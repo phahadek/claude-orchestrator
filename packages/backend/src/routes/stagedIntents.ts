@@ -41,6 +41,7 @@ import type {
   GroomProposalFields,
   CompletenessDispositionQuestion,
   CompletenessProbedGapClass,
+  ReviewDisputePayload,
 } from '../db/types';
 import {
   hashIntentPayload,
@@ -68,6 +69,8 @@ import {
   deleteCompletenessDisposition,
   isSessionComplete,
   TERMINAL_SESSION_STATUSES,
+  getPRByNumber,
+  setPRReviewResult,
 } from '../db/queries';
 import { parseTaskId, normalizeTaskId } from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
@@ -128,6 +131,7 @@ import {
   bashCapabilityConfersFileMutation,
 } from '../session/orchestrator-config';
 import { runtimeSettings } from '../config';
+import type { PRReviewService, PRReviewResult } from '../github/PRReviewService';
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
 // Mirrors tasks.ts's task_updated wiring: REST stays the fetch/apply source of
@@ -742,6 +746,7 @@ const SESSION_TASK_BINDING_KINDS: ReadonlySet<string> = new Set([
   'task.setDependsOn',
   'planning.noOp',
   'completeness.disposition',
+  'review.dispute',
 ]);
 
 /**
@@ -1595,6 +1600,84 @@ function validateCapabilityRequestDoesNotCarryGroup(
   }
 }
 
+/** Verdicts a review.dispute may be staged against — every blocking outcome a re-review would otherwise sit behind. */
+const DISPUTABLE_PR_VERDICTS: ReadonlySet<string> = new Set([
+  'needs_changes',
+  'incomplete',
+  'verify_failed',
+  'autofix_failed',
+]);
+
+function parsePRVerdict(reviewResultJson: string | null): string | null {
+  if (!reviewResultJson) return null;
+  try {
+    const parsed = JSON.parse(reviewResultJson) as Partial<PRReviewResult>;
+    return typeof parsed.verdict === 'string' ? parsed.verdict : null;
+  } catch {
+    return null;
+  }
+}
+
+class ReviewDisputeValidationError extends Error {
+  constructor(reason: string) {
+    super(`[stagedIntents] review.dispute rejected: ${reason}`);
+    this.name = 'ReviewDisputeValidationError';
+  }
+}
+
+/**
+ * A code session's route out of a verdict it concludes is wrong (see
+ * README §review.dispute). Refuses at stage time — before the row ever
+ * reaches `staged` — the two cases that would otherwise strand the intent:
+ * no PR to point at, and no outstanding blocking verdict to dispute (the
+ * verdict already cleared, or was never blocking in the first place).
+ */
+function validateReviewDisputePayload(
+  payload: unknown,
+  groupId: string | null | undefined,
+  decisionProposal: string | null | undefined,
+): asserts payload is ReviewDisputePayload {
+  if (groupId) {
+    throw new ReviewDisputeValidationError(
+      'a review.dispute cannot belong to a group — it applies via a direct verdict ' +
+        'override, not a group commit',
+    );
+  }
+  if (!decisionProposal?.trim()) {
+    throw new ReviewDisputeValidationError(
+      'a substantive decisionProposal (the evidence for why the verdict is wrong) is required',
+    );
+  }
+  const p = payload as Partial<ReviewDisputePayload> | null;
+  if (!p || typeof p.taskId !== 'string' || !p.taskId.trim()) {
+    throw new ReviewDisputeValidationError('payload.taskId is required');
+  }
+  if (typeof p.prNumber !== 'number' || !Number.isFinite(p.prNumber)) {
+    throw new ReviewDisputeValidationError('payload.prNumber is required');
+  }
+  if (typeof p.repo !== 'string' || !p.repo.trim()) {
+    throw new ReviewDisputeValidationError('payload.repo is required');
+  }
+  if (typeof p.rationale !== 'string' || !p.rationale.trim()) {
+    throw new ReviewDisputeValidationError(
+      'payload.rationale (the evidence the verdict is wrong) is required',
+    );
+  }
+  const pr = getPRByNumber(p.prNumber, p.repo);
+  if (!pr) {
+    throw new ReviewDisputeValidationError(
+      `PR #${p.prNumber} in ${p.repo} was not found`,
+    );
+  }
+  const verdict = parsePRVerdict(pr.review_result);
+  if (!verdict || !DISPUTABLE_PR_VERDICTS.has(verdict)) {
+    throw new ReviewDisputeValidationError(
+      `PR #${p.prNumber} has no outstanding blocking verdict to dispute ` +
+        `(current verdict: ${verdict ?? 'none'})`,
+    );
+  }
+}
+
 /**
  * Thrown by validateAndNormalizeTaskReferences when a staged intent's task
  * reference (taskId or a dependsOn entry) is malformed or does not resolve
@@ -1973,6 +2056,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'planning.noOp',
   'notion.pageEdit',
   'gate.verify',
+  'review.dispute',
 ]);
 
 /**
@@ -2637,6 +2721,9 @@ export function stageIntent(
   if (kind === 'planning.noOp') {
     validateNoOpPayload(payload);
   }
+  if (kind === 'review.dispute') {
+    validateReviewDisputePayload(payload, groupId, decisionProposal);
+  }
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
   assertNotSessionStagedDone(kind, payload, sessionId);
@@ -3271,6 +3358,8 @@ async function rejectStagedIntentRow(
       outcome,
       reason,
     );
+  } else if (rejectedIntent.kind === 'review.dispute') {
+    await resumeReviewDisputeAuthor(sessionManager, rejectedIntent, outcome, reason);
   } else {
     await planningOrchestrator?.handleDisposition({
       intent: rejected,
@@ -3353,6 +3442,63 @@ async function resumeCapabilityRequester(
   } catch (err) {
     logger.error(
       `[stagedIntents] resume failed for session ${intent.sessionId.slice(0, 8)} after capability-request ${outcome}: ${err}`,
+    );
+  }
+}
+
+/**
+ * A review.dispute's disposition twin of resumeCapabilityRequester: records
+ * the operator's call on the dispute, then — for a pushback/decline — resumes
+ * the authoring session for a normal revision turn, carrying the operator's
+ * reason so the session knows the original review feedback still stands. An
+ * approved dispute needs no revision turn (the verdict-clear + PR-proceed
+ * side effects are handled by the caller via PRReviewService), so it only
+ * sends an informational note.
+ */
+async function resumeReviewDisputeAuthor(
+  sessionManager: SessionManager | undefined,
+  intent: StagedIntent,
+  outcome: 'approved' | StagedIntentRejectOutcome,
+  reason?: string | null,
+): Promise<void> {
+  if (!intent.sessionId) return;
+  const payload = intent.payload as ReviewDisputePayload;
+
+  recordEvent({
+    event_type: 'review_dispute_disposition',
+    actor_type: 'human',
+    actor_id: null,
+    project_id: intent.projectId,
+    task_id: payload.taskId,
+    payload: {
+      intentId: intent.id,
+      prNumber: payload.prNumber,
+      repo: payload.repo,
+      disposition: outcome,
+      reason: reason ?? null,
+    },
+  });
+
+  if (!sessionManager) return;
+
+  const message =
+    outcome === 'approved'
+      ? `Review dispute approved: the operator agreed the prior review verdict on PR #${payload.prNumber} was ` +
+        `wrong. It has been cleared without a new commit and the PR can proceed — no revision needed.`
+      : `Review dispute for PR #${payload.prNumber} was not upheld — sent back for revision. ` +
+        `${reason ? `Operator reason: ${reason}` : ''}\n\n` +
+        `The original review feedback still applies; please address it and push.`;
+
+  try {
+    await sessionManager.enqueueFeedback(
+      intent.sessionId,
+      'operator-disposition',
+      message,
+      { attemptTerminalResume: false },
+    );
+  } catch (err) {
+    logger.error(
+      `[stagedIntents] resume failed for session ${intent.sessionId.slice(0, 8)} after review.dispute ${outcome}: ${err}`,
     );
   }
 }
@@ -4497,6 +4643,7 @@ async function commitGroupIntents(
 export function createStagedIntentsRouter(
   planningOrchestrator?: PlanningOrchestrator,
   sessionManager?: SessionManager,
+  prReviewService?: PRReviewService,
 ): Router {
   const router = Router();
   stagedIntentSessionManager = sessionManager;
@@ -4692,6 +4839,12 @@ export function createStagedIntentsRouter(
         });
         return;
       }
+      if (row.kind === 'review.dispute') {
+        res.status(409).json({
+          error: `staged intent "${row.id}" is a review.dispute — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
+        });
+        return;
+      }
       const intent = rowToApi(row);
 
       const body = req.body as {
@@ -4838,6 +4991,59 @@ export function createStagedIntentsRouter(
           intent: committed,
           disposition: 'approve',
         });
+        res.json(committedIntent);
+        return;
+      }
+
+      // A review.dispute has no separate apply step either — approval is
+      // terminal: it clears the blocking verdict on the disputed PR (a
+      // synthesized approved result carrying the dispute's provenance,
+      // through the same setPRReviewResult write every other verdict uses),
+      // runs the standard approved-verdict side effects (draft -> ready,
+      // task -> In Review, mergeability check, auto-merge attempt), and
+      // notifies the authoring session. No new head SHA is produced or
+      // required — see PreReviewPipeline's SHA-keyed caches, which is
+      // exactly why this route exists instead of asking for one.
+      if (intent.kind === 'review.dispute') {
+        const payload = intent.payload as ReviewDisputePayload;
+        const pr = getPRByNumber(payload.prNumber, payload.repo);
+        if (!pr) {
+          res.status(404).json({
+            error: `PR #${payload.prNumber} in ${payload.repo} was not found`,
+          });
+          return;
+        }
+        const priorVerdict = parsePRVerdict(pr.review_result);
+        const priorResult = pr.review_result
+          ? (JSON.parse(pr.review_result) as Partial<PRReviewResult>)
+          : null;
+        const clearedResult: PRReviewResult = {
+          prNumber: payload.prNumber,
+          repo: payload.repo,
+          verdict: 'approved',
+          dimensions: priorResult?.dimensions ?? [],
+          summary:
+            `Review dispute upheld by operator — prior verdict "${priorVerdict ?? 'unknown'}" ` +
+            `cleared without a new commit. ${payload.rationale}`,
+          reviewedAt: new Date().toISOString(),
+        };
+        setPRReviewResult(
+          payload.prNumber,
+          payload.repo,
+          JSON.stringify(clearedResult),
+        );
+        const committed = transitionStagedIntent(intent.id, 'committed', {
+          annotation: null,
+        });
+        const committedIntent = rowToApi(committed);
+        broadcastIntentChange(committedIntent);
+        await resumeReviewDisputeAuthor(sessionManager, committedIntent, 'approved');
+        await prReviewService?.handleApprovedVerdict(
+          payload.prNumber,
+          payload.repo,
+          payload.taskId,
+          intent.projectId,
+        );
         res.json(committedIntent);
         return;
       }

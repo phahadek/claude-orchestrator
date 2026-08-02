@@ -648,6 +648,21 @@ export interface StagedIntentAnswer {
 }
 
 /**
+ * Payload for the review.dispute staged-intent kind — a code session's route
+ * out of a `needs_changes`/`incomplete` PR review verdict it concludes is
+ * wrong, carrying the evidence for an operator to judge instead of leaving
+ * the session waiting on a re-review that a disputed-but-unchanged head SHA
+ * will never trigger. Approval clears the blocking verdict without a new
+ * commit; pushback resumes the authoring session for a revision turn.
+ */
+export interface ReviewDisputePayload {
+  taskId: string;
+  prNumber: number;
+  repo: string;
+  rationale: string;
+}
+
+/**
  * The /groom skill's per-task proposal shape (`presentation.md`'s 4/5-point
  * summary: what it achieves, open questions, automated tests, manual
  * verification, and operational seed) — the structured contract a dispatched

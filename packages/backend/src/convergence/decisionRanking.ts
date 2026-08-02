@@ -30,8 +30,13 @@ export type DecisionKindDirection =
   | 'scope_add'
   | 'advisory_only';
 
-/** setStatus is the pipeline-advancement kind — most visibly setStatus->Ready, but any status transition advances the task through the pipeline. */
-const PROGRESS_KINDS = new Set(['task.setStatus']);
+/**
+ * setStatus is the pipeline-advancement kind — most visibly setStatus->Ready,
+ * but any status transition advances the task through the pipeline.
+ * review.dispute joins it: resolving one either way is the single unblocking
+ * action for a PR otherwise parked on a verdict its author disputes.
+ */
+const PROGRESS_KINDS = new Set(['task.setStatus', 'review.dispute']);
 
 /** Kinds that reshape an existing task's content/classification without advancing or widening scope. */
 const STRUCTURAL_KINDS = new Set([
