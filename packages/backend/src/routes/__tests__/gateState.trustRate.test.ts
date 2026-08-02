@@ -9,6 +9,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const queriesMock = vi.hoisted(() => ({
   getFlowRejectionRate: vi.fn(),
+  getFlakeRecoveryMisclassificationRates: vi.fn(),
+  getAutoGrantDisagreementRate: vi.fn(),
 }));
 vi.mock('../../db/queries.js', () => queriesMock);
 
@@ -56,6 +58,16 @@ beforeEach(() => {
   milestoneResolverMock.resolveMilestoneForProject.mockImplementation(
     (_project: string, milestone: string) => milestone,
   );
+  queriesMock.getAutoGrantDisagreementRate.mockImplementation(
+    (project: string, milestone: string, kind: string) => ({
+      kind,
+      project,
+      milestone,
+      total: 0,
+      disagreed: 0,
+      rate: null,
+    }),
+  );
 });
 
 describe('GET /api/gate/trust-rate', () => {
@@ -81,6 +93,16 @@ describe('GET /api/gate/trust-rate', () => {
       'M12',
       'groom',
     );
+    expect(queriesMock.getAutoGrantDisagreementRate).toHaveBeenCalledWith(
+      'proj-1',
+      'M12',
+      'gate.accrete',
+    );
+    expect(queriesMock.getAutoGrantDisagreementRate).toHaveBeenCalledWith(
+      'proj-1',
+      'M12',
+      'seed.stage',
+    );
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       flow: 'groom',
@@ -89,6 +111,24 @@ describe('GET /api/gate/trust-rate', () => {
       total: 4,
       rejected: 1,
       rate: 0.25,
+      autoGrantDisagreementRate: {
+        'gate.accrete': {
+          kind: 'gate.accrete',
+          project: 'proj-1',
+          milestone: 'M12',
+          total: 0,
+          disagreed: 0,
+          rate: null,
+        },
+        'seed.stage': {
+          kind: 'seed.stage',
+          project: 'proj-1',
+          milestone: 'M12',
+          total: 0,
+          disagreed: 0,
+          rate: null,
+        },
+      },
     });
   });
 
