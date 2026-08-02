@@ -4734,13 +4734,35 @@ export function createStagedIntentsRouter(
           .json({ error: 'projectId is required when milestone is set' });
         return;
       }
-      const rows = listStagedIntentsByMilestone(projectId, milestone).filter(
-        (r) => isVisibleOnDecisionSurface(r, sessionManager),
-      );
-      let convergence = null;
+      // Canonicalize the caller-supplied milestone reference (DB UUID,
+      // display name, or already-canonical short id) the same way stageIntent
+      // does at write time — otherwise a UUID-holding caller silently misses
+      // every row written under the display name (or short id) form and vice
+      // versa. The sentinel bucket is not a real milestone and bypasses
+      // resolution entirely.
+      let canonicalMilestone = milestone;
       if (milestone !== UNATTRIBUTED_MILESTONE_BUCKET) {
         try {
-          convergence = getMilestoneConvergence(projectId, milestone);
+          canonicalMilestone = resolveMilestoneForProject(
+            projectId,
+            milestone,
+          );
+        } catch (err) {
+          if (err instanceof UnknownMilestoneError) {
+            res.status(400).json({ error: err.message });
+            return;
+          }
+          throw err;
+        }
+      }
+      const rows = listStagedIntentsByMilestone(
+        projectId,
+        canonicalMilestone,
+      ).filter((r) => isVisibleOnDecisionSurface(r, sessionManager));
+      let convergence = null;
+      if (canonicalMilestone !== UNATTRIBUTED_MILESTONE_BUCKET) {
+        try {
+          convergence = getMilestoneConvergence(projectId, canonicalMilestone);
         } catch (err) {
           if (!(err instanceof UnknownMilestoneError)) throw err;
         }
