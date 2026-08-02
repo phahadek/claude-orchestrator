@@ -116,7 +116,12 @@ describe('review.dispute — stage-time validation', () => {
     expect(() =>
       stageIntent(
         'review.dispute',
-        { taskId: 'task-1', prNumber: 42, repo: 'owner/repo', rationale: 'the file is already green on dev' },
+        {
+          taskId: 'task-1',
+          prNumber: 42,
+          repo: 'owner/repo',
+          rationale: 'the file is already green on dev',
+        },
         'proj-1',
         null,
         SESSION_ID,
@@ -131,7 +136,12 @@ describe('review.dispute — stage-time validation', () => {
     expect(() =>
       stageIntent(
         'review.dispute',
-        { taskId: 'task-1', prNumber: 999, repo: 'owner/repo', rationale: 'evidence' },
+        {
+          taskId: 'task-1',
+          prNumber: 999,
+          repo: 'owner/repo',
+          rationale: 'evidence',
+        },
         'proj-1',
         null,
         SESSION_ID,
@@ -151,7 +161,12 @@ describe('review.dispute — stage-time validation', () => {
     expect(() =>
       stageIntent(
         'review.dispute',
-        { taskId: 'task-1', prNumber: 42, repo: 'owner/repo', rationale: 'evidence' },
+        {
+          taskId: 'task-1',
+          prNumber: 42,
+          repo: 'owner/repo',
+          rationale: 'evidence',
+        },
         'proj-1',
         'some-group',
         SESSION_ID,
@@ -174,7 +189,8 @@ describe('review.dispute — stage-time validation', () => {
         taskId: 'task-1',
         prNumber: 42,
         repo: 'owner/repo',
-        rationale: 'All 7 target files pass — 302 tests. No code change needed.',
+        rationale:
+          'All 7 target files pass — 302 tests. No code change needed.',
       },
       'proj-1',
       null,
@@ -230,7 +246,13 @@ describe('review.dispute — disposition', () => {
       task_id: 'task-1',
       review_result: JSON.stringify({
         verdict: 'needs_changes',
-        dimensions: [{ name: 'Diff vs Acceptance Criteria', passed: false, notes: 'stale claim' }],
+        dimensions: [
+          {
+            name: 'Diff vs Acceptance Criteria',
+            passed: false,
+            notes: 'stale claim',
+          },
+        ],
       }),
     });
     const staged = stageRow();
@@ -278,7 +300,10 @@ describe('review.dispute — disposition', () => {
 
     const res = await agent
       .post(`/api/staged-intents/${staged.id}/reject`)
-      .send({ outcome: 'pushback', reason: 'The task spec was current when authored; verify again.' });
+      .send({
+        outcome: 'pushback',
+        reason: 'The task spec was current when authored; verify again.',
+      });
     expect(res.status).toBe(200);
 
     expect(sessionManager.enqueueFeedback).toHaveBeenCalledWith(

@@ -131,7 +131,10 @@ import {
   bashCapabilityConfersFileMutation,
 } from '../session/orchestrator-config';
 import { runtimeSettings } from '../config';
-import type { PRReviewService, PRReviewResult } from '../github/PRReviewService';
+import type {
+  PRReviewService,
+  PRReviewResult,
+} from '../github/PRReviewService';
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
 // Mirrors tasks.ts's task_updated wiring: REST stays the fetch/apply source of
@@ -3359,7 +3362,12 @@ async function rejectStagedIntentRow(
       reason,
     );
   } else if (rejectedIntent.kind === 'review.dispute') {
-    await resumeReviewDisputeAuthor(sessionManager, rejectedIntent, outcome, reason);
+    await resumeReviewDisputeAuthor(
+      sessionManager,
+      rejectedIntent,
+      outcome,
+      reason,
+    );
   } else {
     await planningOrchestrator?.handleDisposition({
       intent: rejected,
@@ -5037,7 +5045,11 @@ export function createStagedIntentsRouter(
         });
         const committedIntent = rowToApi(committed);
         broadcastIntentChange(committedIntent);
-        await resumeReviewDisputeAuthor(sessionManager, committedIntent, 'approved');
+        await resumeReviewDisputeAuthor(
+          sessionManager,
+          committedIntent,
+          'approved',
+        );
         await prReviewService?.handleApprovedVerdict(
           payload.prNumber,
           payload.repo,
