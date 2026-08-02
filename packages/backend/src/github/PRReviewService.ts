@@ -11,7 +11,9 @@ import {
   setLocalBranchReviewResult,
   getLocalBranchById,
   getSession,
+  getPRIntentForPR,
 } from '../db/queries';
+import type { OpsPrIntentPayload } from '../db/types';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
 import type { DiffSource } from './DiffSource';
@@ -169,11 +171,32 @@ export type WorkItem =
     };
 
 /**
+ * Guidance for the "Changed files vs Files/paths affected list" dimension
+ * when reviewing against a Code task's task-body spec (the default rubric).
+ */
+const DEFAULT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.`;
+
+/**
+ * The Ops rubric variant of DEFAULT_FILES_DIMENSION_GUIDANCE: an Ops
+ * session's PR content is a mid-execution decision the task body never
+ * declared up front (see OpsPrIntentPayload in db/types.ts), so this
+ * dimension is evaluated against the operator-approved PR-intent's declared
+ * scope (rendered in the "## Approved PR Intent" prompt section) instead of
+ * a task-body Files/paths affected list.
+ */
+const OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths affected list" dimension: this PR was opened by an Ops session against an operator-approved "## Approved PR Intent" declaration above, not a task-body Files/paths affected list — compare the changed files against that declaration's scope instead. Pass if all changed files are either within the declared scope OR are necessary downstream updates it implies (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files outside that approved scope.`;
+
+/**
  * Shared review-instructions block: the JSON schema, verdict rules, and the
  * per-dimension guidance. Used by both the initial prompt and the re-review
- * follow-ups so the two stay in sync.
+ * follow-ups so the two stay in sync. `filesDimensionGuidance` is the only
+ * part that varies between the default (Code task, task-body spec) and Ops
+ * (approved PR-intent) rubrics — see buildPrompt's `prIntent` parameter.
  */
-const REVIEW_JSON_SCHEMA_BLOCK = `Respond ONLY with a JSON object — no preamble, no markdown fences.
+function buildReviewJsonSchemaBlock(
+  filesDimensionGuidance: string = DEFAULT_FILES_DIMENSION_GUIDANCE,
+): string {
+  return `Respond ONLY with a JSON object — no preamble, no markdown fences.
 
 ## Manual verification items — DO NOT evaluate
 
@@ -208,9 +231,12 @@ verdict rules: "approved" = all 5 passed. "needs_changes" = 1–4 passed. "incom
 
 Set "escalate": true only when your CLAUDE.md's "Project Review Criteria" section (if present) indicates this PR requires human/operator attention rather than another coding-session iteration — e.g. a policy violation only a human can adjudicate. Do not escalate for ordinary needs_changes findings a coding session can fix itself.
 
-For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.
+${filesDimensionGuidance}
 
 For the "${SIZE_DIMENSION_NAME}" dimension: Pass when the PR is within the size budget signaled above OR when any overflow is necessary corollary work — for example, deleting dead code or types that the listed changes leave unused, refactoring call sites the listed changes force to update, or test/fixture adjustments that follow from modified behavior. Fail only when the diff is materially larger than what the task scope (Summary + Acceptance Criteria + Files affected) demands, i.e. scope creep, unrelated cleanup, or speculative refactors. Note your reasoning in the "notes" field so a re-reviewer can audit the call.`;
+}
+
+const REVIEW_JSON_SCHEMA_BLOCK = buildReviewJsonSchemaBlock();
 
 export class PRReviewService {
   constructor(
@@ -401,7 +427,11 @@ export class PRReviewService {
       const taskBody = await this.resolveBackend(projectId).fetchTaskPage(
         prRow.task_id,
       );
-      const prompt = this.buildPrompt(prData, diffData, taskBody);
+      const prIntentRow = getPRIntentForPR(prNumber, repo);
+      const prIntent = prIntentRow
+        ? (JSON.parse(prIntentRow.payload) as OpsPrIntentPayload)
+        : null;
+      const prompt = this.buildPrompt(prData, diffData, taskBody, prIntent);
       const sizeSignal = computeSizeSignal(
         diff,
         parseSection(taskBody, 'files'),
@@ -1276,12 +1306,33 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     };
   }
 
-  buildPrompt(pr: PullRequest, diff: PRDiff, taskBody: string): string {
+  /**
+   * `prIntent`, when present, is the approved ops.prIntent this PR was
+   * opened for (see getPRIntentForPR in db/queries.ts) — the Ops rubric
+   * variant: the "Changed files" dimension is evaluated against its declared
+   * scope instead of the task specification's Files/paths affected section.
+   */
+  buildPrompt(
+    pr: PullRequest,
+    diff: PRDiff,
+    taskBody: string,
+    prIntent?: OpsPrIntentPayload | null,
+  ): string {
     const sizeSignal = computeSizeSignal(
       diff.diff,
       parseSection(taskBody, 'files'),
       parseExpectedSize(taskBody),
     );
+    const prIntentSection = prIntent
+      ? `\n## Approved PR Intent (Ops)
+Title: ${prIntent.title}
+Declared scope: ${prIntent.scope}
+Reason: ${prIntent.reason}
+\nThis PR was opened by an Ops session against the operator-approved declaration above — evaluate the "Changed files" dimension against it, not the task specification's Files/paths section.\n`
+      : '';
+    const schemaBlock = prIntent
+      ? buildReviewJsonSchemaBlock(OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE)
+      : REVIEW_JSON_SCHEMA_BLOCK;
     return `You are a code reviewer. Compare the following GitHub PR against its task specification.
 
 ## PR Metadata
@@ -1294,11 +1345,11 @@ ${diff.diff}
 
 ## Task Specification
 ${taskBody}
-
+${prIntentSection}
 ${this.formatSizeSignalSection(sizeSignal)}
 
 ## Your task
-${REVIEW_JSON_SCHEMA_BLOCK}`;
+${schemaBlock}`;
   }
 
   /** Render the size signal block for the reviewer prompt. */

@@ -392,6 +392,22 @@ export function registerStageProposalTools(
     async (args) => stage('review.dispute', args.payload, ctx, args),
   );
 
+  registerTool(
+    'ops.prIntent',
+    {
+      title: 'Declare an intent to open a PR for this Ops task',
+      description:
+        "Stages an ops.prIntent intent — this session's mid-execution \"I intend to open a PR for X, here's the diff scope and why\" declaration. An Ops session's PR content is a decision made during the work, not something the task body declares up front, so operator approval of this declaration is the sanctioned go-ahead to open the PR: PRReviewService's Ops rubric then reviews the diff against payload.scope instead of a task-body Files/paths section. Cannot belong to a group — it applies via a direct operator approval, not a group commit. One approved ops.prIntent authorizes exactly one PR (fire-once).",
+      inputSchema: envelope({
+        taskId: z.string(),
+        title: z.string(),
+        scope: z.string(),
+        reason: z.string(),
+      }),
+    },
+    async (args) => stage('ops.prIntent', args.payload, ctx, args),
+  );
+
   // Not routed through `stage()`: unlike every other tool here, this acts
   // immediately on an existing staged intent rather than creating a new one
   // — see withdrawIntent's doc comment in stagedIntents.ts for why this is

@@ -355,6 +355,11 @@ export interface PullRequestRow {
    *  classified stalled/orphaned by the sweepers. Waits indefinitely for a
    *  human to merge. */
   human_merge_only: number;
+  /** The approved ops.prIntent (staged_intent.id) this PR was opened for, if
+   *  any — set via db/queries.ts's linkPRToPRIntent at PR-open time. Null for
+   *  every non-Ops PR. One approved PR-intent authorizes exactly one PR:
+   *  linkPRToPRIntent rejects a second PR row claiming the same intent id. */
+  pr_intent_id: string | null;
 }
 
 // ─── task_repo_assignments ──────────────────────────────────────────────────
@@ -708,6 +713,33 @@ export interface ReviewDisputePayload {
   prNumber: number;
   repo: string;
   rationale: string;
+}
+
+/**
+ * Payload for the ops.prIntent staged-intent kind — a dispatched Ops
+ * session's mid-execution "I intend to open a PR for X, here's the diff
+ * scope and why" declaration. Unlike a Code task's task-body Files/paths
+ * affected list (written up front, before the work is scoped), an Ops
+ * session's PR content is a mid-execution decision the task body cannot
+ * declare in advance — so this carries the declaration itself, staged for
+ * operator approval before the session may open the PR. Deliberately not
+ * validated via isToolShapedCapability (session.requestCapability's
+ * Bash-prefix/MCP-verb shape) — this is a free-form change-and-reason
+ * declaration, not a tool grant. Once approved (see approve route's
+ * ops.prIntent branch, terminal like review.dispute/session.requestCapability
+ * above), PRReviewService resolves this declaration to build the Ops rubric
+ * variant's "changed files" dimension instead of a task-body section — see
+ * getPRIntentForPR / linkPRToPRIntent in db/queries.ts, which enforce that
+ * one approved PR-intent authorizes exactly one PR (fire-once).
+ */
+export interface OpsPrIntentPayload {
+  taskId: string;
+  /** Short PR title the operator is approving, e.g. "add retry to X poller". */
+  title: string;
+  /** The declared diff scope — files/areas expected to change, and why they're in scope. */
+  scope: string;
+  /** Why this PR is being opened now — the finding/decision driving it. */
+  reason: string;
 }
 
 /**

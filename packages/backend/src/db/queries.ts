@@ -1771,6 +1771,7 @@ export function upsertPullRequest(
     | 'reviewer_requested_at'
     | 'flake_recovery_attempts'
     | 'human_merge_only'
+    | 'pr_intent_id'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -2108,6 +2109,72 @@ export function setPRReviewResult(
     review_result: result,
     review_at: new Date().toISOString(),
   });
+}
+
+/**
+ * Thrown by linkPRToPRIntent when the approved ops.prIntent named by
+ * `intentId` already authorized a different PR — one approved PR-intent
+ * authorizes exactly one PR (fire-once); re-use against a second PR is
+ * rejected rather than silently re-pointed.
+ */
+export class PRIntentAlreadyConsumedError extends Error {
+  constructor(intentId: string, prNumber: number, repo: string) {
+    super(
+      `PR-intent "${intentId}" already authorized PR #${prNumber} in ${repo} — ` +
+        'an approved ops.prIntent authorizes exactly one PR.',
+    );
+    this.name = 'PRIntentAlreadyConsumedError';
+  }
+}
+
+/**
+ * Links a PR to the approved ops.prIntent it was opened for — the Ops
+ * fire-once consumption point PRReviewService's getPRIntentForPR reads at
+ * review time. Idempotent for the same (prNumber, repo): re-linking the same
+ * PR to the same intent is a no-op write. Rejects with
+ * PRIntentAlreadyConsumedError when `intentId` is already linked to a
+ * *different* PR row.
+ */
+export function linkPRToPRIntent(
+  prNumber: number,
+  repo: string,
+  intentId: string,
+): void {
+  const existing = db
+    .prepare<{
+      intent_id: string;
+    }>(
+      `SELECT pr_number, repo FROM pull_requests WHERE pr_intent_id = @intent_id`,
+    )
+    .get({ intent_id: intentId }) as
+    | { pr_number: number; repo: string }
+    | undefined;
+  if (existing && (existing.pr_number !== prNumber || existing.repo !== repo)) {
+    throw new PRIntentAlreadyConsumedError(
+      intentId,
+      existing.pr_number,
+      existing.repo,
+    );
+  }
+  db.prepare<{ pr_number: number; repo: string; intent_id: string }>(
+    `UPDATE pull_requests SET pr_intent_id = @intent_id WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo, intent_id: intentId });
+}
+
+/**
+ * Resolves the approved ops.prIntent a PR was linked to at open time (see
+ * linkPRToPRIntent), or null for a PR with no linked PR-intent — every
+ * non-Ops PR, or an Ops PR reviewed before the linking sibling mechanism
+ * runs. PRReviewService uses this to build the Ops rubric's "changed files"
+ * dimension against the approved declaration instead of a task-body section.
+ */
+export function getPRIntentForPR(
+  prNumber: number,
+  repo: string,
+): StagedIntentRow | null {
+  const pr = getPRByNumber(prNumber, repo);
+  if (!pr?.pr_intent_id) return null;
+  return getStagedIntent(pr.pr_intent_id) ?? null;
 }
 
 export function updatePRDraftStatus(
