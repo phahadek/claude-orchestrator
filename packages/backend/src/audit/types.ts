@@ -40,6 +40,7 @@ type EventType =
   | 'session_idle_write_skipped_terminal'
   | 'session_terminal_reopened'
   | 'conflict_nudge_delivery_failed'
+  | 'conflict_nudge_sent'
   | 'worktree_remove_failed'
   | 'worktree_teardown_refused'
   | 'planning_session_checkout_drift'

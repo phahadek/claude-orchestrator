@@ -24,6 +24,7 @@ const { projectFixture, runtimeSettingsFixture } = vi.hoisted(() => ({
 
 vi.mock('../../db/queries.js', () => ({
   getPRByNumber: vi.fn(),
+  setHeadSha: vi.fn(),
   setPauseReason: vi.fn(),
   updateMergeState: vi.fn(),
   updatePRDraftStatus: vi.fn(),
@@ -97,6 +98,7 @@ import {
   getSession,
   getConflictNudgeCandidates,
   setConflictNudgeSha,
+  setHeadSha,
 } from '../../db/queries';
 import type { GitHubClient, PRReviewDecision } from '../GitHubClient';
 import type { PRMergeWatcher } from '../PRMergeWatcher';
@@ -447,5 +449,125 @@ describe('AutoMerger — existing conflictNudgeSweep callers are unchanged', () 
     await merger.pollOnce();
 
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Stale DB row is refreshed before the nudge is computed ───────────────────
+
+describe('AutoMerger — conflictNudgeSweep refreshes stale head_sha', () => {
+  it('syncs pull_requests.head_sha from the live GitHub read before dedup, and does not re-nudge a commit already delivered', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue([
+      { pr_number: 42, repo: 'owner/repo' },
+    ]);
+    // DB row is stale: still shows the old head_sha the session already
+    // pushed past and was already nudged for.
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ head_sha: 'sha-old', conflict_nudge_sha: 'sha-old' }),
+    );
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+
+    const github = makeMockGitHub();
+    vi.mocked(github.categorizeMergeability).mockResolvedValue({
+      ...makeMergeability('conflict'),
+      headSha: 'sha-new',
+    });
+
+    const merger = new AutoMerger(
+      github,
+      makeMockWatcher(),
+      () => {},
+      sessions as unknown as import('../../session/SessionManager').SessionManager,
+    );
+    vi.mocked(getConflictNudgeCandidates).mockClear();
+    sessions.sendOrResume.mockClear();
+    vi.mocked(setConflictNudgeSha).mockClear();
+    vi.mocked(setHeadSha).mockClear();
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue([
+      { pr_number: 42, repo: 'owner/repo' },
+    ]);
+
+    const job = getRegisteredJob(merger, 'auto_merger_conflict_nudge_sweep');
+    await job.run();
+
+    // head_sha is synced to the live value before the dedup check runs.
+    expect(setHeadSha).toHaveBeenCalledWith(42, 'owner/repo', 'sha-new');
+    // A genuinely new conflict SHA still nudges.
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringContaining('Rebase'),
+    );
+    expect(setConflictNudgeSha).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-new',
+    );
+  });
+
+  it('does not re-nudge when the live head_sha matches what was already nudged, even though the DB row was stale', async () => {
+    const sessions = makeMockSessions();
+    // DB row still shows an old, already-nudged SHA, but the session already
+    // pushed and resolved the conflict — live GitHub state now matches the
+    // already-delivered nudge SHA.
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ head_sha: 'sha-stale', conflict_nudge_sha: 'sha-resolved' }),
+    );
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+
+    const github = makeMockGitHub();
+    vi.mocked(github.categorizeMergeability).mockResolvedValue({
+      ...makeMergeability('conflict'),
+      headSha: 'sha-resolved',
+    });
+
+    const merger = new AutoMerger(
+      github,
+      makeMockWatcher(),
+      () => {},
+      sessions as unknown as import('../../session/SessionManager').SessionManager,
+    );
+    sessions.sendOrResume.mockClear();
+    vi.mocked(setConflictNudgeSha).mockClear();
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue([
+      { pr_number: 42, repo: 'owner/repo' },
+    ]);
+
+    const job = getRegisteredJob(merger, 'auto_merger_conflict_nudge_sweep');
+    await job.run();
+
+    expect(sessions.sendOrResume).not.toHaveBeenCalled();
+    expect(setConflictNudgeSha).not.toHaveBeenCalled();
+  });
+});
+
+// ── Null head_branch never synthesizes a fake branch name ────────────────────
+
+describe('AutoMerger — conflictNudgeSweep with a null head_branch', () => {
+  it('does not fabricate a feature/pr-<n> branch name for the dead-session fixer relaunch', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue([
+      { pr_number: 42, repo: 'owner/repo' },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow({ head_branch: null }));
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'done' }));
+
+    const github = makeMockGitHub();
+    vi.mocked(github.categorizeMergeability).mockResolvedValue(
+      makeMergeability('conflict'),
+    );
+
+    const merger = new AutoMerger(
+      github,
+      makeMockWatcher(),
+      () => {},
+      sessions as unknown as import('../../session/SessionManager').SessionManager,
+    );
+
+    const job = getRegisteredJob(merger, 'auto_merger_conflict_nudge_sweep');
+    await job.run();
+
+    expect(sessions.relaunchFixerForPR).toHaveBeenCalled();
+    const prompt = vi.mocked(sessions.relaunchFixerForPR).mock.calls[0][1];
+    expect(prompt).not.toMatch(/feature\/pr-42/);
   });
 });

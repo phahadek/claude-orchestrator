@@ -157,10 +157,12 @@ export async function recoverSession(
           existingPrState = getPRByNumber(prNumber, repo)?.state;
           const now = new Date().toISOString();
           let headSha: string | null = null;
+          let headBranch: string | null = null;
           if (githubClient) {
             try {
               const freshPR = await githubClient.fetchPR(repo, prNumber);
               headSha = freshPR.headSha ?? null;
+              headBranch = freshPR.headBranch ?? null;
             } catch (e) {
               logger.warn(
                 `[recoverSession] failed to fetch PR #${prNumber} from GitHub for head_sha:`,
@@ -177,7 +179,7 @@ export async function recoverSession(
               repo,
               title: null,
               body: null,
-              head_branch: null,
+              head_branch: headBranch,
               base_branch: null,
               state: 'open',
               draft: 0,

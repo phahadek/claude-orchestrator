@@ -1917,13 +1917,20 @@ export function setHeadSha(
   repo: string,
   sha: string | null,
 ): void {
-  db.prepare<{ pr_number: number; repo: string; head_sha: string | null }>(
+  const now = new Date().toISOString();
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    head_sha: string | null;
+    updated_at: string;
+  }>(
     `
     UPDATE pull_requests
-    SET head_sha = @head_sha, stalled_pr_retry_count = 0
+    SET head_sha = @head_sha, stalled_pr_retry_count = 0,
+        updated_at = @updated_at, synced_at = @updated_at
     WHERE pr_number = @pr_number AND repo = @repo
   `,
-  ).run({ pr_number: prNumber, repo, head_sha: sha });
+  ).run({ pr_number: prNumber, repo, head_sha: sha, updated_at: now });
 }
 
 export function incrementStalledPRRetryCount(
@@ -2356,6 +2363,7 @@ export function updateMergeState(
     failingChecks && failingChecks.length > 0
       ? JSON.stringify(failingChecks)
       : null;
+  const now = new Date().toISOString();
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -2369,7 +2377,9 @@ export function updateMergeState(
     SET mergeable = @mergeable,
         merge_state = @merge_state,
         merge_state_checked_at = @checked_at,
-        failing_checks = @failing_checks
+        failing_checks = @failing_checks,
+        updated_at = @checked_at,
+        synced_at = @checked_at
     WHERE pr_number = @pr_number AND repo = @repo
   `,
   ).run({
@@ -2377,7 +2387,7 @@ export function updateMergeState(
     repo,
     mergeable,
     merge_state: mergeState,
-    checked_at: new Date().toISOString(),
+    checked_at: now,
     failing_checks: failingChecksJson,
   });
 }

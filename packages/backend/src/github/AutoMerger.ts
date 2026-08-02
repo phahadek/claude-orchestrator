@@ -6,6 +6,7 @@ import {
 import { recordEvent } from '../audit/AuditLog';
 import {
   getPRByNumber,
+  setHeadSha,
   setPauseReason,
   updateMergeState,
   updatePRDraftStatus,
@@ -188,16 +189,37 @@ export class AutoMerger {
       if (category.category !== 'conflict' && category.category !== 'blocked')
         continue;
 
+      // The DB row may predate a push the session already made (webhook/poll
+      // lag) — sync head_sha from this live GitHub read so the nudge (and its
+      // SHA dedup) reflects the PR's real current state, not a stale one.
+      if (category.headSha && category.headSha !== pr.head_sha) {
+        setHeadSha(pr_number, repo, category.headSha);
+        pr.head_sha = category.headSha;
+      }
+
       if (isDeadSession) {
         // The implementing session is dead — the live-session nudge path
         // (sendOrResume) can't reach it. Relaunch a coding fixer bound to the
         // PR's existing branch instead, with a rebase prompt.
         if (!this.sessions) continue;
         const prompt = formatMergeConflictFeedback({
-          branchName: pr.head_branch ?? `feature/pr-${pr.pr_number}`,
+          branchName: pr.head_branch,
           baseBranch: pr.base_branch ?? 'dev',
         });
         await this.sessions.relaunchFixerForPR(pr, prompt);
+        recordEvent({
+          event_type: 'conflict_nudge_sent',
+          actor_type: 'system',
+          actor_id: null,
+          project_id: null,
+          task_id: pr.task_id ?? null,
+          payload: {
+            pr_number: pr.pr_number,
+            repo: pr.repo,
+            head_sha: pr.head_sha,
+            cause: 'dead_session_fixer_relaunch',
+          },
+        });
         nudged++;
         continue;
       }
