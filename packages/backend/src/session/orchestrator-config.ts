@@ -44,7 +44,7 @@ function resolveConfigDir(projectDir: string): string | null {
  * paths — see pathDiffPredicate.ts's matchesPathDiff). Omitted/empty
  * `trigger_paths` means "always run", matching plain-string entries.
  */
-export interface AnalyzeCommandEntry {
+interface AnalyzeCommandEntry {
   command: string;
   trigger_paths?: string[];
 }
