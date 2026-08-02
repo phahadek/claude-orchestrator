@@ -9,12 +9,24 @@
  * - Settings → Projects UI shows gitMode field (frontend test is in Settings/__tests__).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mockDbQueries } from './helpers/mockDbQueries';
 import express from 'express';
 import supertest from 'supertest';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
+
+// POST /api/projects rejects a projectDir that does not exist on disk
+// (routes/projects.ts), so the fixture path must be a real directory. A
+// hard-coded testProjectDir passed only on hosts where that path happened to
+// exist and 400'd everywhere else — including a fresh CI runner.
+const testProjectDir = fs.mkdtempSync(
+  path.join(os.tmpdir(), 'local-only-project-'),
+);
+afterAll(() => {
+  fs.rmSync(testProjectDir, { recursive: true, force: true });
+});
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -146,7 +158,7 @@ describe('Project config schema — gitMode field', () => {
     vi.mocked(ProjectService.create).mockReturnValue({
       id: 'new-proj',
       name: 'Test',
-      projectDir: '/tmp/test',
+      projectDir: testProjectDir,
       contextUrl: null,
       githubRepo: null,
       taskSource: 'notion',
@@ -160,7 +172,7 @@ describe('Project config schema — gitMode field', () => {
     });
     const res = await supertest(buildProjectApp())
       .post('/api/projects')
-      .send({ name: 'Test', projectDir: '/tmp/test', gitMode: 'github' });
+      .send({ name: 'Test', projectDir: testProjectDir, gitMode: 'github' });
     expect(res.status).toBe(201);
     expect(res.body.gitMode).toBe('github');
   });
@@ -170,7 +182,7 @@ describe('Project config schema — gitMode field', () => {
     vi.mocked(ProjectService.create).mockReturnValue({
       id: 'new-proj',
       name: 'Test',
-      projectDir: '/tmp/test',
+      projectDir: testProjectDir,
       contextUrl: null,
       githubRepo: null,
       taskSource: 'notion',
@@ -184,7 +196,7 @@ describe('Project config schema — gitMode field', () => {
     });
     const res = await supertest(buildProjectApp())
       .post('/api/projects')
-      .send({ name: 'Test', projectDir: '/tmp/test', gitMode: 'local-only' });
+      .send({ name: 'Test', projectDir: testProjectDir, gitMode: 'local-only' });
     expect(res.status).toBe(201);
     expect(res.body.gitMode).toBe('local-only');
   });
@@ -192,7 +204,7 @@ describe('Project config schema — gitMode field', () => {
   it('rejects invalid gitMode value', async () => {
     const res = await supertest(buildProjectApp())
       .post('/api/projects')
-      .send({ name: 'Test', projectDir: '/tmp/test', gitMode: 'remote-only' });
+      .send({ name: 'Test', projectDir: testProjectDir, gitMode: 'remote-only' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/gitMode/);
   });
@@ -202,7 +214,7 @@ describe('Project config schema — gitMode field', () => {
     vi.mocked(ProjectService.create).mockReturnValue({
       id: 'new-proj',
       name: 'Test',
-      projectDir: '/tmp/test',
+      projectDir: testProjectDir,
       contextUrl: null,
       githubRepo: null,
       taskSource: 'notion',
@@ -216,7 +228,7 @@ describe('Project config schema — gitMode field', () => {
     });
     const res = await supertest(buildProjectApp())
       .post('/api/projects')
-      .send({ name: 'Test', projectDir: '/tmp/test' });
+      .send({ name: 'Test', projectDir: testProjectDir });
     expect(res.status).toBe(201);
     expect(ProjectService.create).toHaveBeenCalledWith(
       expect.objectContaining({ gitMode: 'github' }),
@@ -240,7 +252,7 @@ describe('gitMode and taskSource independence', () => {
       vi.mocked(ProjectService.create).mockReturnValue({
         id: 'new-proj',
         name: 'Test',
-        projectDir: '/tmp/test',
+        projectDir: testProjectDir,
         contextUrl: null,
         githubRepo: null,
         taskSource: taskSource as 'notion' | 'yaml',
@@ -254,7 +266,7 @@ describe('gitMode and taskSource independence', () => {
       });
       const res = await supertest(buildProjectApp())
         .post('/api/projects')
-        .send({ name: 'Test', projectDir: '/tmp/test', gitMode, taskSource });
+        .send({ name: 'Test', projectDir: testProjectDir, gitMode, taskSource });
       expect(res.status).toBe(201);
       expect(res.body.gitMode).toBe(gitMode);
       expect(res.body.taskSource).toBe(taskSource);
@@ -269,7 +281,7 @@ describe('PATCH /api/projects/:id — gitMode', () => {
     vi.mocked(ProjectService.update).mockReturnValue({
       id: 'proj-1',
       name: 'Test',
-      projectDir: '/tmp/test',
+      projectDir: testProjectDir,
       contextUrl: null,
       githubRepo: null,
       taskSource: 'notion',

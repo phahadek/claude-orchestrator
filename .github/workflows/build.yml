@@ -24,6 +24,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Backend deploy-gating tests resolve real ancestry (git rev-parse
+          # HEAD~3); the default shallow fetch-depth of 1 makes that fail.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
