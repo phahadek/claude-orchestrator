@@ -401,6 +401,76 @@ describe('TaskCacheRefresher', () => {
     });
   });
 
+  describe('event loop yielding', () => {
+    it('yields to the event loop between milestone iterations', async () => {
+      const project = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([project]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+        makeMilestone('m2', 'src-2'),
+      ]);
+
+      let sentinelRan = false;
+      const backend = makeBackend({
+        fetchReadyTasks: vi.fn().mockImplementation((fetchId: string) => {
+          if (fetchId === 'm1') {
+            // Scheduled during milestone m1's processing — should fire
+            // before m2 is processed if the refresher yields in between.
+            setImmediate(() => {
+              sentinelRan = true;
+            });
+          } else if (fetchId === 'm2') {
+            expect(sentinelRan).toBe(true);
+          }
+          return Promise.resolve([]);
+        }),
+      });
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+      await refresher.refreshOnce();
+
+      expect(backend.fetchReadyTasks).toHaveBeenCalledTimes(2);
+      expect(sentinelRan).toBe(true);
+    });
+
+    it('does not hold the loop for a full multi-milestone pass', async () => {
+      const project = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([project]);
+      const milestones = Array.from({ length: 5 }, (_, i) =>
+        makeMilestone(`m${i}`, `src-${i}`),
+      );
+      vi.mocked(ProjectService.listMilestones).mockReturnValue(milestones);
+
+      const backend = makeBackend();
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      const events: string[] = [];
+      setImmediate(() => {
+        events.push('sentinel');
+      });
+
+      const tick = refresher.refreshOnce().then(() => {
+        events.push('tick-complete');
+      });
+      await tick;
+
+      // A macrotask scheduled at tick start only gets a chance to run
+      // before the tick's own promise resolves if the tick itself yields
+      // to the event loop at least once along the way (all-microtask work
+      // would resolve the tick's promise first, starving the sentinel).
+      expect(events).toEqual(['sentinel', 'tick-complete']);
+    });
+  });
+
   describe('refreshProjectById', () => {
     it('triggers refresh for a single project by id', async () => {
       const proj1 = makeProject({ id: 'p1' });
