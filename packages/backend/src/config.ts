@@ -265,7 +265,9 @@ const TASK_READ_MCP_TOOLS = [orchestratorMcpToolName('task.getById')];
 // server also registers it unconditionally for groom/design — a groom/design
 // session must never be CLI-permitted to call it, only ever see it listed
 // (see orchestrator-config.test.ts's "never a mutating gate/seed tool" guard).
-const PROJECT_READ_MCP_TOOLS = [orchestratorMcpToolName('pullRequest.getByTaskId')];
+const PROJECT_READ_MCP_TOOLS = [
+  orchestratorMcpToolName('pullRequest.getByTaskId'),
+];
 
 const GROOM_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
