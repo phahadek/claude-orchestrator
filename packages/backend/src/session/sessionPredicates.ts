@@ -17,11 +17,16 @@
  *   worktree, no PR; target task is mechanically moved to In Progress on
  *   start, same as a standard session.
  * - ops: operational/investigation session — base profile is read + stage +
- *   the safe live-data/audited-read surface, no worktree, no PR; write
- *   capability into prod-mutating tools is earned per-session via
- *   grant-on-re-dispatch, never granted in the base profile. Shares the
- *   planning concurrency pool with groom/design rather than a dedicated cap;
- *   target task is mechanically moved to In Progress on start, like design.
+ *   the safe live-data/audited-read surface; write capability into
+ *   prod-mutating tools is earned per-session via grant-on-re-dispatch,
+ *   never granted in the base profile. Unlike groom/design/split/docs it
+ *   gets a real per-session worktree + branch (see usesWorktree) and can
+ *   open its own PR (see opensPr) once an operator-approved PR-intent
+ *   declaration earns it the PR-open tool grant — that PR is routed into
+ *   the standard auto-review path rather than forced human_merge_only.
+ *   Shares the planning concurrency pool with groom/design rather than a
+ *   dedicated cap; target task is mechanically moved to In Progress on
+ *   start, like design.
  * - split: the dedicated split session — the "route" half of the split
  *   detect -> confirm -> route flow (see split/splitCandidate.ts,
  *   split/splitSession.ts). Dispatched by groomFlip.ts on a confirmed
@@ -70,9 +75,25 @@ export function isCodeSession(sessionType: string): boolean {
   return sessionType === 'standard';
 }
 
+/**
+ * True for session types that get a real per-session git worktree + branch,
+ * as opposed to running directly against the shared project checkout
+ * (cwd === projectDir, no branch of their own). Split out of
+ * isPlanningSession so 'ops' can gain a worktree while staying in the
+ * planning concurrency pool and keeping its stage-only base tool profile —
+ * see the 'ops' entry in the session-types doc comment above.
+ */
+export function usesWorktree(sessionType: string): boolean {
+  return sessionType === 'standard' || sessionType === 'ops';
+}
+
 /** True for session types that can open a pull request against the base branch. */
 export function opensPr(sessionType: string): boolean {
-  return sessionType === 'standard' || sessionType === 'docs';
+  return (
+    sessionType === 'standard' ||
+    sessionType === 'docs' ||
+    sessionType === 'ops'
+  );
 }
 
 /** True for session types that count against the shared code+planning concurrency accounting (excludes review). */

@@ -661,9 +661,13 @@ describe('resumeOrphanSessions() — planning-session resumability pre-check', (
   });
 
   it('fails a planning session whose project directory is genuinely missing, distinguishing it from "no path recorded"', async () => {
+    // 'design' (checkout-only planning) — not 'ops', which now gets a real
+    // per-session worktree of its own (see usesWorktree in sessionPredicates.ts)
+    // and would resolve worktree_path: null through the standard-session
+    // branch instead of the projectDir fallback this test exercises.
     const planning = makeRunningSession({
       session_id: 'planning-no-project-dir',
-      session_type: 'ops',
+      session_type: 'design',
       worktree_path: null,
     });
     vi.mocked(queries.getSessionsByStatus).mockReturnValue([planning]);

@@ -155,4 +155,15 @@ describe('AgentSession.handlePRDetected — docs human_merge_only gate', () => {
     );
     expect(setHumanMergeOnly).not.toHaveBeenCalled();
   });
+
+  it('does not set human_merge_only for an ops session PR — an ops-sourced PR routes through the standard auto-review path', async () => {
+    const session = makeSession('ops');
+    detectPR(session);
+    await new Promise((r) => setImmediate(r));
+
+    expect(upsertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ pr_number: 153, repo: 'owner/repo' }),
+    );
+    expect(setHumanMergeOnly).not.toHaveBeenCalled();
+  });
 });

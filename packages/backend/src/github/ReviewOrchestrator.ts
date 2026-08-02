@@ -49,6 +49,7 @@ import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runTestCommands } from '../session/test-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
+import { opensPr } from '../session/sessionPredicates';
 import type { ServerMessage } from '../ws/types';
 import { PreReviewPipeline } from './PreReviewPipeline';
 
@@ -853,7 +854,10 @@ export class ReviewOrchestrator {
 
   private onSessionEnded(sessionId: string): void {
     const session = getSession(sessionId);
-    if (session?.session_type !== 'standard') return;
+    // Admits every PR-opening session type (standard, docs, ops) — a
+    // needs_changes verdict re-review must fire for an ops-sourced PR the
+    // same as a standard one, not just standard's own.
+    if (!session || !opensPr(session.session_type ?? '')) return;
 
     const pr = getPRBySessionId(sessionId);
     if (!pr || !pr.review_result) return;

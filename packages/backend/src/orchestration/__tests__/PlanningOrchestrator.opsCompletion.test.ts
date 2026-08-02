@@ -28,6 +28,7 @@ vi.mock('../../db/queries', () =>
     setPendingApproveTerminal: vi.fn(),
     clearPendingApproveTerminal: vi.fn(),
     getSessionsWithPendingApproveTerminal: vi.fn().mockReturnValue([]),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
   }),
 );
 
@@ -50,7 +51,11 @@ vi.mock('../../ops/opsJournal', () => ({
   getEntry: vi.fn(),
 }));
 
-import { getSession, listStagedIntentsBySession } from '../../db/queries';
+import {
+  getSession,
+  listStagedIntentsBySession,
+  getPRBySessionId,
+} from '../../db/queries';
 import { getTaskBackend } from '../../tasks/TaskBackend';
 import { emitTaskUpdated } from '../../routes/tasks';
 import { PlanningOrchestrator } from '../PlanningOrchestrator';
@@ -128,6 +133,7 @@ beforeEach(() => {
   updateStatus.mockResolvedValue(undefined);
   vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
   vi.mocked(getEntry).mockReturnValue(makeJournalEntry('resolved'));
+  vi.mocked(getPRBySessionId).mockReturnValue(null);
 });
 
 describe('PlanningOrchestrator — ops task completion', () => {
@@ -272,6 +278,30 @@ describe('PlanningOrchestrator — ops task completion', () => {
       expect(updateStatus).not.toHaveBeenCalled();
     },
   );
+
+  it('leaves the task status unchanged when an ops session has an open PR — the PR-merge-driven path owns closure instead', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+    } as any);
+    const approveIntent = makeIntent({
+      id: 'intent-1',
+      state: 'committed',
+      group_id: null,
+    });
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([approveIntent]);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    await orch.handleDisposition({
+      intent: approveIntent,
+      disposition: 'approve',
+    });
+    await flush();
+
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
 
   it('leaves the task status unchanged when the ops session has no ops_journal entry', async () => {
     const sm = makeSessionManager();

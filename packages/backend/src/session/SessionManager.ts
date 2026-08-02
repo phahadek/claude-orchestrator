@@ -103,6 +103,7 @@ import {
   isGateVerifySession,
   isPlanningSession,
   movesTargetInProgress,
+  usesWorktree,
 } from './sessionPredicates';
 import { eventKind } from './eventKind';
 import type { Session } from '../db/types';
@@ -1423,7 +1424,7 @@ export class SessionManager extends EventEmitter {
       started_at: startedAt,
       ended_at: null,
       pr_url: null,
-      worktree_path: isPlanningSession(sessionType) ? null : worktreePath,
+      worktree_path: usesWorktree(sessionType) ? worktreePath : null,
       session_type: sessionType,
       task_name: taskName ?? null,
     });
@@ -1550,13 +1551,15 @@ export class SessionManager extends EventEmitter {
     const project = getProjectById(projectId)!;
     const projectDir = normalizePath(project.projectDir);
     const isPlanning = isPlanningSession(sessionType);
-    // Planning sessions (groom/design/ops) are stage-only/read-only: no
-    // worktree, no feature branch, no bootstrap — cwd is the project's own
-    // checkout (a read-only view in practice, since the base tool profile
-    // has no write/mutate tools).
-    const worktreePath = isPlanning
-      ? projectDir
-      : path.join(projectDir, '.claude', 'worktrees', sessionId);
+    // Worktree-eligible session types (standard, ops) get a real per-session
+    // worktree + feature branch + bootstrap. The remaining planning types
+    // (groom/design/split/docs) are stage-only/read-only: cwd is the
+    // project's own checkout (a read-only view in practice, since the base
+    // tool profile has no write/mutate tools).
+    const worktreeEligible = usesWorktree(sessionType);
+    const worktreePath = worktreeEligible
+      ? path.join(projectDir, '.claude', 'worktrees', sessionId)
+      : projectDir;
     const isLocalOnly = project.gitMode === 'local-only';
     const { startingPoint, milestoneSlug } = resolveStartingPoint(
       project,
@@ -1566,7 +1569,7 @@ export class SessionManager extends EventEmitter {
       precomputedTaskId ??
       deriveTaskId(project.taskSource ?? 'notion', taskUrl);
 
-    if (!isPlanning) {
+    if (worktreeEligible) {
       if (!isLocalOnly) {
         if (milestoneSlug) {
           try {
@@ -1785,7 +1788,7 @@ export class SessionManager extends EventEmitter {
 
     const orchConfig = loadOrchestratorConfig(projectDir);
 
-    if (!isPlanning && orchConfig.bootstrap_script) {
+    if (worktreeEligible && orchConfig.bootstrap_script) {
       try {
         await exec(`bash "${orchConfig.bootstrap_script}" "${worktreePath}"`, {
           cwd: projectDir,
@@ -1805,9 +1808,9 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    const missingEnv = isPlanning
-      ? []
-      : orchConfig.required_env.filter((varName) => !(varName in process.env));
+    const missingEnv = worktreeEligible
+      ? orchConfig.required_env.filter((varName) => !(varName in process.env))
+      : [];
     if (missingEnv.length > 0) {
       const detail = `bootstrap gate: missing required env var(s): ${missingEnv.join(', ')}`;
       logger.error(
@@ -1816,11 +1819,11 @@ export class SessionManager extends EventEmitter {
       throw new Error(detail);
     }
 
-    const missingFiles = isPlanning
-      ? []
-      : orchConfig.required_files.filter(
+    const missingFiles = worktreeEligible
+      ? orchConfig.required_files.filter(
           (filePath) => !fs.existsSync(path.join(worktreePath, filePath)),
-        );
+        )
+      : [];
     if (missingFiles.length > 0) {
       const detail = `bootstrap gate: missing required file(s): ${missingFiles.join(', ')}`;
       logger.error(
@@ -2255,7 +2258,7 @@ export class SessionManager extends EventEmitter {
         // done-transition that markSessionDone deferred while this turn was
         // in flight — see markSessionDone's in-flight guard in db/queries.ts.
         this.applyPendingDoneForSettledSession(sessionId);
-        if (isPlanningSession(session.sessionType)) {
+        if (isPlanningSession(session.sessionType) && !usesWorktree(session.sessionType)) {
           this.checkPlanningSessionDrift(sessionId, session.taskId, projectDir);
         }
         return this.cleanupWorktree(
@@ -2274,7 +2277,7 @@ export class SessionManager extends EventEmitter {
           this.markSessionErrored(sessionId, 'error', 'run_error', detail);
         }
         this.applyPendingDoneForSettledSession(sessionId);
-        if (isPlanningSession(session.sessionType)) {
+        if (isPlanningSession(session.sessionType) && !usesWorktree(session.sessionType)) {
           this.checkPlanningSessionDrift(sessionId, session.taskId, projectDir);
         }
         return this.cleanupWorktree(
@@ -2556,8 +2559,9 @@ export class SessionManager extends EventEmitter {
     // checkout and never have a worktree_path — that is their documented shape,
     // not a broken record. Resolve the working directory accordingly instead of
     // treating a null worktree_path as "worktree missing".
-    const planning = isPlanningSession(row.session_type);
-    const worktreePath = planning
+    const checkoutOnlyPlanning =
+      isPlanningSession(row.session_type) && !usesWorktree(row.session_type);
+    const worktreePath = checkoutOnlyPlanning
       ? (row.worktree_path ?? projectDir)
       : (row.worktree_path ?? '');
 
@@ -3333,9 +3337,10 @@ export class SessionManager extends EventEmitter {
       'worktrees',
       sessionId,
     );
-    const recordedPath = isPlanningSession(row.session_type)
-      ? (row.worktree_path ?? projectDir)
-      : (row.worktree_path ?? defaultWorktreePath);
+    const recordedPath =
+      isPlanningSession(row.session_type) && !usesWorktree(row.session_type)
+        ? (row.worktree_path ?? projectDir)
+        : (row.worktree_path ?? defaultWorktreePath);
 
     if (
       !recordedPath ||
@@ -3870,9 +3875,10 @@ export class SessionManager extends EventEmitter {
     // completeStart() runs them directly against the project checkout (see
     // worktree_path: null at insertSession time). Point the fast path at
     // projectDir for them instead of the per-session path that never existed.
-    const recordedPath = isPlanningSession(row.session_type)
-      ? (row.worktree_path ?? projectDir)
-      : (row.worktree_path ?? worktreePath);
+    const recordedPath =
+      isPlanningSession(row.session_type) && !usesWorktree(row.session_type)
+        ? (row.worktree_path ?? projectDir)
+        : (row.worktree_path ?? worktreePath);
     if (
       recordedPath &&
       fs.existsSync(recordedPath) &&
@@ -3975,7 +3981,7 @@ export class SessionManager extends EventEmitter {
     // valid project. Reaching here means the project checkout itself is missing;
     // never fall through to git worktree recreation, which planning sessions have
     // no branch/worktree state for.
-    if (isPlanningSession(row.session_type)) {
+    if (isPlanningSession(row.session_type) && !usesWorktree(row.session_type)) {
       const detail = `project checkout missing or not a git repo at ${recordedPath}`;
       logger.error(
         `[SessionManager] sendOrResume: ${detail} for planning session ${sessionId}`,

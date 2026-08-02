@@ -9,6 +9,7 @@ vi.mock('../db/queries.js', () =>
     setPRReviewResult: vi.fn(),
     getPRByNumber: vi.fn(),
     getSession: vi.fn().mockReturnValue(undefined),
+    getPRBySessionId: vi.fn().mockReturnValue(undefined),
     getSetting: vi.fn().mockReturnValue(undefined),
     incrementReviewIteration: vi.fn(),
     updatePRDraftStatus: vi.fn(),
@@ -102,6 +103,7 @@ import {
   setPRReviewResult,
   getPRByNumber,
   getSession,
+  getPRBySessionId,
   updatePRDraftStatus,
   setPauseReason,
   getLocalBranchBySession,
@@ -3817,5 +3819,69 @@ describe('ReviewOrchestrator — enqueueReview and isReviewInFlight', () => {
 
     expect(pushEvents).toHaveLength(1);
     expect(vi.mocked(setPendingPush)).toHaveBeenCalledWith(1, 'owner/repo', 0);
+  });
+});
+
+// ── onSessionEnded session_type gate — admits ops alongside standard ────────
+
+describe('ReviewOrchestrator — onSessionEnded session_type gate', () => {
+  const needsChangesResult = JSON.stringify({ verdict: 'needs_changes' });
+
+  it.each(['standard', 'ops'] as const)(
+    'triggers a re-review for a %s session ended with a needs_changes verdict',
+    async (sessionType) => {
+      vi.mocked(getSession).mockReturnValue({
+        session_id: 'source-session-id',
+        session_type: sessionType,
+        task_url: 'https://notion.so/task',
+      } as any);
+      vi.mocked(getPRBySessionId).mockReturnValue({
+        ...basePRRow,
+        review_result: needsChangesResult,
+        review_iteration: 0,
+      } as any);
+      vi.mocked(getPRByNumber).mockReturnValue({
+        ...basePRRow,
+        review_result: needsChangesResult,
+        review_iteration: 0,
+      } as any);
+
+      const sm = makeMockSessionManager();
+      const rs = makeMockReviewService();
+      new ReviewOrchestrator(rs, sm as any, true);
+
+      sm.emit('message', {
+        type: 'session_ended',
+        sessionId: 'source-session-id',
+      });
+      await new Promise((r) => setTimeout(r, 30));
+
+      expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('does not trigger a re-review for a review-typed session', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'source-session-id',
+      session_type: 'review',
+      task_url: 'https://notion.so/task',
+    } as any);
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      ...basePRRow,
+      review_result: needsChangesResult,
+      review_iteration: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'source-session-id',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
   });
 });
