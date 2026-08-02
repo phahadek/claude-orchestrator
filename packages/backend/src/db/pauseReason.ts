@@ -44,6 +44,7 @@ export type CanonicalPauseReason =
   | 'resume_failed'
   | 'review_rules_escalation'
   | 'baseline_escalation_floor'
+  | 'depth_review_escalation'
   | 'planning_crashed'
   | 'planning_first_turn_empty'
   | 'planning_terminal_no_decision'
@@ -218,6 +219,19 @@ export const PAUSE_REASON_REGISTRY: Record<
   // secrets) — always requires human sign-off regardless of review_rules, so
   // it is deliberately not marked automatic/none like other review reasons.
   baseline_escalation_floor: {
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // The depth review pass's own escalation — distinct from
+  // review_rules_escalation (the conformance pass's project-review_rules
+  // escalation) and from the code-enforced baseline_escalation_floor
+  // escalation above. Raised when the depth pass finds a security/
+  // concurrency/reliability/data-integrity defect; an ordinary
+  // size-proportionality-only finding does NOT raise this — it routes
+  // through the normal auto-fix feedback path instead (see
+  // ReviewOrchestrator's depth-review handling).
+  depth_review_escalation: {
     source: 'review',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',

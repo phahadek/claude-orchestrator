@@ -549,3 +549,44 @@ If this session is resumed or receives a follow-up message, it means there is
 a new diff to review. Wait for the diff content, then output a new JSON verdict.
 Do NOT start implementing anything.`.trimEnd();
 }
+
+/**
+ * Builds the CLAUDE.md header for a depth-review session (session type
+ * 'depth_review') — the second, separate review pass dispatched only after a
+ * PR's conformance verdict (session type 'review') reaches approved. Distinct
+ * from buildReviewClaudeMd: this pass never evaluates conformance
+ * (title/description vs Summary, diff vs Context spec, diff vs Acceptance
+ * Criteria, changed files vs Files/paths affected) — only security,
+ * concurrency, reliability/crash, data-integrity/parsing correctness, and
+ * size-proportionality (relocated here from the conformance pass).
+ */
+export function buildDepthReviewClaudeMd(taskName: string): string {
+  return `# Depth Review Session Rules
+
+You are a **depth review session** — a second, separate review pass that runs
+only after a PR's conformance review (title/description vs Summary, diff vs
+Context spec, diff vs Acceptance Criteria, changed files vs Files/paths
+affected) has already been approved. Your job is NOT to re-check conformance —
+it is to judge whether the diff is correct and safe, beyond matching what the
+task said it would do.
+
+## What you are
+- A defect-hunting reviewer, not a spec-conformance reviewer.
+- You evaluate the diff already embedded in your prompt across five
+  dimensions: security, concurrency, reliability/crash, data-integrity &
+  parsing correctness, and size-proportionality.
+- You output a single JSON verdict in the format requested by your prompt.
+
+## What you must NOT do
+- Do NOT implement code, create branches, make commits, or open/modify pull
+  requests — you have no git-push or GitHub-write tool access.
+- Do NOT fetch Notion pages, check git status, or look for tasks to work on.
+- Do NOT update task statuses.
+- Do NOT re-litigate conformance (Summary/Context spec/Acceptance
+  Criteria/Files affected) — the conformance pass already ran and approved
+  this diff; re-flagging a conformance-only concern here has no effect.
+
+## Task
+${taskName}
+`.trimEnd();
+}

@@ -123,6 +123,10 @@ import type { PRReviewService } from './PRReviewService';
 import type { GitHubClient } from './GitHubClient';
 import type { PullRequest } from './types';
 import type { ReviewJob } from './types';
+import type {
+  DepthReviewService,
+  DepthReviewResult,
+} from './DepthReviewService';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -546,6 +550,330 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'verdict_routing_failed' }),
     );
+  });
+});
+
+// ── Depth review dispatch ──────────────────────────────────────────────────────
+
+function makeMockDepthReviewService(
+  runDepthReview: DepthReviewService['runDepthReview'],
+): DepthReviewService {
+  return { runDepthReview } as unknown as DepthReviewService;
+}
+
+function makeDepthResult(
+  overrides: Partial<DepthReviewResult>,
+): DepthReviewResult {
+  return {
+    verdict: 'pass',
+    dimensions: [],
+    summary: 'Nothing found.',
+    hasNonSizeFailure: false,
+    sizeOnlyFailure: false,
+    ...overrides,
+  };
+}
+
+describe('ReviewOrchestrator — depth review dispatch gating', () => {
+  it('dispatches the depth-review pass when the conformance verdict is approved', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(runDepthReview).toHaveBeenCalledOnce();
+    const [prNumber, repo, , projectId, contextUrl, taskId] =
+      runDepthReview.mock.calls[0];
+    expect(prNumber).toBe(1);
+    expect(repo).toBe('owner/repo');
+    expect(projectId).toBe('proj-1');
+    expect(contextUrl).toBe('https://notion.so/ctx');
+    expect(taskId).toBe('notion:task-abc');
+  });
+
+  it('never dispatches the depth-review pass when the conformance verdict is needs_changes', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'ok' },
+      ],
+      summary: 'Needs changes.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(runDepthReview).not.toHaveBeenCalled();
+  });
+
+  it('never dispatches the depth-review pass when the conformance verdict is incomplete', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'incomplete',
+      dimensions: [],
+      summary: 'Could not assess.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(runDepthReview).not.toHaveBeenCalled();
+  });
+
+  it('never dispatches the depth-review pass when the conformance verdict was escalated', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'Touches CI workflow config.',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: 'Baseline escalation floor: diff touches CI config.',
+      baselineEscalationFloor: true,
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(runDepthReview).not.toHaveBeenCalled();
+  });
+});
+
+describe('ReviewOrchestrator — depth review finding routing', () => {
+  it('routes a security/concurrency/reliability/data-integrity finding to escalate + pause_reason, not enqueueFeedback', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        verdict: 'fail',
+        dimensions: [
+          {
+            name: 'Security',
+            passed: false,
+            notes: 'Unsanitized input reaches a shell command.',
+          },
+        ],
+        summary: 'Found a security defect.',
+        hasNonSizeFailure: true,
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    const messages: unknown[] = [];
+    sm.on('message', (m: unknown) => messages.push(m));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_escalation',
+    );
+    expect(
+      messages.some(
+        (m) =>
+          (m as { type: string }).type === 'review_escalated' &&
+          (m as { message: string }).message.includes(
+            'Unsanitized input reaches a shell command.',
+          ),
+      ),
+    ).toBe(true);
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+  });
+
+  it('routes a size-proportionality-only finding to enqueueFeedback (auto-fix), not escalate', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        verdict: 'fail',
+        dimensions: [
+          {
+            name: 'Size proportionality',
+            passed: false,
+            notes: 'Diff is far larger than the task scope demands.',
+          },
+        ],
+        summary: 'Scope creep detected.',
+        sizeOnlyFailure: true,
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    const [sessionId, source, message] = vi.mocked(sm.enqueueFeedback).mock
+      .calls[0];
+    expect(sessionId).toBe('coding-session-id');
+    expect(source).toBe('ai-reviewer');
+    expect(message).toContain(
+      'Diff is far larger than the task scope demands.',
+    );
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_escalation',
+    );
+  });
+
+  it('is a silent no-op when every depth-review dimension passes', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_escalation',
+    );
+  });
+});
+
+describe('ReviewOrchestrator — depth review fails open', () => {
+  it('does not escalate or block merge when the depth pass errors', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    // DepthReviewService itself fails open (returns null) on error/timeout —
+    // model that contract directly rather than a rejected promise, since a
+    // rejection would only be caught by ReviewOrchestrator's own .catch()
+    // logging, not surfaced as an escalation either way.
+    const runDepthReview = vi.fn().mockResolvedValue(null);
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    const messages: unknown[] = [];
+    sm.on('message', (m: unknown) => messages.push(m));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    // Conformance approval alone was already sufficient — pr_review_complete
+    // fired regardless of the depth pass's outcome.
+    expect(
+      messages.some(
+        (m) => (m as { type: string }).type === 'pr_review_complete',
+      ),
+    ).toBe(true);
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_escalation',
+    );
+    expect(
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
+    ).toBe(false);
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+  });
+
+  it('does not escalate or block merge when no depth-review service is wired', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    // No setDepthReviewService() call — mirrors production behavior before
+    // server.ts wiring, and every existing test in this suite.
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_escalation',
+    );
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
   });
 });
 

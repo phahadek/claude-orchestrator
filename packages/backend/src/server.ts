@@ -51,6 +51,7 @@ import {
 import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
+import { DepthReviewService } from './github/DepthReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PlanningOrchestrator } from './orchestration/PlanningOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
@@ -183,6 +184,7 @@ const prReviewService = new PRReviewService(
   undefined,
   sessionManager,
 );
+const depthReviewService = new DepthReviewService(sessionManager, undefined);
 // Retained so push_detected handler can call consumeAutofixSha() to detect
 // autofix-only pushes and suppress iteration-counter increments for them.
 const reviewOrchestrator = new ReviewOrchestrator(
@@ -191,6 +193,7 @@ const reviewOrchestrator = new ReviewOrchestrator(
   AUTO_REVIEW_ENABLED,
   githubClient,
 );
+reviewOrchestrator.setDepthReviewService(depthReviewService);
 setSettingsReviewOrchestrator(reviewOrchestrator);
 const planningOrchestrator = new PlanningOrchestrator(sessionManager);
 
