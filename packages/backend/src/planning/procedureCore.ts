@@ -208,6 +208,27 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     text: renderOpsJournalStateMachine(),
   },
   {
+    id: 'ops-consult-architecture-before-diagnosing',
+    title: 'Consult architecture units before diagnosing or staging a proposal',
+    appliesTo: ['ops'],
+    text:
+      `DO call ${orchestratorMcpToolName('architecture.getUnit')} / ` +
+      `${orchestratorMcpToolName('architecture.queryUnits')} against the ` +
+      "digest's listed archUnits (and any unit they reference) before " +
+      'diagnosing the mandate or staging a write — an invariant or a prior ' +
+      'design decision recorded there can rule out a candidate root cause or ' +
+      'a candidate fix outright, and re-deriving from source alone risks ' +
+      're-litigating a call already made and recorded. The digest names which ' +
+      'units are in scope; dereferencing one is a normal, expected step of ' +
+      'working the mandate, not an optional extra. DO NOT stage a diagnosis, a ' +
+      '`decision.pickOne`, or a write whose correctness turns on how the ' +
+      'system is *supposed* to behave without first checking whether the ' +
+      "digest's archUnits already answer that question. DO NOT treat an empty " +
+      'digest archUnits list as license to skip this — query ' +
+      `${orchestratorMcpToolName('architecture.queryUnits')} directly when the ` +
+      'mandate touches a region the digest left unscoped.',
+  },
+  {
     id: 'dispatched-ops-write-capable',
     title:
       'A dispatched ops run is write-capable — drive to applied-pending-confirm or stage the no-change terminal, never park a staged proposal without one',

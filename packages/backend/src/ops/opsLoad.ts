@@ -32,12 +32,25 @@ import {
   getMergeCommitFromLocalBranches,
 } from '../db/queries';
 import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
-import { selectArchitectureContext } from '../architecture/selectiveInjection';
+import {
+  selectArchitectureContext,
+  selectUnitsFromStore,
+} from '../architecture/selectiveInjection';
 import type { NotionTask } from '../notion/types';
 import { reconcileJournal, type OpsBoardTaskRow } from './opsJournal';
 import { formatTaskId } from '../tasks/taskId';
 import { getProjectDeployedSha } from '../deploy/deployService';
 import { createLocalGitAncestrySource } from '../gate/gateService';
+import {
+  loadManifest,
+  resolveConfigDir,
+  resolveTrackedFileSet,
+  type GroomManifest,
+} from '../groom/groomLoad';
+import {
+  resolveTaskRegions,
+  type CodeWorklistOptions,
+} from '../groom/codeWorklist';
 
 // ─── Notion status vocabulary (matches the values NotionClient reads/writes) ──
 const STATUS = {
@@ -323,18 +336,43 @@ export async function loadOpsContext(
   }
 
   // ── Job 2: query target + neighbour boards, resolve deps, classify ──────
-  // Dual-read: an ops task carries no resolved code regions and no topic
-  // (see `OpsTaskEntry.archUnits`'s doc comment), so `selectArchitectureContext`
-  // is called with no `regions`/`topic` — the store branch degrades to just
-  // the active `kind='invariant'` units, the same selection for every task in
-  // this run. A non-migrated project keeps the pre-migration behaviour: the
-  // project's full Notion architecture page set.
+  // Dual-read: a migrated project (archStoreAdopted) reads from the arch_unit
+  // store; a non-migrated project keeps the pre-migration behaviour — the
+  // project's full Notion architecture page set, the same for every task
+  // (there is no store to region-intersect against). Which branch is active
+  // is resolved once via this no-regions probe; the store branch's actual
+  // per-task unit selection is re-derived below, scoped to each task's own
+  // resolved code regions (mirroring groom's `deriveGroomDigestSlice`),
+  // rather than reusing this probe's project-wide invariants-only fallback.
   const archContext = await selectArchitectureContext({ projectId: project });
   const archSource: 'store' | 'notion' = archContext.source;
-  const archUnits: OpsArchUnitRef[] =
-    archContext.source === 'store'
-      ? archContext.units.map((u) => ({ id: u.id, title: u.title }))
-      : archContext.pages.map((p) => ({ id: p.id, title: p.title }));
+  const notionArchUnits: OpsArchUnitRef[] =
+    archContext.source === 'notion'
+      ? archContext.pages.map((p) => ({ id: p.id, title: p.title }))
+      : [];
+
+  const repoRoot = projectRow?.project_dir;
+  let manifest: GroomManifest = {};
+  let trackedFiles: string[] = [];
+  if (repoRoot) {
+    try {
+      if (resolveConfigDir(repoRoot))
+        manifest = loadManifest(repoRoot, project);
+    } catch {
+      manifest = {};
+    }
+    try {
+      trackedFiles = [...(await resolveTrackedFileSet(repoRoot))];
+    } catch {
+      trackedFiles = [];
+    }
+  }
+  const worklistOptions: CodeWorklistOptions = {
+    sourceRoot: manifest.source_root ?? '',
+    packages: manifest.packages ?? [],
+    areaAliases: manifest.area_aliases ?? {},
+    trackedFiles,
+  };
 
   const targetRows = await notion.fetchBoardTasks(board);
   const neighbourRowSets = await Promise.all(
@@ -381,12 +419,11 @@ export async function loadOpsContext(
       status === STATUS.ready || status === STATUS.inProgress;
     if (!isExecutable && !isBacklog && !isInReview) continue;
 
+    const page = await notion.fetchTaskPage(formatTaskId('notion', row.id));
+
     let mode: 'operational' | 'investigation';
     if (isTesting) {
-      const { markdown } = await notion.fetchPageMarkdown(
-        formatTaskId('notion', row.id),
-      );
-      if (isTestAuthoring(markdown)) {
+      if (isTestAuthoring(page.rawMarkdown)) {
         testAuthoring.push(toTaskRef(row));
         continue;
       }
@@ -394,6 +431,27 @@ export async function loadOpsContext(
     } else {
       mode = modeOf(type);
     }
+
+    // Scope this task's own archUnits to its declared regions (Files/paths
+    // affected, or paths named in the body) rather than reusing one
+    // project-wide list for every task in the run — see the Job 2 header
+    // comment above.
+    const regions = resolveTaskRegions(
+      {
+        id: row.id,
+        title: row.title,
+        filesSection: page.filesSection,
+        rawMarkdown: page.rawMarkdown,
+      },
+      worklistOptions,
+    );
+    const archUnits: OpsArchUnitRef[] =
+      archSource === 'store'
+        ? selectUnitsFromStore({ regions }).map((u) => ({
+            id: u.id,
+            title: u.title,
+          }))
+        : notionArchUnits;
 
     // Only ✅ Done satisfies a hard dep — 🗂️ Ready and ⏭️ Deferred both block.
     // Unresolved/external deps (on a board not loaded) are not counted as blocking.
