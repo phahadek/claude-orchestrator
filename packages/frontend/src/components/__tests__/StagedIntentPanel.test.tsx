@@ -43,6 +43,26 @@ describe('StagedIntentPanel', () => {
     expect(screen.queryByRole('button', { name: /approve/i })).toBeNull();
   });
 
+  it('renders an "auto-approved" badge for a gate.accrete intent tagged annotation.autoApproved', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'gate.accrete',
+          state: 'approved',
+          annotation: { autoApproved: true },
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('staged-intent-auto-approved')).toBeTruthy();
+  });
+
+  it('does not render the "auto-approved" badge for an ordinary staged intent', () => {
+    render(<StagedIntentPanel intent={makeIntent()} />);
+
+    expect(screen.queryByTestId('staged-intent-auto-approved')).toBeNull();
+  });
+
   it('renders a completeness.disposition run — its questions, and Approve/Reject with no separate Commit', () => {
     render(
       <StagedIntentPanel

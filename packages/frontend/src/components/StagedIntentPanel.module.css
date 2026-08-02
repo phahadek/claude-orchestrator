@@ -145,6 +145,13 @@
   letter-spacing: 0.03em;
 }
 
+.autoApprovedBadge {
+  font-size: 0.7rem;
+  color: var(--ctp-green);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 .withdrawnReason {
   margin: 0;
   font-size: 0.82rem;

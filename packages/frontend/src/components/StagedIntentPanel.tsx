@@ -1346,6 +1346,16 @@ export function StagedIntentPanel({
             <span className={styles.stateBadge}>{intent.state}</span>
           )
         )}
+        {intent.annotation &&
+          'autoApproved' in intent.annotation &&
+          intent.annotation.autoApproved && (
+            <span
+              className={styles.autoApprovedBadge}
+              data-testid="staged-intent-auto-approved"
+            >
+              auto-approved
+            </span>
+          )}
         {disabled && (
           <span
             className={styles.stateBadge}
