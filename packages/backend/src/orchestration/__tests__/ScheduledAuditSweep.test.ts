@@ -129,7 +129,7 @@ describe('worktree provisioning and command execution isolation', () => {
         gitCwds.push(cwd);
         return { stdout: '', stderr: '' };
       },
-      runAnalyzeCommand: async (cwd, command) => {
+      runAnalyzeCommand: async (cwd) => {
         analyzeCwds.push(cwd);
         return { passed: true, output: '{}' };
       },
