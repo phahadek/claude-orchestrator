@@ -348,10 +348,10 @@ function GroomingGateSummary({ gate }: { gate: GroomingGate }) {
     >
       <p>
         Size: {sizeCheck?.decision ?? '—'}
-        {sizeCheckEstimate} · Type check:{' '}
-        {gate.type_check?.decision ?? '—'} · Task type: {gate.type ?? '—'} ·{' '}
-        {regionCount} region{regionCount === 1 ? '' : 's'} · {constraintCount}{' '}
-        constraint{constraintCount === 1 ? '' : 's'} dispositioned
+        {sizeCheckEstimate} · Type check: {gate.type_check?.decision ?? '—'} ·
+        Task type: {gate.type ?? '—'} · {regionCount} region
+        {regionCount === 1 ? '' : 's'} · {constraintCount} constraint
+        {constraintCount === 1 ? '' : 's'} dispositioned
       </p>
       {(constraintCount > 0 || filesPathsEntries.length > 0) && (
         <details className={styles.expandDetail}>

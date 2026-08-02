@@ -161,15 +161,13 @@ export interface GroomingGateEntry {
    * `sizeCheckMissingNumericFields` below. `n/a` (Design/Planning, sized in
    * open-question count instead) carries no numbers to require.
    */
-  size_check?:
-    | {
-        decision?: unknown;
-        files?: unknown;
-        loc?: unknown;
-        loc_method?: unknown;
-        [key: string]: unknown;
-      }
-    | null;
+  size_check?: {
+    decision?: unknown;
+    files?: unknown;
+    loc?: unknown;
+    loc_method?: unknown;
+    [key: string]: unknown;
+  } | null;
   type_check?: {
     decision?: unknown;
     disposition?: unknown;
@@ -793,7 +791,7 @@ export async function checkGroomingPromotionGate(
       reasons.push(
         `size_check is missing required field(s): ${missingNumericFields.join(', ')} — a numeric ` +
           'size decision (no_split/split_now/unsplittable) must also record the files/loc/loc_method ' +
-          "estimate the decision rests on, not judge whether that estimate is correct.",
+          'estimate the decision rests on, not judge whether that estimate is correct.',
       );
     }
   }

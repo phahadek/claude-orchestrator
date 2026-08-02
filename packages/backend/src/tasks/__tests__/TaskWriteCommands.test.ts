@@ -155,7 +155,12 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
 
     await commands.setStatus('notion:abc', 'Ready', {
       groomingGate: {
-        size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
       },
     });
@@ -165,7 +170,12 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
       '🗂️ Ready',
       expect.objectContaining({
         groomingGate: {
-          size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       }),
@@ -210,7 +220,12 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
       source: 'human',
       sessionId: 'sess-1',
       groomingGate: {
-        size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
       },
     });
@@ -222,7 +237,12 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
         source: 'human',
         sessionId: 'sess-1',
         groomingGate: {
-          size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       },
@@ -238,7 +258,12 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
 
     await commands.setStatus('notion:abc', 'Ready', {
       groomingGate: {
-        size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
       },
     });
@@ -331,7 +356,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
     try {
       await commands.setStatus('notion:abc', 'Ready', {
         groomingGate: {
-          size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       });
@@ -357,7 +387,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
 
     await commands.setStatus('notion:abc', 'Ready', {
       groomingGate: {
-        size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
       },
     });
@@ -367,7 +402,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       '🗂️ Ready',
       expect.objectContaining({
         groomingGate: {
-          size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       }),
@@ -392,7 +432,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       sessionId: 'sess-1',
       readinessOverride: { reason: 'human reviewed and approved' },
       groomingGate: {
-        size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
       },
     });
@@ -588,7 +633,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       try {
         await commands.setStatus(id, 'Ready', {
           groomingGate: {
-            size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+            size_check: {
+              decision: 'no_split',
+              files: 1,
+              loc: 40,
+              loc_method: 'estimated',
+            },
             type_check: { decision: 'none' },
             filesPathsEntries: [
               {
@@ -690,7 +740,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
 
     await commands.setStatus('notion:abc', 'Ready', {
       groomingGate: {
-        size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
       },
     });
@@ -700,7 +755,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
       '🗂️ Ready',
       expect.objectContaining({
         groomingGate: {
-          size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       }),
@@ -774,7 +834,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
     try {
       await commands.setStatus('notion:abc', 'Ready', {
         groomingGate: {
-          size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       });
@@ -804,7 +869,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
     try {
       await commands.setStatus('notion:abc', 'Ready', {
         groomingGate: {
-          size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       });
@@ -832,7 +902,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
 
     await commands.setStatus('notion:abc', 'Ready', {
       groomingGate: {
-        size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
         filesPathsEntries: [
           {
@@ -849,7 +924,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
       '🗂️ Ready',
       expect.objectContaining({
         groomingGate: {
-          size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
           filesPathsEntries: [
             {
@@ -1913,7 +1993,12 @@ describe('TaskWriteCommands + NotionTaskBackend — raw Notion UUID taskId (regr
     await expect(
       commands.setStatus(rawTaskId, 'Ready', {
         groomingGate: {
-          size_check: { decision: 'no_split', files: 1, loc: 40, loc_method: 'estimated' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       }),

@@ -868,7 +868,7 @@ function renderSkeleton(
           'threshold; exceeding either nominates a split (nominates, not forces — ' +
           '"unsplittable" with a recorded reason remains valid above either one). ' +
           'Every decision but "n/a" also carries the estimate it rests on: `files` ' +
-          'from the digest\'s size_check seed, `loc` estimated from the code-map ' +
+          "from the digest's size_check seed, `loc` estimated from the code-map " +
           'digest, `loc_method` naming how (e.g. "estimated") — the gate rejects a ' +
           'numeric decision missing any of the three. "n/a" (Design/Planning types ' +
           'only) carries no numbers. `type_check` (`{"decision": "none"|' +
