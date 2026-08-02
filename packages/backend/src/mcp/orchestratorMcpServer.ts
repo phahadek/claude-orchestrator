@@ -21,6 +21,92 @@ import type { SessionManager } from '../session/SessionManager';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import type { PlanningWorkflow } from '../planning/planningIntentKinds';
 import { resolveMilestoneForSessionTask } from '../projects/milestoneResolver';
+import { normalizeTaskId, parseTaskId } from '../tasks/taskId';
+
+const NOTION_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A task id is well-formed when it normalizes to a recognized
+ * `source:externalId` pair (see `taskId.ts`) whose Notion external id is a
+ * real 32-hex UUID — rejecting the hand-transcription slips a session hits
+ * copying an id off a slugified Notion URL (a dropped/extra hex digit, a
+ * missing/garbled `notion:` prefix, wrong hyphenation) rather than passing
+ * them through to a provider 400.
+ */
+function isWellFormedTaskId(taskId: unknown): taskId is string {
+  if (typeof taskId !== 'string' || !taskId.trim()) return false;
+  let parsed;
+  try {
+    parsed = parseTaskId(normalizeTaskId(taskId));
+  } catch {
+    return false;
+  }
+  return parsed.source === 'notion'
+    ? NOTION_UUID_RE.test(parsed.externalId)
+    : true;
+}
+
+/** Pulls the `taskId` a tool call carries, whether top-level or nested under `payload`. */
+function extractTaskId(args: unknown): unknown {
+  if (!args || typeof args !== 'object') return undefined;
+  const record = args as Record<string, unknown>;
+  if ('taskId' in record) return record.taskId;
+  const payload = record.payload;
+  if (payload && typeof payload === 'object' && 'taskId' in payload) {
+    return (payload as Record<string, unknown>).taskId;
+  }
+  return undefined;
+}
+
+/**
+ * Wraps every tool registered on `server` from this point on so a
+ * malformed `taskId` argument (top-level or under `payload`) is rejected
+ * before the handler runs — before it ever reaches a provider call — with
+ * a message naming this connection's own bound task id, so a session that
+ * mistyped its only usable identifier is told what it actually is instead
+ * of just that the one it sent is invalid. A well-formed taskId for a task
+ * other than the session's own is never rejected or rewritten — staging
+ * against another task is sometimes legitimate; only shape is checked here.
+ */
+function guardTaskIdArguments(
+  server: McpServer,
+  boundTaskId: string | null,
+): void {
+  const originalRegisterTool = server.registerTool.bind(server);
+  server.registerTool = ((name: unknown, config: unknown, handler: unknown) => {
+    if (typeof handler !== 'function') {
+      return (originalRegisterTool as (...args: unknown[]) => unknown)(
+        name,
+        config,
+        handler,
+      );
+    }
+    const wrapped = async (...handlerArgs: unknown[]) => {
+      const taskId = extractTaskId(handlerArgs[0]);
+      if (taskId !== undefined && !isWellFormedTaskId(taskId)) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text' as const,
+              text:
+                `taskId ${JSON.stringify(taskId)} is not a well-formed task id. ` +
+                `This session is bound to ${boundTaskId ? JSON.stringify(boundTaskId) : 'no task'} — ` +
+                'if you meant that task, pass it verbatim; do not hand-transcribe or re-hyphenate an id.',
+            },
+          ],
+        };
+      }
+      return (handler as (...a: unknown[]) => unknown)(...handlerArgs);
+    };
+    return (originalRegisterTool as (...args: unknown[]) => unknown)(
+      name,
+      config,
+      wrapped,
+    );
+  }) as typeof server.registerTool;
+}
 
 /**
  * Maps a session's `session_type` to its planning workflow, or null for a
@@ -118,6 +204,9 @@ export function buildMcpServer(
     version: '1.0.0',
   });
 
+  const session = getSession(sessionId);
+  guardTaskIdArguments(server, session?.task_id ?? null);
+
   server.registerTool(
     'health',
     {
@@ -130,7 +219,6 @@ export function buildMcpServer(
     }),
   );
 
-  const session = getSession(sessionId);
   const workflow = toPlanningWorkflow(session?.session_type);
 
   if (session?.project_id) {

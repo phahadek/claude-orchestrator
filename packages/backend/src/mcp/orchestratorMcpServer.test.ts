@@ -23,6 +23,22 @@ vi.mock('../projects/ProjectService', () => ({
   },
 }));
 
+// Every taskId referenced in the taskId-guard tests below is a fixture, not
+// a real board task — stub the backend so a taskId that survives the guard
+// resolves at stage time (see validateAndNormalizeTaskReferences) rather
+// than failing for an unrelated reason.
+vi.mock('../tasks/TaskBackend', () => ({
+  getTaskBackend: vi.fn(() => ({
+    type: 'notion',
+    fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nok'),
+    fetchTaskSummary: vi.fn().mockResolvedValue({
+      title: 'Some other task',
+      type: '💻 Code',
+      status: '🔲 Backlog',
+    }),
+  })),
+}));
+
 import {
   createOrchestratorMcpRouter,
   buildOrchestratorMcpServerEntry,
@@ -35,6 +51,7 @@ import {
 } from '../auth/SessionStageAuth';
 import { SessionManager } from '../session/SessionManager';
 import { insertSession, insertGateItem, getStagedIntent } from '../db/queries';
+import { getTaskBackend } from '../tasks/TaskBackend';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import { createUnit } from '../architecture/ArchUnitStore';
 import * as AuditLog from '../audit/AuditLog';
@@ -325,6 +342,89 @@ describe('architecture.getUnit / architecture.queryUnits', () => {
     )[0];
     const queried = JSON.parse(queryContent.text) as { id: string }[];
     expect(queried.some((u) => u.id === unit.id)).toBe(true);
+
+    await client.close();
+    await server.close();
+  });
+});
+
+describe('taskId argument guard', () => {
+  const BOUND_TASK_ID = 'notion:3b022f91-52f3-810e-846b-ded6111a6bb3';
+
+  it('rejects a malformed taskId before it reaches the provider, naming the session bound task id', async () => {
+    insertSession({
+      session_id: 'mcp-taskid-guard-1',
+      task_id: BOUND_TASK_ID,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'groom',
+    });
+
+    const server = buildMcpServer('mcp-taskid-guard-1', new SessionManager());
+    const [serverTransport, clientTransport] =
+      InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+
+    // One hex digit short of a valid 32-char Notion UUID — the exact
+    // transcription slip this guard exists to catch.
+    const result = await client.callTool({
+      name: 'task.setStatus',
+      arguments: {
+        payload: {
+          taskId: '3b022f9152f3810e846bded6111a6bb',
+          status: 'Ready',
+        },
+      },
+    });
+    expect(result.isError).toBe(true);
+    const content = (result.content as { type: string; text: string }[])[0];
+    expect(content.text).toContain(BOUND_TASK_ID);
+
+    await client.close();
+    await server.close();
+  });
+
+  it('does not reject or rewrite a well-formed taskId for a task other than the session bound one', async () => {
+    insertSession({
+      session_id: 'mcp-taskid-guard-2',
+      task_id: BOUND_TASK_ID,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'groom',
+    });
+
+    const server = buildMcpServer('mcp-taskid-guard-2', new SessionManager());
+    const [serverTransport, clientTransport] =
+      InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+
+    // task.getById is a read tool with no same-task-as-session restriction —
+    // exercises the "not rejected/rewritten" side of the guard in isolation
+    // from the separate, unrelated same-task write policy other tools apply.
+    const otherTaskId = 'notion:4c133a02-63a4-921f-957c-efe7222b7cc4';
+    const result = await client.callTool({
+      name: 'task.getById',
+      arguments: { taskId: otherTaskId },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(getTaskBackend).toHaveBeenCalled();
+    const fetchTaskSummary = vi.mocked(getTaskBackend).mock.results[0]
+      .value as { fetchTaskSummary: ReturnType<typeof vi.fn> };
+    expect(fetchTaskSummary.fetchTaskSummary).toHaveBeenCalledWith(otherTaskId);
 
     await client.close();
     await server.close();
