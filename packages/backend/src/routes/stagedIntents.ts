@@ -4645,6 +4645,15 @@ async function commitGroupIntents(
     }
   }
 
+  // Advisory-only, same contract as verifyGroup's call: never awaited into
+  // the gate, and `.catch` guards against an unhandled rejection crashing
+  // the process. This is the group-commit path — the one grooming actually
+  // takes — so it must carry its own call rather than relying solely on
+  // verifyGroup's idle-park-only invocation. classifyReadyProposal is
+  // idempotent per intent id, so a group that also passed through
+  // verifyGroup earlier in the same turn still classifies each intent once.
+  void classifyReadyProposal(groupId).catch(() => {});
+
   return { status: 200, body: { ok: true, committed } };
 }
 
