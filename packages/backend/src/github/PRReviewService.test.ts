@@ -389,7 +389,12 @@ describe('PRReviewService.buildPrompt()', () => {
       reason: 'poller drops events under transient network errors',
     };
 
-    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody, prIntent);
+    const prompt = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      prIntent,
+    );
 
     // The Ops-approved declaration is rendered in the prompt...
     expect(prompt).toContain('## Approved PR Intent');
@@ -398,7 +403,7 @@ describe('PRReviewService.buildPrompt()', () => {
     // ...and the "changed files" dimension's guidance points at it instead
     // of the task-body Files/paths section.
     expect(prompt).toContain(
-      'compare the changed files against that declaration\'s scope',
+      "compare the changed files against that declaration's scope",
     );
     expect(prompt).not.toContain(
       'necessary downstream updates caused by the listed changes',

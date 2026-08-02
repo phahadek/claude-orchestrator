@@ -2141,16 +2141,13 @@ export function linkPRToPRIntent(
   intentId: string,
 ): void {
   const existing = db
-    .prepare<{ intent_id: string }>(
-      `SELECT pr_number, repo FROM pull_requests WHERE pr_intent_id = @intent_id`,
-    )
+    .prepare<{
+      intent_id: string;
+    }>(`SELECT pr_number, repo FROM pull_requests WHERE pr_intent_id = @intent_id`)
     .get({ intent_id: intentId }) as
     | { pr_number: number; repo: string }
     | undefined;
-  if (
-    existing &&
-    (existing.pr_number !== prNumber || existing.repo !== repo)
-  ) {
+  if (existing && (existing.pr_number !== prNumber || existing.repo !== repo)) {
     throw new PRIntentAlreadyConsumedError(
       intentId,
       existing.pr_number,
