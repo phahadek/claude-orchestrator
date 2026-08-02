@@ -78,7 +78,8 @@ export class CapabilityDispositionMiner {
   async scanOnce(): Promise<void> {
     const listProjects = this.options.listProjects ?? getAllProjects;
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
-    const findPatterns = this.options.findPatterns ?? findQualifyingDenialPatterns;
+    const findPatterns =
+      this.options.findPatterns ?? findQualifyingDenialPatterns;
     const now = this.options.now ?? (() => new Date().toISOString());
 
     const projectsById = new Map(listProjects().map((p) => [p.id, p]));

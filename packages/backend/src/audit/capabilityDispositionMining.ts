@@ -60,9 +60,7 @@ function readDispositionsByCapability(): DispositionsByCapability {
     .prepare<
       [],
       AuditDispositionRow
-    >(
-      `SELECT ts, project_id, task_id, payload FROM audit_log WHERE event_type = 'capability_request_disposition' ORDER BY id ASC`,
-    )
+    >(`SELECT ts, project_id, task_id, payload FROM audit_log WHERE event_type = 'capability_request_disposition' ORDER BY id ASC`)
     .all();
 
   const byProject: DispositionsByCapability = new Map();
@@ -160,7 +158,9 @@ export function findQualifyingDenialPatterns(): CapabilityDenialPattern[] {
       if (eligibleDenials.length < QUALIFYING_DENIAL_COUNT) continue;
 
       const distinctTaskIds = Array.from(
-        new Set(eligibleDenials.map((e) => e.taskId).filter((t): t is string => !!t)),
+        new Set(
+          eligibleDenials.map((e) => e.taskId).filter((t): t is string => !!t),
+        ),
       );
       if (distinctTaskIds.length < QUALIFYING_DISTINCT_TASK_COUNT) continue;
 
@@ -195,7 +195,7 @@ export function renderInvestigationTaskBody(
       'independent of the capability itself)?',
     '',
     'Resolving this Investigation is the sole mechanism that lifts or hardens ' +
-      'this key\'s disqualification: concluding the root cause is addressed or ' +
+      "this key's disqualification: concluding the root cause is addressed or " +
       'no longer applies lifts it (denial evidence resumes accumulating from ' +
       'that point); confirming genuine risk hardens it permanently, and may ' +
       'itself propose a GRANT_DENYLIST_PATTERNS change via a normal reviewed PR.',
@@ -273,9 +273,8 @@ export function resolveCapabilityDisqualification(
   resolution: unknown,
   nowIso: string,
 ): void {
-  const row = getCapabilityDisqualificationByInvestigationTask(
-    investigationTaskId,
-  );
+  const row =
+    getCapabilityDisqualificationByInvestigationTask(investigationTaskId);
   if (!row || row.state !== 'open') return;
 
   let verdict = capabilityDisqualificationVerdictFromResolution(resolution);

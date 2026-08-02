@@ -40,18 +40,30 @@ function denial(capability: string, taskId: string | null, project = PROJECT) {
     actor_id: null,
     project_id: project,
     task_id: taskId,
-    payload: { capability, disposition: 'operator_denied', provenance: 'operator' },
+    payload: {
+      capability,
+      disposition: 'operator_denied',
+      provenance: 'operator',
+    },
   });
 }
 
-function approval(capability: string, taskId: string | null, project = PROJECT) {
+function approval(
+  capability: string,
+  taskId: string | null,
+  project = PROJECT,
+) {
   recordEvent({
     event_type: 'capability_request_disposition',
     actor_type: 'human',
     actor_id: null,
     project_id: project,
     task_id: taskId,
-    payload: { capability, disposition: 'operator_approved', provenance: 'operator' },
+    payload: {
+      capability,
+      disposition: 'operator_approved',
+      provenance: 'operator',
+    },
   });
 }
 
@@ -98,7 +110,12 @@ describe('findQualifyingDenialPatterns', () => {
   it('excludes a key with an open disqualification', () => {
     for (let i = 0; i < 5; i++) denial(CAPABILITY, `task-${i % 2}`);
     recordDisqualification(
-      { projectId: PROJECT, capability: CAPABILITY, denialCount: 5, taskIds: ['task-0', 'task-1'] },
+      {
+        projectId: PROJECT,
+        capability: CAPABILITY,
+        denialCount: 5,
+        taskIds: ['task-0', 'task-1'],
+      },
       'investigation-1',
       new Date(0).toISOString(),
     );
@@ -108,7 +125,12 @@ describe('findQualifyingDenialPatterns', () => {
   it('excludes a hardened key permanently', () => {
     for (let i = 0; i < 5; i++) denial(CAPABILITY, `task-${i % 2}`);
     recordDisqualification(
-      { projectId: PROJECT, capability: CAPABILITY, denialCount: 5, taskIds: ['task-0', 'task-1'] },
+      {
+        projectId: PROJECT,
+        capability: CAPABILITY,
+        denialCount: 5,
+        taskIds: ['task-0', 'task-1'],
+      },
       'investigation-1',
       new Date(0).toISOString(),
     );
@@ -117,14 +139,21 @@ describe('findQualifyingDenialPatterns', () => {
       { capabilityDisqualificationVerdict: 'hardened' },
       new Date(1000).toISOString(),
     );
-    expect(getCapabilityDisqualification(PROJECT, CAPABILITY)?.state).toBe('hardened');
+    expect(getCapabilityDisqualification(PROJECT, CAPABILITY)?.state).toBe(
+      'hardened',
+    );
     expect(findQualifyingDenialPatterns()).toHaveLength(0);
   });
 
   it('after a lift, only re-counts denials recorded after the lift', async () => {
     for (let i = 0; i < 5; i++) denial(CAPABILITY, `task-${i % 2}`);
     recordDisqualification(
-      { projectId: PROJECT, capability: CAPABILITY, denialCount: 5, taskIds: ['task-0', 'task-1'] },
+      {
+        projectId: PROJECT,
+        capability: CAPABILITY,
+        denialCount: 5,
+        taskIds: ['task-0', 'task-1'],
+      },
       'investigation-1',
       new Date(0).toISOString(),
     );
@@ -138,7 +167,9 @@ describe('findQualifyingDenialPatterns', () => {
       { capabilityDisqualificationVerdict: 'lifted' },
       new Date().toISOString(),
     );
-    expect(getCapabilityDisqualification(PROJECT, CAPABILITY)?.state).toBe('lifted');
+    expect(getCapabilityDisqualification(PROJECT, CAPABILITY)?.state).toBe(
+      'lifted',
+    );
     await new Promise((r) => setTimeout(r, 5));
 
     // Only 2 post-lift denials so far — not enough to re-qualify, even
@@ -162,17 +193,32 @@ describe('findQualifyingDenialPatterns', () => {
 describe('resolveCapabilityDisqualification', () => {
   it('is a no-op for a task not tied to any disqualification', () => {
     expect(() =>
-      resolveCapabilityDisqualification('unrelated-task', { capabilityDisqualificationVerdict: 'lifted' }, new Date().toISOString()),
+      resolveCapabilityDisqualification(
+        'unrelated-task',
+        { capabilityDisqualificationVerdict: 'lifted' },
+        new Date().toISOString(),
+      ),
     ).not.toThrow();
   });
 
   it('defaults to hardened when the resolution carries no explicit verdict', () => {
     recordDisqualification(
-      { projectId: PROJECT, capability: CAPABILITY, denialCount: 5, taskIds: ['task-0', 'task-1'] },
+      {
+        projectId: PROJECT,
+        capability: CAPABILITY,
+        denialCount: 5,
+        taskIds: ['task-0', 'task-1'],
+      },
       'investigation-1',
       new Date(0).toISOString(),
     );
-    resolveCapabilityDisqualification('investigation-1', { note: 'looked into it' }, new Date(1000).toISOString());
-    expect(getCapabilityDisqualification(PROJECT, CAPABILITY)?.state).toBe('hardened');
+    resolveCapabilityDisqualification(
+      'investigation-1',
+      { note: 'looked into it' },
+      new Date(1000).toISOString(),
+    );
+    expect(getCapabilityDisqualification(PROJECT, CAPABILITY)?.state).toBe(
+      'hardened',
+    );
   });
 });

@@ -189,7 +189,11 @@ export function setEntryState(
   // -> "resolved" commit path (routes/stagedIntents.ts), since both funnel
   // through this function.
   if (state === 'resolved') {
-    resolveCapabilityDisqualification(taskId, updated.resolution, updated.updatedAt);
+    resolveCapabilityDisqualification(
+      taskId,
+      updated.resolution,
+      updated.updatedAt,
+    );
   }
   recordEvent({
     event_type: 'ops_journal_state_changed',
