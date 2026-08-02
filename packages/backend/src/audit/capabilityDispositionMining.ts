@@ -233,7 +233,7 @@ export function recordDisqualification(
 }
 
 /** The verdict an Investigation task's resolution declares for a capability disqualification it's tied to. */
-export type CapabilityDisqualificationVerdict = 'lifted' | 'hardened';
+type CapabilityDisqualificationVerdict = 'lifted' | 'hardened';
 
 /**
  * Reads the `capabilityDisqualificationVerdict` field an Investigation
@@ -241,8 +241,9 @@ export type CapabilityDisqualificationVerdict = 'lifted' | 'hardened';
  * disqualification — the resolving session/operator's explicit "root cause
  * addressed" (lifted) vs "genuine risk confirmed" (hardened) call. Returns
  * null for anything else (missing, malformed, or an unrecognized value).
+ * Module-private: only resolveCapabilityDisqualification (below) needs it.
  */
-export function capabilityDisqualificationVerdictFromResolution(
+function capabilityDisqualificationVerdictFromResolution(
   resolution: unknown,
 ): CapabilityDisqualificationVerdict | null {
   if (!resolution || typeof resolution !== 'object') return null;
