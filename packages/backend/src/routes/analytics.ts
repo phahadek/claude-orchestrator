@@ -186,3 +186,112 @@ analyticsRouter.get('/tokens', (req: Request, res: Response) => {
   };
   res.json(result);
 });
+
+interface TaskSessionRow {
+  sessionId: string;
+  taskName: string | null;
+  startedAt: number;
+  endedAt: number | null;
+  sessionType: string;
+  category: 'planning' | 'execution';
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalCost: number;
+}
+
+// GET /api/analytics/tasks/:boardId/sessions
+// Session-grain rows for a single task-rollup's drill-in — diagnosing which
+// session drove a task's cost. Scoped to one normalized board id (plus the
+// same project/date bounds as /tokens), so unlike /tokens this is a bounded,
+// on-demand row-level fetch rather than the unbounded scan the SQL-summed
+// rollup query above is written to avoid.
+analyticsRouter.get(
+  '/tasks/:boardId/sessions',
+  (req: Request, res: Response) => {
+    const boardIdParam = String(req.params.boardId);
+    const boardId = boardIdParam === '__none__' ? null : boardIdParam;
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    const toMs =
+      typeof req.query.to === 'string' && !isNaN(parseInt(req.query.to, 10))
+        ? parseInt(req.query.to, 10)
+        : Date.now();
+    const fromMs =
+      typeof req.query.from === 'string' &&
+      !isNaN(parseInt(req.query.from, 10))
+        ? parseInt(req.query.from, 10)
+        : toMs - DEFAULT_RANGE_MS;
+
+    const whereClauses = ['started_at >= ?', 'started_at <= ?'];
+    const params: (string | number)[] = [fromMs, toMs];
+    if (boardId === null) {
+      whereClauses.push('task_id IS NULL');
+    } else {
+      whereClauses.push('normalize_board_id(task_id) = ?');
+      params.push(boardId);
+    }
+    if (projectId) {
+      whereClauses.push('project_id = ?');
+      params.push(projectId);
+    }
+    const whereSql = whereClauses.join(' AND ');
+
+    const rows = db
+      .prepare(
+        `
+      SELECT
+        session_id,
+        task_name,
+        started_at,
+        ended_at,
+        session_type,
+        model,
+        total_input_tokens AS input_tokens,
+        total_output_tokens AS output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens
+      FROM sessions
+      WHERE ${whereSql}
+      ORDER BY started_at DESC
+    `,
+      )
+      .all(...params) as {
+      session_id: string;
+      task_name: string | null;
+      started_at: number;
+      ended_at: number | null;
+      session_type: string;
+      model: string | null;
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_tokens: number;
+      cache_creation_tokens: number;
+    }[];
+
+    const sessions: TaskSessionRow[] = rows.map((row) => ({
+      sessionId: row.session_id,
+      taskName: row.task_name,
+      startedAt: row.started_at,
+      endedAt: row.ended_at,
+      sessionType: row.session_type,
+      category: categoryForSessionType(row.session_type),
+      model: row.model,
+      inputTokens: row.input_tokens ?? 0,
+      outputTokens: row.output_tokens ?? 0,
+      cacheReadTokens: row.cache_read_tokens ?? 0,
+      cacheCreationTokens: row.cache_creation_tokens ?? 0,
+      totalCost: calculateCost(
+        row.input_tokens ?? 0,
+        row.output_tokens ?? 0,
+        row.model,
+        row.cache_read_tokens ?? 0,
+        row.cache_creation_tokens ?? 0,
+      ),
+    }));
+
+    res.json({ sessions });
+  },
+);
