@@ -836,9 +836,10 @@ function GateAccreteHeadline({ intent }: { intent: StagedIntent }) {
 
 interface GateVerifyPayload {
   gateItemId: string;
-  disposition: 'pass' | 'fail' | 'needs-setup';
+  disposition?: 'pass' | 'fail' | 'needs-setup' | 'deferred';
   evidence?: unknown;
   reclassify?: { to: string; reason: string };
+  origin?: 'mirror';
 }
 
 interface GateVerifyEvidence {
@@ -918,7 +919,11 @@ function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
     <div className={styles.text} data-testid="staged-intent-gate-verify">
       <p>
         Gate item <strong>{payload.gateItemId}</strong>:{' '}
-        <strong>{payload.disposition}</strong>
+        {payload.origin === 'mirror' ? (
+          <strong>Human-Observation — awaiting operator disposition</strong>
+        ) : (
+          <strong>{payload.disposition}</strong>
+        )}
       </p>
       {evidence == null && payload.evidence != null ? (
         renderFallback(payload.evidence)
@@ -1233,15 +1238,25 @@ export function StagedIntentPanel({
   // disposition (commit/approve/reject) is ever offered for it.
   const isNoOp = intent.kind === 'planning.noOp';
   const isGrouped = !!intent.groupId;
+  // A Human-Observation mirror carries no pre-set disposition — no verifier
+  // ever observed anything, so the operator picks Pass/Fail/Defer here
+  // instead of a single generic "Commit" (see GateVerifyIntentPayload.origin).
+  const isGateVerifyMirror =
+    intent.kind === 'gate.verify' &&
+    (intent.payload as { origin?: string } | null)?.origin === 'mirror';
 
-  const handleApply = async (override?: { reason: string }) => {
+  const handleApply = async (
+    override?: { reason: string },
+    mirrorDisposition?: 'pass' | 'fail' | 'needs-setup' | 'deferred',
+  ) => {
     setInFlight(override ? 'override' : 'apply');
     setError(null);
     try {
-      const { result } = await stagedIntentsApi.apply(
-        intent.id,
-        override ? { override: true, reason: override.reason } : undefined,
-      );
+      const { result } = await stagedIntentsApi.apply(intent.id, {
+        override: !!override,
+        reason: override?.reason,
+        mirrorDisposition,
+      });
       onApplied?.(intent, result);
     } catch (err) {
       if (isNotFoundError(err)) {
@@ -1465,7 +1480,38 @@ export function StagedIntentPanel({
           </div>
 
           <div className={styles.permissionButtons}>
-            {!isGrouped && !blocked && !skipsApply && (
+            {!isGrouped && !blocked && !skipsApply && isGateVerifyMirror && (
+              <>
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={inFlight !== null || disabled}
+                  data-testid="staged-intent-gate-verify-mirror-pass"
+                  onClick={() => void handleApply(undefined, 'pass')}
+                >
+                  {inFlight === 'apply' ? 'Applying…' : 'Pass'}
+                </button>
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={inFlight !== null || disabled}
+                  data-testid="staged-intent-gate-verify-mirror-fail"
+                  onClick={() => void handleApply(undefined, 'fail')}
+                >
+                  {inFlight === 'apply' ? 'Applying…' : 'Fail'}
+                </button>
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={inFlight !== null || disabled}
+                  data-testid="staged-intent-gate-verify-mirror-defer"
+                  onClick={() => void handleApply(undefined, 'deferred')}
+                >
+                  {inFlight === 'apply' ? 'Applying…' : 'Defer'}
+                </button>
+              </>
+            )}
+            {!isGrouped && !blocked && !skipsApply && !isGateVerifyMirror && (
               <button
                 type="button"
                 className={styles.approveButton}

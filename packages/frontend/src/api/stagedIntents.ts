@@ -144,6 +144,14 @@ export interface ApplyOptions {
   /** Overrides a blocked-with-reason intent — requires a non-empty reason. */
   override?: boolean;
   reason?: string;
+  /**
+   * The operator's chosen disposition for a Human-Observation `gate.verify`
+   * mirror intent (payload.origin === 'mirror') — such an intent carries no
+   * pre-set disposition, since no verifier ever observed anything, so the
+   * operator supplies one here at apply time. Ignored for every other kind.
+   */
+  mirrorDisposition?: 'pass' | 'fail' | 'needs-setup' | 'deferred';
+  mirrorEvidence?: string;
 }
 
 /** Mirrors the backend's UNATTRIBUTED_MILESTONE_BUCKET (db/queries.ts) — the ?milestone lens value for legacy/unresolvable rows. */
@@ -206,6 +214,8 @@ export const stagedIntentsApi = {
         body: JSON.stringify({
           override: options?.override ?? false,
           reason: options?.reason ?? '',
+          mirrorDisposition: options?.mirrorDisposition,
+          mirrorEvidence: options?.mirrorEvidence,
         }),
       },
     );

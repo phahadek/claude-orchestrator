@@ -27,7 +27,7 @@ vi.mock('../../db/db.js', async () => {
 
 import { db } from '../../db/db.js';
 import { insertItem, getItem } from '../../gate/gateStore.js';
-import { createStagedIntentsRouter } from '../stagedIntents';
+import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
 import { PLANNING_INTENT_KINDS } from '../../planning/planningIntentKinds';
 import { KNOWN_INTENT_KINDS } from '../stagedIntents';
 import { ProjectService } from '../../projects/ProjectService.js';
@@ -318,5 +318,103 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
       .prepare('SELECT state FROM staged_intent WHERE id = ?')
       .get(staged.body.id) as { state: string };
     expect(row.state).toBe('committed');
+  });
+});
+
+describe('gate.verify — Human-Observation mirror apply (operator-supplied disposition)', () => {
+  it('requires an operator-supplied mirrorDisposition — applying with none fails', async () => {
+    const item = makeGateItem({ classification: 'Human-Observation' });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${mirror.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(500);
+    expect(getItem(item.id)?.events).toHaveLength(0);
+  });
+
+  it('a mirrorDisposition of "pass" produces the exact same gate_item state as a direct GateReadinessPanel pass for the same item/evidence', async () => {
+    const directItem = makeGateItem({ classification: 'Human-Observation' });
+    const mirroredItem = makeGateItem({ classification: 'Human-Observation' });
+    const evidence = { note: 'the banner renders in the correct brand blue' };
+
+    // The direct GateReadinessPanel path: POST /gate/items/:id/events.
+    const { appendGateItemEvent } = await import('../../gate/gateService.js');
+    appendGateItemEvent(directItem.id, {
+      disposition: 'pass',
+      evidence,
+      operator: 'gate-verifier',
+    });
+
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: mirroredItem.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    const applied = await agent
+      .post(`/api/staged-intents/${mirror.id}/apply`)
+      .send({ mirrorDisposition: 'pass', mirrorEvidence: evidence });
+    expect(applied.status).toBe(200);
+
+    const direct = getItem(directItem.id);
+    const mirrored = getItem(mirroredItem.id);
+    expect(mirrored?.state).toBe(direct?.state);
+    expect(mirrored?.currentDisposition).toBe(direct?.currentDisposition);
+    expect(mirrored?.events.at(-1)).toMatchObject({
+      disposition: 'pass',
+      evidence,
+    });
+
+    const row = db
+      .prepare('SELECT state, group_id FROM staged_intent WHERE id = ?')
+      .get(mirror.id) as { state: string; group_id: string | null };
+    expect(row.state).toBe('committed');
+    expect(row.group_id).toBeNull();
+  });
+
+  it('a mirrorDisposition of "deferred" resolves the gate_item to deferred, matching GateReadinessPanel\'s direct-path Defer button', async () => {
+    const item = makeGateItem({ classification: 'Human-Observation' });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    const applied = await agent
+      .post(`/api/staged-intents/${mirror.id}/apply`)
+      .send({ mirrorDisposition: 'deferred' });
+    expect(applied.status).toBe(200);
+
+    expect(getItem(item.id)?.state).toBe('deferred');
   });
 });

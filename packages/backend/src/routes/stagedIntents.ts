@@ -1219,9 +1219,25 @@ interface JournalSetStatePayload {
  */
 interface GateVerifyIntentPayload {
   gateItemId: string;
-  disposition: 'pass' | 'fail' | 'needs-setup';
+  /**
+   * Absent for a mirror intent (`origin: 'mirror'`) — a Human-Observation
+   * item has no verifier to propose a disposition, so the operator supplies
+   * one at apply time instead (see applyIntent's gate.verify case and POST
+   * /staged-intents/:id/apply's `mirrorDisposition` body field). Always
+   * present for a normal verifier-originated report.
+   */
+  disposition?: 'pass' | 'fail' | 'needs-setup' | 'deferred';
   evidence?: unknown;
   reclassify?: { to: GateItemClassification; reason: string };
+  /**
+   * Marks a reconciler-originated stand-in for a runnable Human-Observation
+   * gate_item that no headless session can verify (see
+   * gateReconciler.reconcileHumanObservationMirrors) — reuses gate.verify's
+   * kind/shape and disposition-routing path rather than inventing a new
+   * kind, since the only real difference is *who* supplies the disposition
+   * and *when*. Absent for a genuine verifier-originated report.
+   */
+  origin?: 'mirror';
 }
 /**
  * Payload for the notion.pageEdit staged intent — the Notion
@@ -3061,6 +3077,38 @@ export function withdrawIntent(
 }
 
 /**
+ * System-initiated retirement of a live Human-Observation mirror intent —
+ * called from gateReconciler's level-triggered mirror scan
+ * (reconcileHumanObservationMirrors, via the GateItemMirrorSink wired in
+ * server.ts) once the backing gate_item has resolved via
+ * GateReadinessPanel's direct path or been reclassified away from
+ * Human-Observation, so the Decision Inbox never shows a stale card. Unlike
+ * withdrawIntent, this carries no session-ownership check — it is not a
+ * session's self-correction, it is the reconciler retiring its own mirror.
+ * A no-op if the intent already left the withdrawable staged/approved
+ * window (e.g. the operator applied it in the same tick this ran).
+ */
+export function withdrawGateVerifyMirror(intentId: string, reason: string): void {
+  const row = getStagedIntentRow(intentId);
+  if (!row || !WITHDRAWABLE_STATES.includes(row.state)) return;
+
+  const withdrawn = transitionStagedIntent(intentId, 'withdrawn', {
+    dispositionReason: reason,
+  });
+  const withdrawnIntent = rowToApi(withdrawn);
+  broadcastIntentChange(withdrawnIntent);
+
+  recordEvent({
+    event_type: 'staged_intent_disposition',
+    actor_type: 'system',
+    actor_id: 'gate-reconciler',
+    project_id: withdrawnIntent.projectId,
+    task_id: row.task_id,
+    payload: { intentId, disposition: 'withdrawn', reason },
+  });
+}
+
+/**
  * Archive and the structural intents (body/property rewrites) are
  * human-apply-only — applied through the device-auth apply path, never a
  * session credential. See Technical Architecture § Authority-vs-drift.
@@ -3092,12 +3140,19 @@ class HumanApplyOnlyError extends Error {
   }
 }
 
+/** The operator's pick for a Human-Observation mirror intent's disposition — see GateVerifyIntentPayload.origin. */
+interface GateVerifyMirrorDisposition {
+  disposition: 'pass' | 'fail' | 'needs-setup' | 'deferred';
+  evidence?: unknown;
+}
+
 async function applyIntent(
   intent: StagedIntent,
   override?: { reason: string },
   actorType: ApplyActorType = 'human',
   triageMilestoneLabel?: string,
   sessionManager?: SessionManager,
+  mirrorDisposition?: GateVerifyMirrorDisposition,
 ): Promise<unknown> {
   if (HUMAN_APPLY_ONLY_KINDS.has(intent.kind) && actorType !== 'human') {
     throw new HumanApplyOnlyError(intent.kind);
@@ -3236,15 +3291,36 @@ async function applyIntent(
           `[stagedIntents] gate.verify apply: gate item "${payload.gateItemId}" was not found`,
         );
       }
+      // A mirror intent (Human-Observation, no verifier report behind it)
+      // carries no pre-set disposition — the operator supplies pass/fail/
+      // deferred/needs-setup at apply time instead, via the same
+      // Pass/Fail/Defer-equivalent vocabulary GateReadinessPanel's direct
+      // path offers.
+      const disposition =
+        payload.origin === 'mirror'
+          ? mirrorDisposition?.disposition
+          : payload.disposition;
+      if (!disposition) {
+        throw new Error(
+          payload.origin === 'mirror'
+            ? `[stagedIntents] gate.verify apply: a Human-Observation mirror for "${payload.gateItemId}" requires an operator-supplied disposition (pass/fail/deferred/needs-setup)`
+            : `[stagedIntents] gate.verify apply: intent carries no disposition`,
+        );
+      }
+      const evidence =
+        payload.origin === 'mirror' ? mirrorDisposition?.evidence : payload.evidence;
       const result: GateVerificationResult = {
-        disposition: payload.disposition,
-        evidence: payload.evidence,
+        disposition,
+        evidence,
         reclassify: payload.reclassify,
       };
       // The operator's approval is the verdict itself — reuse the exact
       // routing gateReconciler already applies to an operator-triggered
       // manual verify dispatch (fail-followup filing/dedup, reclassify,
-      // appendGateItemEvent), rather than a second bespoke write path.
+      // appendGateItemEvent), rather than a second bespoke write path. A
+      // mirror's operator-supplied disposition routes through this exact
+      // same call, so the resulting gate_item state is identical to a
+      // direct GateReadinessPanel disposition for the same input.
       return routeVerificationResult(
         item,
         result,
@@ -4896,6 +4972,8 @@ export function createStagedIntentsRouter(
         override?: unknown;
         reason?: unknown;
         actorType?: unknown;
+        mirrorDisposition?: unknown;
+        mirrorEvidence?: unknown;
       };
       const override = body?.override === true;
       const reason = typeof body?.reason === 'string' ? body.reason : '';
@@ -4908,6 +4986,20 @@ export function createStagedIntentsRouter(
       const actorType: ApplyActorType =
         body?.actorType === 'session' ? 'session' : 'human';
 
+      const MIRROR_DISPOSITIONS = new Set(['pass', 'fail', 'needs-setup', 'deferred']);
+      const mirrorDisposition =
+        typeof body?.mirrorDisposition === 'string' &&
+        MIRROR_DISPOSITIONS.has(body.mirrorDisposition)
+          ? {
+              disposition: body.mirrorDisposition as
+                | 'pass'
+                | 'fail'
+                | 'needs-setup'
+                | 'deferred',
+              evidence: body?.mirrorEvidence,
+            }
+          : undefined;
+
       try {
         const result = await applyIntent(
           intent,
@@ -4915,6 +5007,7 @@ export function createStagedIntentsRouter(
           actorType,
           undefined,
           sessionManager,
+          mirrorDisposition,
         );
         const committed = transitionStagedIntent(intent.id, 'committed', {
           annotation: null,
