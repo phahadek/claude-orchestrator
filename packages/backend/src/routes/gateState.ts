@@ -17,7 +17,10 @@ import {
 } from '../gate/gateService';
 import { dispatchGateItemVerification } from '../gate/gateReconciler';
 import type { GateItemClassification } from '../db/types';
-import { getFlowRejectionRate } from '../db/queries';
+import {
+  getFlowRejectionRate,
+  getFlakeRecoveryMisclassificationRates,
+} from '../db/queries';
 import type { TrustPrecisionFlow } from '../db/queries';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
@@ -530,6 +533,19 @@ export function createGateStateRouter(): Router {
       }
       throw err;
     }
+  });
+
+  // GET /api/gate/flake-recovery-rate?project=<id>
+  // The transient-failure contract's self-falsification rate: per
+  // (project, gate), the fraction of conclusive flake-recovery re-runs
+  // (see db/queries.ts's getFlakeRecoveryMisclassificationRates) that ended
+  // in failure rather than passing. Inconclusive re-runs are reported
+  // alongside, excluded from the rate. Informative only; no gating, no
+  // auto-disarm — matches the trust-rate signal's posture.
+  router.get('/gate/flake-recovery-rate', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : undefined;
+    res.json(getFlakeRecoveryMisclassificationRates(project));
   });
 
   return router;

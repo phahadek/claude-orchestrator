@@ -6777,6 +6777,77 @@ export function getFlowRejectionRate(
   };
 }
 
+// ─── flake-recovery misclassification signal ──────────────────────────────
+
+/** The gates a flake-recovery re-run can target — see PRMergeWatcher.handleVerifiedFlakyDisposition. */
+type FlakeRecoveryGate = 'ci' | 'f2';
+
+const FLAKE_RECOVERY_EVENT_TO_GATE: Record<string, FlakeRecoveryGate> = {
+  flake_recovery_ci_rerun: 'ci',
+  flake_recovery_f2_rerun: 'f2',
+};
+
+export interface FlakeRecoveryMisclassificationRateResult {
+  project: string;
+  gate: FlakeRecoveryGate;
+  conclusive: number;
+  failed: number;
+  inconclusive: number;
+  rate: number | null;
+}
+
+/**
+ * The transient-failure contract's self-falsification rate: of flake-recovery
+ * re-runs that reached a conclusive outcome (passed/failed — see
+ * FlakeRecoveryOutcome), what fraction ended in `failed`. Inconclusive
+ * re-runs (head_sha drifted mid-run) are reported alongside but excluded
+ * from both the numerator and denominator, so they never silently dilute or
+ * inflate the rate. Informative only — mirrors getFlowRejectionRate's
+ * no-gating posture; nothing reads this to auto-disarm anything.
+ */
+export function getFlakeRecoveryMisclassificationRates(
+  project?: string,
+): FlakeRecoveryMisclassificationRateResult[] {
+  const eventTypes = Object.keys(FLAKE_RECOVERY_EVENT_TO_GATE);
+  const placeholders = eventTypes.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        project_id AS project,
+        event_type AS eventType,
+        SUM(CASE WHEN json_extract(payload, '$.outcome') = 'failed' THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN json_extract(payload, '$.outcome') IN ('passed', 'failed') THEN 1 ELSE 0 END) AS conclusive,
+        SUM(CASE WHEN json_extract(payload, '$.outcome') = 'inconclusive' THEN 1 ELSE 0 END) AS inconclusive
+      FROM audit_log
+      WHERE event_type IN (${placeholders})
+        AND project_id IS NOT NULL
+        ${project ? 'AND project_id = ?' : ''}
+      GROUP BY project_id, event_type
+    `,
+    )
+    .all(...eventTypes, ...(project ? [project] : [])) as Array<{
+    project: string;
+    eventType: string;
+    failed: number | null;
+    conclusive: number | null;
+    inconclusive: number | null;
+  }>;
+
+  return rows.map((row) => {
+    const conclusive = row.conclusive ?? 0;
+    const failed = row.failed ?? 0;
+    return {
+      project: row.project,
+      gate: FLAKE_RECOVERY_EVENT_TO_GATE[row.eventType],
+      conclusive,
+      failed,
+      inconclusive: row.inconclusive ?? 0,
+      rate: conclusive > 0 ? failed / conclusive : null,
+    };
+  });
+}
+
 // ─── arch_unit ────────────────────────────────────────────────────────────
 // Statements are cached lazily (prepared on first use, not at module load) so
 // importing this module doesn't fail on a not-yet-migrated db handle.
