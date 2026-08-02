@@ -294,9 +294,7 @@ export function MilestoneDecisionInbox({
                       label.name
                     )}
                   </span>
-                  <span className={styles.cardTitleDetail}>
-                    {intent.kind}
-                  </span>
+                  <span className={styles.cardTitleDetail}>{intent.kind}</span>
                 </span>
                 <span
                   className={styles.provenanceBadge}

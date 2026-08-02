@@ -8,9 +8,10 @@ import type { StagedIntent } from '../api/stagedIntents';
  * on the payload itself.
  */
 export function taskIdFromIntent(intent: StagedIntent): string | null {
-  const payload = intent.payload as
-    | { taskId?: unknown; sourceTask?: { id?: unknown } }
-    | null;
+  const payload = intent.payload as {
+    taskId?: unknown;
+    sourceTask?: { id?: unknown };
+  } | null;
   if (typeof payload?.taskId === 'string') return payload.taskId;
   const sourceTaskId = payload?.sourceTask?.id;
   return typeof sourceTaskId === 'string' ? sourceTaskId : null;
