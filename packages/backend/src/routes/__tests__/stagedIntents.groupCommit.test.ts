@@ -10,10 +10,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
 
-const { mockGetTaskBackend, mockRecordEvent } = vi.hoisted(() => ({
-  mockGetTaskBackend: vi.fn(),
-  mockRecordEvent: vi.fn(),
-}));
+const { mockGetTaskBackend, mockRecordEvent, mockClassifyReadyProposal } =
+  vi.hoisted(() => ({
+    mockGetTaskBackend: vi.fn(),
+    mockRecordEvent: vi.fn(),
+    mockClassifyReadyProposal: vi.fn(),
+  }));
 
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: mockGetTaskBackend,
@@ -21,6 +23,10 @@ vi.mock('../../tasks/TaskBackend', () => ({
 
 vi.mock('../../audit/AuditLog', () => ({
   recordEvent: mockRecordEvent,
+}));
+
+vi.mock('../../tasks/deferralClassifier', () => ({
+  classifyReadyProposal: mockClassifyReadyProposal,
 }));
 
 vi.mock('../../db/db', async () => {
@@ -88,6 +94,8 @@ function sections(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   mockGetTaskBackend.mockReset();
   mockRecordEvent.mockReset();
+  mockClassifyReadyProposal.mockReset();
+  mockClassifyReadyProposal.mockResolvedValue(undefined);
   vi.mocked(getTaskCache).mockReturnValue(null);
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
@@ -1621,6 +1629,65 @@ describe('Tier-3 advisory vs. annotation — commit-time channel independence', 
       .send({});
 
     expect(commit.status).toBe(409);
+  });
+});
+
+describe('Tier-3 advisory — group-commit path invocation', () => {
+  it('invokes classifyReadyProposal with the group id once a Ready-flip group commits', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    vi.mocked(getTaskCache).mockReturnValue(null);
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-commit-tier3',
+      't-commit-tier3',
+      'g-commit-tier3',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-commit-tier3/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(mockClassifyReadyProposal).toHaveBeenCalledWith('g-commit-tier3');
+  });
+
+  it('does not let a rejecting classifyReadyProposal reject, delay, or alter the commit result', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    vi.mocked(getTaskCache).mockReturnValue(null);
+    mockClassifyReadyProposal.mockRejectedValue(new Error('classifier down'));
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-commit-tier3-fail',
+      't-commit-tier3-fail',
+      'g-commit-tier3-fail',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-commit-tier3-fail/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.ok).toBe(true);
   });
 });
 
