@@ -216,9 +216,7 @@ describe('MilestoneBurndown', () => {
     const inGroomingFill = groomingRow.querySelector(
       '[class*="fillInGrooming"]',
     );
-    const untouchedFill = groomingRow.querySelector(
-      '[class*="fillUntouched"]',
-    );
+    const untouchedFill = groomingRow.querySelector('[class*="fillUntouched"]');
     const awaitingFill = groomingRow.querySelector(
       '[class*="fillAwaitingDisposition"]',
     );

@@ -5983,8 +5983,7 @@ export const DECISION_INBOX_VISIBLE_STATES: readonly StagedIntentState[] = [
 
 let _stmtListStagedIntentsByMilestone: Database.Statement | null = null;
 let _stmtListStagedIntentsUnattributed: Database.Statement | null = null;
-let _stmtHasAwaitingDispositionIntentForTask: Database.Statement | null =
-  null;
+let _stmtHasAwaitingDispositionIntentForTask: Database.Statement | null = null;
 
 /**
  * Active (staged/approved) *plus* blocked (needs_revision/pending_verification)
