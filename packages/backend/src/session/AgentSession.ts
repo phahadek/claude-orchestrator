@@ -85,6 +85,7 @@ import {
   pauseReasonFromCanonical,
   serializePauseReason,
 } from '../db/pauseReason';
+import { matchesWorkflowScopeDenylist } from './workflowScopeDenylist';
 import type {
   ParsedDispositionItem,
   DispositionsParsedPayload,
@@ -1878,6 +1879,43 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       return;
     }
 
+    // Proactive workflow-scope check: diff the branch against base and skip
+    // the doomed push entirely if it touches a credential-ceiling path — the
+    // reactive isWorkflowScopeDenied match below stays in place as a
+    // backstop for whatever this diff-based check misses (e.g. base branch
+    // resolution failures upstream).
+    try {
+      const changedFiles = execSync(
+        `git diff --name-only ${baseBranch}...${branch}`,
+        { cwd: this.worktreePath, encoding: 'utf-8', stdio: 'pipe' },
+      )
+        .split('\n')
+        .map((f) => f.trim())
+        .filter(Boolean);
+      if (matchesWorkflowScopeDenylist(changedFiles)) {
+        setSessionPauseReason(
+          this.sessionId,
+          serializePauseReason(
+            pauseReasonFromCanonical(
+              'workflow_scope_denied',
+              'This branch edits .github/workflows/ but the auto-dispatch PAT lacks the `workflow` scope. ' +
+                'Push requires a workflow-scoped credential; land this change via an interactive ' +
+                'remote-control session (its `gh` credential carries `workflow` scope), or once ' +
+                'available, stage the ops PR-creation intent path instead.',
+            ),
+          ),
+        );
+        return;
+      }
+    } catch (e) {
+      // Diff computation failed (e.g. base ref not fetched locally) — fall
+      // through to the push attempt; the reactive isWorkflowScopeDenied
+      // match below still catches an actual workflow-scope rejection.
+      logger.warn(
+        `[AgentSession] proactive workflow-scope diff check failed: ${(e as Error).message}`,
+      );
+    }
+
     // Push the branch to origin so GitHub can find it when createPR is called.
     // Re-pushing an already-current branch is a harmless fast-forward no-op.
     try {
@@ -1912,7 +1950,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             pauseReasonFromCanonical(
               'workflow_scope_denied',
               'This task edits .github/workflows/ but the auto-dispatch PAT lacks the `workflow` scope. ' +
-                'Push requires a workflow-scoped credential; such tasks should be typed as 🛠️ Tooling and landed interactively.',
+                'Push requires a workflow-scoped credential; land this change via an interactive ' +
+                'remote-control session (its `gh` credential carries `workflow` scope), or once ' +
+                'available, stage the ops PR-creation intent path instead.',
             ),
           ),
         );
