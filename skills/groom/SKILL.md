@@ -348,6 +348,23 @@ which mints one `seed_item` per seed on the milestone seed store and records the
 `seed_accretion` marker `checkGroomingPromotionGate` reads before allowing the Ready
 flip — again, the call itself is the durable record.
 
+Once accreted, stage a `task.patchBodySection` (`operation: "replace"`,
+`find: "None."`, `replaceWith: "- <seed 1>\n- …"`) that **writes the same seed
+spec(s) into the task body's own `## Operational seed` section**, replacing the
+`None.` placeholder every task body already carries there — the operational twin of
+Gate accretion's removal, but in the opposite direction: the section gets *filled in*,
+not stripped out. Stage this **on its own, with no `groupId`**, and let it commit
+before staging the `seed.stage` / `task.setStatus` group — never batch it as a
+same-instant sibling of the arming `task.setStatus`. This must land on the real page
+**before** the Ready-flip's stage-time content-match check runs
+(checkGroupArmingIntentCompleteness re-derives the section server-side from the
+stored body and cross-checks it against the accreted `seed_item` rows); staged in the
+same group as the arming intent, the check would see only the still-unapplied
+`None.` placeholder and pass on an empty comparison — the exact self-verifying gap
+this content-match exists to close. A post-groom 💻 Code task carrying seeds shows
+those seeds' real specs in its own `## Operational seed` section; a task with none
+shows `None.` — both are correct post-groom states, not a gap.
+
 Confirm the accretion in chat before the Ready-flip.
 
 2. **Then**, stage the write per task through the sanctioned device-authed

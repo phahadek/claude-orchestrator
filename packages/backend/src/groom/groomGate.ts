@@ -213,15 +213,16 @@ export interface GroomingGateEntry {
   /**
    * The groomer's declared operational data/config seeds for seed_contribution
    * — the assessment output stageSeedContribution's `seeds` array is supposed
-   * to mint verbatim (see task-writing.md § Milestone config-seed). Unlike
-   * gate_contribution's candidates, seeds have no pre-groom body section to
-   * re-derive server-side (they are identified from reading the change, not
-   * stripped from an author-authored list) — this is the groomer's own
-   * declared set, cross-checked at stage-group-commit time
-   * (stagedIntents.ts's precheckGroupCommit, via
-   * readinessGate.ts's checkAccretionContentMatch) against the group's live
-   * `seed.stage` intent's actual `seeds` array, the same strip⇔accrete
-   * content-match posture gate_contribution enforces against the real body.
+   * to mint verbatim (see task-writing.md § Milestone config-seed). Now the
+   * *trigger* for the content-match check, not one side of it: like
+   * gate_contribution, seeds now have a real, persisted body section
+   * (bodyRender.ts's `## Operational seed`, parsed back out via
+   * readinessGate.ts's parseOperationalSeedItems) to re-derive server-side —
+   * checkGroupArmingIntentCompleteness (stagedIntents.ts) fetches the real
+   * stored task body and cross-checks its parsed items against the group's
+   * live `seed.stage` intent's actual `seeds` array via
+   * checkAccretionContentMatch, the same strip⇔accrete content-match posture
+   * gate_contribution enforces, independent of this self-declared field.
    * Absent entirely, this check fails open (mirrors gate_contribution's own
    * candidates check) — a caller that hasn't started passing this yet records
    * nothing here and is unaffected.

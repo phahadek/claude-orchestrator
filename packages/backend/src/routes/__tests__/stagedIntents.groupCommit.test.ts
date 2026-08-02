@@ -1262,7 +1262,11 @@ describe('strip⇔accrete content-verification hard gate', () => {
   });
 });
 
-describe('seed_contribution strip⇔accrete content-match (declared candidates vs staged seeds)', () => {
+describe('seed_contribution strip⇔accrete content-match (body-derived "## Operational seed" section vs staged seeds)', () => {
+  const SEED_BODY =
+    '## Summary\nClean.\n\n## Operational seed\n- Set default retry count to 3\n- Enable the new feature flag\n';
+  const NO_SEED_SECTION_BODY = '## Summary\nClean.';
+
   async function stageSeedContentMatchGroup(
     agent: ReturnType<typeof supertest>,
     projectId: string,
@@ -1315,10 +1319,10 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
     return { dependsOn, seedStage, setStatus };
   }
 
-  it('commits cleanly when declared seed candidates match staged seeds', async () => {
+  it('commits cleanly when N items in the body\'s "## Operational seed" section match N staged seeds', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi.fn().mockResolvedValue(SEED_BODY),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
     });
@@ -1330,8 +1334,13 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
       'proj-cm-seed',
       't-cm-seed',
       groupId,
-      { seeds: [{ spec: 'Set default retry count to 3' }] },
-      [{ spec: 'Set default retry count to 3' }],
+      {
+        seeds: [
+          { spec: 'Set default retry count to 3' },
+          { spec: 'Enable the new feature flag' },
+        ],
+      },
+      [{ spec: 'ignored — trigger only, no longer the comparison side' }],
     );
 
     const commit = await agent
@@ -1341,10 +1350,10 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
     expect(commit.status).toBe(200);
   });
 
-  it('hard-blocks when fewer seeds were staged than declared', async () => {
+  it('hard-blocks when fewer seeds were staged than the body declares', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi.fn().mockResolvedValue(SEED_BODY),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
     });
@@ -1357,10 +1366,7 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
       't-cm-seed-fewer',
       groupId,
       { seeds: [{ spec: 'Set default retry count to 3' }] },
-      [
-        { spec: 'Set default retry count to 3' },
-        { spec: 'Enable the new feature flag' },
-      ],
+      [{ spec: 'Set default retry count to 3' }],
     );
 
     const commit = await agent
@@ -1380,7 +1386,7 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
   it('hard-blocks on an item-correspondence mismatch even with equal counts', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi.fn().mockResolvedValue(SEED_BODY),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
     });
@@ -1398,10 +1404,7 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
           { spec: 'Something totally unrelated' },
         ],
       },
-      [
-        { spec: 'Set default retry count to 3' },
-        { spec: 'Enable the new feature flag' },
-      ],
+      [{ spec: 'Set default retry count to 3' }],
     );
 
     const commit = await agent
@@ -1412,10 +1415,36 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
     expect(commit.body.error).toContain('content mismatch');
   });
 
+  it('never blocks a grouped Ready-flip when the real stored body carries no "## Operational seed" section', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue(NO_SEED_SECTION_BODY),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-seed-missing-section';
+    await stageSeedContentMatchGroup(
+      agent,
+      'proj-cm-seed-missing',
+      't-cm-seed-missing',
+      groupId,
+      { seeds: [{ spec: 'Set default retry count to 3' }] },
+      [{ spec: 'Set default retry count to 3' }],
+    );
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+  });
+
   it('does not run the content-match check when no seedContributionCandidates were declared', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi.fn().mockResolvedValue(SEED_BODY),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
     });
@@ -1441,7 +1470,7 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
   it('does not run the content-match check for the existing none/n-a decision path', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi.fn().mockResolvedValue(SEED_BODY),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
     });

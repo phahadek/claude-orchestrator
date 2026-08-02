@@ -622,6 +622,41 @@ export function parseManualVerificationItems(body: string): string[] {
   return items;
 }
 
+/**
+ * The seed_contribution twin of parseManualVerificationItems: parses the
+ * non-empty list items under an "Operational seed" heading (any level) from
+ * a task body — the pre-groom candidate set that stageSeedContribution's
+ * minted seed_item rows are supposed to account for. Same
+ * heading-normalization posture (normalizeHeadingText strips emoji), so
+ * "## Operational seed" and "### Operational Seed" both match; the "None."
+ * placeholder bodyRender.ts renders for an empty section is skipped the same
+ * way "none" is skipped under Manual verification.
+ */
+export function parseOperationalSeedItems(body: string): string[] {
+  const items: string[] = [];
+  const lines = body.split('\n');
+  let inSection = false;
+  for (const line of lines) {
+    const heading = line.match(/^#{1,6}\s*(.+)$/);
+    if (heading) {
+      inSection = normalizeHeadingText(heading[1]) === 'operational seed';
+      continue;
+    }
+    if (!inSection) continue;
+    const trimmed = line.trim();
+    if (!trimmed || /^none\.?$/i.test(trimmed)) continue;
+    if (/^[-*]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed)) {
+      items.push(
+        trimmed
+          .replace(/^[-*]\s+/, '')
+          .replace(/^\d+[.)]\s+/, '')
+          .trim(),
+      );
+    }
+  }
+  return items;
+}
+
 export interface AccretionContentMatchResult {
   ok: boolean;
   reasons: string[];

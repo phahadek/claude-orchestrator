@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   checkReadiness,
   parseManualVerificationItems,
+  parseOperationalSeedItems,
   checkAccretionContentMatch,
   extractDeclaredWrites,
 } from '../readinessGate';
@@ -322,6 +323,36 @@ describe('parseManualVerificationItems', () => {
   it('returns an empty array for an explicit "None" section', () => {
     const body = '### 👁️ Manual verification\nNone\n';
     expect(parseManualVerificationItems(body)).toEqual([]);
+  });
+});
+
+describe('parseOperationalSeedItems', () => {
+  it('parses bulleted items under a "## Operational seed" heading', () => {
+    const body =
+      '## Summary\nStuff.\n\n## Operational seed\n- Set default retry count to 3\n- Enable the new feature flag\n';
+    expect(parseOperationalSeedItems(body)).toEqual([
+      'Set default retry count to 3',
+      'Enable the new feature flag',
+    ]);
+  });
+
+  it('matches any heading level and stops at the next heading', () => {
+    const body =
+      '### Operational Seed\n1. First seed\n2. Second seed\n\n## Next section\n- Not an operational seed item\n';
+    expect(parseOperationalSeedItems(body)).toEqual([
+      'First seed',
+      'Second seed',
+    ]);
+  });
+
+  it('returns an empty array when there is no Operational seed section', () => {
+    const body = '## Summary\nNo such section here.\n';
+    expect(parseOperationalSeedItems(body)).toEqual([]);
+  });
+
+  it('returns an empty array for the rendered "None." placeholder', () => {
+    const body = '## Operational seed\nNone.\n';
+    expect(parseOperationalSeedItems(body)).toEqual([]);
   });
 });
 
