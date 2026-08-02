@@ -100,7 +100,8 @@ type EventType =
   | 'mcp_connection_closed'
   | 'mcp_session_credential_revoked'
   | 'memory_admission_deferred'
-  | 'task_aborted';
+  | 'task_aborted'
+  | 'planning_dispatch_launched';
 
 type ActorType = 'ai' | 'human' | 'system';
 
@@ -111,4 +112,17 @@ export interface AuditEvent {
   project_id?: string | null;
   task_id?: string | null;
   payload: Record<string, unknown>;
+}
+
+/**
+ * trigger_source discriminates the two dispatch call sites so evaluator vs
+ * operator activity can be told apart in the audit record — see
+ * DispatchTriggerEvaluator.ts and routes/planningLaunch.ts. milestone_id is
+ * always the flow_arm UUID key space (milestone.id), never gate_item's
+ * display-name space.
+ */
+export interface PlanningDispatchLaunchedPayload {
+  trigger_source: 'evaluator' | 'operator';
+  flow: string;
+  milestone_id: string;
 }

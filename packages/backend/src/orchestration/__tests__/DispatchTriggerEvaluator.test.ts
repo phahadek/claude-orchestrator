@@ -15,6 +15,10 @@ vi.mock('../planningCandidates.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../../ops/opsLoad.js', () => ({
+  loadOpsContext: vi.fn(),
+}));
+
 import {
   computeAvailableCapacity,
   rotateFromIndex,
@@ -407,5 +411,129 @@ describe('DispatchTriggerEvaluator — usage admission gate', () => {
     await evaluator.tickOnce();
 
     expect(listProjects).toHaveBeenCalledOnce();
+  });
+});
+
+describe('DispatchTriggerEvaluator — dispatch provenance audit rows', () => {
+  const PROJECT = 'proj-provenance';
+  const MILESTONE = 'milestone-provenance';
+
+  function makeTask(id: string): NotionTask {
+    return {
+      id,
+      title: `Task ${id}`,
+      status: '🔲 Backlog',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: `https://notion.so/${id}`,
+    };
+  }
+
+  beforeEach(async () => {
+    const { db } = await import('../../db/db.js');
+    db.prepare('DELETE FROM task_cache').run();
+    db.prepare('DELETE FROM flow_arm').run();
+    db.prepare('DELETE FROM milestones').run();
+    db.prepare('DELETE FROM projects').run();
+    db.prepare("DELETE FROM audit_log WHERE event_type = 'planning_dispatch_launched'").run();
+
+    insertProject({
+      id: PROJECT,
+      name: 'Provenance Project',
+      project_dir: '/tmp/proj-provenance',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    insertMilestone({
+      id: MILESTONE,
+      project_id: PROJECT,
+      name: 'Provenance Milestone',
+      source_id: null,
+      canonical_short_id: null,
+      wrapped_at: null,
+    });
+    upsertTaskCache(`board:${MILESTONE}`, JSON.stringify([makeTask('task-1')]));
+  });
+
+  it('records a planning_dispatch_launched row with trigger_source "evaluator" on a successful groom dispatch', async () => {
+    const { db } = await import('../../db/db.js');
+    const launcher = {
+      launchSelected: vi.fn().mockResolvedValue({
+        launched: ['task-1'],
+        deferred: [],
+        failed: [],
+      }),
+    };
+    const evaluator = new DispatchTriggerEvaluator({} as never, launcher as never);
+    const candidate = {
+      projectId: PROJECT,
+      milestone: { id: MILESTONE } as never,
+      task: makeTask('task-1'),
+    };
+
+    const launched = await (evaluator as any).dispatchPlanningCandidate(
+      candidate,
+      'groom',
+    );
+    expect(launched).toBe(true);
+
+    const rows = db
+      .prepare(
+        "SELECT payload FROM audit_log WHERE event_type = 'planning_dispatch_launched'",
+      )
+      .all() as Array<{ payload: string }>;
+    expect(rows).toHaveLength(1);
+    const payload = JSON.parse(rows[0].payload);
+    expect(payload).toEqual({
+      trigger_source: 'evaluator',
+      flow: 'groom',
+      milestone_id: MILESTONE,
+    });
+  });
+
+  it('records a planning_dispatch_launched row with trigger_source "evaluator" on a successful ops dispatch', async () => {
+    const { db } = await import('../../db/db.js');
+    const opsEntry = {
+      id: 'task-1',
+      title: 'Task task-1',
+      url: '',
+      blockingDepIds: [],
+      mode: 'launch',
+    };
+    const { loadOpsContext } = await import('../../ops/opsLoad.js');
+    vi.mocked(loadOpsContext).mockResolvedValue({
+      worklist: { executable: [opsEntry] },
+    } as never);
+
+    const launcher = {
+      launchSelected: vi.fn().mockResolvedValue({
+        launched: ['task-1'],
+        deferred: [],
+        failed: [],
+      }),
+    };
+    const evaluator = new DispatchTriggerEvaluator({} as never, launcher as never);
+    const candidate = {
+      projectId: PROJECT,
+      milestone: { id: MILESTONE } as never,
+      task: makeTask('task-1'),
+    };
+
+    const launched = await (evaluator as any).dispatchOpsCandidate(candidate);
+    expect(launched).toBe(true);
+
+    const rows = db
+      .prepare(
+        "SELECT payload FROM audit_log WHERE event_type = 'planning_dispatch_launched'",
+      )
+      .all() as Array<{ payload: string }>;
+    expect(rows).toHaveLength(1);
+    const payload = JSON.parse(rows[0].payload);
+    expect(payload).toEqual({
+      trigger_source: 'evaluator',
+      flow: 'ops',
+      milestone_id: MILESTONE,
+    });
   });
 });
