@@ -1865,4 +1865,26 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // ── audit_finding_dedup: scheduled base-branch dependency/license-audit
+  // sweep's dedup record ──────────────────────────────────────────────────
+  // One row per (project, finding-identity) currently covered by a filed
+  // dep-bump task. finding_identity is the advisory id (GHSA/npm advisory
+  // number) for a dependency-vulnerability finding, or
+  // "<package>@<version>:<license>" for a license finding. The record only
+  // suppresses re-filing while task_id remains open (not Done) — the sweep
+  // re-checks the referenced task's live status before treating a hit as
+  // "already covered", so a closed task's row is stale rather than binding.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS audit_finding_dedup (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id     TEXT    NOT NULL,
+      finding_identity TEXT  NOT NULL,
+      task_id        TEXT    NOT NULL,
+      filed_at       TEXT    NOT NULL,
+      UNIQUE(project_id, finding_identity)
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_finding_dedup_project_identity
+      ON audit_finding_dedup(project_id, finding_identity);
+  `);
 }
