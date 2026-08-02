@@ -21,7 +21,9 @@ function fakeSession() {
   return {
     recordReviewDisposition: vi.fn(),
     recordVerifiedFlakyDisposition: vi.fn(),
-    recordGateVerifyDisposition: vi.fn(),
+    recordGateVerifyDisposition: vi
+      .fn()
+      .mockReturnValue({ id: 'staged-1', milestone: 'M1' }),
   } as unknown as AgentSession & {
     recordReviewDisposition: ReturnType<typeof vi.fn>;
     recordVerifiedFlakyDisposition: ReturnType<typeof vi.fn>;
@@ -177,7 +179,11 @@ describe('gate.verify', () => {
         },
       },
     });
-    expect(resultOf(result as never)).toEqual({ status: 'ok' });
+    expect(resultOf(result as never)).toEqual({
+      status: 'ok',
+      id: 'staged-1',
+      milestone: 'M1',
+    });
     expect(session.recordGateVerifyDisposition).toHaveBeenCalledWith({
       gateItemId: 'item-1',
       disposition: 'pass',
@@ -188,6 +194,27 @@ describe('gate.verify', () => {
       },
       reclassify: undefined,
     });
+    await close();
+  });
+
+  it('surfaces a not-found gateItemId (e.g. a short/truncated form) as an error, not a bare ok', async () => {
+    const session = fakeSession();
+    session.recordGateVerifyDisposition.mockImplementation(() => {
+      throw new Error(
+        'no gate item "short-id" — gateItemId must be the full gate_item id',
+      );
+    });
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'short-id',
+        disposition: 'pass',
+        evidence: { expected: 'x', found: 'y', query: 'z' },
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultOf(result as never).error).toMatch(/full gate_item id/);
     await close();
   });
 
@@ -285,7 +312,11 @@ describe('gate.verify', () => {
         },
       },
     });
-    expect(resultOf(result as never)).toEqual({ status: 'ok' });
+    expect(resultOf(result as never)).toEqual({
+      status: 'ok',
+      id: 'staged-1',
+      milestone: 'M1',
+    });
     expect(session.recordGateVerifyDisposition).toHaveBeenCalledWith({
       gateItemId: 'item-1',
       disposition: 'fail',

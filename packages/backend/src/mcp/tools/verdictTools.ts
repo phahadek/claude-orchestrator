@@ -9,6 +9,7 @@ import {
   gateVerifyEvidenceSchema,
   gateVerifyReclassifySchema,
   gateVerifyPayloadSchema,
+  gateVerifyResultSchema,
 } from './schemas';
 
 /** Per-connection context a verdict-delivery tool call is scoped to. */
@@ -135,13 +136,23 @@ export function registerVerdictTools(
         if (!parsed.success) {
           return invalid(parsed.error.issues.map((i) => i.message).join('; '));
         }
-        session.recordGateVerifyDisposition({
-          gateItemId: args.gateItemId,
-          disposition: args.disposition,
-          evidence: args.evidence,
-          reclassify: args.reclassify,
-        });
-        return ok();
+        let staged;
+        try {
+          staged = session.recordGateVerifyDisposition({
+            gateItemId: args.gateItemId,
+            disposition: args.disposition,
+            evidence: args.evidence,
+            reclassify: args.reclassify,
+          });
+        } catch (err) {
+          return invalid(err instanceof Error ? err.message : String(err));
+        }
+        const result: z.infer<typeof gateVerifyResultSchema> = {
+          status: 'ok',
+          id: staged.id,
+          milestone: staged.milestone ?? null,
+        };
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] };
       },
     );
   }

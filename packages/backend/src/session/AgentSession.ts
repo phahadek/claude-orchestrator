@@ -65,7 +65,7 @@ import {
   isGateVerifySession,
   opensPr,
 } from './sessionPredicates';
-import { stageIntent } from '../routes/stagedIntents';
+import { stageIntent, type StagedIntent } from '../routes/stagedIntents';
 import { getGateItem } from '../gate/gateService';
 import {
   VALID_EVENT_TYPES,
@@ -2850,15 +2850,30 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * dedup is needed here — unlike recordReviewDisposition/
    * recordVerifiedFlakyDisposition above, a repeat call with the same
    * disposition after a rejection must be allowed to re-stage.
+   *
+   * gateItemId must exact-match an existing gate_item row — getGateItem does
+   * a plain `WHERE id = ?` lookup, so a truncated/short-form id (not
+   * guaranteed unique on these boards, whose ids share long structured
+   * prefixes) simply misses and is rejected here rather than silently
+   * staging with milestone null. Returns the staged intent so the
+   * gate.verify MCP tool can echo its id and recorded milestone back to the
+   * caller — the same shape journal.setState already echoes.
    */
-  recordGateVerifyDisposition(disposition: GateVerifyDisposition): void {
+  recordGateVerifyDisposition(
+    disposition: GateVerifyDisposition,
+  ): StagedIntent {
     const item = getGateItem(disposition.gateItemId);
+    if (!item) {
+      throw new Error(
+        `no gate item "${disposition.gateItemId}" — gateItemId must be the full gate_item id`,
+      );
+    }
     const summary =
       `Gate item ${disposition.gateItemId}: reported ${disposition.disposition}` +
       (disposition.reclassify
         ? ` (proposes reclassify -> ${disposition.reclassify.to})`
         : '');
-    stageIntent(
+    const staged = stageIntent(
       'gate.verify',
       disposition,
       this.projectId,
@@ -2867,7 +2882,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       summary,
       null,
       null,
-      item?.milestone ?? null,
+      item.milestone,
       null,
     );
     const payload: GateVerifyDispositionPayload = {
@@ -2875,6 +2890,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       disposition,
     };
     this.emit('gate_verify_disposition', payload);
+    return staged;
   }
 
   /** No-op — CLI does not support mid-session permission approval. */

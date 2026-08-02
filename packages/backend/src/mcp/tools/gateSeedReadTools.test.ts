@@ -11,6 +11,24 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../../projects/ProjectService', () => ({
+  ProjectService: {
+    getById: (id: string) =>
+      id === 'proj-1'
+        ? {
+            id: 'proj-1',
+            milestones: [
+              {
+                id: 'ms-uuid-1',
+                name: 'Milestone One',
+                canonicalShortId: 'M1',
+              },
+            ],
+          }
+        : undefined,
+  },
+}));
+
 import { db } from '../../db/db';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -174,5 +192,59 @@ describe('gateSeed.getState', () => {
 
     expect(result.gateItems).toEqual([]);
     expect(result.seedItems).toEqual([]);
+  });
+
+  it.each([
+    ['the DB UUID', 'ms-uuid-1'],
+    ['the canonical short id', 'M1'],
+    ['the full display name', 'Milestone One'],
+  ])(
+    'returns the same items regardless of which milestone form is passed (%s)',
+    async (_label, milestoneRef) => {
+      const gateItem = insertGateItem({
+        project: PROJECT_ID,
+        milestone: MILESTONE,
+        text: 'Verify the new endpoint returns 200',
+        classification: 'Read-Only',
+        sources: [{ sourceTaskId: 'notion:task-1', sourceTaskTitle: 'Task 1' }],
+        updatedAt: '2024-01-01T00:00:00Z',
+      });
+
+      const { client, close } = await connectedClient();
+      const result = resultOf(
+        (await client.callTool({
+          name: 'gateSeed.getState',
+          arguments: { milestone: milestoneRef },
+        })) as { content: Array<{ type: string; text?: string }> },
+      );
+      await close();
+
+      expect(result.gateItems).toEqual([
+        {
+          id: gateItem.id,
+          milestone: MILESTONE,
+          text: 'Verify the new endpoint returns 200',
+          classification: 'Read-Only',
+          state: 'open',
+        },
+      ]);
+    },
+  );
+
+  it('raises a clear error for an unresolvable milestone rather than returning an empty result set', async () => {
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'gateSeed.getState',
+      arguments: { milestone: 'not-a-real-milestone' },
+    })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
+    await close();
+
+    expect(result.isError).toBe(true);
+    const parsed = resultOf(result as never);
+    expect(typeof parsed.error).toBe('string');
+    expect(parsed.error).toMatch(/not-a-real-milestone/);
   });
 });

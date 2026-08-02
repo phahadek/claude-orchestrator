@@ -4,6 +4,10 @@ import {
   listGateItemsByMilestone,
   listSeedItemsByMilestone,
 } from '../../db/queries';
+import {
+  resolveMilestoneForProject,
+  UnknownMilestoneError,
+} from '../../projects/milestoneResolver';
 
 /** Per-connection context the gate/seed read tool is scoped to. */
 export interface GateSeedReadToolContext {
@@ -45,13 +49,27 @@ export function registerGateSeedReadTools(
     {
       title: 'Fetch gate/seed item state for a milestone',
       description:
-        'Read-only: returns { gateItems, seedItems } state for the given milestone — each item as { id, milestone, text/spec, classification (gate only), state }. No event history, no operator field.',
+        "Read-only: returns { gateItems, seedItems } state for the given milestone — each item as { id, milestone, text/spec, classification (gate only), state }. No event history, no operator field. milestone accepts any of the milestone's forms (DB UUID, canonical short id, or full display name); an unresolvable milestone raises rather than returning an empty result.",
       inputSchema: { milestone: z.string() },
     },
     async (args) => {
+      let milestone: string;
+      try {
+        milestone = resolveMilestoneForProject(ctx.projectId, args.milestone);
+      } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          return {
+            content: [
+              { type: 'text', text: JSON.stringify({ error: err.message }) },
+            ],
+            isError: true,
+          };
+        }
+        throw err;
+      }
       const gateItems: GateItemState[] = listGateItemsByMilestone(
         ctx.projectId,
-        args.milestone,
+        milestone,
       ).map((row) => ({
         id: row.id,
         milestone: row.milestone,
@@ -61,7 +79,7 @@ export function registerGateSeedReadTools(
       }));
       const seedItems: SeedItemState[] = listSeedItemsByMilestone(
         ctx.projectId,
-        args.milestone,
+        milestone,
       ).map((row) => ({
         id: row.id,
         milestone: row.milestone,
