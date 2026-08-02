@@ -178,3 +178,57 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.migrationMarker {
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--color-yellow, #f9e2af);
+  border-radius: 8px;
+  color: var(--color-yellow, #f9e2af);
+  font-size: 0.8125rem;
+  padding: 8px 14px;
+}
+
+.legendRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--text-muted, #a6adc8);
+}
+
+.legendSwatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.rollupRow {
+  cursor: pointer;
+}
+
+.expandCell {
+  width: 18px;
+  color: var(--text-muted, #a6adc8);
+  text-align: center;
+}
+
+.sessionRow td {
+  background: var(--bg-secondary, #181825);
+  color: var(--text-muted, #a6adc8);
+  font-size: 0.75rem;
+}
+
+.sessionNameCell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 20px;
+}
