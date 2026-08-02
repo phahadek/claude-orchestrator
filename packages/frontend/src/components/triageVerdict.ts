@@ -2,11 +2,18 @@ import type { StagedIntent } from '../api/stagedIntents';
 
 /**
  * Task types eligible for approve-by-standard triage — mirrors the
- * backend's INTERACTIVE_TASK_TYPES (planning/triage.ts). 💻 Code (and any
- * other non-interactive type) stays per-task-gated; a triage verdict
- * recorded against one is never a valid batch-approval signal.
+ * backend's clean-verdict eligibility signal (planning/triage.ts), which
+ * now also covers 🔧 Operational and 🔎 Investigation per the shared
+ * triage-surface design. 💻 Code (and any other non-interactive type)
+ * stays per-task-gated; a triage verdict recorded against one is never a
+ * valid batch-approval signal.
  */
-const INTERACTIVE_TASK_TYPES = new Set(['📐 Design', '📋 Planning']);
+const INTERACTIVE_TASK_TYPES = new Set([
+  '📐 Design',
+  '📋 Planning',
+  '🔧 Operational',
+  '🔎 Investigation',
+]);
 
 interface SetStatusTriagePayload {
   taskId: string;
