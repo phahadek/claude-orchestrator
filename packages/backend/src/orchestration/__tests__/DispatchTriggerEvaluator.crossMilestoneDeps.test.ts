@@ -32,7 +32,9 @@ describe('DispatchTriggerEvaluator — cross-milestone dependency resolution', (
   const MILESTONE_A = 'milestone-a';
   const MILESTONE_B = 'milestone-b';
 
-  function makeTask(overrides: Partial<NotionTask> & { id: string }): NotionTask {
+  function makeTask(
+    overrides: Partial<NotionTask> & { id: string },
+  ): NotionTask {
     return {
       title: `Task ${overrides.id}`,
       status: '🔲 Backlog',
@@ -155,9 +157,7 @@ describe('DispatchTriggerEvaluator — cross-milestone dependency resolution', (
     const candidates = await (evaluator as any).scanProjectDesignCandidates(
       PROJECT,
     );
-    expect(candidates.map((c: any) => c.task.id)).toEqual([
-      'design-dependent',
-    ]);
+    expect(candidates.map((c: any) => c.task.id)).toEqual(['design-dependent']);
   });
 
   it('still fails the gate closed for a dependency present on no board of the project', async () => {
