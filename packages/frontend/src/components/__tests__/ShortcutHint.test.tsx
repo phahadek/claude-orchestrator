@@ -23,7 +23,9 @@ describe('ShortcutHint', () => {
     // media query only affects CSS display, not whether the rows exist in
     // the DOM, so this assertion holds regardless of viewport.
     render(<ShortcutHint />);
-    fireEvent.click(screen.getByRole('button', { name: /keyboard shortcuts/i }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /keyboard shortcuts/i }),
+    );
 
     for (const { key, desc } of KEYBOARD_SHORTCUTS) {
       const row = screen.getByText(key, { selector: 'kbd' }).closest('tr');
@@ -34,7 +36,9 @@ describe('ShortcutHint', () => {
 
   it('drift guard: the cheatsheet documents no key that useKeyboardShortcuts does not handle', () => {
     const { container } = render(<ShortcutHint />);
-    fireEvent.click(screen.getByRole('button', { name: /keyboard shortcuts/i }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /keyboard shortcuts/i }),
+    );
 
     const knownKeys = new Set(KEYBOARD_SHORTCUTS.map((s) => s.key));
     // Shift+Enter is the one documented binding not owned by
@@ -50,7 +54,9 @@ describe('ShortcutHint', () => {
 
   it('does not document the removed Rules view shortcut', () => {
     render(<ShortcutHint />);
-    fireEvent.click(screen.getByRole('button', { name: /keyboard shortcuts/i }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /keyboard shortcuts/i }),
+    );
     expect(screen.queryByText('Rules view')).toBeNull();
   });
 });
