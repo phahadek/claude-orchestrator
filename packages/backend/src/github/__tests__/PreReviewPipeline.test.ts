@@ -1111,7 +1111,11 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
       makeProject(),
     );
 
-    expect(result).toEqual({ outcome: 'inconclusive', passed: true, output: 'ok' });
+    expect(result).toEqual({
+      outcome: 'inconclusive',
+      passed: true,
+      output: 'ok',
+    });
     expect(mockRecordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'flake_recovery_f2_rerun',

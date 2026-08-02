@@ -155,9 +155,7 @@ function makeMockGitHub(): GitHubClient {
   return {
     rerunFailedJobs: vi.fn().mockResolvedValue([1, 2]),
     waitForCheckRunsCompletion: vi.fn().mockResolvedValue(true),
-    getPRState: vi
-      .fn()
-      .mockResolvedValue({ state: 'open', headSha: HEAD_SHA }),
+    getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha: HEAD_SHA }),
     categorizeMergeability: vi.fn().mockResolvedValue({
       category: 'clean',
       mergeState: 'clean',
@@ -241,10 +239,7 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — same-SHA re-run actu
       REPO,
       [1, 2],
     );
-    expect(vi.mocked(github.getPRState)).toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-    );
+    expect(vi.mocked(github.getPRState)).toHaveBeenCalledWith(PR_NUMBER, REPO);
     expect(vi.mocked(incrementFlakeRecoveryAttempts)).toHaveBeenCalledWith(
       PR_NUMBER,
       REPO,

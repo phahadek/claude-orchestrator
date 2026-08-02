@@ -533,7 +533,11 @@ export class ReviewOrchestrator {
     headSha: string,
     worktreePath: string,
     project: ProjectConfig,
-  ): Promise<{ outcome: FlakeRecoveryOutcome; passed: boolean; output: string } | null> {
+  ): Promise<{
+    outcome: FlakeRecoveryOutcome;
+    passed: boolean;
+    output: string;
+  } | null> {
     return this.preReviewPipeline.rerunFlakyTests(
       prNumber,
       repo,
