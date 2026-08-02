@@ -7,7 +7,11 @@ import type { Scheduler } from './Scheduler';
 import { getAllProjects, runtimeSettings } from '../config';
 import type { ProjectConfig } from '../config';
 import type { ResolvedTask } from '../notion/types';
-import type { ServerMessage } from '../ws/types';
+import type {
+  AdmissionBlockReason,
+  AdmissionStallState,
+  ServerMessage,
+} from '../ws/types';
 import {
   hasActiveSessionForTask,
   getPausedPrReasonForTask,
@@ -35,6 +39,13 @@ const FETCH_TIMEOUT_MS = 30_000;
 const PROJECT_CONCURRENCY = 5;
 const UPDATE_CONCURRENCY = 3;
 const LAUNCH_CONCURRENCY = 3;
+
+/** Result of an admission-gate check — allowed, or blocked with a uniform reason tag. */
+interface AdmissionCheckResult {
+  allowed: boolean;
+  reason?: AdmissionBlockReason;
+  detail?: Record<string, unknown>;
+}
 
 export class AutoLauncherFetchTimeoutError extends Error {
   constructor(message: string) {
@@ -85,6 +96,17 @@ export class AutoLauncher {
    * cleared (the loop-safety guard for launch_failed escalation).
    */
   private lastPollReadyTaskIds: Set<string> | null = null;
+  /**
+   * Consecutive poll ticks where eligible candidates existed but zero were
+   * admitted (a gate blocked every one). Reset to 0 the moment a tick admits
+   * something or has no eligible candidates — only a run of blocked ticks
+   * counts toward the sustained-block signal (edge-triggered, not per-tick).
+   */
+  private consecutiveStallTicks = 0;
+  /** Non-null while a sustained admission block is active — the onset payload, reused for REST reconciliation. */
+  private stallState: AdmissionStallState | null = null;
+  /** Consecutive blocked ticks required before raising admission_stalled. */
+  private static readonly STALL_THRESHOLD_TICKS = 3;
   private static readonly BACKOFF_SCHEDULE_MS = [
     60_000,
     5 * 60_000,
@@ -242,10 +264,14 @@ export class AutoLauncher {
               launched: 0,
               skipped: 0,
               readyTaskIds: [] as string[],
+              blockReason: undefined as AdmissionBlockReason | undefined,
+              blockDetail: undefined as Record<string, unknown> | undefined,
             };
           }),
       );
       const newReadyTaskIds = new Set<string>();
+      let blockReason: AdmissionBlockReason | undefined;
+      let blockDetail: Record<string, unknown> | undefined;
       for (const counts of projectResults) {
         eligibleCount += counts.eligible;
         launchedCount += counts.launched;
@@ -253,8 +279,18 @@ export class AutoLauncher {
         for (const id of counts.readyTaskIds) {
           newReadyTaskIds.add(id);
         }
+        if (counts.blockReason) {
+          blockReason = counts.blockReason;
+          blockDetail = counts.blockDetail;
+        }
       }
       this.lastPollReadyTaskIds = newReadyTaskIds;
+      this.evaluateAdmissionStall(
+        eligibleCount,
+        launchedCount,
+        blockReason,
+        blockDetail,
+      );
     } finally {
       const elapsedMs = Date.now() - (this.pollLastStartedAt ?? Date.now());
       logger.info(
@@ -268,6 +304,8 @@ export class AutoLauncher {
     launched: number;
     skipped: number;
     readyTaskIds: string[];
+    blockReason?: AdmissionBlockReason;
+    blockDetail?: Record<string, unknown>;
   }> {
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const backend = resolveBackend(project.id);
@@ -401,13 +439,18 @@ export class AutoLauncher {
     // candidate so the cap is still respected once in-flight launches land;
     // capacityExhausted short-circuits remaining workers once it flips.
     let capacityExhausted = false;
+    let blockReason: AdmissionBlockReason | undefined;
+    let blockDetail: Record<string, unknown> | undefined;
     const launchResults = await runWithConcurrency(
       candidates,
       LAUNCH_CONCURRENCY,
       async (candidate) => {
         if (capacityExhausted) return false;
-        if (!this.hasCapacity()) {
+        const capacity = this.hasCapacity();
+        if (!capacity.allowed) {
           capacityExhausted = true;
+          blockReason = capacity.reason;
+          blockDetail = capacity.detail;
           return false;
         }
         // Non-milestone tasks have no milestoneId — they branch off dev directly.
@@ -427,6 +470,8 @@ export class AutoLauncher {
       launched,
       skipped: candidates.length - launched,
       readyTaskIds,
+      blockReason,
+      blockDetail,
     };
   }
 
@@ -498,11 +543,16 @@ export class AutoLauncher {
    * resumeOrphanSessions() restored at boot — this keeps the launcher from
    * racing with orphan-resume slot reservations.
    */
-  private hasCapacity(): boolean {
+  private hasCapacity(): AdmissionCheckResult {
     const cap = Math.max(0, runtimeSettings.auto_launch_concurrency);
-    if (cap === 0) return false;
     const liveCodeSessions = this.countLiveCodeSessions();
-    if (liveCodeSessions >= cap) return false;
+    if (cap === 0 || liveCodeSessions >= cap) {
+      return {
+        allowed: false,
+        reason: 'capacity_exhausted',
+        detail: { cap, liveCodeSessions },
+      };
+    }
     const memoryHeadroom = hasMemoryHeadroom();
     if (!memoryHeadroom.allowed) {
       logger.info(
@@ -523,16 +573,93 @@ export class AutoLauncher {
           projectedFreeMB: memoryHeadroom.projectedFreeMB,
         },
       });
-      return false;
+      return {
+        allowed: false,
+        reason: 'memory_admission',
+        detail: {
+          freeMemMB: memoryHeadroom.freeMemMB,
+          minHostFreeMemoryMB: memoryHeadroom.minHostFreeMemoryMB,
+          perSessionReserveMB: memoryHeadroom.perSessionReserveMB,
+          projectedFreeMB: memoryHeadroom.projectedFreeMB,
+        },
+      };
     }
     const usageAdmission = isUsageAdmitted();
     if (!usageAdmission.allowed) {
       logger.info(
         `[AutoLauncher] deferring dispatch — plan usage (${usageAdmission.window}) exhausted until ${usageAdmission.deferredUntil ? new Date(usageAdmission.deferredUntil).toISOString() : 'unknown'}`,
       );
-      return false;
+      return {
+        allowed: false,
+        reason: 'usage_deferral',
+        detail: {
+          window: usageAdmission.window,
+          deferredUntil: usageAdmission.deferredUntil,
+        },
+      };
     }
-    return true;
+    return { allowed: true };
+  }
+
+  /**
+   * Aggregates per-tick admission outcomes into the sustained-block signal.
+   * Edge-triggered: fires admission_stalled once after STALL_THRESHOLD_TICKS
+   * consecutive ticks with eligible candidates and zero admissions, and fires
+   * admission_stall_cleared once admission resumes (or candidates disappear).
+   * A launcher with no eligible candidates is idle, not blocked, and must
+   * never contribute to the counter.
+   */
+  private evaluateAdmissionStall(
+    eligibleCount: number,
+    launchedCount: number,
+    reason: AdmissionBlockReason | undefined,
+    detail: Record<string, unknown> | undefined,
+  ): void {
+    const isStallTick = eligibleCount > 0 && launchedCount === 0 && !!reason;
+
+    if (!isStallTick) {
+      this.consecutiveStallTicks = 0;
+      if (this.stallState) {
+        this.stallState = null;
+        this.broadcast?.({ type: 'admission_stall_cleared' });
+        recordEvent({
+          event_type: 'admission_stall_cleared',
+          actor_type: 'system',
+          actor_id: null,
+          project_id: null,
+          task_id: null,
+          payload: {},
+        });
+      }
+      return;
+    }
+
+    this.consecutiveStallTicks += 1;
+    if (
+      !this.stallState &&
+      this.consecutiveStallTicks >= AutoLauncher.STALL_THRESHOLD_TICKS
+    ) {
+      this.stallState = {
+        reason,
+        eligibleCount,
+        since: Date.now(),
+        detail: detail ?? {},
+      };
+      this.broadcast?.({ type: 'admission_stalled', ...this.stallState });
+      recordEvent({
+        event_type: 'admission_stall_started',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: null,
+        payload: { reason, eligibleCount, ...(detail ?? {}) },
+      });
+    }
+  }
+
+  /** Current sustained-admission-block state, for REST reconciliation on client load/reconnect. */
+  getAdmissionStallState(): AdmissionStallState | null {
+    return this.stallState;
   }
 
   /** Count live (in-memory) standard sessions via SessionManager's public API. */

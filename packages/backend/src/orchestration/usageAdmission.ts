@@ -18,6 +18,12 @@ export interface UsageAdmissionResult {
   /** Present when allowed is false — the ms timestamp admission reopens. */
   deferredUntil?: number;
   window?: UsageDeferralWindow;
+  /**
+   * Present when allowed is false — a uniform reason tag shared with the
+   * other admission gates (memory, capacity) so callers like AutoLauncher's
+   * sustained-block signal don't need gate-specific branching.
+   */
+  reason?: 'usage_deferral';
 }
 
 const WINDOW_ORDER: UsageDeferralWindow[] = ['five_hour', 'seven_day'];
@@ -46,7 +52,12 @@ export function checkUsageAdmission(usage: PlanUsage): UsageAdmissionResult {
   for (const window of WINDOW_ORDER) {
     const deferredUntil = getUsageDeferral(window);
     if (deferredUntil != null && deferredUntil > now) {
-      return { allowed: false, deferredUntil, window };
+      return {
+        allowed: false,
+        deferredUntil,
+        window,
+        reason: 'usage_deferral',
+      };
     }
   }
 
@@ -64,7 +75,12 @@ export function checkUsageAdmission(usage: PlanUsage): UsageAdmissionResult {
         ? fallbackDeferralMs()
         : parsed;
       setUsageDeferral(window, deferredUntil);
-      return { allowed: false, deferredUntil, window };
+      return {
+        allowed: false,
+        deferredUntil,
+        window,
+        reason: 'usage_deferral',
+      };
     }
   }
 
@@ -138,5 +154,5 @@ export function recordObservedUsageLimit(
   const parsed = resultMessage ? parseCliResetTime(resultMessage) : undefined;
   const deferredUntil = parsed ?? fallbackDeferralMs();
   setUsageDeferral(window, deferredUntil);
-  return { allowed: false, deferredUntil, window };
+  return { allowed: false, deferredUntil, window, reason: 'usage_deferral' };
 }

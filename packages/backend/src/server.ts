@@ -94,7 +94,11 @@ import { resolveMilestoneForTaskId } from './projects/milestoneResolver';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
-import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
+import {
+  createDiagnosticsRouter,
+  setScheduler,
+  setAutoLauncher,
+} from './routes/diagnostics';
 import {
   createDeployRouter,
   setDeployScheduler,
@@ -466,6 +470,7 @@ wss.on('connection', (ws, req) => {
 // AutoLauncher is constructed up-front; pollOnce() is called during boot after
 // orphan resume, and the Scheduler drives subsequent periodic polls.
 const autoLauncher = new AutoLauncher(sessionManager, broadcast);
+setAutoLauncher(autoLauncher);
 
 // DispatchTriggerEvaluator: sibling to AutoLauncher — scans armed flows
 // (groom/ops/design) across all projects' non-Done milestones and dispatches

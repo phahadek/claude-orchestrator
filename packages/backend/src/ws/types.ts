@@ -62,6 +62,32 @@ export interface PlanUsage {
   stale?: boolean;
 }
 
+/**
+ * The reason an admission gate is blocking dispatch — shared across every
+ * gate (AutoLauncher's hasCapacity) so the sustained-block signal isn't
+ * memory-gate-specific. See AdmissionStallState below.
+ */
+export type AdmissionBlockReason =
+  | 'memory_admission'
+  | 'usage_deferral'
+  | 'capacity_exhausted';
+
+/**
+ * Current sustained-admission-block state, as reported by AutoLauncher and
+ * surfaced both over WS (admission_stalled / admission_stall_cleared) and via
+ * REST (GET /api/diagnostics/admission-stall) for reconnect reconciliation —
+ * the WS stream alone is not authoritative for a client that loads or
+ * reconnects mid-stall.
+ */
+export interface AdmissionStallState {
+  reason: AdmissionBlockReason;
+  /** Count of eligible candidates that went unadmitted on the tick the block was detected. */
+  eligibleCount: number;
+  /** ms epoch when the sustained block was first detected. */
+  since: number;
+  detail?: Record<string, unknown>;
+}
+
 /** Full live-state snapshot of a task, sent in task_updated WS messages. */
 export interface TaskView {
   taskId: string;
@@ -325,6 +351,8 @@ export type ServerMessage =
       used: number;
     }
   | { type: 'github_rate_limit_cleared' }
+  | ({ type: 'admission_stalled' } & AdmissionStallState)
+  | { type: 'admission_stall_cleared' }
   | { type: 'plan_usage'; usage: PlanUsage }
   | { type: 'error'; message: string }
   | { type: 'pr_pause_cleared'; prNumber: number; repo: string }
