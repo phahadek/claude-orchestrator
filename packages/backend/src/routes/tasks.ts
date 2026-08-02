@@ -15,6 +15,7 @@ import {
   getPRByNotionTaskId,
   clearTerminalPRFlags,
   getMilestoneById,
+  hasAwaitingDispositionIntentForTask,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { typedGetSetting } from '../config/settings';
@@ -391,6 +392,9 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     review,
     totalTokens,
     assignedRepo: getTaskRepoAssignment(row.task_id)?.repo ?? null,
+    hasAwaitingDispositionIntent: hasAwaitingDispositionIntentForTask(
+      row.task_id,
+    ),
     recoveryDescriptor: deriveRecoveryDescriptor(pauseStruct?.reason ?? null),
   };
 }

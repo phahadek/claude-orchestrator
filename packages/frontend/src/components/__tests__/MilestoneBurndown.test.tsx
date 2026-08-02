@@ -37,6 +37,7 @@ function makeTask(overrides: Partial<TaskView> = {}): TaskView {
     review: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
+    hasAwaitingDispositionIntent: false,
     ...overrides,
   };
 }
@@ -85,6 +86,13 @@ describe('MilestoneBurndown', () => {
       taskType: '📐 Design',
       displayStatus: 'backlog',
       blocked: false,
+    }),
+    makeTask({
+      taskId: 'g3',
+      taskType: '💻 Code',
+      displayStatus: 'backlog',
+      blocked: false,
+      hasAwaitingDispositionIntent: true,
     }),
   ];
 
@@ -170,6 +178,31 @@ describe('MilestoneBurndown', () => {
     const groomingRow = screen.getByTestId('phase-segment-grooming');
     const fills = groomingRow.querySelectorAll('[class*="fill"]');
     expect(fills.length).toBeGreaterThan(1);
+  });
+
+  it('renders a distinct fill class for the awaiting-disposition state and its label in the legend row', () => {
+    render(
+      <MilestoneBurndown
+        tasks={tasks}
+        convergence={makeConvergence()}
+        activePhase={null}
+        onPhaseSelect={vi.fn()}
+      />,
+    );
+
+    const groomingRow = screen.getByTestId('phase-segment-grooming');
+    expect(groomingRow.textContent).toContain('Awaiting disposition: 1');
+
+    const inGroomingFill = groomingRow.querySelector(
+      '[class*="fillInGrooming"]',
+    );
+    const untouchedFill = groomingRow.querySelector('[class*="fillUntouched"]');
+    const awaitingFill = groomingRow.querySelector(
+      '[class*="fillAwaitingDisposition"]',
+    );
+    expect(awaitingFill).toBeTruthy();
+    expect(awaitingFill?.className).not.toBe(inGroomingFill?.className);
+    expect(awaitingFill?.className).not.toBe(untouchedFill?.className);
   });
 
   it('the gate bar renders a different number for its total and its warning', () => {

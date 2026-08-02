@@ -5997,8 +5997,26 @@ export function listAllActiveStagedIntents(): StagedIntentRow[] {
 /** The milestone key the ?milestone list lens uses to bucket legacy/unattributable rows — never a real milestone's canonical_short_id. */
 export const UNATTRIBUTED_MILESTONE_BUCKET = 'unattributed';
 
+/**
+ * The decision-inbox visibility set: intent states where the operator still
+ * owns a disposition — active (staged/approved) plus blocked
+ * (needs_revision/pending_verification). Terminal states (committed,
+ * rejected, superseded, withdrawn) are never included. This is the single
+ * source of truth for "awaiting operator disposition" — reuse it rather than
+ * re-listing the state names, so other surfaces (e.g. the grooming
+ * burndown's awaiting-disposition state) can't drift from the inbox they
+ * mirror.
+ */
+const DECISION_INBOX_VISIBLE_STATES: readonly StagedIntentState[] = [
+  'staged',
+  'approved',
+  'needs_revision',
+  'pending_verification',
+];
+
 let _stmtListStagedIntentsByMilestone: Database.Statement | null = null;
 let _stmtListStagedIntentsUnattributed: Database.Statement | null = null;
+let _stmtHasAwaitingDispositionIntentForTask: Database.Statement | null = null;
 
 /**
  * Active (staged/approved) *plus* blocked (needs_revision/pending_verification)
@@ -6043,6 +6061,28 @@ export function listStagedIntentsByMilestone(
     project_id: projectId,
     milestone,
   }) as StagedIntentRow[];
+}
+
+/**
+ * True if this task has at least one staged_intent in the decision-inbox
+ * visibility set (see DECISION_INBOX_VISIBLE_STATES) — i.e. the operator
+ * still owns a disposition for it. Used by buildTaskViewFromRow to surface
+ * "groomed, awaiting disposition" as a distinct grooming-bar state from
+ * untouched.
+ */
+export function hasAwaitingDispositionIntentForTask(taskId: string): boolean {
+  _stmtHasAwaitingDispositionIntentForTask ??= db.prepare<unknown[]>(
+    `SELECT 1 FROM staged_intent
+     WHERE task_id = ?
+       AND state IN (${DECISION_INBOX_VISIBLE_STATES.map(() => '?').join(', ')})
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasAwaitingDispositionIntentForTask.get(
+      taskId,
+      ...DECISION_INBOX_VISIBLE_STATES,
+    ) !== undefined
+  );
 }
 
 /**

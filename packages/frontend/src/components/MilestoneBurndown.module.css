@@ -189,6 +189,10 @@
   background: #89b4fa;
 }
 
+.fillAwaitingDisposition {
+  background: #f9e2af;
+}
+
 .fillUntouched {
   background: #6c7086;
 }

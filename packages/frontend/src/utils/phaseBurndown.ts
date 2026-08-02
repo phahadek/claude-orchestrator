@@ -6,11 +6,21 @@ type BurndownState = 'pending' | 'staged' | 'done';
 
 /**
  * Grooming's internal states, computed client-side from fields already on
- * TaskView (blocked / planningSession) — see docs/tasks resolution notes.
- * `blocked` takes priority over `inGrooming` when both are true, since a
- * blocked task needs attention regardless of an in-flight groom session.
+ * TaskView (blocked / planningSession / hasAwaitingDispositionIntent) — see
+ * docs/tasks resolution notes. Precedence is `blocked` > `inGrooming` >
+ * `awaitingDisposition` > `untouched`: a blocked task needs attention
+ * regardless of an in-flight groom session, and a live groom session still
+ * wins over intents already staged from an earlier groom pass.
+ * `awaitingDisposition` means the task's groom session has ended but it
+ * still holds at least one intent in the decision-inbox visibility set
+ * (see hasAwaitingDispositionIntentForTask on the backend) — i.e. work is
+ * staged and waiting on the operator, not merely untouched.
  */
-type GroomingState = 'blocked' | 'inGrooming' | 'untouched';
+type GroomingState =
+  | 'blocked'
+  | 'inGrooming'
+  | 'awaitingDisposition'
+  | 'untouched';
 
 /** Gate's own state-machine vocabulary (see gateService.ts GATE_STATES), rendered in full so resolved items are visible alongside outstanding ones. */
 type GateState =
@@ -49,7 +59,7 @@ export type PhaseKey = (typeof PHASE_ORDER)[number];
 /** Per-phase ordered list of segment states to render, left to right. */
 export const PHASE_SEGMENT_ORDER: Record<PhaseKey, readonly SegmentState[]> = {
   design: ['pending', 'staged', 'done'],
-  grooming: ['blocked', 'inGrooming', 'untouched'],
+  grooming: ['blocked', 'inGrooming', 'awaitingDisposition', 'untouched'],
   code: ['pending', 'staged', 'done'],
   investigation: ['pending', 'staged', 'done'],
   ops: ['pending', 'staged', 'done'],
@@ -91,6 +101,7 @@ export const SEGMENT_STATE_LABELS: Record<SegmentState, string> = {
   done: 'Done',
   blocked: 'Blocked',
   inGrooming: 'In grooming',
+  awaitingDisposition: 'Awaiting disposition',
   untouched: 'Untouched',
   open: 'Open',
   runnable: 'Runnable',
@@ -155,6 +166,7 @@ function groomingStateForTask(task: TaskView): GroomingState {
   ) {
     return 'inGrooming';
   }
+  if (task.hasAwaitingDispositionIntent) return 'awaitingDisposition';
   return 'untouched';
 }
 
