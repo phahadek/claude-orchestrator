@@ -5,6 +5,7 @@ import {
   isPlanningSession,
   movesTargetInProgress,
   opensPr,
+  usesWorktree,
   writesTaskStatus,
 } from '../sessionPredicates';
 
@@ -17,13 +18,23 @@ describe('sessionPredicates', () => {
     expect(isCodeSession('ops')).toBe(false);
   });
 
-  it('opensPr is true for standard and docs', () => {
+  it('opensPr is true for standard, docs, and ops', () => {
     expect(opensPr('standard')).toBe(true);
     expect(opensPr('docs')).toBe(true);
+    expect(opensPr('ops')).toBe(true);
     expect(opensPr('review')).toBe(false);
     expect(opensPr('groom')).toBe(false);
     expect(opensPr('design')).toBe(false);
-    expect(opensPr('ops')).toBe(false);
+  });
+
+  it('usesWorktree is true only for standard and ops', () => {
+    expect(usesWorktree('standard')).toBe(true);
+    expect(usesWorktree('ops')).toBe(true);
+    expect(usesWorktree('review')).toBe(false);
+    expect(usesWorktree('groom')).toBe(false);
+    expect(usesWorktree('design')).toBe(false);
+    expect(usesWorktree('split')).toBe(false);
+    expect(usesWorktree('docs')).toBe(false);
   });
 
   it('countsAgainstConcurrency is true for everything but review', () => {

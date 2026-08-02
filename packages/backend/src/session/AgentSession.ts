@@ -568,8 +568,43 @@ export class AgentSession extends EventEmitter {
 
     const initialPrompt =
       this.customPrompt ??
-      (isPlanningSession(this.sessionType)
+      (this.sessionType === 'ops'
         ? `
+You are a Claude Code session managed by Claude Code Orchestrator, running a
+dispatched ops session.
+
+## Task
+Task page: ${this.taskUrl}
+
+The ops procedure, digest, and all rules are in your system prompt. Run the
+workflow it describes directly.
+
+## Lifecycle
+1. Follow the injected ops procedure end to end for this single task.
+2. Stage every proposed change via the staged-intent transport described in
+   your system prompt. Opening a PR requires first staging and getting an
+   operator-approved PR-intent declaration — see your system prompt for the
+   staged-intent kind. Never open a PR without one.
+3. If you hold the PR-open tool grant and open a PR, WAIT after opening it —
+   do not end the turn. The dashboard will send review feedback as
+   follow-up messages; address findings by pushing additional commits, then
+   wait again.
+4. Otherwise, when you reach a natural stopping point (every open item
+   presented and either staged or explicitly deferred), end the turn
+   instead of waiting.
+
+## What the dashboard handles (do NOT do these yourself)
+- Applying staged intents — a human reviews and applies them.
+- Task status updates — the backend manages these.
+- PR review — automated after you publish a PR.
+
+## Rules
+- One task per session. No scope creep.
+- Never commit to the base branch directly.
+- Never merge your own PR.
+`.trim()
+        : isPlanningSession(this.sessionType)
+          ? `
 You are a Claude Code session managed by Claude Code Orchestrator, running a
 dispatched planning session.
 
@@ -596,7 +631,7 @@ the workflow it describes directly.
 - This session has no worktree and no feature branch — never attempt to
   commit, branch, or open a PR.
 `.trim()
-        : `
+          : `
 You are a Claude Code session managed by Claude Code Orchestrator.
 
 ## Task

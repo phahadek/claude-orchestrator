@@ -558,11 +558,19 @@ export class PlanningOrchestrator {
    * session has gone terminal. Callers must exclude gate-verify sessions
    * (task_id `gate-item:<id>`) first, since those have no Notion task to
    * close and also have no ops_journal entry.
+   *
+   * Also gated on the absence of a PR row for this session, mirroring
+   * completeDocsTask: an ops session can now earn the PR-open tool grant
+   * (see opensPr('ops')) and open a PR against its target task, whose
+   * closure must run through the existing merge-driven path instead of
+   * this ops_journal-driven one — closing the task here while that PR is
+   * still open would pull the task out from under an in-flight review.
    */
   private completeOpsTask(sessionId: string, row: Session): void {
     const taskId = row.task_id;
     const projectId = row.project_id;
     if (!taskId || !projectId) return;
+    if (getPRBySessionId(sessionId)) return;
 
     const journalEntry = getEntry(taskId);
     if (!journalEntry || journalEntry.state !== 'resolved') return;

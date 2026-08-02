@@ -160,7 +160,7 @@ beforeEach(() => {
 });
 
 describe('AgentSession — initial prompt by session type', () => {
-  it.each(['groom', 'design', 'ops'] as const)(
+  it.each(['groom', 'design'] as const)(
     '%s session prompt has no PR/branch-verify instruction',
     async (sessionType) => {
       const session = makeSession(sessionType);
@@ -182,5 +182,21 @@ describe('AgentSession — initial prompt by session type', () => {
     const prompt = runCalls[0].prompt ?? '';
     expect(prompt).toMatch(/open a draft pr/i);
     expect(prompt).toMatch(/git branch --show-current/i);
+  });
+
+  it('ops session prompt waits for review after opening a PR instead of the no-PR planning prompt', async () => {
+    const session = makeSession('ops');
+    await session.run();
+
+    expect(runCalls).toHaveLength(1);
+    const prompt = runCalls[0].prompt ?? '';
+    // Not the standard code-session prompt — an ops session has no fixed
+    // branch to verify up front (it only gets one once a PR-intent is approved).
+    expect(prompt).not.toMatch(/git branch --show-current/i);
+    expect(prompt).not.toMatch(/open a draft pr/i);
+    // But unlike groom/design, it must wait for review rather than end the
+    // turn once it does hold the PR-open grant and opens one.
+    expect(prompt).toMatch(/wait/i);
+    expect(prompt).toMatch(/never merge your own pr/i);
   });
 });

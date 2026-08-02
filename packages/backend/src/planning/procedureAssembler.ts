@@ -469,13 +469,21 @@ export function renderOpsCapabilities(): string[] {
       'file is always a Code task, not something a capability grant hands to ops ' +
       '(see "Dispatch-eligibility boundary" below).',
     '',
-    'Never create a PR, and never author or land code yourself, no matter how small ' +
-      'the change looks: this session has no worktree or branch (see "Session ' +
-      'Lifecycle" above), and a code change is categorically a 💻 Code task. If ' +
-      'driving the operational change to `applied-pending-confirm` turns out to need ' +
-      'one, stage a `task.create` intent carrying the spec instead of opening a PR — ' +
-      'then continue driving the rest of the change, or park on it if the whole ' +
+    'Do not create a PR out of the box: this session starts with no worktree or ' +
+      'branch (see "Session Lifecycle" above). Most code needs stay a 💻 Code task — ' +
+      'if driving the operational change to `applied-pending-confirm` turns out to ' +
+      'need one, stage a `task.create` intent carrying the spec instead of opening a ' +
+      'PR, then continue driving the rest of the change, or park on it if the whole ' +
       'thing is now blocked on that Code task landing.',
+    '',
+    'For a change small and ops-scoped enough to land directly from this session, ' +
+      'stage an Ops PR-intent declaration first — never open a PR speculatively. On ' +
+      'operator approval, this session is granted a real worktree, feature branch, ' +
+      'and the PR-open tools, and is re-dispatched to make the approved change, open ' +
+      'the PR, and wait for its automated review the same way a code session does ' +
+      '(push additional commits in response to feedback, never merge it yourself). ' +
+      "On rejection or pushback, the session resumes with the operator's feedback " +
+      'instead and falls back to the `task.create` path above.',
     '',
   ];
 }
@@ -744,9 +752,12 @@ function renderSkeleton(
   const lifecycle =
     workflow === 'ops'
       ? `This is an injected, non-interactive ${label} session for a single target task ` +
-        `(${taskName} — ${taskUrl}). There is no worktree and no feature branch, and this ` +
-        'session never creates a PR — the worktree-branch-PR invariant holds for ops too ' +
-        '(see "Capabilities" below for what a code change routes through instead). Unlike ' +
+        `(${taskName} — ${taskUrl}). This session starts with no worktree and no feature ` +
+        'branch and must not create a PR out of the box (see "Capabilities" below for the ' +
+        'default no-code-change path). A worktree, branch, and the PR-open tools are only ' +
+        'earned once an operator approves a staged Ops PR-intent declaration — see ' +
+        '"Capabilities" for how to request it and, once opened, wait for review the same ' +
+        'way a code session does rather than ending the turn. Unlike ' +
         'groom/design, this session is write-capable, earning capabilities on request, and ' +
         'its job is to drive the operational change itself to completion, not to stage a ' +
         'proposal and hand execution back. The terminal state is the ops_journal ' +

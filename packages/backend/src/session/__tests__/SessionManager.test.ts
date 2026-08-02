@@ -2943,10 +2943,12 @@ describe('start() — worktree_path persistence', () => {
     vi.mocked(loadOrchestratorConfig).mockReturnValue({
       mcp_servers: undefined,
       allowed_tools: [],
+      required_env: [],
+      required_files: [],
     } as any);
   });
 
-  it.each(['groom', 'design', 'ops'] as const)(
+  it.each(['groom', 'design'] as const)(
     'persists worktree_path as null for a %s (planning) session — no worktree is ever created on disk',
     async (sessionType) => {
       await sm.start('https://notion.so/task', 'https://notion.so/project', {
@@ -2962,20 +2964,23 @@ describe('start() — worktree_path persistence', () => {
     },
   );
 
-  it('persists a real worktree_path for a standard (code) session', async () => {
-    await sm.start('https://notion.so/task', 'https://notion.so/project', {
-      projectId: PROJECT_ID,
-      taskKind: 'non_milestone',
-      taskName: 'my-task',
-      sessionType: 'standard',
-    });
+  it.each(['standard', 'ops'] as const)(
+    'persists a real worktree_path for a %s session',
+    async (sessionType) => {
+      await sm.start('https://notion.so/task', 'https://notion.so/project', {
+        projectId: PROJECT_ID,
+        taskKind: 'non_milestone',
+        taskName: 'my-task',
+        sessionType,
+      });
 
-    expect(vi.mocked(insertSession)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        worktree_path: expect.stringContaining('.claude/worktrees/'),
-      }),
-    );
-  });
+      expect(vi.mocked(insertSession)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          worktree_path: expect.stringContaining('.claude/worktrees/'),
+        }),
+      );
+    },
+  );
 });
 
 // ── start() — planning/ops prompt assembly (gate-verify hardening) ─────────
@@ -2991,6 +2996,8 @@ describe('start() — planning/ops prompt assembly (gate-verify hardening)', () 
     vi.mocked(loadOrchestratorConfig).mockReturnValue({
       mcp_servers: undefined,
       allowed_tools: [],
+      required_env: [],
+      required_files: [],
     } as any);
   });
 
@@ -3112,6 +3119,8 @@ describe('start() — planning-flow dedup', () => {
     vi.mocked(loadOrchestratorConfig).mockReturnValue({
       mcp_servers: undefined,
       allowed_tools: [],
+      required_env: [],
+      required_files: [],
     } as any);
     // clearAllMocks() clears call history but not implementations set by an
     // earlier test in this file — reset every planning-dedup predicate to

@@ -786,13 +786,17 @@ describe('sendOrResume() overflow escalation: setPendingOverflowText', () => {
 // ── Planning sessions (groom/design/ops): never respawn a worktree ───────────
 
 const PLANNING_SESSION_ID = 'ffffeeee-dddd-cccc-bbbb-aaaaaaaaaaaa';
+// 'design' (checkout-only planning) — not 'ops', which now gets a real
+// per-session worktree of its own (see usesWorktree in sessionPredicates.ts)
+// and would exercise the standard worktree-recreate/cleanup path these tests
+// deliberately exclude.
 const PLANNING_SESSION_ROW = {
   session_id: PLANNING_SESSION_ID,
   task_name: 'nightly-groom',
   task_id: 'notion:task-groom123',
   project_id: 'test-proj',
   status: 'starting',
-  session_type: 'ops',
+  session_type: 'design',
   worktree_path: null,
   pause_reason: null,
 };
