@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TaskView } from '../types/taskView';
 import type { StagedIntent } from '../api/stagedIntents';
+import type { SessionState } from '../hooks/useSessionStore';
 import { phaseForTask } from '../utils/phaseBurndown';
 import {
   MilestoneDecisionInbox,
@@ -19,6 +20,8 @@ interface Props {
   /** The milestone's canonical short id (e.g. "M13") — the decision-inbox lens key, distinct from the board's DB id used to fetch `tasks`. */
   milestone: string;
   tasks: TaskView[];
+  /** The live session list — forwarded to MilestoneDecisionInbox so a taskId-less card (e.g. decision.pickOne) can resolve a display-only task name from its originating session, with no extra fetch. */
+  sessions?: SessionState[];
   /** The shared phase filter emitted by the burndown (left column) — a PhaseKey (see utils/phaseBurndown), matched against each task's derived phase. */
   phaseFilter: string | null;
   /** True when phaseFilter was activated via a phase's ⚠ warning badge — narrows the phase's tasks down to the flagged (blocked) ones. */
@@ -43,6 +46,7 @@ export function MilestoneDecisionStack({
   projectId,
   milestone,
   tasks,
+  sessions = [],
   phaseFilter,
   flaggedOnly = false,
   selection,
@@ -150,6 +154,7 @@ export function MilestoneDecisionStack({
         projectId={projectId}
         milestone={milestone}
         tasks={tasks}
+        sessions={sessions}
         phaseFilter={phaseFilter}
         flaggedOnly={flaggedOnly}
         selectedCardId={selectedIntentCardId}

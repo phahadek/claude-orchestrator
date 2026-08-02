@@ -822,6 +822,96 @@ describe('MilestoneDecisionInbox', () => {
     await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
 
     const card = screen.getByTestId('milestone-decision-card-pickone-no-task');
+    expect(card.textContent).toContain('Untitled decision');
     expect(card.textContent).toContain('decision.pickOne');
+  });
+
+  it('resolves a decision.pickOne card header to its originating session task name when the intent carries no payload.taskId', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'pickone-session-task',
+        kind: 'decision.pickOne',
+        payload: {
+          prompt: 'Which approach?',
+          options: [{ label: 'A', description: 'Option A' }],
+          allowFreeForm: false,
+        },
+        projectId: 'proj-1',
+        createdAt: 0,
+        sessionId: 'session-groom',
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    render(
+      <MilestoneDecisionInbox
+        projectId="proj-1"
+        milestone="M1"
+        tasks={[]}
+        sessions={[
+          { sessionId: 'session-groom', taskName: 'Fix the login flow' },
+        ]}
+      />,
+    );
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId(
+      'milestone-decision-card-pickone-session-task',
+    );
+    expect(card.textContent).toContain('Fix the login flow');
+    expect(card.textContent).toContain('decision.pickOne');
+  });
+
+  it('resolves gate.accrete and seed.stage card headers from payload.sourceTask.id', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'gate-accrete-intent',
+        kind: 'gate.accrete',
+        payload: { sourceTask: { id: 'notion:accrete' }, items: [] },
+        projectId: 'proj-1',
+        createdAt: 1,
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+      },
+      {
+        id: 'seed-stage-intent',
+        kind: 'seed.stage',
+        payload: { sourceTask: { id: 'notion:seed' }, seeds: [] },
+        projectId: 'proj-1',
+        createdAt: 0,
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    render(
+      <MilestoneDecisionInbox
+        projectId="proj-1"
+        milestone="M1"
+        tasks={[
+          makeTask({ taskId: 'notion:accrete', taskName: 'Accrete target' }),
+          makeTask({ taskId: 'notion:seed', taskName: 'Seed target' }),
+        ]}
+      />,
+    );
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const gateCard = screen.getByTestId(
+      'milestone-decision-card-gate-accrete-intent',
+    );
+    expect(gateCard.textContent).toContain('Accrete target');
+    expect(gateCard.textContent).toContain('gate.accrete');
+
+    const seedCard = screen.getByTestId(
+      'milestone-decision-card-seed-stage-intent',
+    );
+    expect(seedCard.textContent).toContain('Seed target');
+    expect(seedCard.textContent).toContain('seed.stage');
   });
 });
