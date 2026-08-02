@@ -125,9 +125,8 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
 
       const isInputField = Boolean(
         event.target instanceof HTMLInputElement ||
-          event.target instanceof HTMLTextAreaElement ||
-          (event.target instanceof HTMLElement &&
-            event.target.isContentEditable),
+        event.target instanceof HTMLTextAreaElement ||
+        (event.target instanceof HTMLElement && event.target.isContentEditable),
       );
 
       const shortcut = KEYBOARD_SHORTCUTS.find((s) => s.matches(event));
