@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 
 export interface ShortcutHandlers {
   onOpenDispatch: () => void;
-  onDismiss: () => void;
+  onDismiss: (fromInputField: boolean) => void;
   onSelectNext: () => void;
   onSelectPrev: () => void;
   onConfirmSelection: () => void;
@@ -20,7 +20,11 @@ export interface ShortcutDefinition {
   /** Whether this key is handled even when focus is in an input/textarea. */
   allowInInput?: boolean;
   matches: (event: KeyboardEvent) => boolean;
-  invoke: (handlers: ShortcutHandlers) => void;
+  invoke: (
+    handlers: ShortcutHandlers,
+    event: KeyboardEvent,
+    isInputField: boolean,
+  ) => void;
   preventDefault?: boolean;
 }
 
@@ -33,7 +37,9 @@ export const KEYBOARD_SHORTCUTS: ShortcutDefinition[] = [
     desc: 'Close modal / panel',
     allowInInput: true,
     matches: (e) => e.key === 'Escape',
-    invoke: (h) => h.onDismiss(),
+    // The input's own field context is passed through so the caller can
+    // skip navigating away and discarding an in-progress draft.
+    invoke: (h, _event, isInputField) => h.onDismiss(isInputField),
   },
   {
     key: 'N',
@@ -60,7 +66,12 @@ export const KEYBOARD_SHORTCUTS: ShortcutDefinition[] = [
     key: 'Enter',
     desc: 'Open selected session',
     matches: (e) => e.key === 'Enter',
-    invoke: (h) => h.onConfirmSelection(),
+    invoke: (h, event) => {
+      // Don't let an unrelated focused button's Enter activation also
+      // mutate session selection.
+      if (event.target instanceof HTMLButtonElement) return;
+      h.onConfirmSelection();
+    },
   },
   {
     key: '1',
@@ -109,10 +120,14 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      const isInputField =
+      // Never hijack modified chords (browser/OS shortcuts like Cmd+1, Ctrl+N, Ctrl+J).
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      const isInputField = Boolean(
         event.target instanceof HTMLInputElement ||
         event.target instanceof HTMLTextAreaElement ||
-        (event.target instanceof HTMLElement && event.target.isContentEditable);
+        (event.target instanceof HTMLElement && event.target.isContentEditable),
+      );
 
       const shortcut = KEYBOARD_SHORTCUTS.find((s) => s.matches(event));
       if (!shortcut) return;
@@ -121,7 +136,7 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
       if (isInputField && !shortcut.allowInInput) return;
 
       if (shortcut.preventDefault) event.preventDefault();
-      shortcut.invoke(handlersRef.current);
+      shortcut.invoke(handlersRef.current, event, isInputField);
     }
 
     window.addEventListener('keydown', onKeyDown);

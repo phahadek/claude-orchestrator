@@ -52,7 +52,12 @@ export function MilestoneProgress({ tasks, compact = false }: Props) {
       }
     }
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') setPopoverOpen(false);
+      if (e.key === 'Escape') {
+        setPopoverOpen(false);
+        // This popover owns Escape while open; don't let the global
+        // dismiss ladder also react to the same keystroke.
+        e.stopPropagation();
+      }
     }
     document.addEventListener('mousedown', handleClick);
     document.addEventListener('keydown', handleKeyDown);
