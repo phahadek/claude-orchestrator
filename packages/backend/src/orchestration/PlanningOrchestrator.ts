@@ -28,6 +28,7 @@ import type { ServerMessage } from '../ws/types';
 import {
   verifyDispatchedGroupsForSession,
   sessionOwesGatedDesignArtifacts,
+  findIncompleteOpsTerminalGroupsForSession,
 } from '../routes/stagedIntents';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { emitTaskUpdated, broadcastTaskStatusChanged } from '../routes/tasks';
@@ -356,6 +357,34 @@ export class PlanningOrchestrator {
           `Planning session ${sessionId} reached terminal (${reason}) with ` +
             `${blockedMembers.length} blocked staged intent(s) still outstanding: ` +
             `${blockedMembers.map((i) => i.id).join(', ')}.`,
+        );
+      }
+    }
+
+    // An ops-terminal closing group that never carried its journal.setState
+    // -> "resolved" transition leaves an Investigation's journal stuck at a
+    // non-terminal state forever — completeOpsTask's synchronous check will
+    // not close the task, and no one will ever stage the transition once the
+    // session is done. group-commit's own precheck
+    // (checkOpsTerminalGroupCompleteness) refuses this when both are staged
+    // together in one apply, but a session can still commit a partial group
+    // across turns and go terminal before ever staging the rest — surface it
+    // rather than let the session complete (or fail to complete) silently.
+    if (
+      row.task_id &&
+      row.session_type === 'ops' &&
+      !isGateVerifySession(row.task_id)
+    ) {
+      const incompleteGroups = findIncompleteOpsTerminalGroupsForSession(
+        sessionId,
+      );
+      if (incompleteGroups.length > 0) {
+        setTaskPauseReason(
+          row.task_id,
+          'ops_terminal_group_incomplete',
+          `Ops session ${sessionId} reached terminal (${reason}) with an ops-terminal closing ` +
+            'group missing its journal.setState -> "resolved" transition: ' +
+            `${incompleteGroups.join(', ')}.`,
         );
       }
     }

@@ -1057,6 +1057,128 @@ describe('the ops-terminal closing set is mandated under one shared groupId', ()
   });
 });
 
+describe('an ops-terminal closing group is refused at commit unless it actually carries the resolved transition', () => {
+  function seedOpsSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+    });
+  }
+
+  async function seedJournal(taskId: string, state: string) {
+    const { upsertOpsJournalEntry } = await import('../db/queries');
+    upsertOpsJournalEntry({
+      task_id: taskId,
+      project: 'proj-ops-commit',
+      milestone: 'M1',
+      state: state as any,
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  it('refuses to commit a group carrying only a follow-on task.create — the worked-instance bug — naming the missing journal.setState -> resolved member', async () => {
+    seedOpsSession('ops-commit-1', 'notion:ops-commit-1');
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const groupId = 'group-ops-commit-1';
+    stageIntent(
+      'task.create',
+      { title: 'Follow-on from investigation', body: 'x', databaseId: 'db-1' },
+      'proj-ops-commit',
+      groupId,
+      'ops-commit-1',
+    );
+
+    const result = await approveAndCommitGroup(agent, groupId);
+    expect(result.status).toBe(409);
+    expect(result.body.error).toContain('journal.setState');
+    expect(result.body.error).toContain('resolved');
+    expect(result.body.committed ?? []).toEqual([]);
+  });
+
+  it('commits an ops-terminal group that does carry the journal.setState -> resolved member', async () => {
+    seedOpsSession('ops-commit-2', 'notion:ops-commit-2');
+    await seedJournal('notion:ops-commit-2', 'candidate');
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask: vi.fn().mockResolvedValue('notion:new-followon'),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const groupId = 'group-ops-commit-2';
+    stageIntent(
+      'journal.setState',
+      { taskId: 'notion:ops-commit-2', state: 'resolved' },
+      'proj-ops-commit',
+      groupId,
+    );
+    stageIntent(
+      'task.create',
+      { title: 'Follow-on from investigation', body: 'x', databaseId: 'db-1' },
+      'proj-ops-commit',
+      groupId,
+      'ops-commit-2',
+    );
+
+    const result = await approveAndCommitGroup(agent, groupId);
+    expect(result.status).toBe(200);
+    expect(result.body.committed).toHaveLength(2);
+  });
+
+  it('succeeds when the resolved transition was committed in an earlier apply of the same group', async () => {
+    seedOpsSession('ops-commit-3', 'notion:ops-commit-3');
+    await seedJournal('notion:ops-commit-3', 'candidate');
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask: vi.fn().mockResolvedValue('notion:new-followon-2'),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const groupId = 'group-ops-commit-3';
+    stageIntent(
+      'journal.setState',
+      { taskId: 'notion:ops-commit-3', state: 'resolved' },
+      'proj-ops-commit',
+      groupId,
+    );
+    const firstCommit = await approveAndCommitGroup(agent, groupId);
+    expect(firstCommit.status).toBe(200);
+
+    // A later turn stages a further member into the same group — the
+    // journal.setState -> resolved sibling is already `committed`, not
+    // `staged`/`approved`, so this exercises the durable-store (not
+    // in-memory) tolerance.
+    stageIntent(
+      'task.create',
+      { title: 'Follow-on from investigation', body: 'x', databaseId: 'db-1' },
+      'proj-ops-commit',
+      groupId,
+      'ops-commit-3',
+    );
+
+    const secondCommit = await approveAndCommitGroup(agent, groupId);
+    expect(secondCommit.status).toBe(200);
+    expect(secondCommit.body.committed).toHaveLength(1);
+  });
+});
+
 describe('POST /api/staged-intents — decision-proposal annotation', () => {
   it('round-trips the decisionProposal field through staging and listing', async () => {
     const app = makeApp();

@@ -47,6 +47,7 @@ export type CanonicalPauseReason =
   | 'planning_first_turn_empty'
   | 'planning_terminal_no_decision'
   | 'planning_terminal_blocked_members'
+  | 'ops_terminal_group_incomplete'
   | 'usage_limit_deferred'
   | 'api_overloaded_exhausted';
 
@@ -228,6 +229,11 @@ export const PAUSE_REASON_REGISTRY: Record<
     retry_strategy: 'manual_action',
   },
   planning_terminal_blocked_members: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  ops_terminal_group_incomplete: {
     source: 'session',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
