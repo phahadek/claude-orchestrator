@@ -129,26 +129,47 @@ export function Header({
     <nav className={styles.nav}>
       <button
         type="button"
-        className={`${styles.navLink}${activeView === 'tasks' ? ` ${styles.navLinkActive}` : ''}`}
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'milestone' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('milestone')}
+        title="Milestone"
+        aria-label="Milestone"
+      >
+        🎯
+        {milestoneAttentionCount != null && milestoneAttentionCount > 0 && (
+          <span
+            className={styles.incompleteBadge}
+            title="Milestone needs attention"
+          >
+            {milestoneAttentionCount}
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'tasks' ? ` ${styles.navLinkActive}` : ''}`}
         onClick={() => onViewChange('tasks')}
         title="Tasks"
+        aria-label="Tasks"
       >
-        Tasks
+        📋
       </button>
       <button
         type="button"
-        className={`${styles.navLink}${activeView === 'sessions' ? ` ${styles.navLinkActive}` : ''}`}
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'sessions' ? ` ${styles.navLinkActive}` : ''}`}
         onClick={() => onViewChange('sessions')}
         title="Sessions"
+        aria-label="Sessions"
       >
-        Sessions
+        🖥️
       </button>
       <button
         type="button"
-        className={`${styles.navLink}${activeView === 'prs' ? ` ${styles.navLinkActive}` : ''}`}
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'prs' ? ` ${styles.navLinkActive}` : ''}`}
         onClick={() => onViewChange('prs')}
+        title="PRs"
+        aria-label="PRs"
       >
-        PRs
+        🔀
         {incompleteReviewCount != null && incompleteReviewCount > 0 && (
           <span
             className={styles.incompleteBadge}
@@ -157,15 +178,6 @@ export function Header({
             {incompleteReviewCount}
           </span>
         )}
-      </button>
-      <button
-        type="button"
-        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'analytics' ? ` ${styles.navLinkActive}` : ''}`}
-        onClick={() => onViewChange('analytics')}
-        title="Analytics"
-        aria-label="Analytics"
-      >
-        📊
       </button>
       <button
         type="button"
@@ -187,20 +199,12 @@ export function Header({
       </button>
       <button
         type="button"
-        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'milestone' ? ` ${styles.navLinkActive}` : ''}`}
-        onClick={() => onViewChange('milestone')}
-        title="Milestone"
-        aria-label="Milestone"
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'analytics' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('analytics')}
+        title="Analytics"
+        aria-label="Analytics"
       >
-        🎯
-        {milestoneAttentionCount != null && milestoneAttentionCount > 0 && (
-          <span
-            className={styles.incompleteBadge}
-            title="Milestone needs attention"
-          >
-            {milestoneAttentionCount}
-          </span>
-        )}
+        📊
       </button>
       <button
         type="button"
