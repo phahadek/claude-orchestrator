@@ -35,7 +35,12 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { insertSession, getSession, getStagedIntent } from '../../db/queries';
+import {
+  insertSession,
+  getSession,
+  getStagedIntent,
+  setStagedIntentAppliedTaskId,
+} from '../../db/queries';
 import {
   createStagedIntentsRouter,
   stageIntent,
@@ -408,6 +413,149 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
     for (const call of sm.enqueueFeedback.mock.calls) {
       expect(call[2]).not.toMatch(/sent back for revision/);
     }
+  });
+});
+
+// ── task.create supersede of an already-applied intent — non-idempotent
+// apply's exposure under the supersede model ────────────────────────────────
+//
+// task.create's apply is not idempotent: each application mints a new task.
+// The state machine's supersede/dedup logic assumes a still-staged/approved
+// target hasn't taken effect yet — true for every other kind (each of their
+// applies converges on the same end state, so a stale assumption costs
+// nothing), but false for a create whose own apply raced a concurrent
+// supersede of its row and never reached `committed`, even though the task it
+// created is real. `applied_task_id` (set the instant the create's backend
+// write succeeds, independent of that row's own state transition) is the
+// fix's source of truth for "did this already happen" instead of `state`.
+describe('task.create supersede of an already-applied intent', () => {
+  it('a task.create superseding an intent whose apply already produced a task refuses instead of creating a second one', async () => {
+    const createTask = vi.fn().mockResolvedValue('notion:task-original');
+    mockGetTaskBackend.mockReturnValue({ type: 'notion', createTask });
+
+    seedPlanningSession('session-create-1', 'task-parent-1');
+    const original = stageIntent(
+      'task.create',
+      { title: 'New follow-on', body: 'x', databaseId: 'db-1' },
+      'proj-1',
+      null,
+      'session-create-1',
+    );
+
+    // The race this fix closes: the original's create already ran (a real
+    // task exists) but its own staged -> committed transition hasn't landed
+    // yet, so the row still reads 'staged' — exactly the state an explicit
+    // supersede is allowed to target.
+    setStagedIntentAppliedTaskId(original.id, 'notion:task-original');
+
+    const superseding = stageIntent(
+      'task.create',
+      { title: 'New follow-on (corrected)', body: 'y', databaseId: 'db-1' },
+      'proj-1',
+      null,
+      'session-create-1',
+      null,
+      null,
+      original.id,
+    );
+    expect(superseding.supersedes).toBe(original.id);
+    expect(getStagedIntent(original.id)!.state).toBe('superseded');
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    const app = makeApp(planningOrchestrator);
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${superseding.id}/apply`)
+      .send({});
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain(original.id);
+    expect(res.body.error).toContain('notion:task-original');
+    expect(createTask).not.toHaveBeenCalled();
+    expect(getStagedIntent(superseding.id)!.state).toBe('needs_revision');
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'staged_intent_create_supersede_noop',
+        actor_type: 'system',
+        payload: expect.objectContaining({
+          supersedingIntentId: superseding.id,
+          supersededIntentId: original.id,
+          resultId: 'notion:task-original',
+        }),
+      }),
+    );
+  });
+
+  it('a task.create superseding an intent that has not applied yet still creates exactly one task, as today', async () => {
+    const createTask = vi.fn().mockResolvedValue('notion:task-new');
+    mockGetTaskBackend.mockReturnValue({ type: 'notion', createTask });
+
+    seedPlanningSession('session-create-2', 'task-parent-2');
+    const original = stageIntent(
+      'task.create',
+      { title: 'New follow-on', body: 'x', databaseId: 'db-1' },
+      'proj-1',
+      null,
+      'session-create-2',
+    );
+
+    const superseding = stageIntent(
+      'task.create',
+      { title: 'New follow-on (corrected)', body: 'y', databaseId: 'db-1' },
+      'proj-1',
+      null,
+      'session-create-2',
+      null,
+      null,
+      original.id,
+    );
+    expect(getStagedIntent(original.id)!.state).toBe('superseded');
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    const app = makeApp(planningOrchestrator);
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${superseding.id}/apply`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(createTask).toHaveBeenCalledTimes(1);
+    expect(getStagedIntent(superseding.id)!.state).toBe('committed');
+    expect(getStagedIntent(superseding.id)!.applied_task_id).toBe(
+      'notion:task-new',
+    );
+  });
+
+  it('supersede behaviour for a non-create kind is unchanged — applied_task_id is never consulted', async () => {
+    const setProperties = vi.fn().mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({ type: 'notion', setProperties });
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    seedPlanningSession('session-create-3', 'task-7');
+    const original = stagePropertiesIntent('session-create-3', 'notion:task-7');
+
+    const superseding = stageIntent(
+      'task.setProperties',
+      { taskId: 'notion:task-7', patch: { title: 'Renamed twice' } },
+      'proj-1',
+      null,
+      'session-create-3',
+      null,
+      null,
+      original.id,
+    );
+
+    const app = makeApp(planningOrchestrator);
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${superseding.id}/apply`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(setProperties).toHaveBeenCalledTimes(1);
+    expect(getStagedIntent(superseding.id)!.state).toBe('committed');
+    expect(getStagedIntent(superseding.id)!.applied_task_id ?? null).toBeNull();
   });
 });
 

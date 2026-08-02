@@ -6233,19 +6233,43 @@ export function insertStagedIntent(row: StagedIntentRow): void {
     INSERT INTO staged_intent
       (id, kind, payload, payload_hash, task_id, project_id, session_id,
        group_id, milestone, state, supersedes, annotation, decision_proposal, investigation, groom_proposal,
-       advisory, disposition_reason, answer, created_at, updated_at)
+       advisory, disposition_reason, answer, applied_task_id, created_at, updated_at)
     VALUES
       (@id, @kind, @payload, @payload_hash, @task_id, @project_id, @session_id,
        @group_id, @milestone, @state, @supersedes, @annotation, @decision_proposal, @investigation, @groom_proposal,
-       @advisory, @disposition_reason, @answer, @created_at, @updated_at)
+       @advisory, @disposition_reason, @answer, @applied_task_id, @created_at, @updated_at)
   `);
-  // `row.investigation` defaults to null for callers built before this column
-  // existed (test fixtures, older call sites) — better-sqlite3's named-param
-  // binding otherwise throws on a key absent from the object.
+  // `row.investigation`/`row.applied_task_id` default to null for callers
+  // built before these columns existed (test fixtures, older call sites) —
+  // better-sqlite3's named-param binding otherwise throws on a key absent
+  // from the object.
   _stmtInsertStagedIntent.run({
     ...row,
     investigation: row.investigation ?? null,
+    applied_task_id: row.applied_task_id ?? null,
   });
+}
+
+let _stmtSetStagedIntentAppliedTaskId: Database.Statement | null = null;
+
+/**
+ * Durably records that this intent's apply already produced `resultId` — a
+ * plain UPDATE, unrestricted by STAGED_INTENT_TRANSITIONS, so it always
+ * succeeds even if the row's own state transition (staged/approved ->
+ * committed) is about to lose a race against a concurrent supersede. See
+ * StagedIntentRow.applied_task_id's doc comment.
+ */
+export function setStagedIntentAppliedTaskId(
+  id: string,
+  resultId: string,
+): void {
+  _stmtSetStagedIntentAppliedTaskId ??= db.prepare<{
+    id: string;
+    applied_task_id: string;
+  }>(
+    `UPDATE staged_intent SET applied_task_id = @applied_task_id WHERE id = @id`,
+  );
+  _stmtSetStagedIntentAppliedTaskId.run({ id, applied_task_id: resultId });
 }
 
 export function getStagedIntent(id: string): StagedIntentRow | undefined {

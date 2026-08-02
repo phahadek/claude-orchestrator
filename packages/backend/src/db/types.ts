@@ -684,6 +684,17 @@ export interface StagedIntentRow {
   disposition_reason: string | null;
   /** The operator's answer to a decision.pickOne question-intent — JSON-serialized StagedIntentAnswer. Null until answered. */
   answer: string | null;
+  /**
+   * The id `applyIntent` minted for this intent's non-idempotent create
+   * (task.create's created task id / arch.createUnit's new unit id) — set the
+   * instant the backend write succeeds, independent of and prior to the
+   * row's own staged/approved -> committed transition, so it stays a
+   * reliable "has this create already applied" signal even when that
+   * transition later loses a race (see AlreadyAppliedCreateSupersedeError in
+   * routes/stagedIntents.ts). Null for every other kind, and for a create
+   * that hasn't applied yet.
+   */
+  applied_task_id?: string | null;
   created_at: number;
   updated_at: number;
 }
