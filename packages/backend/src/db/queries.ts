@@ -4725,10 +4725,12 @@ export function insertGateItem(row: GateItemRow): void {
   _stmtInsertGateItem ??= db.prepare<GateItemRow>(`
     INSERT INTO gate_item
       (id, project, milestone, text, classification, min_deployed_commit,
-       state, current_disposition, latest_disposition, updated_at)
+       state, current_disposition, latest_disposition, next_attempt_at,
+       pending_attempt_count, updated_at)
     VALUES
       (@id, @project, @milestone, @text, @classification, @min_deployed_commit,
-       @state, @current_disposition, @latest_disposition, @updated_at)
+       @state, @current_disposition, @latest_disposition, @next_attempt_at,
+       @pending_attempt_count, @updated_at)
   `);
   _stmtInsertGateItem.run(row);
 }
@@ -4744,6 +4746,8 @@ export function updateGateItem(row: GateItemRow): void {
       state = @state,
       current_disposition = @current_disposition,
       latest_disposition = @latest_disposition,
+      next_attempt_at = @next_attempt_at,
+      pending_attempt_count = @pending_attempt_count,
       updated_at = @updated_at
     WHERE id = @id
   `);
@@ -4873,6 +4877,35 @@ export function updateGateItemMinDeployedCommit(
   _stmtUpdateGateItemMinDeployedCommit.run({
     id,
     min_deployed_commit: minDeployedCommit,
+    updated_at: updatedAt,
+  });
+}
+
+let _stmtUpdateGateItemPendingSchedule: Database.Statement | null = null;
+
+/**
+ * Writes the `pending` backoff schedule columns directly — used by
+ * gateStore.schedulePendingAttempt after a not-yet-triggerable disposition,
+ * separately from the (state, current_disposition) write in advanceState.
+ */
+export function updateGateItemPendingSchedule(
+  id: string,
+  nextAttemptAt: string,
+  pendingAttemptCount: number,
+  updatedAt: string,
+): void {
+  _stmtUpdateGateItemPendingSchedule ??= db.prepare<{
+    id: string;
+    next_attempt_at: string;
+    pending_attempt_count: number;
+    updated_at: string;
+  }>(
+    `UPDATE gate_item SET next_attempt_at = @next_attempt_at, pending_attempt_count = @pending_attempt_count, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtUpdateGateItemPendingSchedule.run({
+    id,
+    next_attempt_at: nextAttemptAt,
+    pending_attempt_count: pendingAttemptCount,
     updated_at: updatedAt,
   });
 }

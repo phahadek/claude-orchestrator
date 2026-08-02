@@ -432,6 +432,10 @@ export interface GateItemRow {
   current_disposition: string | null;
   /** The disposition carried by the item's most recent event, regardless of whether it advanced state — distinct from current_disposition, which only moves on a terminal (state-advancing) disposition. */
   latest_disposition: string | null;
+  /** Earliest time a `pending` item is eligible for its next not-yet-triggerable re-check. NULL outside `pending`. */
+  next_attempt_at: string | null;
+  /** Consecutive not-yet-triggerable results so far — drives the doubling backoff. 0 outside `pending`. */
+  pending_attempt_count: number;
   updated_at: string;
 }
 

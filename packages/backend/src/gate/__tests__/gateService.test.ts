@@ -26,11 +26,13 @@ import {
   setSourceMergeCommit,
   advanceState,
   addSource,
+  schedulePendingAttempt,
 } from '../gateStore.js';
 import {
   getGateReadiness,
   reconcileGateRunnability,
   nextRunnableGateItems,
+  nextPendingGateItems,
   getGateItem,
   getGateItemDetail,
   listGateItems,
@@ -792,6 +794,143 @@ describe('appendGateItemEvent', () => {
       appendGateItemEvent(item.id, { disposition: 'discarded' }),
     ).toThrow(/requires an evidence/);
     expect(getGateItem(item.id)?.state).toBe('open');
+  });
+});
+
+describe('appendGateItemEvent — not-yet-triggerable pending lifecycle', () => {
+  it('parks an Opportunistic item to pending with a 3h-out next_attempt_at on the first result', () => {
+    const item = makeItem({ classification: 'Opportunistic' });
+    const updated = appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'the quarterly window has not closed yet',
+    });
+    expect(updated.state).toBe('pending');
+    expect(updated.currentDisposition).toBe('not-yet-triggerable');
+
+    const detail = getGateItemDetail(item.id)!;
+    const nextAttemptAt = (detail.item as { nextAttemptAt?: string })
+      .nextAttemptAt;
+    const pendingAttemptCount = (detail.item as { pendingAttemptCount: number })
+      .pendingAttemptCount;
+    expect(pendingAttemptCount).toBe(1);
+    expect(nextAttemptAt).toBeDefined();
+    const deltaHours =
+      (Date.parse(nextAttemptAt!) - Date.parse(detail.item.updatedAt)) /
+      3_600_000;
+    expect(deltaHours).toBeCloseTo(3, 5);
+  });
+
+  it('rejects not-yet-triggerable for a non-Opportunistic item', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    expect(() =>
+      appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' }),
+    ).toThrow(/not-yet-triggerable only applies to Opportunistic/);
+    expect(getGateItem(item.id)?.state).toBe('open');
+  });
+
+  it('doubles the backoff on each consecutive not-yet-triggerable result, capped at 168h', () => {
+    const item = makeItem({ classification: 'Opportunistic' });
+    const expectedHours = [3, 6, 12, 24, 48, 96, 168, 168];
+    for (const hours of expectedHours) {
+      appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+      const after = getGateItemDetail(item.id)!.item as {
+        nextAttemptAt?: string;
+        updatedAt: string;
+      };
+      const deltaHours =
+        (Date.parse(after.nextAttemptAt!) - Date.parse(after.updatedAt)) /
+        3_600_000;
+      expect(deltaHours).toBeCloseTo(hours, 5);
+    }
+    const detail = getGateItemDetail(item.id)!;
+    expect(
+      (detail.item as { pendingAttemptCount: number }).pendingAttemptCount,
+    ).toBe(expectedHours.length);
+  });
+
+  it('restarts the backoff from 3h when a fresh not-yet-triggerable follows a reopen out of pending', () => {
+    const item = makeItem({ classification: 'Opportunistic' });
+    appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+    appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+    expect(
+      (getGateItemDetail(item.id)!.item as { pendingAttemptCount: number })
+        .pendingAttemptCount,
+    ).toBe(2);
+
+    reclassifyGateItem(item.id, 'Read-Only', 'pedro');
+    reclassifyGateItem(item.id, 'Opportunistic', 'pedro');
+    expect(getGateItem(item.id)?.state).toBe('open');
+
+    appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+    const detail = getGateItemDetail(item.id)!;
+    const after = detail.item as {
+      nextAttemptAt?: string;
+      updatedAt: string;
+      pendingAttemptCount: number;
+    };
+    expect(after.pendingAttemptCount).toBe(1);
+    const deltaHours =
+      (Date.parse(after.nextAttemptAt!) - Date.parse(after.updatedAt)) /
+      3_600_000;
+    expect(deltaHours).toBeCloseTo(3, 5);
+  });
+});
+
+describe('nextPendingGateItems', () => {
+  it('skips a pending item until its next_attempt_at elapses', () => {
+    const item = makeItem({ classification: 'Opportunistic' });
+    appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+    expect(getGateItem(item.id)?.state).toBe('pending');
+
+    expect(nextPendingGateItems(item.project, item.milestone)).toHaveLength(0);
+
+    schedulePendingAttempt(
+      item.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+    expect(
+      nextPendingGateItems(item.project, item.milestone).map((i) => i.id),
+    ).toEqual([item.id]);
+  });
+
+  it('never returns a non-pending item', () => {
+    const item = makeItem({ classification: 'Opportunistic' });
+    expect(nextPendingGateItems(item.project, item.milestone)).toHaveLength(0);
+  });
+});
+
+describe('reclassifyGateItem — pending lifecycle', () => {
+  it('forces a pending item back to open when reclassified away from Opportunistic', () => {
+    const item = makeItem({ classification: 'Opportunistic' });
+    appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+    expect(getGateItem(item.id)?.state).toBe('pending');
+
+    const updated = reclassifyGateItem(item.id, 'Read-Only', 'pedro');
+    expect(updated.state).toBe('open');
+    expect(updated.classification).toBe('Read-Only');
+
+    const detail = getGateItemDetail(item.id)!.item as {
+      nextAttemptAt?: string;
+      pendingAttemptCount: number;
+    };
+    expect(detail.nextAttemptAt).toBeUndefined();
+    expect(detail.pendingAttemptCount).toBe(0);
+  });
+
+  it('leaves a non-pending item state untouched on reclassification', () => {
+    const item = makeItem({ classification: 'needs-triage' });
+    const updated = reclassifyGateItem(item.id, 'Opportunistic', 'pedro');
+    expect(updated.state).toBe('open');
+  });
+});
+
+describe('reopenGateItem — pending is blocked', () => {
+  it('rejects reopening a pending item', () => {
+    const item = makeItem({ classification: 'Opportunistic' });
+    appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+    expect(() => reopenGateItem(item.id, 'pedro')).toThrow(/already pending/);
   });
 });
 
