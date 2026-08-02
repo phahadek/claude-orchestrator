@@ -111,7 +111,8 @@ type EventType =
   | 'staged_intent_group_committed'
   | 'manual_verification_cleared'
   | 'admission_stall_started'
-  | 'admission_stall_cleared';
+  | 'admission_stall_cleared'
+  | 'session_teardown_escalated';
 
 type ActorType = 'ai' | 'human' | 'system';
 

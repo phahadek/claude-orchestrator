@@ -205,8 +205,9 @@ export class ApiSessionRunner implements ISessionRunner {
     });
   }
 
-  endSession(): void {
+  async endSession(): Promise<boolean> {
     this.messageQueue?.close();
+    return false;
   }
 
   async kill(): Promise<void> {

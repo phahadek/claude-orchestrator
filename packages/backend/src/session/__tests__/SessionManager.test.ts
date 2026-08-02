@@ -282,6 +282,26 @@ function makeProject() {
   } as any;
 }
 
+/**
+ * Registers a live in-memory session on `sm` (via the resume path) and
+ * returns its captured mock AgentSession, so tests can assert on
+ * session.endSession()/kill() without spawning a real subprocess.
+ */
+async function registerLiveSession(sm: SessionManager, sessionId = SESSION_ID) {
+  vi.mocked(getSession).mockReturnValue(makeDeadRow(sessionId)); // idle — resumable
+  const p = sm.sendOrResume(sessionId, 'boot');
+  await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+  const session = capturedSessions[capturedSessions.length - 1];
+  session.emit('message', {
+    type: 'session_event' as const,
+    sessionId,
+    eventType: 'system' as const,
+    content: 'boot',
+  });
+  await p;
+  return session;
+}
+
 // ── sendOrResume — dead session path ─────────────────────────────────────────
 
 describe('sendOrResume — dead session path', () => {
@@ -1822,6 +1842,112 @@ describe('terminal cleanup for idle sessions (not live)', () => {
         ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
       );
     expect(removeCalls).toHaveLength(1);
+  });
+});
+
+// ── endSession: terminal-status guard + escalation delegation ────────────────
+
+describe('endSession — refuses to escalate against a non-terminal (idle) session', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  it('does not call session.endSession() when the row is idle — idle is never terminal', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+
+    sm.endSession(SESSION_ID);
+
+    expect(session.endSession).not.toHaveBeenCalled();
+  });
+
+  it('does not call session.endSession() when the row is running (mid-turn, not idle either)', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'running' });
+
+    sm.endSession(SESSION_ID);
+
+    expect(session.endSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['done', 'error', 'killed'] as const)(
+    'calls session.endSession() once the row is terminal (%s)',
+    async (status) => {
+      const session = await registerLiveSession(sm);
+      vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status });
+
+      sm.endSession(SESSION_ID);
+
+      expect(session.endSession).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
+describe('archiveAndEndSession — honours its "reap any live subprocess" docstring', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  it('delegates to endSession() so a live session with a terminal row is actually torn down', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'done' });
+
+    sm.archiveAndEndSession(SESSION_ID);
+
+    expect(session.endSession).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── reconcileSessionsMap: reap-before-evict ───────────────────────────────────
+
+describe('reconcileSessionsMap — reaps the process before dropping a stale entry', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  it('calls session.endSession() before evicting an entry whose row went terminal underneath it', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'done' });
+
+    const result = sm.reconcileSessionsMap();
+
+    expect(session.endSession).toHaveBeenCalledTimes(1);
+    expect(result.dropped).toBe(1);
+  });
+
+  it('calls session.endSession() before evicting an entry whose row disappeared entirely', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue(undefined);
+
+    const result = sm.reconcileSessionsMap();
+
+    expect(session.endSession).toHaveBeenCalledTimes(1);
+    expect(result.dropped).toBe(1);
+  });
+
+  it('never touches a live session whose row is still idle (non-terminal)', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+
+    const result = sm.reconcileSessionsMap();
+
+    expect(session.endSession).not.toHaveBeenCalled();
+    expect(result.dropped).toBe(0);
   });
 });
 

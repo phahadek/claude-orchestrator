@@ -21,6 +21,12 @@ import {
   getScratchDir,
 } from './planningScratchDir';
 
+/**
+ * How long endSession() waits for the process to exit on its own after
+ * stdin close before escalating to a forceful process-tree kill().
+ */
+export const GRACEFUL_END_TIMEOUT_MS = 15_000;
+
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
 }
@@ -269,10 +275,41 @@ export class CliSessionRunner implements ISessionRunner {
     }
   }
 
-  endSession(): void {
+  /**
+   * @returns true if the process did not exit on its own within the grace
+   * period and had to be escalated to a forceful kill() — callers use this
+   * to decide whether the escalation is audit-worthy.
+   */
+  async endSession(): Promise<boolean> {
     if (this.proc?.stdin?.writable) {
       this.proc.stdin.end();
     }
+    return this.waitForExitOrEscalate();
+  }
+
+  /**
+   * Waits up to GRACEFUL_END_TIMEOUT_MS for the process to exit on its own
+   * after stdin close. A CLI that does not honor stdin EOF (or a hung
+   * subprocess) would otherwise sit alive forever under a session already
+   * marked terminal — escalate to the same SIGTERM/SIGKILL process-tree
+   * kill() used for explicit aborts.
+   */
+  private async waitForExitOrEscalate(): Promise<boolean> {
+    if (!this.proc || this.proc.exitCode !== null) return false;
+    const exited = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), GRACEFUL_END_TIMEOUT_MS);
+      this.proc!.once('exit', () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+    if (exited) return false;
+    log(
+      this.sessionId,
+      `did not exit within ${GRACEFUL_END_TIMEOUT_MS}ms of stdin close; escalating to kill()`,
+    );
+    await this.kill();
+    return true;
   }
 
   async kill(): Promise<void> {

@@ -108,10 +108,18 @@ export interface ISessionRunner {
   sendMessage(message: string): void;
 
   /**
-   * Signal a clean session end (close stdin / end the input stream).
-   * The session finishes its current turn and exits.
+   * Signal a clean session end (close stdin / end the input stream), then
+   * verify the underlying process actually exits. If it does not exit
+   * within a bounded grace period, escalates to `kill()` (whole process
+   * tree) so a session can never be marked terminal while its subprocess
+   * lives on. Resolves once the process is confirmed gone, one way or
+   * another.
+   *
+   * @returns true if escalation to a forceful kill was required (the
+   * process did not honor the graceful close), false if it exited on its
+   * own. Callers use this to decide whether to audit the escalation.
    */
-  endSession(): void;
+  endSession(): Promise<boolean>;
 
   /** Forcefully terminate the session. */
   kill(): Promise<void>;

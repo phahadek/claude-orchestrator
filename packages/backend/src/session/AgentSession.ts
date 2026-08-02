@@ -1506,7 +1506,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         // so the subprocess exits and runner.run() returns, allowing the escalation
         // path to fire.
         if (event.is_error === true) {
-          this.runner.endSession();
+          Promise.resolve(this.runner.endSession()).catch((err) => {
+            sessionLog(
+              this.sessionId,
+              `endSession (context-overflow close) failed: ${(err as Error).message}`,
+            );
+          });
         }
       }
     }
@@ -3010,10 +3015,28 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   }
 
   /**
-   * Signal a clean session end. Delegates to the underlying runner.
+   * Signal a clean session end. Delegates to the underlying runner, which
+   * verifies the process actually exits and escalates to a forceful kill
+   * if it does not — never touches DB status, only the OS process(es). A
+   * forced escalation is audited here (naming this session and that the
+   * graceful close failed) so a subprocess surviving its session leaves a
+   * trace instead of going unnoticed.
    */
-  endSession(): void {
-    this.runner.endSession();
+  async endSession(): Promise<void> {
+    const escalated = await this.runner.endSession();
+    if (escalated) {
+      recordEvent({
+        event_type: 'session_teardown_escalated',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: null,
+        task_id: this.taskId ?? null,
+        payload: {
+          sessionId: this.sessionId,
+          reason: 'graceful_stdin_close_timed_out',
+        },
+      });
+    }
   }
 
   async kill(): Promise<void> {
