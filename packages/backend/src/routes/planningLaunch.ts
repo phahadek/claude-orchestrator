@@ -5,7 +5,9 @@ import {
   getMilestoneById,
   getProjectRowById,
   getTaskTitleFromCache,
+  getTaskTypeFromCache,
 } from '../db/queries';
+import { isTaskTypeCompatibleWithSessionType } from '../session/sessionPredicates';
 import type { MilestoneRow, ProjectRow } from '../db/types';
 import type {
   OpsLaunchResult,
@@ -175,6 +177,25 @@ export function createPlanningLaunchRouter(
     const sessionType = resolveSessionType(workflow);
     if (!sessionType) {
       res.status(400).json({ error: `unsupported workflow "${workflow}"` });
+      return;
+    }
+
+    const incompatible = taskIds
+      .map((taskId) => ({
+        taskId,
+        taskType: getTaskTypeFromCache(normalizeTaskId(taskId)),
+      }))
+      .filter(
+        (t): t is { taskId: string; taskType: string } =>
+          typeof t.taskType === 'string' &&
+          !isTaskTypeCompatibleWithSessionType(t.taskType, sessionType),
+      );
+    if (incompatible.length > 0) {
+      res.status(400).json({
+        error: `workflow "${workflow}" (sessionType "${sessionType}") is incompatible with ${incompatible
+          .map((t) => `task ${t.taskId} (Type "${t.taskType}")`)
+          .join(', ')}`,
+      });
       return;
     }
 
