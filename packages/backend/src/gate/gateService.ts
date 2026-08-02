@@ -396,7 +396,7 @@ export interface ListGateItemsOptions {
   order?: GateItemListOrder;
 }
 
-export interface GateItemWithVerifyStatus extends GateItem {
+interface GateItemWithVerifyStatus extends GateItem {
   /** True if this item currently has a non-terminal, unended verify session. */
   verifyInFlight: boolean;
 }
