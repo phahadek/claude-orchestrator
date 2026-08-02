@@ -141,6 +141,7 @@ export function createSeedStateRouter(): Router {
         project,
         milestone,
         state: stringParam('state'),
+        classification: stringParam('classification'),
         page: numberParam('page'),
         limit: numberParam('limit'),
         order: orderRaw,

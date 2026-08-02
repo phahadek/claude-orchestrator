@@ -5501,6 +5501,7 @@ export interface SeedItemFilter {
   project?: string;
   milestone?: string;
   state?: string;
+  classification?: string;
 }
 
 function buildSeedItemWhereClause(filter: SeedItemFilter): {
@@ -5520,6 +5521,10 @@ function buildSeedItemWhereClause(filter: SeedItemFilter): {
   if (filter.state) {
     conditions.push('state = @state');
     params.state = filter.state;
+  }
+  if (filter.classification) {
+    conditions.push('classification = @classification');
+    params.classification = filter.classification;
   }
   return {
     clause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
@@ -5559,9 +5564,9 @@ export function countSeedItemsFiltered(filter: SeedItemFilter): number {
 export function insertSeedItem(row: SeedItemRow): void {
   _stmtInsertSeedItem ??= db.prepare<SeedItemRow>(`
     INSERT INTO seed_item
-      (id, project, milestone, spec, min_deployed_commit, state, updated_at)
+      (id, project, milestone, spec, classification, min_deployed_commit, state, updated_at)
     VALUES
-      (@id, @project, @milestone, @spec, @min_deployed_commit, @state, @updated_at)
+      (@id, @project, @milestone, @spec, @classification, @min_deployed_commit, @state, @updated_at)
   `);
   _stmtInsertSeedItem.run(row);
 }
@@ -5572,6 +5577,7 @@ export function updateSeedItem(row: SeedItemRow): void {
       project = @project,
       milestone = @milestone,
       spec = @spec,
+      classification = @classification,
       min_deployed_commit = @min_deployed_commit,
       state = @state,
       updated_at = @updated_at

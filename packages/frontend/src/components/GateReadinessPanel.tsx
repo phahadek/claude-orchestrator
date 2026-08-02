@@ -12,6 +12,7 @@ import type {
 import { seedApi } from '../api/seed';
 import type {
   SeedItem,
+  SeedItemClassification,
   SeedItemEventOutcome,
   SeedReadiness,
   SeedMilestoneReadiness,
@@ -61,6 +62,12 @@ const REOPEN_BLOCKED_STATES = new Set(['open', 'runnable', 'pending-approval']);
 
 const SEED_STATE_ORDER = ['pending', 'applied', 'confirmed', 'blocked'];
 const SEED_DONE_STATES = ['confirmed'];
+
+const SEED_CLASSIFICATION_OPTIONS: SeedItemClassification[] = [
+  'operational-seed',
+  'in-pr',
+  'needs-triage',
+];
 
 /** Mirrors the outcomes the POST /seed/items/:id/events route accepts (seedService.ts). */
 const SEED_EVENT_OUTCOMES: SeedItemEventOutcome[] = [
@@ -362,6 +369,7 @@ export function GateReadinessPanel({
   );
 
   const [seedStateFilter, setSeedStateFilter] = useState('');
+  const [seedClassificationFilter, setSeedClassificationFilter] = useState('');
   const [seedPage, setSeedPage] = useState(1);
 
   const [seedItems, setSeedItems] = useState<SeedItem[]>([]);
@@ -535,7 +543,7 @@ export function GateReadinessPanel({
   // Reset seed items to page 1 whenever the milestone or seed filter changes.
   useEffect(() => {
     setSeedPage(1);
-  }, [selectedMilestone, seedStateFilter]);
+  }, [selectedMilestone, seedStateFilter, seedClassificationFilter]);
 
   // Load the filtered/paginated item list — never a full unbounded load.
   // Defaults to the run worklist: runnable items, not-done first.
@@ -606,6 +614,7 @@ export function GateReadinessPanel({
         project: activeProjectId ?? undefined,
         milestone: selectedMilestone,
         state: seedStateFilter || undefined,
+        classification: seedClassificationFilter || undefined,
         order: seedStateFilter === '' ? 'not-done-first' : undefined,
         page: seedPage,
         limit: PAGE_SIZE,
@@ -626,7 +635,13 @@ export function GateReadinessPanel({
     return () => {
       cancelled = true;
     };
-  }, [activeProjectId, selectedMilestone, seedStateFilter, seedPage]);
+  }, [
+    activeProjectId,
+    selectedMilestone,
+    seedStateFilter,
+    seedClassificationFilter,
+    seedPage,
+  ]);
 
   const refreshDeployStatus = useCallback(() => {
     if (!activeProjectId) return;
@@ -1616,6 +1631,21 @@ export function GateReadinessPanel({
                 ))}
               </select>
             </label>
+            <label className={styles.filterField}>
+              Classification
+              <select
+                value={seedClassificationFilter}
+                onChange={(e) => setSeedClassificationFilter(e.target.value)}
+                data-testid="seed-classification-filter"
+              >
+                <option value="">All</option>
+                {SEED_CLASSIFICATION_OPTIONS.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           {seedItemsLoading && <p className={styles.muted}>Loading items…</p>}
@@ -1635,6 +1665,7 @@ export function GateReadinessPanel({
                 <thead>
                   <tr>
                     <th>Item</th>
+                    <th>Classification</th>
                     <th>State</th>
                     <th>Updated</th>
                     <th></th>
@@ -1644,6 +1675,7 @@ export function GateReadinessPanel({
                   {seedItems.map((item) => (
                     <tr key={item.id} className={styles.itemRow}>
                       <td>{item.spec}</td>
+                      <td>{item.classification ?? ''}</td>
                       <td>{item.state}</td>
                       <td>{new Date(item.updatedAt).toLocaleString()}</td>
                       <td className={styles.itemActions}>
@@ -1677,7 +1709,7 @@ export function GateReadinessPanel({
                   ))}
                   {seedItems.length === 0 && (
                     <tr>
-                      <td colSpan={4} className={styles.muted}>
+                      <td colSpan={5} className={styles.muted}>
                         No config-seed items match these filters.
                       </td>
                     </tr>

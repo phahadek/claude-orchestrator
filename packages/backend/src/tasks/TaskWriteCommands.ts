@@ -35,7 +35,10 @@ import {
   type SeedAccretionMarker,
 } from '../seed/seedStore';
 import type { GroomingGateEntry } from '../groom/groomGate';
-import type { GateItemClassification } from '../db/types';
+import type {
+  GateItemClassification,
+  SeedItemClassification,
+} from '../db/types';
 import { recordEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
 import { planMove, type MoveGraphTask } from '../orchestration/moveTask';
@@ -324,6 +327,8 @@ export interface SeedContributionSourceTask {
  */
 export interface SeedContributionItemInput {
   spec: string;
+  /** Mirrors GateContributionItemInput's classification override — see SeedItemClassification. */
+  classification?: SeedItemClassification;
 }
 
 /**
@@ -759,6 +764,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
           project: sourceTask.project,
           milestone,
           spec: seed.spec,
+          classification: seed.classification,
           sources: [
             {
               sourceTaskId,
