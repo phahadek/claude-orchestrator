@@ -521,12 +521,21 @@ export async function loadOpsContext(
   // ── Job 3: pre-seed / reconcile / trim ops_journal ──────────────────────
   // reconcileJournal is scoped to whatever liveBoard rows are passed in, so we
   // pass through entries belonging to other project/milestone combos untouched
-  // (only executable tasks belonging to *this* run get seeded/trimmed).
+  // (executable AND dep_blocked tasks belonging to *this* run get
+  // seeded/preserved — dep_blocked is still open, still on the board, and is
+  // exactly the state a task waits in across sessions, so its staged journal
+  // entry must survive rather than be trimmed alongside genuinely Done/off-board
+  // rows).
   const otherEntries = listOpsJournalEntries().filter(
     (e) => e.project !== project || e.milestone !== milestoneId,
   );
   const liveBoard: OpsBoardTaskRow[] = [
     ...executable.map((t) => ({
+      taskId: t.id,
+      project,
+      milestone: milestoneId,
+    })),
+    ...depBlocked.map((t) => ({
       taskId: t.id,
       project,
       milestone: milestoneId,
