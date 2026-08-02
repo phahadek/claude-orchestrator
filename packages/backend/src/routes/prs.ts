@@ -17,6 +17,7 @@ import {
   getSessionsByProject,
   lookupSessionByBranch,
   clearTerminalPRFlags,
+  setPauseReason,
 } from '../db/queries';
 import { parsePauseReason } from '../db/pauseReason';
 import { recordEvent } from '../audit/AuditLog';
@@ -784,6 +785,36 @@ export function createPrsRouter(
       // Kick off auto-merge for projects with the toggle enabled (no-op otherwise)
       if (autoMerger) autoMerger.attempt(prNumber, repo);
       res.json(result);
+    },
+  );
+
+  // ── POST /api/prs/:owner/:repoName/:prNumber/verify-manual-items ────────────
+  // Single sign-off: clears manual_verification_pending and re-attempts
+  // auto-merge. No per-item verified-state is persisted.
+  router.post(
+    '/prs/:owner/:repoName/:prNumber/verify-manual-items',
+    async (req: Request, res: Response) => {
+      const repo = `${req.params.owner}/${req.params.repoName}`;
+      const prNumber = parseInt(String(req.params.prNumber), 10);
+      const prRow = getPRByNumber(prNumber, repo);
+      if (!prRow) {
+        res.status(404).json({ error: `PR #${prNumber} not found` });
+        return;
+      }
+      setPauseReason(prNumber, repo, null);
+      recordEvent({
+        event_type: 'manual_verification_cleared',
+        actor_type: 'human',
+        actor_id: null,
+        project_id: getProjectByGithubRepo(repo)?.id ?? null,
+        task_id: prRow.task_id,
+        payload: {
+          pr_number: prNumber,
+          repo,
+        },
+      });
+      if (autoMerger) autoMerger.attempt(prNumber, repo);
+      res.json({ ok: true });
     },
   );
 

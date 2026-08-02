@@ -121,6 +121,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Plan usage limit exhausted — launch deferred until the window resets. Will resume automatically.',
   api_overloaded_exhausted:
     'API overloaded (529) — automatic retries were exhausted. Review and resume manually.',
+  manual_verification_pending:
+    'Manual verification required — review the checklist and sign off to allow auto-merge.',
 };
 
 function verdictLabel(verdict: string): string {
@@ -170,6 +172,7 @@ export function TaskCard({
   })();
   const isNonCode = !task.taskType.includes('💻');
   const pauseStruct = parsePauseReason(task.pauseReason);
+  const [verifyInFlight, setVerifyInFlight] = useState(false);
 
   const handleRecover = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -184,6 +187,39 @@ export function TaskCard({
       // state will be updated via WS broadcast
     } finally {
       setRecoveryInFlight(false);
+    }
+  };
+
+  const manualVerificationPending =
+    pauseStruct?.reason === 'manual_verification_pending';
+  const manualVerificationItems: string[] = (() => {
+    if (!manualVerificationPending || !task.pauseDetail) return [];
+    try {
+      const parsed: unknown = JSON.parse(task.pauseDetail);
+      return Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === 'string')
+        : [];
+    } catch {
+      return [];
+    }
+  })();
+
+  const handleVerifyManualItems = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (verifyInFlight || !pr) return;
+    const match = pr.prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\//);
+    if (!match) return;
+    const [, owner, repoName] = match;
+    setVerifyInFlight(true);
+    try {
+      await authedFetch(
+        `/api/prs/${owner}/${repoName}/${pr.prNumber}/verify-manual-items`,
+        { method: 'POST' },
+      );
+    } catch {
+      // state will be updated via WS broadcast
+    } finally {
+      setVerifyInFlight(false);
     }
   };
 
@@ -307,6 +343,26 @@ export function TaskCard({
             <span className={styles.placeholder}>—</span>
           )}
         </>
+      )}
+
+      {manualVerificationPending && (
+        <div className={styles.manualVerification}>
+          {manualVerificationItems.length > 0 && (
+            <ul className={styles.manualVerificationList}>
+              {manualVerificationItems.map((item, idx) => (
+                <li key={idx}>{item}</li>
+              ))}
+            </ul>
+          )}
+          <button
+            className={styles.verifyManualButton}
+            disabled={verifyInFlight || !pr}
+            onClick={(e) => void handleVerifyManualItems(e)}
+            title="Sign off on manual verification and allow auto-merge"
+          >
+            ✔ Verified — allow auto-merge
+          </button>
+        </div>
       )}
 
       <div className={styles.cardFooter}>

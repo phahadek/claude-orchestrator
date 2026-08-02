@@ -12,8 +12,10 @@ import {
   getLocalBranchById,
   getSession,
   getPRIntentForPR,
+  setPauseReason,
 } from '../db/queries';
 import type { OpsPrIntentPayload } from '../db/types';
+import { getCachedType } from '../tasks/TaskWriteCommands';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
 import type { DiffSource } from './DiffSource';
@@ -51,6 +53,18 @@ function isTransientFetchError(e: unknown): boolean {
   if (e instanceof GitHubApiError && (e.status === 429 || e.status >= 500))
     return true;
   return false;
+}
+
+// Placeholder bodyRender.ts renders when a non-Code task has zero manual
+// criteria — not a genuine checklist item, so it must never be stored/shown.
+const MANUAL_VERIFICATION_SENTINEL =
+  'Covered by the Manual Verification Gate task.';
+
+function filterManualVerificationSentinel(
+  items: string[] | undefined,
+): string[] | undefined {
+  if (!items) return items;
+  return items.filter((item) => item !== MANUAL_VERIFICATION_SENTINEL);
 }
 
 /**
@@ -334,6 +348,7 @@ export class PRReviewService {
             repo,
             prRow.task_id,
             projectId,
+            finalResult.manualItemsForHuman,
           );
         }
         return finalResult;
@@ -408,6 +423,7 @@ export class PRReviewService {
               repo,
               prRow.task_id,
               projectId,
+              finalResult.manualItemsForHuman,
             );
           }
           return finalResult;
@@ -474,6 +490,7 @@ export class PRReviewService {
           repo,
           prRow.task_id,
           projectId,
+          finalResult.manualItemsForHuman,
         );
       }
       return finalResult;
@@ -582,6 +599,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     repo: string,
     taskId: string | null,
     projectId?: string,
+    manualItemsForHuman?: string[],
   ): Promise<boolean> {
     let draftTransitioned = false;
     const resolvedProjectId = projectId || this.defaultProjectId;
@@ -642,6 +660,25 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
             (err as Error).message,
           ),
         );
+    }
+    // Hold auto-merge when the task's cached Type is not 💻 Code — those
+    // tasks may carry manual-verification items that only a human can sign
+    // off on. A cache miss (getCachedType returns null) is treated as
+    // eligible for the hold — fail closed, matching getCachedType's own
+    // doc-comment precedent for checkGroomingPromotionGate. This re-derives
+    // on every approved verdict (initial review and re-review alike), so a
+    // fresh diff always re-arms the hold even if an operator cleared a prior
+    // round.
+    const cachedType = taskId ? getCachedType(taskId) : null;
+    if (cachedType !== '💻 Code') {
+      setPauseReason(
+        prNumber,
+        repo,
+        'manual_verification_pending',
+        manualItemsForHuman && manualItemsForHuman.length > 0
+          ? JSON.stringify(manualItemsForHuman)
+          : undefined,
+      );
     }
     // Kick off the auto-merger (per-project opt-in; AutoMerger guards on the
     // project toggle and on pause_reason). Fire-and-forget — the polling loop
@@ -789,7 +826,13 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
     if (finalResult.verdict === 'approved') {
-      await this.handleApprovedVerdict(prNumber, repo, pr.task_id, projectId);
+      await this.handleApprovedVerdict(
+        prNumber,
+        repo,
+        pr.task_id,
+        projectId,
+        finalResult.manualItemsForHuman,
+      );
     }
     return finalResult;
   }
@@ -978,8 +1021,10 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         const summary =
           typeof parsed.summary === 'string' ? parsed.summary : '';
         const manualItems = Array.isArray(parsed.manualItemsForHuman)
-          ? (parsed.manualItemsForHuman as string[]).filter(
-              (item) => typeof item === 'string',
+          ? filterManualVerificationSentinel(
+              (parsed.manualItemsForHuman as string[]).filter(
+                (item) => typeof item === 'string',
+              ),
             )
           : undefined;
         const escalate = parsed.escalate === true;

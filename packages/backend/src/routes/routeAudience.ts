@@ -139,6 +139,11 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'PR panel approve action',
   },
+  'POST /api/prs/:owner/:repoName/:prNumber/verify-manual-items': {
+    audience: 'operator',
+    reason:
+      'operator sign-off clearing manual_verification_pending — single-action dashboard button',
+  },
   'DELETE /api/prs/:prNumber': {
     audience: 'operator',
     reason: 'PR panel remove action',
