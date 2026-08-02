@@ -2143,7 +2143,9 @@ export function linkPRToPRIntent(
   const existing = db
     .prepare<{
       intent_id: string;
-    }>(`SELECT pr_number, repo FROM pull_requests WHERE pr_intent_id = @intent_id`)
+    }>(
+      `SELECT pr_number, repo FROM pull_requests WHERE pr_intent_id = @intent_id`,
+    )
     .get({ intent_id: intentId }) as
     | { pr_number: number; repo: string }
     | undefined;
