@@ -1126,6 +1126,7 @@ function renderGroomDigest(
     heading,
     '',
     `- Task: ${data.task.title} (${data.task.type}, ${data.task.status}) — ${data.task.url}`,
+    `- Task id: \`${data.task.id}\``,
     `- size_check seed: ${data.sizeCheckSeed.files} files affected (${data.sizeCheckSeed.loc_method})`,
     `- type_check: ${data.typeCheck.decision}${data.typeCheck.signals?.length ? ` — ${data.typeCheck.signals.join('; ')}` : ''}`,
     `- Binding constraints: ${data.bindingConstraints.length ? data.bindingConstraints.join(', ') : '(none)'}`,
@@ -1217,6 +1218,7 @@ function renderDesignDigest(data: DesignDigestSlice): string {
     '## Design Investigation Slice',
     '',
     `- Task: ${data.task.title} (${data.task.type}, ${data.task.status}) — ${data.task.url}`,
+    `- Task id: \`${data.task.id}\``,
     `- Open questions (${data.openQuestions.source}): ${data.openQuestions.items.length ? data.openQuestions.items.length : 0}`,
   ];
   for (const q of data.openQuestions.items) {
@@ -1255,6 +1257,7 @@ function renderOpsDigest(data: OpsDigestSlice): string {
     '## Ops Journal Slice',
     '',
     `- Task: ${data.task.title} (${data.task.type}, ${data.task.mode}) — ${data.task.url}`,
+    `- Task id: \`${data.task.id}\``,
     `- Depends On: ${data.task.dependsOn.length ? data.task.dependsOn.join(', ') : '(none)'}`,
     `- Dep status: ${data.task.depStatus}`,
   ];

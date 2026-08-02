@@ -48,6 +48,7 @@ import type { DocsLoadResult } from '../../docs/docsLoad';
 import type { OpsLoadResult } from '../../ops/opsLoad';
 import { KNOWN_INTENT_KINDS } from '../../routes/stagedIntents';
 import { orchestratorMcpToolName } from '../../mcp/toolNaming';
+import { normalizeTaskId } from '../../tasks/taskId';
 
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
@@ -458,6 +459,21 @@ describe('assemblePlanningProcedure', () => {
       };
       expect(output).toContain(digestTitles[workflow]);
 
+      // The task id is rendered as a discrete, copy-pasteable field
+      // alongside the existing title/type/status/url line — not only
+      // recoverable by parsing the trailing hex of the Notion URL.
+      expect(output).toContain(`\`${digest.data.task.id}\``);
+      expect(output).toMatch(/- Task id: `.+`/);
+
+      // The existing Task line — title, type, status, url — is unchanged.
+      const taskStatus =
+        workflow === 'ops'
+          ? (digest.data.task as { mode: string }).mode
+          : (digest.data.task as { status: string }).status;
+      expect(output).toContain(
+        `- Task: ${digest.data.task.title} (${digest.data.task.type}, ${taskStatus}) — ${digest.data.task.url}`,
+      );
+
       // Concrete Transport block — the milestone/project ids, the allowed
       // intent kinds, and at least one concrete client invocation.
       expect(output).toContain('`m1`');
@@ -499,6 +515,43 @@ describe('assemblePlanningProcedure', () => {
       }
     });
   }
+
+  it('a split session (same slice as groom, `## Split Candidate Slice` heading) also gets the Task id field', () => {
+    const data = deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1');
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: { workflow: 'split', data },
+    });
+    expect(output).toContain('## Split Candidate Slice');
+    expect(output).toContain(`- Task id: \`${data.task.id}\``);
+  });
+
+  it('renders the task id in the exact form the staging tools accept — copyable verbatim into a task.setStatus payload with no transformation', () => {
+    const canonicalId = 'notion:3b022f91-52f3-810e-846b-ded6111a6bb3';
+    const loadResult = fixtureGroomLoadResult();
+    loadResult.targetTasks[0].id = canonicalId;
+    const data = deriveGroomDigestSlice(loadResult, canonicalId);
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: { workflow: 'groom', data },
+    });
+    const match = output.match(/- Task id: `([^`]+)`/);
+    expect(match).not.toBeNull();
+    const renderedTaskId = match![1];
+    expect(renderedTaskId).toBe(data.task.id);
+
+    const payload = { taskId: renderedTaskId, status: 'Ready' };
+    // Round-trips through the staging tools' own id canonicalization
+    // unchanged — proof the rendered id needs no re-hyphenation or
+    // re-prefixing before it's usable in a task.setStatus payload.
+    expect(normalizeTaskId(payload.taskId)).toBe(payload.taskId);
+  });
 
   it("renders the real directory for a project whose checkout dir name differs from its registry id — not the p1 fixture's path", () => {
     const output = assemblePlanningProcedure({
