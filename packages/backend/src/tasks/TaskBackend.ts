@@ -17,7 +17,7 @@ import {
 import { GitHubClient } from '../github/GitHubClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 import { recordEvent } from '../audit/AuditLog';
-import { upsertTaskCache } from '../db/queries';
+import { upsertTaskCache, updateTaskStatusInBoardCaches } from '../db/queries';
 
 /**
  * Per-project configuration that identifies where non-milestone tasks are sourced from.
@@ -309,6 +309,7 @@ export class AuditingTaskBackend implements TaskBackend {
     options?: UpdateStatusOptions,
   ): Promise<void> {
     await this.inner.updateStatus(taskId, status);
+    updateTaskStatusInBoardCaches(taskId, status);
     const source = options?.source ?? 'orchestrator';
     const sessionId = options?.sessionId ?? null;
     recordEvent({
