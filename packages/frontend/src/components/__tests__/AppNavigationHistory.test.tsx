@@ -64,7 +64,7 @@ vi.mock('../../hooks/useWebSocket', () => ({
 }));
 
 vi.mock('../../hooks/useKeyboardShortcuts', () => ({
-  useKeyboardShortcuts: vi.fn(),
+  useKeyboardShortcuts: vi.fn(() => ({ highlightedItemId: null })),
 }));
 
 vi.mock('../Header', () => ({

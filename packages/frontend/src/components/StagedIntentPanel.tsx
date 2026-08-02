@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { renderTaskBodyMarkdown } from '@claude-orchestrator/backend/src/tasks/bodyRender';
 import type {
   StagedIntent,
@@ -8,6 +8,7 @@ import type {
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { diffTaskBody, splitSections, type SectionDiff } from './bodyDiff';
 import { CollapsibleField } from './CollapsibleField';
+import { useHighlightedCardKeyboardActions } from '../types/panelKeyboard';
 import styles from './StagedIntentPanel.module.css';
 
 interface Props {
@@ -41,6 +42,13 @@ interface Props {
    * registers, and proposal are still rendered read-only.
    */
   disabled?: boolean;
+  /**
+   * True while this card is the active keyboard ring's current highlight —
+   * enables its local 'a' (approve) / 'r' (focus reason field) bindings.
+   * Defaults to false so the panel is inert outside a keyboard-ring
+   * context (e.g. rendered standalone in the session DecisionPanel today).
+   */
+  highlighted?: boolean;
 }
 
 function isNotFoundError(err: unknown): boolean {
@@ -1210,6 +1218,7 @@ export function StagedIntentPanel({
   onApproved,
   hideActions,
   disabled = false,
+  highlighted = false,
 }: Props) {
   // A member stuck off the active surface (needs_revision |
   // pending_verification) — its only operator-usable exit is decline
@@ -1230,6 +1239,7 @@ export function StagedIntentPanel({
   const [rejectReason, setRejectReason] = useState('');
   const [showOverride, setShowOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
+  const rejectReasonRef = useRef<HTMLTextAreaElement>(null);
 
   const blocked = Boolean(
     intent.annotation &&
@@ -1303,6 +1313,25 @@ export function StagedIntentPanel({
       setInFlight(null);
     }
   };
+
+  // Mirrors the visible approve button's own enable condition (see the
+  // "Approve"/"Grant" button below) — 'a' is a no-op whenever that button
+  // would be hidden or disabled, never bypassing its gate.
+  const canApproveViaKeyboard =
+    !hideActions &&
+    (isGrouped || skipsApply) &&
+    intent.state !== 'approved' &&
+    !isBlockedState &&
+    inFlight === null &&
+    !disabled;
+
+  useHighlightedCardKeyboardActions({
+    highlighted,
+    onApprove: canApproveViaKeyboard ? () => void handleApprove() : undefined,
+    onFocusReject: hideActions
+      ? undefined
+      : () => rejectReasonRef.current?.focus(),
+  });
 
   const handleAcknowledge = async () => {
     setInFlight('acknowledge');
@@ -1489,6 +1518,7 @@ export function StagedIntentPanel({
               </button>
             </div>
             <textarea
+              ref={rejectReasonRef}
               className={styles.feedbackInput}
               placeholder={
                 rejectOutcome === 'pushback'

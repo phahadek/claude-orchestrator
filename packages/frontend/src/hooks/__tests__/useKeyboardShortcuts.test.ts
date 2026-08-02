@@ -1,4 +1,4 @@
-import { renderHook } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import type { ShortcutHandlers } from '../useKeyboardShortcuts';
@@ -308,6 +308,63 @@ describe('useKeyboardShortcuts', () => {
       expect(handlers.onSelectPrev).toHaveBeenCalledTimes(1);
       expect(handlers.onConfirmSelection).toHaveBeenCalledTimes(1);
       expect(handlers.onFocusSearch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('with an active panel declaration', () => {
+    function makeActivePanel(ids: string[]) {
+      const onApprove = vi.fn();
+      return {
+        declaration: {
+          orderedItems: () => ids.map((id) => ({ id })),
+          onApprove,
+          hints: [],
+        },
+        onApprove,
+      };
+    }
+
+    it('J moves the ring highlight within the active panel, not the session grid', () => {
+      const { declaration } = makeActivePanel(['x', 'y', 'z']);
+      const handlers = makeHandlers({ activePanel: declaration });
+      const { result } = renderHook(() => useKeyboardShortcuts(handlers));
+
+      expect(result.current.highlightedItemId).toBeNull();
+      act(() => fireKey('J'));
+      expect(handlers.onSelectNext).not.toHaveBeenCalled();
+      expect(result.current.highlightedItemId).toBe('x');
+
+      act(() => fireKey('J'));
+      expect(result.current.highlightedItemId).toBe('y');
+    });
+
+    it('K moves the ring highlight backward within the active panel', () => {
+      const { declaration } = makeActivePanel(['x', 'y', 'z']);
+      const handlers = makeHandlers({ activePanel: declaration });
+      const { result } = renderHook(() => useKeyboardShortcuts(handlers));
+
+      act(() => fireKey('K'));
+      expect(handlers.onSelectPrev).not.toHaveBeenCalled();
+      expect(result.current.highlightedItemId).toBe('z');
+    });
+
+    it('Enter fires the active panel onApprove with the highlighted item, not onConfirmSelection', () => {
+      const { declaration, onApprove } = makeActivePanel(['x', 'y']);
+      const handlers = makeHandlers({ activePanel: declaration });
+      renderHook(() => useKeyboardShortcuts(handlers));
+
+      act(() => fireKey('J'));
+      act(() => fireKey('Enter'));
+
+      expect(onApprove).toHaveBeenCalledWith({ id: 'x' });
+      expect(handlers.onConfirmSelection).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the session grid when no active panel is set', () => {
+      const handlers = makeHandlers({ activePanel: null });
+      renderHook(() => useKeyboardShortcuts(handlers));
+      act(() => fireKey('J'));
+      expect(handlers.onSelectNext).toHaveBeenCalledTimes(1);
     });
   });
 });
