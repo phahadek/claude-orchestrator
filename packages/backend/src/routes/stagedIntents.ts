@@ -4022,6 +4022,55 @@ async function maybeAutoApproveGateAccrete(
 }
 
 /**
+ * The seed.stage twin of maybeAutoApproveGateAccrete: when the intent's own
+ * payload content-matches the task's currently-stored "## Operational seed"
+ * body items, transitions staged -> approved immediately at stage time, via
+ * the same autoApproveAccretionRow helper. A bare 'none'/'n/a' decision never
+ * runs the content-match check and falls back to ordinary staged state, as
+ * does a failed match or a task-body fetch failure/timeout — this never
+ * blocks or errors the stage call. Gated off the same
+ * runtimeSettings.gate_seed_auto_approve_enabled flag gate.accrete already
+ * uses; off by default.
+ */
+async function maybeAutoApproveSeedStage(
+  intent: StagedIntent,
+): Promise<StagedIntent> {
+  if (!runtimeSettings.gate_seed_auto_approve_enabled) return intent;
+
+  const payload = intent.payload as SeedStagePayload;
+  if (payload.decision === 'none' || payload.decision === 'n/a') {
+    return intent;
+  }
+
+  let storedBody: string;
+  try {
+    const backend = getTaskBackend(intent.projectId);
+    storedBody = (await backend.fetchTaskPage(payload.sourceTask.id)) ?? '';
+  } catch (err) {
+    logger.error(
+      `[stagedIntents] task-body fetch failed for seed.stage auto-grant on ${intent.id}: ${err}`,
+    );
+    return intent;
+  }
+
+  const strippedItems = parseOperationalSeedItems(storedBody);
+  const accretedItems = payload.seeds.map((seed) => seed.spec);
+  const match = checkAccretionContentMatch(
+    'seed_contribution',
+    strippedItems,
+    accretedItems,
+  );
+  if (!match.ok) return intent;
+
+  const row = getStagedIntentRow(intent.id);
+  if (!row) return intent;
+  autoApproveAccretionRow(row);
+
+  const approved = getStagedIntentRow(intent.id);
+  return approved ? rowToApi(approved) : intent;
+}
+
+/**
  * Notion's object_not_found message ("Could not find page with ID: X. Make
  * sure the relevant pages and databases are shared with your integration.")
  * is accurate for a genuine sharing gap but is the far more common apply-time
@@ -4418,6 +4467,9 @@ export async function routeStageTimeBlock(
   }
   if (intent.kind === 'gate.accrete') {
     intent = await maybeAutoApproveGateAccrete(intent);
+  }
+  if (intent.kind === 'seed.stage') {
+    intent = await maybeAutoApproveSeedStage(intent);
   }
 
   const checked = await runStageTimeReadyChecks(intent);
