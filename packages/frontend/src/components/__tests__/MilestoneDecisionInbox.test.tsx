@@ -516,6 +516,154 @@ describe('MilestoneDecisionInbox', () => {
     );
   });
 
+  it('renders a pushed-back group (operator needs_revision, no autoRejected annotation) as blocked, disables Approve, and never fires the commit request when clicked', async () => {
+    const groupId = 'group-pushed-back';
+    const blockedMember: StagedIntent = {
+      id: `${groupId}-status`,
+      kind: 'task.setStatus',
+      payload: { taskId: 't-pushed-back', status: 'Ready' },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'session-groom',
+      groupId,
+      groupKind: 'groom',
+      milestone: 'M1',
+      state: 'needs_revision',
+      sessionComplete: true,
+      groupBlocked: true,
+      groupBlockedMemberCount: 1,
+    };
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      blockedMember,
+    ]);
+    const approveGroup = vi.spyOn(stagedIntentsApi, 'approveGroup');
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
+    expect(within(card).getByTestId(`recovery-banner-${groupId}`)).toBeTruthy();
+
+    const approveButton = within(card).getByRole('button', {
+      name: /approve groom/i,
+    }) as HTMLButtonElement;
+    expect(approveButton.disabled).toBe(true);
+
+    fireEvent.click(approveButton);
+    expect(approveGroup).not.toHaveBeenCalled();
+  });
+
+  it('renders a pending_verification member as blocked, disabling Approve, the same as an auto-rejected one', async () => {
+    const groupId = 'group-pending-verification';
+    const blockedMember: StagedIntent = {
+      id: `${groupId}-status`,
+      kind: 'task.setStatus',
+      payload: { taskId: 't-pv', status: 'Ready' },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'session-groom',
+      groupId,
+      groupKind: 'groom',
+      milestone: 'M1',
+      state: 'pending_verification',
+      sessionComplete: true,
+      groupBlocked: true,
+      groupBlockedMemberCount: 1,
+    };
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      blockedMember,
+    ]);
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
+    expect(within(card).getByTestId(`recovery-banner-${groupId}`)).toBeTruthy();
+    const approveButton = within(card).getByRole('button', {
+      name: /approve groom/i,
+    }) as HTMLButtonElement;
+    expect(approveButton.disabled).toBe(true);
+  });
+
+  it('renders a group blocked (Approve disabled, no Recover offered) when its only blocked member is auto-rejected and hidden behind a still-live session', async () => {
+    const groupId = 'group-hidden-blocked';
+    // The auto-rejected/needs_revision sibling never reaches the frontend —
+    // isVisibleOnDecisionSurface filters it out server-side while its
+    // session is live — so only its visible sibling is fetched. The backend
+    // still marks the visible sibling groupBlocked: true because it reads
+    // every member of the group, not just the visible ones.
+    const visibleSibling: StagedIntent = {
+      id: `${groupId}-dep`,
+      kind: 'task.setDependsOn',
+      payload: { taskId: 't-hidden', dependsOn: [] },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'session-groom',
+      groupId,
+      groupKind: 'groom',
+      milestone: 'M1',
+      state: 'staged',
+      sessionComplete: true,
+      groupBlocked: true,
+      groupBlockedMemberCount: 1,
+    };
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      visibleSibling,
+    ]);
+    const approveGroup = vi.spyOn(stagedIntentsApi, 'approveGroup');
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    // The blocked member stays off the surface entirely — the fix doesn't
+    // re-filter its visible sibling out either.
+    expect(
+      screen.getByTestId(`milestone-decision-card-${groupId}`),
+    ).toBeTruthy();
+
+    const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
+    expect(within(card).getByTestId(`recovery-banner-${groupId}`)).toBeTruthy();
+    // No visible blocked row to recover — Recover isn't offered.
+    expect(within(card).queryByTestId(`recover-group-${groupId}`)).toBeNull();
+
+    const approveButton = within(card).getByRole('button', {
+      name: /approve groom/i,
+    }) as HTMLButtonElement;
+    expect(approveButton.disabled).toBe(true);
+    fireEvent.click(approveButton);
+    expect(approveGroup).not.toHaveBeenCalled();
+  });
+
+  it('disables Approve/Recover via the disabled prop when a group member session has not signaled turn-complete', async () => {
+    const groupId = 'group-session-incomplete';
+    const member: StagedIntent = {
+      id: `${groupId}-status`,
+      kind: 'task.setStatus',
+      payload: { taskId: 't-incomplete', status: 'Ready' },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'session-groom',
+      groupId,
+      groupKind: 'groom',
+      milestone: 'M1',
+      state: 'staged',
+      sessionComplete: true,
+      groupBlocked: true,
+      groupBlockedMemberCount: 0,
+      groupSessionIncomplete: true,
+    };
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([member]);
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
+    const approveButton = within(card).getByRole('button', {
+      name: /approve groom/i,
+    }) as HTMLButtonElement;
+    expect(approveButton.disabled).toBe(true);
+  });
+
   it('disables the group reject submit until an outcome is chosen, even with a reason typed', async () => {
     const groupId = 'group-reject';
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([

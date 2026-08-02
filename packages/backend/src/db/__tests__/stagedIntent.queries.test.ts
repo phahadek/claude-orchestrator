@@ -29,6 +29,7 @@ import {
   listStagedIntentsByMilestone,
   UNATTRIBUTED_MILESTONE_BUCKET,
   backfillStagedIntentMilestones,
+  isSessionComplete,
 } from '../queries.js';
 import type { StagedIntentRow } from '../types.js';
 
@@ -229,6 +230,48 @@ describe('hasActiveCapabilityRequestForSession', () => {
   it('is scoped to session.requestCapability — an unrelated staged intent from the same session does not count', () => {
     insertStagedIntent(makeRow({ id: 'other-1', session_id: 'sess-3' }));
     expect(hasActiveCapabilityRequestForSession('sess-3')).toBe(false);
+  });
+});
+
+describe('isSessionComplete — blocked-member leg', () => {
+  it('reads false for a session with a needs_revision member, even with a staged sibling and no turn in flight', () => {
+    insertStagedIntent(
+      makeRow({ id: 'blocked-1', session_id: 'sess-b', state: 'needs_revision' }),
+    );
+    insertStagedIntent(
+      makeRow({ id: 'sibling-1', session_id: 'sess-b', task_id: 't-2' }),
+    );
+    expect(isSessionComplete('sess-b', false)).toBe(false);
+  });
+
+  it('reads false for a session with a pending_verification member', () => {
+    insertStagedIntent(
+      makeRow({
+        id: 'blocked-2',
+        session_id: 'sess-c',
+        state: 'pending_verification',
+      }),
+    );
+    expect(isSessionComplete('sess-c', false)).toBe(false);
+  });
+
+  it('is derived purely from persisted rows — no live session handle is consulted', () => {
+    insertStagedIntent(
+      makeRow({ id: 'blocked-3', session_id: 'sess-d', state: 'needs_revision' }),
+    );
+    // No SessionManager/live handle exists anywhere in this test — the
+    // false verdict comes entirely from the persisted staged_intent row.
+    expect(isSessionComplete('sess-d', false)).toBe(false);
+  });
+
+  it('reads true once the blocked member is the only row and it is declined/superseded away, leaving a staged sibling', () => {
+    insertStagedIntent(
+      makeRow({ id: 'was-blocked', session_id: 'sess-e', state: 'rejected' }),
+    );
+    insertStagedIntent(
+      makeRow({ id: 'sibling-2', session_id: 'sess-e', task_id: 't-3' }),
+    );
+    expect(isSessionComplete('sess-e', false)).toBe(true);
   });
 });
 

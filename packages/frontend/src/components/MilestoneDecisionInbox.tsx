@@ -406,6 +406,9 @@ export function MilestoneDecisionInbox({
               inFlight={inFlight}
               draft={draft}
               onSetDraft={(patch) => setDraft(groupId, patch)}
+              disabled={groupIntents.some(
+                (intent) => intent.groupSessionIncomplete === true,
+              )}
               onApproveGroup={() => void handleApproveGroup(groupId)}
               onRejectGroup={() => void handleRejectGroup(groupId)}
               onRecoverGroup={() => void handleRecoverGroup(groupId)}

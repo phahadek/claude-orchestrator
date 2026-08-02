@@ -1372,6 +1372,199 @@ describe('milestone-inbox turn-boundary reveal', () => {
   });
 });
 
+describe('group-blockedness on the milestone list response', () => {
+  const PROJECT_ID = 'proj-group-blocked';
+
+  function makeSessionManager() {
+    const emitter = new EventEmitter();
+    return Object.assign(emitter, {
+      getLiveSession: vi.fn().mockReturnValue({
+        hasActiveTurn: () => false,
+      }),
+    }) as unknown as SessionManager & EventEmitter;
+  }
+
+  let counter = 0;
+  function makeGroupMember(
+    overrides: Partial<StagedIntentRow> = {},
+  ): StagedIntentRow {
+    counter += 1;
+    const now = Date.now();
+    const row: StagedIntentRow = {
+      id: `gmember-${counter}`,
+      kind: 'task.updateBody',
+      payload: JSON.stringify({ taskId: `task-${counter}` }),
+      payload_hash: `hash-${counter}`,
+      task_id: `task-${counter}`,
+      project_id: PROJECT_ID,
+      session_id: null,
+      group_id: 'group-under-test',
+      milestone: 'M1',
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: now,
+      updated_at: now,
+      ...overrides,
+    };
+    insertStagedIntent(row);
+    return row;
+  }
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+    db.prepare('DELETE FROM staged_intent_group').run();
+    db.prepare('DELETE FROM milestones').run();
+    db.prepare('DELETE FROM projects').run();
+    counter = 0;
+    insertProjectWithMilestone(PROJECT_ID, 'M1');
+    setStagedIntentBroadcast(() => {});
+  });
+
+  async function listMilestone(sessionManager?: SessionManager) {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter(undefined, sessionManager));
+    const agent = supertest(app);
+    return agent
+      .get('/api/staged-intents')
+      .query({ projectId: PROJECT_ID, milestone: 'M1' });
+  }
+
+  it('marks a visible sibling groupBlocked when the group has an auto-rejected needs_revision member hidden behind a still-live session', async () => {
+    const sessionManager = makeSessionManager();
+    insertSession({
+      session_id: 'sess-live',
+      task_id: 'task:sess-live',
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: 0,
+      session_type: 'groom',
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+    } as never);
+    const visible = makeGroupMember({
+      session_id: 'sess-live',
+      state: 'staged',
+    });
+    makeGroupMember({
+      session_id: 'sess-live',
+      state: 'needs_revision',
+      annotation: JSON.stringify({ autoRejected: true }),
+    });
+
+    const res = await listMilestone(sessionManager);
+    const ids = res.body.intents.map((i: { id: string }) => i.id);
+    expect(ids).toContain(visible.id);
+    // The auto-rejected member stays hidden while its session is live.
+    expect(ids).toHaveLength(1);
+
+    const found = res.body.intents.find(
+      (i: { id: string }) => i.id === visible.id,
+    );
+    expect(found.groupBlocked).toBe(true);
+    expect(found.groupBlockedMemberCount).toBe(1);
+  });
+
+  it('produces the same blocked presentation for an operator-pushback needs_revision member (no autoRejected annotation)', async () => {
+    const blocked = makeGroupMember({ state: 'needs_revision' });
+    const sibling = makeGroupMember({ state: 'staged' });
+
+    const res = await listMilestone();
+    const ids = res.body.intents.map((i: { id: string }) => i.id);
+    // Not auto-rejected — stays visible (isVisibleOnDecisionSurface never
+    // hides operator-pushback rows).
+    expect(ids).toContain(blocked.id);
+    expect(ids).toContain(sibling.id);
+
+    for (const id of [blocked.id, sibling.id]) {
+      const found = res.body.intents.find((i: { id: string }) => i.id === id);
+      expect(found.groupBlocked).toBe(true);
+      expect(found.groupBlockedMemberCount).toBe(1);
+    }
+  });
+
+  it('produces the same blocked presentation for a pending_verification member', async () => {
+    const blocked = makeGroupMember({ state: 'pending_verification' });
+    const sibling = makeGroupMember({ state: 'staged' });
+
+    const res = await listMilestone();
+    const found = res.body.intents.find(
+      (i: { id: string }) => i.id === sibling.id,
+    );
+    expect(found.groupBlocked).toBe(true);
+    expect(found.groupBlockedMemberCount).toBe(1);
+    expect(res.body.intents.map((i: { id: string }) => i.id)).toContain(
+      blocked.id,
+    );
+  });
+
+  it('marks the group groupBlocked (via groupSessionIncomplete) when a live member is staged but its owning session has not signaled turn-complete, with no blocked-state member present', async () => {
+    const emitter = new EventEmitter();
+    const sessionManager = Object.assign(emitter, {
+      getLiveSession: vi.fn().mockReturnValue({
+        hasActiveTurn: () => true,
+      }),
+    }) as unknown as SessionManager & EventEmitter;
+    insertSession({
+      session_id: 'sess-turning',
+      task_id: 'task:sess-turning',
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: 0,
+      session_type: 'groom',
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+    } as never);
+    const member = makeGroupMember({
+      session_id: 'sess-turning',
+      state: 'staged',
+    });
+
+    const res = await listMilestone(sessionManager);
+    const found = res.body.intents.find(
+      (i: { id: string }) => i.id === member.id,
+    );
+    expect(found.groupBlocked).toBe(true);
+    expect(found.groupBlockedMemberCount).toBe(0);
+    expect(found.groupSessionIncomplete).toBe(true);
+  });
+
+  it('reports groupBlocked: false for a group whose members are all live and complete', async () => {
+    const member = makeGroupMember({ state: 'staged' });
+
+    const res = await listMilestone();
+    const found = res.body.intents.find(
+      (i: { id: string }) => i.id === member.id,
+    );
+    expect(found.groupBlocked).toBe(false);
+    expect(found.groupBlockedMemberCount).toBe(0);
+  });
+});
+
 describe('rowToApi groupKind', () => {
   beforeEach(() => {
     db.prepare('DELETE FROM staged_intent').run();

@@ -116,6 +116,29 @@ export interface StagedIntent {
    * every other kind and for a non-file-mutating capability.
    */
   confersFileMutation?: boolean;
+  /**
+   * Mirrors the backend's group-commit non-committability predicate
+   * (commitGroupIntents' 409 guard): true when this intent's group has any
+   * member — visible or not — in needs_revision/pending_verification, or
+   * any live member's owning session is incomplete. Null for an ungrouped
+   * intent. Drives GroupCard's disabled Approve/Reject controls.
+   */
+  groupBlocked?: boolean | null;
+  /**
+   * Count of this intent's group members — visible or not — sitting in
+   * needs_revision/pending_verification. Used to render an accurate
+   * blocked-member banner even when the blocking member itself is hidden
+   * from the decision surface.
+   */
+  groupBlockedMemberCount?: number | null;
+  /**
+   * True when some live member of this intent's group has an owning session
+   * that hasn't gone complete for the turn — the incomplete-session leg of
+   * `groupBlocked`, isolated so the milestone inbox can wire it through
+   * GroupCard's `disabled` prop without also disabling the blocked-member
+   * Recover/Decline affordances, which stay usable while blocked.
+   */
+  groupSessionIncomplete?: boolean | null;
 }
 
 /** The two explicit operator-chosen outcomes for a reject disposition. */

@@ -6079,24 +6079,52 @@ export function listStagedIntentsBySession(
 }
 
 let _stmtHasActiveStagedIntentForSession: Database.Statement | null = null;
+let _stmtHasBlockedStagedIntentForSession: Database.Statement | null = null;
+
+/**
+ * True when the session owns at least one staged_intent row parked in
+ * needs_revision or pending_verification — the same pair of states
+ * commitGroupIntents' blocked-member guard (routes/stagedIntents.ts) refuses
+ * a group over. Read directly off the persisted table, never a live session
+ * handle, so this stays correct across a backend restart.
+ */
+function hasBlockedStagedIntentForSession(sessionId: string): boolean {
+  _stmtHasBlockedStagedIntentForSession ??= db.prepare<{
+    session_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE session_id = @session_id AND state IN ('needs_revision', 'pending_verification')
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasBlockedStagedIntentForSession.get({ session_id: sessionId }) !==
+    undefined
+  );
+}
 
 /**
  * Derived "is this session's proposal set complete" signal — never a
- * persisted flag. True exactly when the session's turn is not in flight AND
- * it has at least one currently-active (staged/approved) staged intent.
- * Turn-in-flight lives only on the live AgentSession instance and is never
- * persisted (see AgentSession.hasActiveTurn()/_turnInFlight) — callers must
- * supply it; a session with no live instance in this process (parked across
- * a restart, or never spawned here) has no turn in flight by construction.
- * A wake (AgentSession.sendMessage) flips turn-in-flight back to true, so a
- * previously-complete session's staged intents refuse disposition again
- * until the resumed turn ends — no extra bookkeeping needed.
+ * persisted flag. True exactly when the session's turn is not in flight, it
+ * has at least one currently-active (staged/approved) staged intent, and
+ * none of its staged intents are wedged in needs_revision/pending_verification
+ * (a blocked member means the owning session isn't done turning on its own
+ * proposal set — the same predicate commitGroupIntents' blocked-member guard
+ * enforces at commit time, mirrored here so a session reads incomplete
+ * rather than fail open). Turn-in-flight lives only on the live AgentSession
+ * instance and is never persisted (see AgentSession.hasActiveTurn()/
+ * _turnInFlight) — callers must supply it; a session with no live instance
+ * in this process (parked across a restart, or never spawned here) has no
+ * turn in flight by construction. A wake (AgentSession.sendMessage) flips
+ * turn-in-flight back to true, so a previously-complete session's staged
+ * intents refuse disposition again until the resumed turn ends — no extra
+ * bookkeeping needed.
  */
 export function isSessionComplete(
   sessionId: string,
   turnInFlight: boolean,
 ): boolean {
   if (turnInFlight) return false;
+  if (hasBlockedStagedIntentForSession(sessionId)) return false;
   _stmtHasActiveStagedIntentForSession ??= db.prepare<{
     session_id: string;
   }>(

@@ -132,11 +132,29 @@ export function GroupCard({
 
   const head = headProposalOf(members);
   const actionSuffix = actionSuffixFor(members[0]?.intent.groupKind);
-  const blockedCount = members.filter(
+  const visibleBlockedCount = members.filter(
     ({ intent }) =>
       intent.state === 'needs_revision' ||
       intent.state === 'pending_verification',
   ).length;
+  // The backend-derived count spans every group member, visible or not — a
+  // group blocked solely by a hidden (auto-rejected, live-session) member
+  // still needs to render blocked, just without a Recover affordance for a
+  // row the operator can't see (see groupNonCommittable below).
+  const blockedCount = Math.max(
+    visibleBlockedCount,
+    members[0]?.intent.groupBlockedMemberCount ?? 0,
+  );
+  // Mirrors the backend's commit-guard predicate exactly (blocked member OR
+  // incomplete owning session) — the group card must render blocked and
+  // disable its controls whenever the backend would refuse the commit, not
+  // just when a blocked member happens to be visible. `blockedCount > 0`
+  // covers a directly-visible blocked member even before the backend's
+  // `groupBlocked` field is threaded through everywhere it's constructed.
+  const groupNonCommittable =
+    blockedCount > 0 ||
+    members.some(({ intent }) => intent.groupBlocked === true);
+  const controlsDisabled = disabled || groupNonCommittable;
 
   return (
     <div
@@ -180,24 +198,28 @@ export function GroupCard({
       )}
       {groupError && <div className={panelStyles.groupError}>{groupError}</div>}
 
-      {blockedCount > 0 && (
+      {(blockedCount > 0 || groupNonCommittable) && (
         <div
           className={styles.recoveryBanner}
           onClick={(e) => e.stopPropagation()}
           data-testid={`recovery-banner-${groupId}`}
         >
           <span className={styles.recoveryBannerText}>
-            {blockedCount} blocked member{blockedCount === 1 ? '' : 's'}
+            {blockedCount > 0
+              ? `${blockedCount} blocked member${blockedCount === 1 ? '' : 's'}`
+              : 'Blocked — awaiting session'}
           </span>
-          <button
-            type="button"
-            className={styles.recoverButton}
-            disabled={inFlight || disabled}
-            onClick={onRecoverGroup}
-            data-testid={`recover-group-${groupId}`}
-          >
-            {inFlight ? 'Recovering…' : '↺ Recover'}
-          </button>
+          {visibleBlockedCount > 0 && (
+            <button
+              type="button"
+              className={styles.recoverButton}
+              disabled={inFlight || disabled}
+              onClick={onRecoverGroup}
+              data-testid={`recover-group-${groupId}`}
+            >
+              {inFlight ? 'Recovering…' : '↺ Recover'}
+            </button>
+          )}
         </div>
       )}
 
@@ -294,7 +316,7 @@ export function GroupCard({
         <button
           type="button"
           className={panelStyles.commitButton}
-          disabled={inFlight || disabled}
+          disabled={inFlight || controlsDisabled}
           onClick={onApproveGroup}
         >
           {inFlight ? 'Approving…' : `✓ Approve${actionSuffix}`}
