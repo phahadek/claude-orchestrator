@@ -224,6 +224,17 @@ describe('classifyReadyProposal — type scope', () => {
     mockGetTaskCache.mockReturnValue({
       raw_json: JSON.stringify({ type: '🔧 Operational' }),
     });
+    // Operational carries its own required-heading + reconcile-and-capture
+    // floor facts (readinessGate.ts's TYPE_FLOOR_FACTS) — satisfy those so
+    // this test isolates the type-scope guard, not the readiness guard.
+    mockGetTaskBackend.mockReturnValue({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Targets / surfaces affected\n- billing config catalog\n\n' +
+            '### 👁️ Manual verification\n- worker reconciled and captured the change signal\n',
+        ),
+    });
     stubSpawn({
       stdout: cliJsonWrap({ status: 'clean', confidence: 0, findings: [] }),
     });
