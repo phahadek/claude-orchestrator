@@ -39,6 +39,7 @@ import {
 import type { NotionTask } from '../notion/types';
 import { reconcileJournal, type OpsBoardTaskRow } from './opsJournal';
 import { formatTaskId } from '../tasks/taskId';
+import { isTestAuthoring } from '../tasks/testAuthoring';
 import { getProjectDeployedSha } from '../deploy/deployService';
 import { createLocalGitAncestrySource } from '../gate/gateService';
 import {
@@ -71,18 +72,6 @@ const testingTypeMatcher = (t: string) => /testing/i.test(t);
 const toolingTypeMatcher = (t: string) => /tooling/i.test(t);
 const modeOf = (type: string): 'operational' | 'investigation' =>
   /investigation/i.test(type) ? 'investigation' : 'operational';
-
-/**
- * A 🧪 Testing task folds into /ops only as observational / E2E work.
- * Test-authoring carries an explicit `Mode: 🧪 Testing · authoring` marker in
- * the page body; absent one we default to observational (fold in).
- */
-function isTestAuthoring(markdown: string): boolean {
-  const m = markdown.match(
-    /mode\s*:.*testing.*?(authoring|observational|e2e|end[-\s]?to[-\s]?end)/is,
-  );
-  return !!m && /authoring/i.test(m[1]);
-}
 
 const normId = (id: string) => id.replace(/-/g, '').toLowerCase();
 
