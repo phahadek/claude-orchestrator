@@ -357,7 +357,9 @@ export class PreReviewPipeline {
                 logger.info(
                   `[PreReviewPipeline] analyze content-cache hit PR #${ctx.prNumber}: ${entry.command}`,
                 );
-                outputParts.push(`$ ${entry.command}\n[cached]\n${cached.output}`);
+                outputParts.push(
+                  `$ ${entry.command}\n[cached]\n${cached.output}`,
+                );
                 if (cached.passed !== 1) allPassed = false;
                 if (!allPassed && config.analyze_fail_fast) break;
                 continue;

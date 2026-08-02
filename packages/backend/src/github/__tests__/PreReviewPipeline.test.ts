@@ -846,7 +846,10 @@ describe('PreReviewPipeline — analyze gate path-trigger + content-hash cache',
       verify: [],
       autofix: [],
       analyze: [
-        { command: 'npm audit', trigger_paths: ['package.json', 'package-lock.json'] },
+        {
+          command: 'npm audit',
+          trigger_paths: ['package.json', 'package-lock.json'],
+        },
       ],
       test: [],
       test_timeout_sec: 300,
@@ -883,7 +886,10 @@ describe('PreReviewPipeline — analyze gate path-trigger + content-hash cache',
       verify: [],
       autofix: [],
       analyze: [
-        { command: 'npm audit', trigger_paths: ['package.json', 'package-lock.json'] },
+        {
+          command: 'npm audit',
+          trigger_paths: ['package.json', 'package-lock.json'],
+        },
       ],
       test: [],
       test_timeout_sec: 300,

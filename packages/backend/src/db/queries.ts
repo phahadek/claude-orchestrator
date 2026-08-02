@@ -4413,9 +4413,10 @@ export function getAnalyzeContentCacheResult(
   contentHash: string,
 ): AnalyzeContentCacheRow | undefined {
   return db
-    .prepare<{ command: string; content_hash: string }>(
-      `SELECT * FROM orchestrator_analyze_content_cache WHERE command = @command AND content_hash = @content_hash`,
-    )
+    .prepare<{
+      command: string;
+      content_hash: string;
+    }>(`SELECT * FROM orchestrator_analyze_content_cache WHERE command = @command AND content_hash = @content_hash`)
     .get({ command, content_hash: contentHash }) as
     | AnalyzeContentCacheRow
     | undefined;
