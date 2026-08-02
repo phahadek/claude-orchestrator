@@ -245,7 +245,6 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
 
     expect(mockDeleteTaskCacheRow).not.toHaveBeenCalled();
   });
-
 });
 
 describe('getCachedType / getCachedStatus — task ID normalization', () => {
