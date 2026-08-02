@@ -647,6 +647,42 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
     );
   });
 
+  it('records a staged_intent_group_committed audit row at the commit boundary with group id, member count and outcome', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn().mockResolvedValue(undefined),
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-gc',
+      't-gc',
+      'g-gc',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-gc/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'staged_intent_group_committed',
+        payload: expect.objectContaining({
+          group_id: 'g-gc',
+          member_count: 2,
+          outcome: 'committed',
+        }),
+      }),
+    );
+  });
+
   it('commits a group containing a task.patchBodySection member atomically alongside setDependsOn/setStatus', async () => {
     const calls: string[] = [];
     const patchBodySection = vi.fn().mockImplementation(async () => {

@@ -4301,11 +4301,21 @@ export class SessionManager extends EventEmitter {
         continue;
       }
       this.evictDeadSessionEntry(sessionId);
-      revokeStageCredential(
-        sessionId,
-        row ? `terminal_status:${row.status}` : 'missing_db_row',
-      );
+      const revocationReason = row
+        ? `terminal_status:${row.status}`
+        : 'missing_db_row';
+      revokeStageCredential(sessionId, revocationReason);
       dropped++;
+      recordEvent({
+        event_type: 'session_map_entry_dropped',
+        actor_type: 'system',
+        actor_id: sessionId,
+        payload: {
+          session_id: sessionId,
+          status: row ? row.status : null,
+          revocation_reason: revocationReason,
+        },
+      });
       logger.info(
         `[SessionManager] reconcileSessionsMap: dropped stale in-memory entry for session ${sessionId.slice(0, 8)} (${row ? `status=${row.status}` : 'missing DB row'})`,
       );
