@@ -81,9 +81,9 @@ describe('sessionPredicates', () => {
       expect(isTaskTypeCompatibleWithSessionType('💻 Code', 'standard')).toBe(
         true,
       );
-      expect(
-        isTaskTypeCompatibleWithSessionType('📐 Design', 'standard'),
-      ).toBe(false);
+      expect(isTaskTypeCompatibleWithSessionType('📐 Design', 'standard')).toBe(
+        false,
+      );
       expect(
         isTaskTypeCompatibleWithSessionType('📋 Planning', 'standard'),
       ).toBe(false);
@@ -99,18 +99,18 @@ describe('sessionPredicates', () => {
       expect(isTaskTypeCompatibleWithSessionType('📝 Docs', 'standard')).toBe(
         false,
       );
-      expect(
-        isTaskTypeCompatibleWithSessionType('🎨 Assets', 'standard'),
-      ).toBe(false);
+      expect(isTaskTypeCompatibleWithSessionType('🎨 Assets', 'standard')).toBe(
+        false,
+      );
     });
 
     it('design is compatible only with 📐 Design / 📋 Planning', () => {
       expect(isTaskTypeCompatibleWithSessionType('📐 Design', 'design')).toBe(
         true,
       );
-      expect(
-        isTaskTypeCompatibleWithSessionType('📋 Planning', 'design'),
-      ).toBe(true);
+      expect(isTaskTypeCompatibleWithSessionType('📋 Planning', 'design')).toBe(
+        true,
+      );
       expect(isTaskTypeCompatibleWithSessionType('💻 Code', 'design')).toBe(
         false,
       );
@@ -132,36 +132,30 @@ describe('sessionPredicates', () => {
     });
 
     it('ops is compatible with 🔧 Operational / 🔎 Investigation / 🧪 Testing', () => {
-      expect(
-        isTaskTypeCompatibleWithSessionType('🔧 Operational', 'ops'),
-      ).toBe(true);
+      expect(isTaskTypeCompatibleWithSessionType('🔧 Operational', 'ops')).toBe(
+        true,
+      );
       expect(
         isTaskTypeCompatibleWithSessionType('🔎 Investigation', 'ops'),
       ).toBe(true);
       expect(isTaskTypeCompatibleWithSessionType('🧪 Testing', 'ops')).toBe(
         true,
       );
-      expect(isTaskTypeCompatibleWithSessionType('💻 Code', 'ops')).toBe(
-        false,
-      );
+      expect(isTaskTypeCompatibleWithSessionType('💻 Code', 'ops')).toBe(false);
       expect(isTaskTypeCompatibleWithSessionType('📐 Design', 'ops')).toBe(
         false,
       );
       expect(isTaskTypeCompatibleWithSessionType('📋 Planning', 'ops')).toBe(
         false,
       );
-      expect(isTaskTypeCompatibleWithSessionType('📝 Docs', 'ops')).toBe(
-        false,
-      );
+      expect(isTaskTypeCompatibleWithSessionType('📝 Docs', 'ops')).toBe(false);
       expect(isTaskTypeCompatibleWithSessionType('🎨 Assets', 'ops')).toBe(
         false,
       );
     });
 
     it('docs is compatible only with 📝 Docs / 🎨 Assets', () => {
-      expect(isTaskTypeCompatibleWithSessionType('📝 Docs', 'docs')).toBe(
-        true,
-      );
+      expect(isTaskTypeCompatibleWithSessionType('📝 Docs', 'docs')).toBe(true);
       expect(isTaskTypeCompatibleWithSessionType('🎨 Assets', 'docs')).toBe(
         true,
       );
@@ -198,12 +192,10 @@ describe('sessionPredicates', () => {
       ];
       for (const type of types) {
         expect(isTaskTypeCompatibleWithSessionType(type, 'groom')).toBe(true);
-        expect(isTaskTypeCompatibleWithSessionType(type, 'review')).toBe(
+        expect(isTaskTypeCompatibleWithSessionType(type, 'review')).toBe(true);
+        expect(isTaskTypeCompatibleWithSessionType(type, 'depth_review')).toBe(
           true,
         );
-        expect(
-          isTaskTypeCompatibleWithSessionType(type, 'depth_review'),
-        ).toBe(true);
         expect(isTaskTypeCompatibleWithSessionType(type, 'split')).toBe(true);
       }
     });
