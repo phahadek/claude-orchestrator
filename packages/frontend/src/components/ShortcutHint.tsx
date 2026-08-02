@@ -1,16 +1,17 @@
 import { useState } from 'react';
 import styles from './ShortcutHint.module.css';
+import { KEYBOARD_SHORTCUTS } from '../hooks/useKeyboardShortcuts';
+
+// Shift+Enter is handled locally by the Composer's textarea (see
+// Composer.tsx), not by useKeyboardShortcuts — documented here by hand since
+// it isn't part of that shared key map.
+const EXTRA_SHORTCUTS = [
+  { key: 'Shift+Enter', desc: 'Insert newline in the composer' },
+];
 
 const SHORTCUTS = [
-  { key: 'N', desc: 'New session' },
-  { key: 'Esc', desc: 'Close modal / panel' },
-  { key: 'J', desc: 'Next session' },
-  { key: 'K', desc: 'Previous session' },
-  { key: 'Enter', desc: 'Open selected session' },
-  { key: '1', desc: 'Sessions view' },
-  { key: '2', desc: 'PRs view' },
-  { key: 'R', desc: 'Rules view' },
-  { key: '/', desc: 'Focus search' },
+  ...KEYBOARD_SHORTCUTS.map(({ key, desc }) => ({ key, desc })),
+  ...EXTRA_SHORTCUTS,
 ];
 
 export function ShortcutHint() {
