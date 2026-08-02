@@ -161,7 +161,6 @@ describe('session.requestCapability declared-write auto-approve', () => {
   });
 
   it('rejects a hard-denylisted capability outright even when it appears in the declared-writes set', async () => {
-    const sessionManager = makeSessionManager();
     makeOpsSession('sess-declared-6', [
       { capability: 'Bash(git push:*)', prodMutating: false },
     ]);
