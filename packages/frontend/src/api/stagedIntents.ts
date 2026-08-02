@@ -91,6 +91,7 @@ export interface StagedIntent {
     | { blocked: true; violations: StagedIntentViolation[] }
     | { blocked: true; reasons: string[] }
     | { autoRejected: true }
+    | { autoApproved: true }
     | null;
   /**
    * Tier-3 semantic readiness advisory — a caution signal (confidence +

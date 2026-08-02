@@ -341,3 +341,205 @@ describe('verifyDispatchedGroupsForSession — group-level verify gate', () => {
     );
   });
 });
+
+describe('gate.accrete/seed.stage auto-grant on a verified content-match', () => {
+  function auditEventsFor(intentId: string) {
+    return (
+      db
+        .prepare(
+          "SELECT actor_type, payload FROM audit_log WHERE event_type = 'staged_intent_disposition'",
+        )
+        .all() as { actor_type: string; payload: string }[]
+    ).filter((row) => JSON.parse(row.payload).intentId === intentId);
+  }
+
+  it('auto-approves a gate.accrete intent whose accreted items cleanly match the stripped Manual verification section', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend(
+        '## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n',
+      ),
+    );
+    const taskId = 'notion:group-gate-auto-approve';
+    const groupId = 'group-gate-auto-approve';
+    recordAccretion(taskId);
+    stageDependsOn('session-auto-1', groupId, taskId);
+    stageIntent(
+      'task.patchBodySection',
+      { taskId, section: '👁️ Manual verification', operation: 'remove' },
+      'proj-1',
+      groupId,
+      'session-auto-1',
+    );
+    const gateAccrete = stageIntent(
+      'gate.accrete',
+      {
+        sourceTask: {
+          id: taskId,
+          title: 'A task',
+          project: 'proj-1',
+          milestone: 'M1',
+        },
+        items: [{ text: 'Check it.' }],
+        classification: 'items',
+      },
+      'proj-1',
+      groupId,
+      'session-auto-1',
+    );
+    stageIntent(
+      'task.setStatus',
+      {
+        taskId,
+        status: 'Ready',
+        groomingGate: {
+          ...wellFormedGroomingGate(),
+          hasManualVerificationSection: true,
+        },
+      },
+      'proj-1',
+      groupId,
+      'session-auto-1',
+    );
+
+    const outcomes = await verifyDispatchedGroupsForSession('session-auto-1');
+    expect(outcomes).toEqual([
+      expect.objectContaining({ groupId, passed: true, errors: [] }),
+    ]);
+
+    const row = db
+      .prepare('SELECT state, annotation FROM staged_intent WHERE id = ?')
+      .get(gateAccrete.id) as { state: string; annotation: string | null };
+    expect(row.state).toBe('approved');
+    expect(JSON.parse(row.annotation ?? 'null')).toEqual({
+      autoApproved: true,
+    });
+
+    const events = auditEventsFor(gateAccrete.id);
+    expect(events).toHaveLength(1);
+    expect(events[0].actor_type).toBe('system');
+    expect(JSON.parse(events[0].payload)).toEqual(
+      expect.objectContaining({
+        intentId: gateAccrete.id,
+        disposition: 'auto_approved',
+        provenance: 'auto',
+      }),
+    );
+  });
+
+  it('does not auto-approve a gate.accrete intent on a content-match failure — falls back to ordinary operator disposition', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend(
+        '## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n',
+      ),
+    );
+    const taskId = 'notion:group-gate-no-auto-approve';
+    const groupId = 'group-gate-no-auto-approve';
+    stageDependsOn('session-auto-2', groupId, taskId);
+    const gateAccrete = stageIntent(
+      'gate.accrete',
+      {
+        sourceTask: {
+          id: taskId,
+          title: 'A task',
+          project: 'proj-1',
+          milestone: 'M1',
+        },
+        items: [{ text: 'Something totally unrelated' }],
+        classification: 'items',
+      },
+      'proj-1',
+      groupId,
+      'session-auto-2',
+    );
+    stageIntent(
+      'task.setStatus',
+      {
+        taskId,
+        status: 'Ready',
+        groomingGate: {
+          ...wellFormedGroomingGate(),
+          hasManualVerificationSection: true,
+        },
+      },
+      'proj-1',
+      groupId,
+      'session-auto-2',
+    );
+
+    const outcomes = await verifyDispatchedGroupsForSession('session-auto-2');
+    expect(outcomes[0]).toEqual(
+      expect.objectContaining({ groupId, passed: false }),
+    );
+
+    const row = db
+      .prepare('SELECT state, annotation FROM staged_intent WHERE id = ?')
+      .get(gateAccrete.id) as { state: string; annotation: string | null };
+    expect(row.state).not.toBe('approved');
+    expect(JSON.parse(row.annotation ?? 'null')).not.toEqual({
+      autoApproved: true,
+    });
+    expect(auditEventsFor(gateAccrete.id)).toHaveLength(0);
+  });
+
+  it('does not auto-approve a gate.accrete intent staged with a none/n-a classification — bare-decision path is unaffected', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend(
+        '## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n',
+      ),
+    );
+    const taskId = 'notion:group-gate-none';
+    const groupId = 'group-gate-none';
+    recordAccretion(taskId);
+    stageDependsOn('session-auto-3', groupId, taskId);
+    stageIntent(
+      'task.patchBodySection',
+      { taskId, section: '👁️ Manual verification', operation: 'remove' },
+      'proj-1',
+      groupId,
+      'session-auto-3',
+    );
+    const gateAccrete = stageIntent(
+      'gate.accrete',
+      {
+        sourceTask: {
+          id: taskId,
+          title: 'A task',
+          project: 'proj-1',
+          milestone: 'M1',
+        },
+        items: [],
+        classification: 'n/a',
+        reason: 'Assessed the change; nothing runtime-observable resulted.',
+      },
+      'proj-1',
+      groupId,
+      'session-auto-3',
+    );
+    stageIntent(
+      'task.setStatus',
+      {
+        taskId,
+        status: 'Ready',
+        groomingGate: {
+          ...wellFormedGroomingGate(),
+          hasManualVerificationSection: true,
+        },
+      },
+      'proj-1',
+      groupId,
+      'session-auto-3',
+    );
+
+    const outcomes = await verifyDispatchedGroupsForSession('session-auto-3');
+    expect(outcomes[0]).toEqual(
+      expect.objectContaining({ groupId, passed: true }),
+    );
+
+    const row = db
+      .prepare('SELECT state, annotation FROM staged_intent WHERE id = ?')
+      .get(gateAccrete.id) as { state: string; annotation: string | null };
+    expect(row.state).toBe('staged');
+    expect(row.annotation).toBeNull();
+    expect(auditEventsFor(gateAccrete.id)).toHaveLength(0);
+  });
+});
