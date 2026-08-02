@@ -523,6 +523,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'n/a' },
+          // 🔧 Operational is triage-eligible (see planning/triage.ts's
+          // TRIAGE_ELIGIBLE_TYPES), so checkGroomingPromotionGate requires a
+          // recorded triage verdict before it even reaches checkReadiness —
+          // supply one so this test still reaches (and exercises) the
+          // readiness gate it's actually testing.
+          triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
         },
       });
     } catch (err) {
