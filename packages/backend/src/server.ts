@@ -70,6 +70,7 @@ import { PlanUsagePoller } from './orchestration/PlanUsagePoller';
 import { registerUsagePoller } from './orchestration/usageAdmission';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { StrandedOpsTaskMonitor } from './orchestration/StrandedOpsTaskMonitor';
+import { CapabilityDispositionMiner } from './orchestration/CapabilityDispositionMiner';
 import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
@@ -514,6 +515,12 @@ const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
 // exemption for such tasks otherwise leaves permanently unobserved.
 const strandedOpsTaskMonitor = new StrandedOpsTaskMonitor();
 
+// Capability-disposition-trail miner: files a 🔎 Investigation task (never a
+// ready denylist decision) for any capability with 5+ operator denials
+// across 2+ tasks and zero approvals ever recorded — see
+// audit/capabilityDispositionMining.ts.
+const capabilityDispositionMiner = new CapabilityDispositionMiner();
+
 const sessionEventsPruner = new SessionEventsPruner();
 
 // Convergence snapshot: samples the live milestone convergence every 5
@@ -541,6 +548,7 @@ opsSessionLauncher.register(scheduler);
 autoMerger.register(scheduler);
 orphanedTaskSweeper.register(scheduler);
 strandedOpsTaskMonitor.register(scheduler);
+capabilityDispositionMiner.register(scheduler);
 stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);

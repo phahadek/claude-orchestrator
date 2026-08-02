@@ -232,6 +232,20 @@ export function isGrantable(capability: string): boolean {
 }
 
 /**
+ * True when `capability` already matches GRANT_DENYLIST_PATTERNS — the
+ * denylist-mining exclusion the capability-disposition-trail miner
+ * (audit/capabilityDispositionMining.ts) checks before staging an
+ * Investigation task for a repeated-denial pattern: a key the denylist
+ * already covers needs no auto-deny candidate generated for it. The
+ * logical negation of `isGrantable`, exported separately so the miner's
+ * intent reads as "is this already denylisted" rather than reusing a
+ * grant-time predicate for an unrelated exclusion check.
+ */
+export function isGrantDenylisted(capability: string): boolean {
+  return !isGrantable(capability);
+}
+
+/**
  * Prefix for the one grantable own-record read capability: the
  * orchestrator's own runtime records (session_events + audit_log) for a
  * single named target session id, brokered via the `session.getRecord` MCP
