@@ -161,9 +161,11 @@ export function SessionCard({
                     session.totalInputTokens ?? 0,
                     session.totalOutputTokens ?? 0,
                     session.model,
+                    session.cache_read_tokens ?? 0,
+                    session.cache_creation_tokens ?? 0,
                   ),
                 )
-              : `${formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens (~${formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model))} est.)`}
+              : `${formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens (~${formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model, session.cache_read_tokens ?? 0, session.cache_creation_tokens ?? 0))} est.)`}
           </span>
         )}
         {session.model && (

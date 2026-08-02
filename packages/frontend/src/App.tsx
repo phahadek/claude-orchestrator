@@ -1069,6 +1069,8 @@ export default function App() {
             s.totalInputTokens ?? 0,
             s.totalOutputTokens ?? 0,
             s.model,
+            s.cache_read_tokens ?? 0,
+            s.cache_creation_tokens ?? 0,
           ),
         0,
       ),

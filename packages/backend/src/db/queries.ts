@@ -1707,6 +1707,22 @@ export function setContextOccupancy(sessionId: string, tokens: number): void {
   ).run(tokens, sessionId);
 }
 
+/**
+ * Overwrite (not accumulate) the session's cache-token spend. Mirrors
+ * setContextOccupancy: the usage payload's cache_read/cache_creation figures
+ * are cumulative-per-turn, not per-turn deltas, so SET is correct and += would
+ * double-count.
+ */
+export function setCacheTokens(
+  sessionId: string,
+  cacheReadTokens: number,
+  cacheCreationTokens: number,
+): void {
+  db.prepare(
+    `UPDATE sessions SET cache_read_tokens = ?, cache_creation_tokens = ? WHERE session_id = ?`,
+  ).run(cacheReadTokens, cacheCreationTokens, sessionId);
+}
+
 export function getZeroTokenSessions(limit: number): Session[] {
   return db
     .prepare(

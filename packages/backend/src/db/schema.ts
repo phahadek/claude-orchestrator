@@ -1810,4 +1810,24 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // Cache-token spend, captured with overwrite/SET semantics mirroring
+  // context_occupancy_tokens — the usage payload's cache figures are
+  // cumulative-per-turn, not per-turn deltas. Rows written before this
+  // migration default to 0, which is what distinguishes pre-migration from
+  // post-migration cache spend in analytics.
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 }
