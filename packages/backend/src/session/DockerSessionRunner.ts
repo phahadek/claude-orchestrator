@@ -16,6 +16,13 @@ function log(sessionId: string, ...args: unknown[]) {
 }
 
 /**
+ * How long endSession() waits for the exec process to exit on its own
+ * after stdin close before escalating to a forceful kill() + container
+ * teardown.
+ */
+const GRACEFUL_END_TIMEOUT_MS = 15_000;
+
+/**
  * Container name prefix for session containers.
  * Used by the orphan-reap logic to identify containers owned by this system.
  */
@@ -311,10 +318,40 @@ export class DockerSessionRunner implements ISessionRunner {
     }
   }
 
-  endSession(): void {
+  /**
+   * @returns true if the exec process did not exit on its own within the
+   * grace period and had to be escalated to a forceful kill() — callers use
+   * this to decide whether the escalation is audit-worthy.
+   */
+  async endSession(): Promise<boolean> {
     if (this.execProc?.stdin?.writable) {
       this.execProc.stdin.end();
     }
+    return this.waitForExitOrEscalate();
+  }
+
+  /**
+   * Waits up to GRACEFUL_END_TIMEOUT_MS for the exec process to exit on its
+   * own after stdin close. If it does not, escalates to kill() (SIGTERM,
+   * then SIGKILL, then container/network teardown) — a container surviving
+   * its session is exactly the kind of leak this is meant to catch.
+   */
+  private async waitForExitOrEscalate(): Promise<boolean> {
+    if (!this.execProc || this.execProc.exitCode !== null) return false;
+    const exited = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), GRACEFUL_END_TIMEOUT_MS);
+      this.execProc!.once('exit', () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+    if (exited) return false;
+    log(
+      this.sessionId,
+      `did not exit within ${GRACEFUL_END_TIMEOUT_MS}ms of stdin close; escalating to kill()`,
+    );
+    await this.kill();
+    return true;
   }
 
   async kill(): Promise<void> {

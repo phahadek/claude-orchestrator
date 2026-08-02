@@ -3522,15 +3522,40 @@ export class SessionManager extends EventEmitter {
       );
   }
 
-  /** Close stdin on the session process so the CLI can exit cleanly. */
+  /**
+   * Close stdin on the session process so the CLI can exit cleanly, then
+   * verify it actually did and escalate to a forceful kill if not.
+   *
+   * Callers must only invoke this once a session's row has genuinely
+   * reached a terminal status (done / error / killed) — idle is never
+   * terminal (a session parked awaiting an operator disposition is
+   * legitimately alive with a live process), so a non-terminal row here is
+   * refused rather than risking a kill of a live session.
+   */
   endSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
-      session.endSession();
+      const row = getSession(sessionId);
+      if (row && !TERMINAL_SESSION_STATUSES.has(row.status)) {
+        logger.warn(
+          `[SessionManager] endSession called for non-terminal session ${sessionId.slice(0, 8)} (status=${row.status}) — refusing to escalate against a live session`,
+        );
+        return;
+      }
+      Promise.resolve(session.endSession()).catch((err) => {
+        logger.error(
+          `[SessionManager] endSession escalation failed for ${sessionId.slice(0, 8)}: ${(err as Error).message}`,
+        );
+      });
       return;
     }
-    // Session not live (already idle) — explicitly finalize the worktree now
-    // that a terminal event has fired (PR merged/closed, session done/killed).
+    // Absent from the in-memory map does not mean the process exited — it
+    // means either a cross-restart orphan (a different backend process;
+    // out of scope here, recovered by resumeOrphanSessions/manual sweep)
+    // or a stale reference dropped by reconcileSessionsMap, which now
+    // reaps the process before ever evicting the entry. Either way there
+    // is no live handle left in this process to escalate against here, so
+    // only the worktree is finalized.
     this._teardownIdleSessionWorktree(sessionId);
   }
 
@@ -3538,7 +3563,9 @@ export class SessionManager extends EventEmitter {
    * Archive a session's row and reap any live subprocess so it doesn't keep
    * holding a concurrency slot under an archived (dashboard-invisible) row.
    * Shared by the archive route and any terminal-status writer so the two
-   * paths can't drift apart again.
+   * paths can't drift apart again. Relies on endSession()'s verify-and-
+   * escalate teardown to actually make the "no live subprocess" guarantee
+   * true rather than just closing stdin and hoping.
    */
   archiveAndEndSession(sessionId: string): void {
     archiveSession(sessionId);
@@ -4330,6 +4357,21 @@ export class SessionManager extends EventEmitter {
       const row = getSession(sessionId);
       if (row && !TERMINAL_SESSION_STATUSES.has(row.status)) {
         continue;
+      }
+      // The row is terminal (or gone entirely) but this map entry
+      // survived — nothing upstream is guaranteed to have reaped its
+      // subprocess (that's exactly the class of bug this sweep exists to
+      // catch), so verify-and-escalate before dropping the last reference
+      // to it. endSession() only touches the process, never DB status, so
+      // it's safe even though the row may already be a terminal status
+      // this AgentSession never wrote itself (e.g. an external actor).
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        Promise.resolve(session.endSession()).catch((err) => {
+          logger.error(
+            `[SessionManager] reconcileSessionsMap teardown failed for ${sessionId.slice(0, 8)}: ${(err as Error).message}`,
+          );
+        });
       }
       this.evictDeadSessionEntry(sessionId);
       const revocationReason = row

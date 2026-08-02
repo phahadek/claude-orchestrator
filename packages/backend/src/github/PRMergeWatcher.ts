@@ -1545,8 +1545,11 @@ export class PRMergeWatcher extends EventEmitter {
         );
     }
 
-    // Mark the code session done — it was idle (process exited, PR open) and
-    // the PR just merged, so this is the terminal done transition.
+    // Mark the code session done — it was idle (parked, PR open, subprocess
+    // still alive and waiting) and the PR just merged, so this is the
+    // terminal done transition. Idle never implies the process exited;
+    // endSession() below is what actually closes stdin and, if the process
+    // doesn't honor that, forcefully reaps it.
     if (pr.session_id) {
       markSessionDone(
         pr.session_id,
@@ -1556,7 +1559,8 @@ export class PRMergeWatcher extends EventEmitter {
       );
     }
 
-    // End coding session gracefully (stdin close → clean CLI exit).
+    // End coding session (stdin close, verified, escalates to a forceful
+    // kill if the process doesn't exit on its own).
     // Mark it for local branch deletion so cleanupWorktree removes the branch
     // even though a prUrl is set.
     if (pr.session_id) {
@@ -1576,7 +1580,8 @@ export class PRMergeWatcher extends EventEmitter {
       );
     }
 
-    // End review session gracefully (stdin close → clean CLI exit)
+    // End review session (stdin close, verified, escalates to a forceful
+    // kill if the process doesn't exit on its own).
     if (pr.review_session_id) {
       this.sessions.endSession(pr.review_session_id);
     }

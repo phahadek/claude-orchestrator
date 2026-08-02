@@ -47,7 +47,7 @@ function auditRowsFor(sessionId: string): Array<{
 function setSessionEntry(sm: SessionManager, sessionId: string): void {
   (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(
     sessionId,
-    { sendMessage: vi.fn() },
+    { sendMessage: vi.fn(), endSession: vi.fn().mockResolvedValue(undefined) },
   );
 }
 
