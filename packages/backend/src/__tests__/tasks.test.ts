@@ -60,6 +60,8 @@ import * as queries from '../db/queries.js';
 import { getTaskBackend } from '../tasks/TaskBackend.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import type { NotionTask } from '../notion/types.js';
+import { passesGroomDepGate } from '../orchestration/planningCandidates.js';
+import { normalizeBoardId } from '../tasks/taskId.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1519,5 +1521,144 @@ describe('dependency resolution — single source of truth', () => {
     );
     const matches = source.match(/new DependencyResolver\(\)/g) ?? [];
     expect(matches.length).toBe(1);
+  });
+});
+
+describe('annotateGroomDepBlocking — key space parity with passesGroomDepGate', () => {
+  // Production-form ids: notion:-prefixed, hyphenated UUIDs — the form the
+  // board-cache loader actually produces, and the form dependsOn entries
+  // reference. annotateGroomDepBlocking must key its lookup map on
+  // normalizeBoardId(t.id) (bare, hyphenless, lowercased) to match how
+  // groomBlockingDepTitles/passesGroomDepGate look up deps, or every lookup
+  // misses and every Backlog task with a dependency is reported blocked.
+  const DEPENDENT_ID = 'notion:11111111-1111-1111-1111-111111111111';
+  const CODE_DEP_ID = 'notion:22222222-2222-2222-2222-222222222222';
+  const DESIGN_DEP_ID = 'notion:33333333-3333-3333-3333-333333333333';
+  const DEFERRED_DEP_ID = 'notion:44444444-4444-4444-4444-444444444444';
+
+  function dependentTask(dependsOn: string[]): NotionTask {
+    return {
+      id: DEPENDENT_ID,
+      title: 'Dependent Task',
+      status: '🔲 Backlog',
+      type: '💻 Code',
+      dependsOn,
+      notionUrl: '',
+    };
+  }
+
+  async function runActiveWithBoard(boardTasks: NotionTask[]) {
+    vi.mocked(queries.getTaskCache).mockImplementation(((key: string) =>
+      key === 'board:board-1'
+        ? {
+            cache_key: key,
+            raw_json: JSON.stringify(boardTasks),
+            fetched_at: Date.now(),
+          }
+        : undefined) as typeof queries.getTaskCache);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue(
+      boardTasks.map((t) =>
+        makeAggregate(t.id, t.status, { raw_json: JSON.stringify(t) }),
+      ),
+    );
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    return res.body.tasks.find(
+      (v: { taskId: string }) => v.taskId === DEPENDENT_ID,
+    );
+  }
+
+  it('groomDepBlocked is false for a dependent whose only dep is a 🔲 Backlog 💻 Code task', async () => {
+    const codeDep: NotionTask = {
+      id: CODE_DEP_ID,
+      title: 'Code Dep',
+      status: '🔲 Backlog',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const view = await runActiveWithBoard([
+      dependentTask([CODE_DEP_ID]),
+      codeDep,
+    ]);
+    expect(view.groomDepBlocked).toBe(false);
+  });
+
+  it('groomDepBlocked is false for a dependent whose only dep is a ✅ Done 📐 Design task on the same board', async () => {
+    const designDep: NotionTask = {
+      id: DESIGN_DEP_ID,
+      title: 'Design Dep',
+      status: '✅ Done',
+      type: '📐 Design',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const view = await runActiveWithBoard([
+      dependentTask([DESIGN_DEP_ID]),
+      designDep,
+    ]);
+    expect(view.groomDepBlocked).toBe(false);
+  });
+
+  it('groomDepBlocked is true with the dep title (not its id) for a dependent whose dep is ⏭️ Deferred', async () => {
+    const deferredDep: NotionTask = {
+      id: DEFERRED_DEP_ID,
+      title: 'Deferred Dep Title',
+      status: '⏭️ Deferred',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const view = await runActiveWithBoard([
+      dependentTask([DEFERRED_DEP_ID]),
+      deferredDep,
+    ]);
+    expect(view.groomDepBlocked).toBe(true);
+    expect(view.groomDepBlockedReason).toContain('Deferred Dep Title');
+    expect(view.groomDepBlockedReason).not.toContain(DEFERRED_DEP_ID);
+  });
+
+  it('agrees with passesGroomDepGate for the same task/dep fixture set', async () => {
+    const codeDep: NotionTask = {
+      id: CODE_DEP_ID,
+      title: 'Code Dep',
+      status: '🔲 Backlog',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const designDep: NotionTask = {
+      id: DESIGN_DEP_ID,
+      title: 'Design Dep',
+      status: '✅ Done',
+      type: '📐 Design',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const deferredDep: NotionTask = {
+      id: DEFERRED_DEP_ID,
+      title: 'Deferred Dep Title',
+      status: '⏭️ Deferred',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const boardTasks = [
+      dependentTask([CODE_DEP_ID, DESIGN_DEP_ID, DEFERRED_DEP_ID]),
+      codeDep,
+      designDep,
+      deferredDep,
+    ];
+
+    const view = await runActiveWithBoard(boardTasks);
+
+    const tasksById = new Map(
+      boardTasks.map((t) => [normalizeBoardId(t.id), t]),
+    );
+    const gateAllows = passesGroomDepGate(boardTasks[0], tasksById);
+
+    expect(view.groomDepBlocked).toBe(!gateAllows);
   });
 });

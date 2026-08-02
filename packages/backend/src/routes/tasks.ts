@@ -28,7 +28,7 @@ import type { ServerMessage, TaskView } from '../ws/types';
 import { parsePauseReason, deriveRecoveryDescriptor } from '../db/pauseReason';
 import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
 import { groomBlockingDepTitles } from '../orchestration/planningCandidates';
-import { normalizeTaskId } from '../tasks/taskId';
+import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
 import yaml from 'js-yaml';
 export type { TaskView } from '../ws/types';
 
@@ -183,7 +183,7 @@ function annotateGroomDepBlocking(
 ): void {
   const backlogTasks = allTasks.filter((t) => t.status.includes('Backlog'));
   if (backlogTasks.length === 0) return;
-  const tasksById = new Map(allTasks.map((t) => [t.id, t]));
+  const tasksById = new Map(allTasks.map((t) => [normalizeBoardId(t.id), t]));
   for (const task of backlogTasks) {
     const view = views.find((v) => v.taskId === task.id);
     if (!view) continue;
