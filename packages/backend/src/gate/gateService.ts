@@ -184,7 +184,9 @@ export function getGateReadiness(
       NON_TERMINAL_DISPOSITIONS.has(item.latestDisposition as GateDisposition),
   });
   const blocking = items
-    .filter((item) => !RESOLVED_STATES.has(item.state) && item.state !== 'pending')
+    .filter(
+      (item) => !RESOLVED_STATES.has(item.state) && item.state !== 'pending',
+    )
     .map(toBlockingItem);
   const parked = items
     .filter((item) => item.state === 'pending')

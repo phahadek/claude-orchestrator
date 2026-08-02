@@ -207,7 +207,10 @@ describe('getGateReadiness', () => {
   });
 
   it('surfaces a pending (parked) Opportunistic item as a sibling of blocking, never counted toward it or the green status', () => {
-    const stillOpen = makeItem({ text: 'unresolved', classification: 'Read-Only' });
+    const stillOpen = makeItem({
+      text: 'unresolved',
+      classification: 'Read-Only',
+    });
     const parked = makeItem({
       text: 'not yet triggerable',
       classification: 'Opportunistic',
