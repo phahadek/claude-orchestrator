@@ -363,7 +363,12 @@ describe('POST /api/staged-intents/group/:groupId/commit — grooming promotion 
         taskId: 'notion:abc',
         status: 'Ready',
         groomingGate: {
-          size_check: { decision: 'no_split' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       },

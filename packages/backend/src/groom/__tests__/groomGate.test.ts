@@ -154,7 +154,12 @@ describe('checkGroomingPromotionGate', () => {
   it('accepts a Ready flip with a recorded disposition for a flagged type_check', async () => {
     const result = await gate(
       {
-        size_check: { decision: 'no_split' },
+        size_check: {
+          decision: 'no_split',
+          files: 3,
+          loc: 120,
+          loc_method: 'estimated',
+        },
         type_check: {
           decision: 'flagged',
           signals: ['api key'],
@@ -176,6 +181,52 @@ describe('checkGroomingPromotionGate', () => {
     );
     expect(result.allowed).toBe(false);
     expect(result.reasons.some((r) => r.includes('size_check'))).toBe(true);
+  });
+
+  it('rejects a numeric size_check decision that omits files/loc, naming the missing fields', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'no_split' },
+        type_check: { decision: 'none' },
+      },
+      'notion:t5b',
+    );
+    expect(result.allowed).toBe(false);
+    const reason = result.reasons.find((r) => r.includes('size_check'));
+    expect(reason).toBeDefined();
+    expect(reason).toContain('files');
+    expect(reason).toContain('loc');
+    expect(reason).toContain('loc_method');
+  });
+
+  it('accepts a numeric size_check decision without judging the recorded values', async () => {
+    const result = await gate(
+      {
+        size_check: {
+          decision: 'unsplittable',
+          files: 999,
+          loc: 99999,
+          loc_method: 'estimated',
+          reason: 'Cannot be split further.',
+        },
+        type_check: { decision: 'none' },
+      },
+      'notion:t5c',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('does not require files/loc for an n/a size_check decision (Design/Planning)', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+        type: '📐 Design',
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+      },
+      'notion:t5d',
+    );
+    expect(result.allowed).toBe(true);
   });
 
   it('blocks a Code-task Ready flip with no gate_accretion marker', async () => {

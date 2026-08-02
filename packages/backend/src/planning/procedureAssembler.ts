@@ -861,12 +861,17 @@ function renderSkeleton(
           'required (checkGroomingPromotionGate in `groomGate.ts` blocks the Ready ' +
           'flip at commit time on anything missing, and the block is surfaced back to ' +
           'you at stage time, not silently dropped): `size_check` ' +
-          '(`{"decision": "no_split"|"split_now"|"unsplittable"|"n/a"}` — Code/Tooling ' +
+          '(`{"decision": "no_split"|"split_now"|"unsplittable"|"n/a", "files": <n>, ' +
+          '"loc": <n>, "loc_method": "estimated"}` — Code/Tooling ' +
           `tasks default to "no_split" under both the ${SIZE_TYPE_CHECK.locSplitThreshold}` +
           `-LoC-estimated threshold and the ${SIZE_TYPE_CHECK.fileSplitThreshold}-file ` +
           'threshold; exceeding either nominates a split (nominates, not forces — ' +
-          '"unsplittable" with a recorded reason remains valid above either one), "n/a" is ' +
-          'for Design/Planning types only), `type_check` (`{"decision": "none"|' +
+          '"unsplittable" with a recorded reason remains valid above either one). ' +
+          'Every decision but "n/a" also carries the estimate it rests on: `files` ' +
+          'from the digest\'s size_check seed, `loc` estimated from the code-map ' +
+          'digest, `loc_method` naming how (e.g. "estimated") — the gate rejects a ' +
+          'numeric decision missing any of the three. "n/a" (Design/Planning types ' +
+          'only) carries no numbers. `type_check` (`{"decision": "none"|' +
           '"flagged"|"n/a"}`, plus `signals` naming the matched phrases when ' +
           '"flagged"), `type` (the task\'s display-format Type, e.g. `"💻 Code"`), ' +
           '`regions` (`{"packages": [...], "files": [...]}` — this task\'s resolved ' +
@@ -887,7 +892,7 @@ function renderSkeleton(
           'one Files/paths entry, and no dependencies: call the ' +
           `\`${orchestratorMcpToolName('task.setStatus')}\` tool with \`{"payload":` +
           '{"taskId":"<task-id>","status":"Ready","groomingGate":{' +
-          '"size_check":{"decision":"no_split"},' +
+          '"size_check":{"decision":"no_split","files":1,"loc":40,"loc_method":"estimated"},' +
           '"type_check":{"decision":"none"},' +
           '"type":"💻 Code",' +
           '"regions":{"packages":["packages/backend"],"files":["packages/backend/src/foo.ts"]},' +

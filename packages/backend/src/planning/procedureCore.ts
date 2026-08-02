@@ -1579,11 +1579,16 @@ export const SIZE_TYPE_CHECK = {
     'nominates, it does not force, and `unsplittable` with a recorded reason ' +
     "remains a legitimate outcome above either one. Where a task's files cluster " +
     'into distinct root-causes, the file-count signal should read as a nomination ' +
-    'to split along those clusters rather than a flat count. Design/Planning ' +
-    'tasks are sized in open-question count instead, recorded as ' +
-    '`{decision: "n/a"}`. type_check is an advisory keyword/heuristic scan for a ' +
-    'task body whose content does not match its declared Type ("smuggling") — it ' +
-    'never hard-blocks; the groomer records a disposition.',
+    'to split along those clusters rather than a flat count. A numeric decision ' +
+    '(no_split/split_now/unsplittable) records the estimate it rests on, not just ' +
+    'the verdict: `{decision, files, loc, loc_method}` — `files` from the ' +
+    'sizeCheckSeed already computed for the task, `loc` estimated by the groomer ' +
+    'from the code-map digest, `loc_method` naming how ("estimated"). Design/' +
+    'Planning tasks are sized in open-question count instead, recorded as ' +
+    '`{decision: "n/a"}` with no numbers. type_check is an advisory ' +
+    'keyword/heuristic scan for a task body whose content does not match its ' +
+    'declared Type ("smuggling") — it never hard-blocks; the groomer records a ' +
+    'disposition.',
   implementedBy: [
     'packages/backend/src/groom/groomLoad.ts (sizeCheckSeed)',
     'packages/backend/src/groom/typeCheck.ts',

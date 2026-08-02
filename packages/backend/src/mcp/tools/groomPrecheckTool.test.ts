@@ -430,7 +430,12 @@ describe('groom.precheck — a clean payload then stages without needs_revision'
     });
 
     const cleanGroomingGate = {
-      size_check: { decision: 'no_split' },
+      size_check: {
+        decision: 'no_split',
+        files: 1,
+        loc: 40,
+        loc_method: 'estimated',
+      },
       type_check: { decision: 'none' },
       type: '💻 Code',
       filesPathsEntries: [

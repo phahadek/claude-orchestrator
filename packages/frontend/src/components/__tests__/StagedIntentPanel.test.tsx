@@ -155,6 +155,59 @@ describe('StagedIntentPanel', () => {
     expect(summary.textContent).toContain('packages/frontend/src/b.ts');
   });
 
+  it("renders the recorded LoC and changed-file count on the grooming summary's first line when size_check carries them", () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'task.setStatus',
+          payload: {
+            taskId: 'notion:abc',
+            status: 'Ready',
+            groomingGate: {
+              size_check: {
+                decision: 'no_split',
+                files: 3,
+                loc: 120,
+                loc_method: 'estimated',
+              },
+              type_check: { decision: 'none' },
+              type: '💻 Code',
+            },
+          },
+        })}
+      />,
+    );
+
+    const summary = screen.getByTestId('staged-intent-grooming-gate-summary');
+    expect(summary.textContent).toContain('no_split');
+    expect(summary.textContent).toContain('120 LoC');
+    expect(summary.textContent).toContain('estimated');
+    expect(summary.textContent).toContain('3 files');
+  });
+
+  it('renders a size_check missing the numbers exactly as today — no crash, no invented values', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'task.setStatus',
+          payload: {
+            taskId: 'notion:abc',
+            status: 'Ready',
+            groomingGate: {
+              size_check: { decision: 'no_split' },
+              type_check: { decision: 'none' },
+              type: '💻 Code',
+            },
+          },
+        })}
+      />,
+    );
+
+    const summary = screen.getByTestId('staged-intent-grooming-gate-summary');
+    expect(summary.textContent).toContain('Size: no_split');
+    expect(summary.textContent).not.toContain('LoC');
+  });
+
   it('renders a task.setStatus -> Ready card with only the task id when the intent has no groomProposal, no decisionProposal, and no groomingGate', () => {
     render(
       <StagedIntentPanel
