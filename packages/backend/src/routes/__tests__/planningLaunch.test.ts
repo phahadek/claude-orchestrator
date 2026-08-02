@@ -14,6 +14,7 @@ vi.mock('../../db/queries.js', () => ({
   getMilestoneById: vi.fn(),
   getProjectRowById: vi.fn(),
   getTaskTitleFromCache: vi.fn(),
+  getTaskTypeFromCache: vi.fn(),
 }));
 
 vi.mock('../../db/db.js', async () => {
@@ -25,6 +26,7 @@ import {
   getMilestoneById,
   getProjectRowById,
   getTaskTitleFromCache,
+  getTaskTypeFromCache,
 } from '../../db/queries';
 import { createPlanningLaunchRouter } from '../planningLaunch';
 import type { OpsSessionLauncher } from '../../orchestration/OpsSessionLauncher';
@@ -50,6 +52,7 @@ describe('POST /api/planning/launch', () => {
       context_url: 'https://example.com/proj-1',
     } as ReturnType<typeof getProjectRowById>);
     vi.mocked(getTaskTitleFromCache).mockReturnValue(null);
+    vi.mocked(getTaskTypeFromCache).mockReturnValue(null);
 
     launchSelected = vi
       .fn()
@@ -162,6 +165,7 @@ describe('POST /api/planning/launch', () => {
 
   it('falls back to the bare id (never a notion.so/notion:<id> url) when the title cannot be resolved from the cache', async () => {
     vi.mocked(getTaskTitleFromCache).mockReturnValue(null);
+    vi.mocked(getTaskTypeFromCache).mockReturnValue(null);
 
     const res = await request(app)
       .post('/api/planning/launch')
@@ -238,5 +242,51 @@ describe('POST /api/planning/launch', () => {
     expect(sources).toContain('operator');
     expect(sources).toContain('evaluator');
     expect(new Set(sources).size).toBe(2);
+  });
+
+  it('400s rather than launching when the workflow is incompatible with the target task Type', async () => {
+    vi.mocked(getTaskTypeFromCache).mockReturnValue('🔧 Operational');
+
+    const res = await request(app)
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'design',
+        milestone: 'm1',
+        taskIds: ['task-1'],
+      });
+
+    expect(res.status).toBe(400);
+    expect(launchSelected).not.toHaveBeenCalled();
+  });
+
+  it('the rejection error names both the mismatched Type and the sessionType/workflow, not a generic failure', async () => {
+    vi.mocked(getTaskTypeFromCache).mockReturnValue('🔧 Operational');
+
+    const res = await request(app)
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'design',
+        milestone: 'm1',
+        taskIds: ['task-1'],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('🔧 Operational');
+    expect(res.body.error).toContain('design');
+  });
+
+  it('launches normally when the task Type is compatible with the workflow', async () => {
+    vi.mocked(getTaskTypeFromCache).mockReturnValue('📐 Design');
+
+    const res = await request(app)
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'design',
+        milestone: 'm1',
+        taskIds: ['task-1'],
+      });
+
+    expect(res.status).toBe(202);
+    expect(launchSelected).toHaveBeenCalled();
   });
 });

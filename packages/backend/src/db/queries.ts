@@ -1747,6 +1747,18 @@ export function getTaskTitleFromCache(taskId: string): string | null {
   }
 }
 
+/** Returns a cached task's Notion Type (e.g. "💻 Code"), or null if unknown. */
+export function getTaskTypeFromCache(taskId: string): string | null {
+  const row = getTaskCache(taskId);
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.raw_json) as { type?: unknown };
+    return typeof parsed.type === 'string' ? parsed.type : null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
 export function upsertPullRequest(

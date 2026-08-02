@@ -141,6 +141,53 @@ export function movesTargetInProgress(sessionType: string): boolean {
   );
 }
 
+const CODE_TASK_TYPE = /code/i;
+const DESIGN_OR_PLANNING_TASK_TYPE = /design|planning/i;
+const OPS_ELIGIBLE_TASK_TYPE = /operational|investigation|testing/i;
+const DOCS_OR_ASSETS_TASK_TYPE = /docs|assets/i;
+
+/**
+ * True when `sessionType` is a session dispatchable against a task whose
+ * Notion Type is `taskType` — the guard PR #1069's now-removed opsLaunch.ts
+ * lacked (it defaulted an unspecified sessionType to 'standard' with zero
+ * Type validation). Tolerant of the emoji being stripped from `taskType`,
+ * matching the style of opsLoad.ts's opsTypeMatcher/isOpsEligibleType.
+ *
+ * Per procedures.md's Task types table:
+ * - standard: 💻 Code only.
+ * - design: 📐 Design / 📋 Planning only.
+ * - ops: 🔧 Operational / 🔎 Investigation / 🧪 Testing (mirrors
+ *   isOpsEligibleType in ops/opsLoad.ts).
+ * - docs: 📝 Docs / 🎨 Assets only.
+ * - groom: type-agnostic — /groom brings every Type to 🗂️ Ready.
+ * - review / depth_review: type-agnostic — these review an existing PR, not
+ *   a task Type.
+ * - split: type-agnostic — narrows whatever task groomFlip.ts nominated,
+ *   regardless of its Type.
+ */
+export function isTaskTypeCompatibleWithSessionType(
+  taskType: string,
+  sessionType: string,
+): boolean {
+  switch (sessionType) {
+    case 'standard':
+      return CODE_TASK_TYPE.test(taskType);
+    case 'design':
+      return DESIGN_OR_PLANNING_TASK_TYPE.test(taskType);
+    case 'ops':
+      return OPS_ELIGIBLE_TASK_TYPE.test(taskType);
+    case 'docs':
+      return DOCS_OR_ASSETS_TASK_TYPE.test(taskType);
+    case 'groom':
+    case 'review':
+    case 'depth_review':
+    case 'split':
+      return true;
+    default:
+      return false;
+  }
+}
+
 /**
  * True for a gate-item verification session — a one-shot 'ops' session
  * dispatched by SessionGateItemVerifier (task_id `gate-item:<id>`). Unlike
