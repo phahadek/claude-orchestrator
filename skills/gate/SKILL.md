@@ -231,8 +231,15 @@ For every item in the pulled batch:
    | `fail` | ❌ stays blocking | behavior is **broken** — file the fix as a Code task (`filedFollowon: <taskId>`); the item stays unresolved, re-verified after the fix deploys. "Record `fail`" is not a resolution. |
    | `noted` | non-terminal (stays `runnable`) | "attempted, not yet resolved" — records the event + evidence without advancing state. The sanctioned home for a non-resolving attempt (or just omit `disposition`). |
    | `needs-setup` | non-terminal (stays `runnable`) | the verifier's bounded best-effort **abstain** — records the attempt; `next` skips the item until a later event supersedes it. |
+   | `not-yet-triggerable` | non-terminal (advances to `pending`) | **`Opportunistic`-only** — the triggering condition genuinely hasn't happened yet (no occurrence in history, nothing to stage). Enters a backoff schedule; `next` skips it until the backoff clock elapses, then it resurfaces `runnable` for a fresh look. |
 
    **Rules the vocabulary encodes:**
+   - **"Hasn't happened yet" on an `Opportunistic` item is `not-yet-triggerable`, not
+     `deferred`.** `deferred` means punted to a *later milestone*; `not-yet-triggerable`
+     means the same milestone, waiting on its own backoff clock for the trigger to occur
+     naturally. Don't reach for `deferred` just because nothing has fired yet — that's
+     what `not-yet-triggerable` is for, and it keeps the item live in-milestone instead of
+     punting it.
    - **"Hard to observe" means _stage it_, not defer it.** Staging is the fallback for
      exactly the behaviors history can't show (Core doctrine). `deferred` is **not** a bin
      for "code-reasoned," "never-occurred-in-prod," or "too fiddly to set up" — those are
