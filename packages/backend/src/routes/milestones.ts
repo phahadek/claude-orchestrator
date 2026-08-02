@@ -3,6 +3,8 @@ import type { Request, Response } from 'express';
 import { getArm, listArm, upsertArm } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { FLOW_IDS, isFlowId } from '../orchestration/flowArm';
+import { ProjectService } from '../projects/ProjectService';
+import { checkMilestoneRegistered } from '../groom/groomLoad';
 
 /**
  * Per-flow auto-dispatch arm surface (Technical Architecture § "Per-flow
@@ -35,6 +37,27 @@ export function createMilestonesRouter(): Router {
       if (typeof body.armed !== 'boolean') {
         res.status(400).json({ error: 'armed must be a boolean' });
         return;
+      }
+
+      if (body.armed) {
+        const milestone = ProjectService.getMilestone(milestoneId);
+        if (milestone?.canonicalShortId) {
+          const project = ProjectService.getById(milestone.projectId);
+          const check = project
+            ? checkMilestoneRegistered(
+                project.projectDir,
+                milestone.canonicalShortId,
+              )
+            : null;
+          if (check && !check.registered) {
+            res.status(409).json({
+              error:
+                `milestone "${milestone.canonicalShortId}" is not registered in the grooming manifest ` +
+                `(registered: ${check.registeredKeys.join(', ') || 'none'}).`,
+            });
+            return;
+          }
+        }
       }
 
       const { previous } = upsertArm(milestoneId, flow, body.armed, Date.now());
