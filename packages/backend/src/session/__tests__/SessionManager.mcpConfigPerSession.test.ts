@@ -127,6 +127,7 @@ vi.mock('child_process', () => ({
         callback(null, { stdout: '', stderr: '' });
       },
     ),
+  execFile: vi.fn(),
 }));
 
 const writtenFiles = new Map<string, string>();

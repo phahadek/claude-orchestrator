@@ -167,6 +167,7 @@ vi.mock('child_process', () => ({
         callback(null, { stdout: '', stderr: '' });
       },
     ),
+  execFile: vi.fn(),
 }));
 
 vi.mock('fs', () => ({

@@ -191,6 +191,7 @@ vi.mock('child_process', () => ({
         callback(null, { stdout: '', stderr: '' });
       },
     ),
+  execFile: vi.fn(),
 }));
 
 // Worktree + .git always present — exercises the surviving-worktree fast path.
