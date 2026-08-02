@@ -91,6 +91,8 @@ vi.mock('../session/orchestrator-config', () => ({
     prGate: null,
     bashRules: null,
     allowedTools: [],
+    required_env: [],
+    required_files: [],
   }),
 }));
 
@@ -164,6 +166,7 @@ import * as fs from 'fs';
 import * as queries from '../db/queries';
 import { SessionManager } from '../session/SessionManager';
 import { AgentSession } from '../session/AgentSession';
+import { getProjectById } from '../config';
 
 const TASK_URL =
   'https://www.notion.so/Test-Task-abc123def456789012345678901234';
@@ -229,12 +232,44 @@ describe('SessionManager.start() fire-and-forget timing', () => {
       // start() must still return in <100ms.
       return {} as never;
     });
+    // The stalled background completeStart() holds SessionManager's per-repo
+    // worktree-add mutex (keyed by projectDir) open forever. Give this test
+    // its own projectDir so that permanently-held lock doesn't block later
+    // tests' completeStart() calls from ever acquiring the lock for '/tmp/test'.
+    // getProjectById is called more than once per launch (start() + completeStart()),
+    // so override the implementation for the whole test rather than just the
+    // next call, then restore the shared default afterward.
+    vi.mocked(getProjectById).mockImplementation(
+      () =>
+        ({
+          id: 'test-proj',
+          name: 'Test Project',
+          projectDir: '/tmp/test-hung-worktree-lock',
+          taskSource: 'notion',
+          autoLaunchEnabled: true,
+          boards: [],
+        }) as never,
+    );
 
     const sm = new SessionManager();
     const t0 = Date.now();
-    await sm.start(TASK_URL, CTX_URL, START_OPTS);
-    expect(Date.now() - t0).toBeLessThan(100);
-    // Test ends here. The stalled background promise is abandoned — no 5-second wait.
+    try {
+      await sm.start(TASK_URL, CTX_URL, START_OPTS);
+      expect(Date.now() - t0).toBeLessThan(100);
+      // Test ends here. The stalled background promise is abandoned — no 5-second wait.
+    } finally {
+      vi.mocked(getProjectById).mockImplementation(
+        () =>
+          ({
+            id: 'test-proj',
+            name: 'Test Project',
+            projectDir: '/tmp/test',
+            taskSource: 'notion',
+            autoLaunchEnabled: true,
+            boards: [],
+          }) as never,
+      );
+    }
   });
 
   it('emits session_starting synchronously before returning', async () => {

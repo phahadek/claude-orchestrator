@@ -55,7 +55,10 @@ describe('SessionManager.resumeSession() — task re-pin on resume', () => {
 
   it('calls _buildAndWriteResumeSystemPrompt in resumeSession to re-pin the task', () => {
     const resumeIdx = source.indexOf('private async resumeSession(');
-    const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeIdx);
+    const resumeOrphanIdx = source.indexOf(
+      'async resumeOrphanSessions(',
+      resumeIdx,
+    );
     const block = source.slice(resumeIdx, resumeOrphanIdx);
     expect(block).toMatch(/_buildAndWriteResumeSystemPrompt\s*\(/);
   });
@@ -75,7 +78,10 @@ describe('SessionManager.resumeSession() — task re-pin on resume', () => {
 
   it('re-pin is guarded on CLI session mode', () => {
     const resumeIdx = source.indexOf('private async resumeSession(');
-    const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeIdx);
+    const resumeOrphanIdx = source.indexOf(
+      'async resumeOrphanSessions(',
+      resumeIdx,
+    );
     const block = source.slice(resumeIdx, resumeOrphanIdx);
     expect(block).toMatch(/=== 'cli'/);
   });
@@ -187,7 +193,10 @@ describe('queries.ts — supersession support', () => {
     const fnIdx = source.indexOf('export function hasActiveSessionForTask');
     const fnEnd = source.indexOf('\n}', fnIdx);
     const block = source.slice(fnIdx, fnEnd + 2);
-    expect(block).toMatch(/superseded/);
+    // The superseded status is folded in via the shared
+    // TERMINAL_STATUS_SQL_LIST (derived from
+    // TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED), not spelled out literally.
+    expect(block).toMatch(/status NOT IN \(\$\{TERMINAL_STATUS_SQL_LIST\}\)/);
   });
 });
 
@@ -666,10 +675,10 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
   });
 
   it('calls this.send() with the nudge message during resume', () => {
-    // nudgeMessage is built by the module-level buildResumeMessage(row) helper
+    // nudgeMessage is built by the module-level buildResumeMessage(row, ...) helper
     // (exported so tests can verify the exact message) and then passed to send()
     expect(source).toMatch(
-      /const\s+nudgeMessage\s*=\s*buildResumeMessage\s*\(\s*row\s*\)/,
+      /const\s+nudgeMessage\s*=\s*buildResumeMessage\s*\(\s*row\s*,/,
     );
     expect(source).toMatch(
       /this\.send\s*\(\s*row\.session_id\s*,\s*nudgeMessage\s*\)/,
@@ -1283,7 +1292,7 @@ describe('SessionManager.buildResumeMessage() — verdict-enriched resume nudge'
   });
 
   it('resumeSession calls buildResumeMessage(row) instead of using RESUME_NUDGE_MESSAGE directly', () => {
-    expect(source).toMatch(/buildResumeMessage\s*\(\s*row\s*\)/);
+    expect(source).toMatch(/buildResumeMessage\s*\(\s*row\s*,/);
     // The direct RESUME_NUDGE_MESSAGE reference in the nudge setTimeout must be gone
     const nudgeDelayIdx = source.indexOf('const nudgeDelay = setTimeout');
     const nudgeDelayBlock = source.slice(nudgeDelayIdx, nudgeDelayIdx + 300);
