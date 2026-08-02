@@ -8,7 +8,13 @@ import {
 describe('calculateCost', () => {
   it('prices cache_read/cache_creation tokens on their own tier, distinct from input/output', () => {
     const base = calculateCost(1000, 1000, 'claude-sonnet-4-6');
-    const withCache = calculateCost(1000, 1000, 'claude-sonnet-4-6', 1000, 1000);
+    const withCache = calculateCost(
+      1000,
+      1000,
+      'claude-sonnet-4-6',
+      1000,
+      1000,
+    );
     expect(withCache).toBeGreaterThan(base);
   });
 
