@@ -401,6 +401,28 @@ function isGateContributionCandidatesClassified(
 }
 
 /**
+ * Present-and-dispositioned, same posture as isGateContributionCandidatesClassified:
+ * every seed_contribution candidate must carry a non-empty classification
+ * string, but the content of that classification is never judged — a
+ * groomer's "needs-triage" call is accepted exactly as readily as
+ * "operational-seed". Absent an `entry.seedContributionCandidates` array
+ * entirely, this check fails open (nothing to disposition).
+ */
+function isSeedContributionCandidatesClassified(
+  candidates: GroomingGateEntry['seedContributionCandidates'],
+): { ok: boolean; reasons: string[] } {
+  if (!candidates || candidates.length === 0) return { ok: true, reasons: [] };
+  const reasons = candidates
+    .filter((c) => !c.classification || !`${c.classification}`.trim())
+    .map(
+      (c) =>
+        `seed_contribution candidate "${c.spec}" has no recorded classification — every candidate ` +
+        'must be triaged operational-seed / in-pr / needs-triage before promotion.',
+    );
+  return { ok: reasons.length === 0, reasons };
+}
+
+/**
  * Word-boundary match, excluding hyphenated compounds (e.g. `confirm-gate`,
  * `confirm-restart`) — a bare `includes` flagged those StepKind/playbook step
  * ids alongside real hedges. `\b` alone still rejects `Confirmed` (no
@@ -897,6 +919,11 @@ export function checkAccretionContributions(
 
   reasons.push(
     ...isGateContributionCandidatesClassified(entry.gateContributionCandidates)
+      .reasons,
+  );
+
+  reasons.push(
+    ...isSeedContributionCandidatesClassified(entry.seedContributionCandidates)
       .reasons,
   );
 

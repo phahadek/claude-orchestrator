@@ -1273,7 +1273,7 @@ describe('seed_contribution strip⇔accrete content-match (body-derived "## Oper
     taskId: string,
     groupId: string,
     seedStageOverrides: Record<string, unknown>,
-    seedContributionCandidates?: { spec: string }[],
+    seedContributionCandidates?: { spec: string; classification?: string }[],
   ) {
     const dependsOn = await agent.post('/api/staged-intents').send({
       kind: 'task.setDependsOn',
@@ -1340,7 +1340,12 @@ describe('seed_contribution strip⇔accrete content-match (body-derived "## Oper
           { spec: 'Enable the new feature flag' },
         ],
       },
-      [{ spec: 'ignored — trigger only, no longer the comparison side' }],
+      [
+        {
+          spec: 'ignored — trigger only, no longer the comparison side',
+          classification: 'operational-seed',
+        },
+      ],
     );
 
     const commit = await agent
@@ -1431,7 +1436,12 @@ describe('seed_contribution strip⇔accrete content-match (body-derived "## Oper
       't-cm-seed-missing',
       groupId,
       { seeds: [{ spec: 'Set default retry count to 3' }] },
-      [{ spec: 'Set default retry count to 3' }],
+      [
+        {
+          spec: 'Set default retry count to 3',
+          classification: 'operational-seed',
+        },
+      ],
     );
 
     const commit = await agent
@@ -1483,7 +1493,12 @@ describe('seed_contribution strip⇔accrete content-match (body-derived "## Oper
       't-cm-seed-none',
       groupId,
       { seeds: [], decision: 'n/a' },
-      [{ spec: 'Set default retry count to 3' }],
+      [
+        {
+          spec: 'Set default retry count to 3',
+          classification: 'operational-seed',
+        },
+      ],
     );
 
     const commit = await agent

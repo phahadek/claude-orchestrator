@@ -329,11 +329,14 @@ section at all; runtime/manual verification for it is owned by the gate from tha
 point on, and its absence in the body is the correct post-groom state, not a gap.
 
 **Seed accretion (💻 Code tasks):** The operational twin of Gate accretion.
-Before flipping to Ready, mint the task's operational data/config seed — a prod-data
-row/flag/default deliberately kept **out** of its auto-dispatched PR (e.g. an
-`analyzer_configs` row, config-category defaults, alias/cohort flags) — onto the
-milestone seed store. Call the accretion route through the vendored client, **never** a
-`task.updateBody` body-append:
+Before flipping to Ready, classify each candidate line the pre-groom body's `## Operational
+seed` section carries as `operational-seed` (a genuine prod-data row/flag/default
+deliberately kept **out** of this task's own PR — e.g. an `analyzer_configs` row,
+config-category defaults, alias/cohort flags), `in-pr` (mislabeled — it actually ships in
+the PR and does not accrete), or `needs-triage` (unclear, deferred). Mint every
+`operational-seed`-classified candidate onto the milestone seed store — never the
+`in-pr`/`needs-triage` ones. Call the accretion route through the vendored client,
+**never** a `task.updateBody` body-append:
 
 ```bash
 node ~/.claude/scripts/seed-state-client.mjs accrete \
@@ -341,8 +344,8 @@ node ~/.claude/scripts/seed-state-client.mjs accrete \
     "milestone":"<M>","decision":"seeds","seeds":[{"spec":"<seed 1>"}, "…"]}'
 ```
 
-For a task with no operational seed, call it with `"decision":"none"` and an empty (or
-omitted) `seeds` array instead. This POSTs to the loopback, device-authed
+For a task with no operational seed (or every candidate classifies `in-pr`/`needs-triage`),
+call it with `"decision":"none"` and an empty (or omitted) `seeds` array instead. This POSTs to the loopback, device-authed
 `/api/seed/accrete-contribution` route (see `packages/backend/src/routes/seedState.ts`),
 which mints one `seed_item` per seed on the milestone seed store and records the
 `seed_accretion` marker `checkGroomingPromotionGate` reads before allowing the Ready

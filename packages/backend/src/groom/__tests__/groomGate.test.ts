@@ -1555,3 +1555,110 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
     expect(result.allowed).toBe(true);
   });
 });
+
+describe('checkGroomingPromotionGate — seed_contribution per-candidate triage', () => {
+  it('blocks a Ready flip whose seedContributionCandidates omits a classification for a candidate', async () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:seed-candidate-unclassified',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:seed-candidate-unclassified',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'seeds',
+      accretedAt: new Date(0).toISOString(),
+    });
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        type: '💻 Code',
+        filesPathsEntries: [
+          { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
+        ],
+        seedContributionCandidates: [
+          {
+            spec: 'analyzer_configs row for foo',
+            classification: 'operational-seed',
+          },
+          { spec: 'cohort flag for bar' },
+        ],
+      },
+      'notion:seed-candidate-unclassified',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some((r) => r.includes('has no recorded classification')),
+    ).toBe(true);
+  });
+
+  it('accepts any recorded classification without judging its content', async () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:seed-candidate-classified',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:seed-candidate-classified',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'seeds',
+      accretedAt: new Date(0).toISOString(),
+    });
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        type: '💻 Code',
+        filesPathsEntries: [
+          { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
+        ],
+        seedContributionCandidates: [
+          { spec: 'a', classification: 'operational-seed' },
+          { spec: 'b', classification: 'in-pr' },
+          { spec: 'c', classification: 'needs-triage' },
+        ],
+      },
+      'notion:seed-candidate-classified',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('fails open when no seedContributionCandidates are recorded at all', async () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:seed-candidate-absent',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:seed-candidate-absent',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        type: '💻 Code',
+        filesPathsEntries: [
+          { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
+        ],
+      },
+      'notion:seed-candidate-absent',
+    );
+    expect(result.allowed).toBe(true);
+  });
+});

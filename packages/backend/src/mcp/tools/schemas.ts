@@ -242,6 +242,34 @@ export const groomingGateEntrySchema = z
         hasOpenQuestionsHeading: z.boolean(),
       })
       .optional(),
+    /** Structural fact: whether the pre-groom body carried a `## Operational seed` section — see groomGate.ts's GroomingGateEntry. */
+    hasOperationalSeedSection: z.boolean().optional(),
+    /** Per-line triage of the pre-groom `## Operational seed` section's candidates — see groomGate.ts's GroomingGateEntry.seedContributionCandidates. */
+    seedContributionCandidates: z
+      .array(
+        z.object({
+          spec: z.string(),
+          classification: z
+            .enum(['operational-seed', 'in-pr', 'needs-triage'])
+            .optional(),
+        }),
+      )
+      .optional(),
+    /** Per-line triage of the pre-groom `### 👁️ Manual verification` section's candidates — see groomGate.ts's GroomingGateEntry.gateContributionCandidates. */
+    gateContributionCandidates: z
+      .array(
+        z.object({
+          text: z.string(),
+          classification: z
+            .enum([
+              'runtime-observable',
+              'config-or-code-determined',
+              'needs-triage',
+            ])
+            .optional(),
+        }),
+      )
+      .optional(),
   })
   .optional();
 
