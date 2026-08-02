@@ -548,9 +548,7 @@ describe('AutoMerger — conflictNudgeSweep with a null head_branch', () => {
     vi.mocked(getConflictNudgeCandidates).mockReturnValue([
       { pr_number: 42, repo: 'owner/repo' },
     ]);
-    vi.mocked(getPRByNumber).mockReturnValue(
-      makePRRow({ head_branch: null }),
-    );
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow({ head_branch: null }));
     vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'done' }));
 
     const github = makeMockGitHub();
