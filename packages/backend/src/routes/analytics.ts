@@ -220,8 +220,7 @@ analyticsRouter.get(
         ? parseInt(req.query.to, 10)
         : Date.now();
     const fromMs =
-      typeof req.query.from === 'string' &&
-      !isNaN(parseInt(req.query.from, 10))
+      typeof req.query.from === 'string' && !isNaN(parseInt(req.query.from, 10))
         ? parseInt(req.query.from, 10)
         : toMs - DEFAULT_RANGE_MS;
 

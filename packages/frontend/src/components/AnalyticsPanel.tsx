@@ -115,10 +115,16 @@ function categoryColors(rows: SessionTypeRow[]): Map<string, string> {
   let executionIdx = 0;
   for (const row of rows) {
     if (row.category === 'planning') {
-      colors.set(row.sessionType, PLANNING_HUES[planningIdx % PLANNING_HUES.length]);
+      colors.set(
+        row.sessionType,
+        PLANNING_HUES[planningIdx % PLANNING_HUES.length],
+      );
       planningIdx++;
     } else {
-      colors.set(row.sessionType, EXECUTION_HUES[executionIdx % EXECUTION_HUES.length]);
+      colors.set(
+        row.sessionType,
+        EXECUTION_HUES[executionIdx % EXECUTION_HUES.length],
+      );
       executionIdx++;
     }
   }
@@ -171,9 +177,7 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
   const taskRollups = data?.taskRollups ?? [];
   const sessionTypeBreakdown = data?.sessionTypeBreakdown ?? [];
 
-  const topRollups = [...taskRollups].sort(
-    (a, b) => b.totalCost - a.totalCost,
-  );
+  const topRollups = [...taskRollups].sort((a, b) => b.totalCost - a.totalCost);
 
   const typeColors = categoryColors(sessionTypeBreakdown);
   const typeChartData = sessionTypeBreakdown
@@ -300,9 +304,7 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
               {/* ── Per-type breakdown, colored by planning/execution category ── */}
               {typeChartData.length > 0 && (
                 <div className={styles.chartSection}>
-                  <h3 className={styles.sectionTitle}>
-                    Cost by session type
-                  </h3>
+                  <h3 className={styles.sectionTitle}>Cost by session type</h3>
                   <div className={styles.legendRow}>
                     <span className={styles.legendItem}>
                       <span
@@ -429,12 +431,11 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
                                   <span
                                     className={styles.legendSwatch}
                                     style={{
-                                      background: typeColors.get(
-                                        s.sessionType,
-                                      ),
+                                      background: typeColors.get(s.sessionType),
                                     }}
                                   />
-                                  {s.sessionType} · {shortSessionId(s.sessionId)}
+                                  {s.sessionType} ·{' '}
+                                  {shortSessionId(s.sessionId)}
                                 </td>
                                 <td>—</td>
                                 <td>{formatTokenCount(s.inputTokens)}</td>
