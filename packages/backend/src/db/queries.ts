@@ -4842,9 +4842,9 @@ export function listGateItemEvents(gateItemId: string): GateItemEventRow[] {
 export function insertGateItemEvent(row: NewGateItemEventRow): void {
   _stmtInsertGateItemEvent ??= db.prepare<NewGateItemEventRow>(`
     INSERT INTO gate_item_event
-      (gate_item_id, disposition, evidence, filed_followon, deploy_sha, operator, unattended, at)
+      (gate_item_id, disposition, evidence, filed_followon, deploy_sha, operator, unattended, min_deployed_commit_at_fail, at)
     VALUES
-      (@gate_item_id, @disposition, @evidence, @filed_followon, @deploy_sha, @operator, @unattended, @at)
+      (@gate_item_id, @disposition, @evidence, @filed_followon, @deploy_sha, @operator, @unattended, @min_deployed_commit_at_fail, @at)
   `);
   _stmtInsertGateItemEvent.run(row);
 }
