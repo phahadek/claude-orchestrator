@@ -27,6 +27,7 @@ vi.mock('node:fs', () => ({
 
 vi.mock('../db/queries.js', () => ({
   getLatestCodeSessionByNotionTaskId: vi.fn(),
+  getLatestOpsSessionByTaskId: vi.fn(() => undefined),
   hasActiveSessionForTask: vi.fn(),
   hasNonTerminalPlanningSessionForTask: vi.fn(() => false),
   isSessionAwaitingCapabilityDisposition: vi.fn(() => false),
@@ -36,6 +37,8 @@ vi.mock('../db/queries.js', () => ({
   getSessionLastActivityMs: vi.fn(() => null),
   upsertPullRequest: vi.fn(() => null),
   getOpsJournalEntry: vi.fn(() => undefined),
+  getSession: vi.fn(() => undefined),
+  listStagedIntentsBySession: vi.fn(() => []),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -56,6 +59,7 @@ vi.mock('../config.js', () => ({
 import fs from 'node:fs';
 import {
   getLatestCodeSessionByNotionTaskId,
+  getLatestOpsSessionByTaskId,
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
   isSessionAwaitingCapabilityDisposition,
@@ -65,6 +69,8 @@ import {
   getSessionLastActivityMs,
   upsertPullRequest,
   getOpsJournalEntry,
+  getSession,
+  listStagedIntentsBySession,
 } from '../db/queries.js';
 import {
   recordEvent,
@@ -154,6 +160,9 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(upsertPullRequest).mockClear();
     vi.mocked(getOpsJournalEntry).mockReset().mockReturnValue(undefined);
+    vi.mocked(getLatestOpsSessionByTaskId).mockReset().mockReturnValue(undefined);
+    vi.mocked(getSession).mockReset().mockReturnValue(undefined);
+    vi.mocked(listStagedIntentsBySession).mockReset().mockReturnValue([]);
     broadcast.mockClear();
   });
 
@@ -1096,6 +1105,17 @@ describe('OrphanedTaskSweeper', () => {
       vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
       vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
       vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+      vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(
+        makeSession('done', 30 * 60 * 1000) as ReturnType<
+          typeof getLatestOpsSessionByTaskId
+        >,
+      );
+      vi.mocked(getSession).mockReturnValue({
+        session_id: 'sess-1',
+        session_type: 'ops',
+        task_id: 'notion:abc',
+      } as ReturnType<typeof getSession>);
+      vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
       vi.mocked(getOpsJournalEntry).mockReturnValue({
         task_id: 'notion:abc',
         project: 'proj-1',
@@ -1164,6 +1184,45 @@ describe('OrphanedTaskSweeper', () => {
 
     expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
     expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('does not revert an Investigation task that staged a decision even though its ops_journal is still pending', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
+    ]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+    vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(
+      makeSession('done', 30 * 60 * 1000) as ReturnType<
+        typeof getLatestOpsSessionByTaskId
+      >,
+    );
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'sess-1',
+      session_type: 'ops',
+      task_id: 'notion:abc',
+    } as ReturnType<typeof getSession>);
+    // Staged a decision — sessionDidWork must count this even with the
+    // journal still at its initial 'pending' state (or missing).
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      { id: 'intent-1', kind: 'task.updateBody', state: 'staged' },
+    ] as ReturnType<typeof listStagedIntentsBySession>);
+    vi.mocked(getOpsJournalEntry).mockReturnValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'task_orphan_reverted' }),
     );
   });

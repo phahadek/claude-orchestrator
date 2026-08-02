@@ -20,6 +20,7 @@ vi.mock('../../db/queries.js', () => ({
   markSessionDone: vi.fn(),
   markSessionIdle: vi.fn(),
   getSession: vi.fn(),
+  getSessionLastActivityMs: vi.fn().mockReturnValue(null),
 }));
 
 import {
