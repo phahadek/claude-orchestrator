@@ -170,6 +170,15 @@ export function runMigrations(target: Database.Database): void {
       PRIMARY KEY (pr_number, repo, sha)
     );
 
+    CREATE TABLE IF NOT EXISTS orchestrator_analyze_content_cache (
+      command       TEXT    NOT NULL,
+      content_hash  TEXT    NOT NULL,
+      passed        INTEGER NOT NULL,
+      output        TEXT    NOT NULL DEFAULT '',
+      ran_at        TEXT    NOT NULL,
+      PRIMARY KEY (command, content_hash)
+    );
+
     CREATE TABLE IF NOT EXISTS task_no_op_attempts (
       task_id          TEXT PRIMARY KEY,
       retry_count      INTEGER NOT NULL DEFAULT 0,
