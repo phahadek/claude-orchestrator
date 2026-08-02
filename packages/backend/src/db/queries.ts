@@ -4668,9 +4668,10 @@ export function getAuditFindingDedup(
   findingIdentity: string,
 ): AuditFindingDedupRow | null {
   const row = db
-    .prepare<{ project_id: string; finding_identity: string }>(
-      `SELECT * FROM audit_finding_dedup WHERE project_id = @project_id AND finding_identity = @finding_identity`,
-    )
+    .prepare<{
+      project_id: string;
+      finding_identity: string;
+    }>(`SELECT * FROM audit_finding_dedup WHERE project_id = @project_id AND finding_identity = @finding_identity`)
     .get({ project_id: projectId, finding_identity: findingIdentity }) as
     | AuditFindingDedupRow
     | undefined;

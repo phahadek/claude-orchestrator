@@ -6,13 +6,13 @@ import { logger } from '../logger';
 import { getAllProjects } from '../config';
 import type { ProjectConfig } from '../config';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
-import { runTestCommands, type TestCommandResult } from '../session/test-runner';
+import {
+  runTestCommands,
+  type TestCommandResult,
+} from '../session/test-runner';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { toCanonicalStatus } from '../tasks/statusCanonical';
-import {
-  getAuditFindingDedup,
-  upsertAuditFindingDedup,
-} from '../db/queries';
+import { getAuditFindingDedup, upsertAuditFindingDedup } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type { Scheduler } from './Scheduler';
 
@@ -86,7 +86,14 @@ export async function ensureAuditWorktree(
   if (!exists) {
     await fs.promises.mkdir(path.dirname(worktreePath), { recursive: true });
     await gitRunner(
-      ['worktree', 'add', '--force', '--detach', worktreePath, `origin/${baseBranch}`],
+      [
+        'worktree',
+        'add',
+        '--force',
+        '--detach',
+        worktreePath,
+        `origin/${baseBranch}`,
+      ],
       project.projectDir,
     );
     return;
@@ -108,7 +115,14 @@ export async function ensureAuditWorktree(
       // best-effort
     }
     await gitRunner(
-      ['worktree', 'add', '--force', '--detach', worktreePath, `origin/${baseBranch}`],
+      [
+        'worktree',
+        'add',
+        '--force',
+        '--detach',
+        worktreePath,
+        `origin/${baseBranch}`,
+      ],
       project.projectDir,
     );
   }
@@ -158,7 +172,12 @@ async function runAnalyzeCommandWithRetry(
   let result: TestCommandResult;
   for (;;) {
     attempt++;
-    result = await runAnalyzeCommand(worktreePath, command, timeoutSec, maxRssMb);
+    result = await runAnalyzeCommand(
+      worktreePath,
+      command,
+      timeoutSec,
+      maxRssMb,
+    );
     const transient = Boolean(result.timedOut || result.oomKilled);
     if (!transient) {
       return { command, output: result.output, transientFailure: false };
@@ -280,7 +299,8 @@ function parseNpmAuditFindings(
         : undefined;
     for (const via of vuln.via) {
       if (typeof via === 'string') continue; // a bare "depends on <name>" link, not its own advisory
-      const advisoryId = via.source !== undefined ? String(via.source) : via.url;
+      const advisoryId =
+        via.source !== undefined ? String(via.source) : via.url;
       if (!advisoryId) continue;
       findings.push({
         kind: 'vulnerability',
@@ -336,7 +356,8 @@ export function parseAuditFindings(commandOutput: string): AuditFinding[] {
   const parsed = extractJsonObject(commandOutput);
   if (parsed === null) return [];
   if (isNpmAuditReport(parsed)) return parseNpmAuditFindings(parsed);
-  if (isLicenseCheckerReport(parsed)) return parseLicenseCheckerFindings(parsed);
+  if (isLicenseCheckerReport(parsed))
+    return parseLicenseCheckerFindings(parsed);
   return [];
 }
 
@@ -436,7 +457,12 @@ async function fileFindingIfNeeded(
     body: renderDepBumpTaskBody(finding),
   });
 
-  upsertAuditFindingDedup(project.id, identity, taskId, new Date().toISOString());
+  upsertAuditFindingDedup(
+    project.id,
+    identity,
+    taskId,
+    new Date().toISOString(),
+  );
 
   recordEvent({
     event_type: 'scheduled_audit_sweep_finding_filed',

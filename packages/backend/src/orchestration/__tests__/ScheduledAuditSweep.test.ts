@@ -102,7 +102,10 @@ describe('worktree provisioning and command execution isolation', () => {
 
     const nonBootstrapGitCwds = gitCwds.filter((_, i) => {
       const call = gitRunner.mock.calls[i][0] as string[];
-      return !(call[0] === 'fetch' || (call[0] === 'worktree' && call[1] === 'add'));
+      return !(
+        call[0] === 'fetch' ||
+        (call[0] === 'worktree' && call[1] === 'add')
+      );
     });
     for (const cwd of nonBootstrapGitCwds) {
       expect(cwd).not.toBe(project.projectDir);
