@@ -150,6 +150,11 @@ vi.mock('../session/branchModel', () => ({
     .mockImplementation(
       (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
     ),
+  resolveResumeBranchSlug: vi
+    .fn()
+    .mockImplementation(
+      (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
+    ),
 }));
 
 vi.mock('../routes/tasks', () => ({

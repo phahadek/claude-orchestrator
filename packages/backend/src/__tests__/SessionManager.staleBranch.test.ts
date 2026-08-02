@@ -133,6 +133,7 @@ vi.mock('../session/branchModel', () => ({
     .mockReturnValue({ startingPoint: 'dev', milestoneSlug: null }),
   ensureMilestoneBranch: vi.fn(),
   deriveBranchSlug: vi.fn().mockReturnValue('feature/my-task-abc12345'),
+  resolveResumeBranchSlug: vi.fn().mockReturnValue('feature/my-task-abc12345'),
 }));
 
 vi.mock('../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));

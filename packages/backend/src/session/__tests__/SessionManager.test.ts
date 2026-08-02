@@ -67,6 +67,7 @@ vi.mock('../branchModel', () => ({
     .mockReturnValue({ startingPoint: 'dev', milestoneSlug: null }),
   ensureMilestoneBranch: vi.fn(),
   deriveBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
+  resolveResumeBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
 }));
 vi.mock('../orchestrator-config', () => ({
   loadOrchestratorConfig: vi
@@ -234,6 +235,7 @@ import {
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
 import { buildSessionContext } from '../ContextBuilder';
+import { deriveBranchSlug } from '../branchModel';
 import { execSync, exec as execCb } from 'child_process';
 import { recordEvent } from '../../audit/AuditLog';
 import * as fsModule from 'fs';
@@ -2906,6 +2908,107 @@ describe('start() — bootstrap gate', () => {
 
     expect(vi.mocked(buildSessionContext)).toHaveBeenCalledWith(
       expect.objectContaining({ taskBackend: 'jira' }),
+    );
+  });
+});
+
+// ── start() — two same-titled tasks dispatched concurrently ───────────────
+
+describe('start() — two same-titled tasks dispatched concurrently', () => {
+  let sm: SessionManager;
+
+  const BASE_ORCH_CONFIG = {
+    mcp_servers: undefined,
+    allowed_tools: [],
+    verify: [],
+    bash_rules: [],
+    session_rules: [],
+    bootstrap_script: '',
+    required_env: [] as string[],
+    required_files: [] as string[],
+    autofix: [],
+    ci_check_name: [],
+    test: [],
+    test_timeout_sec: 300,
+    test_max_rss_mb: 0,
+    test_fail_fast: true,
+    analyze: [],
+    analyze_timeout_sec: 300,
+    analyze_max_rss_mb: 0,
+    analyze_fail_fast: true,
+  };
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(fsModule.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({ ...BASE_ORCH_CONFIG });
+
+    // Restore the real title+id derivation for this describe block so the
+    // two dispatches below actually diverge instead of both resolving to the
+    // module-wide fixed mock value ('feature/my-task').
+    vi.mocked(deriveBranchSlug).mockImplementation(
+      (title: string, taskId?: string | null, prefix = 'feature') => {
+        const slug = title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '');
+        return taskId ? `${prefix}/${slug}-${taskId}` : `${prefix}/${slug}`;
+      },
+    );
+  });
+
+  it('same task_name, different task_id → distinct branch names, both launch (no isBranchAlreadyExists path)', async () => {
+    const wtAddCommands: string[] = [];
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree add')) wtAddCommands.push(cmd);
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    await Promise.all([
+      sm.start('https://notion.so/task', 'https://notion.so/project', {
+        projectId: PROJECT_ID,
+        taskKind: 'non_milestone',
+        taskName: 'Duplicate title task',
+        taskId: 'task-id-one',
+      }),
+      sm.start('https://notion.so/task', 'https://notion.so/project', {
+        projectId: PROJECT_ID,
+        taskKind: 'non_milestone',
+        taskName: 'Duplicate title task',
+        taskId: 'task-id-two',
+      }),
+    ]);
+
+    await vi.waitFor(() =>
+      expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(2),
+    );
+
+    const branchArgs = vi
+      .mocked(deriveBranchSlug)
+      .mock.calls.map(([title, taskId]) => `${title}::${taskId}`);
+    expect(new Set(branchArgs).size).toBe(branchArgs.length);
+
+    const branchesUsed = wtAddCommands.map((cmd) => {
+      const m = cmd.match(/-b "([^"]+)"/);
+      return m?.[1];
+    });
+    expect(new Set(branchesUsed).size).toBe(2);
+
+    // Neither dispatch hit the "A branch named ... already exists" recovery path.
+    expect(vi.mocked(setSessionPauseReason)).not.toHaveBeenCalledWith(
+      expect.any(String),
+      'launch_failed',
     );
   });
 });

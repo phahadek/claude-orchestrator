@@ -22,6 +22,7 @@ import {
   resolveStartingPoint,
   ensureMilestoneBranch,
   deriveBranchSlug,
+  resolveResumeBranchSlug,
 } from './branchModel';
 import {
   loadOrchestratorConfig,
@@ -1621,7 +1622,9 @@ export class SessionManager extends EventEmitter {
           ? startingPoint
           : `origin/${project.baseBranch}`;
 
-      const featureBranch = taskName ? deriveBranchSlug(taskName) : null;
+      const featureBranch = taskName
+        ? deriveBranchSlug(taskName, sessionTaskId)
+        : null;
       if (featureBranch) {
         try {
           await gitWorktreeAddWithRetry(
@@ -2156,7 +2159,7 @@ export class SessionManager extends EventEmitter {
     }
 
     const featureBranch = row.task_name
-      ? deriveBranchSlug(row.task_name)
+      ? deriveBranchSlug(row.task_name, row.task_id)
       : null;
     if (featureBranch) {
       try {
@@ -4104,7 +4107,7 @@ export class SessionManager extends EventEmitter {
         : `origin/${project.baseBranch}`;
 
     const resumeFeatureBranch = row.task_name
-      ? deriveBranchSlug(row.task_name)
+      ? resolveResumeBranchSlug(row.task_name, row.task_id, projectDir)
       : null;
 
     // Prune stale worktree registrations before attempting re-attach.
