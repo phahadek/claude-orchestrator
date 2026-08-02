@@ -1450,10 +1450,19 @@ describe('assemblePlanningProcedure', () => {
       },
     });
 
-    expect(output).not.toContain(
+    // architecture.getUnit legitimately appears elsewhere in the assembled
+    // output — the ops-consult-architecture-before-diagnosing procedure-core
+    // principle names it for every ops session regardless of digest content
+    // (procedureCore.ts:215). Scope the assertion to the ops digest section
+    // itself, whose store-gated unit list + dereference hint stay absent.
+    const opsDigestSection = output.slice(
+      output.indexOf('## Ops Journal Slice'),
+    );
+    expect(opsDigestSection).not.toContain('### Arch-store-selected units');
+    expect(opsDigestSection).not.toContain('This selection is titles/ids only');
+    expect(opsDigestSection).not.toContain(
       orchestratorMcpToolName('architecture.getUnit'),
     );
-    expect(output).not.toContain('Arch-store-selected units');
   });
 
   it('carries no hint and no arch-unit section in the ops digest when the store selection is empty', () => {
@@ -1472,10 +1481,18 @@ describe('assemblePlanningProcedure', () => {
       },
     });
 
-    expect(output).not.toContain(
+    // Same scoping rationale as the notion-archSource case above: the
+    // procedure-core principle names architecture.getUnit unconditionally,
+    // so only the ops digest section itself can prove the store-gated
+    // section stayed absent.
+    const opsDigestSection = output.slice(
+      output.indexOf('## Ops Journal Slice'),
+    );
+    expect(opsDigestSection).not.toContain('### Arch-store-selected units');
+    expect(opsDigestSection).not.toContain('This selection is titles/ids only');
+    expect(opsDigestSection).not.toContain(
       orchestratorMcpToolName('architecture.getUnit'),
     );
-    expect(output).not.toContain('Arch-store-selected units');
   });
 
   it('sources the arch-unit dereference hint from the same shared text for the design and ops digests', () => {
