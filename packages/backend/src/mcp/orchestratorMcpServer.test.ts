@@ -31,13 +31,11 @@ vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn(() => ({
     type: 'notion',
     fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nok'),
-    fetchTaskSummary: vi
-      .fn()
-      .mockResolvedValue({
-        title: 'Some other task',
-        type: '💻 Code',
-        status: '🔲 Backlog',
-      }),
+    fetchTaskSummary: vi.fn().mockResolvedValue({
+      title: 'Some other task',
+      type: '💻 Code',
+      status: '🔲 Backlog',
+    }),
   })),
 }));
 
