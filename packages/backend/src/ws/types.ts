@@ -130,6 +130,8 @@ export interface TaskView {
   totalTokens: { input: number; output: number };
   /** Assigned target repo slug for multi-repo projects, e.g. "owner/repo". Null when unassigned. */
   assignedRepo: string | null;
+  /** True when this task has a staged intent in the decision-inbox visibility set (staged/approved/needs_revision/pending_verification) — the operator still owns a disposition for it. */
+  hasAwaitingDispositionIntent: boolean;
   /** Recovery action available for this task when paused. */
   recoveryDescriptor?: RecoveryDescriptor;
 }

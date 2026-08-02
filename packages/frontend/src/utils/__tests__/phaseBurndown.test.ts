@@ -28,6 +28,7 @@ function makeTask(overrides: Partial<TaskView> = {}): TaskView {
     review: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
+    hasAwaitingDispositionIntent: false,
     ...overrides,
   };
 }
@@ -86,12 +87,13 @@ describe('computePhaseBurndown', () => {
         },
       }),
       makeTask({
-        taskId: 'untouched-1',
+        taskId: 'awaiting-disposition-1',
         displayStatus: 'backlog',
         blocked: false,
+        hasAwaitingDispositionIntent: true,
       }),
       makeTask({
-        taskId: 'untouched-2',
+        taskId: 'untouched-1',
         displayStatus: 'backlog',
         blocked: false,
       }),
@@ -102,7 +104,8 @@ describe('computePhaseBurndown', () => {
     expect(result.grooming.counts).toEqual({
       blocked: 1,
       inGrooming: 1,
-      untouched: 2,
+      awaitingDisposition: 1,
+      untouched: 1,
     });
     const states = Object.keys(result.grooming.counts).filter(
       (k) => (result.grooming.counts as Record<string, number>)[k] > 0,
@@ -114,6 +117,103 @@ describe('computePhaseBurndown', () => {
         0,
       ),
     ).toBe(4);
+  });
+
+  it('a task with staged intents awaiting disposition and no live groom session counts as awaitingDisposition, not untouched', () => {
+    const tasks = [
+      makeTask({
+        taskId: 'awaiting-1',
+        displayStatus: 'backlog',
+        blocked: false,
+        planningSession: {
+          sessionId: 's1',
+          status: 'done',
+          sessionType: 'groom',
+          startedAt: 1,
+          endedAt: 2,
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        hasAwaitingDispositionIntent: true,
+      }),
+    ];
+    const result = computePhaseBurndown(tasks, null);
+    expect(result.grooming.counts.awaitingDisposition).toBe(1);
+    expect(result.grooming.counts.untouched ?? 0).toBe(0);
+  });
+
+  it('a live groom session still counts as inGrooming even when the task also holds awaiting intents', () => {
+    const tasks = [
+      makeTask({
+        taskId: 'live-with-awaiting',
+        displayStatus: 'backlog',
+        blocked: false,
+        planningSession: {
+          sessionId: 's1',
+          status: 'running',
+          sessionType: 'groom',
+          startedAt: 1,
+          endedAt: null,
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        hasAwaitingDispositionIntent: true,
+      }),
+    ];
+    const result = computePhaseBurndown(tasks, null);
+    expect(result.grooming.counts.inGrooming).toBe(1);
+    expect(result.grooming.counts.awaitingDisposition ?? 0).toBe(0);
+  });
+
+  it('a blocked task still counts as blocked even when it also holds awaiting intents and a live groom session', () => {
+    const tasks = [
+      makeTask({
+        taskId: 'blocked-with-awaiting',
+        displayStatus: 'backlog',
+        blocked: true,
+        planningSession: {
+          sessionId: 's1',
+          status: 'running',
+          sessionType: 'groom',
+          startedAt: 1,
+          endedAt: null,
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        hasAwaitingDispositionIntent: true,
+      }),
+    ];
+    const result = computePhaseBurndown(tasks, null);
+    expect(result.grooming.counts.blocked).toBe(1);
+    expect(result.grooming.counts.awaitingDisposition ?? 0).toBe(0);
+    expect(result.grooming.counts.inGrooming ?? 0).toBe(0);
+  });
+
+  it('a task with only terminal intents (hasAwaitingDispositionIntent false) still counts as untouched', () => {
+    const tasks = [
+      makeTask({
+        taskId: 'terminal-only',
+        displayStatus: 'backlog',
+        blocked: false,
+        hasAwaitingDispositionIntent: false,
+      }),
+    ];
+    const result = computePhaseBurndown(tasks, null);
+    expect(result.grooming.counts.untouched).toBe(1);
+    expect(result.grooming.counts.awaitingDisposition ?? 0).toBe(0);
+  });
+
+  it('a task with no intents at all still counts as untouched', () => {
+    const tasks = [
+      makeTask({
+        taskId: 'no-intents',
+        displayStatus: 'backlog',
+        blocked: false,
+      }),
+    ];
+    const result = computePhaseBurndown(tasks, null);
+    expect(result.grooming.counts.untouched).toBe(1);
+    expect(result.grooming.counts.awaitingDisposition ?? 0).toBe(0);
   });
 
   it('a completed groom session (endedAt set) does not count as in grooming', () => {

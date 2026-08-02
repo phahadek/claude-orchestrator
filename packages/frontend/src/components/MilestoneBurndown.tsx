@@ -44,6 +44,7 @@ const SEGMENT_FILL_CLASS: Record<SegmentState, string> = {
   done: styles.fillDone,
   blocked: styles.fillBlocked,
   inGrooming: styles.fillInGrooming,
+  awaitingDisposition: styles.fillAwaitingDisposition,
   untouched: styles.fillUntouched,
   open: styles.fillGateOpen,
   runnable: styles.fillGateRunnable,

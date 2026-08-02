@@ -57,6 +57,8 @@ import {
   emitTaskUpdated,
 } from '../routes/tasks.js';
 import * as queries from '../db/queries.js';
+import { insertStagedIntent } from '../db/queries.js';
+import type { StagedIntentState } from '../db/types.js';
 import { getTaskBackend } from '../tasks/TaskBackend.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import type { NotionTask } from '../notion/types.js';
@@ -707,6 +709,108 @@ describe('buildTaskViewFromRow — totalTokens', () => {
     );
     expect(task.review.inputTokens).toBe(80);
     expect(task.review.outputTokens).toBe(40);
+  });
+});
+
+describe('buildTaskViewFromRow — hasAwaitingDispositionIntent', () => {
+  let intentCounter = 0;
+
+  function stageIntent(taskId: string, state: StagedIntentState) {
+    intentCounter += 1;
+    insertStagedIntent({
+      id: `intent-${intentCounter}`,
+      kind: 'task.setStatus',
+      payload: '{}',
+      payload_hash: `hash-${intentCounter}`,
+      task_id: taskId,
+      project_id: 'proj-1',
+      session_id: null,
+      group_id: null,
+      milestone: 'M1',
+      state,
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      investigation: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: 0,
+      updated_at: 0,
+    });
+  }
+
+  it('is true for a task holding a staged intent', async () => {
+    stageIntent('task-backlog', 'staged');
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-backlog', '🔲 Backlog'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    const task = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-backlog',
+    );
+    expect(task.hasAwaitingDispositionIntent).toBe(true);
+  });
+
+  it('is true for a task holding an approved, needs_revision, or pending_verification intent', async () => {
+    stageIntent('task-approved', 'approved');
+    stageIntent('task-needs-revision', 'needs_revision');
+    stageIntent('task-pending-verification', 'pending_verification');
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-approved', '🔲 Backlog'),
+      makeAggregate('task-needs-revision', '🔲 Backlog'),
+      makeAggregate('task-pending-verification', '🔲 Backlog'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    for (const taskId of [
+      'task-approved',
+      'task-needs-revision',
+      'task-pending-verification',
+    ]) {
+      const task = res.body.tasks.find(
+        (t: { taskId: string }) => t.taskId === taskId,
+      );
+      expect(task.hasAwaitingDispositionIntent).toBe(true);
+    }
+  });
+
+  it('is false for a task whose only intents are terminal (committed/rejected/superseded/withdrawn)', async () => {
+    stageIntent('task-terminal', 'committed');
+    stageIntent('task-terminal', 'rejected');
+    stageIntent('task-terminal', 'superseded');
+    stageIntent('task-terminal', 'withdrawn');
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-terminal', '🔲 Backlog'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    const task = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-terminal',
+    );
+    expect(task.hasAwaitingDispositionIntent).toBe(false);
+  });
+
+  it('is false for a task with no staged intents at all', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-no-intents', '🔲 Backlog'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    const task = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-no-intents',
+    );
+    expect(task.hasAwaitingDispositionIntent).toBe(false);
   });
 });
 
