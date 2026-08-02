@@ -38,6 +38,9 @@ jobs:
       - name: Typecheck backend
         run: npx tsc --noEmit -p packages/backend/tsconfig.json
 
+      - name: Test frontend
+        run: npm run test -w packages/frontend
+
       - name: Build
         run: npm run build
 
