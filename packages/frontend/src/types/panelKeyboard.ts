@@ -133,11 +133,9 @@ export function useKeyboardRing<T extends PanelKeyboardItem>(items: T[]) {
 
   const selectNext = useCallback(() => {
     setHighlightedId((id) => nextRingId(items, id, 1));
-     
   }, [items]);
   const selectPrev = useCallback(() => {
     setHighlightedId((id) => nextRingId(items, id, -1));
-     
   }, [items]);
 
   return { highlightedId, setHighlightedId, selectNext, selectPrev };
