@@ -133,9 +133,16 @@ describe('checkReadiness — type-aware Open Questions / deferral exemption', ()
     expect(checkReadiness(deferralBody, '📋 Planning')).toEqual([]);
   });
 
-  it('does not flag Open Questions / deferral for 🔎 Investigation', () => {
-    expect(checkReadiness(openQuestionsBody, '🔎 Investigation')).toEqual([]);
-    expect(checkReadiness(deferralBody, '🔎 Investigation')).toEqual([]);
+  it('does not flag the generic Open Questions / deferral checks for 🔎 Investigation (its own Deliverables/decision-branch floor facts still apply)', () => {
+    // Investigation's Tier-1/Tier-2 exemption is about the *generic* Open
+    // Questions / deferral checks — it still needs its own Deliverables
+    // heading and decision-branch structure (see the floor-facts describe
+    // block below), so this body satisfies those to isolate the exemption.
+    const investigationBody =
+      '## Deliverables\n- A go/no-go decision.\n\n## Context\n- If the spike succeeds, file the Code task.\n- If it fails, file a follow-on Investigation.\n\n' +
+      openQuestionsBody +
+      deferralBody;
+    expect(checkReadiness(investigationBody, '🔎 Investigation')).toEqual([]);
   });
 
   it('does not flag Open Questions / deferral for 🧪 Testing', () => {
@@ -151,6 +158,140 @@ describe('checkReadiness — type-aware Open Questions / deferral exemption', ()
       true,
     );
     expect(codeViolations.some((v) => v.detail.includes('residue'))).toBe(true);
+  });
+});
+
+describe('checkReadiness — 🔧 Operational floor facts', () => {
+  const validBody =
+    '## Targets / surfaces affected\n- billing config catalog\n\n### 👁️ Manual verification\n- seed present on prod; worker reconciled and captured the change signal\n';
+
+  it('passes a clean Operational body', () => {
+    expect(checkReadiness(validBody, '🔧 Operational')).toEqual([]);
+  });
+
+  it('fails when Targets / surfaces affected is missing', () => {
+    const body =
+      '### 👁️ Manual verification\n- seed present on prod; worker reconciled and captured the change signal\n';
+    const violations = checkReadiness(body, '🔧 Operational');
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('Targets'),
+      ),
+    ).toBe(true);
+  });
+
+  it('fails when Targets / surfaces affected is present but empty', () => {
+    const body =
+      '## Targets / surfaces affected\nNone\n\n### 👁️ Manual verification\n- seed present on prod; worker reconciled and captured the change signal\n';
+    const violations = checkReadiness(body, '🔧 Operational');
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('Targets'),
+      ),
+    ).toBe(true);
+  });
+
+  it('fails when Manual verification lacks reconcile-and-capture language', () => {
+    const body =
+      '## Targets / surfaces affected\n- billing config catalog\n\n### 👁️ Manual verification\n- looks fine\n';
+    const violations = checkReadiness(body, '🔧 Operational');
+    expect(
+      violations.some(
+        (v) => v.tier === 'lexical' && v.detail.includes('reconcile'),
+      ),
+    ).toBe(true);
+  });
+
+  it('passes when reconcile and capture are stated separately, order-agnostic', () => {
+    const body =
+      '## Targets / surfaces affected\n- billing config catalog\n\n### 👁️ Manual verification\n- captured evidence that the worker reconciled the change\n';
+    expect(checkReadiness(body, '🔧 Operational')).toEqual([]);
+  });
+
+  it('still blocks on a deferral phrase (Tier 2 not exempted for Operational)', () => {
+    const body =
+      validBody + '\nThe retry policy will be decide during implementation.';
+    const violations = checkReadiness(body, '🔧 Operational');
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('a sample body missing Targets / surfaces affected is blocked by checkReadiness', () => {
+    const body =
+      '### 👁️ Manual verification\n- seed present on prod; worker reconciled and captured the change signal\n';
+    expect(checkReadiness(body, '🔧 Operational').length).toBeGreaterThan(0);
+  });
+
+  it('a sample body containing a deferral phrase is still blocked', () => {
+    const body =
+      validBody + '\nThe retry policy will be decide during implementation.';
+    expect(checkReadiness(body, '🔧 Operational').length).toBeGreaterThan(0);
+  });
+});
+
+describe('checkReadiness — 🔎 Investigation floor facts', () => {
+  const validBody =
+    '## Deliverables\n- A go/no-go decision plus follow-on tasks.\n\n## Context\n- If latency regressed after the deploy, file a Code rollback task.\n- If it did not, file a follow-on Investigation into the alert itself.\n';
+
+  it('passes a clean Investigation body', () => {
+    expect(checkReadiness(validBody, '🔎 Investigation')).toEqual([]);
+  });
+
+  it('fails when Deliverables is missing', () => {
+    const body =
+      '## Context\n- If latency regressed, file a rollback task.\n- If not, investigate the alert.\n';
+    const violations = checkReadiness(body, '🔎 Investigation');
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('Deliverables'),
+      ),
+    ).toBe(true);
+  });
+
+  it('fails when Deliverables is present but empty', () => {
+    const body =
+      '## Deliverables\nNone\n\n## Context\n- If latency regressed, file a rollback task.\n- If not, investigate the alert.\n';
+    const violations = checkReadiness(body, '🔎 Investigation');
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('Deliverables'),
+      ),
+    ).toBe(true);
+  });
+
+  it('fails when Context has no enumerated decision-branch structure', () => {
+    const body =
+      '## Deliverables\n- A go/no-go decision.\n\n## Context\nLatency looked elevated yesterday, worth a look.\n';
+    const violations = checkReadiness(body, '🔎 Investigation');
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('decision-branch'),
+      ),
+    ).toBe(true);
+  });
+
+  it('accepts a plain list as a lenient decision-branch structure (no literal a/b/c lettering required)', () => {
+    const body =
+      '## Deliverables\n- A go/no-go decision.\n\n## Context\n- Root cause is the retry storm.\n- Root cause is the upstream outage.\n';
+    expect(checkReadiness(body, '🔎 Investigation')).toEqual([]);
+  });
+
+  it("Investigation's existing Tier-1/Tier-2 exemption is unchanged: a live Open Questions section and a deferral phrase are not flagged", () => {
+    const body =
+      validBody +
+      '\n## Open Questions\n- Which alert threshold?\n\nThe retry policy will be decide during implementation.';
+    expect(checkReadiness(body, '🔎 Investigation')).toEqual([]);
+  });
+
+  it('a sample body missing Deliverables is blocked by checkReadiness', () => {
+    const body =
+      '## Context\n- If latency regressed, file a rollback task.\n- If not, investigate the alert.\n';
+    expect(checkReadiness(body, '🔎 Investigation').length).toBeGreaterThan(0);
+  });
+
+  it('a sample body whose Context lacks any enumerated decision-branch structure surfaces as a violation', () => {
+    const body =
+      '## Deliverables\n- A go/no-go decision.\n\n## Context\nLatency looked elevated yesterday, worth a look.\n';
+    expect(checkReadiness(body, '🔎 Investigation').length).toBeGreaterThan(0);
   });
 });
 
