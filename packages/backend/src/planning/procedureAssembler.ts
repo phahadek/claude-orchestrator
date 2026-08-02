@@ -928,7 +928,7 @@ function renderSkeleton(
           '`gate.accrete` / `seed.stage` above. When the pre-groom body carries ' +
           'no such section, stage no strip intent at all — there is nothing to ' +
           'remove.\n\n' +
-          'seed.stage\'s content-match check runs the opposite direction: the ' +
+          "seed.stage's content-match check runs the opposite direction: the " +
           'task body starts with a "## Operational seed" section already present ' +
           '(every task body carries one, `None.` by default), and after a ' +
           '`seed.stage` accretion this session fills it in with the same seed ' +
@@ -937,7 +937,7 @@ function renderSkeleton(
           `own \`${orchestratorMcpToolName('task.patchBodySection')}\` call ` +
           '(`operation: "replace"`, `section: "Operational seed"`) FIRST, in its ' +
           'own group, and confirm it lands before staging `task.setStatus` → ' +
-          '`Ready`. Staged in the same group instead, the arming intent\'s ' +
+          "`Ready`. Staged in the same group instead, the arming intent's " +
           'stage-time check re-derives the section from the still-unapplied ' +
           '(still `None.`) stored body and finds nothing to cross-check — the ' +
           'exact self-verifying gap this content-match exists to close. A ' +
