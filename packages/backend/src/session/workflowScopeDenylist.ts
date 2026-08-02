@@ -31,7 +31,9 @@ export const WORKFLOW_SCOPE_DENYLIST: readonly string[] = [
  * (against the discovered fix's target path(s), as the session's own
  * investigation names them).
  */
-export function matchesWorkflowScopeDenylist(paths: readonly string[]): boolean {
+export function matchesWorkflowScopeDenylist(
+  paths: readonly string[],
+): boolean {
   return paths.some((path) =>
     WORKFLOW_SCOPE_DENYLIST.some((glob) => matchesRegionGlob(glob, path)),
   );

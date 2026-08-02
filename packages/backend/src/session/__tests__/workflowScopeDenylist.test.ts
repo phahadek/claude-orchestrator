@@ -12,9 +12,9 @@ describe('WORKFLOW_SCOPE_DENYLIST', () => {
 
 describe('matchesWorkflowScopeDenylist', () => {
   it('matches a workflow file under .github/workflows/', () => {
-    expect(
-      matchesWorkflowScopeDenylist(['.github/workflows/build.yml']),
-    ).toBe(true);
+    expect(matchesWorkflowScopeDenylist(['.github/workflows/build.yml'])).toBe(
+      true,
+    );
   });
 
   it('does not match an unrelated path', () => {
