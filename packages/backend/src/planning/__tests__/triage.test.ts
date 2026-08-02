@@ -28,7 +28,12 @@ describe('isInteractiveTaskType / INTERACTIVE_TASK_TYPES', () => {
 describe('isTriageEligibleType / TRIAGE_ELIGIBLE_TYPES', () => {
   it('includes 📐 Design, 📋 Planning, 🔧 Operational, and 🔎 Investigation', () => {
     expect(new Set(TRIAGE_ELIGIBLE_TYPES)).toEqual(
-      new Set(['📐 Design', '📋 Planning', '🔧 Operational', '🔎 Investigation']),
+      new Set([
+        '📐 Design',
+        '📋 Planning',
+        '🔧 Operational',
+        '🔎 Investigation',
+      ]),
     );
     expect(isTriageEligibleType('🔧 Operational')).toBe(true);
     expect(isTriageEligibleType('🔎 Investigation')).toBe(true);

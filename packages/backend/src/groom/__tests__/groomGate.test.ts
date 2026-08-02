@@ -1292,11 +1292,14 @@ describe('checkGroomingPromotionGate — Operational/Investigation triage floor'
     expect(result.allowed).toBe(true);
   });
 
-  it("uses the 🔧 Operational required-heading label when the heading fact is false", async () => {
+  it('uses the 🔧 Operational required-heading label when the heading fact is false', async () => {
     const result = await gate(
       {
         ...operationalCleanEntry,
-        triage: { proposedVerdict: 'clean' as const, hasOpenQuestionsHeading: false },
+        triage: {
+          proposedVerdict: 'clean' as const,
+          hasOpenQuestionsHeading: false,
+        },
       },
       'notion:operational-triage-no-heading',
     );
