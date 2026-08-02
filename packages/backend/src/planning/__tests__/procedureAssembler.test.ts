@@ -374,9 +374,7 @@ describe('docs digest rendering', () => {
 
     const hardRulesIndex = output.indexOf('### Hard rules');
     expect(hardRulesIndex).toBeGreaterThan(-1);
-    const afterHeading = output.slice(
-      hardRulesIndex + '### Hard rules'.length,
-    );
+    const afterHeading = output.slice(hardRulesIndex + '### Hard rules'.length);
     expect(afterHeading).toMatch(/\n- \*\*.+\*\*:/);
     expect(output).toContain('The human is the gate');
   });

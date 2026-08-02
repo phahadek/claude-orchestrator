@@ -84,7 +84,10 @@ describe('procedureCore', () => {
   });
 
   it('keeps non-docs skills at their pre-existing principlesFor/stepsFor counts — a regression guard against this docs fix leaking into unrelated skills', () => {
-    const expected: Record<'groom' | 'design' | 'ops' | 'split', { principles: number; steps: number }> = {
+    const expected: Record<
+      'groom' | 'design' | 'ops' | 'split',
+      { principles: number; steps: number }
+    > = {
       groom: { principles: 12, steps: 8 },
       design: { principles: 22, steps: 7 },
       ops: { principles: 15, steps: 5 },
