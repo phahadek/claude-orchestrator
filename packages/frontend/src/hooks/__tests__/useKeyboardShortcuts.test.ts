@@ -116,6 +116,33 @@ describe('useKeyboardShortcuts', () => {
     expect(handlers.onSwitchView).toHaveBeenCalledWith('prs');
   });
 
+  it('4 calls onSwitchView with "analytics"', () => {
+    const handlers = makeHandlers();
+    renderHook(() => useKeyboardShortcuts(handlers));
+    fireKey('4');
+    expect(handlers.onSwitchView).toHaveBeenCalledWith('analytics');
+  });
+
+  it('5 calls onSwitchView with "settings"', () => {
+    const handlers = makeHandlers();
+    renderHook(() => useKeyboardShortcuts(handlers));
+    fireKey('5');
+    expect(handlers.onSwitchView).toHaveBeenCalledWith('settings');
+  });
+
+  it('1-5 map to the rendered nav order of shortcut-bearing items (Tasks, Sessions, PRs, Analytics, Settings)', () => {
+    // Keep in sync with Header's nav order test: only these 5 of the 8 nav
+    // items carry number-key shortcuts, matching their left-to-right order.
+    const handlers = makeHandlers();
+    renderHook(() => useKeyboardShortcuts(handlers));
+    ['1', '2', '3', '4', '5'].forEach((key) => fireKey(key));
+    expect(
+      (handlers.onSwitchView as ReturnType<typeof vi.fn>).mock.calls.map(
+        (call) => call[0],
+      ),
+    ).toEqual(['tasks', 'sessions', 'prs', 'analytics', 'settings']);
+  });
+
   it('/ calls onFocusSearch', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
