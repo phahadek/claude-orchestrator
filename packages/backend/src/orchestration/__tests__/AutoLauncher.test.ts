@@ -658,7 +658,13 @@ describe('AutoLauncher — fetch timeouts', () => {
     // yieldToEventLoop), and leaving it real lets that resolve on its own
     // instead of hanging until timers are explicitly advanced.
     vi.useFakeTimers({
-      toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+      toFake: [
+        'Date',
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+      ],
     });
     vi.clearAllMocks();
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
@@ -955,7 +961,13 @@ describe('AutoLauncher — Notion Done-update backoff', () => {
     // yieldToEventLoop), and leaving it real lets that resolve on its own
     // instead of hanging until timers are explicitly advanced.
     vi.useFakeTimers({
-      toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+      toFake: [
+        'Date',
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+      ],
     });
     vi.clearAllMocks();
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
@@ -1147,7 +1159,13 @@ describe('AutoLauncher — launch failure tracking', () => {
     // yieldToEventLoop), and leaving it real lets that resolve on its own
     // instead of hanging until timers are explicitly advanced.
     vi.useFakeTimers({
-      toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+      toFake: [
+        'Date',
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+      ],
     });
     vi.clearAllMocks();
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
