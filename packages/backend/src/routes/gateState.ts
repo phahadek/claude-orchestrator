@@ -20,8 +20,9 @@ import type { GateItemClassification } from '../db/types';
 import {
   getFlowRejectionRate,
   getFlakeRecoveryMisclassificationRates,
+  getAutoGrantDisagreementRate,
 } from '../db/queries';
-import type { TrustPrecisionFlow } from '../db/queries';
+import type { TrustPrecisionFlow, AutoGrantKind } from '../db/queries';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
 import type {
@@ -494,11 +495,16 @@ export function createGateStateRouter(): Router {
     'gate-verify',
   ];
 
+  const AUTO_GRANT_KINDS: AutoGrantKind[] = ['gate.accrete', 'seed.stage'];
+
   // GET /api/gate/trust-rate?project=<id>&milestone=M12&flow=groom
   // The Milestone panel's trust-precision read: per flow per milestone, the
   // rate at which auto-dispatched output was rejected/abstained rather than
   // approved — see db/queries.ts's getFlowRejectionRate for the per-flow
-  // definition. Informative only; no auto-disarm.
+  // definition. Alongside it, always includes the per-kind auto-grant
+  // disagreement rate (see getAutoGrantDisagreementRate) for the same
+  // project+milestone — a second, independent trust-precision read that
+  // isn't scoped by `flow`. Both are informative only; no auto-disarm.
   router.get('/gate/trust-rate', (req: Request, res: Response) => {
     const project =
       typeof req.query.project === 'string' ? req.query.project : null;
@@ -519,13 +525,20 @@ export function createGateStateRouter(): Router {
     }
     try {
       const canonicalMilestone = resolveMilestoneForProject(project, milestone);
-      res.json(
-        getFlowRejectionRate(
+      const autoGrantDisagreementRate = Object.fromEntries(
+        AUTO_GRANT_KINDS.map((kind) => [
+          kind,
+          getAutoGrantDisagreementRate(project, canonicalMilestone, kind),
+        ]),
+      ) as Record<AutoGrantKind, ReturnType<typeof getAutoGrantDisagreementRate>>;
+      res.json({
+        ...getFlowRejectionRate(
           project,
           canonicalMilestone,
           flow as TrustPrecisionFlow,
         ),
-      );
+        autoGrantDisagreementRate,
+      });
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {
         res.status(400).json({ error: err.message });

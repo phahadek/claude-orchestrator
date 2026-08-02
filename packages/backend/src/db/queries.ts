@@ -7164,6 +7164,145 @@ export function getFlakeRecoveryMisclassificationRates(
   });
 }
 
+/** The auto-grant kinds the disagreement-rate signal covers. */
+export type AutoGrantKind = 'gate.accrete' | 'seed.stage';
+
+export interface AutoGrantDisagreementRateResult {
+  kind: AutoGrantKind;
+  project: string;
+  milestone: string;
+  /** Auto-granted (annotation.autoApproved) commits of this kind this rate was computed over. */
+  total: number;
+  /** Of `total`, the ones whose accreted item(s) were later disagreed with by an independent verification. */
+  disagreed: number;
+  /** `disagreed / total`, or null when there's no denominator yet. */
+  rate: number | null;
+}
+
+let _stmtAutoGrantCommittedIntents: Database.Statement | null = null;
+let _stmtAutoGrantGateItemIds: Database.Statement | null = null;
+let _stmtAutoGrantGateItemEvents: Database.Statement | null = null;
+let _stmtAutoGrantSeedItemIds: Database.Statement | null = null;
+let _stmtAutoGrantSeedItemEvents: Database.Statement | null = null;
+
+/**
+ * Per-(project, milestone, kind) auto-grant disagreement rate — the
+ * measurable proxy for the auto-grant accuracy claim (Technical
+ * Architecture § "Auto-grant disagreement-rate signal"). Scoped to
+ * `kind ∈ {gate.accrete, seed.stage}`: the two staged-intent kinds that
+ * commit to `staged_intent`, tagged `annotation: {autoApproved: true}`, and
+ * whose accreted item(s) are readable off `gate_item_source`/
+ * `seed_item_source` (keyed by `source_task_id`).
+ *
+ * Numerator: committed auto-granted rows of this kind whose accreted
+ * item(s) later received an independent-verification disagreement —
+ * a `fail` `gate_item_event.disposition` (gate.accrete) or a `blocked`
+ * `seed_item_event.outcome` (seed.stage), or a `needs-setup` disposition
+ * recurring 2+ times on the same gate item (a single needs-setup is
+ * evidence gathering, not disagreement; seed items have no needs-setup
+ * equivalent). Denominator: all committed auto-granted rows of this kind —
+ * operator-approved commits of the same kinds are covered by the existing
+ * `getFlowRejectionRate` and are excluded here.
+ *
+ * Purely observational: no threshold, no auto-disarm, no new arm/disarm
+ * ladder — the operator reads this like the other trust-precision signals.
+ */
+export function getAutoGrantDisagreementRate(
+  project: string,
+  milestone: string,
+  kind: AutoGrantKind,
+): AutoGrantDisagreementRateResult {
+  _stmtAutoGrantCommittedIntents ??= db.prepare(`
+    SELECT payload, annotation
+    FROM staged_intent
+    WHERE kind = ? AND project_id = ? AND milestone = ? AND state = 'committed'
+  `);
+  const rows = _stmtAutoGrantCommittedIntents.all(
+    kind,
+    project,
+    milestone,
+  ) as { payload: string; annotation: string | null }[];
+
+  const autoApprovedSourceTaskIds: string[] = [];
+  for (const row of rows) {
+    if (!row.annotation) continue;
+    let annotation: { autoApproved?: unknown };
+    try {
+      annotation = JSON.parse(row.annotation) as { autoApproved?: unknown };
+    } catch {
+      continue;
+    }
+    if (annotation.autoApproved !== true) continue;
+    try {
+      const payload = JSON.parse(row.payload) as {
+        sourceTask?: { id?: unknown };
+      };
+      const rawId = payload?.sourceTask?.id;
+      if (typeof rawId === 'string') {
+        autoApprovedSourceTaskIds.push(normalizeTaskId(rawId));
+      }
+    } catch {
+      /* malformed payload — excluded from both numerator and denominator */
+    }
+  }
+
+  const total = autoApprovedSourceTaskIds.length;
+  let disagreed = 0;
+
+  if (kind === 'gate.accrete') {
+    _stmtAutoGrantGateItemIds ??= db.prepare(`
+      SELECT DISTINCT gate_item_id FROM gate_item_source WHERE source_task_id = ?
+    `);
+    _stmtAutoGrantGateItemEvents ??= db.prepare(`
+      SELECT disposition FROM gate_item_event WHERE gate_item_id = ?
+    `);
+    for (const sourceTaskId of autoApprovedSourceTaskIds) {
+      const itemIds = _stmtAutoGrantGateItemIds.all(sourceTaskId) as {
+        gate_item_id: string;
+      }[];
+      const disagreedHere = itemIds.some(({ gate_item_id }) => {
+        const events = _stmtAutoGrantGateItemEvents!.all(gate_item_id) as {
+          disposition: string | null;
+        }[];
+        if (events.some((e) => e.disposition === 'fail')) return true;
+        const needsSetupCount = events.filter(
+          (e) => e.disposition === 'needs-setup',
+        ).length;
+        return needsSetupCount >= 2;
+      });
+      if (disagreedHere) disagreed++;
+    }
+  } else {
+    _stmtAutoGrantSeedItemIds ??= db.prepare(`
+      SELECT DISTINCT seed_item_id FROM seed_item_source WHERE source_task_id = ?
+    `);
+    _stmtAutoGrantSeedItemEvents ??= db.prepare(`
+      SELECT outcome FROM seed_item_event WHERE seed_item_id = ?
+    `);
+    for (const sourceTaskId of autoApprovedSourceTaskIds) {
+      const itemIds = _stmtAutoGrantSeedItemIds.all(sourceTaskId) as {
+        seed_item_id: string;
+      }[];
+      const disagreedHere = itemIds.some(({ seed_item_id }) => {
+        const events = _stmtAutoGrantSeedItemEvents!.all(seed_item_id) as {
+          outcome: string;
+        }[];
+        return events.some((e) => e.outcome === 'blocked');
+      });
+      if (disagreedHere) disagreed++;
+    }
+  }
+
+  return {
+    kind,
+    project,
+    milestone,
+    total,
+    disagreed,
+    rate: total > 0 ? disagreed / total : null,
+  };
+}
+
 // ─── arch_unit ────────────────────────────────────────────────────────────
 // Statements are cached lazily (prepared on first use, not at module load) so
 // importing this module doesn't fail on a not-yet-migrated db handle.
