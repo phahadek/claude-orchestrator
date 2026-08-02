@@ -1,4 +1,5 @@
 import http from 'http';
+import crypto from 'crypto';
 import { GitHubClient } from './github/GitHubClient';
 import { runPRBootSweep } from './github/PRBootSweep';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
@@ -6,7 +7,11 @@ import { runGitConfigIntegrityCheck } from './orchestration/gitConfigIntegrity';
 import { logger } from './logger';
 import { getCorporateMode } from './config/corporateMode';
 import { recordEvent, getLatestEventByType } from './audit/AuditLog';
+import { getCurrentVersion } from './updater/UpdateChecker';
 import type { ServerMessage } from './ws/types';
+
+/** Generated once per process; lets audit rows sharing this value be attributed to one process. */
+const processBootId = crypto.randomUUID();
 
 function isLoopback(host: string): boolean {
   return (
@@ -187,12 +192,16 @@ function reportRecoveryIfNeeded(broadcast: (msg: ServerMessage) => void): void {
 }
 
 /** Records the process_boot event; never throws so boot completion isn't blocked. */
-function recordBootEvent(): void {
+export function recordBootEvent(): void {
   try {
     recordEvent({
       event_type: 'process_boot',
       actor_type: 'system',
-      payload: {},
+      payload: {
+        pid: process.pid,
+        version: getCurrentVersion(),
+        bootId: processBootId,
+      },
     });
   } catch (err) {
     logger.warn('[boot] failed to record process_boot event:', err);
