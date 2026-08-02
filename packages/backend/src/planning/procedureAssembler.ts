@@ -1129,7 +1129,7 @@ function renderGroomDigest(
     `- Task id: \`${data.task.id}\``,
     `- size_check seed: ${data.sizeCheckSeed.files} files affected (${data.sizeCheckSeed.loc_method})`,
     `- type_check: ${data.typeCheck.decision}${data.typeCheck.signals?.length ? ` — ${data.typeCheck.signals.join('; ')}` : ''}`,
-    `- Binding constraints: ${data.bindingConstraints.length ? data.bindingConstraints.join(', ') : '(none)'}`,
+    `- Binding constraints (constraint ids — a separate id space from arch_unit; not dereferenceable via ${orchestratorMcpToolName('architecture.getUnit')}): ${data.bindingConstraints.length ? data.bindingConstraints.join(', ') : '(none)'}`,
   ];
   // Store-sourced architecture is task-scoped (region-intersected + active
   // invariants) — small enough to inline the full unit bodies, the only
@@ -1141,15 +1141,15 @@ function renderGroomDigest(
   // inlined it here either, so leave the digest unchanged on that branch.
   if (data.archSource === 'store') {
     lines.push(
-      `- Arch-store-selected units (${data.archUnits.length}): ${data.archUnits.length ? data.archUnits.map((u) => `${u.title} (${u.id})`).join(', ') : '(none)'}`,
+      `- Arch-store-selected units (${data.archUnits.length}) — parenthesised value is the arch_unit id to pass to ${orchestratorMcpToolName('architecture.getUnit')}: ${data.archUnits.length ? data.archUnits.map((u) => `${u.title} (${u.id})`).join(', ') : '(none)'}`,
     );
     if (data.archUnits.length > ARCH_UNIT_INLINE_CAP) {
       lines.push(
         '',
         '### Architecture unit bodies (titles only — fetch on demand)',
         '',
-        `Selection exceeds the inline cap (${ARCH_UNIT_INLINE_CAP}); fetch a unit's full body with ` +
-          `${orchestratorMcpToolName('architecture.getUnit')} ({ id }) instead of assuming it is inlined below.`,
+        `Selection exceeds the inline cap (${ARCH_UNIT_INLINE_CAP}).`,
+        archUnitDereferenceHint(),
         '',
       );
     } else if (data.archUnits.length) {
@@ -1207,7 +1207,8 @@ function renderGroomDigest(
  */
 function archUnitDereferenceHint(): string {
   return (
-    `_This selection is titles/ids only — too large to inline wholesale. Fetch a unit's full body with ` +
+    `_This selection is titles/ids only — too large to inline wholesale. The parenthesised value after ` +
+    `each title is the arch_unit id: fetch that unit's full body with ` +
     `${orchestratorMcpToolName('architecture.getUnit')} ({ id }), or run a broader query with ` +
     `${orchestratorMcpToolName('architecture.queryUnits')} ({ topic / kind / region })._`
   );

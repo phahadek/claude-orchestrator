@@ -90,4 +90,36 @@ describe('architecture.getUnit', () => {
     expect(result.content[0]?.text).not.toBe('null');
     expect(result.content[0]?.text).toMatch(/not found/i);
   });
+
+  it('names the binding-constraint confusion for a non-uuid id copied verbatim from the digest', async () => {
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'architecture.getUnit',
+      arguments: { id: 'pr-no-self-merge' },
+    })) as {
+      content: Array<{ type: string; text?: string }>;
+      isError?: boolean;
+    };
+    await close();
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toMatch(/binding-constraint/i);
+  });
+
+  it('still returns isError true (never a body, never the literal null) for a well-formed uuid that does not exist', async () => {
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'architecture.getUnit',
+      arguments: { id: '00000000-0000-4000-8000-000000000000' },
+    })) as {
+      content: Array<{ type: string; text?: string }>;
+      isError?: boolean;
+    };
+    await close();
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).not.toBe('null');
+    expect(result.content[0]?.text).toMatch(/not found/i);
+    expect(result.content[0]?.text).not.toMatch(/binding-constraint/i);
+  });
 });

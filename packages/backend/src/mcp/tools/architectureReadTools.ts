@@ -18,6 +18,10 @@ const archUnitKindSchema = z.enum([
 
 const archUnitStatusSchema = z.enum(['active', 'deferred', 'superseded']);
 
+/** arch_unit ids are uuids; anything else (a title slug, a binding-constraint id) fails this. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Registers `architecture.getUnit` / `architecture.queryUnits` — the read
  * surface over the arch_unit store a groom/design/ops session dereferences
@@ -56,12 +60,20 @@ export function registerArchitectureReadTools(
     async (args) => {
       const unit = getUnit(args.id);
       if (!unit) {
+        const looksLikeConstraintId = !UUID_RE.test(args.id);
         return {
           isError: true,
           content: [
             {
               type: 'text',
-              text: `Not found: no arch_unit with id "${args.id}". Ids are uuids from the digest's "title (id)" listing — do not guess a slug from the title.`,
+              text:
+                `Not found: no arch_unit with id "${args.id}". Ids are uuids from the digest's ` +
+                '"title (id)" listing — do not guess a slug from the title.' +
+                (looksLikeConstraintId
+                  ? ` "${args.id}" looks like a binding-constraint id, not an arch_unit uuid — ` +
+                    'binding constraints are a separate id space and are not arch_unit rows, ' +
+                    'so they are not fetchable through this tool.'
+                  : ''),
             },
           ],
         };
