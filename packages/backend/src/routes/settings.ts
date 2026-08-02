@@ -288,7 +288,7 @@ function runtimeSettingsAsRecord(): {
   };
 }
 
-export interface CapabilityAutoAllowSuggestion {
+interface CapabilityAutoAllowSuggestion {
   projectId: string;
   capability: string;
   /** Length of the current unbroken run of operator_approved dispositions for this key. */
