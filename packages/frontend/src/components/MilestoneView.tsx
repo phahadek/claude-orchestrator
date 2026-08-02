@@ -87,7 +87,7 @@ export function MilestoneView({
   // changes, so scroll-follow re-selecting the already-selected card
   // (suppressNextScrollRef's one-event no-op) never yanks an operator out
   // of session mode — only a deliberate switch to a different card does.
-  const handleSelect = (next: MilestoneStackSelection) => {
+  const handleSelect = (next: MilestoneStackSelection | null) => {
     if (selectionKey(selection) !== selectionKey(next)) {
       setDrilldownMode('task');
     }
