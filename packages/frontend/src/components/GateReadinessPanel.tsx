@@ -643,8 +643,8 @@ export function GateReadinessPanel({
       .then((result) => {
         setDeployRun(result.run);
         setDeployEvents(result.events);
-        setDeployedSha(result.deployedSha);
-        setDeployBehind(result.behind);
+        setDeployedSha(result.deployedSha ?? null);
+        setDeployBehind(result.behind ?? { count: 0, items: [] });
       })
       .catch(() => {
         /* transient poll failures don't clear the last-known run state */
