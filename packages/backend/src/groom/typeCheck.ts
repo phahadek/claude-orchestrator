@@ -56,7 +56,8 @@ const TYPES_NEEDING_CODE_SCAN = new Set(['🔧 Operational', '🔎 Investigation
 const TYPES_NEEDING_TESTING_SCAN = new Set(['🧪 Testing']);
 
 /** task-writing.md § 🧪 Testing's Manual verification disposition vocabulary. */
-const DISPOSITION_VOCAB_PATTERN = /\b(pass-with-caveat|blocked-pending-fix|pass)\b/i;
+const DISPOSITION_VOCAB_PATTERN =
+  /\b(pass-with-caveat|blocked-pending-fix|pass)\b/i;
 const MANUAL_VERIFICATION_HEADING = /^#{1,6}\s*👁️\s*Manual verification\s*$/i;
 
 /**
@@ -126,7 +127,9 @@ function scanTestingType(body: string): TypeCheckResult {
     );
   }
 
-  return signals.length > 0 ? { decision: 'flagged', signals } : { decision: 'none' };
+  return signals.length > 0
+    ? { decision: 'flagged', signals }
+    : { decision: 'none' };
 }
 
 /** Scan a task body for type/content mismatches. Exempt types return {decision: 'n/a'}. */
