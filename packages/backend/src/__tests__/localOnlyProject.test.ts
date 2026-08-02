@@ -194,17 +194,21 @@ describe('Project config schema — gitMode field', () => {
       updatedAt: 1000,
       milestones: [],
     });
-    const res = await supertest(buildProjectApp())
-      .post('/api/projects')
-      .send({ name: 'Test', projectDir: testProjectDir, gitMode: 'local-only' });
+    const res = await supertest(buildProjectApp()).post('/api/projects').send({
+      name: 'Test',
+      projectDir: testProjectDir,
+      gitMode: 'local-only',
+    });
     expect(res.status).toBe(201);
     expect(res.body.gitMode).toBe('local-only');
   });
 
   it('rejects invalid gitMode value', async () => {
-    const res = await supertest(buildProjectApp())
-      .post('/api/projects')
-      .send({ name: 'Test', projectDir: testProjectDir, gitMode: 'remote-only' });
+    const res = await supertest(buildProjectApp()).post('/api/projects').send({
+      name: 'Test',
+      projectDir: testProjectDir,
+      gitMode: 'remote-only',
+    });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/gitMode/);
   });
@@ -266,7 +270,12 @@ describe('gitMode and taskSource independence', () => {
       });
       const res = await supertest(buildProjectApp())
         .post('/api/projects')
-        .send({ name: 'Test', projectDir: testProjectDir, gitMode, taskSource });
+        .send({
+          name: 'Test',
+          projectDir: testProjectDir,
+          gitMode,
+          taskSource,
+        });
       expect(res.status).toBe(201);
       expect(res.body.gitMode).toBe(gitMode);
       expect(res.body.taskSource).toBe(taskSource);
