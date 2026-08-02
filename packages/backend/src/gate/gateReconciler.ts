@@ -687,7 +687,7 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
       gateItemId =
         typeof payload.gateItemId === 'string' ? payload.gateItemId : null;
     } catch {
-      gateItemId = null;
+      // Malformed payload — leave gateItemId null, treated as "backing item no longer exists" below.
     }
     const item = gateItemId ? gateStore.getItem(gateItemId) : undefined;
     const stillLive =
