@@ -7,7 +7,7 @@ export interface PanelKeyboardItem {
 }
 
 /** One row of the panel's keyboard-shortcut hint list (e.g. shown in a ShortcutHint overlay). */
-export interface PanelKeyboardHint {
+interface PanelKeyboardHint {
   key: string;
   description: string;
 }
