@@ -11,6 +11,8 @@ import {
 } from '../db/queries';
 import type { WorktreeEscapeViolation, SessionEvent } from '../db/types';
 import { eventKind } from './eventKind';
+import { isCodeSession } from './sessionPredicates';
+import { sessionDidWork } from './sessionLifecycle';
 
 // ── Public interfaces ────────────────────────────────────────────────────────
 
@@ -162,12 +164,21 @@ export class SessionAuditor {
     let prTargetsBranch: string | null = null;
     let specMismatch: string | null = null;
 
-    // 1. PR opened on clean exit?
+    // 1. PR opened on clean exit? Only meaningful for session types that
+    // actually open a PR — a stage-only session (groom/design/ops/split)
+    // is judged by sessionDidWork instead, so this stays correct even if
+    // ever called without the isCodeSession gate its sole caller applies.
     const prOpened =
       session.prUrl != null ||
       (!!session.taskId && getPRByNotionTaskId(session.taskId) != null);
-    if (exitCode === 0 && !prOpened) {
-      violations.push('Clean exit but no PR opened');
+    if (exitCode === 0) {
+      if (isCodeSession(session.sessionType)) {
+        if (!prOpened) {
+          violations.push('Clean exit but no PR opened');
+        }
+      } else if (!sessionDidWork(session.sessionId)) {
+        violations.push('Clean exit but no work done');
+      }
     }
 
     if (session.prUrl && this.githubClient) {

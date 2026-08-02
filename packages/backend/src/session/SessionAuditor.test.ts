@@ -125,6 +125,21 @@ describe('SessionAuditor', () => {
     expect(audit.violations).toContain('Clean exit but no PR opened');
   });
 
+  // ── AC: stage-only session types are judged by sessionDidWork, not a bare
+  // PR-existence check (defense-in-depth for isCodeSession gate loosening) ──
+  it('flags "Clean exit but no work done" (not "no PR opened") for a stage-only session that staged nothing', async () => {
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const session = makeSession({ sessionType: 'design', prUrl: undefined });
+    const audit = await auditor.audit(session, 0);
+
+    expect(audit.violations).not.toContain('Clean exit but no PR opened');
+    expect(audit.violations).toContain('Clean exit but no work done');
+  });
+
   it('does NOT flag "Clean exit but no PR opened" when exitCode is non-zero', async () => {
     const auditor = new SessionAuditor(
       makeNotionClient(),
