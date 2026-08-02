@@ -4,6 +4,7 @@ import type {
   MergeabilityCategory,
   FailingCheck,
   VerifiedFlakyDispositionPayload,
+  FlakeRecoveryOutcome,
 } from './types';
 import { GitHubRateLimitError } from './types';
 import type { SessionManager } from '../session/SessionManager';
@@ -875,6 +876,9 @@ export class PRMergeWatcher extends EventEmitter {
     const pauseStruct = parsePauseReason(pr.pause_reason);
     if (pauseStruct?.reason !== 'ci_failing') return;
 
+    const project = getProjectByGithubRepo(pr.repo);
+    const projectId = project?.id ?? null;
+
     const maxRetries = typedGetSetting('flake_recovery_max_retries');
     if (pr.flake_recovery_attempts >= maxRetries) {
       setPauseReason(
@@ -883,16 +887,35 @@ export class PRMergeWatcher extends EventEmitter {
         'ci_failing',
         'flake-recovery-exhausted',
       );
+      recordEvent({
+        event_type: 'flake_recovery_exhausted',
+        actor_type: 'system',
+        project_id: projectId,
+        task_id: pr.task_id ?? null,
+        payload: {
+          pr_number: pr.pr_number,
+          repo: pr.repo,
+          attempts: pr.flake_recovery_attempts,
+          max_retries: maxRetries,
+        },
+      });
+      this.broadcast({
+        type: 'pr_flake_recovery_exhausted',
+        prNumber: pr.pr_number,
+        repo: pr.repo,
+        attempts: pr.flake_recovery_attempts,
+        maxRetries,
+      });
       logger.warn(
         `[PRMergeWatcher] PR #${pr.pr_number}: flake recovery exhausted (${pr.flake_recovery_attempts}/${maxRetries}) — staying paused`,
       );
       return;
     }
-    incrementFlakeRecoveryAttempts(pr.pr_number, pr.repo);
 
     recordEvent({
       event_type: 'flake_recovery_attempted',
       actor_type: 'system',
+      project_id: projectId,
       task_id: pr.task_id ?? null,
       payload: {
         pr_number: pr.pr_number,
@@ -905,8 +928,7 @@ export class PRMergeWatcher extends EventEmitter {
     });
 
     if (!pr.head_sha) return;
-    const project = getProjectByGithubRepo(pr.repo);
-    let passed: boolean;
+    let outcome: FlakeRecoveryOutcome;
 
     if (payload.disposition.gate === 'f2') {
       if (!project || !pr.session_id || !this.reviewOrchestrator) return;
@@ -921,10 +943,14 @@ export class PRMergeWatcher extends EventEmitter {
         project,
       );
       if (!result) return;
-      passed = result.passed;
+      outcome = result.outcome;
     } else {
+      let rerequestedIds: number[];
       try {
-        await this.github.rerunFailedJobs(pr.head_sha, pr.repo);
+        rerequestedIds = await this.github.rerunFailedJobs(
+          pr.head_sha,
+          pr.repo,
+        );
       } catch (err) {
         logger.warn(
           `[PRMergeWatcher] rerunFailedJobs failed for PR #${pr.pr_number}:`,
@@ -932,18 +958,57 @@ export class PRMergeWatcher extends EventEmitter {
         );
         return;
       }
-      const ciCheckNames = project
-        ? loadOrchestratorConfig(project.projectDir).ci_check_name
-        : [];
-      const category = await this.github.categorizeMergeability(
-        pr.pr_number,
+      // Wait for the rerequested checks to reach a terminal state — reading
+      // categorizeMergeability right after rerequest would observe the
+      // freshly-queued check run's transient state, not its real outcome.
+      await this.github.waitForCheckRunsCompletion(
+        pr.head_sha,
         pr.repo,
-        ciCheckNames,
+        rerequestedIds,
       );
-      passed = category.category !== 'ci_failed';
+
+      // Re-verify head_sha immediately before recording the outcome — a push
+      // that landed mid-rerun means this result no longer speaks to the SHA
+      // the disposition was diagnosed against.
+      const current = await this.github.getPRState(pr.pr_number, pr.repo);
+      if (current.headSha !== pr.head_sha) {
+        outcome = 'inconclusive';
+      } else {
+        const ciCheckNames = project
+          ? loadOrchestratorConfig(project.projectDir).ci_check_name
+          : [];
+        const category = await this.github.categorizeMergeability(
+          pr.pr_number,
+          pr.repo,
+          ciCheckNames,
+        );
+        outcome = category.category !== 'ci_failed' ? 'passed' : 'failed';
+      }
+
+      recordEvent({
+        event_type: 'flake_recovery_ci_rerun',
+        actor_type: 'system',
+        project_id: projectId,
+        task_id: pr.task_id ?? null,
+        payload: {
+          pr_number: pr.pr_number,
+          repo: pr.repo,
+          sha: pr.head_sha,
+          outcome,
+        },
+      });
     }
 
-    if (passed) {
+    if (outcome === 'inconclusive') {
+      logger.info(
+        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run inconclusive (head_sha drifted) — not consuming retry budget`,
+      );
+      return;
+    }
+
+    incrementFlakeRecoveryAttempts(pr.pr_number, pr.repo);
+
+    if (outcome === 'passed') {
       resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
       setPauseReason(pr.pr_number, pr.repo, null);
       this.broadcast({

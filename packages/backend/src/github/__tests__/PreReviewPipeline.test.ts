@@ -1017,7 +1017,7 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
       makeProject(),
     );
 
-    expect(result).toEqual({ passed: true, output: 'ok' });
+    expect(result).toEqual({ outcome: 'passed', passed: true, output: 'ok' });
 
     // Audited: invalidation happened, recorded before the re-run.
     expect(mockDeleteTestResult).toHaveBeenCalledWith(
@@ -1028,6 +1028,7 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
     expect(mockRecordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'flake_recovery_f2_invalidated',
+        project_id: 'proj-1',
         payload: expect.objectContaining({
           prNumber: PR_NUMBER,
           sha: HEAD_SHA,
@@ -1037,10 +1038,11 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
     expect(mockRecordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'flake_recovery_f2_rerun',
+        project_id: 'proj-1',
         payload: expect.objectContaining({
           prNumber: PR_NUMBER,
           sha: HEAD_SHA,
-          passed: true,
+          outcome: 'passed',
         }),
       }),
     );
@@ -1083,5 +1085,38 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
     expect(result).toBeNull();
     expect(mockDeleteTestResult).not.toHaveBeenCalled();
     expect(mockRunTestCommands).not.toHaveBeenCalled();
+  });
+
+  it('records inconclusive when head_sha drifted by the time the re-run completed', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+    });
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const sm = makeSessionManager();
+    const github = {
+      getPRState: vi
+        .fn()
+        .mockResolvedValue({ state: 'open', headSha: 'sha-new-push' }),
+    } as any;
+    const pipeline = new PreReviewPipeline(sm, github);
+
+    const result = await pipeline.rerunFlakyTests(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      WORKTREE,
+      makeProject(),
+    );
+
+    expect(result).toEqual({ outcome: 'inconclusive', passed: true, output: 'ok' });
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'flake_recovery_f2_rerun',
+        payload: expect.objectContaining({ outcome: 'inconclusive' }),
+      }),
+    );
   });
 });

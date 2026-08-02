@@ -322,6 +322,13 @@ export type ServerMessage =
   | { type: 'plan_usage'; usage: PlanUsage }
   | { type: 'error'; message: string }
   | { type: 'pr_pause_cleared'; prNumber: number; repo: string }
+  | {
+      type: 'pr_flake_recovery_exhausted';
+      prNumber: number;
+      repo: string;
+      attempts: number;
+      maxRetries: number;
+    }
   | { type: 'autofix_started'; prNumber: number; repo: string }
   | {
       type: 'autofix_complete';

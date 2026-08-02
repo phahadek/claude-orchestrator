@@ -169,3 +169,11 @@ export interface VerifiedFlakyDispositionPayload {
   headSha: string | null;
   disposition: VerifiedFlakyDisposition;
 }
+
+/**
+ * Outcome of a flake-recovery gate re-run. 'inconclusive' means the PR's
+ * head_sha drifted between kicking off the re-run and reading its result —
+ * a new push landed mid-flight, so the re-run's pass/fail no longer speaks
+ * to the disposition it was meant to verify.
+ */
+export type FlakeRecoveryOutcome = 'passed' | 'failed' | 'inconclusive';
