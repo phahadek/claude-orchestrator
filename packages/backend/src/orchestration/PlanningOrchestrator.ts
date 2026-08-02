@@ -29,7 +29,7 @@ import {
   verifyDispatchedGroupsForSession,
   sessionOwesGatedDesignArtifacts,
   findIncompleteOpsTerminalGroupsForSession,
-  groupHasOpsTerminalMember,
+  isOpsTerminalClosingSetMember,
 } from '../routes/stagedIntents';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { emitTaskUpdated, broadcastTaskStatusChanged } from '../routes/tasks';
@@ -55,12 +55,12 @@ const DESIGN_COMPLETING_REASONS = new Set([
  * a member of one of its ops-terminal closing groups (see
  * groupHasOpsTerminalMember / OPS_TERMINAL_KINDS in routes/stagedIntents.ts).
  *
- * Scoped to the closing group rather than every intent the session ever
+ * Scoped to the closing set rather than every intent the session ever
  * staged: a declined intent that has nothing to do with the closing decision
  * (e.g. an unrelated gate-verify proposal the operator correctly rejected,
  * with the session accounting for that reasoning in its own closing note)
  * must not permanently strand the task at In Progress. A rejected or
- * needs_revision member *inside* the closing group still blocks — it means
+ * needs_revision member *inside* the closing set still blocks — it means
  * the closing decision itself was refused, or is still revisable and the
  * session may yet supersede it.
  */
@@ -68,8 +68,7 @@ function opsSessionHasBlockedClosingGroupMember(sessionId: string): boolean {
   return listStagedIntentsBySession(sessionId).some(
     (i) =>
       (i.state === 'rejected' || i.state === 'needs_revision') &&
-      Boolean(i.group_id) &&
-      groupHasOpsTerminalMember(i.group_id as string),
+      isOpsTerminalClosingSetMember(i),
   );
 }
 

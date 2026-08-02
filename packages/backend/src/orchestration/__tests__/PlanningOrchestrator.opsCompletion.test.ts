@@ -37,7 +37,7 @@ vi.mock('../../routes/stagedIntents', () => ({
   verifyDispatchedGroupsForSession: vi.fn().mockResolvedValue([]),
   sessionOwesGatedDesignArtifacts: vi.fn().mockReturnValue(false),
   findIncompleteOpsTerminalGroupsForSession: vi.fn().mockReturnValue([]),
-  groupHasOpsTerminalMember: vi.fn().mockReturnValue(false),
+  isOpsTerminalClosingSetMember: vi.fn().mockReturnValue(false),
 }));
 
 const updateStatus = vi.fn().mockResolvedValue(undefined);
@@ -62,7 +62,7 @@ import {
 } from '../../db/queries';
 import { getTaskBackend } from '../../tasks/TaskBackend';
 import { emitTaskUpdated } from '../../routes/tasks';
-import { groupHasOpsTerminalMember } from '../../routes/stagedIntents';
+import { isOpsTerminalClosingSetMember } from '../../routes/stagedIntents';
 import {
   PlanningOrchestrator,
   closeDeferredOpsTask,
@@ -155,7 +155,7 @@ beforeEach(() => {
   vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
   vi.mocked(getEntry).mockReturnValue(makeJournalEntry('resolved'));
   vi.mocked(getPRBySessionId).mockReturnValue(null);
-  vi.mocked(groupHasOpsTerminalMember).mockReturnValue(false);
+  vi.mocked(isOpsTerminalClosingSetMember).mockReturnValue(false);
 });
 
 describe('PlanningOrchestrator — ops task completion', () => {
@@ -232,8 +232,8 @@ describe('PlanningOrchestrator — ops task completion', () => {
         group_id: null,
       }),
     ]);
-    vi.mocked(groupHasOpsTerminalMember).mockImplementation(
-      (groupId) => groupId === 'closing-group-1',
+    vi.mocked(isOpsTerminalClosingSetMember).mockImplementation(
+      (row) => row.group_id === 'closing-group-1',
     );
     const orch = new PlanningOrchestrator(sm as any);
 
@@ -271,8 +271,8 @@ describe('PlanningOrchestrator — ops task completion', () => {
         group_id: 'closing-group-1',
       }),
     ]);
-    vi.mocked(groupHasOpsTerminalMember).mockImplementation(
-      (groupId) => groupId === 'closing-group-1',
+    vi.mocked(isOpsTerminalClosingSetMember).mockImplementation(
+      (row) => row.group_id === 'closing-group-1',
     );
     const orch = new PlanningOrchestrator(sm as any);
 
@@ -303,8 +303,8 @@ describe('PlanningOrchestrator — ops task completion', () => {
         group_id: 'closing-group-1',
       }),
     ]);
-    vi.mocked(groupHasOpsTerminalMember).mockImplementation(
-      (groupId) => groupId === 'closing-group-1',
+    vi.mocked(isOpsTerminalClosingSetMember).mockImplementation(
+      (row) => row.group_id === 'closing-group-1',
     );
     const orch = new PlanningOrchestrator(sm as any);
 
@@ -332,8 +332,8 @@ describe('PlanningOrchestrator — ops task completion', () => {
         group_id: null,
       }),
     ]);
-    vi.mocked(groupHasOpsTerminalMember).mockImplementation(
-      (groupId) => groupId === 'closing-group-1',
+    vi.mocked(isOpsTerminalClosingSetMember).mockImplementation(
+      (row) => row.group_id === 'closing-group-1',
     );
 
     await closeDeferredOpsTask(makeTerminalSession());
@@ -375,8 +375,8 @@ describe('PlanningOrchestrator — ops task completion', () => {
         group_id: 'closing-group-1',
       }),
     ]);
-    vi.mocked(groupHasOpsTerminalMember).mockImplementation(
-      (groupId) => groupId === 'closing-group-1',
+    vi.mocked(isOpsTerminalClosingSetMember).mockImplementation(
+      (row) => row.group_id === 'closing-group-1',
     );
 
     await closeDeferredOpsTask(makeTerminalSession());
