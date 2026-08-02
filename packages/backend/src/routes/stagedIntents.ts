@@ -3967,6 +3967,61 @@ async function maybeAutoApproveCapabilityRequest(
 }
 
 /**
+ * Stage-time auto-grant for `gate.accrete`: when the intent's own payload
+ * content-matches the task's currently-stored "### 👁️ Manual verification"
+ * body items, transitions staged -> approved immediately at stage time —
+ * before the intent's group is ever verified or surfaced to the operator —
+ * via autoApproveAccretionRow, the same idempotent transition/annotation/
+ * audit-log helper the turn-end group-verify auto-grant path
+ * (verifyGroup -> checkGroupArmingIntentCompleteness) uses. Unlike that
+ * path, this reads directly off the gate.accrete intent's own payload and a
+ * live task-body fetch — it has no dependency on a sibling task.setStatus
+ * intent's groomingGate payload having been staged yet. A bare 'none'/'n/a'
+ * classification never runs the content-match check (mirrors
+ * checkGroupArmingIntentCompleteness) and falls back to ordinary staged
+ * state, as does a failed match or a task-body fetch failure/timeout — this
+ * never blocks or errors the stage call. Gated entirely off by
+ * runtimeSettings.gate_seed_auto_approve_enabled; off by default.
+ */
+async function maybeAutoApproveGateAccrete(
+  intent: StagedIntent,
+): Promise<StagedIntent> {
+  if (!runtimeSettings.gate_seed_auto_approve_enabled) return intent;
+
+  const payload = intent.payload as GateAccretePayload;
+  if (payload.classification === 'none' || payload.classification === 'n/a') {
+    return intent;
+  }
+
+  let storedBody: string;
+  try {
+    const backend = getTaskBackend(intent.projectId);
+    storedBody = (await backend.fetchTaskPage(payload.sourceTask.id)) ?? '';
+  } catch (err) {
+    logger.error(
+      `[stagedIntents] task-body fetch failed for gate.accrete auto-grant on ${intent.id}: ${err}`,
+    );
+    return intent;
+  }
+
+  const strippedItems = parseManualVerificationItems(storedBody);
+  const accretedItems = payload.items.map((item) => item.text);
+  const match = checkAccretionContentMatch(
+    'gate_contribution',
+    strippedItems,
+    accretedItems,
+  );
+  if (!match.ok) return intent;
+
+  const row = getStagedIntentRow(intent.id);
+  if (!row) return intent;
+  autoApproveAccretionRow(row);
+
+  const approved = getStagedIntentRow(intent.id);
+  return approved ? rowToApi(approved) : intent;
+}
+
+/**
  * Notion's object_not_found message ("Could not find page with ID: X. Make
  * sure the relevant pages and databases are shared with your integration.")
  * is accurate for a genuine sharing gap but is the far more common apply-time
@@ -4360,6 +4415,9 @@ export async function routeStageTimeBlock(
 ): Promise<StagedIntent> {
   if (intent.kind === 'session.requestCapability') {
     return maybeAutoApproveCapabilityRequest(intent, sessionManager);
+  }
+  if (intent.kind === 'gate.accrete') {
+    intent = await maybeAutoApproveGateAccrete(intent);
   }
 
   const checked = await runStageTimeReadyChecks(intent);
