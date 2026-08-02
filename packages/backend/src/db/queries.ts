@@ -5974,7 +5974,7 @@ export const UNATTRIBUTED_MILESTONE_BUCKET = 'unattributed';
  * burndown's awaiting-disposition state) can't drift from the inbox they
  * mirror.
  */
-export const DECISION_INBOX_VISIBLE_STATES: readonly StagedIntentState[] = [
+const DECISION_INBOX_VISIBLE_STATES: readonly StagedIntentState[] = [
   'staged',
   'approved',
   'needs_revision',
