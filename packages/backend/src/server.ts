@@ -78,6 +78,7 @@ import { register as registerWorktreeReconciler } from './orchestration/Worktree
 import {
   register as registerGateReconciler,
   configureGateVerification,
+  configureGateItemMirrorSink,
   reattachOutstandingGateVerifications,
 } from './gate/gateReconciler';
 import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
@@ -101,6 +102,8 @@ import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
 import {
   createStagedIntentsRouter,
   setStagedIntentBroadcast,
+  stageIntent,
+  withdrawGateVerifyMirror,
 } from './routes/stagedIntents';
 import { createOrchestratorMcpRouter } from './mcp/orchestratorMcpServer';
 import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
@@ -577,6 +580,31 @@ const gateVerificationOptions = {
 };
 registerGateReconciler(scheduler, gateVerificationOptions);
 configureGateVerification(gateVerificationOptions);
+
+// Human-Observation mirror sink: surfaces every runnable Human-Observation
+// gate_item as a `gate.verify` staged intent (origin: 'mirror') so it shows
+// up in the Decision Inbox — no headless session can judge rendered UI, so
+// without this it's invisible outside GateReadinessPanel. See
+// gateReconciler.reconcileHumanObservationMirrors, run every reconcile tick.
+configureGateItemMirrorSink({
+  stageMirror(item) {
+    stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      item.project,
+      null,
+      null,
+      `Human-Observation: ${item.text}`,
+      null,
+      null,
+      item.milestone,
+      null,
+    );
+  },
+  retireMirror(intentId, reason) {
+    withdrawGateVerifyMirror(intentId, reason);
+  },
+});
 
 void runBootSequence({
   jsonlReader,

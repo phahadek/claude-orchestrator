@@ -8,9 +8,11 @@ import { getProjectDeployedSha } from '../deploy/deployService';
 import {
   countLivePlanningSessions,
   countLiveVerifySessions,
+  findActiveGateVerifyMirrorForItem,
   getArm,
   getGateItemsWithPendingCapabilityRequest,
   hasLiveVerifySessionForGateItem,
+  listActiveGateVerifyMirrors,
 } from '../db/queries';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
@@ -58,8 +60,14 @@ export interface GateVerificationResult {
    * (like `noted`), leaving the item runnable; nextRunnableGateItems skips
    * it on the next pull until a reclassify/reopen/new-source event
    * supersedes it as the item's latest event.
+   *
+   * `deferred` is only ever reached via an operator-supplied disposition on
+   * a Human-Observation mirror intent (stagedIntents.ts's gate.verify apply
+   * case) — no verifier ever proposes it. It matches GateReadinessPanel's
+   * direct-path "Defer" action: the item resolves to the `deferred` state,
+   * punting it to the next milestone, without filing follow-up work.
    */
-  disposition: 'pass' | 'fail' | 'needs-setup';
+  disposition: 'pass' | 'fail' | 'needs-setup' | 'deferred';
   evidence?: unknown;
   /**
    * Set only when `disposition` is `needs-setup` and the session was never
@@ -220,7 +228,7 @@ export interface GateReconcilerOptions {
 interface ProcessedGateItem {
   itemId: string;
   classification: GateItemClassification;
-  disposition: 'pass' | 'fail' | 'needs-setup';
+  disposition: 'pass' | 'fail' | 'needs-setup' | 'deferred';
   /** Set when this run applied a verifier-proposed self-correction — `classification` above already reflects it. */
   reclassifiedTo?: GateItemClassification;
 }
@@ -468,6 +476,17 @@ export async function routeVerificationResult(
       );
       gateStore.advanceState(item.id, 'open', 'fail', now);
     }
+  } else if (result.disposition === 'deferred') {
+    // Punts to the next milestone — the same disposition
+    // GateReadinessPanel's direct-path "Defer" button writes via
+    // appendGateItemEvent, reached here only from an operator-supplied
+    // mirror disposition (no verifier ever proposes this).
+    appendGateItemEvent(item.id, {
+      disposition: 'deferred',
+      evidence: result.evidence,
+      deploySha: deploySha ?? undefined,
+      unattended,
+    });
   } else {
     // pass — auto-pass is provenance-tagged, never anonymous.
     appendGateItemEvent(item.id, {
@@ -595,6 +614,100 @@ export async function reattachOutstandingGateVerifications(): Promise<void> {
 }
 
 /**
+ * The reconciler's Human-Observation mirror callbacks, wired at server
+ * bootstrap (see server.ts's configureGateItemMirrorSink) to stagedIntents.ts's
+ * stageIntent / withdrawGateVerifyMirror. Kept as an injected interface
+ * rather than a direct import — stagedIntents.ts already imports
+ * routeVerificationResult/defaultFollowupFiler from this module, so a static
+ * import in the other direction would be a cycle.
+ */
+export interface GateItemMirrorSink {
+  /** Stage a `gate.verify` mirror intent (origin: 'mirror', no groupId, no pre-set disposition) for this runnable Human-Observation item. */
+  stageMirror(item: GateItem): void;
+  /** Retire (withdraw) a live mirror intent whose backing gate_item has resolved or been reclassified away from Human-Observation. */
+  retireMirror(intentId: string, reason: string): void;
+}
+
+let configuredMirrorSink: GateItemMirrorSink | null = null;
+
+/** Wires the mirror-staging sink for reconcileHumanObservationMirrors below. */
+export function configureGateItemMirrorSink(sink: GateItemMirrorSink): void {
+  configuredMirrorSink = sink;
+}
+
+export interface GateItemMirrorReconcileResult {
+  staged: string[];
+  retired: string[];
+}
+
+/**
+ * Human-Observation items are excluded from AUTO_RUN_TIERS — no headless
+ * session can judge rendered UI/visual state — so without this they live
+ * only in the gate table, invisible unless an operator happens to browse
+ * GateReadinessPanel filtered to that classification. This mirrors each
+ * runnable, unmirrored Human-Observation item into a staged `gate.verify`
+ * intent (reusing its shape/kind and disposition-routing path, see
+ * stagedIntents.ts's gate.verify apply case) so it surfaces in the Decision
+ * Inbox instead.
+ *
+ * Level-triggered, not edge-triggered: re-evaluated every reconcile tick
+ * (not just on the open->runnable transition) so an item accreted directly
+ * into a runnable state is still caught. Idempotent via
+ * findActiveGateVerifyMirrorForItem's dedup lookup — a gate_item with an
+ * already-live mirror is never re-staged. The companion retire pass rescans
+ * every live mirror each tick (rather than hooking the direct
+ * GateReadinessPanel dispose/reclassify routes individually) so a mirror is
+ * retired however the underlying item left runnable-Human-Observation state
+ * — resolved via the direct panel path, or reclassified away — without a
+ * stale card lingering in the Inbox.
+ */
+export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResult {
+  const staged: string[] = [];
+  const retired: string[] = [];
+  if (!configuredMirrorSink) return { staged, retired };
+  const sink = configuredMirrorSink;
+
+  const runnableHumanObservation = gateStore
+    .listAll()
+    .filter(
+      (item) =>
+        item.classification === 'Human-Observation' &&
+        item.state === 'runnable',
+    );
+  for (const item of runnableHumanObservation) {
+    if (findActiveGateVerifyMirrorForItem(item.id)) continue;
+    sink.stageMirror(item);
+    staged.push(item.id);
+  }
+
+  for (const mirror of listActiveGateVerifyMirrors()) {
+    let gateItemId: string | null = null;
+    try {
+      const payload = JSON.parse(mirror.payload) as { gateItemId?: unknown };
+      gateItemId =
+        typeof payload.gateItemId === 'string' ? payload.gateItemId : null;
+    } catch {
+      // Malformed payload — leave gateItemId null, treated as "backing item no longer exists" below.
+    }
+    const item = gateItemId ? gateStore.getItem(gateItemId) : undefined;
+    const stillLive =
+      item !== undefined &&
+      item.classification === 'Human-Observation' &&
+      item.state === 'runnable';
+    if (stillLive) continue;
+    const reason = !item
+      ? 'backing gate_item no longer exists'
+      : item.classification !== 'Human-Observation'
+        ? `gate_item reclassified to ${item.classification}`
+        : `gate_item resolved to ${item.state}`;
+    sink.retireMirror(mirror.id, reason);
+    retired.push(mirror.id);
+  }
+
+  return { staged, retired };
+}
+
+/**
  * One reconcile tick: for each project with gate items, recomputes runnability
  * against that project's reported-deployed SHA (if any advance is reported),
  * then pulls one classification tier at a time per milestone (never a bulk
@@ -636,6 +749,16 @@ export async function runGateReconcilerTick(
           reopened: [...reconciled.reopened, ...result.reopened],
         }
       : result;
+  }
+
+  // Level-triggered, independent of the auto-run tiers below — runs even
+  // when no verifier is wired, since it stages Decision Inbox cards rather
+  // than dispatching anything.
+  const mirrorResult = reconcileHumanObservationMirrors();
+  if (mirrorResult.staged.length > 0 || mirrorResult.retired.length > 0) {
+    logger.info(
+      `[GateReconciler] Human-Observation mirror pass: staged ${mirrorResult.staged.length}, retired ${mirrorResult.retired.length}`,
+    );
   }
 
   // Keyed by project::milestone, not milestone alone — a milestone display

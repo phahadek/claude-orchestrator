@@ -6238,6 +6238,54 @@ export function findActiveDecisionPickOneForSession(
   }) as StagedIntentRow | undefined;
 }
 
+let _stmtFindActiveGateVerifyMirrorForItem: Database.Statement | null = null;
+
+/**
+ * The standing staged/approved `gate.verify` mirror intent (if any) for a
+ * given gate_item — the dedup slot for the Human-Observation reconciler
+ * mirror step (gateReconciler.ts's mirrorHumanObservationGateItems), which
+ * carries no taskId to key on via findActiveStagedIntentForTask (gate.verify
+ * intents key on payload.gateItemId, not payload.taskId). Scoped to
+ * payload.origin = 'mirror' so a genuine verifier-originated gate.verify
+ * report for the same item (staged before a reclassify, e.g.) is never
+ * mistaken for a live mirror.
+ */
+export function findActiveGateVerifyMirrorForItem(
+  gateItemId: string,
+): StagedIntentRow | undefined {
+  _stmtFindActiveGateVerifyMirrorForItem ??= db.prepare<{
+    gate_item_id: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
+       AND json_extract(payload, '$.origin') = 'mirror'
+       AND json_extract(payload, '$.gateItemId') = @gate_item_id
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+  return _stmtFindActiveGateVerifyMirrorForItem.get({
+    gate_item_id: gateItemId,
+  }) as StagedIntentRow | undefined;
+}
+
+let _stmtListActiveGateVerifyMirrors: Database.Statement | null = null;
+
+/**
+ * Every live (staged/approved) Human-Observation mirror intent, across all
+ * projects — the reconciler's level-triggered retirement scan reads this
+ * each pass to withdraw mirrors whose gate_item has since resolved (via
+ * GateReadinessPanel's direct path) or been reclassified away from
+ * Human-Observation, so a stale card never lingers in the Decision Inbox.
+ */
+export function listActiveGateVerifyMirrors(): StagedIntentRow[] {
+  _stmtListActiveGateVerifyMirrors ??= db.prepare(
+    `SELECT * FROM staged_intent
+     WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
+       AND json_extract(payload, '$.origin') = 'mirror'`,
+  );
+  return _stmtListActiveGateVerifyMirrors.all() as StagedIntentRow[];
+}
+
 /**
  * Enforces the per-intent lifecycle state machine. `committed` is a terminal,
  * immutable state — no outgoing transition is legal. Throws

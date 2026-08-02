@@ -28,7 +28,11 @@ const GATE_ITEM_TIER_DESCRIPTIONS: Record<GateItemClassification, string> = {
     'page. A check that merely requires a live dispatched session to occur ' +
     "is NOT Human-Observation for that reason alone — the session's " +
     'record is readable afterwards, so it belongs under Read-Only (or ' +
-    'Prod-Mutating) instead.',
+    'Prod-Mutating) instead. No headless session can ever verify this tier, ' +
+    'and it surfaces to an operator with no session-generated evidence ' +
+    "trail behind it — so the item's own text must be actionable alone: " +
+    'name exactly what to look at (a URL, page, or rendered state) and ' +
+    'what a passing observation looks like.',
   'needs-triage':
     'The classification is genuinely unknown and must be ' +
     'resolved by a human triage pass before the item can run in any tier.',
