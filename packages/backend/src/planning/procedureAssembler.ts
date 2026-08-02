@@ -1299,6 +1299,7 @@ function renderDocsDigest(data: DocsDigestSlice): string {
     '## Docs Authoring Slice',
     '',
     `- Task: ${data.task.title} (${data.task.type}, ${data.task.status}) — ${data.task.url}`,
+    `- Task id: \`${data.task.id}\``,
     `- Target surface: ${data.targetSurface || '(not declared — stop and ask; do not guess a target surface)'}`,
     `- Source domains: ${data.sourceDomains.length ? data.sourceDomains.join(', ') : '(not declared — stop and ask; do not widen by inference)'}`,
     '',

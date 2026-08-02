@@ -356,6 +356,22 @@ describe('docs digest rendering', () => {
     expect(output).toMatch(/not declared.*stop and ask/i);
   });
 
+  it('renders the Task id line immediately after the Task line, equal to the slice task id verbatim', () => {
+    const data = deriveDocsDigestSlice(fixtureDocsLoadResult());
+    const digest: PlanningDigest = { workflow: 'docs', data };
+    const output = assemblePlanningProcedure({
+      taskName: 'Document the webhooks API',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    const lines = output.split('\n');
+    const taskLineIndex = lines.findIndex((l) => l.startsWith('- Task: '));
+    expect(taskLineIndex).toBeGreaterThan(-1);
+    expect(lines[taskLineIndex + 1]).toBe(`- Task id: \`${data.task.id}\``);
+  });
+
   it('renders a non-empty ### Hard rules section for a dispatched docs session — regression guard for docs having zero principlesFor/stepsFor entries', () => {
     const digest: PlanningDigest = {
       workflow: 'docs',
@@ -527,6 +543,34 @@ describe('assemblePlanningProcedure', () => {
     });
     expect(output).toContain('## Split Candidate Slice');
     expect(output).toContain(`- Task id: \`${data.task.id}\``);
+  });
+
+  it('pairs every `- Task:` line with a `- Task id:` line, across all four render sites (groom, design, ops, docs) plus split', () => {
+    const allDigests: PlanningDigest[] = [
+      ...cases.map((c) => c.digest),
+      {
+        workflow: 'docs',
+        data: deriveDocsDigestSlice(fixtureDocsLoadResult()),
+      },
+      {
+        workflow: 'split',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    ];
+    for (const digest of allDigests) {
+      const output = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
+        digest,
+      });
+      const lines = output.split('\n');
+      const taskLines = lines.filter((l) => l.startsWith('- Task: '));
+      const taskIdLines = lines.filter((l) => l.startsWith('- Task id: '));
+      expect(taskLines.length).toBeGreaterThan(0);
+      expect(taskIdLines.length).toBe(taskLines.length);
+    }
   });
 
   it('renders the task id in the exact form the staging tools accept — copyable verbatim into a task.setStatus payload with no transformation', () => {
