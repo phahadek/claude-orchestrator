@@ -6333,6 +6333,37 @@ export function findActiveStagedIntentForTask(
   }) as StagedIntentRow | undefined;
 }
 
+let _stmtListActiveOpsSetStateIntentsForTask: Database.Statement | null = null;
+
+/**
+ * Live (staged/approved) journal.setState intents for a task, oldest first —
+ * the in-flight ops-journal transition chain a session may be building up
+ * within one turn (e.g. pending -> candidate staged, then candidate ->
+ * resolved staged in the same closing group). Used to fold the effective
+ * "current" state a new journal.setState should be validated against at
+ * stage time, since the applied row alone only reflects the last *applied*
+ * hop, not staged-but-not-yet-applied ones. See
+ * ops/opsJournal.ts's foldOpsTransitionChain.
+ */
+export function listActiveOpsSetStateIntentsForTask(
+  projectId: string,
+  taskId: string,
+): StagedIntentRow[] {
+  _stmtListActiveOpsSetStateIntentsForTask ??= db.prepare<{
+    project_id: string;
+    task_id: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE project_id = @project_id AND task_id = @task_id AND kind = 'journal.setState'
+       AND state IN ('staged', 'approved')
+     ORDER BY created_at ASC`,
+  );
+  return _stmtListActiveOpsSetStateIntentsForTask.all({
+    project_id: projectId,
+    task_id: taskId,
+  }) as StagedIntentRow[];
+}
+
 let _stmtFindActiveStagedIntentByTitleForSession: Database.Statement | null =
   null;
 

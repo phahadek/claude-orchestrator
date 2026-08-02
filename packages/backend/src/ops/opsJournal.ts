@@ -92,6 +92,43 @@ export function isValidOpsTransition(from: OpsState, to: OpsState): boolean {
   return ALLOWED_TRANSITIONS[from].includes(to);
 }
 
+/**
+ * Thrown by foldOpsTransitionChain when a hop within the chain itself is
+ * illegal — in practice unreachable from the stage-time caller, which only
+ * ever folds a chain of already-individually-validated staged intents, but
+ * kept as a hard failure (rather than silently stopping the fold) so a bug
+ * upstream surfaces immediately instead of validating the next hop against
+ * the wrong state.
+ */
+export class InvalidOpsTransitionChainError extends Error {
+  constructor(from: OpsState, to: OpsState) {
+    super(`ops_journal: invalid transition ${from} -> ${to} in staged chain`);
+    this.name = 'InvalidOpsTransitionChainError';
+  }
+}
+
+/**
+ * The state a sequence of not-yet-applied journal.setState targets would
+ * leave an entry in, folding forward from `from` one hop at a time via
+ * isValidOpsTransition — the chain-aware read that lets a staged (but not
+ * yet applied) transition serve as the "current state" for validating the
+ * next staged transition in the same turn, instead of only ever reading the
+ * applied row. An empty chain returns `from` unchanged.
+ */
+export function foldOpsTransitionChain(
+  from: OpsState,
+  chain: readonly OpsState[],
+): OpsState {
+  let current = from;
+  for (const next of chain) {
+    if (!isValidOpsTransition(current, next)) {
+      throw new InvalidOpsTransitionChainError(current, next);
+    }
+    current = next;
+  }
+  return current;
+}
+
 function parseJson(value: string | null): unknown {
   if (value === null) return undefined;
   try {

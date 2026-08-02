@@ -54,6 +54,7 @@ import {
   listStagedIntentsByGroup,
   listStagedIntentsBySession,
   findActiveStagedIntentForTask,
+  listActiveOpsSetStateIntentsForTask,
   findActiveStagedIntentByTitleForSession,
   findActiveDecisionPickOneForSession,
   transitionStagedIntent,
@@ -87,6 +88,7 @@ import {
   setEntryState,
   getEntry as getOpsJournalEntry,
   isValidOpsTransition,
+  foldOpsTransitionChain,
   ALLOWED_TRANSITIONS,
   type OpsState,
   type OpsJournalEntry,
@@ -1910,15 +1912,68 @@ class InvestigationAccretionRejectedError extends Error {
 }
 
 /**
+ * The state a new journal.setState intent for `taskId` should be validated
+ * against at stage time — the applied row's state, folded forward through
+ * any journal.setState intents this task already has live-staged (in
+ * created_at order) via foldOpsTransitionChain. This is what lets a session
+ * stage pending -> candidate and then candidate -> resolved in the same
+ * turn/group: the second stage call reads the first's staged (not yet
+ * applied) target as its effective "current" state, rather than only ever
+ * reading the still-`pending` applied row. Falls back to the applied state
+ * unchanged if the chain itself is somehow invalid (each prior link was
+ * already validated when it was staged, so this is defense-in-depth, not the
+ * expected path).
+ */
+function effectiveOpsStateForStaging(
+  projectId: string,
+  taskId: string,
+  appliedState: OpsState,
+): OpsState {
+  const priorTargets = listActiveOpsSetStateIntentsForTask(
+    projectId,
+    taskId,
+  ).map((row) => (JSON.parse(row.payload) as { state?: OpsState }).state);
+  const chain = priorTargets.filter((s): s is OpsState => s !== undefined);
+  try {
+    return foldOpsTransitionChain(appliedState, chain);
+  } catch {
+    return appliedState;
+  }
+}
+
+/**
+ * The dedup slot for a journal.setState intent — unlike
+ * findActiveStagedIntentForTask's generic (project, kind, taskId) key, this
+ * also matches on the target state. journal.setState is the one kind whose
+ * live staged rows for the same task are meant to form a chain (pending ->
+ * candidate staged alongside candidate -> resolved in the same closing
+ * group), not a single standing decision superseded by whatever is staged
+ * next — so only a re-stage of the *same* target state should supersede the
+ * prior one; a different target state is a new link in the chain and must
+ * coexist as its own live row for commitGroupIntents to apply in order.
+ */
+function findActiveStagedOpsTransitionForState(
+  projectId: string,
+  taskId: string,
+  targetState: string,
+): StagedIntentRow | undefined {
+  return listActiveOpsSetStateIntentsForTask(projectId, taskId).find(
+    (row) => (JSON.parse(row.payload) as { state?: string }).state === targetState,
+  );
+}
+
+/**
  * Thrown when a journal.setState intent's transition is illegal from the
- * journal's *current* state at stage time — the same authority
- * (`isValidOpsTransition`, reading `ALLOWED_TRANSITIONS`) apply time already
- * enforces, run here so the session (or the operator reviewing the decision
- * surface) sees the rejection immediately rather than after an operator
- * disposition has been spent staging/approving an intent that can never
- * apply. This never replaces the apply-time check in setEntryState — the
- * journal's state can still change between stage and apply (e.g. a sibling
- * intent applies first), so apply time remains the sole hard authority.
+ * journal's *effective* state at stage time — the applied state folded
+ * forward through this task's already-staged journal.setState chain (see
+ * effectiveOpsStateForStaging) — the same authority (`isValidOpsTransition`,
+ * reading `ALLOWED_TRANSITIONS`) apply time already enforces, run here so the
+ * session (or the operator reviewing the decision surface) sees the
+ * rejection immediately rather than after an operator disposition has been
+ * spent staging/approving an intent that can never apply. This never
+ * replaces the apply-time check in setEntryState — the journal's state can
+ * still change between stage and apply (e.g. a sibling intent applies
+ * first), so apply time remains the sole hard authority.
  */
 class OpsJournalTransitionRejectedError extends Error {
   constructor(taskId: string, from: OpsState, to: OpsState) {
@@ -2097,12 +2152,19 @@ export async function validateAndNormalizeTaskReferences(
     if (typeof p?.taskId === 'string' && typeof p?.state === 'string') {
       const entry = getOpsJournalEntry(p.taskId);
       const targetState = p.state as OpsState;
-      if (entry && !isValidOpsTransition(entry.state, targetState)) {
-        throw new OpsJournalTransitionRejectedError(
+      if (entry) {
+        const effectiveFrom = effectiveOpsStateForStaging(
+          projectId,
           p.taskId,
           entry.state,
-          targetState,
         );
+        if (!isValidOpsTransition(effectiveFrom, targetState)) {
+          throw new OpsJournalTransitionRejectedError(
+            p.taskId,
+            effectiveFrom,
+            targetState,
+          );
+        }
       }
     }
   }
@@ -2922,7 +2984,14 @@ export function stageIntent(
   const existing = explicitValid
     ? explicitValid
     : taskId
-      ? findActiveStagedIntentForTask(projectId, kind, taskId)
+      ? kind === 'journal.setState' &&
+        typeof (payload as { state?: unknown } | null)?.state === 'string'
+        ? findActiveStagedOpsTransitionForState(
+            projectId,
+            taskId,
+            (payload as { state: string }).state,
+          )
+        : findActiveStagedIntentForTask(projectId, kind, taskId)
       : promptKey && sessionId
         ? findActiveDecisionPickOneForSession(sessionId, promptKey)
         : titleKey && sessionId

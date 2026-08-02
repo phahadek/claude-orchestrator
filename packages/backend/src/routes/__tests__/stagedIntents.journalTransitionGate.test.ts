@@ -270,4 +270,126 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
       .get('task-3') as { state: string };
     expect(row.state).toBe('resolved');
   });
+
+  function journalState(taskId: string): string {
+    return (
+      db
+        .prepare('SELECT state FROM ops_journal WHERE task_id = ?')
+        .get(taskId) as { state: string }
+    ).state;
+  }
+
+  describe('staged closing-set chains (candidate + resolved in one group)', () => {
+    it('stages candidate and resolved in one group and commits through the chain in order', async () => {
+      const app = buildApp();
+      seedEntry('task-chain-1', 'pending');
+      const groupId = 'group-chain-1';
+
+      const candidateRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-chain-1', state: 'candidate' },
+          projectId: 'proj-1',
+          groupId,
+        });
+      expect(candidateRes.status).toBe(201);
+
+      // The applied row is still "pending" here — this stage call only
+      // succeeds because it is validated against the effective state the
+      // just-staged candidate transition would produce, not the applied row.
+      const resolvedRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-chain-1', state: 'resolved' },
+          projectId: 'proj-1',
+          groupId,
+        });
+      expect(resolvedRes.status).toBe(201);
+      expect(resolvedRes.body.id).not.toBe(candidateRes.body.id);
+
+      // Both hops coexist as live siblings — the second did not supersede
+      // the first.
+      const liveMembers = db
+        .prepare(
+          `SELECT id FROM staged_intent WHERE group_id = ? AND state IN ('staged','approved')`,
+        )
+        .all(groupId);
+      expect(liveMembers).toHaveLength(2);
+
+      const commitRes = await supertest(app)
+        .post(`/api/staged-intents/group/${groupId}/approve`)
+        .send({});
+      expect(commitRes.status).toBe(200);
+      expect(journalState('task-chain-1')).toBe('resolved');
+    });
+
+    it('rejects an illegal hop from the staged-chain effective state and never stages it', async () => {
+      const app = buildApp();
+      seedEntry('task-chain-2', 'pending');
+      const groupId = 'group-chain-2';
+
+      const candidateRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-chain-2', state: 'candidate' },
+          projectId: 'proj-1',
+          groupId,
+        });
+      expect(candidateRes.status).toBe(201);
+
+      // applied-pending-confirm is not reachable directly from "candidate"
+      // (must pass through staged-proposal) — rejected, naming the staged
+      // effective state ("candidate"), not the still-applied "pending" one.
+      const illegalRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-chain-2', state: 'applied-pending-confirm' },
+          projectId: 'proj-1',
+          groupId,
+        });
+      expect(illegalRes.status).toBe(400);
+      expect(illegalRes.body.error).toContain('"candidate" -> "applied-pending-confirm"');
+
+      // Never staged — the group carries only the legal candidate hop.
+      const members = db
+        .prepare(`SELECT kind FROM staged_intent WHERE group_id = ?`)
+        .all(groupId);
+      expect(members).toHaveLength(1);
+
+      // The group commits fine on just its one legal member — the illegal
+      // hop never entered it, so there is nothing left to partially apply.
+      const commitRes = await supertest(app)
+        .post(`/api/staged-intents/group/${groupId}/approve`)
+        .send({});
+      expect(commitRes.status).toBe(200);
+      expect(journalState('task-chain-2')).toBe('candidate');
+    });
+
+    it('rejects a direct illegal single-hop transition within a group, with no prior staged transition', async () => {
+      const app = buildApp();
+      seedEntry('task-chain-3', 'pending');
+      const groupId = 'group-chain-3';
+
+      const res = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-chain-3', state: 'applied-pending-confirm' },
+          projectId: 'proj-1',
+          groupId,
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('"pending" -> "applied-pending-confirm"');
+      expect(res.body.error).toContain('Current state is "pending"');
+
+      const rows = db
+        .prepare(`SELECT * FROM staged_intent WHERE group_id = ?`)
+        .all(groupId);
+      expect(rows).toHaveLength(0);
+    });
+  });
 });
