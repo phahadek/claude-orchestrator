@@ -69,9 +69,30 @@ describe('getFlakeRecoveryMisclassificationRates', () => {
     expect(result).toHaveLength(3);
     expect(result).toEqual(
       expect.arrayContaining([
-        { project: 'proj-1', gate: 'ci', conclusive: 1, failed: 0, inconclusive: 0, rate: 0 },
-        { project: 'proj-1', gate: 'f2', conclusive: 1, failed: 1, inconclusive: 0, rate: 1 },
-        { project: 'proj-2', gate: 'ci', conclusive: 1, failed: 1, inconclusive: 0, rate: 1 },
+        {
+          project: 'proj-1',
+          gate: 'ci',
+          conclusive: 1,
+          failed: 0,
+          inconclusive: 0,
+          rate: 0,
+        },
+        {
+          project: 'proj-1',
+          gate: 'f2',
+          conclusive: 1,
+          failed: 1,
+          inconclusive: 0,
+          rate: 1,
+        },
+        {
+          project: 'proj-2',
+          gate: 'ci',
+          conclusive: 1,
+          failed: 1,
+          inconclusive: 0,
+          rate: 1,
+        },
       ]),
     );
   });
@@ -98,7 +119,14 @@ describe('getFlakeRecoveryMisclassificationRates', () => {
 
     const result = getFlakeRecoveryMisclassificationRates('proj-1');
     expect(result).toEqual([
-      { project: 'proj-1', gate: 'ci', conclusive: 1, failed: 1, inconclusive: 0, rate: 1 },
+      {
+        project: 'proj-1',
+        gate: 'ci',
+        conclusive: 1,
+        failed: 1,
+        inconclusive: 0,
+        rate: 1,
+      },
     ]);
   });
 
@@ -108,7 +136,14 @@ describe('getFlakeRecoveryMisclassificationRates', () => {
       actor_type: 'system',
       project_id: 'proj-1',
       task_id: null,
-      payload: { pr_number: 1, repo: 'org/repo', sha: 'abc123', gate: 'ci', reason: 'x', attempt: 1 },
+      payload: {
+        pr_number: 1,
+        repo: 'org/repo',
+        sha: 'abc123',
+        gate: 'ci',
+        reason: 'x',
+        attempt: 1,
+      },
     });
     recordEvent({
       event_type: 'flake_recovery_exhausted',
