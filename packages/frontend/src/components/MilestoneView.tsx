@@ -209,6 +209,7 @@ export function MilestoneView({
       />
       <FlowArmToggle
         milestoneId={activeBoardId}
+        projectId={activeProjectId}
         autoLaunchEnabled={project?.autoLaunchEnabled}
       />
     </>
