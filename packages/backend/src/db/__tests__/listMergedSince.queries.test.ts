@@ -13,7 +13,12 @@ vi.mock('../db.js', async () => {
 });
 
 import { db } from '../db.js';
-import { insertProject, insertSession, insertLocalBranch, listMergedSince } from '../queries.js';
+import {
+  insertProject,
+  insertSession,
+  insertLocalBranch,
+  listMergedSince,
+} from '../queries.js';
 
 function insertPR(overrides: {
   pr_number: number;

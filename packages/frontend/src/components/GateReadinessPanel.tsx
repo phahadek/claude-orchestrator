@@ -1102,9 +1102,7 @@ export function GateReadinessPanel({
                 <button
                   className={styles.deployButton}
                   onClick={launchDeploy}
-                  disabled={
-                    deployLaunching || deployRun?.status === 'running'
-                  }
+                  disabled={deployLaunching || deployRun?.status === 'running'}
                   data-testid="deploy-launch-button"
                 >
                   {deployRun?.status === 'running'
@@ -1115,9 +1113,7 @@ export function GateReadinessPanel({
                   type="button"
                   className={styles.deployButton}
                   onClick={() => setDeployConfirmArmed(false)}
-                  disabled={
-                    deployLaunching || deployRun?.status === 'running'
-                  }
+                  disabled={deployLaunching || deployRun?.status === 'running'}
                   data-testid="deploy-cancel-confirm-button"
                 >
                   Cancel
@@ -1163,7 +1159,10 @@ export function GateReadinessPanel({
               : `Never deployed through this system — ${deployBehind.count} merged`}
           </p>
           {deployConfirmArmed && deployBehind.items.length > 0 && (
-            <ul className={styles.deployEventList} data-testid="deploy-behind-list">
+            <ul
+              className={styles.deployEventList}
+              data-testid="deploy-behind-list"
+            >
               {deployBehind.items.map((item, index) => (
                 <li key={`${item.kind}-${index}`}>
                   {item.kind === 'pr' ? (
@@ -1171,7 +1170,10 @@ export function GateReadinessPanel({
                       #{item.prNumber} {item.title ?? item.prUrl}
                     </a>
                   ) : (
-                    <span>{item.branchName}{item.title ? ` — ${item.title}` : ''}</span>
+                    <span>
+                      {item.branchName}
+                      {item.title ? ` — ${item.title}` : ''}
+                    </span>
                   )}
                 </li>
               ))}
