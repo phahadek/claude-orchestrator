@@ -398,3 +398,58 @@ export function hasPrBodyMarkerUpdateSinceTimestamp(
     .get(taskId, sinceTs);
   return row !== undefined;
 }
+
+/** One capability_request_disposition row's mining-relevant fields, in emission order. */
+export interface CapabilityDispositionEvent {
+  id: number;
+  projectId: string;
+  capability: string;
+  disposition:
+    | 'auto_approved'
+    | 'operator_approved'
+    | 'operator_denied'
+    | 'declined';
+}
+
+/**
+ * Returns every capability_request_disposition audit_log row across all
+ * projects, oldest first — the evidence trail the auto-allow suggestion
+ * miner (routes/settings.ts) folds over to compute per-(project, capability)
+ * approval streaks. `task_id` is never read here: a capability request is
+ * session-scoped, not task-scoped (see resumeCapabilityRequester, the sole
+ * emission site — task_id is always null on these rows). Rows with no
+ * project_id or a payload missing `capability`/`disposition` are skipped —
+ * they carry nothing a (project_id, capability) key can be derived from.
+ */
+export function getCapabilityDispositionEvents(): CapabilityDispositionEvent[] {
+  const rows = db
+    .prepare<
+      [],
+      AuditRow
+    >(`SELECT * FROM audit_log WHERE event_type = 'capability_request_disposition' ORDER BY id ASC`)
+    .all();
+  const events: CapabilityDispositionEvent[] = [];
+  for (const r of rows) {
+    if (!r.project_id) continue;
+    const payload = JSON.parse(r.payload) as {
+      capability?: string;
+      disposition?: string;
+    };
+    if (!payload.capability) continue;
+    if (
+      payload.disposition !== 'auto_approved' &&
+      payload.disposition !== 'operator_approved' &&
+      payload.disposition !== 'operator_denied' &&
+      payload.disposition !== 'declined'
+    ) {
+      continue;
+    }
+    events.push({
+      id: r.id,
+      projectId: r.project_id,
+      capability: payload.capability,
+      disposition: payload.disposition,
+    });
+  }
+  return events;
+}
