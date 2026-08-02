@@ -1,19 +1,55 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { FLOW_IDS } from '@claude-orchestrator/backend/src/orchestration/flowArm';
 import type { FlowId } from '@claude-orchestrator/backend/src/orchestration/flowArm';
 import { flowArmApi, type FlowArmState } from '../api/flowArm';
+import {
+  gateApi,
+  TRUST_PRECISION_FLOWS,
+  type FlowRejectionRateResult,
+  type TrustPrecisionFlow,
+} from '../api/gate';
 import styles from './FlowArmToggle.module.css';
 
 interface Props {
   milestoneId: string | null;
+  /** Scopes the per-flow trust-rate read; the milestone UUID is passed through unconverted (resolveMilestoneForProject translates it server-side). */
+  projectId?: string | null;
   /** The project's code-level autoLaunchEnabled flag, surfaced alongside per-flow arm — see the arm-model design's "independence surprise" mitigation. */
   autoLaunchEnabled?: boolean;
 }
 
-export function FlowArmToggle({ milestoneId, autoLaunchEnabled }: Props) {
+function hasTrustMetric(flow: FlowId): flow is TrustPrecisionFlow {
+  return (TRUST_PRECISION_FLOWS as readonly string[]).includes(flow);
+}
+
+function hueForRate(rate: number): number {
+  const clamped = Math.min(1, Math.max(0, rate));
+  return 120 - 120 * clamped;
+}
+
+/** Green→red ramp by rate, heavily desaturated toward grey when disarmed, bright when armed. */
+function ratedBackground(rate: number, armed: boolean): string {
+  const hue = hueForRate(rate);
+  return armed ? `hsl(${hue}, 65%, 42%)` : `hsl(${hue}, 16%, 28%)`;
+}
+
+/** A neutral, non-ramp tint for "no data yet" — distinct from both a good (green) score and the achromatic disarmed grey. */
+function noDataBackground(armed: boolean): string {
+  return armed ? 'hsl(228, 24%, 42%)' : 'hsl(228, 12%, 26%)';
+}
+
+function formatRate(result: FlowRejectionRateResult): string {
+  if (result.rate === null) return 'no data';
+  return `${Math.round(result.rate * 100)}% (${result.rejected}/${result.total})`;
+}
+
+export function FlowArmToggle({ milestoneId, projectId = null, autoLaunchEnabled }: Props) {
   const [state, setState] = useState<FlowArmState | null>(null);
   const [pending, setPending] = useState<Partial<Record<FlowId, boolean>>>({});
   const [error, setError] = useState<string | null>(null);
+  const [trustRates, setTrustRates] = useState<
+    Partial<Record<TrustPrecisionFlow, FlowRejectionRateResult>>
+  >({});
 
   useEffect(() => {
     setState(null);
@@ -36,6 +72,33 @@ export function FlowArmToggle({ milestoneId, autoLaunchEnabled }: Props) {
       cancelled = true;
     };
   }, [milestoneId]);
+
+  useEffect(() => {
+    setTrustRates({});
+    if (!projectId || !milestoneId) return;
+
+    let cancelled = false;
+    Promise.all(
+      TRUST_PRECISION_FLOWS.map((flow) =>
+        gateApi
+          .getFlowRejectionRate(projectId, milestoneId, flow)
+          .then((result) => [flow, result] as const)
+          .catch(() => null),
+      ),
+    ).then((results) => {
+      if (cancelled) return;
+      const next: Partial<Record<TrustPrecisionFlow, FlowRejectionRateResult>> =
+        {};
+      for (const entry of results) {
+        if (entry) next[entry[0]] = entry[1];
+      }
+      setTrustRates(next);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, milestoneId]);
 
   if (!milestoneId) return null;
 
@@ -82,6 +145,29 @@ export function FlowArmToggle({ milestoneId, autoLaunchEnabled }: Props) {
           const entry = state?.[flow];
           const armed = entry?.armed ?? false;
           const isPending = pending[flow] === true;
+          const metricFlow = hasTrustMetric(flow);
+          const trustResult = metricFlow ? trustRates[flow] : undefined;
+
+          let toggleClassName = `${styles.toggle} ${armed ? styles.toggleArmed : ''}`;
+          let toggleStyle: CSSProperties | undefined;
+          let rateLabel: string | null = null;
+          let rateAccessibleLabel = '';
+
+          if (metricFlow) {
+            if (trustResult && trustResult.rate !== null) {
+              toggleClassName += ` ${styles.toggleRated}`;
+              toggleStyle = { backgroundColor: ratedBackground(trustResult.rate, armed) };
+              rateLabel = formatRate(trustResult);
+              rateAccessibleLabel = `, trust rate ${rateLabel}`;
+            } else {
+              toggleClassName += ` ${styles.toggleNoData}`;
+              toggleStyle = { backgroundColor: noDataBackground(armed) };
+              rateLabel = 'no data';
+              rateAccessibleLabel = ', trust rate no data';
+            }
+          } else {
+            toggleClassName += ` ${styles.toggleNoMetric}`;
+          }
 
           return (
             <div
@@ -94,13 +180,24 @@ export function FlowArmToggle({ milestoneId, autoLaunchEnabled }: Props) {
                 type="button"
                 role="switch"
                 aria-checked={armed}
-                aria-label={`Toggle auto-dispatch arm for ${flow}`}
+                aria-label={`Toggle auto-dispatch arm for ${flow}${rateAccessibleLabel}`}
                 disabled={!state || isPending}
-                className={`${styles.toggle} ${armed ? styles.toggleArmed : ''}`}
+                className={toggleClassName}
+                style={toggleStyle}
                 data-testid={`flow-arm-switch-${flow}`}
                 onClick={() => handleToggle(flow, !armed)}
               >
-                {armed ? 'Armed' : 'Disarmed'}
+                <span className={styles.toggleText}>
+                  {armed ? 'Armed' : 'Disarmed'}
+                </span>
+                {rateLabel && (
+                  <span
+                    className={styles.rateLabel}
+                    data-testid={`flow-arm-rate-${flow}`}
+                  >
+                    {rateLabel}
+                  </span>
+                )}
               </button>
             </div>
           );

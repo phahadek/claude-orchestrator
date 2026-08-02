@@ -9,9 +9,24 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { FlowArmToggle } from '../FlowArmToggle';
 import { flowArmApi, type FlowArmState } from '../../api/flowArm';
 import { FLOW_IDS } from '@claude-orchestrator/backend/src/orchestration/flowArm';
+import type { FlowRejectionRateResult } from '../../api/gate';
+
+const getFlowRejectionRateMock = vi.hoisted(() => vi.fn());
+vi.mock('../../api/gate', async () => {
+  const actual =
+    await vi.importActual<typeof import('../../api/gate')>('../../api/gate');
+  return {
+    ...actual,
+    gateApi: {
+      ...actual.gateApi,
+      getFlowRejectionRate: getFlowRejectionRateMock,
+    },
+  };
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
+  getFlowRejectionRateMock.mockReset();
 });
 
 function makeState(overrides: Partial<FlowArmState> = {}): FlowArmState {
@@ -21,6 +36,31 @@ function makeState(overrides: Partial<FlowArmState> = {}): FlowArmState {
     design: { armed: false, source: 'default' },
     ops: { armed: false, source: 'default' },
     docs: { armed: false, source: 'default' },
+    ...overrides,
+  };
+}
+
+function parseRgb(color: string): { r: number; g: number; b: number } {
+  const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (!match) throw new Error(`unparseable color: ${color}`);
+  return { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]) };
+}
+
+/** Spread between the loudest and quietest channel — a rough saturation proxy for an achromatic-vs-tinted comparison in jsdom, which normalizes inline hsl() styles to rgb(). */
+function channelSpread({ r, g, b }: { r: number; g: number; b: number }): number {
+  return Math.max(r, g, b) - Math.min(r, g, b);
+}
+
+function makeTrustRate(
+  overrides: Partial<FlowRejectionRateResult> = {},
+): FlowRejectionRateResult {
+  return {
+    flow: 'groom',
+    project: 'proj',
+    milestone: 'm1',
+    total: 10,
+    rejected: 1,
+    rate: 0.1,
     ...overrides,
   };
 }
@@ -140,5 +180,152 @@ describe('FlowArmToggle', () => {
     expect(
       screen.getByTestId('flow-arm-switch-design').getAttribute('aria-checked'),
     ).toBe('false');
+  });
+
+  it('passes the milestoneId through unconverted to the trust-rate read', async () => {
+    vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+    getFlowRejectionRateMock.mockResolvedValue(makeTrustRate());
+
+    render(
+      <FlowArmToggle
+        milestoneId="a3f9c1d2-uuid-not-short-id"
+        projectId="proj"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getFlowRejectionRateMock).toHaveBeenCalledWith(
+        'proj',
+        'a3f9c1d2-uuid-not-short-id',
+        'groom',
+      );
+    });
+  });
+
+  it('tints an arm button on a ramp where a low rejection rate renders green and a high rate renders red', async () => {
+    vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+    getFlowRejectionRateMock.mockImplementation(
+      (_project: string, _milestone: string, flow: string) =>
+        Promise.resolve(
+          flow === 'groom'
+            ? makeTrustRate({ flow: 'groom', total: 100, rejected: 1, rate: 0.01 })
+            : makeTrustRate({ flow: flow as never, total: 100, rejected: 95, rate: 0.95 }),
+        ),
+    );
+
+    render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('flow-arm-rate-groom').textContent).toContain(
+        '1%',
+      );
+    });
+
+    const lowRateButton = screen.getByTestId('flow-arm-switch-groom');
+    const highRateButton = screen.getByTestId('flow-arm-switch-design');
+
+    const lowRgb = parseRgb(lowRateButton.style.backgroundColor);
+    const highRgb = parseRgb(highRateButton.style.backgroundColor);
+
+    // Low rate (good) leans green; high rate (bad) leans red.
+    expect(lowRgb.g).toBeGreaterThan(lowRgb.r);
+    expect(highRgb.r).toBeGreaterThan(highRgb.g);
+  });
+
+  it('renders the same rate desaturated/grey when disarmed and bright when armed', async () => {
+    vi.spyOn(flowArmApi, 'get').mockResolvedValue(
+      makeState({
+        groom: { armed: false, source: 'default' },
+        design: { armed: true, source: 'row' },
+      }),
+    );
+    getFlowRejectionRateMock.mockImplementation(
+      (_project: string, _milestone: string, flow: string) =>
+        Promise.resolve(makeTrustRate({ flow: flow as never, rate: 0.5 })),
+    );
+
+    render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('flow-arm-switch-groom').getAttribute('aria-checked'),
+      ).toBe('false');
+    });
+
+    const disarmed = screen.getByTestId('flow-arm-switch-groom');
+    const armed = screen.getByTestId('flow-arm-switch-design');
+
+    const disarmedSpread = channelSpread(
+      parseRgb(disarmed.style.backgroundColor),
+    );
+    const armedSpread = channelSpread(parseRgb(armed.style.backgroundColor));
+
+    expect(armedSpread).toBeGreaterThan(disarmedSpread);
+  });
+
+  it('renders a defined no-metric appearance for docs and issues no trust-rate request for it', async () => {
+    vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+    getFlowRejectionRateMock.mockResolvedValue(makeTrustRate());
+
+    render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
+
+    await waitFor(() => {
+      expect(getFlowRejectionRateMock).toHaveBeenCalled();
+    });
+
+    expect(screen.queryByTestId('flow-arm-rate-docs')).toBeNull();
+    for (const call of getFlowRejectionRateMock.mock.calls) {
+      expect(call[2]).not.toBe('docs');
+    }
+  });
+
+  it('renders a neutral no-data appearance for a null rate, distinct from a good score and the disarmed tint', async () => {
+    vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+    getFlowRejectionRateMock.mockImplementation(
+      (_project: string, _milestone: string, flow: string) =>
+        Promise.resolve(
+          flow === 'ops'
+            ? makeTrustRate({ flow: 'ops', total: 0, rejected: 0, rate: null })
+            : makeTrustRate({ flow: flow as never, total: 10, rejected: 1, rate: 0.1 }),
+        ),
+    );
+
+    render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('flow-arm-rate-ops').textContent).toContain(
+        'no data',
+      );
+    });
+
+    const noDataButton = screen.getByTestId('flow-arm-switch-ops');
+    const goodScoreButton = screen.getByTestId('flow-arm-switch-groom');
+    const disarmedNoMetric = screen.getByTestId('flow-arm-switch-docs');
+
+    expect(noDataButton.style.backgroundColor).not.toEqual(
+      goodScoreButton.style.backgroundColor,
+    );
+    expect(noDataButton.style.backgroundColor).not.toEqual(
+      disarmedNoMetric.style.backgroundColor,
+    );
+  });
+
+  it('keeps the rate available as text alongside the unchanged Armed/Disarmed label and aria-checked', async () => {
+    vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+    getFlowRejectionRateMock.mockResolvedValue(
+      makeTrustRate({ flow: 'groom', total: 73, rejected: 1, rate: 1 / 73 }),
+    );
+
+    render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('flow-arm-rate-groom').textContent).toContain(
+        '1/73',
+      );
+    });
+
+    const groomButton = screen.getByTestId('flow-arm-switch-groom');
+    expect(groomButton.textContent).toContain('Disarmed');
+    expect(groomButton.getAttribute('aria-checked')).toBe('false');
   });
 });
