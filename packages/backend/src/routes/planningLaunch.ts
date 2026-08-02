@@ -15,6 +15,7 @@ import type {
 } from '../orchestration/OpsSessionLauncher';
 import { toExternalId, normalizeTaskId } from '../tasks/taskId';
 import { recordEvent } from '../audit/AuditLog';
+import type { PlanningDispatchLaunchedPayload } from '../audit/types';
 
 /**
  * Worklist entry ids from loadOpsContext are bare Notion UUIDs, but the
@@ -206,15 +207,16 @@ export function createPlanningLaunchRouter(
         { model, effort },
       );
       if (result.launched.length > 0) {
+        const payload: PlanningDispatchLaunchedPayload = {
+          trigger_source: 'operator',
+          flow: workflow,
+          milestone_id: milestone.id,
+        };
         recordEvent({
           event_type: 'planning_dispatch_launched',
           actor_type: 'human',
           project_id: project.id,
-          payload: {
-            trigger_source: 'operator',
-            flow: workflow,
-            milestone_id: milestone.id,
-          },
+          payload: { ...payload },
         });
       }
       res.status(202).json(result);

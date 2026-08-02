@@ -1,6 +1,7 @@
 import { logger } from '../logger';
 import { normalizeBoardId } from '../tasks/taskId';
 import { recordEvent } from '../audit/AuditLog';
+import type { PlanningDispatchLaunchedPayload } from '../audit/types';
 import type { SessionManager } from '../session/SessionManager';
 import type { Scheduler } from './Scheduler';
 import type { OpsSessionLauncher } from './OpsSessionLauncher';
@@ -381,16 +382,17 @@ export class DispatchTriggerEvaluator {
 
     if (result.launched.length > 0) {
       this.crashBudget.clear(candidate.task.id);
+      const payload: PlanningDispatchLaunchedPayload = {
+        trigger_source: 'evaluator',
+        flow,
+        milestone_id: milestone.id,
+      };
       recordEvent({
         event_type: 'planning_dispatch_launched',
         actor_type: 'system',
         project_id: candidate.projectId,
         task_id: candidate.task.id,
-        payload: {
-          trigger_source: 'evaluator',
-          flow,
-          milestone_id: milestone.id,
-        },
+        payload: { ...payload },
       });
       return true;
     }
@@ -470,16 +472,17 @@ export class DispatchTriggerEvaluator {
 
     if (result.launched.length > 0) {
       this.crashBudget.clear(candidate.task.id);
+      const payload: PlanningDispatchLaunchedPayload = {
+        trigger_source: 'evaluator',
+        flow: 'ops',
+        milestone_id: milestone.id,
+      };
       recordEvent({
         event_type: 'planning_dispatch_launched',
         actor_type: 'system',
         project_id: candidate.projectId,
         task_id: candidate.task.id,
-        payload: {
-          trigger_source: 'evaluator',
-          flow: 'ops',
-          milestone_id: milestone.id,
-        },
+        payload: { ...payload },
       });
       return true;
     }
