@@ -359,13 +359,11 @@ describe('procedureCore', () => {
     expect(text).toMatch(
       /📐 Design \/ 📋 Planning \/ 🔎 Investigation[\s\S]{0,120}blocks promotion to Ready for as long as it is not ✅ Done/,
     );
-    // A Code (or any other-Type) dependency only blocks at Backlog/Deferred.
+    // A Code (or any other-Type) dependency never blocks at Backlog, only at Deferred.
     expect(text).toMatch(
-      /including 💻 Code, blocks promotion\s+only while it sits at 🔲 Backlog or ⏭️ Deferred/,
+      /including 💻 Code, never blocks\s+promotion while it sits at 🔲 Backlog/,
     );
-    expect(text).toMatch(
-      /once it has been\s+groomed to 🗂️ Ready, or picked up \(🔄 In Progress, 👀 In Review\), it\s+no longer blocks promotion/,
-    );
+    expect(text).toMatch(/It still blocks while ⏭️ Deferred/);
     // Promotion is not dispatch: the auto-dispatcher independently gates on Done.
     expect(text).toMatch(/Promotion is not dispatch/);
     expect(text).toMatch(
@@ -385,7 +383,7 @@ describe('procedureCore', () => {
     );
   });
 
-  it('matches passesGroomDepGate: a 💻 Code dependency in flight (In Progress) does not block promotion, but one at Backlog does', () => {
+  it('matches passesGroomDepGate: a 💻 Code dependency in flight (In Progress) or at Backlog does not block promotion, but a Deferred one does', () => {
     const inFlightDep: NotionTask = {
       id: 'dep-in-progress',
       title: 'Code dep in progress',
@@ -398,6 +396,11 @@ describe('procedureCore', () => {
       ...inFlightDep,
       id: 'dep-backlog',
       status: '🔲 Backlog',
+    };
+    const deferredDep: NotionTask = {
+      ...inFlightDep,
+      id: 'dep-deferred',
+      status: '⏭️ Deferred',
     };
     const taskWithInFlightDep: NotionTask = {
       id: 'task-1',
@@ -412,14 +415,25 @@ describe('procedureCore', () => {
       id: 'task-2',
       dependsOn: ['dep-backlog'],
     };
+    const taskWithDeferredDep: NotionTask = {
+      ...taskWithInFlightDep,
+      id: 'task-3',
+      dependsOn: ['dep-deferred'],
+    };
     const tasksById = new Map(
-      [inFlightDep, backlogDep, taskWithInFlightDep, taskWithBacklogDep].map(
-        (t) => [normalizeBoardId(t.id), t],
-      ),
+      [
+        inFlightDep,
+        backlogDep,
+        deferredDep,
+        taskWithInFlightDep,
+        taskWithBacklogDep,
+        taskWithDeferredDep,
+      ].map((t) => [normalizeBoardId(t.id), t]),
     );
 
     expect(passesGroomDepGate(taskWithInFlightDep, tasksById)).toBe(true);
-    expect(passesGroomDepGate(taskWithBacklogDep, tasksById)).toBe(false);
+    expect(passesGroomDepGate(taskWithBacklogDep, tasksById)).toBe(true);
+    expect(passesGroomDepGate(taskWithDeferredDep, tasksById)).toBe(false);
   });
 
   it('names task.create among the intents that share the decision groupId when splitting-by-narrowing produces one', () => {

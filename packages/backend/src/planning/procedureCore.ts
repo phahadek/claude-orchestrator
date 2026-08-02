@@ -1227,10 +1227,13 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'dependencies from first principles: a Depends-On of a ' +
         'decision-producing Type — 📐 Design / 📋 Planning / 🔎 Investigation — ' +
         'blocks promotion to Ready for as long as it is not ✅ Done. A ' +
-        'Depends-On of any other Type, including 💻 Code, blocks promotion ' +
-        'only while it sits at 🔲 Backlog or ⏭️ Deferred — once it has been ' +
-        'groomed to 🗂️ Ready, or picked up (🔄 In Progress, 👀 In Review), it ' +
-        'no longer blocks promotion. Promotion is not dispatch: staging the ' +
+        'Depends-On of any other Type, including 💻 Code, never blocks ' +
+        'promotion while it sits at 🔲 Backlog — grooming is not dispatch, ' +
+        'so a dependency merely not-yet-groomed does not stop this task from ' +
+        'being groomed. It still blocks while ⏭️ Deferred, a terminal, ' +
+        "distinct state (the dependency's scope was superseded, or it will " +
+        'never be done) rather than "not yet groomed." Promotion is not ' +
+        'dispatch: staging the ' +
         'Ready path for a task with such a dependency does not skip ahead of ' +
         'it — the auto-dispatcher independently holds every Ready task until ' +
         'all of its dependencies reach ✅ Done, regardless of what this dep ' +

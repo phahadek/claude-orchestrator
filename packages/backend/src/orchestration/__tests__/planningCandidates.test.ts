@@ -3,6 +3,7 @@ import type { NotionTask } from '../../notion/types';
 import {
   isGroomCandidate,
   passesGroomDepGate,
+  groomBlockingDepTitles,
   isDesignCandidate,
   passesDesignDepGate,
   isDesignEligibleType,
@@ -58,17 +59,22 @@ describe('passesGroomDepGate', () => {
     expect(passesGroomDepGate(t, done)).toBe(true);
   });
 
-  it('requires an other-Type dep to be groomed past 🔲 Backlog (at 🗂️ Ready or beyond)', () => {
+  it('never blocks on a 💻 Code dep sitting at 🔲 Backlog — grooming is not dispatch', () => {
     const t = task({ dependsOn: ['code-dep'] });
     const stillBacklog = depsMap([
       task({ id: 'code-dep', type: '💻 Code', status: '🔲 Backlog' }),
     ]);
-    expect(passesGroomDepGate(t, stillBacklog)).toBe(false);
+    expect(passesGroomDepGate(t, stillBacklog)).toBe(true);
+  });
 
-    const groomed = depsMap([
-      task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' }),
-    ]);
-    expect(passesGroomDepGate(t, groomed)).toBe(true);
+  it('passes for a 💻 Code dep at 🔄 In Progress, 👀 In Review, or 🗂️ Ready', () => {
+    for (const status of ['🔄 In Progress', '👀 In Review', '🗂️ Ready']) {
+      const t = task({ dependsOn: ['code-dep'] });
+      const tasksById = depsMap([
+        task({ id: 'code-dep', type: '💻 Code', status }),
+      ]);
+      expect(passesGroomDepGate(t, tasksById)).toBe(true);
+    }
   });
 
   it('requires a 🔎 Investigation dep to be ✅ Done, like Design/Planning', () => {
@@ -211,6 +217,57 @@ describe('passesGroomDepGate', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe('groomBlockingDepTitles', () => {
+  it('never lists a 💻 Code dep sitting at 🔲 Backlog', () => {
+    const t = task({ dependsOn: ['code-dep'] });
+    const stillBacklog = depsMap([
+      task({
+        id: 'code-dep',
+        title: 'Code dep',
+        type: '💻 Code',
+        status: '🔲 Backlog',
+      }),
+    ]);
+    expect(groomBlockingDepTitles(t, stillBacklog)).toEqual([]);
+  });
+
+  it('is empty for a 💻 Code dep at 🔄 In Progress, 👀 In Review, or 🗂️ Ready', () => {
+    for (const status of ['🔄 In Progress', '👀 In Review', '🗂️ Ready']) {
+      const t = task({ dependsOn: ['code-dep'] });
+      const tasksById = depsMap([
+        task({ id: 'code-dep', title: 'Code dep', type: '💻 Code', status }),
+      ]);
+      expect(groomBlockingDepTitles(t, tasksById)).toEqual([]);
+    }
+  });
+
+  it('lists a ⏭️ Deferred 💻 Code dep by title', () => {
+    const t = task({ dependsOn: ['code-dep'] });
+    const deferred = depsMap([
+      task({
+        id: 'code-dep',
+        title: 'Code dep',
+        type: '💻 Code',
+        status: '⏭️ Deferred',
+      }),
+    ]);
+    expect(groomBlockingDepTitles(t, deferred)).toEqual(['Code dep']);
+  });
+
+  it('lists a non-Done 📐 Design dep by title', () => {
+    const t = task({ dependsOn: ['design-dep'] });
+    const notDone = depsMap([
+      task({
+        id: 'design-dep',
+        title: 'Design dep',
+        type: '📐 Design',
+        status: '📐 In Progress',
+      }),
+    ]);
+    expect(groomBlockingDepTitles(t, notDone)).toEqual(['Design dep']);
   });
 });
 
@@ -794,14 +851,14 @@ describe('isDesignEligibleType — the shared predicate design-armed groom narro
       status: '🔲 Backlog',
       dependsOn: ['code-dep'],
     });
-    const stillBacklog = depsMap([
-      task({ id: 'code-dep', type: '💻 Code', status: '🔲 Backlog' }),
+    const deferred = depsMap([
+      task({ id: 'code-dep', type: '💻 Code', status: '⏭️ Deferred' }),
     ]);
     expect(isDesignEligibleType(t.type)).toBe(true);
-    expect(passesGroomDepGate(t, stillBacklog)).toBe(false);
+    expect(passesGroomDepGate(t, deferred)).toBe(false);
 
     const baseDeps = {
-      tasksById: stillBacklog,
+      tasksById: deferred,
       hasActiveSession: () => false,
       hasActiveGroomSession: () => false,
       inCrashCooldown: () => false,
