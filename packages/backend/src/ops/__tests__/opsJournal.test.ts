@@ -20,6 +20,8 @@ import {
   setEntryState,
   reconcileJournal,
   isValidOpsTransition,
+  foldOpsTransitionChain,
+  InvalidOpsTransitionChainError,
 } from '../opsJournal.js';
 import {
   upsertOpsJournalEntry,
@@ -334,5 +336,44 @@ describe('setEntryState resolves a capability disqualification', () => {
         resolution: { summary: 'nothing capability-related here' },
       }),
     ).not.toThrow();
+  });
+});
+
+describe('foldOpsTransitionChain', () => {
+  it('returns the starting state unchanged for an empty chain', () => {
+    expect(foldOpsTransitionChain('pending', [])).toBe('pending');
+  });
+
+  it('folds a legal multi-hop chain to its final state', () => {
+    expect(foldOpsTransitionChain('pending', ['candidate', 'resolved'])).toBe(
+      'resolved',
+    );
+  });
+
+  it('folds a single legal hop', () => {
+    expect(foldOpsTransitionChain('pending', ['candidate'])).toBe('candidate');
+  });
+
+  it('throws when a hop in the chain is illegal from the state the prior hop produced', () => {
+    expect(() =>
+      foldOpsTransitionChain('pending', [
+        'candidate',
+        'applied-pending-confirm',
+      ]),
+    ).toThrow(InvalidOpsTransitionChainError);
+  });
+
+  it('throws naming the illegal hop, not the chain start', () => {
+    try {
+      foldOpsTransitionChain('pending', [
+        'candidate',
+        'applied-pending-confirm',
+      ]);
+      throw new Error('expected foldOpsTransitionChain to throw');
+    } catch (err) {
+      expect((err as Error).message).toContain(
+        'candidate -> applied-pending-confirm',
+      );
+    }
   });
 });

@@ -546,14 +546,18 @@ export class PlanningOrchestrator {
    * journal already at 'resolved' at this synchronous instant means the
    * investigation actually concluded — every other state (including a
    * missing entry) leaves the task in progress. This only ever fires for the
-   * no-change Investigation path, where journal.setState -> resolved is
-   * staged atomically alongside this session's other closing-group members
-   * via commitGroupIntents and is therefore already committed by the time
-   * markTerminal runs; the operator-confirmed applied-pending-confirm ->
-   * resolved path is out of scope (see routes/opsJournal.ts) and typically
-   * settles well after the session has gone terminal. Callers must exclude
-   * gate-verify sessions (task_id `gate-item:<id>`) first, since those have
-   * no Notion task to close and also have no ops_journal entry.
+   * no-change Investigation path, where the whole hop sequence to resolved
+   * (e.g. journal.setState -> candidate alongside journal.setState ->
+   * resolved) is staged in the same closing group and applied in order by
+   * commitGroupIntents — each hop validated against the effective state the
+   * prior staged hop in the chain would produce (stagedIntents.ts's
+   * effectiveOpsStateForStaging), not just the applied row — and is
+   * therefore already committed by the time markTerminal runs; the
+   * operator-confirmed applied-pending-confirm -> resolved path is out of
+   * scope (see routes/opsJournal.ts) and typically settles well after the
+   * session has gone terminal. Callers must exclude gate-verify sessions
+   * (task_id `gate-item:<id>`) first, since those have no Notion task to
+   * close and also have no ops_journal entry.
    */
   private completeOpsTask(sessionId: string, row: Session): void {
     const taskId = row.task_id;
