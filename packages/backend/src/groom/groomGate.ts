@@ -51,6 +51,7 @@ import {
   type TriageVerdict,
 } from '../planning/triage';
 import { ProjectService } from '../projects/ProjectService';
+import type { SeedItemClassification } from '../db/types';
 
 const SIZE_CHECK_DECISIONS = new Set([
   'no_split',
@@ -226,7 +227,11 @@ export interface GroomingGateEntry {
    * candidates check) — a caller that hasn't started passing this yet records
    * nothing here and is unaffected.
    */
-  seedContributionCandidates?: { spec: string }[];
+  seedContributionCandidates?: {
+    spec: string;
+    /** Mirrors GateContributionCandidate.classification — see SeedItemClassification. */
+    classification?: SeedItemClassification;
+  }[];
   /**
    * True when this task's pre-groom body (at Ready-flip staging time) still
    * carried a "### 👁️ Manual verification" section — a structural fact

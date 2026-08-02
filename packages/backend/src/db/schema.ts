@@ -1854,4 +1854,15 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // seed_item.classification: mirrors gate_item's classification column, but
+  // nullable/optional — unlike gate_item's NOT NULL classification, existing
+  // seed_item rows predate this concept and a caller that hasn't started
+  // passing it yet (groomGate.ts's seedContributionCandidates fails open the
+  // same way) should not be broken by its absence.
+  try {
+    target.exec(`ALTER TABLE seed_item ADD COLUMN classification TEXT`);
+  } catch {
+    /* already exists */
+  }
 }

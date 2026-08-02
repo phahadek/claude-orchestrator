@@ -561,11 +561,23 @@ export type NewDeployRunEventRow = Omit<DeployRunEventRow, 'id'>;
 /** Single-field lifecycle: pending -> applied -> confirmed | blocked. */
 export type SeedItemState = 'pending' | 'applied' | 'confirmed' | 'blocked';
 
+/**
+ * Mirrors GateItemClassification's schema-vs-data split for a seed
+ * candidate, which is always a static data/config value (runtime-
+ * observability is categorically inapplicable here): 'operational-seed' is a
+ * genuine data/config row/default/flag correctly kept out of the PR;
+ * 'in-pr' is actually schema/DDL or code that ships in the task's own PR —
+ * the line was mislabeled and should not accrete; 'needs-triage' is unclear,
+ * deferred.
+ */
+export type SeedItemClassification = 'operational-seed' | 'in-pr' | 'needs-triage';
+
 export interface SeedItemRow {
   id: string;
   project: string;
   milestone: string;
   spec: string;
+  classification: SeedItemClassification | null;
   min_deployed_commit: string | null;
   state: SeedItemState;
   updated_at: string;

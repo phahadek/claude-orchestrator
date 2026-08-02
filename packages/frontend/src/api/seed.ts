@@ -2,6 +2,8 @@ import { apiRequest } from './projects';
 
 type SeedItemState = 'pending' | 'applied' | 'confirmed' | 'blocked';
 
+export type SeedItemClassification = 'operational-seed' | 'in-pr' | 'needs-triage';
+
 export type SeedItemEventOutcome = 'applied' | 'confirmed' | 'blocked';
 
 interface SeedItemSource {
@@ -24,6 +26,7 @@ export interface SeedItem {
   project: string;
   milestone: string;
   spec: string;
+  classification?: SeedItemClassification;
   minDeployedCommit?: string;
   state: SeedItemState;
   updatedAt: string;
@@ -57,6 +60,7 @@ export interface ListSeedItemsParams {
   project?: string;
   milestone?: string;
   state?: string;
+  classification?: string;
   page?: number;
   limit?: number;
   order?: 'not-done-first';

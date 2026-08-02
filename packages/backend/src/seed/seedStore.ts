@@ -23,6 +23,7 @@ import {
 import type { SeedItemFilter, SeedItemListOrder } from '../db/queries';
 import type {
   SeedItemState,
+  SeedItemClassification,
   SeedItemEventOutcome,
   SeedAccretionDecision,
 } from '../db/types';
@@ -48,6 +49,7 @@ export interface SeedItem {
   project: string;
   milestone: string;
   spec: string;
+  classification?: SeedItemClassification;
   minDeployedCommit?: string;
   state: SeedItemState;
   updatedAt: string;
@@ -77,6 +79,7 @@ export function getItem(id: string): SeedItem | undefined {
     project: row.project,
     milestone: row.milestone,
     spec: row.spec,
+    classification: row.classification ?? undefined,
     minDeployedCommit: row.min_deployed_commit ?? undefined,
     state: row.state,
     updatedAt: row.updated_at,
@@ -157,6 +160,7 @@ export interface NewSeedItemInput {
   project: string;
   milestone: string;
   spec: string;
+  classification?: SeedItemClassification;
   sources: Omit<SeedItemSource, 'addedAt'>[];
   updatedAt: string;
 }
@@ -173,6 +177,7 @@ export function insertItem(input: NewSeedItemInput): SeedItem {
     project: input.project,
     milestone: input.milestone,
     spec: input.spec,
+    classification: input.classification ?? null,
     min_deployed_commit: null,
     state: 'pending',
     updated_at: input.updatedAt,
