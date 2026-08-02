@@ -47,7 +47,15 @@ function parseRgb(color: string): { r: number; g: number; b: number } {
 }
 
 /** Spread between the loudest and quietest channel — a rough saturation proxy for an achromatic-vs-tinted comparison in jsdom, which normalizes inline hsl() styles to rgb(). */
-function channelSpread({ r, g, b }: { r: number; g: number; b: number }): number {
+function channelSpread({
+  r,
+  g,
+  b,
+}: {
+  r: number;
+  g: number;
+  b: number;
+}): number {
   return Math.max(r, g, b) - Math.min(r, g, b);
 }
 
@@ -208,8 +216,18 @@ describe('FlowArmToggle', () => {
       (_project: string, _milestone: string, flow: string) =>
         Promise.resolve(
           flow === 'groom'
-            ? makeTrustRate({ flow: 'groom', total: 100, rejected: 1, rate: 0.01 })
-            : makeTrustRate({ flow: flow as never, total: 100, rejected: 95, rate: 0.95 }),
+            ? makeTrustRate({
+                flow: 'groom',
+                total: 100,
+                rejected: 1,
+                rate: 0.01,
+              })
+            : makeTrustRate({
+                flow: flow as never,
+                total: 100,
+                rejected: 95,
+                rate: 0.95,
+              }),
         ),
     );
 
@@ -248,7 +266,9 @@ describe('FlowArmToggle', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId('flow-arm-switch-groom').getAttribute('aria-checked'),
+        screen
+          .getByTestId('flow-arm-switch-groom')
+          .getAttribute('aria-checked'),
       ).toBe('false');
     });
 
@@ -286,7 +306,12 @@ describe('FlowArmToggle', () => {
         Promise.resolve(
           flow === 'ops'
             ? makeTrustRate({ flow: 'ops', total: 0, rejected: 0, rate: null })
-            : makeTrustRate({ flow: flow as never, total: 10, rejected: 1, rate: 0.1 }),
+            : makeTrustRate({
+                flow: flow as never,
+                total: 10,
+                rejected: 1,
+                rate: 0.1,
+              }),
         ),
     );
 

@@ -43,7 +43,11 @@ function formatRate(result: FlowRejectionRateResult): string {
   return `${Math.round(result.rate * 100)}% (${result.rejected}/${result.total})`;
 }
 
-export function FlowArmToggle({ milestoneId, projectId = null, autoLaunchEnabled }: Props) {
+export function FlowArmToggle({
+  milestoneId,
+  projectId = null,
+  autoLaunchEnabled,
+}: Props) {
   const [state, setState] = useState<FlowArmState | null>(null);
   const [pending, setPending] = useState<Partial<Record<FlowId, boolean>>>({});
   const [error, setError] = useState<string | null>(null);
@@ -156,7 +160,9 @@ export function FlowArmToggle({ milestoneId, projectId = null, autoLaunchEnabled
           if (metricFlow) {
             if (trustResult && trustResult.rate !== null) {
               toggleClassName += ` ${styles.toggleRated}`;
-              toggleStyle = { backgroundColor: ratedBackground(trustResult.rate, armed) };
+              toggleStyle = {
+                backgroundColor: ratedBackground(trustResult.rate, armed),
+              };
               rateLabel = formatRate(trustResult);
               rateAccessibleLabel = `, trust rate ${rateLabel}`;
             } else {

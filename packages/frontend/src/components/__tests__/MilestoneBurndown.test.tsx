@@ -117,7 +117,9 @@ describe('MilestoneBurndown', () => {
 
     // A non-zero phase keeps its track/fill area.
     expect(
-      screen.getByTestId('phase-segment-code').querySelectorAll('[class*="track"]'),
+      screen
+        .getByTestId('phase-segment-code')
+        .querySelectorAll('[class*="track"]'),
     ).toHaveLength(1);
   });
 
@@ -471,11 +473,15 @@ describe('MilestoneBurndown convergence header', () => {
     expect(screen.getByTestId('convergence-header')).toBeDefined();
     // No tasks -> the Code lane is zero-total: header renders, compact (no track).
     expect(
-      screen.getByTestId('phase-segment-code').querySelectorAll('[class*="track"]'),
+      screen
+        .getByTestId('phase-segment-code')
+        .querySelectorAll('[class*="track"]'),
     ).toHaveLength(0);
     // The gate lane is populated from convergence counts, not tasks — keeps its track.
     expect(
-      screen.getByTestId('phase-segment-gate').querySelectorAll('[class*="track"]'),
+      screen
+        .getByTestId('phase-segment-gate')
+        .querySelectorAll('[class*="track"]'),
     ).toHaveLength(1);
   });
 });
