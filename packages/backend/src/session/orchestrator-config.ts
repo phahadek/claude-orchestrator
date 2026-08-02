@@ -341,15 +341,31 @@ function sanctionedAutoApproveCapabilities(): readonly string[] {
  * Exact-string comparison only — never a prefix/heuristic match, so a
  * Bash(*:*) prefix or any other tool-shaped capability can never
  * auto-approve.
+ *
+ * The audit-log-read / session-events-read own-project auto-approve is
+ * withheld from a `groom` session (`requestingSessionType`). Grooming's
+ * mandate is validating a Backlog task's scope, size and dependencies from
+ * the code and the board — no grooming judgement needs the orchestrator's own
+ * operational record (session_events / audit_log), and that record is
+ * exactly the investigation instrument a groom session should never
+ * self-serve (see the worked instance this guards against: a groom session
+ * auto-approved its own read:session-events grant, used it to run its target
+ * Investigation to conclusion, then promoted the task to Ready). A groom
+ * request for either capability now falls through to the ordinary
+ * operator-park path instead. ops/design/gate-verify sessions are unaffected
+ * — those flows are supposed to read the record — and the own-record reader
+ * and the allowlist are untouched for every session type, including groom.
  */
 export function isSanctionedAutoApproveCapability(
   capability: string,
   requestingSessionId: string,
   requestingProjectId?: string | null,
+  requestingSessionType?: string | null,
 ): boolean {
   return (
     capability === sessionRecordReadCapability(requestingSessionId) ||
     (requestingProjectId != null &&
+      requestingSessionType !== 'groom' &&
       (capability === auditLogReadCapability(requestingProjectId) ||
         capability === sessionEventsReadCapability(requestingProjectId))) ||
     sanctionedAutoApproveCapabilities().includes(capability)

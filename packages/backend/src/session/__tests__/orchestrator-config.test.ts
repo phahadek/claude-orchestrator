@@ -671,4 +671,65 @@ describe('isSanctionedAutoApproveCapability', () => {
       ),
     ).toBe(true);
   });
+
+  it('does not auto-approve the audit-log capability for a groom session', () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        auditLogReadCapability('project-abc'),
+        'session-1',
+        'project-abc',
+        'groom',
+      ),
+    ).toBe(false);
+  });
+
+  it('does not auto-approve the session-events capability for a groom session', () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        sessionEventsReadCapability('project-abc'),
+        'session-1',
+        'project-abc',
+        'groom',
+      ),
+    ).toBe(false);
+  });
+
+  it.each(['ops', 'design', 'review'])(
+    'still auto-approves the audit-log capability for a %s session',
+    (sessionType) => {
+      expect(
+        isSanctionedAutoApproveCapability(
+          auditLogReadCapability('project-abc'),
+          'session-1',
+          'project-abc',
+          sessionType,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each(['ops', 'design', 'review'])(
+    'still auto-approves the session-events capability for a %s session',
+    (sessionType) => {
+      expect(
+        isSanctionedAutoApproveCapability(
+          sessionEventsReadCapability('project-abc'),
+          'session-1',
+          'project-abc',
+          sessionType,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it('still auto-approves the own-record-read capability for a groom session', () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        sessionRecordReadCapability('session-1'),
+        'session-1',
+        'project-abc',
+        'groom',
+      ),
+    ).toBe(true);
+  });
 });

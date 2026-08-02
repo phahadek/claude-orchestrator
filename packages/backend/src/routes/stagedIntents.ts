@@ -493,6 +493,62 @@ function isManualVerificationSection(section: string): boolean {
   );
 }
 
+/** The exact heading text bodyRender.ts writes for the section (see bodyRender.ts:348,493). */
+const IMPLEMENTATION_NOTES_SECTION = 'Implementation notes';
+
+function isImplementationNotesSection(section: string): boolean {
+  return (
+    section.trim().toLowerCase() === IMPLEMENTATION_NOTES_SECTION.toLowerCase()
+  );
+}
+
+/**
+ * Thrown when a groom session stages a task.patchBodySection targeting
+ * Implementation notes. That section is "the implementing session fills it"
+ * per the authoring standard — the closing synthesis a design/ops session
+ * legitimately writes there at the end of its run. Grooming's mandate is
+ * validating a Backlog task's scope/size/dependencies, never producing (or
+ * recording) the task's own deliverable — a groom writing to this section is
+ * exactly a groom session executing its target's work instead of scoping it
+ * (see the worked instance this guards against: a groom ran its target
+ * Investigation to conclusion and filed the finding here). Scoped to groom
+ * only — design and ops keep writing this section unchanged.
+ */
+class GroomImplementationNotesWriteRejectedError extends Error {
+  constructor(taskId: string) {
+    super(
+      `[stagedIntents] task.patchBodySection targeting "Implementation notes" for task "${taskId}" ` +
+        "is rejected from a groom session: that section records the task's own deliverable/decision, " +
+        'filled in by the implementing (design/ops) session — grooming validates scope, size and ' +
+        "dependencies, and must never execute or record the task's work itself.",
+    );
+    this.name = 'GroomImplementationNotesWriteRejectedError';
+  }
+}
+
+/**
+ * Stage-time twin of isOpsTerminalKind's session_type gating: rejects a
+ * task.patchBodySection targeting Implementation notes the moment a groom
+ * session stages it, before the row ever reaches `staged`.
+ */
+function assertGroomBodySectionAllowed(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'task.patchBodySection' || !sessionId) return;
+  const session = getSession(sessionId);
+  if (session?.session_type !== 'groom') return;
+  const p = payload as { taskId?: unknown; section?: unknown } | null;
+  if (
+    typeof p?.taskId === 'string' &&
+    typeof p?.section === 'string' &&
+    isImplementationNotesSection(p.section)
+  ) {
+    throw new GroomImplementationNotesWriteRejectedError(p.taskId);
+  }
+}
+
 /**
  * The Manual-verification-strip twin of DependsOnCompletenessError: a
  * task.setStatus->Ready apply is only allowed when, for a task whose
@@ -2534,6 +2590,7 @@ export function stageIntent(
     }
     assertReadyPathGrouped(kind, payload, groupId);
     assertOpsTerminalGrouped(kind, payload, groupId, sessionId);
+    assertGroomBodySectionAllowed(kind, payload, sessionId);
     const newRow: StagedIntentRow = {
       id: randomUUID(),
       kind,
@@ -2563,6 +2620,7 @@ export function stageIntent(
 
   assertReadyPathGrouped(kind, payload, groupId);
   assertOpsTerminalGrouped(kind, payload, groupId, sessionId);
+  assertGroomBodySectionAllowed(kind, payload, sessionId);
   const row: StagedIntentRow = {
     id: randomUUID(),
     kind,
@@ -3200,11 +3258,13 @@ async function maybeAutoApproveCapabilityRequest(
   }
 
   const payload = intent.payload as CapabilityRequestPayload;
+  const requestingSession = getSession(intent.sessionId);
   if (
     !isSanctionedAutoApproveCapability(
       payload.capability,
       intent.sessionId,
       intent.projectId,
+      requestingSession?.session_type,
     )
   ) {
     return intent;
