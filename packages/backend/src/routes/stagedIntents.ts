@@ -1958,7 +1958,8 @@ function findActiveStagedOpsTransitionForState(
   targetState: string,
 ): StagedIntentRow | undefined {
   return listActiveOpsSetStateIntentsForTask(projectId, taskId).find(
-    (row) => (JSON.parse(row.payload) as { state?: string }).state === targetState,
+    (row) =>
+      (JSON.parse(row.payload) as { state?: string }).state === targetState,
   );
 }
 

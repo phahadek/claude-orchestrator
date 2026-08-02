@@ -352,7 +352,9 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
           groupId,
         });
       expect(illegalRes.status).toBe(400);
-      expect(illegalRes.body.error).toContain('"candidate" -> "applied-pending-confirm"');
+      expect(illegalRes.body.error).toContain(
+        '"candidate" -> "applied-pending-confirm"',
+      );
 
       // Never staged — the group carries only the legal candidate hop.
       const members = db
@@ -383,7 +385,9 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
           groupId,
         });
       expect(res.status).toBe(400);
-      expect(res.body.error).toContain('"pending" -> "applied-pending-confirm"');
+      expect(res.body.error).toContain(
+        '"pending" -> "applied-pending-confirm"',
+      );
       expect(res.body.error).toContain('Current state is "pending"');
 
       const rows = db
