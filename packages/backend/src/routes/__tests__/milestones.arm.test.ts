@@ -79,7 +79,7 @@ describe('PUT /api/milestones/:milestoneId/arm/:flow', () => {
       milestone: 'm1',
       flow: 'groom',
       armed: false,
-      previous: true,
+      previous: false,
     });
   });
 

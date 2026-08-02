@@ -27,6 +27,13 @@ const HEALTH_TOOL = orchestratorMcpToolName('health');
 // kind, so it isn't in PLANNING_INTENT_KINDS.ops (see config.ts's
 // OPS_MCP_TOOLS comment).
 const GATESEED_GETSTATE_TOOL = orchestratorMcpToolName('gateSeed.getState');
+// pullRequest.getByTaskId is the read-only PR lookup registered
+// unconditionally for any session resolving to a project — also a direct
+// read, not a staged-intent kind, so it isn't in PLANNING_INTENT_KINDS (see
+// config.ts's PROJECT_READ_MCP_TOOLS comment).
+const PULLREQUEST_GETBYTASKID_TOOL = orchestratorMcpToolName(
+  'pullRequest.getByTaskId',
+);
 // completeness.disposition / completeness.traceCoverage are direct
 // write/read calls, not staged-intent kinds — they aren't in
 // PLANNING_INTENT_KINDS.design, so the design guard below excludes them too
@@ -59,42 +66,61 @@ const TASK_READ_TOOLS = [orchestratorMcpToolName('task.getById')];
 const TIER_B_READ_TOOLS = [
   orchestratorMcpToolName('session.getRecord'),
   orchestratorMcpToolName('auditLog.query'),
+  orchestratorMcpToolName('sessionEvents.query'),
 ];
 
 const WORKFLOWS: {
   name: 'groom' | 'design' | 'ops';
   allowedTools: string[];
   extraNonStagedTools: string[];
+  /**
+   * gateSeed.getState the server registers unconditionally for any
+   * project-resolved session (see buildMcpServer's doc comment), but which
+   * stays out of GROOM_ALLOWED_TOOLS/DESIGN_ALLOWED_TOOLS on purpose — a
+   * groom/design session must never be CLI-permitted to call it, only ever
+   * see it listed (see orchestrator-config.test.ts's "never a mutating
+   * gate/seed tool" guard). Not present for ops: there it's a genuine
+   * OPS_MCP_TOOLS entry, so it's already in allowedTools.
+   */
+  alwaysRegisteredNotAllowed: string[];
 }[] = [
   {
     name: 'groom',
     allowedTools: GROOM_ALLOWED_TOOLS,
     extraNonStagedTools: [
       GROOM_PRECHECK_TOOL,
+      GATESEED_GETSTATE_TOOL,
+      PULLREQUEST_GETBYTASKID_TOOL,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
       ...TIER_B_READ_TOOLS,
     ],
+    alwaysRegisteredNotAllowed: [GATESEED_GETSTATE_TOOL],
   },
   {
     name: 'design',
     allowedTools: DESIGN_ALLOWED_TOOLS,
     extraNonStagedTools: [
       ...COMPLETENESS_TOOLS,
+      GATESEED_GETSTATE_TOOL,
+      PULLREQUEST_GETBYTASKID_TOOL,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
       ...TIER_B_READ_TOOLS,
     ],
+    alwaysRegisteredNotAllowed: [GATESEED_GETSTATE_TOOL],
   },
   {
     name: 'ops',
     allowedTools: OPS_ALLOWED_TOOLS,
     extraNonStagedTools: [
       GATESEED_GETSTATE_TOOL,
+      PULLREQUEST_GETBYTASKID_TOOL,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
       ...TIER_B_READ_TOOLS,
     ],
+    alwaysRegisteredNotAllowed: [],
   },
 ];
 
@@ -156,7 +182,7 @@ describe('planning workflow --allowed-tools parity with PLANNING_INTENT_KINDS', 
 
   it.each(WORKFLOWS)(
     '$name MCP server registers exactly its allow-list mcp__orchestrator__ entries',
-    async ({ name, allowedTools }) => {
+    async ({ name, allowedTools, alwaysRegisteredNotAllowed }) => {
       const sessionId = `parity-${name}`;
       insertSession({
         session_id: sessionId,
@@ -184,9 +210,10 @@ describe('planning workflow --allowed-tools parity with PLANNING_INTENT_KINDS', 
       const registered = new Set(
         tools.map((t) => orchestratorMcpToolName(t.name)),
       );
-      const expected = new Set(
-        allowedTools.filter((t) => t.startsWith(ORCHESTRATOR_MCP_PREFIX)),
-      );
+      const expected = new Set([
+        ...allowedTools.filter((t) => t.startsWith(ORCHESTRATOR_MCP_PREFIX)),
+        ...alwaysRegisteredNotAllowed,
+      ]);
       expect(registered).toEqual(expected);
     },
   );

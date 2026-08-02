@@ -576,11 +576,13 @@ describe('loadOpsContext — dep deploy-gating', () => {
 
   beforeEach(() => {
     // Point the fixture project at this real git checkout so the ancestry
-    // check has a genuine repo to run `git merge-base` against.
-    db.prepare('UPDATE projects SET project_dir = ? WHERE id = ?').run(
-      repoDir,
-      PROJECT,
-    );
+    // check has a genuine repo to run `git merge-base` against. Also mark it
+    // arch-store-adopted so selectArchitectureContext takes the arch_unit
+    // store branch instead of falling back to a Notion-architecture-pages
+    // manifest lookup that has no fixture on disk for this project id.
+    db.prepare(
+      'UPDATE projects SET project_dir = ?, arch_store_adopted = 1 WHERE id = ?',
+    ).run(repoDir, PROJECT);
     db.prepare('DELETE FROM sessions').run();
     db.prepare('DELETE FROM local_branches').run();
     db.prepare('DELETE FROM project_deployed_sha').run();

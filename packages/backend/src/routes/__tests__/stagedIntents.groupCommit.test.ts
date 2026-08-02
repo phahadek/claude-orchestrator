@@ -2320,7 +2320,11 @@ describe('task.create staged while the session has an open decision group for it
 
     const create = stageIntent(
       'task.create',
-      { title: 'Sibling split off the original', type: '💻 Code' },
+      {
+        databaseId: 'db-split-2',
+        title: 'Sibling split off the original',
+        type: '💻 Code',
+      },
       'proj-split',
       'g-split-2',
       'groom-split-2',
@@ -2375,7 +2379,11 @@ describe('task.create staged while the session has an open decision group for it
 
     const create = stageIntent(
       'task.create',
-      { title: 'Sibling split off the original', type: '💻 Code' },
+      {
+        databaseId: 'db-split-3',
+        title: 'Sibling split off the original',
+        type: '💻 Code',
+      },
       'proj-split',
       'g-split-3',
       'groom-split-3',
@@ -2419,8 +2427,10 @@ describe('task.create staged while the session has an open decision group for it
       .send({});
 
     expect(commit.status).toBe(200);
-    expect(setDependsOn).toHaveBeenCalledWith('t-split-original-3', [
-      'notion:sibling-task-id-3',
-    ]);
+    expect(setDependsOn).toHaveBeenCalledWith(
+      'notion:t-split-original-3',
+      ['notion:sibling-task-id-3'],
+      { source: 'human' },
+    );
   });
 });

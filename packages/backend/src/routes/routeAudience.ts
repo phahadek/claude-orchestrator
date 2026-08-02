@@ -190,6 +190,12 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
       'manual status override issued directly by an ops session; UI-driven moves flow through move-preview -> staged-intents instead',
   },
 
+  // -- taskAbort.ts --------------------------------------------------------
+  'POST /api/tasks/:id/abort': {
+    audience: 'operator',
+    reason: 'task card abort action',
+  },
+
   // -- gateState.ts ------------------------------------------------------
   'POST /api/gate/reconcile': {
     audience: 'session',
@@ -306,6 +312,7 @@ export const ROUTE_FILE_MOUNT_PREFIX: Record<string, string> = {
   'setup.ts': '/api',
   'prs.ts': '/api',
   'tasks.ts': '/api',
+  'taskAbort.ts': '/api',
   'gateState.ts': '/api',
   'seedState.ts': '/api',
   'stagedIntents.ts': '/api',
