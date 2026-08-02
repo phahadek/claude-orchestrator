@@ -183,9 +183,7 @@ function annotateGroomDepBlocking(
 ): void {
   const backlogTasks = allTasks.filter((t) => t.status.includes('Backlog'));
   if (backlogTasks.length === 0) return;
-  const tasksById = new Map(
-    allTasks.map((t) => [normalizeBoardId(t.id), t]),
-  );
+  const tasksById = new Map(allTasks.map((t) => [normalizeBoardId(t.id), t]));
   for (const task of backlogTasks) {
     const view = views.find((v) => v.taskId === task.id);
     if (!view) continue;
