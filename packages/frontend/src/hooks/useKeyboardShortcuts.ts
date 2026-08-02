@@ -140,7 +140,9 @@ export function useKeyboardShortcuts(
   const ringItems = activePanel ? activePanel.orderedItems() : [];
   const ring = useKeyboardRing(ringItems);
   const ringRef = useRef(ring);
-  ringRef.current = ring;
+  useEffect(() => {
+    ringRef.current = ring;
+  });
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
