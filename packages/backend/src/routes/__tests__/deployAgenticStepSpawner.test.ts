@@ -31,7 +31,10 @@ import {
 } from '../../deploy/DeployOrchestrator';
 import { getDeployRun } from '../../deploy/deployService';
 import { insertSessionOrIgnore } from '../../db/queries';
-import type { DeployPlaybook, StepDescriptor } from '../../deploy/playbookSchema';
+import type {
+  DeployPlaybook,
+  StepDescriptor,
+} from '../../deploy/playbookSchema';
 import type { LoadPlaybookResult } from '../../deploy/loadPlaybook';
 
 beforeEach(() => {

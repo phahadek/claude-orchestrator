@@ -363,7 +363,9 @@ export function validatePlaybook(
   });
   steps.forEach((s, i) => {
     if (s.kind === 'agentic' && s.is_prod_mutating) {
-      errors.push(`steps[${i}].is_prod_mutating must not be true for an agentic step`);
+      errors.push(
+        `steps[${i}].is_prod_mutating must not be true for an agentic step`,
+      );
     }
   });
   failureDiagnoses.forEach((d, i) => {

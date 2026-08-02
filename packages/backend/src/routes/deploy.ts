@@ -112,7 +112,7 @@ export function buildDeployAgenticStepProcedure(input: {
     'Report your finding by calling the ' +
       `\`${orchestratorMcpToolName('deploy.verdict')}\` tool exactly once, ` +
       'as your final action — never a chat block, which is not delivered ' +
-      'anywhere and leaves the deploy run stalled until this session\'s ' +
+      "anywhere and leaves the deploy run stalled until this session's " +
       'budget expires. `verdict` is one of `approved` (the step is safe/' +
       'correct to proceed past), `rejected` (it is not — the deploy engine ' +
       'halts the run), or `inconclusive` (you could not conclusively ' +
@@ -151,11 +151,16 @@ export class DeployAgenticStepSpawner {
     }
   >();
   /** A verdict that arrived before its dispatch's `arm()` call landed (a fast session racing `SessionManager.start()`'s own resolution). */
-  private readonly earlyVerdicts = new Map<string, DeployAgenticVerdictPayload>();
+  private readonly earlyVerdicts = new Map<
+    string,
+    DeployAgenticVerdictPayload
+  >();
 
   constructor(
     private readonly sessionManager: SessionManager,
-    private readonly getOrchestrator: (project: string) => DeployOrchestrator | undefined,
+    private readonly getOrchestrator: (
+      project: string,
+    ) => DeployOrchestrator | undefined,
     options: { budgetMs?: number } = {},
   ) {
     this.budgetMs = options.budgetMs ?? DEFAULT_AGENTIC_STEP_BUDGET_MS;
@@ -231,7 +236,12 @@ export class DeployAgenticStepSpawner {
     this.arm(runId, step.id, project, sessionId);
   }
 
-  private arm(runId: string, stepId: string, project: string, sessionId: string): void {
+  private arm(
+    runId: string,
+    stepId: string,
+    project: string,
+    sessionId: string,
+  ): void {
     const key = this.key(runId, stepId);
     const early = this.earlyVerdicts.get(key);
     if (early && early.sessionId === sessionId) {
@@ -253,7 +263,12 @@ export class DeployAgenticStepSpawner {
    * the human review it exists to wait for. Mirrors
    * SessionGateItemVerifier's onBudgetFire/waitForCapabilityClear.
    */
-  private onBudgetFire(runId: string, stepId: string, project: string, sessionId: string): void {
+  private onBudgetFire(
+    runId: string,
+    stepId: string,
+    project: string,
+    sessionId: string,
+  ): void {
     const key = this.key(runId, stepId);
     if (hasActiveCapabilityRequestForSession(sessionId)) {
       logger.info(
@@ -291,7 +306,12 @@ export class DeployAgenticStepSpawner {
     this.pending.set(key, { runId, stepId, project, sessionId, timer });
   }
 
-  private settleTimeout(runId: string, stepId: string, project: string, sessionId: string): void {
+  private settleTimeout(
+    runId: string,
+    stepId: string,
+    project: string,
+    sessionId: string,
+  ): void {
     const key = this.key(runId, stepId);
     const entry = this.pending.get(key);
     if (!entry) return;

@@ -437,7 +437,9 @@ describe('deploy.verdict', () => {
       arguments: { verdict: 'inconclusive' },
     });
     expect(result.isError).toBe(true);
-    expect(resultOf(result as never).error).toMatch(/not a deploy-agentic task/);
+    expect(resultOf(result as never).error).toMatch(
+      /not a deploy-agentic task/,
+    );
     await close();
   });
 

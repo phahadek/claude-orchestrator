@@ -162,7 +162,7 @@ export function registerVerdictTools(
       {
         title: 'Report a deploy agentic-step verdict',
         description:
-          'Reports this dispatched deploy-agentic-step session\'s finding — approved/rejected/inconclusive — as your final action. Call exactly once, never as a chat block: the deploy engine gates the next playbook step directly on this report, with no operator disposition in between. The run/step this applies to is resolved from this session\'s own dispatch, not from any argument you pass — you cannot report for a step other than the one you were dispatched to validate.',
+          "Reports this dispatched deploy-agentic-step session's finding — approved/rejected/inconclusive — as your final action. Call exactly once, never as a chat block: the deploy engine gates the next playbook step directly on this report, with no operator disposition in between. The run/step this applies to is resolved from this session's own dispatch, not from any argument you pass — you cannot report for a step other than the one you were dispatched to validate.",
         inputSchema: {
           verdict: deployAgenticVerdictSchema,
           detail: z.string().optional(),

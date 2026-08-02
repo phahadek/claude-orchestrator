@@ -72,7 +72,10 @@ export type AgenticVerdict = 'approved' | 'rejected' | 'inconclusive';
  */
 export const DEPLOY_AGENTIC_TASK_PREFIX = 'deploy-agentic:';
 
-export function buildDeployAgenticTaskId(runId: string, stepId: string): string {
+export function buildDeployAgenticTaskId(
+  runId: string,
+  stepId: string,
+): string {
   return `${DEPLOY_AGENTIC_TASK_PREFIX}${runId}:${stepId}`;
 }
 

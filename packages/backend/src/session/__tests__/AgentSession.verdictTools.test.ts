@@ -508,7 +508,9 @@ function makeDeployAgenticSession(taskId: string) {
 
 describe('AgentSession.recordDeployAgenticVerdict', () => {
   it('recovers runId/stepId from the session task_id and emits deploy_agentic_verdict — never a staged intent', () => {
-    const session = makeDeployAgenticSession('deploy-agentic:run-1:investigate');
+    const session = makeDeployAgenticSession(
+      'deploy-agentic:run-1:investigate',
+    );
     const emitted: unknown[] = [];
     session.on('deploy_agentic_verdict', (p) => emitted.push(p));
 
