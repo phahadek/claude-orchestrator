@@ -4,7 +4,34 @@ import * as path from 'path';
 
 // ── formatTokenCount ──────────────────────────────────────────────────────────
 
-import { formatTokenCount } from '../utils/usage';
+import { formatTokenCount, calculateCost } from '../utils/usage';
+
+describe('calculateCost', () => {
+  const cases: [string, number, number][] = [
+    ['claude-opus-5', 5, 25],
+    ['claude-opus-4-8', 5, 25],
+    ['claude-opus-4-7', 5, 25],
+    ['claude-sonnet-5', 3, 15],
+    ['claude-sonnet-4-6', 3, 15],
+    ['claude-haiku-4-5', 1, 5],
+  ];
+
+  it.each(cases)(
+    'resolves published input/output rate for %s',
+    (model, inputPerMillion, outputPerMillion) => {
+      const cost = calculateCost(1_000_000, 1_000_000, model);
+      expect(cost).toBeCloseTo(inputPerMillion + outputPerMillion);
+    },
+  );
+
+  it('falls back to the documented (Sonnet) rate for an unknown model', () => {
+    expect(() =>
+      calculateCost(1_000_000, 1_000_000, 'some-unknown-model'),
+    ).not.toThrow();
+    const cost = calculateCost(1_000_000, 1_000_000, 'some-unknown-model');
+    expect(cost).toBeCloseTo(3 + 15);
+  });
+});
 
 describe('formatTokenCount', () => {
   it('formats numbers below 1000 as plain integers', () => {

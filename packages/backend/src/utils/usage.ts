@@ -3,6 +3,13 @@
  * Cache tokens are priced on their own tier per Anthropic's published cache
  * pricing: cache writes (creation) cost 1.25x the base input rate, cache
  * reads cost 0.1x the base input rate.
+ *
+ * All current generations within a family (Opus 4.6/4.7/4.8/5, Sonnet 4.6/5,
+ * Haiku 4.5) share one published rate, so a family-level match is sufficient
+ * today. Note: Sonnet 5 currently carries a promotional rate distinct from
+ * its list price below — this shape cannot represent a per-generation
+ * override; if a family's generations diverge in price, switch to a
+ * per-model-id table with this array as the fallback.
  */
 const MODEL_PRICING: {
   match: string;
@@ -13,10 +20,10 @@ const MODEL_PRICING: {
 }[] = [
   {
     match: 'opus',
-    inputPerMillion: 15,
-    outputPerMillion: 75,
-    cacheReadPerMillion: 1.5,
-    cacheCreationPerMillion: 18.75,
+    inputPerMillion: 5,
+    outputPerMillion: 25,
+    cacheReadPerMillion: 0.5,
+    cacheCreationPerMillion: 6.25,
   },
   {
     match: 'sonnet',
@@ -27,10 +34,10 @@ const MODEL_PRICING: {
   },
   {
     match: 'haiku',
-    inputPerMillion: 0.8,
-    outputPerMillion: 4,
-    cacheReadPerMillion: 0.08,
-    cacheCreationPerMillion: 1,
+    inputPerMillion: 1,
+    outputPerMillion: 5,
+    cacheReadPerMillion: 0.1,
+    cacheCreationPerMillion: 1.25,
   },
 ];
 
