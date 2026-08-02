@@ -31,6 +31,10 @@ import { TaskDetail } from './components/TaskDetail';
 import { Settings } from './components/Settings';
 import { UpdateBanner } from './components/UpdateBanner';
 import { RateLimitBanner } from './components/RateLimitBanner';
+import {
+  AdmissionStallBanner,
+  type AdmissionBlockReason,
+} from './components/AdmissionStallBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { GateReadinessPanel } from './components/GateReadinessPanel';
 import { ArchitecturePanel } from './components/ArchitecturePanel';
@@ -235,6 +239,12 @@ export default function App() {
   } | null>(null);
   const [planUsage, setPlanUsage] = useState<PlanUsage | null>(null);
   const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
+  const [admissionStall, setAdmissionStall] = useState<{
+    reason: AdmissionBlockReason;
+    eligibleCount: number;
+  } | null>(null);
+  const [admissionStallDismissed, setAdmissionStallDismissed] =
+    useState(false);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
@@ -278,6 +288,19 @@ export default function App() {
       if (msg.type === 'github_rate_limit_cleared') {
         setRateLimitInfo(null);
         setRateLimitDismissed(false);
+        return;
+      }
+      if (msg.type === 'admission_stalled') {
+        setAdmissionStall({
+          reason: msg.reason,
+          eligibleCount: msg.eligibleCount,
+        });
+        setAdmissionStallDismissed(false);
+        return;
+      }
+      if (msg.type === 'admission_stall_cleared') {
+        setAdmissionStall(null);
+        setAdmissionStallDismissed(false);
         return;
       }
       if (msg.type === 'plan_usage') {
@@ -358,6 +381,32 @@ export default function App() {
       milestoneId: activeBoardId,
     });
   }, [connectionState, activeProjectId, activeBoardId, send]);
+
+  // Reconciliation fetch: a client that loads or reconnects while a stall is
+  // already in progress must reflect it immediately — the WS pair only fires
+  // on the onset/recovery transition, not on every tick, so a client that
+  // missed the transition would otherwise show nothing until the next one.
+  useEffect(() => {
+    if (connectionState !== 'connected') return;
+    apiRequest<{
+      stalled: boolean;
+      reason?: AdmissionBlockReason;
+      eligibleCount?: number;
+    }>('/api/diagnostics/admission-stall')
+      .then((data) => {
+        if (data.stalled && data.reason != null) {
+          setAdmissionStall({
+            reason: data.reason,
+            eligibleCount: data.eligibleCount ?? 0,
+          });
+        } else {
+          setAdmissionStall(null);
+        }
+      })
+      .catch(() => {
+        /* reconciliation is a best-effort backstop — the WS stream still updates live */
+      });
+  }, [connectionState]);
 
   useEffect(() => {
     if (connectionState === 'connected') {
@@ -1299,6 +1348,13 @@ export default function App() {
         <RateLimitBanner
           resetAt={rateLimitInfo.resetAt}
           onDismiss={() => setRateLimitDismissed(true)}
+        />
+      )}
+      {admissionStall && !admissionStallDismissed && (
+        <AdmissionStallBanner
+          reason={admissionStall.reason}
+          eligibleCount={admissionStall.eligibleCount}
+          onDismiss={() => setAdmissionStallDismissed(true)}
         />
       )}
       <div className={styles.mainArea}>

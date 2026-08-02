@@ -2140,3 +2140,186 @@ describe('AutoLauncher — memory admission gate', () => {
     );
   });
 });
+
+describe('AutoLauncher — sustained admission-block signal', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: true,
+      freeMemMB: 8192,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 5120,
+    });
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    const { clearUsageDeferral } = await import('../../db/queries.js');
+    registerUsagePoller({ getCache: () => ({ available: false }) });
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
+  });
+
+  it('raises admission_stalled exactly once, on the transition into a sustained memory-gate block', async () => {
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: false,
+      freeMemMB: 5000,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 1928,
+    });
+    const task = makeResolvedTask({ id: 'task-stall-1' });
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const broadcast = vi.fn();
+    const launcher = new AutoLauncher(sessionManager as never, broadcast, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+    expect(
+      broadcast.mock.calls.filter((c) => c[0].type === 'admission_stalled'),
+    ).toHaveLength(0);
+
+    await launcher.pollOnce();
+    const stalledCalls = broadcast.mock.calls.filter(
+      (c) => c[0].type === 'admission_stalled',
+    );
+    expect(stalledCalls).toHaveLength(1);
+    expect(stalledCalls[0][0]).toMatchObject({
+      type: 'admission_stalled',
+      reason: 'memory_admission',
+      eligibleCount: 1,
+    });
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'admission_stall_started' }),
+    );
+
+    // Continued deferrals must not re-fire the signal.
+    await launcher.pollOnce();
+    expect(
+      broadcast.mock.calls.filter((c) => c[0].type === 'admission_stalled'),
+    ).toHaveLength(1);
+  });
+
+  it('raises nothing when deferrals occur with no eligible candidates', async () => {
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const broadcast = vi.fn();
+    const launcher = new AutoLauncher(sessionManager as never, broadcast, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+
+    expect(
+      broadcast.mock.calls.filter((c) => c[0].type === 'admission_stalled'),
+    ).toHaveLength(0);
+  });
+
+  it('clears the block and records recovery once admission resumes', async () => {
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: false,
+      freeMemMB: 5000,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 1928,
+    });
+    const task = makeResolvedTask({ id: 'task-stall-recover' });
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const broadcast = vi.fn();
+    const launcher = new AutoLauncher(sessionManager as never, broadcast, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+    expect(
+      broadcast.mock.calls.filter((c) => c[0].type === 'admission_stalled'),
+    ).toHaveLength(1);
+    expect(launcher.getAdmissionStallState()).not.toBeNull();
+
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: true,
+      freeMemMB: 8192,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 5120,
+    });
+    await launcher.pollOnce();
+
+    expect(
+      broadcast.mock.calls.filter(
+        (c) => c[0].type === 'admission_stall_cleared',
+      ),
+    ).toHaveLength(1);
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'admission_stall_cleared' }),
+    );
+    expect(launcher.getAdmissionStallState()).toBeNull();
+  });
+
+  it('is not memory-gate-specific — a usage-deferral block produces the same signal with its own reason', async () => {
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    const resetsAt = new Date(Date.now() + 60_000).toISOString();
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: { percent: 100, resetsAt, severity: 'exceeded' },
+      }),
+    });
+
+    const task = makeResolvedTask({ id: 'task-stall-usage' });
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const broadcast = vi.fn();
+    const launcher = new AutoLauncher(sessionManager as never, broadcast, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+
+    const stalledCalls = broadcast.mock.calls.filter(
+      (c) => c[0].type === 'admission_stalled',
+    );
+    expect(stalledCalls).toHaveLength(1);
+    expect(stalledCalls[0][0]).toMatchObject({
+      type: 'admission_stalled',
+      reason: 'usage_deferral',
+      eligibleCount: 1,
+    });
+  });
+});

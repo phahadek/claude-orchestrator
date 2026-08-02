@@ -1,12 +1,18 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { Scheduler } from '../orchestration/Scheduler';
+import type { AutoLauncher } from '../orchestration/AutoLauncher';
 import { getSchedulerAuditStats } from '../db/queries';
 
 let _scheduler: Scheduler | null = null;
+let _autoLauncher: AutoLauncher | null = null;
 
 export function setScheduler(s: Scheduler): void {
   _scheduler = s;
+}
+
+export function setAutoLauncher(a: AutoLauncher): void {
+  _autoLauncher = a;
 }
 
 export function createDiagnosticsRouter(): Router {
@@ -45,6 +51,16 @@ export function createDiagnosticsRouter(): Router {
       /* errors are logged inside triggerNow */
     });
     res.status(202).json({ job: name, triggered_at: triggeredAt });
+  });
+
+  // GET /api/diagnostics/admission-stall
+  // Read-only reconciliation surface for AdmissionStallBanner: a client that
+  // loads or reconnects mid-stall needs this to reflect the block
+  // immediately, since the WS admission_stalled/admission_stall_cleared pair
+  // only fires on the transition, not on every tick.
+  router.get('/admission-stall', (_req: Request, res: Response) => {
+    const state = _autoLauncher?.getAdmissionStallState() ?? null;
+    res.json(state ? { stalled: true, ...state } : { stalled: false });
   });
 
   return router;
