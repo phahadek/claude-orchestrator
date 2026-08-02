@@ -647,6 +647,16 @@ export interface RuntimeSettings {
    * editable from the Settings UI; empty by default.
    */
   capability_auto_approve_allowlist: string[];
+  /**
+   * Kill switch for the gate.accrete stage-time auto-grant policy (see
+   * routeStageTimeBlock's maybeAutoApproveGateAccrete, stagedIntents.ts):
+   * when true, a gate.accrete intent whose payload content-matches the
+   * task's stored "### 👁️ Manual verification" body items is transitioned
+   * staged -> approved immediately at stage time. Off by default — every
+   * gate.accrete intent parks in ordinary staged state for operator
+   * disposition, regardless of content-match, until an operator opts in.
+   */
+  gate_seed_auto_approve_enabled: boolean;
   /** Milestone view tier-2 attention: seconds a staged decision may sit before it's flagged aging. */
   milestone_attention_aging_threshold_seconds: number;
   /** Milestone view tier-2 attention: seconds of no distanceToGreen improvement before convergence is flagged flat. */
@@ -740,4 +750,6 @@ export const runtimeSettings: RuntimeSettings = {
   capability_auto_approve_enabled:
     process.env.CAPABILITY_AUTO_APPROVE_ENABLED !== 'false',
   capability_auto_approve_allowlist: [],
+  gate_seed_auto_approve_enabled:
+    process.env.GATE_SEED_AUTO_APPROVE_ENABLED === 'true',
 };
