@@ -69,7 +69,10 @@ const fourPassedDims = [
 ];
 
 /** Wires a SessionManager mock so start() emits `payload` as the depth-review verdict. */
-function wireVerdict(sm: ReturnType<typeof makeMockSessionManager>, payload: unknown) {
+function wireVerdict(
+  sm: ReturnType<typeof makeMockSessionManager>,
+  payload: unknown,
+) {
   (sm.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
     (_a: string, _b: string, opts: { sessionId: string }) => {
       setImmediate(() =>
@@ -98,7 +101,10 @@ describe('DepthReviewService.runDepthReview() — dimension classification', () 
       summary: 'Nothing found.',
     });
 
-    const service = new DepthReviewService(sm as unknown as SessionManager, undefined);
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
     const result = await service.runDepthReview(
       1,
       'owner/repo',
@@ -129,7 +135,10 @@ describe('DepthReviewService.runDepthReview() — dimension classification', () 
       summary: 'Found a security defect.',
     });
 
-    const service = new DepthReviewService(sm as unknown as SessionManager, undefined);
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
     const result = await service.runDepthReview(
       1,
       'owner/repo',
@@ -151,13 +160,20 @@ describe('DepthReviewService.runDepthReview() — dimension classification', () 
       verdict: 'fail',
       dimensions: [
         fourPassedDims[0],
-        { name: 'Concurrency', passed: false, notes: 'Unsynchronized shared state.' },
+        {
+          name: 'Concurrency',
+          passed: false,
+          notes: 'Unsynchronized shared state.',
+        },
         ...fourPassedDims.slice(2),
       ],
       summary: 'Found a race.',
     });
 
-    const service = new DepthReviewService(sm as unknown as SessionManager, undefined);
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
     const result = await service.runDepthReview(
       1,
       'owner/repo',
@@ -186,7 +202,10 @@ describe('DepthReviewService.runDepthReview() — dimension classification', () 
       summary: 'Scope creep detected.',
     });
 
-    const service = new DepthReviewService(sm as unknown as SessionManager, undefined);
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
     const result = await service.runDepthReview(
       1,
       'owner/repo',
@@ -208,12 +227,19 @@ describe('DepthReviewService.runDepthReview() — dimension classification', () 
       dimensions: [
         { name: 'Security', passed: false, notes: 'Unsafe input.' },
         ...fourPassedDims.slice(1, 4),
-        { name: 'Size proportionality', passed: false, notes: 'Also oversized.' },
+        {
+          name: 'Size proportionality',
+          passed: false,
+          notes: 'Also oversized.',
+        },
       ],
       summary: 'Multiple findings.',
     });
 
-    const service = new DepthReviewService(sm as unknown as SessionManager, undefined);
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
     const result = await service.runDepthReview(
       1,
       'owner/repo',
@@ -237,7 +263,10 @@ describe('DepthReviewService.runDepthReview() — fails open', () => {
       fetchDiff: vi.fn().mockRejectedValue(new Error('GitHub outage')),
     };
 
-    const service = new DepthReviewService(sm as unknown as SessionManager, undefined);
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
     const result = await service.runDepthReview(
       1,
       'owner/repo',
@@ -265,7 +294,10 @@ describe('DepthReviewService.runDepthReview() — fails open', () => {
       },
     );
 
-    const service = new DepthReviewService(sm as unknown as SessionManager, undefined);
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
     const result = await service.runDepthReview(
       1,
       'owner/repo',
@@ -282,7 +314,9 @@ describe('DepthReviewService.runDepthReview() — fails open', () => {
     const sm = makeMockSessionManager();
     // start() never emits a verdict message — the short timeoutMs below
     // forces waitForVerdict's timeout branch instead of hanging the test.
-    (sm.start as ReturnType<typeof vi.fn>).mockResolvedValue('depth-session-id');
+    (sm.start as ReturnType<typeof vi.fn>).mockResolvedValue(
+      'depth-session-id',
+    );
 
     const service = new DepthReviewService(
       sm as unknown as SessionManager,
@@ -307,7 +341,10 @@ describe('DepthReviewService.runDepthReview() — fails open', () => {
       new Error('spawn failed'),
     );
 
-    const service = new DepthReviewService(sm as unknown as SessionManager, undefined);
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
     const result = await service.runDepthReview(
       1,
       'owner/repo',
@@ -332,7 +369,10 @@ describe('DepthReviewService.runDepthReview() — session dispatch', () => {
       summary: 'Nothing found.',
     });
 
-    const service = new DepthReviewService(sm as unknown as SessionManager, undefined);
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
     await service.runDepthReview(
       7,
       'owner/repo',

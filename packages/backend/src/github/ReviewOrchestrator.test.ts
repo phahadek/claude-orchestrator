@@ -123,7 +123,10 @@ import type { PRReviewService } from './PRReviewService';
 import type { GitHubClient } from './GitHubClient';
 import type { PullRequest } from './types';
 import type { ReviewJob } from './types';
-import type { DepthReviewService, DepthReviewResult } from './DepthReviewService';
+import type {
+  DepthReviewService,
+  DepthReviewResult,
+} from './DepthReviewService';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -763,7 +766,9 @@ describe('ReviewOrchestrator — depth review finding routing', () => {
       .calls[0];
     expect(sessionId).toBe('coding-session-id');
     expect(source).toBe('ai-reviewer');
-    expect(message).toContain('Diff is far larger than the task scope demands.');
+    expect(message).toContain(
+      'Diff is far larger than the task scope demands.',
+    );
     expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
       1,
       'owner/repo',
@@ -839,9 +844,7 @@ describe('ReviewOrchestrator — depth review fails open', () => {
       'depth_review_escalation',
     );
     expect(
-      messages.some(
-        (m) => (m as { type: string }).type === 'review_escalated',
-      ),
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
     ).toBe(false);
     expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
   });
