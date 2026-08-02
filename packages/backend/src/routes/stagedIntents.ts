@@ -518,9 +518,9 @@ class GroomImplementationNotesWriteRejectedError extends Error {
   constructor(taskId: string) {
     super(
       `[stagedIntents] task.patchBodySection targeting "Implementation notes" for task "${taskId}" ` +
-        'is rejected from a groom session: that section records the task\'s own deliverable/decision, ' +
+        "is rejected from a groom session: that section records the task's own deliverable/decision, " +
         'filled in by the implementing (design/ops) session — grooming validates scope, size and ' +
-        'dependencies, and must never execute or record the task\'s work itself.',
+        "dependencies, and must never execute or record the task's work itself.",
     );
     this.name = 'GroomImplementationNotesWriteRejectedError';
   }
