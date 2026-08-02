@@ -2241,6 +2241,11 @@ export class SessionManager extends EventEmitter {
     session.on('gate_verify_disposition', (payload: unknown) =>
       this.emit('gate_verify_disposition', payload),
     );
+    // Forward deploy_agentic_verdict so the deploy-agentic-step spawner
+    // awaiting this dispatched session's report can settle the deploy step.
+    session.on('deploy_agentic_verdict', (payload: unknown) =>
+      this.emit('deploy_agentic_verdict', payload),
+    );
 
     // Fire-and-forget — run() blocks until the subprocess exits, then clean up
     session

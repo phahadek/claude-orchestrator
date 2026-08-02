@@ -257,6 +257,7 @@ describe('buildMcpServer — tool surface per session type', () => {
         'task.getById',
         'pullRequest.getByTaskId',
         'gateSeed.getState',
+        'deploy.verdict',
         'session.getRecord',
         'auditLog.query',
         'sessionEvents.query',

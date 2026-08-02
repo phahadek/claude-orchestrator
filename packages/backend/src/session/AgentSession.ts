@@ -69,6 +69,10 @@ import {
 import { stageIntent, type StagedIntent } from '../routes/stagedIntents';
 import { getGateItem } from '../gate/gateService';
 import {
+  parseDeployAgenticTaskId,
+  type AgenticVerdict,
+} from '../deploy/DeployOrchestrator';
+import {
   VALID_EVENT_TYPES,
   SILENT_SKIP_TYPES,
   toEventType,
@@ -124,6 +128,16 @@ export interface GateVerifyDisposition {
 export interface GateVerifyDispositionPayload {
   sessionId: string;
   disposition: GateVerifyDisposition;
+}
+
+/** Emitted by recordDeployAgenticVerdict — the deploy-agentic-step spawner's dispatch settlement signal. */
+export interface DeployAgenticVerdictPayload {
+  sessionId: string;
+  projectId: string;
+  runId: string;
+  stepId: string;
+  verdict: AgenticVerdict;
+  detail?: string;
 }
 
 /** Maximum number of rebase nudges sent to a session before escalating to needs_attention. */
@@ -2900,6 +2914,40 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     };
     this.emit('gate_verify_disposition', payload);
     return staged;
+  }
+
+  /**
+   * Record a deploy-agentic-step verdict delivered via the deploy.verdict
+   * MCP tool. Unlike recordGateVerifyDisposition, this never stages an
+   * intent for an operator to dispose on — the deploy engine gates its next
+   * step directly on this report, so the payload goes straight to the
+   * dispatching spawner (listening for `deploy_agentic_verdict`), which
+   * calls DeployOrchestrator.reportAgenticVerdict() itself. The run/step
+   * this session was dispatched for is recovered from this session's own
+   * `task_id` (`deploy-agentic:<runId>:<stepId>`, see
+   * DeployOrchestrator.buildDeployAgenticTaskId) rather than trusted from
+   * the tool call, so a session cannot report a verdict for any step but
+   * its own.
+   */
+  recordDeployAgenticVerdict(input: {
+    verdict: AgenticVerdict;
+    detail?: string;
+  }): void {
+    const parsed = parseDeployAgenticTaskId(this.taskId);
+    if (!parsed) {
+      throw new Error(
+        `recordDeployAgenticVerdict: session task_id "${this.taskId}" is not a deploy-agentic task`,
+      );
+    }
+    const payload: DeployAgenticVerdictPayload = {
+      sessionId: this.sessionId,
+      projectId: this.projectId,
+      runId: parsed.runId,
+      stepId: parsed.stepId,
+      verdict: input.verdict,
+      detail: input.detail,
+    };
+    this.emit('deploy_agentic_verdict', payload);
   }
 
   /** No-op — CLI does not support mid-session permission approval. */

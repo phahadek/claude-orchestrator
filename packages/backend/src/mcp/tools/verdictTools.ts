@@ -10,6 +10,7 @@ import {
   gateVerifyReclassifySchema,
   gateVerifyPayloadSchema,
   gateVerifyResultSchema,
+  deployAgenticVerdictSchema,
 } from './schemas';
 
 /** Per-connection context a verdict-delivery tool call is scoped to. */
@@ -153,6 +154,32 @@ export function registerVerdictTools(
           milestone: staged.milestone ?? null,
         };
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      },
+    );
+
+    server.registerTool(
+      'deploy.verdict',
+      {
+        title: 'Report a deploy agentic-step verdict',
+        description:
+          "Reports this dispatched deploy-agentic-step session's finding — approved/rejected/inconclusive — as your final action. Call exactly once, never as a chat block: the deploy engine gates the next playbook step directly on this report, with no operator disposition in between. The run/step this applies to is resolved from this session's own dispatch, not from any argument you pass — you cannot report for a step other than the one you were dispatched to validate.",
+        inputSchema: {
+          verdict: deployAgenticVerdictSchema,
+          detail: z.string().optional(),
+        },
+      },
+      async (args) => {
+        const session = ctx.getSession();
+        if (!session) return notLive();
+        try {
+          session.recordDeployAgenticVerdict({
+            verdict: args.verdict,
+            detail: args.detail,
+          });
+        } catch (err) {
+          return invalid(err instanceof Error ? err.message : String(err));
+        }
+        return ok();
       },
     );
   }

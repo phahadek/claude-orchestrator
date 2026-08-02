@@ -392,3 +392,10 @@ export const gateVerifyResultSchema = z.object({
   id: z.string(),
   milestone: z.string().nullable(),
 });
+
+/** AgenticVerdict — see DeployOrchestrator.ts and AgentSession.ts's recordDeployAgenticVerdict. */
+export const deployAgenticVerdictSchema = z.enum([
+  'approved',
+  'rejected',
+  'inconclusive',
+]);

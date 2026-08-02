@@ -47,6 +47,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'planning.noOp',
   'pullRequest.getByTaskId',
   'gateSeed.getState',
+  'deploy.verdict',
   'session.getRecord',
   'auditLog.query',
   'sessionEvents.query',

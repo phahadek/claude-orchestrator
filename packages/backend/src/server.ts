@@ -97,6 +97,7 @@ import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
 import {
   createDeployRouter,
   setDeployScheduler,
+  setDeploySessionManager,
   resumeActiveDeployRuns,
 } from './routes/deploy';
 import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
@@ -150,19 +151,6 @@ try {
   );
 }
 
-// Resume-at-boot: a project's deploy_run left `running` by a self-deploy
-// restart (the restart step reboots this very backend) never finalizes on
-// its own — verify/report-in/record-sha only run if something re-drives
-// it. Guarded and non-blocking so one project's resume failure can't stall
-// the rest of boot.
-try {
-  resumeActiveDeployRuns(listProjectRows());
-} catch (err) {
-  logger.error(
-    `[server] boot deploy-run resume failed: ${err instanceof Error ? err.message : String(err)}`,
-  );
-}
-
 const _cm = getCorporateMode();
 logger.info(
   `[corporateMode] mode=${_cm.enabled ? 'corporate' : 'personal'} envLocked=${_cm.envLocked} gates=${JSON.stringify(_cm.gates)}`,
@@ -205,6 +193,23 @@ const reviewOrchestrator = new ReviewOrchestrator(
 );
 setSettingsReviewOrchestrator(reviewOrchestrator);
 const planningOrchestrator = new PlanningOrchestrator(sessionManager);
+
+// Wire sessionManager into the deploy-agentic-step spawner before any
+// deploy_run resume below could reach an `agentic` step.
+setDeploySessionManager(sessionManager);
+
+// Resume-at-boot: a project's deploy_run left `running` by a self-deploy
+// restart (the restart step reboots this very backend) never finalizes on
+// its own — verify/report-in/record-sha only run if something re-drives
+// it. Guarded and non-blocking so one project's resume failure can't stall
+// the rest of boot.
+try {
+  resumeActiveDeployRuns(listProjectRows());
+} catch (err) {
+  logger.error(
+    `[server] boot deploy-run resume failed: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
 
 const PORT = getOrchestratorConfig().server.port;
 logConfigProvenanceSummary();
