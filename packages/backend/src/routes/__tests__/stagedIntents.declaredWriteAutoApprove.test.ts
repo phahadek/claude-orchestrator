@@ -17,7 +17,11 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { stageIntent, routeStageTimeBlock, type StagedIntent } from '../stagedIntents';
+import {
+  stageIntent,
+  routeStageTimeBlock,
+  type StagedIntent,
+} from '../stagedIntents';
 import { insertSession, setSessionDeclaredWrites } from '../../db/queries';
 import { runtimeSettings } from '../../config';
 import type { SessionManager } from '../../session/SessionManager';

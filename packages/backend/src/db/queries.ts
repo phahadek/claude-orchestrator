@@ -1215,7 +1215,10 @@ export function getSessionDeclaredWrites(
       declaredWrites?: unknown;
     };
     return Array.isArray(parsed.declaredWrites)
-      ? (parsed.declaredWrites as { capability: string; prodMutating: boolean }[])
+      ? (parsed.declaredWrites as {
+          capability: string;
+          prodMutating: boolean;
+        }[])
       : [];
   } catch {
     return [];

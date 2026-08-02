@@ -289,9 +289,7 @@ describe('checkReadiness — Declared writes section', () => {
   });
 
   it('is empty for a task body with no Declared writes section', () => {
-    expect(extractDeclaredWrites('## Some other section\ncontent')).toEqual(
-      [],
-    );
+    expect(extractDeclaredWrites('## Some other section\ncontent')).toEqual([]);
     expect(checkReadiness('## Some other section\ncontent')).toHaveLength(0);
   });
 
