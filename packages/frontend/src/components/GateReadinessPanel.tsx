@@ -185,6 +185,10 @@ interface RollupHeaderProps {
   onSelectState: (state: string) => void;
   /** Count of items with a live verify session right now — rendered as a standalone badge, never a progress-bar segment (in-flight is not a gate_item state). */
   inFlightCount?: number;
+  /** Exact count of items whose latest_disposition is needs-setup — rendered as a standalone, clickable badge (not a counts key: these items already sit inside the `runnable` chip and must stay there). */
+  awaitingSetupCount?: number;
+  /** Clicking the awaiting-setup badge drives the awaitingSetup list filter. */
+  onSelectAwaitingSetup?: () => void;
 }
 
 function RollupHeader({
@@ -199,6 +203,8 @@ function RollupHeader({
   activeState,
   onSelectState,
   inFlightCount,
+  awaitingSetupCount,
+  onSelectAwaitingSetup,
 }: RollupHeaderProps) {
   const total = stateOrder.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
   const doneCount = doneStates.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
@@ -224,6 +230,17 @@ function RollupHeader({
           >
             Verifying: {inFlightCount}
           </div>
+        )}
+        {!!awaitingSetupCount && (
+          <button
+            type="button"
+            className={styles.awaitingSetupBadge}
+            data-testid={`${testId}-awaiting-setup-count`}
+            onClick={onSelectAwaitingSetup}
+            title="Items whose latest verification attempt abstained with needs-setup — still runnable, but excluded from every automated pull until an operator resolves the setup gap."
+          >
+            Awaiting setup: {awaitingSetupCount}
+          </button>
         )}
       </div>
 
@@ -299,6 +316,7 @@ export function GateReadinessPanel({
   const [stateFilter, setStateFilter] = useState('');
   const [classificationFilter, setClassificationFilter] = useState('');
   const [runnableFilter, setRunnableFilter] = useState('true');
+  const [awaitingSetupFilter, setAwaitingSetupFilter] = useState('');
   const [page, setPage] = useState(1);
 
   const [items, setItems] = useState<GateItem[]>([]);
@@ -506,7 +524,13 @@ export function GateReadinessPanel({
   // Reset to page 1 whenever the milestone or filters change.
   useEffect(() => {
     setPage(1);
-  }, [selectedMilestone, stateFilter, classificationFilter, runnableFilter]);
+  }, [
+    selectedMilestone,
+    stateFilter,
+    classificationFilter,
+    runnableFilter,
+    awaitingSetupFilter,
+  ]);
 
   // Reset seed items to page 1 whenever the milestone or seed filter changes.
   useEffect(() => {
@@ -532,6 +556,10 @@ export function GateReadinessPanel({
         classification:
           (classificationFilter as GateItemClassification) || undefined,
         runnable: runnableFilter === '' ? undefined : runnableFilter === 'true',
+        awaitingSetup:
+          awaitingSetupFilter === ''
+            ? undefined
+            : awaitingSetupFilter === 'true',
         order: stateFilter === '' ? 'not-done-first' : undefined,
         page,
         limit: PAGE_SIZE,
@@ -558,6 +586,7 @@ export function GateReadinessPanel({
     stateFilter,
     classificationFilter,
     runnableFilter,
+    awaitingSetupFilter,
     page,
   ]);
 
@@ -978,6 +1007,13 @@ export function GateReadinessPanel({
   const selectGateChip = useCallback((state: string) => {
     setStateFilter(state);
     setRunnableFilter('');
+    setAwaitingSetupFilter('');
+  }, []);
+
+  const selectAwaitingSetupFilter = useCallback(() => {
+    setStateFilter('');
+    setRunnableFilter('');
+    setAwaitingSetupFilter('true');
   }, []);
 
   const selectSeedChip = useCallback((state: string) => {
@@ -1136,6 +1172,8 @@ export function GateReadinessPanel({
             activeState={stateFilter}
             onSelectState={selectGateChip}
             inFlightCount={items.filter((item) => item.verifyInFlight).length}
+            awaitingSetupCount={readiness?.awaitingSetupCount ?? 0}
+            onSelectAwaitingSetup={selectAwaitingSetupFilter}
           />
 
           <div className={styles.filters}>
@@ -1177,6 +1215,18 @@ export function GateReadinessPanel({
                 <option value="">All</option>
                 <option value="true">Runnable only</option>
                 <option value="false">Not runnable</option>
+              </select>
+            </label>
+            <label className={styles.filterField}>
+              Awaiting setup
+              <select
+                value={awaitingSetupFilter}
+                onChange={(e) => setAwaitingSetupFilter(e.target.value)}
+                data-testid="gate-awaiting-setup-filter"
+              >
+                <option value="">All</option>
+                <option value="true">Awaiting setup only</option>
+                <option value="false">Not awaiting setup</option>
               </select>
             </label>
           </div>
@@ -1246,7 +1296,14 @@ export function GateReadinessPanel({
                 <tbody>
                   {items.map((item) => (
                     <Fragment key={item.id}>
-                      <tr key={item.id} className={styles.itemRow}>
+                      <tr
+                        key={item.id}
+                        className={`${styles.itemRow} ${
+                          item.latestDisposition === 'needs-setup'
+                            ? styles.awaitingSetupRow
+                            : ''
+                        }`}
+                      >
                         <td onClick={(e) => e.stopPropagation()}>
                           <input
                             type="checkbox"
@@ -1258,6 +1315,15 @@ export function GateReadinessPanel({
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
                           {item.text}
+                          {item.latestDisposition === 'needs-setup' && (
+                            <span
+                              className={styles.awaitingSetupIndicator}
+                              data-testid={`gate-item-awaiting-setup-${item.id}`}
+                              title="Latest verification attempt abstained with needs-setup"
+                            >
+                              ⚠ awaiting setup
+                            </span>
+                          )}
                           {item.verifyInFlight && (
                             <span
                               className={styles.inFlightIndicator}

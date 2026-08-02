@@ -171,6 +171,27 @@ describe('getGateReadiness', () => {
     ).toBeFalsy();
   });
 
+  it('reports an exact awaiting-setup count, distinct from the wider needs-setup ∪ noted nonResolvingItems set', () => {
+    const untouched = makeItem({ text: 'never attempted' });
+    const abstained = makeItem({ text: 'awaiting setup' });
+    const noted = makeItem({ text: 'noted, not awaiting setup' });
+    appendGateItemEvent(abstained.id, { disposition: 'needs-setup' });
+    appendGateItemEvent(noted.id, { disposition: 'noted' });
+
+    const readiness = getGateReadiness('polimarket-analyser', 'M12');
+    expect(readiness.awaitingSetupCount).toBe(1);
+    expect(readiness.nonResolvingItems.map((i) => i.id).sort()).toEqual(
+      [abstained.id, noted.id].sort(),
+    );
+    // The awaiting-setup item stays inside its state's count exactly as
+    // before — it's an additive sibling field, not another counts key.
+    expect(readiness.counts.runnable).toBeUndefined();
+    expect(readiness.counts.open).toBe(3);
+    expect(
+      readiness.blocking.find((i) => i.id === untouched.id)?.nonResolving,
+    ).toBeFalsy();
+  });
+
   it('returns per-state counts summing to the milestone item total', () => {
     const passed = makeItem({ text: 'a' });
     const deferred = makeItem({ text: 'b' });
