@@ -1106,6 +1106,10 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     size_check: { decision: 'n/a' },
     type_check: { decision: 'n/a' },
     type: '🔧 Operational',
+    triage: {
+      proposedVerdict: 'clean' as const,
+      hasOpenQuestionsHeading: true,
+    },
   };
 
   it.each(['🔲 Backlog', '🗂️ Ready', '🔄 In Progress'])(
@@ -1178,24 +1182,20 @@ describe('checkGroomingPromotionGate — triage eligibility (approve-by-standard
     expect(result.reasons.some((r) => r.includes('💻 Code'))).toBe(true);
   });
 
-  it('rejects a 🔎 Investigation task carrying a triage verdict', async () => {
+  it('accepts a 🔎 Investigation task carrying a triage verdict', async () => {
     const result = await gate(
       cleanEntry('🔎 Investigation'),
-      'notion:triage-ineligible-investigation',
+      'notion:triage-eligible-investigation',
     );
-    expect(result.allowed).toBe(false);
-    expect(result.reasons.some((r) => r.includes('🔎 Investigation'))).toBe(
-      true,
-    );
+    expect(result.allowed).toBe(true);
   });
 
-  it('rejects a 🔧 Operational task carrying a triage verdict', async () => {
+  it('accepts a 🔧 Operational task carrying a triage verdict', async () => {
     const result = await gate(
       cleanEntry('🔧 Operational'),
-      'notion:triage-ineligible-operational',
+      'notion:triage-eligible-operational',
     );
-    expect(result.allowed).toBe(false);
-    expect(result.reasons.some((r) => r.includes('🔧 Operational'))).toBe(true);
+    expect(result.allowed).toBe(true);
   });
 
   it('allows a 📐 Design task carrying a triage verdict', async () => {
@@ -1222,6 +1222,88 @@ describe('checkGroomingPromotionGate — triage eligibility (approve-by-standard
     );
     expect(result.allowed).toBe(false);
     expect(result.reasons.some((r) => r.includes('💻 Code'))).toBe(true);
+  });
+});
+
+describe('checkGroomingPromotionGate — Operational/Investigation triage floor', () => {
+  const operationalCleanEntry = {
+    size_check: { decision: 'n/a' },
+    type_check: { decision: 'n/a' },
+    type: '🔧 Operational',
+    triage: {
+      proposedVerdict: 'clean' as const,
+      hasOpenQuestionsHeading: true,
+    },
+  };
+
+  it('floors an 🔧 Operational triage verdict to blocked when Depends On carries a non-Done 📐 Design task', async () => {
+    const result = await gate(
+      {
+        ...operationalCleanEntry,
+        dependsOnTasks: [
+          { id: 'dep-design', type: '📐 Design', status: '🔲 Backlog' },
+        ],
+      },
+      'notion:operational-triage-blocked-design',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some((r) => r.includes('triage verdict is "blocked"')),
+    ).toBe(true);
+  });
+
+  it('floors an 🔧 Operational triage verdict to blocked when Depends On carries a non-Done 📋 Planning task', async () => {
+    const result = await gate(
+      {
+        ...operationalCleanEntry,
+        dependsOnTasks: [
+          { id: 'dep-planning', type: '📋 Planning', status: '🗂️ Ready' },
+        ],
+      },
+      'notion:operational-triage-blocked-planning',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some((r) => r.includes('triage verdict is "blocked"')),
+    ).toBe(true);
+  });
+
+  it('promotes a clean 🔧 Operational triage entry without a per-item human sign-off', async () => {
+    const result = await gate(
+      operationalCleanEntry,
+      'notion:operational-triage-clean',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('promotes a clean 🔎 Investigation triage entry without a per-item human sign-off', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+        type: '🔎 Investigation',
+        triage: {
+          proposedVerdict: 'clean' as const,
+          hasOpenQuestionsHeading: true,
+        },
+      },
+      'notion:investigation-triage-clean',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it("uses the 🔧 Operational required-heading label when the heading fact is false", async () => {
+    const result = await gate(
+      {
+        ...operationalCleanEntry,
+        triage: { proposedVerdict: 'clean' as const, hasOpenQuestionsHeading: false },
+      },
+      'notion:operational-triage-no-heading',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some((r) => r.includes('Targets / surfaces affected')),
+    ).toBe(true);
   });
 });
 

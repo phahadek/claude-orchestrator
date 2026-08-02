@@ -44,6 +44,46 @@ export function isInteractiveTaskType(type: string | undefined): boolean {
   return !!type && INTERACTIVE_TASK_TYPES.has(type);
 }
 
+/**
+ * Task types eligible for approve-by-standard triage promotion — a superset
+ * of INTERACTIVE_TASK_TYPES that also admits 🔧 Operational and
+ * 🔎 Investigation, per the clean-verdict standard locked in "Articulate the
+ * clean-verdict standard for 🔧 Operational and 🔎 Investigation promotion".
+ * Deliberately its own set rather than a widened INTERACTIVE_TASK_TYPES:
+ * INTERACTIVE_TASK_TYPES also drives groomGate.ts's DEPENDS_ON_GATE_TYPES
+ * exclusion comment and other call sites keyed specifically to
+ * 📐 Design / 📋 Planning, and widening it would change those too.
+ */
+export const TRIAGE_ELIGIBLE_TYPES: ReadonlySet<string> = new Set([
+  ...INTERACTIVE_TASK_TYPES,
+  '🔧 Operational',
+  '🔎 Investigation',
+]);
+
+export function isTriageEligibleType(type: string | undefined): boolean {
+  return !!type && TRIAGE_ELIGIBLE_TYPES.has(type);
+}
+
+/**
+ * Per-type label for the structural heading applyTriageFloorForType requires
+ * in place of Design/Planning's "## Open Questions" — 🔧 Operational and
+ * 🔎 Investigation carry their own required-heading floor fact (see
+ * readinessGate.ts's TYPE_FLOOR_FACTS: 'Targets / surfaces affected' and
+ * 'Deliverables' respectively), so their clean-verdict floor asks the same
+ * "is the heading live" question against their own heading, not Design/
+ * Planning's Open-Questions-worklist framing.
+ */
+const REQUIRED_HEADING_LABEL_BY_TYPE: Readonly<Record<string, string>> = {
+  '📐 Design': '## Open Questions',
+  '📋 Planning': '## Open Questions',
+  '🔧 Operational': 'Targets / surfaces affected',
+  '🔎 Investigation': 'Deliverables',
+};
+
+function requiredHeadingLabelForType(type: string | undefined): string {
+  return (type && REQUIRED_HEADING_LABEL_BY_TYPE[type]) || '## Open Questions';
+}
+
 function normalizeHeadingText(text: string): string {
   return text
     .replace(/[^\p{L}\s]/gu, '')
@@ -100,6 +140,33 @@ export interface TriageFloorResult {
  * statement), and Tier 3 (semantic classification) already exempts Design.
  */
 export function applyTriageFloor(input: TriageFloorInput): TriageFloorResult {
+  return applyFloorAgainstFacts(input, requiredHeadingLabelForType(undefined));
+}
+
+/**
+ * Type-parameterized equivalent of applyTriageFloor for 🔧 Operational /
+ * 🔎 Investigation (and, harmlessly, 📐 Design / 📋 Planning): the same
+ * deterministic floor, but the "is the required structural heading live"
+ * fact is checked against each type's own registry-defined heading
+ * (requiredHeadingLabelForType) instead of always assuming Design/Planning's
+ * "## Open Questions". `input.hasOpenQuestionsHeading` carries that fact
+ * regardless of type — the field name is kept for continuity with
+ * TriageFloorInput/groomLoad.ts's existing computation, but for
+ * Operational/Investigation it is populated from that type's own heading
+ * check (see readinessGate.ts's TYPE_FLOOR_FACTS), not a literal Open
+ * Questions scan.
+ */
+export function applyTriageFloorForType(
+  type: string | undefined,
+  input: TriageFloorInput,
+): TriageFloorResult {
+  return applyFloorAgainstFacts(input, requiredHeadingLabelForType(type));
+}
+
+function applyFloorAgainstFacts(
+  input: TriageFloorInput,
+  requiredHeadingLabel: string,
+): TriageFloorResult {
   if (input.hardBlockDepNotDone) {
     return {
       verdict: 'blocked',
@@ -111,7 +178,7 @@ export function applyTriageFloor(input: TriageFloorInput): TriageFloorResult {
   if (!input.hasOpenQuestionsHeading) {
     return {
       verdict: 'needs-attention',
-      reasons: ['task body has no "## Open Questions" heading'],
+      reasons: [`task body has no "${requiredHeadingLabel}" heading`],
     };
   }
   if (input.hasRoutedConstraintConflict && input.proposedVerdict === 'clean') {

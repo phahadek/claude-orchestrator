@@ -45,8 +45,8 @@ import {
   type RegionsLike,
 } from './constraintCatalog';
 import {
-  applyTriageFloor,
-  isInteractiveTaskType,
+  applyTriageFloorForType,
+  isTriageEligibleType,
   INTERACTIVE_TASK_TYPES,
   type TriageVerdict,
 } from '../planning/triage';
@@ -79,11 +79,15 @@ const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
  * scope-reshaping mechanism after Design/Planning: "An Investigation
  * legitimately produces Code tasks as its output" (procedures.md § Task
  * types), so a task depending on a non-Done Investigation is groomed against
- * a scope the Investigation may reshape, supersede, or split.
+ * a scope the Investigation may reshape, supersede, or split. 🔧 Operational
+ * is included for the same reason: its runtime/launch-and-observe outcome
+ * (a backfill's actual reconciled state, a config authored against live
+ * data) can reshape a dependent task's scope just as directly.
  */
 const DEPENDS_ON_GATE_TYPES = new Set([
   ...INTERACTIVE_TASK_TYPES,
   '🔎 Investigation',
+  '🔧 Operational',
 ]);
 
 /** and/or is a Files/paths-section hedge token only — see readinessGate.ts's Tier-2 class for the general-prose scan, which deliberately excludes it. */
@@ -670,54 +674,60 @@ function isConstraintsDispositioned(entry: GroomingGateEntry): {
 }
 
 /**
- * Approve-by-standard triage is defined for interactive (📐 Design /
- * 📋 Planning) types only — 💻 Code (and any other non-interactive type,
- * e.g. 🔎 Investigation, 🔧 Operational) keeps the per-task human gate that
- * approve-by-standard would otherwise remove. `entry.triage` is
- * session-supplied, like `entry.type`: a dispatched session could otherwise
- * attach a triage verdict to any task type to buy it batched treatment. A
- * Ready-flip carrying `entry.triage` for a resolved type outside
- * INTERACTIVE_TASK_TYPES is therefore rejected outright (never silently
- * stripped), so the staging session sees the mismatch and can re-stage
- * without a triage block. `type` here is always the caller's resolved type
- * (authoritative when available — see checkGroomingPromotionGate), never
- * `entry.type` on its own.
+ * Approve-by-standard triage is defined for triage-eligible types only —
+ * 📐 Design / 📋 Planning (INTERACTIVE_TASK_TYPES) plus 🔧 Operational /
+ * 🔎 Investigation (planning/triage.ts's TRIAGE_ELIGIBLE_TYPES, per the
+ * clean-verdict standard locked in "Articulate the clean-verdict standard
+ * for 🔧 Operational and 🔎 Investigation promotion"). 💻 Code (and any other
+ * ineligible type) keeps the per-task human gate that approve-by-standard
+ * would otherwise remove. `entry.triage` is session-supplied, like
+ * `entry.type`: a dispatched session could otherwise attach a triage verdict
+ * to any task type to buy it batched treatment. A Ready-flip carrying
+ * `entry.triage` for a resolved type outside TRIAGE_ELIGIBLE_TYPES is
+ * therefore rejected outright (never silently stripped), so the staging
+ * session sees the mismatch and can re-stage without a triage block. `type`
+ * here is always the caller's resolved type (authoritative when available —
+ * see checkGroomingPromotionGate), never `entry.type` on its own.
  */
 function isTriageEligibleForType(
   type: string | undefined,
   entry: GroomingGateEntry,
 ): { ok: boolean; reasons: string[] } {
-  if (!entry.triage || isInteractiveTaskType(type))
+  if (!entry.triage || isTriageEligibleType(type))
     return { ok: true, reasons: [] };
   return {
     ok: false,
     reasons: [
       `groomingGate.triage was recorded for task type "${type ?? 'unknown'}" — approve-by-standard triage ` +
-        'applies only to interactive types (📐 Design / 📋 Planning); this type keeps the per-task human ' +
-        'gate and must not carry a triage verdict. Re-stage without groomingGate.triage.',
+        'applies only to triage-eligible types (📐 Design / 📋 Planning / 🔧 Operational / 🔎 Investigation); ' +
+        'this type keeps the per-task human gate and must not carry a triage verdict. Re-stage without ' +
+        'groomingGate.triage.',
     ],
   };
 }
 
 /**
- * Approve-by-standard promotion path for interactive (📐 Design /
- * 📋 Planning) types — the per-task server-enforced records above stay
- * required and type-agnostic; this is the one additional gate that stands in
- * for the per-item human decision those types no longer carry. An
- * interactive-type task promotes only once its triage input floors to
- * 'clean'. 💻 Code (and any other non-interactive type) fails open — this
- * check does not apply to it, so auto-dispatched promotion is unaffected.
+ * Approve-by-standard promotion path for triage-eligible types (📐 Design /
+ * 📋 Planning / 🔧 Operational / 🔎 Investigation — see
+ * planning/triage.ts's TRIAGE_ELIGIBLE_TYPES) — the per-task server-enforced
+ * records above stay required and type-agnostic; this is the one additional
+ * gate that stands in for the per-item human decision those types no longer
+ * carry. A triage-eligible task promotes only once its triage input floors
+ * to 'clean', evaluated against that type's own registry-defined
+ * required-heading fact (applyTriageFloorForType). 💻 Code (and any other
+ * ineligible type) fails open — this check does not apply to it, so
+ * auto-dispatched promotion is unaffected.
  */
 function isInteractiveTriageClean(
   type: string | undefined,
   entry: GroomingGateEntry,
 ): { ok: boolean; reasons: string[] } {
-  if (!isInteractiveTaskType(type)) return { ok: true, reasons: [] };
+  if (!isTriageEligibleType(type)) return { ok: true, reasons: [] };
   if (!entry.triage) {
     return {
       ok: false,
       reasons: [
-        `interactive task type "${type}" requires a recorded triage verdict before promotion — see planning/triage.ts.`,
+        `triage-eligible task type "${type}" requires a recorded triage verdict before promotion — see planning/triage.ts.`,
       ],
     };
   }
@@ -732,7 +742,7 @@ function isInteractiveTriageClean(
     entry.constraintsDispositioned ?? {},
   ).some((d) => d.disposition === 'conflict_route');
 
-  const floored = applyTriageFloor({
+  const floored = applyTriageFloorForType(type, {
     proposedVerdict: entry.triage.proposedVerdict,
     hardBlockDepNotDone,
     hasOpenQuestionsHeading: entry.triage.hasOpenQuestionsHeading,
@@ -744,7 +754,7 @@ function isInteractiveTriageClean(
       ok: false,
       reasons: [
         `triage verdict is "${floored.verdict}" (${floored.reasons.join('; ') || 'not proposed as clean'}) — ` +
-          `an interactive (${type}) task promotes without a per-item sign-off only once triaged clean.`,
+          `a triage-eligible (${type}) task promotes without a per-item sign-off only once triaged clean.`,
       ],
     };
   }
