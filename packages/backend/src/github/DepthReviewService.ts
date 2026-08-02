@@ -23,11 +23,10 @@ import type { SessionEvent } from '../db/types';
 const DEPTH_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
 
 export const SIZE_DIMENSION_NAME = 'Size proportionality';
-export const SECURITY_DIMENSION_NAME = 'Security';
-export const CONCURRENCY_DIMENSION_NAME = 'Concurrency';
-export const RELIABILITY_DIMENSION_NAME = 'Reliability / crash';
-export const DATA_INTEGRITY_DIMENSION_NAME =
-  'Data integrity & parsing correctness';
+const SECURITY_DIMENSION_NAME = 'Security';
+const CONCURRENCY_DIMENSION_NAME = 'Concurrency';
+const RELIABILITY_DIMENSION_NAME = 'Reliability / crash';
+const DATA_INTEGRITY_DIMENSION_NAME = 'Data integrity & parsing correctness';
 
 /** Dimension names a depth-pass finding may fail on that route to escalate rather than auto-fix. */
 const NON_SIZE_DIMENSION_NAMES: ReadonlySet<string> = new Set([
