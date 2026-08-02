@@ -63,7 +63,10 @@ import {
 import { getTaskBackend } from '../../tasks/TaskBackend';
 import { emitTaskUpdated } from '../../routes/tasks';
 import { groupHasOpsTerminalMember } from '../../routes/stagedIntents';
-import { PlanningOrchestrator, closeDeferredOpsTask } from '../PlanningOrchestrator';
+import {
+  PlanningOrchestrator,
+  closeDeferredOpsTask,
+} from '../PlanningOrchestrator';
 import type { StagedIntentRow, Session } from '../../db/types';
 import { getEntry } from '../../ops/opsJournal';
 import type { OpsState } from '../../ops/opsJournal';
@@ -133,9 +136,7 @@ function makeIntent(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
   };
 }
 
-function makeTerminalSession(
-  overrides: Partial<Session> = {},
-): Session {
+function makeTerminalSession(overrides: Partial<Session> = {}): Session {
   return {
     session_id: 'ops-session-1',
     session_type: 'ops',
