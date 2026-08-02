@@ -530,7 +530,10 @@ export function createGateStateRouter(): Router {
           kind,
           getAutoGrantDisagreementRate(project, canonicalMilestone, kind),
         ]),
-      ) as Record<AutoGrantKind, ReturnType<typeof getAutoGrantDisagreementRate>>;
+      ) as Record<
+        AutoGrantKind,
+        ReturnType<typeof getAutoGrantDisagreementRate>
+      >;
       res.json({
         ...getFlowRejectionRate(
           project,

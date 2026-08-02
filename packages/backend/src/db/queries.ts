@@ -7217,11 +7217,10 @@ export function getAutoGrantDisagreementRate(
     FROM staged_intent
     WHERE kind = ? AND project_id = ? AND milestone = ? AND state = 'committed'
   `);
-  const rows = _stmtAutoGrantCommittedIntents.all(
-    kind,
-    project,
-    milestone,
-  ) as { payload: string; annotation: string | null }[];
+  const rows = _stmtAutoGrantCommittedIntents.all(kind, project, milestone) as {
+    payload: string;
+    annotation: string | null;
+  }[];
 
   const autoApprovedSourceTaskIds: string[] = [];
   for (const row of rows) {

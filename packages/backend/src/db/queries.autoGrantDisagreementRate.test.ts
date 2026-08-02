@@ -12,8 +12,14 @@ vi.mock('./db.js', async () => {
 
 import { db } from './db';
 import { getAutoGrantDisagreementRate } from './queries';
-import { insertItem as insertGateItem, appendEvent as appendGateEvent } from '../gate/gateStore';
-import { insertItem as insertSeedItem, appendEvent as appendSeedEvent } from '../seed/seedStore';
+import {
+  insertItem as insertGateItem,
+  appendEvent as appendGateEvent,
+} from '../gate/gateStore';
+import {
+  insertItem as insertSeedItem,
+  appendEvent as appendSeedEvent,
+} from '../seed/seedStore';
 
 const PROJECT = 'proj-1';
 const MILESTONE = 'M1';
@@ -53,7 +59,9 @@ function insertStagedIntent(opts: {
     project_id: PROJECT,
     milestone: MILESTONE,
     state: opts.state,
-    annotation: opts.autoApproved ? JSON.stringify({ autoApproved: true }) : null,
+    annotation: opts.autoApproved
+      ? JSON.stringify({ autoApproved: true })
+      : null,
     created_at: now,
     updated_at: now,
   });
@@ -61,7 +69,11 @@ function insertStagedIntent(opts: {
 
 describe('getAutoGrantDisagreementRate', () => {
   it('returns a null rate when there are no auto-granted commits', () => {
-    const result = getAutoGrantDisagreementRate(PROJECT, MILESTONE, 'gate.accrete');
+    const result = getAutoGrantDisagreementRate(
+      PROJECT,
+      MILESTONE,
+      'gate.accrete',
+    );
     expect(result).toEqual({
       kind: 'gate.accrete',
       project: PROJECT,
@@ -81,7 +93,10 @@ describe('getAutoGrantDisagreementRate', () => {
       sources: [{ sourceTaskId: 'notion:task-1', sourceTaskTitle: 'Task 1' }],
       updatedAt: '2024-01-01T00:00:00Z',
     });
-    appendGateEvent(item.id, { disposition: 'fail', at: '2024-01-02T00:00:00Z' });
+    appendGateEvent(item.id, {
+      disposition: 'fail',
+      at: '2024-01-02T00:00:00Z',
+    });
 
     insertStagedIntent({
       kind: 'gate.accrete',
@@ -90,7 +105,11 @@ describe('getAutoGrantDisagreementRate', () => {
       autoApproved: true,
     });
 
-    const result = getAutoGrantDisagreementRate(PROJECT, MILESTONE, 'gate.accrete');
+    const result = getAutoGrantDisagreementRate(
+      PROJECT,
+      MILESTONE,
+      'gate.accrete',
+    );
     expect(result.total).toBe(1);
     expect(result.disagreed).toBe(1);
     expect(result.rate).toBe(1);
@@ -105,7 +124,10 @@ describe('getAutoGrantDisagreementRate', () => {
       sources: [{ sourceTaskId: 'notion:task-2', sourceTaskTitle: 'Task 2' }],
       updatedAt: '2024-01-01T00:00:00Z',
     });
-    appendGateEvent(item.id, { disposition: 'needs-setup', at: '2024-01-02T00:00:00Z' });
+    appendGateEvent(item.id, {
+      disposition: 'needs-setup',
+      at: '2024-01-02T00:00:00Z',
+    });
 
     insertStagedIntent({
       kind: 'gate.accrete',
@@ -114,7 +136,11 @@ describe('getAutoGrantDisagreementRate', () => {
       autoApproved: true,
     });
 
-    const result = getAutoGrantDisagreementRate(PROJECT, MILESTONE, 'gate.accrete');
+    const result = getAutoGrantDisagreementRate(
+      PROJECT,
+      MILESTONE,
+      'gate.accrete',
+    );
     expect(result.total).toBe(1);
     expect(result.disagreed).toBe(0);
     expect(result.rate).toBe(0);
@@ -129,8 +155,14 @@ describe('getAutoGrantDisagreementRate', () => {
       sources: [{ sourceTaskId: 'notion:task-3', sourceTaskTitle: 'Task 3' }],
       updatedAt: '2024-01-01T00:00:00Z',
     });
-    appendGateEvent(item.id, { disposition: 'needs-setup', at: '2024-01-02T00:00:00Z' });
-    appendGateEvent(item.id, { disposition: 'needs-setup', at: '2024-01-03T00:00:00Z' });
+    appendGateEvent(item.id, {
+      disposition: 'needs-setup',
+      at: '2024-01-02T00:00:00Z',
+    });
+    appendGateEvent(item.id, {
+      disposition: 'needs-setup',
+      at: '2024-01-03T00:00:00Z',
+    });
 
     insertStagedIntent({
       kind: 'gate.accrete',
@@ -139,7 +171,11 @@ describe('getAutoGrantDisagreementRate', () => {
       autoApproved: true,
     });
 
-    const result = getAutoGrantDisagreementRate(PROJECT, MILESTONE, 'gate.accrete');
+    const result = getAutoGrantDisagreementRate(
+      PROJECT,
+      MILESTONE,
+      'gate.accrete',
+    );
     expect(result.total).toBe(1);
     expect(result.disagreed).toBe(1);
   });
@@ -153,7 +189,10 @@ describe('getAutoGrantDisagreementRate', () => {
       sources: [{ sourceTaskId: 'notion:task-4', sourceTaskTitle: 'Task 4' }],
       updatedAt: '2024-01-01T00:00:00Z',
     });
-    appendGateEvent(item.id, { disposition: 'fail', at: '2024-01-02T00:00:00Z' });
+    appendGateEvent(item.id, {
+      disposition: 'fail',
+      at: '2024-01-02T00:00:00Z',
+    });
 
     insertStagedIntent({
       kind: 'gate.accrete',
@@ -162,7 +201,11 @@ describe('getAutoGrantDisagreementRate', () => {
       autoApproved: false,
     });
 
-    const result = getAutoGrantDisagreementRate(PROJECT, MILESTONE, 'gate.accrete');
+    const result = getAutoGrantDisagreementRate(
+      PROJECT,
+      MILESTONE,
+      'gate.accrete',
+    );
     expect(result.total).toBe(0);
     expect(result.disagreed).toBe(0);
     expect(result.rate).toBeNull();
@@ -185,7 +228,11 @@ describe('getAutoGrantDisagreementRate', () => {
       autoApproved: true,
     });
 
-    const result = getAutoGrantDisagreementRate(PROJECT, MILESTONE, 'gate.accrete');
+    const result = getAutoGrantDisagreementRate(
+      PROJECT,
+      MILESTONE,
+      'gate.accrete',
+    );
     expect(result.total).toBe(0);
   });
 
@@ -210,7 +257,11 @@ describe('getAutoGrantDisagreementRate', () => {
       autoApproved: true,
     });
 
-    const result = getAutoGrantDisagreementRate(PROJECT, MILESTONE, 'seed.stage');
+    const result = getAutoGrantDisagreementRate(
+      PROJECT,
+      MILESTONE,
+      'seed.stage',
+    );
     expect(result.total).toBe(1);
     expect(result.disagreed).toBe(1);
     expect(result.rate).toBe(1);
@@ -225,7 +276,10 @@ describe('getAutoGrantDisagreementRate', () => {
       sources: [{ sourceTaskId: 'notion:task-7', sourceTaskTitle: 'Task 7' }],
       updatedAt: '2024-01-01T00:00:00Z',
     });
-    appendGateEvent(gateItem.id, { disposition: 'pass', at: '2024-01-02T00:00:00Z' });
+    appendGateEvent(gateItem.id, {
+      disposition: 'pass',
+      at: '2024-01-02T00:00:00Z',
+    });
     insertStagedIntent({
       kind: 'gate.accrete',
       sourceTaskId: 'notion:task-7',
@@ -252,8 +306,16 @@ describe('getAutoGrantDisagreementRate', () => {
       autoApproved: true,
     });
 
-    const gateResult = getAutoGrantDisagreementRate(PROJECT, MILESTONE, 'gate.accrete');
-    const seedResult = getAutoGrantDisagreementRate(PROJECT, MILESTONE, 'seed.stage');
+    const gateResult = getAutoGrantDisagreementRate(
+      PROJECT,
+      MILESTONE,
+      'gate.accrete',
+    );
+    const seedResult = getAutoGrantDisagreementRate(
+      PROJECT,
+      MILESTONE,
+      'seed.stage',
+    );
     expect(gateResult.total).toBe(1);
     expect(gateResult.disagreed).toBe(0);
     expect(seedResult.total).toBe(1);
