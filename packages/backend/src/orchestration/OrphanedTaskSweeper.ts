@@ -9,6 +9,7 @@ import type { ResolvedTask } from '../tasks/types';
 import type { ServerMessage } from '../ws/types';
 import {
   getLatestCodeSessionByNotionTaskId,
+  getLatestOpsSessionByTaskId,
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
   isSessionAwaitingCapabilityDisposition,
@@ -17,8 +18,8 @@ import {
   setSessionPauseReason,
   getSessionLastActivityMs,
   upsertPullRequest,
-  getOpsJournalEntry,
 } from '../db/queries';
+import { sessionDidWork } from '../session/sessionLifecycle';
 import {
   recordEvent,
   countNudgeEvents,
@@ -298,15 +299,17 @@ export class OrphanedTaskSweeper {
     // fall through every PR/idle exemption above and land here alongside a
     // genuinely abandoned task. Their session_type ('ops') is also invisible
     // to getLatestCodeSessionByNotionTaskId/hasActiveSessionForTask (standard-
-    // session-only), so latestSession is typically undefined too. The one
-    // artifact that distinguishes "finished, awaiting operator disposition"
-    // from "abandoned" is the ops_journal entry: if it has advanced beyond
-    // 'pending', the session did its job — leave the task In Progress rather
-    // than silently returning it to the dispatch pool. A journal still stuck
-    // at 'pending' (or missing entirely) is still a genuine orphan.
+    // session-only), so latestSession is typically undefined too. What
+    // distinguishes "finished, awaiting operator disposition" from
+    // "abandoned" is sessionDidWork: a stage-only ops session that staged a
+    // decision (even with its ops_journal still 'pending' or missing), or
+    // one whose ops_journal has advanced past 'pending' with nothing staged,
+    // both count as having done its job — leave the task In Progress rather
+    // than silently returning it to the dispatch pool. Neither signal true
+    // is still a genuine orphan.
     if (taskType !== '💻 Code') {
-      const journalEntry = getOpsJournalEntry(taskId);
-      if (journalEntry && journalEntry.state !== 'pending') {
+      const opsSession = getLatestOpsSessionByTaskId(taskId);
+      if (opsSession && sessionDidWork(opsSession.session_id)) {
         return;
       }
     }

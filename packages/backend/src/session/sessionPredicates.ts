@@ -38,6 +38,22 @@
  *   false for it.
  */
 
+/**
+ * The closed set of session types. Anywhere a new type is added, every
+ * exhaustive switch over this union (e.g. sessionDidWork in
+ * session/sessionLifecycle.ts) must gain a matching branch or the build
+ * fails — see the `const _exhaustive: never = ...` pattern used there and in
+ * ws/router.ts.
+ */
+export type SessionType =
+  | 'standard'
+  | 'review'
+  | 'groom'
+  | 'design'
+  | 'ops'
+  | 'split'
+  | 'docs';
+
 /** True for session types that plan (groom/design/ops/split): stage-only base profile, no worktree, no PR. */
 export function isPlanningSession(sessionType: string): boolean {
   return (

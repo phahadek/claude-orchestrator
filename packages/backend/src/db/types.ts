@@ -4,6 +4,7 @@ import type {
   CanonicalPauseReason as _CanonicalPauseReason,
   PauseReasonStruct,
 } from './pauseReason';
+import type { SessionType } from '../session/sessionPredicates';
 /** Back-compat alias — canonical source of truth is CanonicalPauseReason in pauseReason.ts. */
 type PauseReason = _CanonicalPauseReason;
 export type { PauseReason };
@@ -32,7 +33,7 @@ export interface Session {
   worktree_path: string | null;
   archived: number; // 0 | 1 (SQLite boolean)
   favorited: number; // 0 | 1 (SQLite boolean)
-  session_type: string; // 'standard' | 'review' | 'groom' | 'design' | 'ops' | 'split'
+  session_type: SessionType;
   note: string | null;
   tags: string | null; // JSON array of strings, e.g. '["bugfix","auth"]'
   total_input_tokens: number;
@@ -90,7 +91,7 @@ export type NewSession = Omit<
   archived?: number;
   favorited?: number;
   project_id?: string | null;
-  session_type?: string;
+  session_type?: SessionType;
   note?: string | null;
   tags?: string | null;
   total_input_tokens?: number;

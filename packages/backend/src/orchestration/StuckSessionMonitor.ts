@@ -22,6 +22,7 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import { recoverSession } from '../session/sessionRecovery';
 import { getCurrentBranch, hasNonEmptyDiff } from './localBranchHelpers';
 import { submitLocalBranch } from './localBranchSubmission';
+import { sessionIsLive } from '../session/sessionLifecycle';
 
 interface TimerState {
   taskName: string;
@@ -593,6 +594,16 @@ export class StuckSessionMonitor {
     if (!state) return;
     state.notifyTimer = null;
     state.notifyDeadline = 0;
+    // Defense-in-depth: the canonical liveness check (sessionIsLive) should
+    // already agree with the timer here — recordActivity clears the pending
+    // timer synchronously on every session_event, so this only trips on a
+    // genuine race (e.g. a rehydrate landing between a persisted deadline
+    // and the activity that should have superseded it). Reschedule from
+    // "now" instead of notifying on stale state.
+    if (sessionIsLive(sessionId)) {
+      this.scheduleNotifyAndPause(sessionId, state);
+      return;
+    }
     this.persistTimerState(sessionId);
     const message = `⚠️ ${state.taskName} exceeding expected duration — possible grooming gap`;
     this.broadcast({
@@ -615,6 +626,14 @@ export class StuckSessionMonitor {
     }
     state.pauseTimer = null;
     state.pauseDeadline = 0;
+
+    // Same race guard as fireNotify — sessionIsLive should already agree
+    // with the timer; reschedule from "now" instead of pausing on stale
+    // state.
+    if (sessionIsLive(sessionId)) {
+      this.scheduleNotifyAndPause(sessionId, state);
+      return;
+    }
 
     const pr = getPRBySessionId(sessionId);
     if (pr) {

@@ -55,7 +55,11 @@ vi.mock('../config.js', () => ({
 import { recordEvent } from '../audit/AuditLog.js';
 import { getAllProjects } from '../config.js';
 import { db } from '../db/db.js';
-import { upsertOpsJournalEntry, getOpsJournalEntry } from '../db/queries.js';
+import {
+  upsertOpsJournalEntry,
+  getOpsJournalEntry,
+  insertSession,
+} from '../db/queries.js';
 import { OrphanedTaskSweeper } from '../orchestration/OrphanedTaskSweeper.js';
 import type { ServerMessage } from '../ws/types.js';
 
@@ -94,6 +98,24 @@ function makeBackend(tasks: ReturnType<typeof makeTask>[]) {
   };
 }
 
+/**
+ * Seeds the ops session that produced a journal entry — sessionDidWork now
+ * resolves its ops_journal check off this session's task_id (via
+ * getLatestOpsSessionByTaskId), so a test exercising id-form resolution
+ * needs a real session row, not just a real journal row.
+ */
+function seedOpsSession(taskId: string) {
+  insertSession({
+    session_id: `sess-${taskId}`,
+    task_id: taskId,
+    task_url: null,
+    project_context_url: null,
+    status: 'done',
+    started_at: Date.now() - 30 * 60 * 1000,
+    session_type: 'ops',
+  });
+}
+
 function seedJournal(taskId: string, state: string) {
   upsertOpsJournalEntry({
     task_id: taskId,
@@ -117,6 +139,7 @@ describe('OrphanedTaskSweeper ops_journal guard — cross id-form resolution', (
 
   beforeEach(() => {
     db.prepare('DELETE FROM ops_journal').run();
+    db.prepare('DELETE FROM sessions').run();
     broadcast = vi.fn();
     vi.mocked(getAllProjects).mockReturnValue([
       { id: 'proj-1', name: 'P1' } as ReturnType<typeof getAllProjects>[number],
@@ -137,6 +160,7 @@ describe('OrphanedTaskSweeper ops_journal guard — cross id-form resolution', (
 
   it('does not revert when the sweeper holds the notion:-prefixed id and ops_journal stores the bare uuid', async () => {
     seedJournal(BARE_ID, 'candidate');
+    seedOpsSession(NOTION_ID);
     const { backend, sweeper } = runSweeper([
       makeTask(NOTION_ID, '🔎 Investigation'),
     ]);
@@ -151,6 +175,7 @@ describe('OrphanedTaskSweeper ops_journal guard — cross id-form resolution', (
 
   it('does not revert when the sweeper holds the bare id and ops_journal was written via the prefixed form', async () => {
     seedJournal(NOTION_ID, 'candidate');
+    seedOpsSession(BARE_ID);
     const { backend, sweeper } = runSweeper([
       makeTask(BARE_ID, '🔧 Operational'),
     ]);
@@ -165,6 +190,7 @@ describe('OrphanedTaskSweeper ops_journal guard — cross id-form resolution', (
 
   it('still reverts when the journal entry (cross id-form) is still pending', async () => {
     seedJournal(BARE_ID, 'pending');
+    seedOpsSession(NOTION_ID);
     const { backend, sweeper } = runSweeper([
       makeTask(NOTION_ID, '🔎 Investigation'),
     ]);
