@@ -4771,6 +4771,60 @@ export function pruneSchedulerAudit(keepPerJob = 1000): void {
   }
 }
 
+// ─── audit_finding_dedup ────────────────────────────────────────────────────
+
+export interface AuditFindingDedupRow {
+  id: number;
+  project_id: string;
+  finding_identity: string;
+  task_id: string;
+  filed_at: string;
+}
+
+/** The dedup record for a (project, finding-identity) pair, or null if never filed. */
+export function getAuditFindingDedup(
+  projectId: string,
+  findingIdentity: string,
+): AuditFindingDedupRow | null {
+  const row = db
+    .prepare<{
+      project_id: string;
+      finding_identity: string;
+    }>(
+      `SELECT * FROM audit_finding_dedup WHERE project_id = @project_id AND finding_identity = @finding_identity`,
+    )
+    .get({ project_id: projectId, finding_identity: findingIdentity }) as
+    | AuditFindingDedupRow
+    | undefined;
+  return row ?? null;
+}
+
+/** Records (or replaces) the task a finding was just filed as — one row per (project, finding-identity). */
+export function upsertAuditFindingDedup(
+  projectId: string,
+  findingIdentity: string,
+  taskId: string,
+  filedAt: string,
+): void {
+  db.prepare<{
+    project_id: string;
+    finding_identity: string;
+    task_id: string;
+    filed_at: string;
+  }>(
+    `INSERT INTO audit_finding_dedup (project_id, finding_identity, task_id, filed_at)
+     VALUES (@project_id, @finding_identity, @task_id, @filed_at)
+     ON CONFLICT(project_id, finding_identity) DO UPDATE SET
+       task_id = excluded.task_id,
+       filed_at = excluded.filed_at`,
+  ).run({
+    project_id: projectId,
+    finding_identity: findingIdentity,
+    task_id: taskId,
+    filed_at: filedAt,
+  });
+}
+
 // ─── convergence_snapshot ───────────────────────────────────────────────────
 
 let _stmtInsertConvergenceSnapshot: Database.Statement | null = null;

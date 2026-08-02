@@ -77,6 +77,7 @@ import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiv
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
+import { register as registerScheduledAuditSweep } from './orchestration/ScheduledAuditSweep';
 import {
   register as registerGateReconciler,
   configureGateVerification,
@@ -572,6 +573,10 @@ stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 convergenceSnapshotJob.register(scheduler);
 registerWorktreeReconciler(scheduler);
+// Daily base-branch dependency/license-audit sweep — independent of any PR,
+// closes the gap the per-PR analyze gate's diff-triggered skip leaves for
+// manifests no PR ever touches.
+registerScheduledAuditSweep(scheduler);
 // Session-map reconciler: defense-in-depth sweep dropping stale in-memory
 // this.sessions entries whose DB row is terminal or missing, so a slot leak
 // from any (known or future) code path self-heals without operator
