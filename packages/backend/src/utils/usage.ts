@@ -71,7 +71,7 @@ export function calculateCost(
  */
 export const SESSION_TYPE_CATEGORIES = {
   planning: ['groom', 'design', 'ops', 'split'],
-  execution: ['standard', 'review', 'docs'],
+  execution: ['standard', 'review', 'docs', 'depth_review'],
 } as const;
 
 export type SessionTypeCategory = keyof typeof SESSION_TYPE_CATEGORIES;

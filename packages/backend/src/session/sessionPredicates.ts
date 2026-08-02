@@ -36,6 +36,14 @@
  *   since its injected procedure — not buildOrchestratorClaudeMd's
  *   code-session lifecycle — governs its PR timing, so isCodeSession stays
  *   false for it.
+ * - depth_review: a second, separate review pass dispatched only after a
+ *   PR's conformance verdict (session type 'review') reaches approved —
+ *   judges security/concurrency/reliability/data-integrity/size-
+ *   proportionality beyond spec-conformance. Same operational shape as
+ *   'review': no worktree branch of its own work, no PR of its own, does
+ *   not touch task status, excluded from code-session concurrency
+ *   accounting. Gets its own restricted tool allowlist (no git-push, no
+ *   GitHub write-MCP) — see getSessionAllowedTools.
  */
 
 /**
@@ -52,7 +60,8 @@ export type SessionType =
   | 'design'
   | 'ops'
   | 'split'
-  | 'docs';
+  | 'docs'
+  | 'depth_review';
 
 /** True for session types that plan (groom/design/ops/split): stage-only base profile, no worktree, no PR. */
 export function isPlanningSession(sessionType: string): boolean {
@@ -75,9 +84,9 @@ export function opensPr(sessionType: string): boolean {
   return sessionType === 'standard' || sessionType === 'docs';
 }
 
-/** True for session types that count against the shared code+planning concurrency accounting (excludes review). */
+/** True for session types that count against the shared code+planning concurrency accounting (excludes review/depth_review). */
 export function countsAgainstConcurrency(sessionType: string): boolean {
-  return sessionType !== 'review';
+  return sessionType !== 'review' && sessionType !== 'depth_review';
 }
 
 /**

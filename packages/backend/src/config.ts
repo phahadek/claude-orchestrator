@@ -459,6 +459,40 @@ export function docsWebFetchTools(sourceDomains: string[]): string[] {
   return sourceDomains.map((domain) => `WebFetch(domain:${domain})`);
 }
 
+// The orchestrator MCP tools a depth-review session is allowed to call — the
+// same always-on health/read surface every review-shaped session gets
+// (PROJECT_READ_MCP_TOOLS/TIER_B_READ_MCP_TOOLS), no staged-intent kinds of
+// its own since the depth pass never stages anything.
+const DEPTH_REVIEW_MCP_TOOLS = [
+  ORCHESTRATOR_MCP_HEALTH_TOOL,
+  ...PROJECT_READ_MCP_TOOLS,
+  ...TIER_B_READ_MCP_TOOLS,
+];
+
+/**
+ * depth-review session tool set: a distinct, restricted allowlist for the
+ * depth-review pass (session type 'depth_review', dispatched only after a
+ * PR's conformance verdict is approved — see PRReviewService/
+ * ReviewOrchestrator). Read-only git inspection (same as design/ops) plus
+ * the always-on read-only MCP surface above. Deliberately excludes
+ * Bash(git:*) (which would confer git push), Write/Edit, and every
+ * GitHub-write MCP tool in the base ALLOWED_TOOLS set — the depth pass
+ * evaluates a diff already embedded in its prompt and must never be able to
+ * push a commit or open/modify a PR itself.
+ */
+export const DEPTH_REVIEW_ALLOWED_TOOLS = [
+  ...PLANNING_READONLY_BASH_TOOLS,
+  ...DEPTH_REVIEW_MCP_TOOLS,
+  'Bash(git log:*)',
+  'Bash(git diff:*)',
+  'Bash(git show:*)',
+  'Bash(git status:*)',
+  'Bash(git blame:*)',
+  'Bash(git ls-files:*)',
+  'Bash(git rev-parse:*)',
+  'Bash(git branch --list:*)',
+];
+
 function hydrateProject(p: {
   id: string;
   name: string;

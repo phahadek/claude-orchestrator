@@ -129,8 +129,9 @@ export function sessionDidWork(sessionId: string): boolean {
     }
 
     case 'review':
-      // Not applicable — a review session fits neither the PR-outcome nor
-      // the stage-only branch.
+    case 'depth_review':
+      // Not applicable — a review/depth-review session fits neither the
+      // PR-outcome nor the stage-only branch.
       return false;
 
     default: {

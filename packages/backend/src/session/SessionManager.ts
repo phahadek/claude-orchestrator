@@ -14,7 +14,10 @@ import { scrubSecrets } from '../security/scrubSecrets';
 import { AgentSession, parseNotionPageIdDashed } from './AgentSession';
 import { formatTaskId } from '../tasks/taskId';
 import { buildSessionContext } from './ContextBuilder';
-import { buildReviewClaudeMd } from './orchestrator-claudemd';
+import {
+  buildReviewClaudeMd,
+  buildDepthReviewClaudeMd,
+} from './orchestrator-claudemd';
 import {
   resolveStartingPoint,
   ensureMilestoneBranch,
@@ -374,7 +377,8 @@ export interface StartOptions {
     | 'design'
     | 'ops'
     | 'split'
-    | 'docs';
+    | 'docs'
+    | 'depth_review';
   customPrompt?: string;
   projectId?: string;
   taskName?: string;
@@ -926,7 +930,8 @@ export class SessionManager extends EventEmitter {
         | 'design'
         | 'ops'
         | 'split'
-        | 'docs';
+        | 'docs'
+        | 'depth_review';
     }
   >();
   /** Concurrency guard: prevents double-spawning when two concurrent sendOrResume calls race. */
@@ -1895,6 +1900,8 @@ export class SessionManager extends EventEmitter {
           ? orchConfig.review_rules
           : undefined,
       );
+    } else if (sessionType === 'depth_review') {
+      sessionContextContent = buildDepthReviewClaudeMd(taskName ?? taskUrl);
     } else if (isPlanning) {
       // A planning/ops session (groom/design/ops) with no assembled procedure
       // is a dispatch mis-wire, not a case to silently paper over: falling
@@ -2676,7 +2683,11 @@ export class SessionManager extends EventEmitter {
     // code-session nudge — they wait for a re-review prompt with a diff instead.
     const nudgeMessage = buildResumeMessage(row, 'restart');
     const nudgeDelay = setTimeout(() => {
-      if (!session.hasEnded && row.session_type !== 'review') {
+      if (
+        !session.hasEnded &&
+        row.session_type !== 'review' &&
+        row.session_type !== 'depth_review'
+      ) {
         this.send(row.session_id, nudgeMessage);
       }
     }, RESUME_NUDGE_DELAY_MS);
@@ -2819,9 +2830,13 @@ export class SessionManager extends EventEmitter {
     const available =
       runtimeSettings.max_concurrent_code_sessions - codeSessionCount;
     const reviewOrphans = orphans.filter(
-      (row) => row.session_type === 'review',
+      (row) =>
+        row.session_type === 'review' || row.session_type === 'depth_review',
     );
-    const codeOrphans = orphans.filter((row) => row.session_type !== 'review');
+    const codeOrphans = orphans.filter(
+      (row) =>
+        row.session_type !== 'review' && row.session_type !== 'depth_review',
+    );
     const toResume = [...reviewOrphans, ...codeOrphans.slice(0, available)];
     const toError = codeOrphans.slice(available);
 
@@ -3171,7 +3186,8 @@ export class SessionManager extends EventEmitter {
   findLiveSessionIdForTask(taskId: string): string | undefined {
     const norm = taskId.replace(/-/g, '');
     for (const s of this.sessions.values()) {
-      if (s.sessionType === 'review') continue;
+      if (s.sessionType === 'review' || s.sessionType === 'depth_review')
+        continue;
       if (isPlanningSession(s.sessionType)) continue;
       if (s.hasEnded) continue;
       const tid = s.taskId?.replace(/-/g, '');

@@ -8,6 +8,7 @@ import {
   DESIGN_ALLOWED_TOOLS,
   OPS_ALLOWED_TOOLS,
   DOCS_ALLOWED_TOOLS,
+  DEPTH_REVIEW_ALLOWED_TOOLS,
   docsWebFetchTools,
   NOTION_READ_MCP_TOOLS,
   runtimeSettings,
@@ -606,7 +607,9 @@ export function getSessionAllowedTools(
                 ...notionExtras,
                 ...docsWebFetchTools(docsSourceDomains),
               ]
-            : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
+            : sessionType === 'depth_review'
+              ? [...DEPTH_REVIEW_ALLOWED_TOOLS, ...notionExtras]
+              : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
   return [...new Set([...base, ...grantable])];
 }
 

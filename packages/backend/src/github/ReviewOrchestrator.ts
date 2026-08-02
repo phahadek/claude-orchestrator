@@ -37,6 +37,8 @@ import type {
   WorkItem,
 } from './PRReviewService';
 import { FetchRetryExhaustedError } from './PRReviewService';
+import type { DepthReviewService } from './DepthReviewService';
+import { SIZE_DIMENSION_NAME as DEPTH_SIZE_DIMENSION_NAME } from './DepthReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob, FlakeRecoveryOutcome } from './types';
@@ -86,6 +88,21 @@ export class ReviewOrchestrator {
   readonly bootReady: Promise<void>;
   private stallDetectorInterval: ReturnType<typeof setInterval> | null = null;
   private preReviewPipeline: PreReviewPipeline;
+  /**
+   * Optional reference to the depth-review pass — the second, separate
+   * review dispatched only after a PR's conformance verdict reaches
+   * approved (see runDepthReviewPass). Set via setDepthReviewService() after
+   * both services are constructed (server.ts), mirroring the
+   * mergeWatcher/autoMerger wiring on PRReviewService. Left unset in most
+   * tests, which is fine: the depth pass fails open, so an unwired instance
+   * behaves exactly like a depth-review timeout — no escalation, merge
+   * proceeds on conformance approval alone.
+   */
+  private depthReviewService?: DepthReviewService;
+
+  setDepthReviewService(service: DepthReviewService): void {
+    this.depthReviewService = service;
+  }
 
   constructor(
     private reviewService: PRReviewService,
@@ -1102,8 +1119,93 @@ export class ReviewOrchestrator {
           }),
         );
       }
+    } else if (result.verdict === 'approved') {
+      // Depth review runs only after conformance is approved, and never
+      // blocks merge — handleApprovedVerdict (inside reviewService.reviewPR,
+      // already called above) has already transitioned the PR and kicked
+      // off auto-merge. Fire-and-forget: an error/timeout in the depth pass
+      // must not delay or block anything already in flight.
+      this.dispatchDepthReview(job, project.id).catch((e) => {
+        logger.warn(
+          `[ReviewOrchestrator] depth review dispatch failed for PR #${job.prNumber} (${job.repo}) — failing open: ${e}`,
+        );
+      });
     }
 
     this.consumePendingPushIfSet(job.prNumber, job.repo);
+  }
+
+  /**
+   * Dispatch the depth-review pass for a just-conformance-approved PR and
+   * route its result: a security/concurrency/reliability/data-integrity
+   * finding escalates (setPauseReason + review_escalated, same channel the
+   * conformance pass's review_rules_escalation uses), while a
+   * size-proportionality-only finding routes through the same
+   * enqueueFeedback auto-fix-iteration path a conformance needs_changes
+   * verdict uses — preserving today's scope-creep auto-fix behavior now that
+   * size lives in this pass instead of conformance. DepthReviewService
+   * itself fails open (returns null on any error/timeout), so a null result
+   * here is a silent no-op — never an escalation, never a merge block.
+   */
+  private async dispatchDepthReview(
+    job: ReviewJob,
+    projectId: string,
+  ): Promise<void> {
+    if (!this.depthReviewService) return;
+
+    const prRow = getPRByNumber(job.prNumber, job.repo);
+    const diffSource = this.github
+      ? new GitHubDiffSource(this.github, job.repo, job.prNumber)
+      : {
+          fetchDiff: async () => {
+            throw new Error('No GitHub client available for diff');
+          },
+        };
+
+    const result = await this.depthReviewService.runDepthReview(
+      job.prNumber,
+      job.repo,
+      diffSource,
+      projectId,
+      job.contextUrl,
+      prRow?.task_id ?? null,
+    );
+    if (!result) return;
+
+    if (result.hasNonSizeFailure) {
+      const failing = result.dimensions.filter(
+        (d) => !d.passed && d.name !== DEPTH_SIZE_DIMENSION_NAME,
+      );
+      const message = [
+        `Depth review for PR #${job.prNumber} found a defect beyond spec-conformance:`,
+        result.summary,
+        '',
+        ...failing.map((d) => `- **${d.name}**: ${d.notes}`),
+      ].join('\n');
+      logger.warn(`[ReviewOrchestrator] ${message}`);
+      setPauseReason(job.prNumber, job.repo, 'depth_review_escalation');
+      this.sessionManager.emit('message', {
+        type: 'review_escalated',
+        prNumber: job.prNumber,
+        repo: job.repo,
+        message,
+      });
+      return;
+    }
+
+    if (result.sizeOnlyFailure && prRow?.session_id) {
+      const sizeDim = result.dimensions.find(
+        (d) => d.name === DEPTH_SIZE_DIMENSION_NAME && !d.passed,
+      );
+      const message = [
+        `The depth review pass flagged this PR for scope creep (size-proportionality):`,
+        sizeDim?.notes ?? result.summary,
+      ].join('\n');
+      await this.sessionManager.enqueueFeedback(
+        prRow.session_id,
+        'ai-reviewer',
+        message,
+      );
+    }
   }
 }
