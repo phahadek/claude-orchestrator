@@ -476,6 +476,19 @@ export function renderOpsCapabilities(): string[] {
       'PR, then continue driving the rest of the change, or park on it if the whole ' +
       'thing is now blocked on that Code task landing.',
     '',
+    'Workflow-scope credential ceiling: before staging that `task.create`, check the ' +
+      "discovered fix's target file path(s) — as this session's own investigation " +
+      'names them, since there is no worktree to git-diff — against the workflow-scope ' +
+      'denylist (`.github/workflows/**`; see `session/workflowScopeDenylist.ts`). A ' +
+      'spun-off Code task hits the identical `workflow` OAuth scope ceiling later, ' +
+      'reactively, at its own push — filing one is a dead end, not an escape hatch. ' +
+      'On a match, do NOT stage `task.create`; instead stage an `ops.prIntent` intent ' +
+      `by calling the \`${orchestratorMcpToolName('ops.prIntent')}\` tool with the ` +
+      'payload carrying the verified change content itself (the fix, described in full ' +
+      '— never a branch reference, since this session cannot push one). On operator ' +
+      'approval this session is granted a real worktree and branch and re-dispatched ' +
+      'to make the change and open the PR itself.',
+    '',
     'For a change small and ops-scoped enough to land directly from this session, ' +
       'stage an Ops PR-intent declaration first — never open a PR speculatively. On ' +
       'operator approval, this session is granted a real worktree, feature branch, ' +
