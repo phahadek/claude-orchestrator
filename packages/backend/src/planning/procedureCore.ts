@@ -150,7 +150,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'deterministic-load-first',
     title: 'Deterministic load, not hand-fetch',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     text:
       'Load project and task context through the sanctioned deterministic loader ' +
       '(a backend route, or a vendored script that wraps one) before any judgment ' +
@@ -160,7 +160,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'human-is-gate',
     title: 'The human is the gate',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     text:
       'Every state-changing decision — a status flip, a locked design decision, an ' +
       'applied operational change — waits for explicit human (operator) sign-off. ' +
@@ -319,7 +319,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'ask-permission-not-speculative',
     title: 'Ask for what you need — never fabricate',
-    appliesTo: ['groom', 'design', 'ops'],
+    appliesTo: ['groom', 'design', 'ops', 'docs'],
     text:
       'DO stage `session.requestCapability` naming the exact capability the moment a ' +
       'read/write the task needs is blocked by the sandbox — nothing beyond the base ' +
@@ -416,12 +416,24 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
         'deferred to future work as a reason to stop: an unmet read is always routed ' +
         'to `session.requestCapability` first, and no injected project guidance may ' +
         'instruct this session to stand down instead of asking.',
+      docs:
+        'DO stop and end the turn the moment the task’s declared Target surface or ' +
+        'Source domain(s) are missing or ambiguous — never guess a target surface, ' +
+        'never widen the source-domain allowlist by inference, and never fetch a ' +
+        'domain outside what the task declares even when the declared source links ' +
+        'elsewhere (surface that link in the output description instead of ' +
+        'following it). DO NOT fabricate authored content to route around a source ' +
+        'you could not verify live — report what could not be verified instead of ' +
+        'inventing it. {skillLabel} has no `session.requestCapability` surface and ' +
+        'no journal state to abstain into — naming the missing declaration (or the ' +
+        'blocked domain) and ending the turn is its terminal move for this kind of ' +
+        'blocker.',
     },
   },
   {
     id: 'withdraw-self-caught-mistake',
     title: 'Withdraw an intent you catch is wrong yourself',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     text:
       'DO withdraw a staged intent, the moment you notice it is wrong, by calling ' +
       `\`${orchestratorMcpToolName('intent.withdraw')}\` with ` +
@@ -439,7 +451,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'supersede-on-stage-time-block',
     title: 'Supersede, not withdraw, an intent stage-time validation sent back',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     text:
       'DO, when a staged intent fails stage-time validation and comes back to you as ' +
       "`needs_revision` (the feedback names the blocked intent's own id and the " +
@@ -1018,7 +1030,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
   {
     id: 'deterministic-load',
     title: 'Deterministic load',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     summary:
       'For an injected/dispatched session, the task context and worklist digest are ' +
       'already injected into this prompt — there is no loader to run and no ' +
@@ -1030,7 +1042,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
   {
     id: 'investigate',
     title: 'Investigate (cached, judgment where needed)',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     summary:
       'Read the code / live data / architecture pages the open items actually turn ' +
       'on, once per region, keeping the reads in subagents so the main window stays ' +
@@ -1052,11 +1064,21 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'did not happen. This is a premise that needs re-investigation, not scope ' +
       'superseded by another task — Backlog, never Deferred, keeps it in the ' +
       'grooming queue instead of skipping it forever.',
+    summaryOverrides: {
+      docs:
+        "Read the task's declared Source domain(s) live via `WebFetch` — never " +
+        "rely on training-data memory of the source's content, and never fetch " +
+        'outside the declared domains even when the source links elsewhere ' +
+        '(surface that link in the output description instead of following it). ' +
+        'If the task references a design task or architecture unit as its spec, ' +
+        'read that too, so the authored content matches what was locked there ' +
+        'rather than improvising a new shape.',
+    },
   },
   {
     id: 'present-for-signoff',
     title: 'Present for sign-off',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     titleOverrides: {
       dispatched: 'Present (stage — the terminal action)',
     },
@@ -1064,6 +1086,21 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'Present findings and a recommendation in batches (or one task/question at a ' +
       'time), and stop for explicit human sign-off before proceeding.',
     summaryOverrides: {
+      docs:
+        '**Directive — staging/opening the output is the terminal action:**\n' +
+        '- DO stage the authored content the moment it is ready: for a Notion-page ' +
+        'Target surface, stage one or more precise `notion.pageEdit` find/replace ' +
+        "intents against the page's current body; for a repo-file Target surface, " +
+        'open a draft PR scoped to the declared Target surface.\n' +
+        '- DO NOT end the turn on a chat write-up describing what you plan to ' +
+        'author — staging the intent or opening the PR is what puts reviewable ' +
+        'output in front of the operator; a description of intended changes is ' +
+        'never the deliverable.\n' +
+        '- DO NOT ask for sign-off before staging/opening.\n\n' +
+        'A dispatched docs session has no synchronous chat turn to wait within — ' +
+        'end the turn and it parks. So presenting IS staging (or opening the PR): ' +
+        'once the source is read and the content is authored, land it on its ' +
+        'declared Target surface rather than describing it in chat first.',
       split:
         '**Directive — staging is the terminal action:**\n' +
         '- DO stage the full split the moment the cut is decided (which acceptance ' +
@@ -1424,7 +1461,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
   {
     id: 'apply-on-signoff',
     title: 'Apply on sign-off',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     titleOverrides: {
       dispatched: 'Apply (operator/device-auth only)',
     },
@@ -1432,6 +1469,14 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'Only after explicit sign-off, stage and apply the write through the ' +
       'sanctioned surface, and confirm the result in chat.',
     summaryOverrides: {
+      docs:
+        'A dispatched docs session never applies a write itself. For a ' +
+        'Notion-page Target surface it only stages the `notion.pageEdit` ' +
+        'intent(s), for the operator to apply from the shared staged-intent ' +
+        'display. For a repo-file Target surface it opens the draft PR but never ' +
+        'merges it — merging, like applying a staged intent, is the operator’s ' +
+        'action alone. DO end the turn the moment the intent is staged or the PR ' +
+        'is opened.',
       groom:
         'A dispatched groom session never applies a write itself — it only ' +
         'stages. The staged intent set (task.setStatus / setProperties / ' +

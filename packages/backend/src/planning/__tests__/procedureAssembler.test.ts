@@ -354,6 +354,30 @@ describe('docs digest rendering', () => {
     });
     expect(output).toMatch(/not declared.*stop and ask/i);
   });
+
+  it('renders a non-empty ### Hard rules section for a dispatched docs session — regression guard for docs having zero principlesFor/stepsFor entries', () => {
+    const digest: PlanningDigest = {
+      workflow: 'docs',
+      data: deriveDocsDigestSlice(fixtureDocsLoadResult()),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Document the webhooks API',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+
+    // At least one numbered step above the Hard rules heading.
+    expect(output).toMatch(/## Docs Authoring Procedure/);
+    expect(output).toMatch(/### .+\n\n.+\n\n### Hard rules/s);
+
+    const hardRulesIndex = output.indexOf('### Hard rules');
+    expect(hardRulesIndex).toBeGreaterThan(-1);
+    const afterHeading = output.slice(hardRulesIndex + '### Hard rules'.length);
+    expect(afterHeading).toMatch(/\n- \*\*.+\*\*:/);
+    expect(output).toContain('The human is the gate');
+  });
 });
 
 // ─── assemblePlanningProcedure ──────────────────────────────────────────────

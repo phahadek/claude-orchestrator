@@ -66,10 +66,40 @@ describe('SKILL_LABELS', () => {
 
 describe('procedureCore', () => {
   it('has at least one principle and one ordered step applicable to every skill', () => {
-    const skills: SkillId[] = ['groom', 'design', 'ops', 'split'];
+    const skills: SkillId[] = ['groom', 'design', 'ops', 'split', 'docs'];
     for (const skill of skills) {
       expect(principlesFor(skill).length).toBeGreaterThan(0);
       expect(stepsFor(skill).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('guards every member of the SkillId union against shipping with zero principles — the class of defect a skill registered into the SkillId union/SKILL_LABELS but into no appliesTo list produces', () => {
+    const allSkills: SkillId[] = ['groom', 'design', 'ops', 'split', 'docs'];
+    for (const skill of allSkills) {
+      expect(
+        principlesFor(skill).length,
+        `principlesFor('${skill}') must be non-empty`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps non-docs skills at their pre-existing principlesFor/stepsFor counts — a regression guard against this docs fix leaking into unrelated skills', () => {
+    const expected: Record<
+      'groom' | 'design' | 'ops' | 'split',
+      { principles: number; steps: number }
+    > = {
+      groom: { principles: 12, steps: 8 },
+      design: { principles: 22, steps: 7 },
+      ops: { principles: 15, steps: 5 },
+      split: { principles: 5, steps: 4 },
+    };
+    for (const skill of Object.keys(expected) as Array<keyof typeof expected>) {
+      expect(principlesFor(skill).length, `${skill} principlesFor`).toBe(
+        expected[skill].principles,
+      );
+      expect(stepsFor(skill).length, `${skill} stepsFor`).toBe(
+        expected[skill].steps,
+      );
     }
   });
 
