@@ -469,9 +469,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       'baseline_escalation_floor',
     );
     expect(
-      messages.some(
-        (m) => (m as { type: string }).type === 'review_escalated',
-      ),
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
     ).toBe(true);
   });
 
