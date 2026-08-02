@@ -1388,6 +1388,48 @@ export function runMigrations(target: Database.Database): void {
     }
   }
 
+  // staged_intent.milestone: canonicalize pre-existing rows written before
+  // stageIntent's caller-side resolveMilestoneForProject normalization
+  // existed (see stagedIntents.milestoneNormalization.test.ts) — those rows
+  // were keyed on whatever form the caller happened to pass (a milestone's
+  // DB id/UUID, or its full display name) instead of the canonical short id
+  // every read (listStagedIntentsByMilestone, the GET /staged-intents
+  // ?milestone= route) matches on literally. Left uncanonicalized, such a
+  // row is invisible to any caller that queries in a different form than it
+  // was written in — the exact false-empty this migration closes. Runs after
+  // the canonical_short_id backfills above so `m.canonical_short_id` is
+  // populated. Matches a row's milestone value against the milestones table
+  // (by id, or by name case-insensitively) scoped to the row's own
+  // project_id — mirroring findMilestone in milestoneResolver.ts — and
+  // rewrites it to COALESCE(canonical_short_id, name), i.e.
+  // canonicalMilestoneKey. A value already in canonical form (or belonging
+  // to no milestone the row's project knows about) matches nothing and is
+  // left untouched — this is deliberate, not a gap: a NULL milestone is the
+  // "unattributed" bucket's rows, handled separately by
+  // backfillStagedIntentMilestones (queries.ts, task-id-based, run at every
+  // boot) rather than this schema migration, and an unmatched non-NULL value
+  // could belong to a deleted/renamed milestone that would be unsafe to
+  // guess at. Idempotent: a row already canonical produces no EXISTS match
+  // on a second run.
+  target.exec(`
+    UPDATE staged_intent
+    SET milestone = (
+      SELECT COALESCE(m.canonical_short_id, m.name)
+      FROM milestones m
+      WHERE m.project_id = staged_intent.project_id
+        AND (m.id = staged_intent.milestone
+             OR m.name = staged_intent.milestone COLLATE NOCASE)
+      LIMIT 1
+    )
+    WHERE milestone IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM milestones m
+        WHERE m.project_id = staged_intent.project_id
+          AND (m.id = staged_intent.milestone
+               OR m.name = staged_intent.milestone COLLATE NOCASE)
+      );
+  `);
+
   // ── projects.arch_store_adopted: per-project dual-read flag ─────────────
   // A whole project flips to reading the arch_unit store at once — no
   // per-page split-brain. Default 0 (Notion fallback) until migrated.
