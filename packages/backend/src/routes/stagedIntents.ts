@@ -405,7 +405,9 @@ export function findIncompleteOpsTerminalGroupsForSession(
         .filter((id): id is string => Boolean(id)),
     ),
   ];
-  return groupIds.filter((groupId) => checkOpsTerminalGroupCompleteness(groupId));
+  return groupIds.filter((groupId) =>
+    checkOpsTerminalGroupCompleteness(groupId),
+  );
 }
 
 /**

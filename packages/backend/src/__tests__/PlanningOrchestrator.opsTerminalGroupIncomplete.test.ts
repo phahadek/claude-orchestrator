@@ -123,7 +123,11 @@ describe('PlanningOrchestrator — surface an ops session going terminal with an
   it('raises ops_terminal_group_incomplete naming the group when the session ends with only a follow-on task.create committed — the worked-instance bug', () => {
     seedSession();
     seedJournal(TASK_ID, 'candidate');
-    stageRow({ kind: 'task.create', group_id: 'g-ops-close', state: 'committed' });
+    stageRow({
+      kind: 'task.create',
+      group_id: 'g-ops-close',
+      state: 'committed',
+    });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
 
@@ -138,7 +142,11 @@ describe('PlanningOrchestrator — surface an ops session going terminal with an
   it('does not raise a pause reason when the group also carries the journal.setState -> resolved member', () => {
     seedSession();
     seedJournal(TASK_ID, 'resolved');
-    stageRow({ kind: 'task.create', group_id: 'g-ops-close', state: 'committed' });
+    stageRow({
+      kind: 'task.create',
+      group_id: 'g-ops-close',
+      state: 'committed',
+    });
     stageRow({
       kind: 'journal.setState',
       payload: JSON.stringify({ taskId: TASK_ID, state: 'resolved' }),
@@ -156,7 +164,11 @@ describe('PlanningOrchestrator — surface an ops session going terminal with an
 
   it('does not raise a pause reason for a non-ops session (e.g. groom) with the same incomplete group shape', () => {
     seedSession(SESSION_ID, TASK_ID, 'groom');
-    stageRow({ kind: 'task.create', group_id: 'g-ops-close', state: 'committed' });
+    stageRow({
+      kind: 'task.create',
+      group_id: 'g-ops-close',
+      state: 'committed',
+    });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
 
@@ -167,7 +179,11 @@ describe('PlanningOrchestrator — surface an ops session going terminal with an
 
   it('does not raise a pause reason for a gate-verify ops session (no Notion task to close)', () => {
     seedSession(SESSION_ID, 'gate-item:abc123', 'ops');
-    stageRow({ kind: 'task.create', group_id: 'g-ops-close', state: 'committed' });
+    stageRow({
+      kind: 'task.create',
+      group_id: 'g-ops-close',
+      state: 'committed',
+    });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
 

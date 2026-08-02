@@ -375,9 +375,8 @@ export class PlanningOrchestrator {
       row.session_type === 'ops' &&
       !isGateVerifySession(row.task_id)
     ) {
-      const incompleteGroups = findIncompleteOpsTerminalGroupsForSession(
-        sessionId,
-      );
+      const incompleteGroups =
+        findIncompleteOpsTerminalGroupsForSession(sessionId);
       if (incompleteGroups.length > 0) {
         setTaskPauseReason(
           row.task_id,
