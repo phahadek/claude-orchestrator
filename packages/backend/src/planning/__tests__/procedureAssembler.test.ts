@@ -1214,6 +1214,32 @@ describe('assemblePlanningProcedure', () => {
     expect(output).not.toContain('Full body content for unit 0, verbatim.');
   });
 
+  it('emits the arch_unit id alongside the title for every store-sourced unit, over the inline cap', () => {
+    const result = fixtureGroomLoadResult();
+    result.archSource = 'store';
+    result.targetTasks[0].archSource = 'store';
+    result.targetTasks[0].archUnits = Array.from({ length: 26 }, (_, i) => ({
+      id: `unit-${i}`,
+      title: `Unit ${i}`,
+      body: `Full body content for unit ${i}, verbatim.`,
+    }));
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(result, 'task-1'),
+      },
+    });
+
+    for (let i = 0; i < 26; i++) {
+      expect(output).toContain(`Unit ${i} (unit-${i})`);
+    }
+  });
+
   it('keeps inlining full bodies when the store-sourced selection is at the inline cap', () => {
     const result = fixtureGroomLoadResult();
     result.archSource = 'store';

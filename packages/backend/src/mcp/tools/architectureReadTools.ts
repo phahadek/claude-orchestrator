@@ -22,8 +22,8 @@ const archUnitStatusSchema = z.enum(['active', 'deferred', 'superseded']);
  * Registers `architecture.getUnit` / `architecture.queryUnits` — the read
  * surface over the arch_unit store a groom/design/ops session dereferences
  * on demand. These are the store's only body-bearing read a session
- * genuinely holds: the digest carries titles/ids (groom inlines bodies for
- * its own small region-intersected selection, see
+ * genuinely holds: the digest carries titles/ids for all three workflows
+ * (groom inlines bodies for its own small region-intersected selection, see
  * `planning/procedureAssembler.ts`'s `renderGroomDigest`, but design/ops
  * selections are too large to inline wholesale). Always-on for the
  * qualifying session types — not gated behind `session.requestCapability` —
@@ -50,11 +50,22 @@ export function registerArchitectureReadTools(
     {
       title: 'Fetch one architecture unit by id',
       description:
-        'Read-only: returns the full arch_unit store record (including body) for the given id, or null if no unit exists with that id.',
+        'Read-only: returns the full arch_unit store record (including body) for the given id, or an isError result if no unit exists with that id.',
       inputSchema: { id: z.string() },
     },
     async (args) => {
-      const unit = getUnit(args.id) ?? null;
+      const unit = getUnit(args.id);
+      if (!unit) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `Not found: no arch_unit with id "${args.id}". Ids are uuids from the digest's "title (id)" listing — do not guess a slug from the title.`,
+            },
+          ],
+        };
+      }
       return {
         content: [{ type: 'text', text: JSON.stringify(unit) }],
       };
