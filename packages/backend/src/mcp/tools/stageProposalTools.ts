@@ -355,6 +355,7 @@ export function registerStageProposalTools(
       inputSchema: envelope({
         taskId: z.string(),
         reason: z.string(),
+        skippedKind: z.string().optional(),
       }),
     },
     async (args) => stage('planning.noOp', args.payload, ctx, args),
