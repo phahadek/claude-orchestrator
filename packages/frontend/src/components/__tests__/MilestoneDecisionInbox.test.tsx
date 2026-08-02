@@ -914,4 +914,38 @@ describe('MilestoneDecisionInbox', () => {
     expect(seedCard.textContent).toContain('Seed target');
     expect(seedCard.textContent).toContain('seed.stage');
   });
+
+  it('signals onCardsRemoved with the dispositioned card id, so a caller (e.g. the decision stack) can re-select whatever is now topmost', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'intent-1',
+        kind: 'task.setStatus',
+        payload: { taskId: 'notion:1', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 1,
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+    vi.spyOn(stagedIntentsApi, 'apply').mockResolvedValue({
+      ok: true,
+      result: {},
+    });
+
+    const onCardsRemoved = vi.fn();
+    render(
+      <MilestoneDecisionInbox
+        projectId="proj-1"
+        milestone="M1"
+        onCardsRemoved={onCardsRemoved}
+      />,
+    );
+
+    const card = await screen.findByTestId('milestone-decision-card-intent-1');
+    fireEvent.click(within(card).getByText('✓ Commit'));
+
+    await waitFor(() => expect(onCardsRemoved).toHaveBeenCalledWith(['intent-1']));
+  });
 });

@@ -39,6 +39,8 @@ interface Props {
   flaggedOnly?: boolean;
   /** Registers (or unregisters, on null) a card's scroll-follow target — called for every rendered card, keyed by its own id. Omit to skip scroll-follow registration. */
   registerScrollTarget?: (id: string, target: CardScrollTarget | null) => void;
+  /** Called with the ids of every card a disposition (single, group, or clean-batch) just removed, so a caller can re-select whatever is now topmost when the removed set included the current selection. */
+  onCardsRemoved?: (ids: string[]) => void;
 }
 
 interface TaskLabel {
@@ -158,6 +160,7 @@ export function MilestoneDecisionInbox({
   phaseFilter = null,
   flaggedOnly = false,
   registerScrollTarget,
+  onCardsRemoved,
 }: Props) {
   const taskById = new Map(tasks.map((t) => [t.taskId, t]));
   const {
@@ -181,7 +184,10 @@ export function MilestoneDecisionInbox({
     handleRecoverGroup,
     upsert,
     remove,
-  } = useDecisionQueue({ type: 'milestone', projectId, milestone });
+  } = useDecisionQueue(
+    { type: 'milestone', projectId, milestone },
+    { onRemoved: onCardsRemoved },
+  );
 
   // Already-committed siblings never reappear on the live active/blocked
   // surface `intents` is drawn from (that would perpetually resurface a

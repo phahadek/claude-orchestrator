@@ -1,4 +1,10 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  within,
+} from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { MilestoneDecisionStack } from '../MilestoneDecisionStack';
 import { stagedIntentsApi } from '../../api/stagedIntents';
@@ -319,6 +325,259 @@ describe('MilestoneDecisionStack', () => {
     expect(onSelect).toHaveBeenCalledWith({
       type: 'intent',
       intent: intents[0],
+    });
+  });
+
+  describe('re-selecting the topmost card after a disposition', () => {
+    function makeIntent(overrides: Partial<StagedIntent>): StagedIntent {
+      return {
+        id: 'intent',
+        kind: 'task.setStatus',
+        payload: { taskId: 'task-x', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 1,
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+        ...overrides,
+      };
+    }
+
+    it('selects the card now topmost when the selected card is dispositioned via commit, and reuses the scroll-follow ordering (no second refetch)', async () => {
+      const intentA = makeIntent({ id: 'intent-a', createdAt: 2 });
+      const intentB = makeIntent({ id: 'intent-b', createdAt: 1 });
+      const listByMilestone = vi
+        .spyOn(stagedIntentsApi, 'listByMilestone')
+        .mockResolvedValue([intentA, intentB]);
+      vi.spyOn(stagedIntentsApi, 'apply').mockResolvedValue({
+        ok: true,
+        result: {},
+      });
+
+      const onSelect = vi.fn();
+      render(
+        <MilestoneDecisionStack
+          projectId="proj-1"
+          milestone="M1"
+          tasks={[]}
+          phaseFilter={null}
+          selection={{ type: 'intent', intent: intentA }}
+          onSelect={onSelect}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(
+          screen.getByTestId('milestone-decision-card-intent-a'),
+        ).toBeTruthy(),
+      );
+
+      const cardA = screen.getByTestId('milestone-decision-card-intent-a');
+      fireEvent.click(within(cardA).getByText('✓ Commit'));
+
+      await waitFor(() =>
+        expect(onSelect).toHaveBeenCalledWith({
+          type: 'intent',
+          intent: intentB,
+        }),
+      );
+
+      // The reselect reused the fetched-order card list — no second fetch.
+      expect(listByMilestone).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the current selection unchanged when a different (non-selected) card is dispositioned', async () => {
+      const groupAIntent = makeIntent({
+        id: 'a1',
+        groupId: 'group-a',
+        createdAt: 2,
+      });
+      const groupBIntent = makeIntent({
+        id: 'b1',
+        groupId: 'group-b',
+        createdAt: 1,
+      });
+      vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+        groupAIntent,
+        groupBIntent,
+      ]);
+      vi.spyOn(stagedIntentsApi, 'listGroup').mockResolvedValue({
+        groupId: 'group-b',
+        intents: [],
+        wedged: false,
+      });
+      const approveGroup = vi
+        .spyOn(stagedIntentsApi, 'approveGroup')
+        .mockResolvedValue({ ok: true, committed: ['group-b'] });
+
+      const onSelect = vi.fn();
+      render(
+        <MilestoneDecisionStack
+          projectId="proj-1"
+          milestone="M1"
+          tasks={[]}
+          phaseFilter={null}
+          selection={{ type: 'intent', intent: groupAIntent }}
+          onSelect={onSelect}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(
+          screen.getByTestId('milestone-decision-card-group-b'),
+        ).toBeTruthy(),
+      );
+
+      const cardB = screen.getByTestId('milestone-decision-card-group-b');
+      // The group actions bar stops click propagation, so this exercises
+      // the disposition path without also triggering a click-to-select.
+      fireEvent.click(within(cardB).getByText(/✓ Approve/));
+
+      await waitFor(() => expect(approveGroup).toHaveBeenCalledWith('group-b'));
+
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it('re-selects the new topmost card exactly once when a group approve removes several cards', async () => {
+      const member1 = makeIntent({
+        id: 'g1',
+        groupId: 'group-x',
+        createdAt: 3,
+      });
+      const member2 = makeIntent({
+        id: 'g2',
+        kind: 'task.setDependsOn',
+        payload: { taskId: 'task-x', dependsOn: [] },
+        groupId: 'group-x',
+        createdAt: 2,
+      });
+      const other = makeIntent({ id: 'other-1', createdAt: 1 });
+      vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+        member1,
+        member2,
+        other,
+      ]);
+      vi.spyOn(stagedIntentsApi, 'listGroup').mockResolvedValue({
+        groupId: 'group-x',
+        intents: [],
+        wedged: false,
+      });
+      vi.spyOn(stagedIntentsApi, 'approveGroup').mockResolvedValue({
+        ok: true,
+        committed: ['group-x'],
+      });
+
+      const onSelect = vi.fn();
+      render(
+        <MilestoneDecisionStack
+          projectId="proj-1"
+          milestone="M1"
+          tasks={[]}
+          phaseFilter={null}
+          selection={{ type: 'intent', intent: member1 }}
+          onSelect={onSelect}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(
+          screen.getByTestId('milestone-decision-card-group-x'),
+        ).toBeTruthy(),
+      );
+
+      const groupCard = screen.getByTestId('milestone-decision-card-group-x');
+      fireEvent.click(within(groupCard).getByText(/✓ Approve/));
+
+      await waitFor(() =>
+        expect(onSelect).toHaveBeenCalledWith({
+          type: 'intent',
+          intent: other,
+        }),
+      );
+      expect(onSelect).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears the selection to the defined empty state when the last remaining card is dispositioned', async () => {
+      const onlyIntent = makeIntent({ id: 'only-1' });
+      vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+        onlyIntent,
+      ]);
+      vi.spyOn(stagedIntentsApi, 'apply').mockResolvedValue({
+        ok: true,
+        result: {},
+      });
+
+      const onSelect = vi.fn();
+      render(
+        <MilestoneDecisionStack
+          projectId="proj-1"
+          milestone="M1"
+          tasks={[]}
+          phaseFilter={null}
+          selection={{ type: 'intent', intent: onlyIntent }}
+          onSelect={onSelect}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(
+          screen.getByTestId('milestone-decision-card-only-1'),
+        ).toBeTruthy(),
+      );
+
+      const card = screen.getByTestId('milestone-decision-card-only-1');
+      fireEvent.click(within(card).getByText('✓ Commit'));
+
+      await waitFor(() => expect(onSelect).toHaveBeenCalledWith(null));
+    });
+
+    it('advances to the new topmost card when a decision.pickOne card is answered, not only via approve/reject', async () => {
+      const pickOne = makeIntent({
+        id: 'pick-1',
+        kind: 'decision.pickOne',
+        payload: {
+          prompt: 'Which approach?',
+          options: [{ label: 'A', description: 'Option A' }],
+          allowFreeForm: false,
+        },
+        createdAt: 2,
+      });
+      const other = makeIntent({ id: 'other-2', createdAt: 1 });
+      vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+        pickOne,
+        other,
+      ]);
+      vi.spyOn(stagedIntentsApi, 'answer').mockResolvedValue({
+        ok: true,
+        intent: { ...pickOne, state: 'committed' },
+      });
+
+      const onSelect = vi.fn();
+      render(
+        <MilestoneDecisionStack
+          projectId="proj-1"
+          milestone="M1"
+          tasks={[]}
+          phaseFilter={null}
+          selection={{ type: 'intent', intent: pickOne }}
+          onSelect={onSelect}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId('decision-pick-one-panel')).toBeTruthy(),
+      );
+
+      const pickOnePanel = screen.getByTestId('decision-pick-one-panel');
+      fireEvent.click(within(pickOnePanel).getByRole('radio'));
+      fireEvent.click(within(pickOnePanel).getByText('✓ Submit'));
+
+      await waitFor(() =>
+        expect(onSelect).toHaveBeenCalledWith({
+          type: 'intent',
+          intent: other,
+        }),
+      );
     });
   });
 });

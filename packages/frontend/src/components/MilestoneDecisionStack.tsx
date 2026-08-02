@@ -27,7 +27,7 @@ interface Props {
   /** True when phaseFilter was activated via a phase's ⚠ warning badge — narrows the phase's tasks down to the flagged (blocked) ones. */
   flaggedOnly?: boolean;
   selection: MilestoneStackSelection | null;
-  onSelect: (selection: MilestoneStackSelection) => void;
+  onSelect: (selection: MilestoneStackSelection | null) => void;
   /** Selects the intent's card *and* switches the drill-down to session mode — wired to each card's "View session" button. */
   onViewSession?: (selection: MilestoneStackSelection) => void;
   /** The centre column's scrollable ancestor (owned by MilestoneView) — scroll-follow attaches to it. Omit to skip scroll-follow (e.g. on mobile, where only one region is mounted at a time). */
@@ -74,9 +74,13 @@ export function MilestoneDecisionStack({
   const inboxTargetsRef = useRef<Map<string, CardScrollTarget>>(new Map());
   const taskTargetsRef = useRef<Map<string, CardScrollTarget>>(new Map());
   const suppressNextScrollRef = useRef(false);
+  // Bumped (never read) whenever a disposition removes the selected card, to
+  // force the reselect effect below to run once the removal's DOM update has
+  // committed (a plain ref wouldn't re-trigger the effect).
+  const [reselectTick, setReselectTick] = useState(0);
 
   const handleSelect = useCallback(
-    (next: MilestoneStackSelection) => {
+    (next: MilestoneStackSelection | null) => {
       suppressNextScrollRef.current = true;
       onSelect(next);
     },
@@ -113,24 +117,25 @@ export function MilestoneDecisionStack({
     [handleSelect],
   );
 
-  useEffect(() => {
-    const container = scrollContainerRef?.current;
-    if (!container) return;
-
-    const handleScroll = () => {
-      if (suppressNextScrollRef.current) {
-        suppressNextScrollRef.current = false;
-        return;
-      }
-      // Inbox cards render above task rows, so concatenation already
-      // reflects document (top-to-bottom) order.
+  // The single definition of "which card is on top": the last target (in
+  // document order — inbox cards, then task rows) whose top sits within
+  // TOP_THRESHOLD_PX of the scroll container's top edge, defaulting to the
+  // first target. Reused by the scroll-follow handler below and by the
+  // post-disposition reselect effect, so there is never a second notion of
+  // "topmost".
+  const selectTopmost = useCallback(
+    (clearIfEmpty: boolean) => {
       const targets = [
         ...inboxTargetsRef.current.values(),
         ...taskTargetsRef.current.values(),
       ];
-      if (targets.length === 0) return;
+      if (targets.length === 0) {
+        if (clearIfEmpty) handleSelect(null);
+        return;
+      }
 
-      const containerTop = container.getBoundingClientRect().top;
+      const container = scrollContainerRef?.current;
+      const containerTop = container ? container.getBoundingClientRect().top : 0;
       let chosen = targets[0];
       for (const target of targets) {
         const relativeTop =
@@ -142,11 +147,45 @@ export function MilestoneDecisionStack({
         }
       }
       chosen.select();
+    },
+    [scrollContainerRef, handleSelect],
+  );
+
+  useEffect(() => {
+    const container = scrollContainerRef?.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      if (suppressNextScrollRef.current) {
+        suppressNextScrollRef.current = false;
+        return;
+      }
+      selectTopmost(false);
     };
 
     container.addEventListener('scroll', handleScroll);
     return () => container.removeEventListener('scroll', handleScroll);
-  }, [scrollContainerRef]);
+  }, [scrollContainerRef, selectTopmost]);
+
+  // Fires once a disposition (single, group, or batch) has removed the
+  // currently-selected card and the removal's DOM update has committed —
+  // ref cleanups (registerInboxTarget/registerTaskTarget) run during commit,
+  // before this passive effect, so the target maps are already up to date.
+  // Skipped on mount (tick 0) since nothing has been removed yet.
+  useEffect(() => {
+    if (reselectTick === 0) return;
+    selectTopmost(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reselectTick]);
+
+  const handleCardsRemoved = useCallback(
+    (removedIds: string[]) => {
+      if (selectedIntentCardId && removedIds.includes(selectedIntentCardId)) {
+        setReselectTick((t) => t + 1);
+      }
+    },
+    [selectedIntentCardId],
+  );
 
   return (
     <div className={styles.stack} data-testid="milestone-decision-stack">
@@ -163,6 +202,7 @@ export function MilestoneDecisionStack({
           handleViewSession({ type: 'intent', intent })
         }
         registerScrollTarget={registerInboxTarget}
+        onCardsRemoved={handleCardsRemoved}
       />
 
       <TaskSection

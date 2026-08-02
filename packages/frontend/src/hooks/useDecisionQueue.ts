@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type {
   StagedIntent,
   StagedIntentRejectOutcome,
@@ -27,6 +27,11 @@ export interface DecisionQueueGroupDraft {
   reason: string;
 }
 
+export interface DecisionQueueOptions {
+  /** Called with the ids of every staged intent a disposition just removed — a single onAnswered/onApplied/onRejected, a group approve/reject, or the clean-batch approve-all. Lets a caller (e.g. the milestone stack) re-select whatever is now topmost when the removed set included the current selection. */
+  onRemoved?: (ids: string[]) => void;
+}
+
 /**
  * The shared partition/rank logic behind both operator decision surfaces:
  * fetch (scoped by session or milestone), live-update via the
@@ -36,13 +41,25 @@ export interface DecisionQueueGroupDraft {
  * DecisionPanel ordering (created_at ASC); milestone scope trusts the
  * backend's already-ranked ?milestone lens order and never re-sorts it.
  */
-export function useDecisionQueue(scope: DecisionQueueScope) {
+export function useDecisionQueue(
+  scope: DecisionQueueScope,
+  options?: DecisionQueueOptions,
+) {
+  const onRemovedRef = useRef(options?.onRemoved);
+  onRemovedRef.current = options?.onRemoved;
+
   const scopeKey =
     scope.type === 'session'
       ? `session:${scope.sessionId}`
       : `milestone:${scope.projectId}:${scope.milestone}`;
 
   const [intents, setIntents] = useState<StagedIntent[]>([]);
+  // Mirrors `intents` for read access from async handlers below (e.g. after
+  // an `await`) without calling setState during another component's render
+  // — computing removed ids inside a setIntents updater would do exactly
+  // that, since updater functions run during React's render phase.
+  const intentsRef = useRef(intents);
+  intentsRef.current = intents;
   const [loaded, setLoaded] = useState(false);
   const [groupErrors, setGroupErrors] = useState<Record<string, string>>({});
   const [groupInFlight, setGroupInFlight] = useState<string | null>(null);
@@ -120,6 +137,7 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
 
   const remove = useCallback((intent: StagedIntent) => {
     setIntents((prev) => prev.filter((i) => i.id !== intent.id));
+    onRemovedRef.current?.([intent.id]);
   }, []);
 
   // A session that hasn't signaled its proposal set complete for this turn
@@ -173,9 +191,13 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
         undefined,
       );
       const committed = new Set(result.committed);
+      const removedIds = intentsRef.current
+        .filter((i) => i.groupId && committed.has(i.groupId))
+        .map((i) => i.id);
       setIntents((prev) =>
         prev.filter((i) => !i.groupId || !committed.has(i.groupId)),
       );
+      if (removedIds.length > 0) onRemovedRef.current?.(removedIds);
       const nextExceptions: Record<string, string> = {};
       for (const exc of result.exceptions) {
         nextExceptions[exc.groupId] = exc.error;
@@ -224,7 +246,11 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
       clearGroupError(groupId);
       try {
         await stagedIntentsApi.approveGroup(groupId);
+        const removedIds = intentsRef.current
+          .filter((i) => i.groupId === groupId)
+          .map((i) => i.id);
         setIntents((prev) => prev.filter((i) => i.groupId !== groupId));
+        if (removedIds.length > 0) onRemovedRef.current?.(removedIds);
       } catch (err) {
         setGroupErrors((prev) => ({
           ...prev,
@@ -250,7 +276,11 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
           outcome: draft.outcome,
           reason,
         });
+        const removedIds = intentsRef.current
+          .filter((i) => i.groupId === groupId)
+          .map((i) => i.id);
         setIntents((prev) => prev.filter((i) => i.groupId !== groupId));
+        if (removedIds.length > 0) onRemovedRef.current?.(removedIds);
       } catch (err) {
         setGroupErrors((prev) => ({
           ...prev,
