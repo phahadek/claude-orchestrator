@@ -482,7 +482,7 @@ export function renderOpsCapabilities(): string[] {
       'and the PR-open tools, and is re-dispatched to make the approved change, open ' +
       'the PR, and wait for its automated review the same way a code session does ' +
       '(push additional commits in response to feedback, never merge it yourself). ' +
-      'On rejection or pushback, the session resumes with the operator\'s feedback ' +
+      "On rejection or pushback, the session resumes with the operator's feedback " +
       'instead and falls back to the `task.create` path above.',
     '',
   ];

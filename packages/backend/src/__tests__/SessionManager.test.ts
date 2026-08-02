@@ -1369,9 +1369,7 @@ describe('SessionManager.completeStart() — planning sessions skip worktree', (
   const block = source.slice(completeStartIdx, cleanupIdx);
 
   it('derives worktreeEligible from usesWorktree(sessionType)', () => {
-    expect(block).toMatch(
-      /worktreeEligible\s*=\s*usesWorktree\(sessionType\)/,
-    );
+    expect(block).toMatch(/worktreeEligible\s*=\s*usesWorktree\(sessionType\)/);
   });
 
   it('worktreePath falls back to projectDir for checkout-only planning sessions', () => {

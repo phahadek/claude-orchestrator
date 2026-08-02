@@ -2258,7 +2258,10 @@ export class SessionManager extends EventEmitter {
         // done-transition that markSessionDone deferred while this turn was
         // in flight — see markSessionDone's in-flight guard in db/queries.ts.
         this.applyPendingDoneForSettledSession(sessionId);
-        if (isPlanningSession(session.sessionType) && !usesWorktree(session.sessionType)) {
+        if (
+          isPlanningSession(session.sessionType) &&
+          !usesWorktree(session.sessionType)
+        ) {
           this.checkPlanningSessionDrift(sessionId, session.taskId, projectDir);
         }
         return this.cleanupWorktree(
@@ -2277,7 +2280,10 @@ export class SessionManager extends EventEmitter {
           this.markSessionErrored(sessionId, 'error', 'run_error', detail);
         }
         this.applyPendingDoneForSettledSession(sessionId);
-        if (isPlanningSession(session.sessionType) && !usesWorktree(session.sessionType)) {
+        if (
+          isPlanningSession(session.sessionType) &&
+          !usesWorktree(session.sessionType)
+        ) {
           this.checkPlanningSessionDrift(sessionId, session.taskId, projectDir);
         }
         return this.cleanupWorktree(
@@ -3981,7 +3987,10 @@ export class SessionManager extends EventEmitter {
     // valid project. Reaching here means the project checkout itself is missing;
     // never fall through to git worktree recreation, which planning sessions have
     // no branch/worktree state for.
-    if (isPlanningSession(row.session_type) && !usesWorktree(row.session_type)) {
+    if (
+      isPlanningSession(row.session_type) &&
+      !usesWorktree(row.session_type)
+    ) {
       const detail = `project checkout missing or not a git repo at ${recordedPath}`;
       logger.error(
         `[SessionManager] sendOrResume: ${detail} for planning session ${sessionId}`,
