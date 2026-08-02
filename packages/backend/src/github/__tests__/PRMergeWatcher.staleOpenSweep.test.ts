@@ -431,10 +431,7 @@ describe('PRMergeWatcher — escalated stale-open sweep', () => {
     await watcher.sweepEscalatedStalePRs();
 
     expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
-    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-    );
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(PR_NUMBER, REPO);
   });
 
   it('does not attempt mergeability re-categorization for a row that transitioned to merged/closed this sweep', async () => {
