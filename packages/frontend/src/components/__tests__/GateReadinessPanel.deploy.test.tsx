@@ -30,11 +30,17 @@ beforeEach(() => {
   gateApiMock.listGateItems.mockResolvedValue({ items: [], total: 0, page: 1 });
   seedApiMock.listSeedMilestoneReadiness.mockResolvedValue([]);
   seedApiMock.listSeedItems.mockResolvedValue({ items: [], total: 0, page: 1 });
-  deployApiMock.getStatus.mockResolvedValue({ run: null, events: [] });
+  deployApiMock.getStatus.mockResolvedValue({
+    run: null,
+    events: [],
+    deployedSha: null,
+    deployedShaRecordedAt: null,
+    behind: { count: 0, items: [] },
+  });
 });
 
 describe('GateReadinessPanel deploy launch control', () => {
-  it('renders no Target-SHA input and launches with just the projectId', async () => {
+  it('requires an explicit review click before the confirm-and-deploy control appears, and launches with just the projectId', async () => {
     deployApiMock.launch.mockResolvedValue({
       run: {
         run_id: 'run-123',
@@ -51,9 +57,13 @@ describe('GateReadinessPanel deploy launch control', () => {
 
     expect(screen.queryByLabelText('Deploy target SHA')).toBeNull();
 
-    const button = await screen.findByTestId('deploy-launch-button');
-    expect((button as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(button);
+    const reviewButton = await screen.findByTestId('deploy-review-button');
+    expect(screen.queryByTestId('deploy-launch-button')).toBeNull();
+    fireEvent.click(reviewButton);
+
+    const confirmButton = await screen.findByTestId('deploy-launch-button');
+    expect((confirmButton as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(confirmButton);
 
     await waitFor(() => {
       expect(deployApiMock.launch).toHaveBeenCalledWith('proj-1');
@@ -85,6 +95,9 @@ describe('GateReadinessPanel deploy launch control', () => {
           at: '2026-07-20T00:01:00.000Z',
         },
       ],
+      deployedSha: 'def456',
+      deployedShaRecordedAt: '2026-07-19T00:00:00.000Z',
+      behind: { count: 0, items: [] },
     });
 
     render(<GateReadinessPanel activeProjectId="proj-1" />);
@@ -119,6 +132,9 @@ describe('GateReadinessPanel deploy launch control', () => {
     deployApiMock.getStatus.mockResolvedValue({
       run: failedRun,
       events: failedEvents,
+      deployedSha: null,
+      deployedShaRecordedAt: null,
+      behind: { count: 0, items: [] },
     });
 
     render(<GateReadinessPanel activeProjectId="proj-1" />);
@@ -151,5 +167,22 @@ describe('GateReadinessPanel deploy launch control', () => {
 
     expect(screen.queryByTestId('deploy-run-status')).toBeNull();
     expect(screen.queryByTestId('deploy-run-failure-reason')).toBeNull();
+  });
+
+  it('resets the confirm-armed state on reload rather than resuming pre-armed', async () => {
+    const { unmount } = render(<GateReadinessPanel activeProjectId="proj-1" />);
+
+    const reviewButton = await screen.findByTestId('deploy-review-button');
+    fireEvent.click(reviewButton);
+    await screen.findByTestId('deploy-launch-button');
+
+    // Simulate a page reload: unmount and remount the component fresh,
+    // exactly like a browser reload would recreate all React state.
+    unmount();
+
+    render(<GateReadinessPanel activeProjectId="proj-1" />);
+
+    expect(await screen.findByTestId('deploy-review-button')).toBeTruthy();
+    expect(screen.queryByTestId('deploy-launch-button')).toBeNull();
   });
 });

@@ -15,6 +15,8 @@ import {
 import type { StepDescriptor } from '../deploy/playbookSchema';
 import {
   getProjectRowById,
+  getProjectDeployedShaRow,
+  listMergedSince,
   getSession,
   hasActiveCapabilityRequestForSession,
   markSessionDone,
@@ -373,10 +375,14 @@ export class DeployAgenticStepSpawner {
 }
 
 /**
- * Lazily builds the one DeployOrchestrator per project. The initial
- * confirm-gate is satisfied by the launch request itself — clicking the
- * gate-panel launch control is the operator's confirmation, so there's no
- * second in-flight pause to wait on here.
+ * Lazily builds the one DeployOrchestrator per project. The two-phase
+ * confirm gate lives client-side by design (GateReadinessPanel's
+ * review-then-confirm sequence, gated on the DB-derived "behind" preview) —
+ * by the time `/deploy/launch` is called, the operator has already
+ * confirmed. Any `confirm-gate` step a playbook declares (e.g. this repo's
+ * `confirm-restart`) is therefore intentionally auto-approved here — it is
+ * not a second gate to pause on. An `agentic` step is instead settled by the
+ * dispatched-session spawner wired up below.
  */
 function getOrchestrator(
   project: string,
@@ -489,7 +495,10 @@ export function createDeployRouter(): Router {
   // GET /api/deploy/status?projectId=...
   // Gate-panel progress read: the project's active deploy_run if any,
   // otherwise its most recent terminal run (so a failure's reason stays
-  // visible after the run leaves 'running'), plus its event log.
+  // visible after the run leaves 'running'), plus its event log, the last
+  // reported deployed SHA, and the DB-derived "behind" preview (merged PRs
+  // + merged local branches since that SHA was recorded) the client's
+  // two-phase confirm gate is built on.
   router.get('/deploy/status', (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;
@@ -500,7 +509,18 @@ export function createDeployRouter(): Router {
 
     const run = getLatestDeployRun(projectId) ?? null;
     const events = run ? listDeployRunEvents(run.run_id) : [];
-    res.status(200).json({ run, events });
+    const deployedShaRow = getProjectDeployedShaRow(projectId);
+    const behindItems = listMergedSince(
+      projectId,
+      deployedShaRow?.recordedAt ?? null,
+    );
+    res.status(200).json({
+      run,
+      events,
+      deployedSha: deployedShaRow?.sha ?? null,
+      deployedShaRecordedAt: deployedShaRow?.recordedAt ?? null,
+      behind: { count: behindItems.length, items: behindItems },
+    });
   });
 
   return router;

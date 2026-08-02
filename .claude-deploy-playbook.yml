@@ -34,31 +34,26 @@ steps:
     kind: shell
     command_or_prompt: 'git fetch origin'
     is_prod_mutating: false
-    supports_dry_run: true
 
   - id: merge-dev
     kind: shell
     command_or_prompt: 'git merge --ff-only origin/dev'
     is_prod_mutating: false
-    supports_dry_run: true
 
   - id: install-deps
     kind: shell
     command_or_prompt: 'npm ci'
     is_prod_mutating: false
-    supports_dry_run: false
 
   - id: build
     kind: shell
     command_or_prompt: 'npm run build'
     is_prod_mutating: false
-    supports_dry_run: false
 
   - id: sync-runtime
     kind: shell
     command_or_prompt: 'rsync -a --delete --exclude=''.git/'' --exclude=''.claude/'' --exclude=''*.db'' --exclude=''*.db-wal'' --exclude=''*.db-shm'' --exclude=''.env'' ./ "$RUNTIME_DIR/"'
     is_prod_mutating: true
-    supports_dry_run: true
 
   - id: confirm-restart
     kind: confirm-gate
