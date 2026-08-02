@@ -1096,6 +1096,56 @@ export class PRMergeWatcher extends EventEmitter {
     const sessionId = prRow.session_id;
     if (!sessionId) return;
 
+    // Refresh head_sha from GitHub before any branch decision below — several
+    // paths (pending re-review guard, no review session yet) return early and
+    // must not leave pull_requests.head_sha stale for a push that already landed.
+    let headSha = prRow.head_sha;
+    {
+      let fetchError: unknown;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const freshPR = await this.github.fetchPR(
+            prRow.repo,
+            prRow.pr_number,
+          );
+          headSha = freshPR.headSha;
+          fetchError = undefined;
+          if (headSha !== prRow.head_sha) {
+            setHeadSha(prRow.pr_number, prRow.repo, headSha);
+            // A fix was actually pushed — the load-bearing signal that
+            // un-sticks a stalled_reconcile_cap escalation, independent of
+            // whatever verdict the re-review below produces.
+            if (
+              parsePauseReason(prRow.pause_reason)?.reason ===
+              'stalled_reconcile_cap'
+            ) {
+              clearTerminalPRFlags(
+                prRow.pr_number,
+                prRow.repo,
+                'head_sha_advance',
+              );
+            }
+            prRow = { ...prRow, head_sha: headSha };
+          }
+          break;
+        } catch (e) {
+          fetchError = e;
+          if (attempt === 0) {
+            logger.warn(
+              `[PRMergeWatcher] fetch PR #${prRow.pr_number} failed (attempt 1), retrying...`,
+            );
+            await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+          }
+        }
+      }
+      if (fetchError) {
+        logger.warn(
+          `[PRMergeWatcher] failed to fetch latest PR state for #${prRow.pr_number} after retry:`,
+          fetchError,
+        );
+      }
+    }
+
     if (this.pendingReReviews.has(sessionId)) {
       logger.info(
         `[PRMergeWatcher] handlePushDetected: already pending for session ${sessionId.slice(0, 8)}`,
@@ -1183,50 +1233,6 @@ export class PRMergeWatcher extends EventEmitter {
 
     void (async () => {
       try {
-        let headSha = prRow.head_sha;
-        let fetchError: unknown;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            const freshPR = await this.github.fetchPR(
-              prRow.repo,
-              prRow.pr_number,
-            );
-            headSha = freshPR.headSha;
-            fetchError = undefined;
-            if (headSha !== prRow.head_sha) {
-              setHeadSha(prRow.pr_number, prRow.repo, headSha);
-              // A fix was actually pushed — the load-bearing signal that
-              // un-sticks a stalled_reconcile_cap escalation, independent of
-              // whatever verdict the re-review below produces.
-              if (
-                parsePauseReason(prRow.pause_reason)?.reason ===
-                'stalled_reconcile_cap'
-              ) {
-                clearTerminalPRFlags(
-                  prRow.pr_number,
-                  prRow.repo,
-                  'head_sha_advance',
-                );
-              }
-            }
-            break;
-          } catch (e) {
-            fetchError = e;
-            if (attempt === 0) {
-              logger.warn(
-                `[PRMergeWatcher] fetch PR #${prRow.pr_number} failed (attempt 1), retrying...`,
-              );
-              await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-            }
-          }
-        }
-        if (fetchError) {
-          logger.warn(
-            `[PRMergeWatcher] failed to fetch latest PR state for #${prRow.pr_number} after retry:`,
-            fetchError,
-          );
-        }
-
         // Skip re-review when the only push since the last review was the autofix
         // commit — the code at that SHA was already reviewed in executeReview().
         if (

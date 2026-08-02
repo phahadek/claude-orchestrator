@@ -533,7 +533,7 @@ export class StalledPRReconciler {
     const prompt =
       kind === 'conflict_dead_session'
         ? formatMergeConflictFeedback({
-            branchName: pr.head_branch ?? `feature/pr-${prNumber}`,
+            branchName: pr.head_branch,
             baseBranch: pr.base_branch ?? 'dev',
           })
         : kind === 'session_inert'
