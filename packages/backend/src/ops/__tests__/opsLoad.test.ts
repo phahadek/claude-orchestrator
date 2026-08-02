@@ -367,6 +367,68 @@ describe('loadOpsContext — architecture dual-read', () => {
     );
     expect(task?.archSource).toBe('notion');
   });
+
+  it("scopes each task's archUnits to its own declared region, not one uniform project-wide list", async () => {
+    // Point the fixture project at this real git checkout so
+    // resolveTaskRegions has a genuine tracked-file set to validate declared
+    // paths against (mirrors the "dep deploy-gating" describe block below).
+    const repoDir = process.cwd();
+    db.prepare('UPDATE projects SET project_dir = ? WHERE id = ?').run(
+      repoDir,
+      PROJECT,
+    );
+    updateProject(PROJECT, { arch_store_adopted: 1 });
+    db.prepare('DELETE FROM arch_unit').run();
+    db.prepare('DELETE FROM arch_unit_event').run();
+    createUnit({
+      title: 'Ops-region unit',
+      kind: 'subsystem',
+      topic: 'ops',
+      regions: ['src/ops'],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+    createUnit({
+      title: 'Planning-region unit',
+      kind: 'subsystem',
+      topic: 'planning',
+      regions: ['src/planning'],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    rows = [
+      {
+        id: 'task-ops-region',
+        name: 'Touches the ops loader',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+      {
+        id: 'task-planning-region',
+        name: 'Touches the planning core',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+    testingBodies['task-ops-region'] =
+      'Touches src/ops/opsLoad.ts for the loader change.';
+    testingBodies['task-planning-region'] =
+      'Touches src/planning/procedureCore.ts for the principle change.';
+
+    const result = await loadOpsContext(MILESTONE);
+
+    const taskA = result.worklist.executable.find(
+      (t) => t.id === 'task-ops-region',
+    );
+    const taskB = result.worklist.executable.find(
+      (t) => t.id === 'task-planning-region',
+    );
+    expect(taskA?.archUnits.map((u) => u.title)).toEqual(['Ops-region unit']);
+    expect(taskB?.archUnits.map((u) => u.title)).toEqual([
+      'Planning-region unit',
+    ]);
+  });
 });
 
 describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {

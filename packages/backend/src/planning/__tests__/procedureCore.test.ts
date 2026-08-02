@@ -276,6 +276,18 @@ describe('procedureCore', () => {
     expect(rendered).toMatch(/DO NOT fabricate/);
   });
 
+  it('directs an ops session to consult architecture units before diagnosing or staging a proposal', () => {
+    const principle = CORE_PRINCIPLES.find(
+      (p) => p.id === 'ops-consult-architecture-before-diagnosing',
+    )!;
+    expect(principle.appliesTo).toEqual(['ops']);
+    const rendered = renderPrinciple(principle, 'ops');
+    expect(rendered).toContain('mcp__orchestrator__architecture_getUnit');
+    expect(rendered).toContain('mcp__orchestrator__architecture_queryUnits');
+    expect(rendered).toMatch(/^DO call/);
+    expect(rendered).toMatch(/DO NOT stage a diagnosis/);
+  });
+
   it('states that a dispatched groom session only stages on apply-on-signoff, never applies', () => {
     const step = ORDERED_STEPS.find((s) => s.id === 'apply-on-signoff')!;
     const text = stepSummaryFor(step, 'groom');
