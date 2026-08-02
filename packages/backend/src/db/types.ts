@@ -5,7 +5,6 @@ import type {
   PauseReasonStruct,
 } from './pauseReason';
 import type { SessionType } from '../session/sessionPredicates';
-export type { SessionType };
 /** Back-compat alias — canonical source of truth is CanonicalPauseReason in pauseReason.ts. */
 type PauseReason = _CanonicalPauseReason;
 export type { PauseReason };
