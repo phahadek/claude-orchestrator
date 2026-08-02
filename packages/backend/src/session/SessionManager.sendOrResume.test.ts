@@ -63,6 +63,7 @@ vi.mock('./branchModel.js', () => ({
   resolveStartingPoint: vi.fn(),
   ensureMilestoneBranch: vi.fn(),
   deriveBranchSlug: vi.fn(),
+  resolveResumeBranchSlug: vi.fn(),
 }));
 
 vi.mock('./orchestrator-config.js', () => ({
