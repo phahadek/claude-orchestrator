@@ -228,6 +228,54 @@ describe('gate.verify — stage then apply', () => {
   });
 });
 
+describe('gate.verify — requires a full gate item id', () => {
+  it('rejects an 8-character short form at stage time, naming the expected full-uuid shape', async () => {
+    const item = makeGateItem();
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'gate.verify',
+      projectId: 'proj-a',
+      payload: {
+        gateItemId: item.id.slice(0, 8),
+        disposition: 'pass',
+        evidence: { basis: 'operational', note: 'checked audit_log' },
+      },
+    });
+
+    expect(staged.status).toBe(400);
+    expect(staged.body.error).toMatch(/full gate item id/i);
+    expect(staged.body.error).toMatch(/uuid/i);
+
+    // No gate state or staged-intent row was written for the rejected call.
+    expect(getItem(item.id)?.events).toHaveLength(0);
+    const rows = db
+      .prepare('SELECT COUNT(*) as n FROM staged_intent')
+      .get() as { n: number };
+    expect(rows.n).toBe(0);
+  });
+
+  it('accepts a full gate item uuid unchanged', async () => {
+    const item = makeGateItem();
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'gate.verify',
+      projectId: 'proj-a',
+      payload: {
+        gateItemId: item.id,
+        disposition: 'pass',
+        evidence: { basis: 'operational', note: 'checked audit_log' },
+      },
+    });
+
+    expect(staged.status).toBe(201);
+    expect(staged.body.state).toBe('staged');
+  });
+});
+
 describe('gate.verify — fail disposition files a follow-up task via resolveMilestoneDatabaseId', () => {
   it('applies cleanly and reaches appendGateItemEvent, with no routeApplyTimeFailure pushback (regression for the 2026-08-01 auto-rejections)', async () => {
     const item = makeGateItem({ milestone: 'M13' });

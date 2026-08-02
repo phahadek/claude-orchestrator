@@ -1573,6 +1573,39 @@ function validateDecisionPickOnePayload(
   }
 }
 
+/** Matches a full, unhyphenated-or-hyphenated v4-shaped uuid — the shape `crypto.randomUUID()` produces for every gate_item.id. */
+const GATE_ITEM_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The gate.verify twin of orchestratorMcpServer.ts's guardTaskIdArguments:
+ * this project's ids share long structured prefixes (see the M11 task-id
+ * incident that rule was written for), so an 8-character short form of a
+ * gate_item id is not safely resolvable by prefix — it must be rejected
+ * rather than silently prefix-matched, which would just reintroduce the same
+ * ambiguity under a different id space.
+ */
+class GateVerifyPayloadValidationError extends Error {
+  constructor(gateItemId: unknown) {
+    super(
+      `[stagedIntents] gate.verify rejected: gateItemId ${JSON.stringify(gateItemId)} ` +
+        'is not a full gate item id. Pass the complete uuid (e.g. ' +
+        '"3b022f91-52f3-8173-b9b2-ada4fdb54c82"), not a short/truncated form.',
+    );
+    this.name = 'GateVerifyPayloadValidationError';
+  }
+}
+
+function validateGateVerifyPayload(
+  payload: unknown,
+): asserts payload is GateVerifyIntentPayload {
+  const p = payload as Partial<GateVerifyIntentPayload> | null;
+  const gateItemId = p?.gateItemId;
+  if (typeof gateItemId !== 'string' || !GATE_ITEM_UUID_RE.test(gateItemId)) {
+    throw new GateVerifyPayloadValidationError(gateItemId);
+  }
+}
+
 /**
  * A session.requestCapability twin of DecisionPickOneValidationError: a
  * capability request applies via SessionManager.grantCapability + a
@@ -2726,6 +2759,9 @@ export function stageIntent(
   }
   if (kind === 'review.dispute') {
     validateReviewDisputePayload(payload, groupId, decisionProposal);
+  }
+  if (kind === 'gate.verify') {
+    validateGateVerifyPayload(payload);
   }
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
@@ -4803,7 +4839,8 @@ export function createStagedIntentsRouter(
     } catch (err) {
       if (
         err instanceof ReadyPathMissingGroupError ||
-        err instanceof UnknownMilestoneError
+        err instanceof UnknownMilestoneError ||
+        err instanceof GateVerifyPayloadValidationError
       ) {
         res.status(400).json({ error: err.message });
         return;
