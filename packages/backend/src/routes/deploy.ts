@@ -71,7 +71,7 @@ const orchestrators = new Map<string, DeployOrchestrator>();
  * bounded, one-shot investigation into whether a production-mutating
  * playbook step is safe/correct to proceed past, not a code session.
  */
-export function buildDeployAgenticStepProcedure(input: {
+function buildDeployAgenticStepProcedure(input: {
   runId: string;
   project: string;
   step: StepDescriptor;

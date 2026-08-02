@@ -70,7 +70,7 @@ export type AgenticVerdict = 'approved' | 'rejected' | 'inconclusive';
  * still-live session for a given run/step (reattach on resume) without a
  * separate mapping table.
  */
-export const DEPLOY_AGENTIC_TASK_PREFIX = 'deploy-agentic:';
+const DEPLOY_AGENTIC_TASK_PREFIX = 'deploy-agentic:';
 
 export function buildDeployAgenticTaskId(
   runId: string,
