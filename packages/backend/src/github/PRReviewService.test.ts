@@ -36,7 +36,6 @@ import {
   getLocalBranchById,
   setLastReviewedSha,
   getSession,
-  getPRIntentForPR,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
