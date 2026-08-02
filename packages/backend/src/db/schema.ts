@@ -217,6 +217,8 @@ export function runMigrations(target: Database.Database): void {
       state                  TEXT    NOT NULL,
       current_disposition    TEXT,
       latest_disposition     TEXT,
+      next_attempt_at        TEXT,
+      pending_attempt_count  INTEGER NOT NULL DEFAULT 0,
       updated_at             TEXT    NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_gate_item_project_milestone ON gate_item(project, milestone);
@@ -1668,6 +1670,26 @@ export function runMigrations(target: Database.Database): void {
         WHERE e.gate_item_id = gate_item.id AND e.disposition IS NOT NULL
       );
   `);
+
+  // gate_item.next_attempt_at / pending_attempt_count: the `pending` state's
+  // backoff schedule. next_attempt_at is the earliest time the item is
+  // eligible for its next not-yet-triggerable re-check (NULL once the item
+  // leaves pending); pending_attempt_count is the number of consecutive
+  // not-yet-triggerable results so far, driving the doubling backoff (3h,
+  // 6h, 12h, ... capped at 168h). Pre-existing rows never entered `pending`,
+  // so no backfill beyond the column defaults is needed.
+  try {
+    target.exec(`ALTER TABLE gate_item ADD COLUMN next_attempt_at TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE gate_item ADD COLUMN pending_attempt_count INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 
   // sessions.terminal_completion_reason: durable copy of the `reason` string
   // PlanningOrchestrator.markTerminal already threads through to

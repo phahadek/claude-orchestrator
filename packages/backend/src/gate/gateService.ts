@@ -65,7 +65,13 @@ export function createLocalGitAncestrySource(
  * gateReconciler.ts): it records a verification attempt without resolving
  * it, the same non-terminal shape as `noted` — the item stays runnable, but
  * nextRunnableGateItems skips it until a later event (reclassify/reopen/a
- * new fail) supersedes it as the item's latest.
+ * new fail) supersedes it as the item's latest. `not-yet-triggerable` is the
+ * Opportunistic-only "the real-world trigger hasn't happened yet" abstain —
+ * server-rejected for any other classification (mirroring approveGateItem's
+ * Prod-Mutating-only guard). Unlike `noted`/`needs-setup`, it does advance
+ * state: to `pending`, with a backoff-scheduled next_attempt_at, so a
+ * near-certain repeat non-result doesn't get re-dispatched every tick (see
+ * nextStateForDisposition / computeNotYetTriggerableBackoffHours below).
  */
 const GATE_DISPOSITIONS = [
   'pass',
@@ -74,6 +80,7 @@ const GATE_DISPOSITIONS = [
   'discarded',
   'noted',
   'needs-setup',
+  'not-yet-triggerable',
 ] as const;
 
 type GateDisposition = (typeof GATE_DISPOSITIONS)[number];
@@ -96,6 +103,7 @@ const GATE_STATES = new Set([
   'fail',
   'deferred',
   'pending-approval',
+  'pending',
   'discarded',
 ]);
 
@@ -357,6 +365,32 @@ export function nextRunnableGateItems(
     .slice(0, limit);
 }
 
+/**
+ * Pending-analog dispatch pull: mirrors nextRunnableGateItems, but over
+ * `pending` items — skipping one whose backoff (next_attempt_at) hasn't
+ * elapsed yet, the same way nextRunnableGateItems skips a `needs-setup`
+ * abstain via isAwaitingSetup. Every `pending` item is Opportunistic (see
+ * appendGateItemEvent's not-yet-triggerable guard), so there is no tier
+ * argument to mirror TIER_ORDER with.
+ */
+function isBackoffPending(item: GateItem, now: string): boolean {
+  return item.nextAttemptAt !== undefined && item.nextAttemptAt > now;
+}
+
+export function nextPendingGateItems(
+  project: string,
+  milestone: string,
+  options: { limit?: number } = {},
+): GateItem[] {
+  const limit = options.limit ?? DEFAULT_BATCH_LIMIT;
+  const now = new Date().toISOString();
+  return gateStore
+    .listByMilestone(project, milestone)
+    .filter((item) => item.state === 'pending')
+    .filter((item) => !isBackoffPending(item, now))
+    .slice(0, limit);
+}
+
 export function getGateItem(id: string): GateItem | undefined {
   return gateStore.getItem(id);
 }
@@ -501,7 +535,7 @@ export interface AppendGateItemEventInput {
   unattended?: boolean;
 }
 
-/** Prod-Mutating passes stop short of resolving — they wait for approveGateItem. */
+/** Prod-Mutating passes stop short of resolving — they wait for approveGateItem. Opportunistic not-yet-triggerable parks at `pending`, not a state literally named after the disposition. */
 function nextStateForDisposition(
   disposition: GateDisposition,
   classification: GateItemClassification,
@@ -509,7 +543,23 @@ function nextStateForDisposition(
   if (disposition === 'pass' && classification === 'Prod-Mutating') {
     return 'pending-approval';
   }
+  if (disposition === 'not-yet-triggerable') {
+    return 'pending';
+  }
   return disposition;
+}
+
+/** First re-check 3h after parking, doubling per consecutive not-yet-triggerable result, capped at 1 week. */
+const NOT_YET_TRIGGERABLE_BASE_BACKOFF_HOURS = 3;
+const NOT_YET_TRIGGERABLE_MAX_BACKOFF_HOURS = 168;
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/** attemptCount is 1-indexed: 1 -> 3h, 2 -> 6h, 3 -> 12h, ..., capped at 168h. */
+function computeNotYetTriggerableBackoffHours(attemptCount: number): number {
+  return Math.min(
+    NOT_YET_TRIGGERABLE_BASE_BACKOFF_HOURS * 2 ** (attemptCount - 1),
+    NOT_YET_TRIGGERABLE_MAX_BACKOFF_HOURS,
+  );
 }
 
 /**
@@ -563,6 +613,14 @@ export function appendGateItemEvent(
   if (event.disposition === 'discarded' && !event.evidence) {
     throw new Error(`gate_item_event: 'discarded' requires an evidence/reason`);
   }
+  if (
+    event.disposition === 'not-yet-triggerable' &&
+    item.classification !== 'Opportunistic'
+  ) {
+    throw new Error(
+      `gate_item ${gateItemId}: not-yet-triggerable only applies to Opportunistic items (classification=${item.classification})`,
+    );
+  }
   const now = new Date().toISOString();
   gateStore.appendEvent(gateItemId, { ...event, at: now });
 
@@ -580,6 +638,24 @@ export function appendGateItemEvent(
       item.classification,
     );
     gateStore.advanceState(gateItemId, nextState, event.disposition, now);
+  }
+
+  if (event.disposition === 'not-yet-triggerable') {
+    // Consecutive count: resumes from the item's own prior count only while
+    // it was already `pending` — any other prior state (e.g. a fresh `open`
+    // item, or one just reopened) starts the backoff over from 3h.
+    const attemptCount =
+      (item.state === 'pending' ? item.pendingAttemptCount : 0) + 1;
+    const backoffHours = computeNotYetTriggerableBackoffHours(attemptCount);
+    const nextAttemptAt = new Date(
+      Date.parse(now) + backoffHours * MS_PER_HOUR,
+    ).toISOString();
+    gateStore.schedulePendingAttempt(
+      gateItemId,
+      nextAttemptAt,
+      attemptCount,
+      now,
+    );
   }
 
   const updated = gateStore.getItem(gateItemId);
@@ -632,8 +708,17 @@ export function approveGateItem(
  * the fail-trap left by a fail dispositioned outside the reconciler's
  * processItem path. `open`/`runnable`/`pending-approval` are already on a
  * sanctioned path back to resolution, so reopening them is a no-op we reject.
+ * `pending` joins them for the same reason — it already carries its own
+ * scheduled backoff re-check; an operator forces it back to `open` early via
+ * reclassifyGateItem (away from Opportunistic) instead of this generic
+ * reopen.
  */
-const REOPEN_BLOCKED_STATES = new Set(['open', 'runnable', 'pending-approval']);
+const REOPEN_BLOCKED_STATES = new Set([
+  'open',
+  'runnable',
+  'pending-approval',
+  'pending',
+]);
 
 /**
  * Operator-attributed reopen: pulls a pass/deferred/fail-trapped item back to
@@ -681,7 +766,14 @@ const RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Human-Observation',
 ]);
 
-/** The /gate skill's triage step: moves a needs-triage (or any) item into a resolved classification. */
+/**
+ * The /gate skill's triage step: moves a needs-triage (or any) item into a
+ * resolved classification. Reclassifying a `pending` item away from
+ * Opportunistic forces it back to `open` in the same call — a pending item's
+ * backoff schedule only makes sense while it remains Opportunistic, and
+ * advanceState clears next_attempt_at/pending_attempt_count on any
+ * transition out of `pending`.
+ */
 export function reclassifyGateItem(
   gateItemId: string,
   classification: GateItemClassification,
@@ -697,7 +789,23 @@ export function reclassifyGateItem(
     throw new Error(`gate_item: no item ${gateItemId}`);
   }
   const now = new Date().toISOString();
-  return gateStore.setClassification(gateItemId, classification, now, operator);
+  const updated = gateStore.setClassification(
+    gateItemId,
+    classification,
+    now,
+    operator,
+  );
+  if (item.state === 'pending' && classification !== 'Opportunistic') {
+    gateStore.advanceState(gateItemId, 'open', 'reclassified', now);
+    const reopened = gateStore.getItem(gateItemId);
+    if (!reopened) {
+      throw new Error(
+        `gate_item: failed to read back item ${gateItemId} after reclassify-forced reopen`,
+      );
+    }
+    return reopened;
+  }
+  return updated;
 }
 
 /**

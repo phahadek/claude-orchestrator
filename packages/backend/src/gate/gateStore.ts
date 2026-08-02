@@ -10,6 +10,7 @@ import {
   insertGateItem,
   updateGateItem,
   updateGateItemMinDeployedCommit,
+  updateGateItemPendingSchedule,
   touchGateItemUpdatedAt,
   listGateItemSources,
   insertGateItemSource,
@@ -66,6 +67,10 @@ export interface GateItem {
   currentDisposition?: string;
   /** The disposition on the item's most recent event, whether or not it advanced state — the queryable "attempted, inconclusive" signal (needs-setup/noted) that current_disposition can't carry. */
   latestDisposition?: string;
+  /** Earliest time a `pending` item is eligible for its next not-yet-triggerable re-check. Absent outside `pending`. */
+  nextAttemptAt?: string;
+  /** Consecutive not-yet-triggerable results so far — drives the doubling backoff. 0 outside `pending`. */
+  pendingAttemptCount: number;
   updatedAt: string;
   sources: GateItemSource[];
   events: GateItemEvent[];
@@ -98,6 +103,8 @@ export function getItem(id: string): GateItem | undefined {
     state: row.state,
     currentDisposition: row.current_disposition ?? undefined,
     latestDisposition: row.latest_disposition ?? undefined,
+    nextAttemptAt: row.next_attempt_at ?? undefined,
+    pendingAttemptCount: row.pending_attempt_count,
     updatedAt: row.updated_at,
     sources: listGateItemSources(row.id).map((s) => ({
       sourceTaskId: s.source_task_id,
@@ -203,6 +210,8 @@ export function insertItem(input: NewGateItemInput): GateItem {
     state: 'open',
     current_disposition: null,
     latest_disposition: null,
+    next_attempt_at: null,
+    pending_attempt_count: 0,
     updated_at: input.updatedAt,
   });
   for (const source of input.sources) {
@@ -268,7 +277,11 @@ export function appendEvent(gateItemId: string, event: GateItemEvent): void {
 
 /**
  * Advances the denormalized (state, current_disposition) pair — the fast-read
- * summary consumers use instead of replaying the event log.
+ * summary consumers use instead of replaying the event log. Any transition
+ * out of `pending` clears the backoff schedule (next_attempt_at,
+ * pending_attempt_count) — a fresh `pending` parking always starts its own
+ * schedule from scratch (see schedulePendingAttempt) rather than resuming a
+ * stale one.
  */
 export function advanceState(
   gateItemId: string,
@@ -280,10 +293,13 @@ export function advanceState(
   if (!row) {
     throw new Error(`gate_item: no item ${gateItemId} to advance`);
   }
+  const leavingPending = row.state === 'pending' && state !== 'pending';
   updateGateItem({
     ...row,
     state,
     current_disposition: currentDisposition ?? null,
+    next_attempt_at: leavingPending ? null : row.next_attempt_at,
+    pending_attempt_count: leavingPending ? 0 : row.pending_attempt_count,
     updated_at: updatedAt,
   });
   recordEvent({
@@ -292,6 +308,26 @@ export function advanceState(
     project_id: row.project,
     payload: { gateItemId, from: row.state, to: state },
   });
+}
+
+/**
+ * Writes the `pending` backoff schedule following a not-yet-triggerable
+ * disposition — separate from advanceState since the (state,
+ * current_disposition) transition to `pending` is written by
+ * gateService.appendGateItemEvent's normal advances path, ahead of this call.
+ */
+export function schedulePendingAttempt(
+  gateItemId: string,
+  nextAttemptAt: string,
+  pendingAttemptCount: number,
+  updatedAt: string,
+): void {
+  updateGateItemPendingSchedule(
+    gateItemId,
+    nextAttemptAt,
+    pendingAttemptCount,
+    updatedAt,
+  );
 }
 
 const VALID_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
@@ -383,8 +419,15 @@ export function setMinDeployedCommit(
 /**
  * Attaches a new source to an existing item — the re-open path when a
  * failing verification files a follow-up fix task (the reconciler service,
- * sibling task 39b22f91-52f3-819e). Does not itself change item state; the
- * caller advances state separately.
+ * sibling task 39b22f91-52f3-819e). Does not itself change a non-`pending`
+ * item's state; the caller advances state separately in that case.
+ *
+ * A `pending` item is the one exception: a newly-added source means new work
+ * has landed against it, so it is auto-reopened to `open` in the same call —
+ * mirroring reconcileGateRunnability's fail->open auto-reopen for a
+ * newly-merged fix source, but immediate rather than waiting on deploy
+ * coverage, since a pending item's backoff is about an external real-world
+ * trigger, not a code change that still needs to ship.
  */
 export function addSource(
   gateItemId: string,
@@ -408,6 +451,15 @@ export function addSource(
     project_id: row.project,
     payload: { gateItemId, sourceTaskId: source.sourceTaskId },
   });
+  if (row.state === 'pending') {
+    appendEvent(gateItemId, {
+      disposition: 'reopened',
+      operator: 'gate-reconciler',
+      evidence: { reason: 'new gate_item_source added while pending' },
+      at: addedAt,
+    });
+    advanceState(gateItemId, 'open', 'reopened', addedAt);
+  }
 }
 
 /** Records the source PR's merge commit — filled at source-task merge, not at accretion. */

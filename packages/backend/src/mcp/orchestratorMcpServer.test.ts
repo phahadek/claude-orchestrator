@@ -443,6 +443,8 @@ describe('buildMcpServer — ctx.milestone attribution', () => {
       state: 'open',
       current_disposition: null,
       latest_disposition: null,
+      next_attempt_at: null,
+      pending_attempt_count: 0,
       updated_at: new Date(0).toISOString(),
     });
     insertSession({

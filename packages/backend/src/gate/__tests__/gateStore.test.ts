@@ -29,6 +29,8 @@ import {
   recordAccretionMarker,
   rehomeItemsBySourceTask,
   rollbackContribution,
+  addSource,
+  schedulePendingAttempt,
 } from '../gateStore.js';
 
 beforeEach(() => {
@@ -301,6 +303,55 @@ describe('gateStore', () => {
         new Date(1).toISOString(),
       ),
     ).toThrow(/invalid reclassification target/);
+  });
+});
+
+describe('gateStore.addSource — pending auto-reopen', () => {
+  it('auto-reopens a pending item to open and clears its backoff schedule when a new source is added', () => {
+    const created = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Verify the quarterly report lands',
+      classification: 'Opportunistic',
+      sources: [{ sourceTaskId: 'notion:p1', sourceTaskTitle: 'Add report' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+    advanceState(created.id, 'pending', 'not-yet-triggerable', new Date(1).toISOString());
+    schedulePendingAttempt(created.id, new Date(2).toISOString(), 1, new Date(1).toISOString());
+    expect(getItem(created.id)?.state).toBe('pending');
+
+    addSource(
+      created.id,
+      { sourceTaskId: 'notion:p2', sourceTaskTitle: 'Follow-up signal' },
+      new Date(3).toISOString(),
+    );
+
+    const item = getItem(created.id);
+    expect(item?.state).toBe('open');
+    expect(item?.currentDisposition).toBe('reopened');
+    expect(item?.nextAttemptAt).toBeUndefined();
+    expect(item?.pendingAttemptCount).toBe(0);
+    expect(item?.sources.map((s) => s.sourceTaskId)).toContain('notion:p2');
+    expect(item?.events.at(-1)).toMatchObject({ disposition: 'reopened' });
+  });
+
+  it('does not touch state when a source is added to a non-pending item', () => {
+    const created = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Verify the quarterly report lands',
+      classification: 'Opportunistic',
+      sources: [{ sourceTaskId: 'notion:q1', sourceTaskTitle: 'Add report' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    addSource(
+      created.id,
+      { sourceTaskId: 'notion:q2', sourceTaskTitle: 'Another signal' },
+      new Date(1).toISOString(),
+    );
+
+    expect(getItem(created.id)?.state).toBe('open');
   });
 });
 
