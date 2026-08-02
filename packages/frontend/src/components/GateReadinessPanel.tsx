@@ -196,6 +196,10 @@ interface RollupHeaderProps {
   awaitingSetupCount?: number;
   /** Clicking the awaiting-setup badge drives the awaitingSetup list filter. */
   onSelectAwaitingSetup?: () => void;
+  /** Opportunistic items parked at `pending` (backoff-scheduled) — rendered as a standalone badge, distinct from blocking and resolved, never folded into the progress bar/chip totals. */
+  parkedCount?: number;
+  /** Clicking the parked badge drives the `pending` state list filter. */
+  onSelectParked?: () => void;
 }
 
 function RollupHeader({
@@ -212,6 +216,8 @@ function RollupHeader({
   inFlightCount,
   awaitingSetupCount,
   onSelectAwaitingSetup,
+  parkedCount,
+  onSelectParked,
 }: RollupHeaderProps) {
   const total = stateOrder.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
   const doneCount = doneStates.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
@@ -247,6 +253,17 @@ function RollupHeader({
             title="Items whose latest verification attempt abstained with needs-setup — still runnable, but excluded from every automated pull until an operator resolves the setup gap."
           >
             Awaiting setup: {awaitingSetupCount}
+          </button>
+        )}
+        {!!parkedCount && (
+          <button
+            type="button"
+            className={styles.parkedBadge}
+            data-testid={`${testId}-parked-count`}
+            onClick={onSelectParked}
+            title="Opportunistic items parked awaiting their next backoff-scheduled not-yet-triggerable re-check — non-blocking, excluded from the green/blocked status."
+          >
+            Parked: {parkedCount}
           </button>
         )}
       </div>
@@ -1079,7 +1096,8 @@ export function GateReadinessPanel({
             {milestones.map((m) => (
               <option key={`${m.project}:${m.milestone}`} value={m.milestone}>
                 {m.milestone} (
-                {m.status === 'green' ? '✅' : `🚫 ${m.blockingCount}`})
+                {m.status === 'green' ? '✅' : `🚫 ${m.blockingCount}`}
+                {m.parkedCount ? `, parked ${m.parkedCount}` : ''})
               </option>
             ))}
           </select>
@@ -1255,6 +1273,8 @@ export function GateReadinessPanel({
             inFlightCount={items.filter((item) => item.verifyInFlight).length}
             awaitingSetupCount={readiness?.awaitingSetupCount ?? 0}
             onSelectAwaitingSetup={selectAwaitingSetupFilter}
+            parkedCount={readiness?.parked?.length ?? 0}
+            onSelectParked={() => selectGateChip('pending')}
           />
 
           <div className={styles.filters}>

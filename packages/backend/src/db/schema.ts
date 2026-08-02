@@ -406,6 +406,7 @@ export function runMigrations(target: Database.Database): void {
       tasks_closed      INTEGER NOT NULL,
       gate_open         INTEGER NOT NULL,
       gate_closed       INTEGER NOT NULL,
+      gate_parked       INTEGER NOT NULL DEFAULT 0,
       seed_open         INTEGER NOT NULL,
       seed_closed       INTEGER NOT NULL,
       ops_open          INTEGER NOT NULL,
@@ -1888,4 +1889,15 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_audit_finding_dedup_project_identity
       ON audit_finding_dedup(project_id, finding_identity);
   `);
+
+  // Non-blocking `pending` (parked) gate-item count, alongside the existing
+  // open/closed split — never subtracted from gate_open, since parked items
+  // don't count toward blocking/green status.
+  try {
+    target.exec(
+      `ALTER TABLE convergence_snapshot ADD COLUMN gate_parked INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 }

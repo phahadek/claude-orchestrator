@@ -112,6 +112,7 @@ describe('detectFlatSignal', () => {
       tasks_closed: 0,
       gate_open: 0,
       gate_closed: 0,
+      gate_parked: 0,
       seed_open: 0,
       seed_closed: 0,
       ops_open: 0,

@@ -100,6 +100,8 @@ interface GateBlockingItem {
 export interface GateReadiness {
   status: 'green' | 'blocked';
   blocking: GateBlockingItem[];
+  /** Opportunistic items parked at `pending` (backoff-scheduled) — a sibling of `blocking`, never a subset of it, and never counted toward the green/blocked status. */
+  parked: GateBlockingItem[];
   /** Subset of `blocking` whose latest disposition is non-resolving (needs-setup/noted). */
   nonResolvingItems: GateBlockingItem[];
   /** The milestone's full per-state item totals, independent of any table filter. */
@@ -113,6 +115,8 @@ export interface MilestoneReadiness {
   milestone: string;
   status: 'green' | 'blocked';
   blockingCount: number;
+  /** Opportunistic items parked at `pending` — never counted toward blockingCount or the green/blocked status. */
+  parkedCount: number;
 }
 
 export interface ListGateItemsParams {

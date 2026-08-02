@@ -205,6 +205,33 @@ describe('getGateReadiness', () => {
       3,
     );
   });
+
+  it('surfaces a pending (parked) Opportunistic item as a sibling of blocking, never counted toward it or the green status', () => {
+    const stillOpen = makeItem({ text: 'unresolved', classification: 'Read-Only' });
+    const parked = makeItem({
+      text: 'not yet triggerable',
+      classification: 'Opportunistic',
+    });
+    appendGateItemEvent(parked.id, { disposition: 'not-yet-triggerable' });
+
+    const readiness = getGateReadiness('polimarket-analyser', 'M12');
+    expect(readiness.blocking.map((b) => b.id)).toEqual([stillOpen.id]);
+    expect(readiness.parked.map((p) => p.id)).toEqual([parked.id]);
+    expect(readiness.status).toBe('blocked');
+  });
+
+  it('is green when the only non-resolved items are parked', () => {
+    const parked = makeItem({
+      text: 'not yet triggerable',
+      classification: 'Opportunistic',
+    });
+    appendGateItemEvent(parked.id, { disposition: 'not-yet-triggerable' });
+
+    const readiness = getGateReadiness('polimarket-analyser', 'M12');
+    expect(readiness.blocking).toEqual([]);
+    expect(readiness.parked).toHaveLength(1);
+    expect(readiness.status).toBe('green');
+  });
 });
 
 describe('reconcileGateRunnability', () => {
@@ -1391,5 +1418,26 @@ describe('listMilestoneReadiness', () => {
     const rows = listMilestoneReadiness();
     const projects = rows.map((r) => r.project).sort();
     expect(projects).toEqual(['proj-a', 'proj-b']);
+  });
+
+  it('reports a parked item as green with a non-zero parkedCount, not blocked', () => {
+    const parked = makeItem({
+      milestone: 'M12',
+      classification: 'Opportunistic',
+    });
+    appendGateItemEvent(parked.id, { disposition: 'not-yet-triggerable' });
+
+    const rows = listMilestoneReadiness({ project: 'polimarket-analyser' });
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          project: 'polimarket-analyser',
+          milestone: 'M12',
+          status: 'green',
+          blockingCount: 0,
+          parkedCount: 1,
+        }),
+      ]),
+    );
   });
 });

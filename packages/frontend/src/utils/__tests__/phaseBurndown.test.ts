@@ -46,6 +46,7 @@ function makeConvergence(
       gate: {
         status: 'blocked',
         blockingCount: 121,
+        parkedCount: 0,
         bespokeCount: 3,
         counts: {
           open: 100,
