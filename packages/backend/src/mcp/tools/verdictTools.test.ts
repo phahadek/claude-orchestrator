@@ -191,7 +191,9 @@ describe('gate.verify', () => {
   it('surfaces a not-found gateItemId (e.g. a short/truncated form) as an error, not a bare ok', async () => {
     const session = fakeSession();
     session.recordGateVerifyDisposition.mockImplementation(() => {
-      throw new Error('no gate item "short-id" — gateItemId must be the full gate_item id');
+      throw new Error(
+        'no gate item "short-id" — gateItemId must be the full gate_item id',
+      );
     });
     const { client, close } = await connectedClient(() => session, 'ops');
     const result = await client.callTool({

@@ -206,9 +206,7 @@ describe('gateSeed.getState', () => {
         milestone: MILESTONE,
         text: 'Verify the new endpoint returns 200',
         classification: 'Read-Only',
-        sources: [
-          { sourceTaskId: 'notion:task-1', sourceTaskTitle: 'Task 1' },
-        ],
+        sources: [{ sourceTaskId: 'notion:task-1', sourceTaskTitle: 'Task 1' }],
         updatedAt: '2024-01-01T00:00:00Z',
       });
 
@@ -238,7 +236,10 @@ describe('gateSeed.getState', () => {
     const result = (await client.callTool({
       name: 'gateSeed.getState',
       arguments: { milestone: 'not-a-real-milestone' },
-    })) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+    })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
     await close();
 
     expect(result.isError).toBe(true);

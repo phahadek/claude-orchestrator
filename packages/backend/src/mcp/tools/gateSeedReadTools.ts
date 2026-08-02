@@ -49,7 +49,7 @@ export function registerGateSeedReadTools(
     {
       title: 'Fetch gate/seed item state for a milestone',
       description:
-        'Read-only: returns { gateItems, seedItems } state for the given milestone — each item as { id, milestone, text/spec, classification (gate only), state }. No event history, no operator field. milestone accepts any of the milestone\'s forms (DB UUID, canonical short id, or full display name); an unresolvable milestone raises rather than returning an empty result.',
+        "Read-only: returns { gateItems, seedItems } state for the given milestone — each item as { id, milestone, text/spec, classification (gate only), state }. No event history, no operator field. milestone accepts any of the milestone's forms (DB UUID, canonical short id, or full display name); an unresolvable milestone raises rather than returning an empty result.",
       inputSchema: { milestone: z.string() },
     },
     async (args) => {
@@ -59,7 +59,9 @@ export function registerGateSeedReadTools(
       } catch (err) {
         if (err instanceof UnknownMilestoneError) {
           return {
-            content: [{ type: 'text', text: JSON.stringify({ error: err.message }) }],
+            content: [
+              { type: 'text', text: JSON.stringify({ error: err.message }) },
+            ],
             isError: true,
           };
         }
