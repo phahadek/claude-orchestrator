@@ -1455,11 +1455,11 @@ describe('assemblePlanningProcedure', () => {
     // principle names it for every ops session regardless of digest content
     // (procedureCore.ts:215). Scope the assertion to the ops digest section
     // itself, whose store-gated unit list + dereference hint stay absent.
-    const opsDigestSection = output.slice(output.indexOf('## Ops Journal Slice'));
-    expect(opsDigestSection).not.toContain('### Arch-store-selected units');
-    expect(opsDigestSection).not.toContain(
-      "This selection is titles/ids only",
+    const opsDigestSection = output.slice(
+      output.indexOf('## Ops Journal Slice'),
     );
+    expect(opsDigestSection).not.toContain('### Arch-store-selected units');
+    expect(opsDigestSection).not.toContain('This selection is titles/ids only');
     expect(opsDigestSection).not.toContain(
       orchestratorMcpToolName('architecture.getUnit'),
     );
@@ -1485,11 +1485,11 @@ describe('assemblePlanningProcedure', () => {
     // procedure-core principle names architecture.getUnit unconditionally,
     // so only the ops digest section itself can prove the store-gated
     // section stayed absent.
-    const opsDigestSection = output.slice(output.indexOf('## Ops Journal Slice'));
-    expect(opsDigestSection).not.toContain('### Arch-store-selected units');
-    expect(opsDigestSection).not.toContain(
-      "This selection is titles/ids only",
+    const opsDigestSection = output.slice(
+      output.indexOf('## Ops Journal Slice'),
     );
+    expect(opsDigestSection).not.toContain('### Arch-store-selected units');
+    expect(opsDigestSection).not.toContain('This selection is titles/ids only');
     expect(opsDigestSection).not.toContain(
       orchestratorMcpToolName('architecture.getUnit'),
     );
