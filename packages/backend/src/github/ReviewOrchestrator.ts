@@ -827,7 +827,12 @@ export class ReviewOrchestrator {
         result.escalationReason ??
         `Review for local branch ${job.branchName} was escalated per project review rules.`;
       logger.warn(`[ReviewOrchestrator] ${message}`);
-      setLocalBranchPauseReason(job.localBranchId, 'review_rules_escalation');
+      setLocalBranchPauseReason(
+        job.localBranchId,
+        result.baselineEscalationFloor
+          ? 'baseline_escalation_floor'
+          : 'review_rules_escalation',
+      );
       this.sessionManager.emit('message', {
         type: 'review_escalated',
         prNumber: job.localBranchId,
@@ -1047,7 +1052,13 @@ export class ReviewOrchestrator {
         result.escalationReason ??
         `Review for PR #${job.prNumber} was escalated per project review rules.`;
       logger.warn(`[ReviewOrchestrator] ${message}`);
-      setPauseReason(job.prNumber, job.repo, 'review_rules_escalation');
+      setPauseReason(
+        job.prNumber,
+        job.repo,
+        result.baselineEscalationFloor
+          ? 'baseline_escalation_floor'
+          : 'review_rules_escalation',
+      );
       this.sessionManager.emit('message', {
         type: 'review_escalated',
         prNumber: job.prNumber,

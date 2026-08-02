@@ -1608,7 +1608,7 @@ function tryParseRateLimitError(
   return new GitHubRateLimitError(message, resetAt, limit, used);
 }
 
-function parseDiffFiles(diff: string): string[] {
+export function parseDiffFiles(diff: string): string[] {
   const files: string[] = [];
   for (const line of diff.split('\n')) {
     if (line.startsWith('diff --git a/')) {

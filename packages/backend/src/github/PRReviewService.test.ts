@@ -2375,6 +2375,146 @@ describe('PRReviewService — Size proportionality dimension', () => {
   });
 });
 
+// ── Baseline escalation floor ────────────────────────────────────────────────
+
+describe('PRReviewService — baseline escalation floor', () => {
+  const fourPassedDims = [
+    {
+      name: 'Title and description vs task Summary',
+      passed: true,
+      notes: 'ok',
+    },
+    { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+    { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+    {
+      name: 'Changed files vs Files/paths affected list',
+      passed: true,
+      notes: 'ok',
+    },
+  ];
+
+  function makeDiffTouching(path: string): string {
+    return [
+      `diff --git a/${path} b/${path}`,
+      `--- a/${path}`,
+      `+++ b/${path}`,
+      '@@ -1,1 +1,2 @@',
+      ' keep me',
+      '+added line',
+    ].join('\n');
+  }
+
+  async function runReview(
+    diff: string,
+    payload: Record<string, unknown>,
+  ): Promise<import('./PRReviewService').PRReviewResult> {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    const mockSM = makeMockSessionManager();
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_a: string, _b: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(opts.sessionId, JSON.stringify(payload)),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+    return service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(diff),
+    );
+  }
+
+  it('forces escalate:true when the diff touches .github/workflows/ even though review_rules found nothing', async () => {
+    const result = await runReview(
+      makeDiffTouching('.github/workflows/ci.yml'),
+      {
+        verdict: 'approved',
+        dimensions: fourPassedDims,
+        summary: 'LLM saw nothing to escalate.',
+      },
+    );
+    expect(result.escalate).toBe(true);
+    expect(result.baselineEscalationFloor).toBe(true);
+    expect(result.escalationReason).toMatch(/CI\/workflow config/);
+  });
+
+  it('forces escalate:true for a migration path', async () => {
+    const result = await runReview(
+      makeDiffTouching('db/migrations/0042_add_column.sql'),
+      {
+        verdict: 'approved',
+        dimensions: fourPassedDims,
+        summary: 'LLM saw nothing to escalate.',
+      },
+    );
+    expect(result.escalate).toBe(true);
+    expect(result.baselineEscalationFloor).toBe(true);
+    expect(result.escalationReason).toMatch(/database migration/);
+  });
+
+  it('forces escalate:true for an auth-related path', async () => {
+    const result = await runReview(
+      makeDiffTouching('packages/backend/src/auth/session.ts'),
+      {
+        verdict: 'approved',
+        dimensions: fourPassedDims,
+        summary: 'LLM saw nothing to escalate.',
+      },
+    );
+    expect(result.escalate).toBe(true);
+    expect(result.baselineEscalationFloor).toBe(true);
+    expect(result.escalationReason).toMatch(/auth/);
+  });
+
+  it('forces escalate:true for a secrets-related path', async () => {
+    const result = await runReview(
+      makeDiffTouching('packages/backend/src/config/secretsLoader.ts'),
+      {
+        verdict: 'approved',
+        dimensions: fourPassedDims,
+        summary: 'LLM saw nothing to escalate.',
+      },
+    );
+    expect(result.escalate).toBe(true);
+    expect(result.baselineEscalationFloor).toBe(true);
+    expect(result.escalationReason).toMatch(/secrets/);
+  });
+
+  it('does not escalate an ordinary diff with no baseline-floor paths', async () => {
+    const result = await runReview(makeDiffTouching('src/widgets/Button.tsx'), {
+      verdict: 'approved',
+      dimensions: fourPassedDims,
+      summary: 'Nothing sensitive touched.',
+    });
+    expect(result.escalate).toBeUndefined();
+    expect(result.baselineEscalationFloor).toBeUndefined();
+  });
+
+  it('cannot be overridden by the LLM setting escalate:false explicitly', async () => {
+    const result = await runReview(
+      makeDiffTouching('.github/workflows/deploy.yml'),
+      {
+        verdict: 'approved',
+        dimensions: fourPassedDims,
+        summary: 'LLM explicitly declined to escalate.',
+        escalate: false,
+      },
+    );
+    expect(result.escalate).toBe(true);
+    expect(result.baselineEscalationFloor).toBe(true);
+  });
+});
+
 // ── buildPrompt() — size proportionality directive ───────────────────────────
 
 describe('PRReviewService.buildPrompt() — size proportionality', () => {

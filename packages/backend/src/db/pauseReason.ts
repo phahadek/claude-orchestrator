@@ -43,6 +43,7 @@ export type CanonicalPauseReason =
   | 'workflow_scope_denied'
   | 'resume_failed'
   | 'review_rules_escalation'
+  | 'baseline_escalation_floor'
   | 'planning_crashed'
   | 'planning_first_turn_empty'
   | 'planning_terminal_no_decision'
@@ -209,6 +210,14 @@ export const PAUSE_REASON_REGISTRY: Record<
     retry_strategy: 'manual_action',
   },
   review_rules_escalation: {
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // Code-enforced baseline floor (CI/workflow config, migrations, auth,
+  // secrets) — always requires human sign-off regardless of review_rules, so
+  // it is deliberately not marked automatic/none like other review reasons.
+  baseline_escalation_floor: {
     source: 'review',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
