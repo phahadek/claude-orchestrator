@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react';
+import type { PanelKeyboardDeclaration } from '../types/panelKeyboard';
+import { useKeyboardRing } from '../types/panelKeyboard';
 
 export interface ShortcutHandlers {
   onOpenDispatch: () => void;
@@ -10,6 +12,20 @@ export interface ShortcutHandlers {
     view: 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings',
   ) => void;
   onFocusSearch: () => void;
+  /**
+   * The currently-active panel's keyboard declaration (e.g. the milestone
+   * decision-card ring). When present, J/K/Enter dispatch against its
+   * ordered item list — moving an id-anchored ring highlight and firing
+   * approve on Enter — instead of the legacy onSelectNext/onSelectPrev/
+   * onConfirmSelection triple, which stays session-grid-only. Omit or pass
+   * null on views with no declared ring (e.g. Sessions).
+   */
+  activePanel?: PanelKeyboardDeclaration | null;
+}
+
+export interface KeyboardShortcutsResult {
+  /** The active panel's ring highlight, or null when no panel is active or nothing is highlighted. */
+  highlightedItemId: string | null;
 }
 
 export interface ShortcutDefinition {
@@ -112,11 +128,19 @@ export const KEYBOARD_SHORTCUTS: ShortcutDefinition[] = [
   },
 ];
 
-export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
+export function useKeyboardShortcuts(
+  handlers: ShortcutHandlers,
+): KeyboardShortcutsResult {
   const handlersRef = useRef(handlers);
   useEffect(() => {
     handlersRef.current = handlers;
   });
+
+  const activePanel = handlers.activePanel ?? null;
+  const ringItems = activePanel ? activePanel.orderedItems() : [];
+  const ring = useKeyboardRing(ringItems);
+  const ringRef = useRef(ring);
+  ringRef.current = ring;
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -128,6 +152,27 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
         event.target instanceof HTMLTextAreaElement ||
         (event.target instanceof HTMLElement && event.target.isContentEditable),
       );
+
+      const panel = handlersRef.current.activePanel ?? null;
+
+      if (panel && !isInputField) {
+        if (event.key === 'j' || event.key === 'J') {
+          event.preventDefault();
+          ringRef.current.selectNext();
+          return;
+        }
+        if (event.key === 'k' || event.key === 'K') {
+          event.preventDefault();
+          ringRef.current.selectPrev();
+          return;
+        }
+        if (event.key === 'Enter') {
+          const highlighted = ringRef.current.highlightedId;
+          const item = panel.orderedItems().find((i) => i.id === highlighted);
+          if (item) panel.onApprove?.(item);
+          return;
+        }
+      }
 
       const shortcut = KEYBOARD_SHORTCUTS.find((s) => s.matches(event));
       if (!shortcut) return;
@@ -142,4 +187,6 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+
+  return { highlightedItemId: ring.highlightedId };
 }

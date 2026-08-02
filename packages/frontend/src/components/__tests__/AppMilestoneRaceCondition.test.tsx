@@ -53,7 +53,7 @@ vi.mock('../../hooks/useSessionStore', () => ({
 }));
 
 vi.mock('../../hooks/useKeyboardShortcuts', () => ({
-  useKeyboardShortcuts: () => {},
+  useKeyboardShortcuts: () => ({ highlightedItemId: null }),
 }));
 
 vi.mock('../../hooks/useNotifications', () => ({

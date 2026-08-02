@@ -1,8 +1,16 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { DecisionPickOnePanel } from '../DecisionPickOnePanel';
 import { stagedIntentsApi } from '../../api/stagedIntents';
 import type { StagedIntent } from '../../api/stagedIntents';
+
+function fireKey(key: string, target?: EventTarget) {
+  const event = new KeyboardEvent('keydown', { key, bubbles: true });
+  if (target) {
+    Object.defineProperty(event, 'target', { value: target, writable: false });
+  }
+  window.dispatchEvent(event);
+}
 
 describe('DecisionPickOnePanel', () => {
   afterEach(() => {
@@ -148,5 +156,34 @@ describe('DecisionPickOnePanel', () => {
 
     fireEvent.click(radio);
     expect(radio.checked).toBe(false);
+  });
+
+  describe('keyboard ring bindings', () => {
+    it("'a' is a no-op for a highlighted card with no option selected", () => {
+      const answer = vi.spyOn(stagedIntentsApi, 'answer');
+      render(<DecisionPickOnePanel intent={singleOptionIntent()} highlighted />);
+
+      fireKey('a');
+
+      expect(answer).not.toHaveBeenCalled();
+    });
+
+    it("'a' fires Submit once an option is selected", async () => {
+      const answer = vi
+        .spyOn(stagedIntentsApi, 'answer')
+        .mockResolvedValue({ ok: true, intent: singleOptionIntent() });
+
+      render(<DecisionPickOnePanel intent={singleOptionIntent()} highlighted />);
+      fireEvent.click(screen.getByRole('radio'));
+
+      act(() => fireKey('a'));
+
+      await waitFor(() =>
+        expect(answer).toHaveBeenCalledWith('intent-1', {
+          chosenLabel: 'Cap at 10MB',
+          freeForm: undefined,
+        }),
+      );
+    });
   });
 });

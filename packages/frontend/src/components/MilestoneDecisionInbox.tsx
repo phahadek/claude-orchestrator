@@ -41,6 +41,8 @@ interface Props {
   registerScrollTarget?: (id: string, target: CardScrollTarget | null) => void;
   /** Called with the ids of every card a disposition (single, group, or clean-batch) just removed, so a caller can re-select whatever is now topmost when the removed set included the current selection. */
   onCardsRemoved?: (ids: string[]) => void;
+  /** The keyboard ring's current highlight (an intent id or groupId) — the matching card enables its local 'a'/'r' bindings. */
+  keyboardHighlightedId?: string | null;
 }
 
 interface TaskLabel {
@@ -161,6 +163,7 @@ export function MilestoneDecisionInbox({
   flaggedOnly = false,
   registerScrollTarget,
   onCardsRemoved,
+  keyboardHighlightedId = null,
 }: Props) {
   const taskById = new Map(tasks.map((t) => [t.taskId, t]));
   const {
@@ -327,6 +330,7 @@ export function MilestoneDecisionInbox({
                   intent={intent}
                   onAnswered={remove}
                   onDismiss={remove}
+                  highlighted={keyboardHighlightedId === intent.id}
                 />
               ) : (
                 <StagedIntentPanel
@@ -335,6 +339,7 @@ export function MilestoneDecisionInbox({
                   onRejected={remove}
                   onDismiss={remove}
                   onApproved={upsert}
+                  highlighted={keyboardHighlightedId === intent.id}
                 />
               )}
             </div>
@@ -428,6 +433,7 @@ export function MilestoneDecisionInbox({
                   : undefined
               }
               data-testid={`milestone-decision-card-${groupId}`}
+              highlighted={keyboardHighlightedId === groupId}
               headerExtra={
                 <>
                   <span

@@ -12,6 +12,11 @@ import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useBootReconciliation } from './hooks/useBootReconciliation';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import type {
+  PanelKeyboardDeclaration,
+  PanelKeyboardRegistry,
+} from './types/panelKeyboard';
+import { resolvePanelKeyboardDeclaration } from './types/panelKeyboard';
 import { useNotifications } from './hooks/useNotifications';
 import { useMilestoneAttention } from './hooks/useMilestoneAttention';
 import { useIsMobile } from './hooks/useIsMobile';
@@ -916,6 +921,26 @@ export default function App() {
 
   const [selectedSessionIndex, setSelectedSessionIndex] = useState(-1);
 
+  // The milestone decision-card ring's declaration — supplied once by
+  // MilestoneView/MilestoneDecisionStack via onDeclarationChange. Every
+  // other TopView has no ring today, so its registry entry is null.
+  const [milestonePanelDeclaration, setMilestonePanelDeclaration] =
+    useState<PanelKeyboardDeclaration | null>(null);
+  const panelKeyboardRegistry: PanelKeyboardRegistry = {
+    tasks: null,
+    sessions: null,
+    prs: null,
+    analytics: null,
+    gate: null,
+    architecture: null,
+    milestone: milestonePanelDeclaration,
+    settings: null,
+  };
+  const activePanel = resolvePanelKeyboardDeclaration(
+    topView,
+    panelKeyboardRegistry,
+  );
+
   // Reset keyboard selection index when active project changes
   useEffect(() => {
     setSelectedSessionIndex(-1);
@@ -1229,7 +1254,8 @@ export default function App() {
     };
   }, []);
 
-  useKeyboardShortcuts({
+  const { highlightedItemId: panelHighlightedItemId } = useKeyboardShortcuts({
+    activePanel,
     onOpenDispatch: () => setShowModal(true),
     onDismiss: (fromInputField) => {
       if (showModal) {
@@ -1688,6 +1714,10 @@ export default function App() {
               setSessionArchived={setSessionArchived}
               setSessionFavorited={setSessionFavorited}
               project={activeProject}
+              keyboardHighlightedId={
+                topView === 'milestone' ? panelHighlightedItemId : null
+              }
+              onDeclarationChange={setMilestonePanelDeclaration}
             />
           </ErrorBoundary>
         )}

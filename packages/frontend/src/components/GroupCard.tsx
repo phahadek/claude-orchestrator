@@ -1,10 +1,11 @@
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import type {
   StagedIntent,
   StagedIntentRejectOutcome,
 } from '../api/stagedIntents';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { CollapsibleField } from './CollapsibleField';
+import { useHighlightedCardKeyboardActions } from '../types/panelKeyboard';
 import panelStyles from './DecisionPanel.module.css';
 import intentStyles from './StagedIntentPanel.module.css';
 import styles from './GroupCard.module.css';
@@ -50,6 +51,12 @@ interface Props {
   selected?: boolean;
   className?: string;
   'data-testid'?: string;
+  /**
+   * True while this card is the active keyboard ring's current highlight —
+   * enables its local 'a' (approve group) / 'r' (focus reason field)
+   * bindings. Defaults to false outside a keyboard-ring context.
+   */
+  highlighted?: boolean;
 }
 
 /** A short, kind-labelled identifier for a member's collapsed summary line — never the full per-kind view, which is reserved for the expanded state. */
@@ -125,10 +132,12 @@ export function GroupCard({
   selected,
   className,
   'data-testid': dataTestId,
+  highlighted = false,
 }: Props) {
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
   const toggle = (id: string) =>
     setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  const reasonInputRef = useRef<HTMLTextAreaElement>(null);
 
   const head = headProposalOf(members);
   const actionSuffix = actionSuffixFor(members[0]?.intent.groupKind);
@@ -155,6 +164,13 @@ export function GroupCard({
     blockedCount > 0 ||
     members.some(({ intent }) => intent.groupBlocked === true);
   const controlsDisabled = disabled || groupNonCommittable;
+
+  useHighlightedCardKeyboardActions({
+    highlighted,
+    onApprove:
+      !inFlight && !controlsDisabled ? () => onApproveGroup() : undefined,
+    onFocusReject: () => reasonInputRef.current?.focus(),
+  });
 
   return (
     <div
@@ -354,6 +370,7 @@ export function GroupCard({
           </button>
         </div>
         <textarea
+          ref={reasonInputRef}
           className={panelStyles.reasonInput}
           placeholder={
             draft.outcome === 'pushback'

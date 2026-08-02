@@ -5,6 +5,7 @@ import type {
 } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { CollapsibleField } from './CollapsibleField';
+import { useHighlightedCardKeyboardActions } from '../types/panelKeyboard';
 import styles from './StagedIntentPanel.module.css';
 import pickOneStyles from './DecisionPickOnePanel.module.css';
 
@@ -14,6 +15,13 @@ interface Props {
   onDismiss?: (intent: StagedIntent) => void;
   /** True while the owning session hasn't signaled its proposal set complete for the turn — the backend refuses an answer too, so Submit is disabled rather than left to fail. */
   disabled?: boolean;
+  /**
+   * True while this card is the active keyboard ring's current highlight —
+   * enables 'a' to fire Submit, but only once an option is selected (or
+   * free-form text entered); a no-op otherwise, mirroring Submit's own
+   * disabled gate.
+   */
+  highlighted?: boolean;
 }
 
 function isNotFoundError(err: unknown): boolean {
@@ -33,6 +41,7 @@ export function DecisionPickOnePanel({
   onAnswered,
   onDismiss,
   disabled = false,
+  highlighted = false,
 }: Props) {
   const payload = intent.payload as DecisionPickOnePayload;
   const [chosenLabel, setChosenLabel] = useState<string | null>(null);
@@ -62,6 +71,14 @@ export function DecisionPickOnePanel({
       setInFlight(false);
     }
   };
+
+  useHighlightedCardKeyboardActions({
+    highlighted,
+    onApprove:
+      canSubmit && !inFlight && !disabled
+        ? () => void handleSubmit()
+        : undefined,
+  });
 
   return (
     <div className={styles.panel} data-testid="decision-pick-one-panel">

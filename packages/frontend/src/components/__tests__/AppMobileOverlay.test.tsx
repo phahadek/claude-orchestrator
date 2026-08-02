@@ -79,7 +79,7 @@ vi.mock('../../hooks/useWebSocket', () => ({
 }));
 
 vi.mock('../../hooks/useKeyboardShortcuts', () => ({
-  useKeyboardShortcuts: vi.fn(),
+  useKeyboardShortcuts: vi.fn(() => ({ highlightedItemId: null })),
 }));
 
 vi.mock('../Header', () => ({
@@ -424,6 +424,7 @@ describe('App — keyboard dismiss', () => {
     let capturedDismiss: ((fromInputField: boolean) => void) | undefined;
     mockImpl.mockImplementation(({ onDismiss }) => {
       capturedDismiss = onDismiss;
+      return { highlightedItemId: null };
     });
 
     render(<App />);
@@ -444,6 +445,7 @@ describe('App — keyboard dismiss', () => {
     let capturedDismiss: ((fromInputField: boolean) => void) | undefined;
     mockImpl.mockImplementation(({ onDismiss }) => {
       capturedDismiss = onDismiss;
+      return { highlightedItemId: null };
     });
 
     render(<App />);

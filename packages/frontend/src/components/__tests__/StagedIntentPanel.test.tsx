@@ -1,7 +1,16 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { StagedIntentPanel } from '../StagedIntentPanel';
+import { stagedIntentsApi } from '../../api/stagedIntents';
 import type { StagedIntent } from '../../api/stagedIntents';
+
+function fireKey(key: string, target?: EventTarget) {
+  const event = new KeyboardEvent('keydown', { key, bubbles: true });
+  if (target) {
+    Object.defineProperty(event, 'target', { value: target, writable: false });
+  }
+  window.dispatchEvent(event);
+}
 
 function makeIntent(overrides: Partial<StagedIntent> = {}): StagedIntent {
   return {
@@ -955,6 +964,60 @@ describe('StagedIntentPanel', () => {
       expect(
         screen.queryByTestId('staged-intent-capability-file-mutation-warning'),
       ).toBeNull();
+    });
+  });
+
+  describe('keyboard ring bindings', () => {
+    it("'a' fires handleApprove for a highlighted grouped intent with no required input", async () => {
+      const approve = vi
+        .spyOn(stagedIntentsApi, 'approve')
+        .mockResolvedValue({ ...makeIntent({ groupId: 'group-1' }) });
+
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({ groupId: 'group-1' })}
+          highlighted
+        />,
+      );
+
+      act(() => fireKey('a'));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('intent-1'));
+    });
+
+    it("'a' is a no-op when the card isn't the ring's highlight", () => {
+      const approve = vi.spyOn(stagedIntentsApi, 'approve');
+
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({ groupId: 'group-1' })}
+          highlighted={false}
+        />,
+      );
+
+      fireKey('a');
+
+      expect(approve).not.toHaveBeenCalled();
+    });
+
+    it("'r' focuses the reason field and never submits by itself", () => {
+      render(
+        <StagedIntentPanel intent={makeIntent({ groupId: 'group-1' })} highlighted />,
+      );
+
+      const reasonField = screen.getByPlaceholderText(
+        'What should the session revise?',
+      ) as HTMLTextAreaElement;
+      expect(document.activeElement).not.toBe(reasonField);
+
+      fireKey('r');
+
+      expect(document.activeElement).toBe(reasonField);
+      expect(
+        screen.getByRole('button', { name: /pushback|decline/i }),
+      ).toBeTruthy();
+      // Focusing the field alone must never fire a network call.
+      expect(reasonField.value).toBe('');
     });
   });
 });

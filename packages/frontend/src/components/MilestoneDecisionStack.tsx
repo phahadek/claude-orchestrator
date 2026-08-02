@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TaskView } from '../types/taskView';
 import type { StagedIntent } from '../api/stagedIntents';
 import type { SessionState } from '../hooks/useSessionStore';
 import { phaseForTask } from '../utils/phaseBurndown';
+import type { PanelKeyboardDeclaration } from '../types/panelKeyboard';
 import {
   MilestoneDecisionInbox,
   type CardScrollTarget,
@@ -32,6 +33,10 @@ interface Props {
   onViewSession?: (selection: MilestoneStackSelection) => void;
   /** The centre column's scrollable ancestor (owned by MilestoneView) — scroll-follow attaches to it. Omit to skip scroll-follow (e.g. on mobile, where only one region is mounted at a time). */
   scrollContainerRef?: React.RefObject<HTMLElement | null>;
+  /** The active keyboard ring's current highlight (an intent id or groupId) — forwarded to the matching decision card so it can enable its local 'a'/'r' bindings. */
+  keyboardHighlightedId?: string | null;
+  /** Called (once, on mount) with this stack's panel-keyboard declaration — the decision-card ring's ordered item list, for the Milestone view's active useKeyboardShortcuts registration. */
+  onDeclarationChange?: (declaration: PanelKeyboardDeclaration) => void;
 }
 
 function matchesPhase(task: TaskView, phaseFilter: string | null): boolean {
@@ -53,6 +58,8 @@ export function MilestoneDecisionStack({
   onSelect,
   onViewSession,
   scrollContainerRef,
+  keyboardHighlightedId = null,
+  onDeclarationChange,
 }: Props) {
   const filteredTasks = tasks
     .filter((t) => matchesPhase(t, phaseFilter))
@@ -78,6 +85,28 @@ export function MilestoneDecisionStack({
   // force the reselect effect below to run once the removal's DOM update has
   // committed (a plain ref wouldn't re-trigger the effect).
   const [reselectTick, setReselectTick] = useState(0);
+
+  // The decision-card ring's keyboard declaration — orderedItems reads the
+  // scroll-follow target map live on every call (never cached), so it
+  // reflects whatever cards are currently mounted without needing to be
+  // rebuilt when the underlying intent list changes.
+  const declaration = useMemo<PanelKeyboardDeclaration>(
+    () => ({
+      orderedItems: () =>
+        Array.from(inboxTargetsRef.current.keys()).map((id) => ({ id })),
+      hints: [
+        { key: 'j', description: 'Next decision' },
+        { key: 'k', description: 'Previous decision' },
+        { key: 'a', description: 'Approve highlighted card' },
+        { key: 'r', description: 'Focus reason field' },
+      ],
+    }),
+    [],
+  );
+
+  useEffect(() => {
+    onDeclarationChange?.(declaration);
+  }, [declaration, onDeclarationChange]);
 
   const handleSelect = useCallback(
     (next: MilestoneStackSelection | null) => {
@@ -205,6 +234,7 @@ export function MilestoneDecisionStack({
         }
         registerScrollTarget={registerInboxTarget}
         onCardsRemoved={handleCardsRemoved}
+        keyboardHighlightedId={keyboardHighlightedId}
       />
 
       <TaskSection

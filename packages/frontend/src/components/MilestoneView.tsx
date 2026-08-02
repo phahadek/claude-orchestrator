@@ -16,6 +16,7 @@ import {
 import { MilestoneDrilldown, type DrilldownMode } from './MilestoneDrilldown';
 import { GateReadinessPanel } from './GateReadinessPanel';
 import { isGatePhase } from '../utils/phaseBurndown';
+import type { PanelKeyboardDeclaration } from '../types/panelKeyboard';
 import styles from './MilestoneView.module.css';
 
 const MIN_MIDDLE_WIDTH_PCT = 30;
@@ -55,6 +56,10 @@ interface Props {
   setSessionArchived: (sessionId: string, archived: boolean) => void;
   setSessionFavorited: (sessionId: string, favorited: boolean) => void;
   project?: ProjectConfig | null;
+  /** The active keyboard ring's current highlight — forwarded to the decision stack so the matching card can enable its local 'a'/'r' bindings. */
+  keyboardHighlightedId?: string | null;
+  /** Called (once, on mount) with the decision stack's panel-keyboard declaration, for the caller's active useKeyboardShortcuts registration. */
+  onDeclarationChange?: (declaration: PanelKeyboardDeclaration) => void;
 }
 
 export function MilestoneView({
@@ -69,6 +74,8 @@ export function MilestoneView({
   setSessionArchived,
   setSessionFavorited,
   project = null,
+  keyboardHighlightedId = null,
+  onDeclarationChange,
 }: Props) {
   // Shared filter state: the burndown (left) emits a phase, the decision
   // stack (middle) consumes it.
@@ -237,6 +244,8 @@ export function MilestoneView({
       onSelect={handleSelect}
       onViewSession={handleViewSession}
       scrollContainerRef={middlePanelRef}
+      keyboardHighlightedId={keyboardHighlightedId}
+      onDeclarationChange={onDeclarationChange}
     />
   ) : (
     <div className={styles.mountPlaceholder}>
