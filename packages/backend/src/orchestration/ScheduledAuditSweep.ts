@@ -130,7 +130,7 @@ export async function ensureAuditWorktree(
 
 // ── Analyze-command execution with bounded transient-failure retry ─────────
 
-export type AnalyzeCommandRunner = (
+type AnalyzeCommandRunner = (
   cwd: string,
   command: string,
   timeoutSec: number,
@@ -233,7 +233,7 @@ export interface DependencyVulnerabilityFinding {
   advisoryUrl?: string;
 }
 
-export interface LicenseFinding {
+interface LicenseFinding {
   kind: 'license';
   packageName: string;
   version: string;
@@ -363,7 +363,7 @@ export function parseAuditFindings(commandOutput: string): AuditFinding[] {
 
 // ── Task body / title rendering ─────────────────────────────────────────────
 
-export function findingTaskTitle(finding: AuditFinding): string {
+function findingTaskTitle(finding: AuditFinding): string {
   return finding.kind === 'vulnerability'
     ? `Dependency audit: fix ${finding.packageName} advisory ${finding.advisoryId}`
     : `Dependency audit: resolve ${finding.packageName}@${finding.version} license (${finding.license})`;
@@ -546,7 +546,7 @@ export async function runAuditSweepForProject(
   return { projectId: project.id, findingsSeen, tasksFiled };
 }
 
-export async function runScheduledAuditSweepOnce(
+async function runScheduledAuditSweepOnce(
   deps: Partial<AuditSweepDeps> = {},
 ): Promise<{ items_processed: number }> {
   const merged: AuditSweepDeps = { ...defaultDeps, ...deps };
