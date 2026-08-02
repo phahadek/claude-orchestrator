@@ -311,6 +311,17 @@ export class StalledPRReconciler {
     }
 
     if (kind === 'analyze_failing') {
+      // The bounded, session-verified flake-recovery mechanism
+      // (flaky.confirm gate:'analyze' -> PRMergeWatcher.handleVerifiedFlakyDisposition)
+      // owns analyze_failing recovery now. Only fall back to this blunt
+      // full-pipeline retry once that mechanism's own retry budget is
+      // exhausted — otherwise this sweep would short-circuit the bounded
+      // mechanism on every stall pass before a session ever gets a chance to
+      // dispose it as verified-flaky.
+      const maxRetries = typedGetSetting('flake_recovery_max_retries');
+      if (pr.flake_recovery_attempts < maxRetries) {
+        return false;
+      }
       // Invalidate the per-SHA analyze cache so the pipeline re-runs analyze
       // rather than returning the stale cached failure.
       if (headSha) {

@@ -566,6 +566,32 @@ export class ReviewOrchestrator {
   }
 
   /**
+   * Actuate a verified-flaky disposition on the analyze gate — delegates to
+   * PreReviewPipeline.rerunFlakyAnalyze. Exposed here so PRMergeWatcher (which
+   * holds a ReviewOrchestrator reference, not a PreReviewPipeline one) can
+   * drive same-SHA analyze re-runs.
+   */
+  async rerunFlakyAnalyze(
+    prNumber: number,
+    repo: string,
+    headSha: string,
+    worktreePath: string,
+    project: ProjectConfig,
+  ): Promise<{
+    outcome: FlakeRecoveryOutcome;
+    passed: boolean;
+    output: string;
+  } | null> {
+    return this.preReviewPipeline.rerunFlakyAnalyze(
+      prNumber,
+      repo,
+      headSha,
+      worktreePath,
+      project,
+    );
+  }
+
+  /**
    * Run the configured analyze: commands for a PR's head SHA.
    * Deduplicates: if a result already exists for this SHA, returns the cached result.
    * Persists { passed, output } keyed by (prNumber, repo, sha).

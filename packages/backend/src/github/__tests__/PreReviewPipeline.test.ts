@@ -15,6 +15,7 @@ const mockDeleteTestResult = vi.fn();
 const mockHasAnalyzeResultForSha = vi.fn().mockReturnValue(false);
 const mockUpsertAnalyzeResult = vi.fn();
 const mockGetAnalyzeResult = vi.fn().mockReturnValue(null);
+const mockDeleteAnalyzeResult = vi.fn();
 const mockAddAutofixSha = vi.fn();
 const mockGetAnalyzeContentCacheResult = vi.fn().mockReturnValue(undefined);
 const mockInsertAnalyzeContentCacheResult = vi.fn();
@@ -33,6 +34,7 @@ vi.mock('../../db/queries', () => ({
     mockHasAnalyzeResultForSha(...args),
   upsertAnalyzeResult: (...args: unknown[]) => mockUpsertAnalyzeResult(...args),
   getAnalyzeResult: (...args: unknown[]) => mockGetAnalyzeResult(...args),
+  deleteAnalyzeResult: (...args: unknown[]) => mockDeleteAnalyzeResult(...args),
   getAnalyzeContentCacheResult: (...args: unknown[]) =>
     mockGetAnalyzeContentCacheResult(...args),
   insertAnalyzeContentCacheResult: (...args: unknown[]) =>
@@ -838,6 +840,48 @@ describe('PreReviewPipeline — analyze gate (parity with autofix/verify)', () =
     expect(result.passed).toBe(true);
     expect(mockRunTestCommands).not.toHaveBeenCalled();
   });
+
+  it('marks is_transient when a failing command output matches a configured transient_output_patterns regex', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      verify: [],
+      autofix: [],
+      analyze: [
+        {
+          command: 'npm audit',
+          transient_output_patterns: ['ECONNRESET'],
+        },
+      ],
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'npm ERR! ECONNRESET',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockUpsertAnalyzeResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      false,
+      'npm ERR! ECONNRESET',
+      true,
+    );
+  });
 });
 
 describe('PreReviewPipeline — analyze gate path-trigger + content-hash cache', () => {
@@ -1328,6 +1372,178 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
         event_type: 'flake_recovery_f2_rerun',
         payload: expect.objectContaining({ outcome: 'inconclusive' }),
       }),
+    );
+  });
+});
+
+// ── rerunFlakyAnalyze — analyze-gate verified-flaky actuation ────────────────
+
+describe('PreReviewPipeline.rerunFlakyAnalyze', () => {
+  it('audits + invalidates the existing analyze result row, then re-runs on the same SHA (no new commit, analyze-stage only)', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      analyze: ['eslint .'],
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+    });
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.rerunFlakyAnalyze(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      WORKTREE,
+      makeProject(),
+    );
+
+    expect(result).toEqual({ outcome: 'passed', passed: true, output: 'ok' });
+
+    // Audited: invalidation happened, recorded before the re-run.
+    expect(mockDeleteAnalyzeResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+    );
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'flake_recovery_analyze_invalidated',
+        project_id: 'proj-1',
+        payload: expect.objectContaining({
+          prNumber: PR_NUMBER,
+          sha: HEAD_SHA,
+        }),
+      }),
+    );
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'flake_recovery_analyze_rerun',
+        project_id: 'proj-1',
+        payload: expect.objectContaining({
+          prNumber: PR_NUMBER,
+          sha: HEAD_SHA,
+          outcome: 'passed',
+        }),
+      }),
+    );
+
+    // Re-run only the analyze commands on the same SHA — no test/CI re-run.
+    expect(mockRunTestCommands).toHaveBeenCalledWith(
+      WORKTREE,
+      ['eslint .'],
+      300,
+      expect.any(Function),
+      { maxRssMb: 0, failFast: true },
+    );
+    expect(mockUpsertAnalyzeResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      true,
+      'ok',
+      false,
+    );
+  });
+
+  it('returns null when the project has no analyze commands configured', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      analyze: [],
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.rerunFlakyAnalyze(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      WORKTREE,
+      makeProject(),
+    );
+
+    expect(result).toBeNull();
+    expect(mockDeleteAnalyzeResult).not.toHaveBeenCalled();
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+  });
+
+  it('records inconclusive when head_sha drifted by the time the re-run completed', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      analyze: ['eslint .'],
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+    });
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const sm = makeSessionManager();
+    const github = {
+      getPRState: vi
+        .fn()
+        .mockResolvedValue({ state: 'open', headSha: 'sha-new-push' }),
+    } as any;
+    const pipeline = new PreReviewPipeline(sm, github);
+
+    const result = await pipeline.rerunFlakyAnalyze(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      WORKTREE,
+      makeProject(),
+    );
+
+    expect(result).toEqual({
+      outcome: 'inconclusive',
+      passed: true,
+      output: 'ok',
+    });
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'flake_recovery_analyze_rerun',
+        payload: expect.objectContaining({ outcome: 'inconclusive' }),
+      }),
+    );
+  });
+
+  it('marks is_transient when a failing command output matches a configured transient_output_patterns regex', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      analyze: [
+        {
+          command: 'npm audit',
+          transient_output_patterns: [
+            'ECONNRESET',
+            'registry\\.npmjs\\.org.*503',
+          ],
+        },
+      ],
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+    });
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'npm ERR! ECONNRESET',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.rerunFlakyAnalyze(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      WORKTREE,
+      makeProject(),
+    );
+
+    expect(result?.passed).toBe(false);
+    expect(mockUpsertAnalyzeResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      false,
+      'npm ERR! ECONNRESET',
+      true,
     );
   });
 });

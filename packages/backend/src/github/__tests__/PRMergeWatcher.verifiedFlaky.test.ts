@@ -95,6 +95,9 @@ const HEAD_SHA = 'sha-flaky-1';
 const CI_FAILING_PAUSE = serializePauseReason(
   pauseReasonFromCanonical('ci_failing'),
 );
+const ANALYZE_FAILING_PAUSE = serializePauseReason(
+  pauseReasonFromCanonical('analyze_failing'),
+);
 
 function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
   return {
@@ -186,6 +189,9 @@ function makeMockReviewOrchestrator(): ReviewOrchestrator {
     rerunFlakyTests: vi
       .fn()
       .mockResolvedValue({ outcome: 'passed', passed: true, output: 'ok' }),
+    rerunFlakyAnalyze: vi
+      .fn()
+      .mockResolvedValue({ outcome: 'passed', passed: true, output: 'ok' }),
   } as unknown as ReviewOrchestrator;
 }
 
@@ -263,6 +269,48 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — same-SHA re-run actu
       '/tmp/worktree',
       expect.objectContaining({ id: 'project-1' }),
     );
+    expect(vi.mocked(github.rerunFailedJobs)).not.toHaveBeenCalled();
+  });
+
+  it('Analyze gate: delegates to ReviewOrchestrator.rerunFlakyAnalyze for an audited invalidation + re-run on the same SHA', async () => {
+    const github = makeMockGitHub();
+    const { watcher, reviewOrchestrator } = makeWatcher(github);
+    const pr = makePRRow({ pause_reason: ANALYZE_FAILING_PAUSE });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    await watcher.handleVerifiedFlakyDisposition(
+      makePayload({
+        disposition: { gate: 'analyze', reason: 'npm registry 503' },
+      }),
+    );
+
+    expect(
+      vi.mocked(reviewOrchestrator.rerunFlakyAnalyze),
+    ).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA, // same SHA — no new commit
+      '/tmp/worktree',
+      expect.objectContaining({ id: 'project-1' }),
+    );
+    expect(vi.mocked(github.rerunFailedJobs)).not.toHaveBeenCalled();
+  });
+
+  it('no-ops when an analyze disposition arrives while the PR is paused ci_failing (gate/pause-reason mismatch)', async () => {
+    const github = makeMockGitHub();
+    const { watcher, reviewOrchestrator } = makeWatcher(github);
+    const pr = makePRRow(); // pause_reason: ci_failing
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    await watcher.handleVerifiedFlakyDisposition(
+      makePayload({
+        disposition: { gate: 'analyze', reason: 'npm registry 503' },
+      }),
+    );
+
+    expect(
+      vi.mocked(reviewOrchestrator.rerunFlakyAnalyze),
+    ).not.toHaveBeenCalled();
     expect(vi.mocked(github.rerunFailedJobs)).not.toHaveBeenCalled();
   });
 

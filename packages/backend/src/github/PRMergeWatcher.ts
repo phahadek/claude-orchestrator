@@ -874,7 +874,13 @@ export class PRMergeWatcher extends EventEmitter {
     }
 
     const pauseStruct = parsePauseReason(pr.pause_reason);
-    if (pauseStruct?.reason !== 'ci_failing') return;
+    // Each gate fails under its own distinct pause reason — a disposition
+    // must match the reason the PR is actually paused on, otherwise an
+    // 'analyze' confirmation would silently no-op against a ci_failing pause
+    // (or vice versa) instead of actuating the right same-commit re-run.
+    const expectedPauseReason =
+      payload.disposition.gate === 'analyze' ? 'analyze_failing' : 'ci_failing';
+    if (pauseStruct?.reason !== expectedPauseReason) return;
 
     const project = getProjectByGithubRepo(pr.repo);
     const projectId = project?.id ?? null;
@@ -884,7 +890,7 @@ export class PRMergeWatcher extends EventEmitter {
       setPauseReason(
         pr.pr_number,
         pr.repo,
-        'ci_failing',
+        expectedPauseReason,
         'flake-recovery-exhausted',
       );
       recordEvent({
@@ -936,6 +942,20 @@ export class PRMergeWatcher extends EventEmitter {
       const worktreePath = session?.worktree_path ?? '';
       if (!worktreePath) return;
       const result = await this.reviewOrchestrator.rerunFlakyTests(
+        pr.pr_number,
+        pr.repo,
+        pr.head_sha,
+        worktreePath,
+        project,
+      );
+      if (!result) return;
+      outcome = result.outcome;
+    } else if (payload.disposition.gate === 'analyze') {
+      if (!project || !pr.session_id || !this.reviewOrchestrator) return;
+      const session = getSession(pr.session_id);
+      const worktreePath = session?.worktree_path ?? '';
+      if (!worktreePath) return;
+      const result = await this.reviewOrchestrator.rerunFlakyAnalyze(
         pr.pr_number,
         pr.repo,
         pr.head_sha,

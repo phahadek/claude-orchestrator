@@ -98,7 +98,7 @@ export function registerVerdictTools(
       {
         title: 'Confirm a verified-flaky CI/gate failure',
         description:
-          'Reports that this session cleared the flake-verification bar (ran the failing test in isolation, re-ran the full suite, confirmed the failure is unrelated to its diff) instead of pushing an empty commit. gate is "ci" for a failing GitHub check or "f2" for the orchestrator-run test gate.',
+          'Reports that this session cleared the flake-verification bar (ran the failing check in isolation, re-ran the full suite/gate, confirmed the failure is unrelated to its diff) instead of pushing an empty commit. gate is "ci" for a failing GitHub check, "f2" for the orchestrator-run test gate, or "analyze" for the orchestrator-run static-analysis gate.',
         inputSchema: {
           gate: flakyGateSchema,
           reason: z.string(),

@@ -88,6 +88,8 @@ type EventType =
   | 'flake_recovery_attempted'
   | 'flake_recovery_f2_invalidated'
   | 'flake_recovery_f2_rerun'
+  | 'flake_recovery_analyze_invalidated'
+  | 'flake_recovery_analyze_rerun'
   | 'flake_recovery_ci_rerun'
   | 'flake_recovery_exhausted'
   | 'arch_unit_created'

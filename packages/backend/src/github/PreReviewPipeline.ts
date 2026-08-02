@@ -12,6 +12,7 @@ import {
   hasAnalyzeResultForSha,
   upsertAnalyzeResult,
   getAnalyzeResult,
+  deleteAnalyzeResult,
   getAnalyzeContentCacheResult,
   insertAnalyzeContentCacheResult,
   addAutofixSha,
@@ -26,6 +27,7 @@ import {
   normalizeAnalyzeCommand,
   isAnalyzeCommandTriggered,
   computeTriggerContentHash,
+  matchesTransientOutputPattern,
 } from '../session/analyzeGating';
 import { validateAndRepairGitConfig } from '../orchestration/gitConfigIntegrity';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
@@ -329,6 +331,7 @@ export class PreReviewPipeline {
           let allPassed = true;
           let anyTimedOut = false;
           let anyOomKilled = false;
+          let anyTransientOutputMatch = false;
 
           for (const entry of normalized) {
             if (!isAnalyzeCommandTriggered(entry, diffPaths)) {
@@ -384,6 +387,12 @@ export class PreReviewPipeline {
             if (!result.passed) allPassed = false;
             if (result.timedOut) anyTimedOut = true;
             if (result.oomKilled) anyOomKilled = true;
+            if (
+              !result.passed &&
+              matchesTransientOutputPattern(entry, result.output)
+            ) {
+              anyTransientOutputMatch = true;
+            }
 
             if (contentHash) {
               insertAnalyzeContentCacheResult(
@@ -405,7 +414,7 @@ export class PreReviewPipeline {
             ctx.headSha,
             passed,
             output,
-            anyTimedOut || anyOomKilled,
+            anyTimedOut || anyOomKilled || anyTransientOutputMatch,
           );
         }
 
@@ -528,6 +537,117 @@ export class PreReviewPipeline {
     });
     logger.info(
       `[PreReviewPipeline] flaky re-run ${outcome} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+    );
+    return { outcome, passed, output };
+  }
+
+  /**
+   * Actuate a session's verified-flaky disposition on the analyze gate:
+   * audit + invalidate the permanent per-(pr,repo,sha) analyze result row,
+   * then re-run the same analyze commands (respecting trigger_paths, not the
+   * content-hash cache — this is an explicit re-run, not a fresh evaluation)
+   * against the same SHA — no new commit, no new SHA, and no full-pipeline
+   * retry. Returns null when the project has no analyze commands configured.
+   */
+  async rerunFlakyAnalyze(
+    prNumber: number,
+    repo: string,
+    headSha: string,
+    worktreePath: string,
+    project: ProjectConfig,
+  ): Promise<{
+    outcome: FlakeRecoveryOutcome;
+    passed: boolean;
+    output: string;
+  } | null> {
+    const config = loadOrchestratorConfig(project.projectDir);
+    if (!config.analyze?.length) return null;
+
+    recordEvent({
+      event_type: 'flake_recovery_analyze_invalidated',
+      actor_type: 'system',
+      project_id: project.id,
+      task_id: null,
+      payload: { prNumber, repo, sha: headSha },
+    });
+    deleteAnalyzeResult(prNumber, repo, headSha);
+
+    const normalized = config.analyze.map(normalizeAnalyzeCommand);
+    const diffPaths = await getChangedFiles(worktreePath, project.baseBranch);
+
+    const outputParts: string[] = [];
+    let allPassed = true;
+    let anyTimedOut = false;
+    let anyOomKilled = false;
+    let anyTransientOutputMatch = false;
+
+    for (const entry of normalized) {
+      if (!isAnalyzeCommandTriggered(entry, diffPaths)) {
+        outputParts.push(
+          `$ ${entry.command}\n[skipped — no diff file matched trigger_paths]`,
+        );
+        continue;
+      }
+
+      const result = await runTestCommands(
+        worktreePath,
+        [entry.command],
+        config.analyze_timeout_sec,
+        (msg) =>
+          logger.info(
+            `[PreReviewPipeline] flaky-rerun analyze PR #${prNumber}: ${msg}`,
+          ),
+        {
+          maxRssMb: config.analyze_max_rss_mb,
+          failFast: config.analyze_fail_fast,
+        },
+      );
+
+      outputParts.push(result.output);
+      if (!result.passed) allPassed = false;
+      if (result.timedOut) anyTimedOut = true;
+      if (result.oomKilled) anyOomKilled = true;
+      if (
+        !result.passed &&
+        matchesTransientOutputPattern(entry, result.output)
+      ) {
+        anyTransientOutputMatch = true;
+      }
+
+      if (!allPassed && config.analyze_fail_fast) break;
+    }
+
+    const passed = allPassed;
+    const output = outputParts.join('\n');
+    upsertAnalyzeResult(
+      prNumber,
+      repo,
+      headSha,
+      passed,
+      output,
+      anyTimedOut || anyOomKilled || anyTransientOutputMatch,
+    );
+
+    // Re-verify head_sha immediately before recording the outcome — a push
+    // that landed mid-run means this result no longer speaks to the SHA the
+    // disposition was diagnosed against.
+    let outcome: FlakeRecoveryOutcome = passed ? 'passed' : 'failed';
+    if (this.github) {
+      const current = await this.github.getPRState(prNumber, repo);
+      if (current.headSha !== headSha) {
+        outcome = 'inconclusive';
+      }
+    }
+
+    recordEvent({
+      event_type: 'flake_recovery_analyze_rerun',
+      actor_type: 'system',
+      project_id: project.id,
+      task_id: null,
+      payload: { prNumber, repo, sha: headSha, outcome },
+    });
+    logger.info(
+      `[PreReviewPipeline] flaky analyze re-run ${outcome} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
     );
     return { outcome, passed, output };
   }
