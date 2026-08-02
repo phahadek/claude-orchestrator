@@ -18,6 +18,7 @@ import {
   incrementTokens,
   incrementCompactionCount,
   setContextOccupancy,
+  setCacheTokens,
   setSessionModel,
   setSessionMetadata,
   getPRBySessionId,
@@ -1551,6 +1552,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           (usage.cache_creation_input_tokens ?? 0);
         if (occupancy > 0) {
           setContextOccupancy(this.sessionId, occupancy);
+          setCacheTokens(
+            this.sessionId,
+            usage.cache_read_input_tokens ?? 0,
+            usage.cache_creation_input_tokens ?? 0,
+          );
           this.broadcast({
             type: 'session_updated',
             sessionId: this.sessionId,
@@ -1559,6 +1565,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             contextOccupancyTokens: occupancy,
             contextOccupancyFraction:
               occupancy / AgentSession.contextWindowForModel(this.model),
+            cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+            cacheCreationTokens: usage.cache_creation_input_tokens ?? 0,
           });
         }
       }

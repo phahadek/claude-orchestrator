@@ -37,6 +37,8 @@ interface SessionState {
   totalOutputTokens?: number;
   compaction_count?: number;
   context_occupancy_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
   model?: string | null;
   /** PR URL linked to this session, resolved from the pull_requests join. */
   prUrl?: string;
@@ -191,6 +193,8 @@ export type ServerMessage =
       model?: string;
       contextOccupancyTokens?: number;
       contextOccupancyFraction?: number;
+      cacheReadTokens?: number;
+      cacheCreationTokens?: number;
     }
   | { type: 'tasks_ready'; tasks: ResolvedTask[] }
   | {

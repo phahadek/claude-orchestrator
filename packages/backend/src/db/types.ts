@@ -39,6 +39,8 @@ export interface Session {
   total_output_tokens: number;
   compaction_count: number;
   context_occupancy_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
   model?: string | null;
   task_name: string | null;
   metadata: string | null; // JSON blob for small session metadata (e.g. aiTitle)
@@ -68,6 +70,8 @@ export type NewSession = Omit<
   | 'total_output_tokens'
   | 'compaction_count'
   | 'context_occupancy_tokens'
+  | 'cache_read_tokens'
+  | 'cache_creation_tokens'
   | 'task_name'
   | 'metadata'
   | 'review_result'
@@ -93,6 +97,8 @@ export type NewSession = Omit<
   total_output_tokens?: number;
   compaction_count?: number;
   context_occupancy_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
   task_name?: string | null;
   metadata?: string | null;
   review_result?: string | null;
