@@ -1,4 +1,10 @@
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  act,
+} from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { DecisionPickOnePanel } from '../DecisionPickOnePanel';
 import { stagedIntentsApi } from '../../api/stagedIntents';
@@ -161,7 +167,9 @@ describe('DecisionPickOnePanel', () => {
   describe('keyboard ring bindings', () => {
     it("'a' is a no-op for a highlighted card with no option selected", () => {
       const answer = vi.spyOn(stagedIntentsApi, 'answer');
-      render(<DecisionPickOnePanel intent={singleOptionIntent()} highlighted />);
+      render(
+        <DecisionPickOnePanel intent={singleOptionIntent()} highlighted />,
+      );
 
       fireKey('a');
 
@@ -173,7 +181,9 @@ describe('DecisionPickOnePanel', () => {
         .spyOn(stagedIntentsApi, 'answer')
         .mockResolvedValue({ ok: true, intent: singleOptionIntent() });
 
-      render(<DecisionPickOnePanel intent={singleOptionIntent()} highlighted />);
+      render(
+        <DecisionPickOnePanel intent={singleOptionIntent()} highlighted />,
+      );
       fireEvent.click(screen.getByRole('radio'));
 
       act(() => fireKey('a'));

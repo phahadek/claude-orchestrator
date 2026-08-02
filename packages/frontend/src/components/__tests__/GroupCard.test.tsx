@@ -77,9 +77,7 @@ describe('GroupCard keyboard ring bindings', () => {
 
   it("'r' focuses the group's reason field and never triggers reject by itself", () => {
     const onRejectGroup = vi.fn();
-    render(
-      <GroupCard {...baseProps({ onRejectGroup, highlighted: true })} />,
-    );
+    render(<GroupCard {...baseProps({ onRejectGroup, highlighted: true })} />);
 
     const reasonField = screen.getByPlaceholderText(
       'Choose Pushback or Decline, then explain why',

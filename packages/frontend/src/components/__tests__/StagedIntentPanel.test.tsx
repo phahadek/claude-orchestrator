@@ -1,4 +1,10 @@
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  act,
+} from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { StagedIntentPanel } from '../StagedIntentPanel';
 import { stagedIntentsApi } from '../../api/stagedIntents';
@@ -1002,7 +1008,10 @@ describe('StagedIntentPanel', () => {
 
     it("'r' focuses the reason field and never submits by itself", () => {
       render(
-        <StagedIntentPanel intent={makeIntent({ groupId: 'group-1' })} highlighted />,
+        <StagedIntentPanel
+          intent={makeIntent({ groupId: 'group-1' })}
+          highlighted
+        />,
       );
 
       const reasonField = screen.getByPlaceholderText(

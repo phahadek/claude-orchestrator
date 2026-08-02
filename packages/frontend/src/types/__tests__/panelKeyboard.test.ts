@@ -21,7 +21,9 @@ describe('panelKeyboard contract', () => {
   it('resolves a declaration for every TopView member without throwing', () => {
     const registry = emptyRegistry();
     for (const view of ALL_TOP_VIEWS) {
-      expect(() => resolvePanelKeyboardDeclaration(view, registry)).not.toThrow();
+      expect(() =>
+        resolvePanelKeyboardDeclaration(view, registry),
+      ).not.toThrow();
     }
   });
 

@@ -133,11 +133,11 @@ export function useKeyboardRing<T extends PanelKeyboardItem>(items: T[]) {
 
   const selectNext = useCallback(() => {
     setHighlightedId((id) => nextRingId(items, id, 1));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [items]);
   const selectPrev = useCallback(() => {
     setHighlightedId((id) => nextRingId(items, id, -1));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [items]);
 
   return { highlightedId, setHighlightedId, selectNext, selectPrev };
