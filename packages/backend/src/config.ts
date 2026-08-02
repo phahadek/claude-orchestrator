@@ -255,12 +255,27 @@ const ARCHITECTURE_READ_MCP_TOOLS = [
 // so it isn't in PLANNING_INTENT_KINDS — added here explicitly.
 const TASK_READ_MCP_TOOLS = [orchestratorMcpToolName('task.getById')];
 
+// pullRequest.getByTaskId — the read-only PR lookup
+// (mcp/tools/pullRequestReadTools.ts), registered unconditionally by
+// buildMcpServer for any session resolving to a project (see
+// orchestratorMcpServer.ts's doc comment) — added here explicitly to every
+// planning workflow's tool set to keep this allow-list in parity with what
+// the server actually registers. gateSeed.getState is NOT included here for
+// groom/design: it stays ops-only (see OPS_MCP_TOOLS below) even though the
+// server also registers it unconditionally for groom/design — a groom/design
+// session must never be CLI-permitted to call it, only ever see it listed
+// (see orchestrator-config.test.ts's "never a mutating gate/seed tool" guard).
+const PROJECT_READ_MCP_TOOLS = [
+  orchestratorMcpToolName('pullRequest.getByTaskId'),
+];
+
 const GROOM_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
   ...PLANNING_INTENT_KINDS.groom.map(orchestratorMcpToolName),
   orchestratorMcpToolName('groom.precheck'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
   ...TASK_READ_MCP_TOOLS,
+  ...PROJECT_READ_MCP_TOOLS,
   ...TIER_B_READ_MCP_TOOLS,
 ];
 
@@ -283,6 +298,7 @@ const DESIGN_MCP_TOOLS = [
   orchestratorMcpToolName('completeness.traceCoverage'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
   ...TASK_READ_MCP_TOOLS,
+  ...PROJECT_READ_MCP_TOOLS,
   ...TIER_B_READ_MCP_TOOLS,
 ];
 
@@ -306,6 +322,7 @@ const OPS_MCP_TOOLS = [
   orchestratorMcpToolName('gateSeed.getState'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
   ...TASK_READ_MCP_TOOLS,
+  ...PROJECT_READ_MCP_TOOLS,
   ...TIER_B_READ_MCP_TOOLS,
 ];
 

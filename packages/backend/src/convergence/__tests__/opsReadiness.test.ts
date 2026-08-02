@@ -50,9 +50,7 @@ describe('getOpsReadiness', () => {
     entry({ task_id: 'notion:1', state: 'candidate' });
     const readiness = getOpsReadiness('p1', 'M12');
     expect(readiness.status).toBe('blocked');
-    expect(readiness.blocking).toEqual([
-      { task_id: 'notion:1', state: 'candidate' },
-    ]);
+    expect(readiness.blocking).toEqual([{ task_id: '1', state: 'candidate' }]);
     expect(readiness.blockingCount).toBe(1);
   });
 
@@ -90,9 +88,7 @@ describe('getOpsReadiness', () => {
       state: 'candidate',
     });
     const readiness = getOpsReadiness('p1', 'M12');
-    expect(readiness.blocking).toEqual([
-      { task_id: 'notion:1', state: 'candidate' },
-    ]);
+    expect(readiness.blocking).toEqual([{ task_id: '1', state: 'candidate' }]);
   });
 });
 

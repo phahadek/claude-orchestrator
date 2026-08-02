@@ -180,6 +180,7 @@ describe('buildMcpServer — tool surface per session type', () => {
         'gateSeed.getState',
         'session.getRecord',
         'auditLog.query',
+        'sessionEvents.query',
       ].sort(),
     );
   });
@@ -209,6 +210,7 @@ describe('buildMcpServer — tool surface per session type', () => {
         'gateSeed.getState',
         'session.getRecord',
         'auditLog.query',
+        'sessionEvents.query',
       ].sort(),
     );
     expect(names).toContain('decision.pickOne');
@@ -240,6 +242,7 @@ describe('buildMcpServer — tool surface per session type', () => {
         'gateSeed.getState',
         'session.getRecord',
         'auditLog.query',
+        'sessionEvents.query',
       ].sort(),
     );
     expect(names).toContain('session.requestCapability');

@@ -22,6 +22,7 @@ import {
   isValidOpsTransition,
 } from '../../ops/opsJournal';
 import { passesGroomDepGate } from '../../orchestration/planningCandidates';
+import { normalizeBoardId } from '../../tasks/taskId';
 import type { NotionTask } from '../../notion/types';
 
 const repoRoot = join(__dirname, '..', '..', '..', '..', '..');
@@ -383,7 +384,7 @@ describe('procedureCore', () => {
     };
     const tasksById = new Map(
       [inFlightDep, backlogDep, taskWithInFlightDep, taskWithBacklogDep].map(
-        (t) => [t.id, t],
+        (t) => [normalizeBoardId(t.id), t],
       ),
     );
 

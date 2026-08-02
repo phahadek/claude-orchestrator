@@ -410,10 +410,26 @@ function isVisibleOnDecisionSurface(
   return true;
 }
 
+// Group-completeness ACTIVE states: 'staged'/'approved'/'committed' cover a
+// sibling live at commit time (precheckGroupCommit), and 'pending_verification'
+// covers the same sibling mid-verifyGroup — verifyGroup transitions every
+// group member to 'pending_verification' before running
+// checkGroupArmingIntentCompleteness (see verifyGroup), so omitting it here
+// would make every one of that group's own siblings invisible to its own
+// completeness check.
+const GROUP_COMPLETENESS_ACTIVE: StagedIntentState[] = [
+  'staged',
+  'pending_verification',
+  'approved',
+  'committed',
+];
+
 function hasGroupDependsOn(groupId: string, taskId: string): boolean {
-  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
   return listStagedIntentsByGroup(groupId).some((row) => {
-    if (row.kind !== 'task.setDependsOn' || !ACTIVE.includes(row.state)) {
+    if (
+      row.kind !== 'task.setDependsOn' ||
+      !GROUP_COMPLETENESS_ACTIVE.includes(row.state)
+    ) {
       return false;
     }
     const payload = JSON.parse(row.payload) as SetDependsOnPayload;
@@ -440,9 +456,10 @@ function hasGroupAccretionIntent(
   taskId: string,
   kind: 'gate.accrete' | 'seed.stage',
 ): boolean {
-  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
   return listStagedIntentsByGroup(groupId).some((row) => {
-    if (row.kind !== kind || !ACTIVE.includes(row.state)) return false;
+    if (row.kind !== kind || !GROUP_COMPLETENESS_ACTIVE.includes(row.state)) {
+      return false;
+    }
     return extractTaskId(row.kind, JSON.parse(row.payload)) === taskId;
   });
 }
@@ -459,9 +476,13 @@ function getGroupGateAccretePayload(
   groupId: string,
   taskId: string,
 ): GateAccretePayload | undefined {
-  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
   const row = listStagedIntentsByGroup(groupId).find((r) => {
-    if (r.kind !== 'gate.accrete' || !ACTIVE.includes(r.state)) return false;
+    if (
+      r.kind !== 'gate.accrete' ||
+      !GROUP_COMPLETENESS_ACTIVE.includes(r.state)
+    ) {
+      return false;
+    }
     return extractTaskId('gate.accrete', JSON.parse(r.payload)) === taskId;
   });
   return row ? (JSON.parse(row.payload) as GateAccretePayload) : undefined;
@@ -476,9 +497,13 @@ function getGroupSeedStagePayload(
   groupId: string,
   taskId: string,
 ): SeedStagePayload | undefined {
-  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
   const row = listStagedIntentsByGroup(groupId).find((r) => {
-    if (r.kind !== 'seed.stage' || !ACTIVE.includes(r.state)) return false;
+    if (
+      r.kind !== 'seed.stage' ||
+      !GROUP_COMPLETENESS_ACTIVE.includes(r.state)
+    ) {
+      return false;
+    }
     return extractTaskId('seed.stage', JSON.parse(r.payload)) === taskId;
   });
   return row ? (JSON.parse(row.payload) as SeedStagePayload) : undefined;
@@ -580,9 +605,11 @@ function hasGroupManualVerificationStrip(
   groupId: string,
   taskId: string,
 ): boolean {
-  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
   return listStagedIntentsByGroup(groupId).some((row) => {
-    if (row.kind !== 'task.patchBodySection' || !ACTIVE.includes(row.state)) {
+    if (
+      row.kind !== 'task.patchBodySection' ||
+      !GROUP_COMPLETENESS_ACTIVE.includes(row.state)
+    ) {
       return false;
     }
     const payload = JSON.parse(row.payload) as PatchBodySectionPayload;

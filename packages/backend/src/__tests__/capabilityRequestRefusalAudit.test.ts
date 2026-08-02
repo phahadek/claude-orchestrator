@@ -76,8 +76,8 @@ describe('vocabulary refusal (stage time) records a capability_request_refused a
       stageIntent(
         'session.requestCapability',
         {
-          capability: 'read:session-events:proj-refusal-2',
-          plan: 'aggregate session_events',
+          capability: 'read:deploy-log:proj-refusal-2',
+          plan: 'aggregate deploy log entries',
           evidence: 'need a count',
         },
         'proj-refusal-2',
@@ -92,7 +92,7 @@ describe('vocabulary refusal (stage time) records a capability_request_refused a
     });
     expect(entries).toHaveLength(1);
     expect(entries[0].payload).toMatchObject({
-      capability: 'read:session-events:proj-refusal-2',
+      capability: 'read:deploy-log:proj-refusal-2',
       gate: 'vocabulary',
     });
   });
