@@ -25,7 +25,9 @@ describe('calculateCost', () => {
   );
 
   it('falls back to the documented (Sonnet) rate for an unknown model', () => {
-    expect(() => calculateCost(1_000_000, 1_000_000, 'some-unknown-model')).not.toThrow();
+    expect(() =>
+      calculateCost(1_000_000, 1_000_000, 'some-unknown-model'),
+    ).not.toThrow();
     const cost = calculateCost(1_000_000, 1_000_000, 'some-unknown-model');
     expect(cost).toBeCloseTo(3 + 15);
   });
