@@ -105,9 +105,7 @@ describe('MilestoneDecisionStack', () => {
     expect(screen.getByTestId('milestone-task-row-code-open')).toBeTruthy();
     // A code session in progress now renders under "In flight" rather than
     // disappearing.
-    expect(
-      screen.getByTestId('milestone-task-row-code-launched'),
-    ).toBeTruthy();
+    expect(screen.getByTestId('milestone-task-row-code-launched')).toBeTruthy();
     // Done is collapsed by default, so its rows are not rendered yet.
     expect(screen.queryByTestId('milestone-task-row-code-done')).toBeNull();
     expect(screen.queryByTestId('milestone-task-row-design-open')).toBeNull();
@@ -178,7 +176,9 @@ describe('MilestoneDecisionStack', () => {
 
     // Every status lands in "In flight" — none silently dropped, none
     // duplicated into "Not yet launched" or "Done".
-    expect(screen.getByText(new RegExp(`In flight \\(${nonDoneStatuses.length}\\)`))).toBeTruthy();
+    expect(
+      screen.getByText(new RegExp(`In flight \\(${nonDoneStatuses.length}\\)`)),
+    ).toBeTruthy();
     for (const status of nonDoneStatuses) {
       expect(
         screen.getByTestId(`milestone-task-row-task-${status}`),
@@ -280,8 +280,7 @@ describe('MilestoneDecisionStack', () => {
       expect(screen.getByTestId('milestone-decision-stack')).toBeTruthy(),
     );
 
-    const renderedRows =
-      screen.getAllByTestId(/^milestone-task-row-/).length;
+    const renderedRows = screen.getAllByTestId(/^milestone-task-row-/).length;
     expect(stagedCount).toBe(3);
     expect(renderedRows).toBe(stagedCount);
   });
@@ -321,9 +320,7 @@ describe('MilestoneDecisionStack', () => {
     expect(
       screen.getByTestId('milestone-task-row-design-in-flight'),
     ).toBeTruthy();
-    expect(
-      screen.getByTestId('milestone-task-row-ops-in-flight'),
-    ).toBeTruthy();
+    expect(screen.getByTestId('milestone-task-row-ops-in-flight')).toBeTruthy();
     expect(screen.queryByText(/Not yet launched/)).toBeNull();
     expect(screen.getByText(/In flight \(2\)/)).toBeTruthy();
   });
