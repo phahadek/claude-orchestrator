@@ -20,7 +20,10 @@ describe('groomingGateEntrySchema', () => {
   it('accepts seedContributionCandidates with the locked enum values', () => {
     const result = groomingGateEntrySchema.safeParse({
       seedContributionCandidates: [
-        { spec: 'analyzer_configs row for foo', classification: 'operational-seed' },
+        {
+          spec: 'analyzer_configs row for foo',
+          classification: 'operational-seed',
+        },
         { spec: 'cohort flag for bar', classification: 'in-pr' },
         { spec: 'unclear one', classification: 'needs-triage' },
         { spec: 'no classification yet' },
@@ -41,8 +44,14 @@ describe('groomingGateEntrySchema', () => {
   it('accepts gateContributionCandidates with the locked enum values', () => {
     const result = groomingGateEntrySchema.safeParse({
       gateContributionCandidates: [
-        { text: 'launched session has read-only tool set', classification: 'runtime-observable' },
-        { text: 'session runs on the planning model', classification: 'config-or-code-determined' },
+        {
+          text: 'launched session has read-only tool set',
+          classification: 'runtime-observable',
+        },
+        {
+          text: 'session runs on the planning model',
+          classification: 'config-or-code-determined',
+        },
         { text: 'unclear one', classification: 'needs-triage' },
         { text: 'no classification yet' },
       ],

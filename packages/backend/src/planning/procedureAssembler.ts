@@ -928,7 +928,7 @@ function renderSkeleton(
           '`gate.accrete` / `seed.stage` above. When the pre-groom body carries ' +
           'no such section, stage no strip intent at all — there is nothing to ' +
           'remove.\n\n' +
-          'Before accreting, classify each candidate line the pre-groom body\'s ' +
+          "Before accreting, classify each candidate line the pre-groom body's " +
           '"## Operational seed" section carries as `operational-seed` (a ' +
           "genuine data/config value kept out of this task's own PR), `in-pr` " +
           '(mislabeled — it actually ships in the PR and does not accrete), or ' +

@@ -261,7 +261,11 @@ export const groomingGateEntrySchema = z
         z.object({
           text: z.string(),
           classification: z
-            .enum(['runtime-observable', 'config-or-code-determined', 'needs-triage'])
+            .enum([
+              'runtime-observable',
+              'config-or-code-determined',
+              'needs-triage',
+            ])
             .optional(),
         }),
       )

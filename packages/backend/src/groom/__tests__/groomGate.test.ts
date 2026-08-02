@@ -1582,7 +1582,10 @@ describe('checkGroomingPromotionGate — seed_contribution per-candidate triage'
           { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
         ],
         seedContributionCandidates: [
-          { spec: 'analyzer_configs row for foo', classification: 'operational-seed' },
+          {
+            spec: 'analyzer_configs row for foo',
+            classification: 'operational-seed',
+          },
           { spec: 'cohort flag for bar' },
         ],
       },
