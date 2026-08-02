@@ -779,10 +779,34 @@ export function hasLiveVerifySessionForGateItem(itemId: string): boolean {
     .prepare<{ taskId: string }, { c: number }>(
       `SELECT COUNT(*) as c FROM sessions
        WHERE task_id = @taskId
-         AND status NOT IN ('done', 'error', 'killed', 'superseded')`,
+         AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})`,
     )
     .get({ taskId });
   return (row?.c ?? 0) > 0;
+}
+
+/**
+ * Batched liveness over getVerifySessionsForGateItems: for each gate item,
+ * whether its most recent verify session is still in flight. Reuses the
+ * same terminal-status set as hasLiveVerifySessionForGateItem instead of
+ * re-inlining it, and additionally honours endedAt so a session whose
+ * status hasn't yet caught up to its end doesn't read as live. One query
+ * for the whole id list — no per-item round trip.
+ */
+export function getLiveVerifySessionItemIds(itemIds: string[]): Set<string> {
+  const live = new Set<string>();
+  const seen = new Set<string>();
+  for (const session of getVerifySessionsForGateItems(itemIds)) {
+    if (seen.has(session.itemId)) continue;
+    seen.add(session.itemId);
+    if (
+      session.endedAt === null &&
+      !TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(session.sessionStatus)
+    ) {
+      live.add(session.itemId);
+    }
+  }
+  return live;
 }
 
 /**

@@ -133,6 +133,24 @@
   color: var(--error, #f38ba8);
 }
 
+.inFlightBadge {
+  display: inline-block;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  width: fit-content;
+  background: rgba(137, 180, 250, 0.15);
+  color: var(--accent, #89b4fa);
+}
+
+.inFlightIndicator {
+  margin-left: 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent, #89b4fa);
+  white-space: nowrap;
+}
+
 .filters {
   display: flex;
   align-items: center;

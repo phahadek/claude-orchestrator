@@ -1302,6 +1302,40 @@ describe('listGateItems', () => {
     const lastNotDoneIndex = result.items.map((i) => i.id).lastIndexOf(open.id);
     expect(lastNotDoneIndex).toBeLessThan(firstDoneIndex);
   });
+
+  it('flags verifyInFlight for an item with a running verify session, without one query per item', () => {
+    const live = makeItem({ text: 'has a live session' });
+    const finished = makeItem({ text: 'session already ended' });
+    const untouched = makeItem({ text: 'never dispatched' });
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, status, started_at, ended_at)
+       VALUES (@session_id, @task_id, @status, @started_at, @ended_at)`,
+    ).run({
+      session_id: 'sess-live',
+      task_id: `gate-item:${live.id}`,
+      status: 'running',
+      started_at: 100,
+      ended_at: null,
+    });
+    // A most-recent session whose status hasn't caught up to terminal, but
+    // whose endedAt is already set — must still report not-in-flight.
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, status, started_at, ended_at)
+       VALUES (@session_id, @task_id, @status, @started_at, @ended_at)`,
+    ).run({
+      session_id: 'sess-finished',
+      task_id: `gate-item:${finished.id}`,
+      status: 'running',
+      started_at: 100,
+      ended_at: 200,
+    });
+
+    const result = listGateItems();
+    const byId = new Map(result.items.map((i) => [i.id, i]));
+    expect(byId.get(live.id)?.verifyInFlight).toBe(true);
+    expect(byId.get(finished.id)?.verifyInFlight).toBe(false);
+    expect(byId.get(untouched.id)?.verifyInFlight).toBe(false);
+  });
 });
 
 describe('listMilestoneReadiness', () => {

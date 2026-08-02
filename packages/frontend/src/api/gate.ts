@@ -76,6 +76,8 @@ export interface GateItem {
   updatedAt: string;
   sources: GateItemSource[];
   events: GateItemEvent[];
+  /** True if this item currently has a non-terminal, unended verify session — set on the list read only. */
+  verifyInFlight?: boolean;
 }
 
 export interface GateItemDetail {
