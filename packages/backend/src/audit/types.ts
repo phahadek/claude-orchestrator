@@ -84,6 +84,7 @@ type EventType =
   | 'task_moved'
   | 'readiness_override'
   | 'staged_intent_disposition'
+  | 'staged_intent_create_supersede_noop'
   | 'capability_revoked'
   | 'capability_request_disposition'
   | 'capability_request_refused'

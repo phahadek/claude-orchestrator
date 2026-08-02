@@ -62,6 +62,7 @@ import {
   transitionStagedIntent,
   supersedeStagedIntent,
   setStagedIntentAnnotation,
+  setStagedIntentAppliedTaskId,
   setStagedIntentGroup,
   clearStagedIntentGroup,
   getTaskCache,
@@ -3129,6 +3130,7 @@ export function stageIntent(
       advisory: null,
       disposition_reason: null,
       answer: null,
+      applied_task_id: null,
       created_at: now,
       updated_at: now,
     };
@@ -3159,6 +3161,7 @@ export function stageIntent(
     advisory: null,
     disposition_reason: null,
     answer: null,
+    applied_task_id: null,
     created_at: now,
     updated_at: now,
   };
@@ -3396,6 +3399,104 @@ interface GateVerifyMirrorDisposition {
   evidence?: unknown;
 }
 
+/**
+ * Thrown from applyIntent when a task.create/arch.createUnit's `supersedes`
+ * target already applied — its `applied_task_id` is set — so re-running the
+ * create would mint a duplicate. This is the apply-time twin of
+ * ExplicitSupersedesError's stage-time refusal of a `committed` target: that
+ * check only sees the target's `state`, which can lag reality. A supersede
+ * staged while the target was still staged/approved (the explicit path
+ * allows both; the implicit title-dedup path only ever matches those two)
+ * can pass cleanly, and then the target's own apply can go on to succeed
+ * (creating the real task) while its own staged/approved -> committed
+ * transition loses a race against that very supersede and never lands —
+ * see StagedIntentRow.applied_task_id's doc comment for the full mechanics.
+ * `state` alone would miss that target entirely; `applied_task_id` doesn't.
+ */
+export class AlreadyAppliedCreateSupersedeError extends Error {
+  constructor(
+    public readonly supersedingIntentId: string,
+    public readonly supersededIntentId: string,
+    public readonly resultId: string,
+  ) {
+    super(
+      `[stagedIntents] refusing to apply "${supersedingIntentId}" — the intent it supersedes ` +
+        `("${supersededIntentId}") already applied and produced "${resultId}"; applying this would ` +
+        'create a duplicate. Stage a task.setProperties/task.updateBody against the existing result ' +
+        'instead of re-creating it.',
+    );
+    this.name = 'AlreadyAppliedCreateSupersedeError';
+  }
+}
+
+/**
+ * Records the apply-time refusal above to the audit trail, naming both
+ * intent ids (and the entity id the target already produced) so the
+ * situation is diagnosable from the audit log alone rather than only from
+ * the pushback text a session sees.
+ */
+function recordAlreadyAppliedCreateSupersedeRefusal(
+  intent: StagedIntent,
+  supersededIntentId: string,
+  resultId: string,
+): void {
+  recordEvent({
+    event_type: 'staged_intent_create_supersede_noop',
+    actor_type: 'system',
+    actor_id: intent.sessionId ?? null,
+    project_id: intent.projectId,
+    task_id: null,
+    payload: {
+      supersedingIntentId: intent.id,
+      supersededIntentId,
+      resultId,
+      kind: intent.kind,
+    },
+  });
+}
+
+/**
+ * Apply-time idempotency survey for every kind applyIntent's switch handles —
+ * the "cascade" this task's audit calls for: task.create's exposure (a
+ * duplicate-mint on re-application) is not unique to that one kind, so every
+ * kind here is either guarded against it or documented as safe by
+ * construction.
+ *
+ * - task.create, arch.createUnit: NOT idempotent — each apply mints a new
+ *   entity. Guarded above via `applied_task_id` (see
+ *   AlreadyAppliedCreateSupersedeError).
+ * - arch.updateUnit, arch.supersedeUnit: NOT naturally idempotent (each
+ *   apply advances a version), but self-guarding: both take an explicit
+ *   `baseVersion` and reject a stale one (StaleArchUnitVersionError /
+ *   ArchUnitAlreadySupersededError) — a re-application against an
+ *   already-advanced unit fails closed rather than silently repeating.
+ * - task.move: NOT idempotent (creates a task at the target + archives the
+ *   source each apply) but shares none of task.create's exposure: it is
+ *   HUMAN_APPLY_ONLY, dedups on the *source* task id (not a title a session
+ *   might re-emit), and is never staged by the redrive/design-session flow
+ *   that produced this task's incident — a second manual move of an
+ *   already-archived source fails at the backend (source no longer live),
+ *   not silently.
+ * - task.setStatus, task.setDependsOn, task.updateBody, task.patchBodySection,
+ *   task.setProperties, task.setType, task.archive, journal.setState: each
+ *   apply overwrites a field (or, for archive, sets a terminal one-way
+ *   status) to the payload's stated value — re-applying the same payload
+ *   twice converges on the same end state. Idempotent by construction.
+ * - gate.verify: routes to the same disposition-recording path a direct
+ *   operator verify uses, which itself dedups/reclassifies rather than
+ *   blindly appending — idempotent in effect.
+ * - notion.pageEdit: applies one page-content edit whose target/anchor is
+ *   part of the payload itself; re-applying targets the same anchor again
+ *   rather than minting a new one.
+ * - gate.accrete, seed.stage: each apply inserts new gate_item/seed_item
+ *   rows — NOT idempotent under raw re-application, but out of scope here:
+ *   both dedup-key on the *source task's* existing id (never a session-owned
+ *   title a redrive can re-emit) via the same taskId-scoped active-intent
+ *   lookup every other taskId-keyed kind uses, so they don't share
+ *   task.create's specific exposure (an untracked, unrelated duplicate
+ *   silently minted). Left undisturbed to keep this change scoped to the
+ *   create-shaped kinds the incident actually implicates.
+ */
 async function applyIntent(
   intent: StagedIntent,
   override?: { reason: string },
@@ -3415,8 +3516,24 @@ async function applyIntent(
 
   switch (intent.kind) {
     case 'task.create': {
+      if (intent.supersedes) {
+        const supersededRow = getStagedIntentRow(intent.supersedes);
+        if (supersededRow?.applied_task_id) {
+          recordAlreadyAppliedCreateSupersedeRefusal(
+            intent,
+            supersededRow.id,
+            supersededRow.applied_task_id,
+          );
+          throw new AlreadyAppliedCreateSupersedeError(
+            intent.id,
+            supersededRow.id,
+            supersededRow.applied_task_id,
+          );
+        }
+      }
       const payload = intent.payload as CreateTaskPayload;
       const id = await commands.createTask(payload, { source: 'human' });
+      setStagedIntentAppliedTaskId(intent.id, id);
       return { id };
     }
     case 'task.setStatus': {
@@ -3589,8 +3706,24 @@ async function applyIntent(
       return { ok: true };
     }
     case 'arch.createUnit': {
+      if (intent.supersedes) {
+        const supersededRow = getStagedIntentRow(intent.supersedes);
+        if (supersededRow?.applied_task_id) {
+          recordAlreadyAppliedCreateSupersedeRefusal(
+            intent,
+            supersededRow.id,
+            supersededRow.applied_task_id,
+          );
+          throw new AlreadyAppliedCreateSupersedeError(
+            intent.id,
+            supersededRow.id,
+            supersededRow.applied_task_id,
+          );
+        }
+      }
       const payload = intent.payload as ArchCreateUnitPayload;
       const unit = await archCommands.createUnit(toNewArchUnitFields(payload));
+      setStagedIntentAppliedTaskId(intent.id, unit.id);
       return { id: unit.id, version: unit.version };
     }
     case 'arch.updateUnit': {

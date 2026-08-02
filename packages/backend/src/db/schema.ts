@@ -1278,6 +1278,24 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_staged_intent_project_milestone ON staged_intent(project_id, milestone);
   `);
 
+  // staged_intent.applied_task_id: the id `applyIntent` minted for a
+  // non-idempotent create-shaped kind (task.create / arch.createUnit) —
+  // set unconditionally the instant the backend write succeeds, in the same
+  // synchronous step, before the separate staged/approved -> committed state
+  // transition is even attempted. That transition can lose a race against a
+  // concurrent supersede of the still-staged row (see
+  // AlreadyAppliedCreateSupersedeError's doc comment in stagedIntents.ts) and
+  // never reach 'committed' even though the task already exists — leaving
+  // `state` an unreliable signal for "has this create's side effect already
+  // run". `applied_task_id` is the durable, race-proof answer to that
+  // question, independent of whatever state the row ends up in. Forward-only:
+  // existing rows get NULL.
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN applied_task_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+
   // ── arch_unit: architecture-information store ───────────────────────────
   // A single titled architecture statement (kind/topic/regions/status envelope
   // + markdown body). Mirrors the gate_item/seed_item shape: envelope as typed
