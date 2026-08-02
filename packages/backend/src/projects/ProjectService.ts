@@ -28,6 +28,7 @@ import { recordEvent } from '../audit/AuditLog';
 import { normalizePath } from '../config';
 import { logger } from '../logger';
 import { extractMilestoneToken } from './milestoneToken';
+import { registerMilestoneInManifest } from '../groom/groomLoad';
 
 export interface ProjectMilestone {
   id: string;
@@ -152,6 +153,48 @@ export function getProjectRepos(project: {
   return [raw];
 }
 
+/**
+ * Projects a newly-created/reconciled milestone row into the project's
+ * grooming manifest (groomLoad.ts's `registerMilestoneInManifest`) — the
+ * manifest's `board` is the row's `source_id`, and its `neighbours` is the
+ * preceding milestone by `display_order` (the manifest already stores
+ * neighbours this way for every registered milestone). A no-op when the
+ * milestone has no `sourceId`/`canonicalShortId` to project, or the project
+ * has no config dir/manifest — the write side mirrors createMilestone's own
+ * no-op tolerance, never throws into the create/reconcile path.
+ */
+function registerMilestoneInGroomingManifest(
+  projectId: string,
+  milestone: ProjectMilestone,
+): void {
+  if (!milestone.sourceId || !milestone.canonicalShortId) return;
+  const project = getProjectRowById(projectId);
+  if (!project) return;
+
+  const ordered = listMilestonesByProject(projectId);
+  const idx = ordered.findIndex((r) => r.id === milestone.id);
+  const preceding = idx > 0 ? ordered[idx - 1] : null;
+  const neighbour =
+    preceding?.canonical_short_id && preceding.source_id
+      ? {
+          canonicalShortId: preceding.canonical_short_id,
+          board: preceding.source_id,
+        }
+      : null;
+
+  try {
+    registerMilestoneInManifest(project.project_dir, {
+      canonicalShortId: milestone.canonicalShortId,
+      board: milestone.sourceId,
+      neighbour,
+    });
+  } catch (err) {
+    logger.warn(
+      `[ProjectService] failed to register milestone ${milestone.canonicalShortId} in grooming manifest: ${String(err)}`,
+    );
+  }
+}
+
 export const ProjectService = {
   list(): Project[] {
     const rows = listProjectRows();
@@ -231,7 +274,9 @@ export const ProjectService = {
       canonical_short_id: canonicalShortId,
       display_order: input.displayOrder ?? 0,
     });
-    return rowToMilestone(row);
+    const milestone = rowToMilestone(row);
+    registerMilestoneInGroomingManifest(input.projectId, milestone);
+    return milestone;
   },
 
   updateMilestone(
@@ -305,7 +350,7 @@ export const ProjectService = {
         continue;
       }
 
-      insertMilestone({
+      const row = insertMilestone({
         id: randomUUID(),
         project_id: projectId,
         name: ym.name,
@@ -313,6 +358,7 @@ export const ProjectService = {
         canonical_short_id: canonicalShortId,
         display_order: displayOrder,
       });
+      registerMilestoneInGroomingManifest(projectId, rowToMilestone(row));
     }
   },
 

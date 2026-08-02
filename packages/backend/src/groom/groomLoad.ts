@@ -11,7 +11,7 @@
  * for how this fits into the wider grooming flow.
  */
 
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { execFile } from 'child_process';
 import { join, resolve, basename } from 'path';
 import { promisify } from 'util';
@@ -316,6 +316,89 @@ export function loadManifest(
       { cause: e },
     );
   }
+}
+
+/**
+ * Which manifest milestones a given repo/project resolves to, and whether a
+ * specific milestone is among them. Returns `null` when there's nothing to
+ * check against — no central config tree, or no manifest file for this
+ * project — which callers should treat as "not applicable" rather than a
+ * rejection: a project with no grooming manifest never had a registration
+ * requirement to begin with.
+ */
+export function checkMilestoneRegistered(
+  repoRoot: string,
+  canonicalShortId: string,
+  projectKey?: string,
+): { registered: boolean; registeredKeys: string[] } | null {
+  const configDir = resolveConfigDir(repoRoot);
+  if (!configDir) return null;
+  const key = projectKey ?? basename(repoRoot);
+  const manifestPath = join(configDir, 'projects', key, 'grooming.json');
+  if (!existsSync(manifestPath)) return null;
+  let manifest: GroomManifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as GroomManifest;
+  } catch {
+    return null;
+  }
+  const registeredKeys = Object.keys(manifest.milestones ?? {});
+  return {
+    registered: registeredKeys.includes(canonicalShortId),
+    registeredKeys,
+  };
+}
+
+/**
+ * Registers a newly-created milestone in the grooming manifest — the write
+ * side of the same `milestones` map `loadGroomContext` above requires every
+ * milestone to already carry. A no-op (not an error) when there's no central
+ * config tree, or this project has no manifest yet: the manifest is
+ * host-specific and gitignored (see its own `$comment`), so a repo without
+ * one simply isn't using the grooming flow. Idempotent — an already-
+ * registered `canonicalShortId` is left untouched, so re-creating or
+ * re-importing a milestone never clobbers or duplicates its entry.
+ */
+export function registerMilestoneInManifest(
+  repoRoot: string,
+  registration: {
+    canonicalShortId: string;
+    board: string;
+    neighbour?: { canonicalShortId: string; board: string } | null;
+  },
+  projectKey?: string,
+): void {
+  const configDir = resolveConfigDir(repoRoot);
+  if (!configDir) return;
+  const key = projectKey ?? basename(repoRoot);
+  const manifestPath = join(configDir, 'projects', key, 'grooming.json');
+  if (!existsSync(manifestPath)) return;
+
+  let manifest: GroomManifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as GroomManifest;
+  } catch {
+    return;
+  }
+
+  manifest.milestones = manifest.milestones ?? {};
+  if (manifest.milestones[registration.canonicalShortId]) return;
+
+  manifest.milestones[registration.canonicalShortId] = {
+    board: registration.board,
+    ...(registration.neighbour
+      ? {
+          neighbours: [
+            {
+              id: registration.neighbour.canonicalShortId,
+              board: registration.neighbour.board,
+            },
+          ],
+        }
+      : {}),
+  };
+
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 }
 
 // ─── git helpers (read-only) ────────────────────────────────────────────────
