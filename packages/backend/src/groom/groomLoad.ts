@@ -398,11 +398,7 @@ export function registerMilestoneInManifest(
       : {}),
   };
 
-  writeFileSync(
-    manifestPath,
-    JSON.stringify(manifest, null, 2) + '\n',
-    'utf8',
-  );
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 }
 
 // ─── git helpers (read-only) ────────────────────────────────────────────────

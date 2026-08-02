@@ -118,7 +118,11 @@ describe('ProjectService.createMilestone — grooming manifest registration', ()
 
   it('is a no-op and does not throw for a project with no config dir', () => {
     delete process.env.ORCHESTRATOR_CONFIG_DIR;
-    ProjectService.create({ id: 'proj-2', name: 'P2', projectDir: '/no/such/dir' });
+    ProjectService.create({
+      id: 'proj-2',
+      name: 'P2',
+      projectDir: '/no/such/dir',
+    });
 
     expect(() =>
       ProjectService.createMilestone({
