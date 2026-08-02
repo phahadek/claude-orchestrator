@@ -1382,7 +1382,11 @@ describe('PRMergeWatcher ci_failing auto-recovery', () => {
     expect(vi.mocked(autoMerger.attempt)).not.toHaveBeenCalled();
   });
 
-  it('does NOT clear pause when pause_reason is stuck_timeout even if merge_state is clean', async () => {
+  it('does NOT clear pause when pause_reason is stuck_timeout even if merge_state is clean, but the becomes-clean transition still re-drives AutoMerger', async () => {
+    // stuck_timeout is a non-CI pause. tryCIFailingRecovery must not clear it —
+    // but the becomes-clean transition hook (widened re-drive) still calls
+    // attempt() so the PR is "considered"; AutoMerger's own pause_reason
+    // guard is what actually blocks the merge from proceeding.
     const pr = makePRRow({
       pause_reason: 'stuck_timeout',
       merge_state: 'ci_failed',
@@ -1406,7 +1410,10 @@ describe('PRMergeWatcher ci_failing auto-recovery', () => {
     await watcher.poll();
 
     expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
-    expect(vi.mocked(autoMerger.attempt)).not.toHaveBeenCalled();
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
   });
 
   it('clears pause when merge_state transitions from ci_failed to unstable (no failing checks)', async () => {
@@ -1441,6 +1448,153 @@ describe('PRMergeWatcher ci_failing auto-recovery', () => {
       42,
       'owner/repo',
     );
+  });
+});
+
+// ── becomes-clean re-drive (approval-beats-CI race) ────────────────────────────
+
+describe('PRMergeWatcher becomes-clean re-drive', () => {
+  function mockCategorize(
+    github: GitHubClient,
+    value: {
+      category: 'clean' | 'conflict' | 'ci_failed' | 'blocked' | 'unknown';
+      mergeState: string;
+      rawMergeableState: string | null;
+      failingChecks: Array<{ name: string; conclusion: string }>;
+    },
+  ): void {
+    vi.mocked(
+      (
+        github as unknown as {
+          categorizeMergeability: (n: number, r: string) => Promise<unknown>;
+        }
+      ).categorizeMergeability,
+    ).mockResolvedValue(value);
+  }
+
+  it('re-drives AutoMerger when an approved PR transitions unknown → clean with no CI pause ever set', async () => {
+    // Approval landed while CI was still in flight: pause_reason has always
+    // been null (never paused), category was 'unknown' (unstable) and now
+    // settles to 'clean'.
+    const pr = makePRRow({
+      pause_reason: null,
+      merge_state: 'unstable',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+    const autoMerger = makeMockAutoMerger();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
+  });
+
+  it('does not re-drive on a poll where the row is already clean (no transition)', async () => {
+    const pr = makePRRow({
+      pause_reason: null,
+      merge_state: 'clean',
+      failing_checks: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+    const autoMerger = makeMockAutoMerger();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+    await watcher.poll();
+
+    expect(vi.mocked(autoMerger.attempt)).not.toHaveBeenCalled();
+  });
+
+  it('considers (re-drives) a PR carrying a non-CI pause reaching clean, without clearing the pause (#1449 scenario)', async () => {
+    // stalled_reconcile_cap is a non-CI, terminal pause that poll() skips
+    // entirely via isTerminalStalePR — so this row is only ever reconsidered
+    // through the escalated-stale sweep. The transition hook must still fire
+    // attempt() so the row is "considered", but must not clear the pause —
+    // AutoMerger's own pause_reason guard blocks the actual merge until the
+    // pause is cleared through a trusted channel.
+    const pr = makePRRow({
+      pause_reason: 'stalled_reconcile_cap',
+      merge_state: 'unknown',
+      mergeable: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+    const autoMerger = makeMockAutoMerger();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+    await watcher.sweepEscalatedStalePRs();
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
+  });
+
+  it('does not re-drive an unapproved PR (checkMergeability gate is untouched)', async () => {
+    const pr = makePRRow({
+      review_result: null,
+      pause_reason: null,
+      merge_state: 'unstable',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+    const autoMerger = makeMockAutoMerger();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+    await watcher.poll();
+
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+    expect(vi.mocked(autoMerger.attempt)).not.toHaveBeenCalled();
   });
 });
 
