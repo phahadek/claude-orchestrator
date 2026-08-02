@@ -26,6 +26,12 @@ export type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
 };
 
+/** Where an effective config field's value actually came from. */
+export type ConfigFieldSource = 'config.json' | 'env' | 'default';
+
+/** Dotted-path field name (e.g. "notion.apiKey") -> where its value came from. */
+export type ConfigProvenance = Record<string, ConfigFieldSource>;
+
 export interface ConfigSource {
   read(): OrchestratorConfig;
   write(partial: DeepPartial<OrchestratorConfig>): void;

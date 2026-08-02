@@ -7,13 +7,13 @@ vi.mock('child_process', () => ({
   execSync: vi.fn(),
 }));
 
-const { mockRuntimeSettings, mockGetMilestone } = vi.hoisted(() => ({
-  mockRuntimeSettings: { corporate_mode_enabled: false },
+const { mockCorporateMode, mockGetMilestone } = vi.hoisted(() => ({
+  mockCorporateMode: { enabled: false },
   mockGetMilestone: vi.fn(),
 }));
 
-vi.mock('../config.js', () => ({
-  runtimeSettings: mockRuntimeSettings,
+vi.mock('../config/corporateMode.js', () => ({
+  getCorporateMode: () => mockCorporateMode,
 }));
 
 vi.mock('../projects/ProjectService.js', () => ({
@@ -51,7 +51,7 @@ describe('slugify', () => {
 
 describe('resolveBranchMode', () => {
   beforeEach(() => {
-    mockRuntimeSettings.corporate_mode_enabled = false;
+    mockCorporateMode.enabled = false;
   });
 
   it('returns two_tier when project explicitly sets two_tier', () => {
@@ -71,12 +71,12 @@ describe('resolveBranchMode', () => {
   });
 
   it('returns two_tier when no setting and corporate mode is on', () => {
-    mockRuntimeSettings.corporate_mode_enabled = true;
+    mockCorporateMode.enabled = true;
     expect(resolveBranchMode(null)).toBe('two_tier');
   });
 
   it('explicit project setting wins over corporate mode', () => {
-    mockRuntimeSettings.corporate_mode_enabled = true;
+    mockCorporateMode.enabled = true;
     expect(resolveBranchMode('flat')).toBe('flat');
   });
 });
@@ -85,7 +85,7 @@ describe('resolveBranchMode', () => {
 
 describe('resolveStartingPoint', () => {
   beforeEach(() => {
-    mockRuntimeSettings.corporate_mode_enabled = false;
+    mockCorporateMode.enabled = false;
     mockGetMilestone.mockReset();
   });
 
@@ -125,7 +125,7 @@ describe('resolveStartingPoint', () => {
   });
 
   it('explicit project setting wins over corporate-mode default', () => {
-    mockRuntimeSettings.corporate_mode_enabled = true;
+    mockCorporateMode.enabled = true;
     mockGetMilestone.mockReturnValue({ id: 'ms-1', name: 'M6' });
     // Project explicitly sets flat → should stay flat even with corporate mode on
     const result = resolveStartingPoint({ milestoneBranching: 'flat' }, 'ms-1');
@@ -272,13 +272,28 @@ describe('SessionManager — detached worktree branch model', () => {
   );
 
   it('does not create session/<UUID> branches in start()', () => {
-    expect(source).not.toMatch(/`session\/\$\{sessionId\}`/);
-    expect(source).not.toMatch(/`session\/\$\{newSessionId\}`/);
+    // `session/${sessionId}` still appears in pruneSessionBranch — a
+    // backward-compat cleanup helper that deletes legacy pre-feature-branch
+    // sessions, not something start()/completeStart() creates. Scope the
+    // check to the start()/completeStart() region (up to the next unrelated
+    // private method) so the legacy prune helper doesn't trip a false
+    // positive.
+    const startIdx = source.indexOf('async start(');
+    const completeStartEndIdx = source.indexOf(
+      'private async cleanupPartialWorktree',
+    );
+    expect(startIdx).toBeGreaterThan(-1);
+    expect(completeStartEndIdx).toBeGreaterThan(startIdx);
+    const startRegion = source.slice(startIdx, completeStartEndIdx);
+    expect(startRegion).not.toMatch(/`session\/\$\{sessionId\}`/);
+    expect(startRegion).not.toMatch(/`session\/\$\{newSessionId\}`/);
   });
 
   it('creates worktree on named feature branch when taskName is available', () => {
     expect(source).toMatch(/git worktree add -b/);
-    expect(source).toMatch(/feature\/\$\{slugify/);
+    // Branch-name derivation now lives in branchModel.ts's deriveBranchSlug
+    // (imported below), rather than being inlined as `feature/${slugify(...)}`.
+    expect(source).toMatch(/deriveBranchSlug/);
   });
 
   it('imports resolveStartingPoint and ensureMilestoneBranch from branchModel', () => {
@@ -298,8 +313,12 @@ describe('SessionManager — detached worktree branch model', () => {
   });
 
   it('milestone branch is never deleted on cleanup (only task branch is)', () => {
-    // The branch deletion is conditioned on !prUrl && branchName
-    expect(source).toMatch(/if \(!prUrl && branchName\)/);
+    // The branch deletion is conditioned on deleteBranch (no PR, or the PR
+    // was merged) && branchName — never on the milestone branch itself.
+    expect(source).toMatch(
+      /const deleteBranch = !prUrl \|\| this\._mergedSessionIds\.has\(sessionId\);/,
+    );
+    expect(source).toMatch(/if \(deleteBranch && branchName\)/);
   });
 });
 

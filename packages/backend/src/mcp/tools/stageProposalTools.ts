@@ -28,7 +28,9 @@ import {
   archUnitMetadataSchema,
   archCreateUnitPayloadSchema,
   decisionPickOneOptionSchema,
+  rejectUnknownPayloadKeys,
 } from './schemas';
+import { GATE_ITEM_TIER_SELECTION_GUIDANCE } from '../../gate/gateItemClassificationGuidance';
 
 /** Per-connection context a stage-proposal tool call is scoped to. */
 export interface StageProposalToolContext {
@@ -42,12 +44,31 @@ export interface StageProposalToolContext {
   kinds?: readonly string[];
   /** Used to route a stage-time validation block back to this session in-turn, via enqueueFeedback. */
   sessionManager?: SessionManager;
+  /**
+   * The milestone this connecting session's task belongs to, known at
+   * dispatch (see orchestratorMcpServer.ts's buildMcpServer) — carried onto
+   * every intent this session stages, for the milestone decision-inbox
+   * attribution. Null for a session whose task couldn't be resolved to a
+   * milestone (falls to the "unattributed" bucket). Already the canonical
+   * short id — stageIntent() runs it through resolveMilestoneForProject
+   * regardless, but that's a no-op for a value already in canonical form.
+   * No stage-proposal tool exposes a caller-settable envelope-level
+   * milestone field; a caller-supplied milestone reference only ever
+   * reaches staged_intent.milestone via the human/device POST
+   * /staged-intents route, which is normalized the same way.
+   */
+  milestone?: string | null;
 }
 
-/** Shape of the { payload, groupId?, decisionProposal?, groomProposal? } envelope every tool accepts. */
+/**
+ * Shape of the { payload, groupId?, decisionProposal?, groomProposal? }
+ * envelope every tool accepts. The payload object rejects any key it doesn't
+ * declare — including a misplaced envelope field like groomProposal, which
+ * would otherwise be silently stripped and discarded rather than staged.
+ */
 function envelope<T extends z.ZodRawShape>(payloadShape: T) {
   return {
-    payload: z.object(payloadShape),
+    payload: rejectUnknownPayloadKeys(payloadShape),
     ...intentEnvelopeShape,
   };
 }
@@ -59,6 +80,7 @@ async function stage(
   envelopeArgs: {
     groupId?: string;
     decisionProposal?: string;
+    investigation?: string;
     groomProposal?: z.infer<typeof intentEnvelopeShape.groomProposal>;
     supersedes?: string;
   },
@@ -78,6 +100,8 @@ async function stage(
     envelopeArgs.decisionProposal ?? null,
     envelopeArgs.groomProposal ?? null,
     envelopeArgs.supersedes ?? null,
+    ctx.milestone ?? null,
+    envelopeArgs.investigation ?? null,
   );
   const checked = await routeStageTimeBlock(intent, ctx.sessionManager);
   return { content: [{ type: 'text', text: JSON.stringify(checked) }] };
@@ -203,7 +227,8 @@ export function registerStageProposalTools(
     {
       title: 'Stage a runtime-item gate contribution',
       description:
-        "Stages a gate.accrete intent — the source task's independently-assessed runtime-observable items to mint onto the milestone gate, or a bare 'none'/'n/a' classification. A bare classification requires a substantive `reason` — the groomer's judgement that the change's behaviour was assessed and found to have nothing runtime-observable, tied to the change rather than to the pre-groom body.",
+        "Stages a gate.accrete intent — the source task's independently-assessed runtime-observable items to mint onto the milestone gate, or a bare 'none'/'n/a' classification. A bare classification requires a substantive `reason` — the groomer's judgement that the change's behaviour was assessed and found to have nothing runtime-observable, tied to the change rather than to the pre-groom body. " +
+        `${GATE_ITEM_TIER_SELECTION_GUIDANCE} The top-level \`classification\` is the batch default; a heterogeneous batch overrides it per item via that item's own \`classification\` field instead of forcing every item in the batch to one tier.`,
       inputSchema: envelope({
         sourceTask: gateContributionSourceTaskSchema,
         items: z.array(gateContributionItemInputSchema),
@@ -281,7 +306,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage an operator decision question',
       description:
-        'Stages a decision.pickOne question-intent — writes no task store, only a question the operator resolves via an answer. Requires a substantive decisionProposal and cannot belong to a group.',
+        'Stages a decision.pickOne question-intent — writes no task store, only a question the operator resolves via an answer. Requires a substantive decisionProposal and cannot belong to a group. decisionProposal names the recommended option and its load-bearing reason at design altitude; carry the file:line/arch-section/API-result evidence it rests on in the separate `investigation` field instead, rendered collapsed by default on the decision panel.',
       inputSchema: envelope({
         prompt: z.string(),
         options: z.array(decisionPickOneOptionSchema).min(1),
@@ -319,6 +344,52 @@ export function registerStageProposalTools(
       }),
     },
     async (args) => stage('session.requestCapability', args.payload, ctx, args),
+  );
+
+  registerTool(
+    'planning.noOp',
+    {
+      title: 'Stage a deliberate no-op for this task',
+      description:
+        "Stages a planning.noOp intent — a deliberate declaration that this turn reached terminal with nothing to change, distinct from a silent park. Purely informational/auditable: no operator disposition is required or offered for it. Use only when there is genuinely no decision to make (e.g. a re-dispatch of an already-settled task) — if there is a real gap, name it instead (e.g. groom's Deferred path).",
+      inputSchema: envelope({
+        taskId: z.string(),
+        reason: z.string(),
+      }),
+    },
+    async (args) => stage('planning.noOp', args.payload, ctx, args),
+  );
+
+  registerTool(
+    'notion.pageEdit',
+    {
+      title: 'Stage a Notion source-page edit',
+      description:
+        "Stages a notion.pageEdit intent — the Notion source-of-truth-page twin of task.updateBody/task.patchBodySection, for a Docs task whose Target surface is a Notion page rather than a repo file. Each content_updates entry is a find/replace pair (old_str/new_str) applied against the page's current full body at apply time; old_str must match the live page body exactly at apply time or the intent is rejected as stale.",
+      inputSchema: envelope({
+        page_id: z.string(),
+        content_updates: z.array(
+          z.object({ old_str: z.string(), new_str: z.string() }),
+        ),
+      }),
+    },
+    async (args) => stage('notion.pageEdit', args.payload, ctx, args),
+  );
+
+  registerTool(
+    'review.dispute',
+    {
+      title: 'Dispute an outstanding PR review verdict',
+      description:
+        'Stages a review.dispute intent — the route out of a needs_changes/incomplete review verdict this session concludes is wrong, for an operator to decide instead of waiting on a re-review no new commit will trigger. Requires a substantive decisionProposal and a payload.rationale carrying the evidence. Refused when the PR has no outstanding blocking verdict. Cannot belong to a group. Approval clears the verdict and lets the PR proceed with no new commit required; pushback resumes this session for a normal revision turn.',
+      inputSchema: envelope({
+        taskId: z.string(),
+        prNumber: z.number(),
+        repo: z.string(),
+        rationale: z.string(),
+      }),
+    },
+    async (args) => stage('review.dispute', args.payload, ctx, args),
   );
 
   // Not routed through `stage()`: unlike every other tool here, this acts

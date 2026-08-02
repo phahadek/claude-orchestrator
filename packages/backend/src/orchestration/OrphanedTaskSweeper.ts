@@ -11,11 +11,13 @@ import {
   getLatestCodeSessionByNotionTaskId,
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
+  isSessionAwaitingCapabilityDisposition,
   getPRBySessionId,
   getLocalBranchBySession,
   setSessionPauseReason,
-  getLatestSessionEventTimestamp,
+  getSessionLastActivityMs,
   upsertPullRequest,
+  getOpsJournalEntry,
 } from '../db/queries';
 import {
   recordEvent,
@@ -141,7 +143,12 @@ export class OrphanedTaskSweeper {
         if (!SWEEPABLE_TYPES.has(resolved.task.type)) continue;
 
         try {
-          await this.maybeRevertTask(taskId, project.id, backend);
+          await this.maybeRevertTask(
+            taskId,
+            project.id,
+            resolved.task.type,
+            backend,
+          );
         } catch (err) {
           logger.warn(
             `[OrphanedTaskSweeper] revert check failed for ${taskId}: ${(err as Error).message}`,
@@ -154,6 +161,7 @@ export class OrphanedTaskSweeper {
   private async maybeRevertTask(
     taskId: string,
     projectId: string,
+    taskType: string,
     backend: TaskBackend,
   ): Promise<void> {
     const latestSession = getLatestCodeSessionByNotionTaskId(taskId);
@@ -180,8 +188,14 @@ export class OrphanedTaskSweeper {
       }
     }
 
-    // Skip if any non-terminal session exists for this task.
-    if (hasActiveSessionForTask(taskId)) return;
+    // Skip if any non-terminal session exists for this task — except when the
+    // latest session is idle past its grace window: idle is a live, resumable
+    // status (hasActiveSessionForTask reports it active), but this function has
+    // its own idle-specific handling below (the stalled-PR nudge) that must run
+    // rather than being short-circuited here.
+    if (latestSession?.status !== 'idle' && hasActiveSessionForTask(taskId)) {
+      return;
+    }
 
     // Planning sessions (groom/design) are legitimately idle awaiting operator
     // disposition (no abandonment timeout — see Q1-B) — never treat one as an
@@ -189,6 +203,18 @@ export class OrphanedTaskSweeper {
     // only ever see 'standard' sessions, so an idle planning session would
     // otherwise fall through to the revert/nudge paths below unnoticed.
     if (hasNonTerminalPlanningSessionForTask(taskId)) return;
+
+    // An idle session parked awaiting a capability disposition is always
+    // legitimate — it is not stalled, not abandoned, and not a candidate for
+    // any terminal action (nudge, revert-to-Ready, surface-to-operator) or
+    // crash-budget accounting. It is the system working: the session asked
+    // and is waiting for an answer only the operator can give.
+    if (
+      latestSession?.status === 'idle' &&
+      isSessionAwaitingCapabilityDisposition(latestSession)
+    ) {
+      return;
+    }
 
     // Orphan confirmed: Notion shows In Progress, no live session.
     const lastSeenAt =
@@ -207,7 +233,15 @@ export class OrphanedTaskSweeper {
       // nudged — the StalledPRReconciler re-drives the review, but the idle
       // session may need a prompt to act on the incoming feedback.
       if (pr && pr.state !== 'merged' && pr.state !== 'closed') {
-        if (latestSession.status === 'idle' && !latestSession.archived) {
+        // The docs execution flow's never-auto-merged gate: an open
+        // human_merge_only PR is legitimately waiting for a human merge —
+        // it runs no review session, so there is no incoming feedback to
+        // nudge the idle session about. Skip the stalled-PR nudge entirely.
+        if (
+          !pr.human_merge_only &&
+          latestSession.status === 'idle' &&
+          !latestSession.archived
+        ) {
           await this.maybeNudgeIdleSession(
             latestSession,
             taskId,
@@ -259,6 +293,24 @@ export class OrphanedTaskSweeper {
       return;
     }
 
+    // Ops/Investigation sessions never open a PR, and once they exit cleanly
+    // their session status is terminal ('done') rather than idle — so they
+    // fall through every PR/idle exemption above and land here alongside a
+    // genuinely abandoned task. Their session_type ('ops') is also invisible
+    // to getLatestCodeSessionByNotionTaskId/hasActiveSessionForTask (standard-
+    // session-only), so latestSession is typically undefined too. The one
+    // artifact that distinguishes "finished, awaiting operator disposition"
+    // from "abandoned" is the ops_journal entry: if it has advanced beyond
+    // 'pending', the session did its job — leave the task In Progress rather
+    // than silently returning it to the dispatch pool. A journal still stuck
+    // at 'pending' (or missing entirely) is still a genuine orphan.
+    if (taskType !== '💻 Code') {
+      const journalEntry = getOpsJournalEntry(taskId);
+      if (journalEntry && journalEntry.state !== 'pending') {
+        return;
+      }
+    }
+
     // Genuine orphan (non-idle, no PR, no active session) — revert to Ready.
     await this.revertTask(
       taskId,
@@ -292,7 +344,7 @@ export class OrphanedTaskSweeper {
 
     // Working-recency gate: skip if the session emitted events recently.
     // Covers escalation/resume windows where the session is legitimately mid-task.
-    const latestEventTs = getLatestSessionEventTimestamp(session_id);
+    const latestEventTs = getSessionLastActivityMs(session_id);
     const recencyGateMs = this.options.recencyGateMs ?? RECENCY_GATE_MS;
     if (latestEventTs !== null && Date.now() - latestEventTs < recencyGateMs) {
       return;

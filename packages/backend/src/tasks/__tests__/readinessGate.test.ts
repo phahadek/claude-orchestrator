@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { checkReadiness } from '../readinessGate';
+import {
+  checkReadiness,
+  parseManualVerificationItems,
+  checkAccretionContentMatch,
+} from '../readinessGate';
 
 describe('checkReadiness — Tier 1 (structural)', () => {
   it('flags a body with a non-empty Open Questions section', () => {
@@ -146,5 +150,91 @@ describe('checkReadiness — type-aware Open Questions / deferral exemption', ()
       true,
     );
     expect(codeViolations.some((v) => v.detail.includes('residue'))).toBe(true);
+  });
+});
+
+describe('parseManualVerificationItems', () => {
+  it('parses bulleted items under a "### 👁️ Manual verification" heading', () => {
+    const body =
+      '## Summary\nStuff.\n\n### 👁️ Manual verification\n- Click the button and confirm a toast appears\n- Reload the page and confirm state persists\n';
+    expect(parseManualVerificationItems(body)).toEqual([
+      'Click the button and confirm a toast appears',
+      'Reload the page and confirm state persists',
+    ]);
+  });
+
+  it('parses numbered items and stops at the next heading', () => {
+    const body =
+      '## 👁️ Manual verification\n1. First check\n2. Second check\n\n## Next section\n- Not a manual verification item\n';
+    expect(parseManualVerificationItems(body)).toEqual([
+      'First check',
+      'Second check',
+    ]);
+  });
+
+  it('returns an empty array when there is no Manual verification section', () => {
+    const body = '## Summary\nNo such section here.\n';
+    expect(parseManualVerificationItems(body)).toEqual([]);
+  });
+
+  it('returns an empty array for an explicit "None" section', () => {
+    const body = '### 👁️ Manual verification\nNone\n';
+    expect(parseManualVerificationItems(body)).toEqual([]);
+  });
+});
+
+describe('checkAccretionContentMatch', () => {
+  it('passes when N stripped items match N accreted items', () => {
+    const result = checkAccretionContentMatch(
+      'gate_contribution',
+      ['Check the toast appears', 'Check state persists'],
+      ['Check the toast appears', 'Check state persists'],
+    );
+    expect(result.ok).toBe(true);
+    expect(result.reasons).toEqual([]);
+  });
+
+  it('is order- and case/whitespace-insensitive', () => {
+    const result = checkAccretionContentMatch(
+      'gate_contribution',
+      ['Check A', 'Check B'],
+      ['  check b  ', 'CHECK A'],
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('hard-blocks when fewer items were accreted than stripped', () => {
+    const result = checkAccretionContentMatch(
+      'gate_contribution',
+      ['Check A', 'Check B'],
+      ['Check A'],
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reasons[0]).toContain('gate_contribution content mismatch');
+    expect(result.reasons[0]).toContain('Check B');
+  });
+
+  it('hard-blocks on an item-correspondence mismatch even with equal counts', () => {
+    const result = checkAccretionContentMatch(
+      'gate_contribution',
+      ['Check A', 'Check B'],
+      ['Check A', 'Something unrelated'],
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reasons[0]).toContain('Check B');
+  });
+
+  it('allows extra accreted items beyond what was stripped (groomer-added observations)', () => {
+    const result = checkAccretionContentMatch(
+      'gate_contribution',
+      ['Check A'],
+      ['Check A', 'Groomer-added extra check'],
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('is a no-op when nothing was stripped', () => {
+    const result = checkAccretionContentMatch('gate_contribution', [], []);
+    expect(result.ok).toBe(true);
   });
 });

@@ -1,7 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import * as fs from 'fs';
-import * as path from 'path';
 import { TaskDetail } from '../TaskDetail';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
@@ -499,6 +497,94 @@ describe('TaskDetail', () => {
     expect(screen.getByText(/Transcript not available/)).toBeTruthy();
   });
 
+  it.each(['done', 'error', 'killed'])(
+    'starts collapsed for a groom session in %s state',
+    (status) => {
+      const planningSession = makePlanningSession({
+        sessionType: 'groom',
+        status,
+      });
+      render(
+        <TaskDetail
+          task={makeTask({ planningSession })}
+          send={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+      const header = screen.getByTestId('planning-session-header');
+      const section = screen.getByTestId('planning-session-section');
+      expect(header.getAttribute('aria-expanded')).toBe('false');
+      expect(section.getAttribute('data-expanded')).toBe('false');
+    },
+  );
+
+  it.each(['running', 'idle'])(
+    'starts expanded for a groom session in %s state',
+    (status) => {
+      const planningSession = makePlanningSession({
+        sessionType: 'groom',
+        status,
+      });
+      render(
+        <TaskDetail
+          task={makeTask({ planningSession })}
+          send={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+      const header = screen.getByTestId('planning-session-header');
+      const section = screen.getByTestId('planning-session-section');
+      expect(header.getAttribute('aria-expanded')).toBe('true');
+      expect(section.getAttribute('data-expanded')).toBe('true');
+    },
+  );
+
+  it.each(['design', 'ops'])(
+    'starts expanded for a %s session regardless of status',
+    (sessionType) => {
+      const planningSession = makePlanningSession({
+        sessionType,
+        status: 'done',
+      });
+      render(
+        <TaskDetail
+          task={makeTask({ planningSession })}
+          send={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+      const header = screen.getByTestId('planning-session-header');
+      const section = screen.getByTestId('planning-session-section');
+      expect(header.getAttribute('aria-expanded')).toBe('true');
+      expect(section.getAttribute('data-expanded')).toBe('true');
+    },
+  );
+
+  it('keeps a collapsed done-grooming panel open after toggling and re-rendering', () => {
+    const planningSession = makePlanningSession({
+      sessionType: 'groom',
+      status: 'done',
+    });
+    const task = makeTask({ planningSession });
+    const { rerender } = render(
+      <TaskDetail task={task} send={vi.fn()} onClose={vi.fn()} />,
+    );
+    const header = screen.getByTestId('planning-session-header');
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+
+    rerender(
+      <TaskDetail task={{ ...task }} send={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(
+      screen
+        .getByTestId('planning-session-header')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+  });
+
   it('has no Overview tab at task level', () => {
     const pr = makePr();
     render(
@@ -612,7 +698,7 @@ describe('TaskDetail', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/prs/42/review?projectId=proj-1',
-        { method: 'POST' },
+        { method: 'POST', headers: {} },
       );
     });
 
@@ -793,6 +879,7 @@ describe('TaskDetail', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/prs/owner/repo/42/merge', {
         method: 'POST',
+        headers: {},
       });
     });
 
@@ -880,45 +967,6 @@ describe('TaskDetail', () => {
       />,
     );
     expect(screen.getByText('Working on the fix…')).toBeTruthy();
-  });
-
-  // ── InlineComposer / ReviewDimensions are gone ──
-
-  it('TaskDetail.tsx does not reference InlineComposer', () => {
-    const src = fs.readFileSync(
-      path.join(__dirname, '../TaskDetail.tsx'),
-      'utf-8',
-    );
-    expect(src).not.toContain('InlineComposer');
-  });
-
-  it('TaskDetail.tsx does not reference ReviewDimensions', () => {
-    const src = fs.readFileSync(
-      path.join(__dirname, '../TaskDetail.tsx'),
-      'utf-8',
-    );
-    expect(src).not.toContain('ReviewDimensions');
-  });
-
-  // ── Mobile header chrome compaction ──
-
-  it('TaskDetail.module.css contains mobile media query for header chrome compaction', () => {
-    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    const mobileBlockStart = css.lastIndexOf('@media (max-width: 768px)');
-    expect(mobileBlockStart).toBeGreaterThan(-1);
-    const mobileBlock = css.slice(mobileBlockStart);
-    expect(mobileBlock).toContain('.header');
-    expect(mobileBlock).toContain('.taskName');
-    expect(mobileBlock).toContain('.sectionHeader');
-  });
-
-  it('desktop header padding is not overridden outside mobile media query', () => {
-    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    const mobileBlockStart = css.lastIndexOf('@media (max-width: 768px)');
-    const desktopCss = css.slice(0, mobileBlockStart);
-    expect(desktopCss).toContain('padding: 14px 16px');
   });
 
   // ── Mobile accordion ──
@@ -1059,29 +1107,63 @@ describe('TaskDetail', () => {
     expect(screen.queryByText(/Review transcript not available/)).toBeNull();
   });
 
-  // ── Review dead-space: CSS cap applied ──
-
-  it('TaskDetail.module.css planningSection only claims flex:1 when expanded', () => {
-    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    const baseMatch = css.match(/\.planningSection\s*\{([^}]+)\}/);
-    expect(baseMatch).toBeTruthy();
-    expect(baseMatch![1]).not.toContain('flex: 1');
-    const expandedMatch = css.match(
-      /\.planningSection\[data-expanded='true'\]\s*\{([^}]+)\}/,
+  it('renders planning, code, and review sections together without one crowding out another', () => {
+    const codeSession = makeCodeSession();
+    const planningSession = makePlanningSession();
+    const review = makeReview();
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession, planningSession, review })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={[]}
+      />,
     );
-    expect(expandedMatch).toBeTruthy();
-    expect(expandedMatch![1]).toContain('flex: 1');
+    expect(screen.getByTestId('planning-session-section')).toBeTruthy();
+    expect(
+      screen.getByText(/Transcript not available — session not loaded\./),
+    ).toBeTruthy();
+    expect(screen.getByTestId('review-session-section')).toBeTruthy();
   });
 
-  it('TaskDetail.module.css reviewBody uses max-height cap (no flex:1 dead space)', () => {
-    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
-    const css = fs.readFileSync(cssPath, 'utf-8');
-    const reviewBodyMatch = css.match(/\.reviewBody\s*\{([^}]+)\}/);
-    expect(reviewBodyMatch).toBeTruthy();
-    const reviewBodyBlock = reviewBodyMatch![1];
-    expect(reviewBodyBlock).not.toContain('flex: 1');
-    expect(reviewBodyBlock).toContain('max-height');
+  it('planning section collapsed still occupies only its header height (flex: 0 0 auto) even with a code session present', () => {
+    const codeSession = makeCodeSession();
+    const planningSession = makePlanningSession();
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession, planningSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={[]}
+      />,
+    );
+    const planningHeader = screen.getByTestId('planning-session-header');
+    fireEvent.click(planningHeader);
+    const section = screen.getByTestId('planning-session-section');
+    expect(section.getAttribute('data-expanded')).toBe('false');
+    expect(screen.queryByTestId('planning-session-body')).toBeNull();
+  });
+
+  it('expanding and collapsing the planning section leaves the code section and its transcript container intact', () => {
+    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
+    const planningSession = makePlanningSession();
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', events: [] }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession, planningSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+    expect(screen.getByText('No events yet.')).toBeTruthy();
+    const planningHeader = screen.getByTestId('planning-session-header');
+    fireEvent.click(planningHeader);
+    expect(screen.getByText('No events yet.')).toBeTruthy();
+    fireEvent.click(planningHeader);
+    expect(screen.getByText('No events yet.')).toBeTruthy();
   });
 
   // ── Shared task-views source — detail pane AC tests ──
@@ -1382,6 +1464,125 @@ describe('TaskDetail', () => {
     });
 
     fetchSpy.mockRestore();
+  });
+});
+
+describe('TaskDetail — Backlog Abort action', () => {
+  it('does not render Abort action for a Ready task', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ displayStatus: 'ready' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+    expect(screen.queryByLabelText('Abort Backlog task')).toBeNull();
+  });
+
+  it('renders Abort action for a Backlog task', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ displayStatus: 'backlog' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+    expect(screen.getByLabelText('Abort Backlog task')).toBeTruthy();
+  });
+
+  it('calls the abort route and shows session-killed feedback on success', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, killedSessionId: 'plan-sess-1' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
+
+    render(
+      <TaskDetail
+        task={makeTask({ taskId: 'task-1', displayStatus: 'backlog' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Abort Backlog task'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/tasks/task-1/abort',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    expect(
+      await screen.findByText('Task deferred; grooming session killed.'),
+    ).toBeTruthy();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('shows no-session feedback when nothing was running', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, killedSessionId: null }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
+
+    render(
+      <TaskDetail
+        task={makeTask({ taskId: 'task-1', displayStatus: 'backlog' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Abort Backlog task'));
+
+    expect(
+      await screen.findByText('Task deferred; no session was running.'),
+    ).toBeTruthy();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('renders failure feedback when the abort route errors', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'task is not in Backlog' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
+
+    render(
+      <TaskDetail
+        task={makeTask({ taskId: 'task-1', displayStatus: 'backlog' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Abort Backlog task'));
+
+    expect(await screen.findByText('task is not in Backlog')).toBeTruthy();
+
+    vi.unstubAllGlobals();
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -79,6 +80,7 @@ vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({
     updateStatus: vi.fn().mockResolvedValue(undefined),
+    fetchTaskPage: vi.fn().mockResolvedValue(''),
   }),
 }));
 vi.mock('../../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));
@@ -102,40 +104,50 @@ vi.mock('../../config/corporateMode', () => ({
     .mockReturnValue({ gates: { dockerMandatory: false } }),
 }));
 
-vi.mock('../../db/queries', () => ({
-  insertSession: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  updateSessionWorktreePath: vi.fn(),
-  markSessionDone: vi.fn(),
-  applyPendingDone: vi.fn().mockReturnValue(false),
-  getSessionsWithUnappliedPendingDone: vi.fn().mockReturnValue([]),
-  markSessionIdle: vi.fn(),
-  markSessionSuperseded: vi.fn(),
-  insertEvent: vi.fn(),
-  getSession: vi.fn(),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
-  getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  incrementTaskCrashCount: vi.fn().mockReturnValue(1),
-  getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
-  setSessionPauseReason: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
-  setTaskPauseReason: vi.fn(),
-  listStagedIntentsBySession: vi.fn().mockReturnValue([]),
-  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
-}));
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    insertSession: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    updateSessionWorktreePath: vi.fn(),
+    markSessionDone: vi.fn(),
+    applyPendingDone: vi.fn().mockReturnValue(false),
+    getSessionsWithUnappliedPendingDone: vi.fn().mockReturnValue([]),
+    markSessionIdle: vi.fn(),
+    markSessionSuperseded: vi.fn(),
+    insertEvent: vi.fn(),
+    getSession: vi.fn(),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
+    getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    hasActivePlanningSessionForTask: vi.fn().mockReturnValue(false),
+    incrementTaskCrashCount: vi.fn().mockReturnValue(1),
+    getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
+    setSessionPauseReason: vi.fn(),
+    setSessionLastErrorDetail: vi.fn(),
+    setTaskPauseReason: vi.fn(),
+    listStagedIntentsBySession: vi.fn().mockReturnValue([]),
+    TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
+    enqueueFeedbackItem: vi.fn(),
+    listUndeliveredInboxItems: vi.fn().mockReturnValue([]),
+    markInboxItemsDelivered: vi.fn(),
+  }),
+);
 
 vi.mock('../../config', () => ({
-  config: { maxConcurrentCodeSessions: 5 },
+  config: {},
   getProjectById: vi.fn(),
   normalizePath: vi.fn().mockImplementation((p: string) => p),
-  runtimeSettings: { session_mode: 'cli', corporate_mode_enabled: false },
+  runtimeSettings: {
+    session_mode: 'cli',
+    corporate_mode_enabled: false,
+    max_concurrent_code_sessions: 5,
+  },
 }));
 
 vi.mock('child_process', () => ({
@@ -155,6 +167,7 @@ vi.mock('child_process', () => ({
         callback(null, { stdout: '', stderr: '' });
       },
     ),
+  execFile: vi.fn(),
 }));
 
 vi.mock('fs', () => ({
@@ -187,10 +200,14 @@ import {
   SessionManager,
   gitWorktreeAddWithRetry,
   isRemovableWorktree,
+  isDegradedSpawnFailure,
+  BACKEND_SPAWN_DEGRADED_REASON,
   buildResumeMessage,
   buildPlanningResumeMessage,
   RESUME_NUDGE_MESSAGE,
   PLANNING_RESUME_FALLBACK_MESSAGE,
+  PLANNING_RESTART_RESUME_MESSAGE,
+  fetchBaseBranchCoalesced,
 } from '../SessionManager';
 import {
   updateSessionStatus,
@@ -207,6 +224,12 @@ import {
   listStagedIntentsBySession,
   applyPendingDone,
   getSessionsWithUnappliedPendingDone,
+  hasActivePlanningSessionForTask,
+  getOtherRunningSessionsForTask,
+  markSessionSuperseded,
+  listUndeliveredInboxItems,
+  markInboxItemsDelivered,
+  setSessionPauseReason,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
@@ -438,6 +461,115 @@ describe('sendOrResume — dead session path', () => {
         payload: expect.objectContaining({ status_before: 'done' }),
       }),
     );
+  });
+
+  it('passes taskBackend: "jira" through to buildSessionContext when resuming a jira-sourced project', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      taskSource: 'jira',
+    });
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      mcp_servers: undefined,
+      allowed_tools: [],
+      verify: [],
+      bash_rules: [],
+      session_rules: [],
+    } as any);
+
+    await doResume();
+
+    expect(vi.mocked(buildSessionContext)).toHaveBeenCalledWith(
+      expect.objectContaining({ taskBackend: 'jira' }),
+    );
+  });
+});
+
+// ── enqueueFeedback — attemptTerminalResume opt-out ──────────────────────────
+
+describe('enqueueFeedback — terminal session behavior', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      { id: 'item-1', source: 'operator-disposition', payload: 'feedback' },
+    ] as any);
+  });
+
+  it.each(['done', 'error', 'killed'])(
+    'defaults to attempting a resume on a terminal (%s) session (no opts passed — existing callers unaffected)',
+    async (terminalStatus) => {
+      vi.mocked(getSession).mockReturnValue({
+        ...makeDeadRow(),
+        status: terminalStatus,
+      } as any);
+      const sendOrResumeSpy = vi
+        .spyOn(sm, 'sendOrResume')
+        .mockResolvedValue(SESSION_ID);
+
+      await sm.enqueueFeedback(SESSION_ID, 'some-source', 'payload');
+
+      expect(sendOrResumeSpy).toHaveBeenCalledWith(
+        SESSION_ID,
+        expect.any(String),
+        { allowTerminal: true },
+      );
+      expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
+        'item-1',
+      ]);
+    },
+  );
+
+  it.each(['done', 'error', 'killed'])(
+    'with attemptTerminalResume:false on a terminal (%s) session, marks delivered without resuming, no spawn, no pause reason, no session_action_failed',
+    async (terminalStatus) => {
+      vi.mocked(getSession).mockReturnValue({
+        ...makeDeadRow(),
+        status: terminalStatus,
+      } as any);
+      const sendOrResumeSpy = vi.spyOn(sm, 'sendOrResume');
+      const messageHandler = vi.fn();
+      sm.on('message', messageHandler);
+
+      await sm.enqueueFeedback(SESSION_ID, 'operator-disposition', 'payload', {
+        attemptTerminalResume: false,
+      });
+
+      expect(sendOrResumeSpy).not.toHaveBeenCalled();
+      expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+      expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
+        'item-1',
+      ]);
+      expect(vi.mocked(setSessionPauseReason)).not.toHaveBeenCalled();
+      expect(
+        messageHandler.mock.calls.some(
+          ([msg]) => msg.type === 'session_action_failed',
+        ),
+      ).toBe(false);
+      expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event_type: 'session_terminal_reopened' }),
+      );
+    },
+  );
+
+  it('an idle (non-terminal) session still resumes and delivers regardless of attemptTerminalResume:false', async () => {
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    const sendOrResumeSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue(SESSION_ID);
+
+    await sm.enqueueFeedback(SESSION_ID, 'operator-disposition', 'payload', {
+      attemptTerminalResume: false,
+    });
+
+    expect(sendOrResumeSpy).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.any(String),
+    );
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
   });
 });
 
@@ -727,6 +859,63 @@ describe('resumeOrphanSessions — boot recovery regression', () => {
   });
 });
 
+// ── resumeOrphanSessions — usage admission gate ───────────────────────────────
+
+describe('resumeOrphanSessions — usage admission gate', () => {
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([]);
+    const { clearUsageDeferral } = await import('../../db/queries.js');
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
+  });
+
+  it('does not spawn a resume while plan usage is exhausted, and tags the task as deferred', async () => {
+    const { registerUsagePoller } =
+      await import('../../orchestration/usageAdmission.js');
+    const resetsAt = new Date(Date.now() + 60_000).toISOString();
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: { percent: 100, resetsAt, severity: 'exceeded' },
+      }),
+    });
+
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+      'task-1',
+      'usage_limit_deferred',
+      'five_hour',
+    );
+    // Not treated as a failure — the session row is left as-is, not driven
+    // to a terminal 'error' status the way flagResumeFailure would.
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
+  });
+
+  it('resumes normally once usage is available (existing resume behavior unaffected)', async () => {
+    const { registerUsagePoller } =
+      await import('../../orchestration/usageAdmission.js');
+    registerUsagePoller({ getCache: () => ({ available: false }) });
+
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
+  });
+});
+
 // ── resumeOrphanSessions — deferred done-transition boot sweep ───────────────
 
 describe('resumeOrphanSessions — deferred done-transition boot sweep', () => {
@@ -861,7 +1050,7 @@ describe('resumeOrphanSessions — resume failure flags needs_attention (resume_
     expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
       'task-1',
       'resume_failed',
-      expect.stringContaining('worktree missing'),
+      expect.stringContaining('path recorded but absent on disk'),
     );
     // Bypasses markSessionErrored's crash-budget/Notion-flip path entirely.
     expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
@@ -968,7 +1157,7 @@ describe('buildResumeMessage — session-type branch', () => {
     expect(message.length).toBeGreaterThan(0);
   });
 
-  it('a planning session resumed after an intent was sent back names that intent and the rejection reason', () => {
+  it('a planning session resumed after an intent was declined names that intent and reason, with no instruction to revise/re-stage/supersede/withdraw', () => {
     const row = { ...makeDeadRow(), session_type: 'design' };
     vi.mocked(listStagedIntentsBySession).mockReturnValue([
       {
@@ -977,15 +1166,38 @@ describe('buildResumeMessage — session-type branch', () => {
         payload: JSON.stringify({ title: 'Fix the flaky test' }),
         state: 'rejected',
         disposition_reason: 'duplicate of task-42',
+        updated_at: 100,
       } as any,
     ]);
 
     const message = buildResumeMessage(row);
     expect(message).toContain('task.create "Fix the flaky test"');
     expect(message).toContain('duplicate of task-42');
+    expect(message.toLowerCase()).not.toMatch(
+      /revise|re-stage|restage|supersede|withdraw/,
+    );
   });
 
-  it('picks the most recently rejected intent when multiple exist', () => {
+  it('a planning session resumed after an intent was sent back (needs_revision) names that intent, the reason, and instructs revision', () => {
+    const row = { ...makeDeadRow(), session_type: 'design' };
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      {
+        id: 'intent-1',
+        kind: 'task.create',
+        payload: JSON.stringify({ title: 'Fix the flaky test' }),
+        state: 'needs_revision',
+        disposition_reason: 'needs more detail',
+        updated_at: 100,
+      } as any,
+    ]);
+
+    const message = buildResumeMessage(row);
+    expect(message).toContain('task.create "Fix the flaky test"');
+    expect(message).toContain('needs more detail');
+    expect(message.toLowerCase()).toContain('revise');
+  });
+
+  it('picks the most recently updated reject-state intent when multiple exist', () => {
     const row = { ...makeDeadRow(), session_type: 'groom' };
     vi.mocked(listStagedIntentsBySession).mockReturnValue([
       {
@@ -994,6 +1206,7 @@ describe('buildResumeMessage — session-type branch', () => {
         payload: JSON.stringify({ taskId: 'task-1' }),
         state: 'rejected',
         disposition_reason: 'first reason',
+        updated_at: 100,
       } as any,
       {
         id: 'intent-2',
@@ -1001,6 +1214,7 @@ describe('buildResumeMessage — session-type branch', () => {
         payload: JSON.stringify({ taskId: 'task-2' }),
         state: 'rejected',
         disposition_reason: 'second reason',
+        updated_at: 200,
       } as any,
     ]);
 
@@ -1008,6 +1222,34 @@ describe('buildResumeMessage — session-type branch', () => {
     expect(message).toContain('task-2');
     expect(message).toContain('second reason');
     expect(message).not.toContain('first reason');
+  });
+
+  it('when a session holds both a rejected and a needs_revision intent, the more recently updated one determines the branch', () => {
+    const row = { ...makeDeadRow(), session_type: 'groom' };
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      {
+        id: 'intent-1',
+        kind: 'task.setStatus',
+        payload: JSON.stringify({ taskId: 'task-1' }),
+        state: 'rejected',
+        disposition_reason: 'declined reason',
+        updated_at: 100,
+      } as any,
+      {
+        id: 'intent-2',
+        kind: 'task.setStatus',
+        payload: JSON.stringify({ taskId: 'task-2' }),
+        state: 'needs_revision',
+        disposition_reason: 'pushback reason',
+        updated_at: 200,
+      } as any,
+    ]);
+
+    const message = buildPlanningResumeMessage(row);
+    expect(message).toContain('task-2');
+    expect(message).toContain('pushback reason');
+    expect(message.toLowerCase()).toContain('revise');
+    expect(message).not.toContain('declined reason');
   });
 
   it('a code session with a stored needs_changes verdict still receives the formatted review feedback unchanged', () => {
@@ -1027,6 +1269,101 @@ describe('buildResumeMessage — session-type branch', () => {
     vi.mocked(getPRBySessionId).mockReturnValue(null);
 
     expect(buildResumeMessage(row)).toBe(RESUME_NUDGE_MESSAGE);
+  });
+});
+
+// ── buildResumeMessage / buildPlanningResumeMessage — restart cause ─────────
+
+describe('buildResumeMessage — restart cause', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+  });
+
+  it('a planning session resumed by the boot-orphan path with zero staged intents states it was interrupted by a restart, and mentions no disposition feedback or staged intents', () => {
+    const row = { ...makeDeadRow(), session_type: 'groom' };
+    const message = buildResumeMessage(row, 'restart');
+    expect(message).toBe(PLANNING_RESTART_RESUME_MESSAGE);
+    expect(message.length).toBeGreaterThan(0);
+    expect(message.toLowerCase()).not.toMatch(/disposition|staged intent/);
+  });
+
+  it('a restart-resumed planning session with a needs_revision intent still receives the sent-back-revise message', () => {
+    const row = { ...makeDeadRow(), session_type: 'design' };
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      {
+        id: 'intent-1',
+        kind: 'task.create',
+        payload: JSON.stringify({ title: 'Fix the flaky test' }),
+        state: 'needs_revision',
+        disposition_reason: 'needs more detail',
+        updated_at: 100,
+      } as any,
+    ]);
+
+    const message = buildResumeMessage(row, 'restart');
+    expect(message).toContain('task.create "Fix the flaky test"');
+    expect(message).toContain('needs more detail');
+    expect(message.toLowerCase()).toContain('revise');
+    expect(message).not.toBe(PLANNING_RESTART_RESUME_MESSAGE);
+  });
+
+  it('a restart-resumed planning session with a rejected intent still receives the declined-final message', () => {
+    const row = { ...makeDeadRow(), session_type: 'design' };
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      {
+        id: 'intent-1',
+        kind: 'task.create',
+        payload: JSON.stringify({ title: 'Fix the flaky test' }),
+        state: 'rejected',
+        disposition_reason: 'duplicate of task-42',
+        updated_at: 100,
+      } as any,
+    ]);
+
+    const message = buildResumeMessage(row, 'restart');
+    expect(message).toContain('task.create "Fix the flaky test"');
+    expect(message).toContain('duplicate of task-42');
+    expect(message).toContain('final');
+    expect(message).not.toBe(PLANNING_RESTART_RESUME_MESSAGE);
+  });
+
+  it('a restart-resumed session holding a reject-state intent produces exactly one message, not the restart fallback layered on top', () => {
+    const row = { ...makeDeadRow(), session_type: 'groom' };
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      {
+        id: 'intent-1',
+        kind: 'task.setStatus',
+        payload: JSON.stringify({ taskId: 'task-1' }),
+        state: 'rejected',
+        disposition_reason: 'declined reason',
+        updated_at: 100,
+      } as any,
+    ]);
+
+    const message = buildResumeMessage(row, 'restart');
+    expect(message).not.toContain(PLANNING_RESTART_RESUME_MESSAGE);
+    expect(message.toLowerCase()).not.toMatch(/restart|backend process/);
+  });
+
+  it('a restart-resumed code session with a stored needs_changes verdict still receives the formatted review feedback', () => {
+    const row = { ...makeDeadRow(), session_type: 'standard' };
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      review_iteration: 1,
+      merge_state: 'clean',
+      base_branch: 'dev',
+    } as any);
+
+    expect(buildResumeMessage(row, 'restart')).toBe('review-feedback');
+  });
+
+  it('a restart-resumed code session with no stored verdict still receives RESUME_NUDGE_MESSAGE', () => {
+    const row = { ...makeDeadRow(), session_type: 'standard' };
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+
+    expect(buildResumeMessage(row, 'restart')).toBe(RESUME_NUDGE_MESSAGE);
   });
 });
 
@@ -1509,6 +1846,7 @@ describe('sendOrResume — surviving worktree reuse (idle resume fast path)', ()
 
   async function doResume(text = 'hello'): Promise<string> {
     const p = sm.sendOrResume(SESSION_ID, text);
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
     const sess = capturedSessions[0];
     sess.emit('message', {
       type: 'session_event' as const,
@@ -1540,6 +1878,110 @@ describe('sendOrResume — surviving worktree reuse (idle resume fast path)', ()
   it('still creates AgentSession with original session ID', async () => {
     await doResume();
     expect(vi.mocked(AgentSession).mock.calls[0][0]).toBe(SESSION_ID);
+  });
+
+  it('passes the resuming (standard) session type through to getOtherRunningSessionsForTask', async () => {
+    await doResume();
+    expect(vi.mocked(getOtherRunningSessionsForTask)).toHaveBeenCalledWith(
+      'task-1',
+      SESSION_ID,
+      'standard',
+    );
+  });
+
+  it('planning-session resume (groom) passes its own type through — supersede sweep must not run', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(SESSION_ID),
+      session_type: 'groom',
+      worktree_path: null,
+    });
+    await doResume();
+    expect(vi.mocked(getOtherRunningSessionsForTask)).toHaveBeenCalledWith(
+      'task-1',
+      SESSION_ID,
+      'groom',
+    );
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
+  });
+});
+
+describe('sendOrResume — usage admission gate', () => {
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(fsModule.existsSync).mockImplementation(() => true);
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      () => true,
+    );
+    const { clearUsageDeferral } = await import('../../db/queries.js');
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
+  });
+
+  it('does not spawn a process when usage is exhausted, and records a deferral carrying the window resets_at', async () => {
+    const { registerUsagePoller } =
+      await import('../../orchestration/usageAdmission.js');
+    const { getUsageDeferral } = await import('../../db/queries.js');
+    const resetsAt = new Date(Date.now() + 60_000).toISOString();
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: { percent: 100, resetsAt, severity: 'exceeded' },
+      }),
+    });
+
+    const result = await sm.sendOrResume(SESSION_ID, 'hello');
+
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+    expect(getUsageDeferral('five_hour')).toBe(Date.parse(resetsAt));
+  });
+
+  it('a deferred respawn leaves the session row unchanged — no status rewrite, no task-status revert — and does not kill the session', async () => {
+    const { registerUsagePoller } =
+      await import('../../orchestration/usageAdmission.js');
+    const resetsAt = new Date(Date.now() + 60_000).toISOString();
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: { percent: 100, resetsAt, severity: 'exceeded' },
+      }),
+    });
+
+    await sm.sendOrResume(SESSION_ID, 'hello');
+
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
+    // The task is tagged as deferred (visibility), never reverted off its
+    // current status the way a hard failure would.
+    expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+      'task-1',
+      'usage_limit_deferred',
+      'five_hour',
+    );
+  });
+
+  it('resumes normally once usage is available (existing sendOrResume behavior unaffected)', async () => {
+    const { registerUsagePoller } =
+      await import('../../orchestration/usageAdmission.js');
+    registerUsagePoller({ getCache: () => ({ available: false }) });
+
+    const p = sm.sendOrResume(SESSION_ID, 'hello');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    const sess = capturedSessions[0];
+    sess.emit('message', {
+      type: 'session_event' as const,
+      sessionId: SESSION_ID,
+      eventType: 'system' as const,
+      content: 'boot',
+    });
+    await p;
+
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
   });
 });
 
@@ -1579,6 +2021,63 @@ describe('sendOrResume — missing worktree falls through to recreation', () => 
         ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree add'),
       );
     expect(worktreeAdds.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('passes the resuming (standard) session type through to getOtherRunningSessionsForTask on the recreation path', async () => {
+    const p = sm.sendOrResume(SESSION_ID, 'hello');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event' as const,
+      sessionId: SESSION_ID,
+      eventType: 'system' as const,
+      content: 'boot',
+    });
+    await p;
+
+    expect(vi.mocked(getOtherRunningSessionsForTask)).toHaveBeenCalledWith(
+      'task-1',
+      SESSION_ID,
+      'standard',
+    );
+  });
+
+  it('a pre-resume fetch failure records a diagnosable signal but the session still resumes', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      projectDir: '/project-resume-fetch-fail',
+    });
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at ae9f9803 but expected 066b562e",
+          });
+          return callback(err);
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    const p = sm.sendOrResume(SESSION_ID, 'hello');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event' as const,
+      sessionId: SESSION_ID,
+      eventType: 'system' as const,
+      content: 'boot',
+    });
+    await p;
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'base_fetch_failed' }),
+    );
+    expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('stale'),
+    );
+    // The resume still proceeded despite the fetch failure.
+    expect(capturedSessions.length).toBeGreaterThan(0);
   });
 });
 
@@ -1682,6 +2181,353 @@ describe('gitWorktreeAddWithRetry — direct unit tests', () => {
   });
 });
 
+// ── gitWorktreeAddWithRetry — per-repo serialization ──────────────────────────
+
+describe('gitWorktreeAddWithRetry — per-repo serialization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('serializes concurrent worktree adds for the same repo (never > 1 in flight)', async () => {
+    let active = 0;
+    let maxActive = 0;
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        setTimeout(() => {
+          active--;
+          callback(null, { stdout: '', stderr: '' });
+        }, 15);
+      },
+    );
+
+    await Promise.all([
+      gitWorktreeAddWithRetry(
+        'git worktree add /repoA/w1 b1',
+        { cwd: '/repoA' },
+        3,
+        NO_DELAY,
+      ),
+      gitWorktreeAddWithRetry(
+        'git worktree add /repoA/w2 b2',
+        { cwd: '/repoA' },
+        3,
+        NO_DELAY,
+      ),
+      gitWorktreeAddWithRetry(
+        'git worktree add /repoA/w3 b3',
+        { cwd: '/repoA' },
+        3,
+        NO_DELAY,
+      ),
+    ]);
+
+    expect(maxActive).toBe(1);
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not serialize worktree adds for different repos', async () => {
+    let active = 0;
+    let maxActive = 0;
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        setTimeout(() => {
+          active--;
+          callback(null, { stdout: '', stderr: '' });
+        }, 15);
+      },
+    );
+
+    await Promise.all([
+      gitWorktreeAddWithRetry(
+        'git worktree add /repoA/w1 b1',
+        { cwd: '/repoA' },
+        3,
+        NO_DELAY,
+      ),
+      gitWorktreeAddWithRetry(
+        'git worktree add /repoB/w1 b1',
+        { cwd: '/repoB' },
+        3,
+        NO_DELAY,
+      ),
+    ]);
+
+    // Both repos' adds overlap — no cross-repo serialization.
+    expect(maxActive).toBe(2);
+  });
+
+  it('same-repo lock contention under real concurrency never surfaces a .git/config lock error to the caller', async () => {
+    // Simulates two concurrent launches against the same repo: without
+    // per-repo serialization both `git worktree add` invocations would run
+    // simultaneously and one would hit the .git/config lock. With
+    // serialization the second call's exec() never overlaps the first, so
+    // this mock — which fails if it observes concurrent invocations — never
+    // rejects with a lock error, and both callers succeed.
+    let inFlight = false;
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        if (inFlight) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr: LOCK_STDERR,
+          });
+          callback(err);
+          return;
+        }
+        inFlight = true;
+        setTimeout(() => {
+          inFlight = false;
+          callback(null, { stdout: '', stderr: '' });
+        }, 10);
+      },
+    );
+
+    await expect(
+      Promise.all([
+        gitWorktreeAddWithRetry(
+          'git worktree add /repoA/w1 b1',
+          { cwd: '/repoA' },
+          3,
+          NO_DELAY,
+        ),
+        gitWorktreeAddWithRetry(
+          'git worktree add /repoA/w2 b2',
+          { cwd: '/repoA' },
+          3,
+          NO_DELAY,
+        ),
+      ]),
+    ).resolves.toBeDefined();
+  });
+});
+
+// ── fetchBaseBranchCoalesced — per-project pre-launch fetch serialization ─────
+//
+// Each test uses its own unique project directory so the module-level
+// coalescing cache (deliberately shared across calls within a short window)
+// can never leak an outcome from one test into another.
+
+describe('fetchBaseBranchCoalesced — direct unit tests', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('serializes concurrent fetches for the same project (never > 1 in flight, one exec call)', async () => {
+    let active = 0;
+    let maxActive = 0;
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        setTimeout(() => {
+          active--;
+          callback(null, { stdout: '', stderr: '' });
+        }, 15);
+      },
+    );
+
+    const dir = '/fetch-test-serialize';
+    const results = await Promise.all([
+      fetchBaseBranchCoalesced(dir, 'dev'),
+      fetchBaseBranchCoalesced(dir, 'dev'),
+      fetchBaseBranchCoalesced(dir, 'dev'),
+    ]);
+
+    expect(maxActive).toBe(1);
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
+    expect(results.every((r) => r.ok)).toBe(true);
+  });
+
+  it('coalesces a burst that arrives after completion — reuses the outcome without a new exec call', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    const dir = '/fetch-test-coalesce';
+    const first = await fetchBaseBranchCoalesced(dir, 'dev');
+    const second = await fetchBaseBranchCoalesced(dir, 'dev');
+    const third = await fetchBaseBranchCoalesced(dir, 'dev');
+
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
+    expect(first.ok).toBe(true);
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+  });
+
+  it('does not serialize or coalesce fetches for different projects', async () => {
+    let active = 0;
+    let maxActive = 0;
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        setTimeout(() => {
+          active--;
+          callback(null, { stdout: '', stderr: '' });
+        }, 15);
+      },
+    );
+
+    await Promise.all([
+      fetchBaseBranchCoalesced('/fetch-test-projA', 'dev'),
+      fetchBaseBranchCoalesced('/fetch-test-projB', 'dev'),
+    ]);
+
+    expect(maxActive).toBe(2);
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns ok:false on failure without throwing, retrying, or forcing past the lock', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        const err = Object.assign(new Error('cmd failed'), {
+          stderr:
+            "error: cannot lock ref 'refs/remotes/origin/dev': is at ae9f9803 but expected 066b562e",
+        });
+        callback(err);
+      },
+    );
+
+    const outcome = await fetchBaseBranchCoalesced(
+      '/fetch-test-failure',
+      'dev',
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toBeDefined();
+    // Exactly one attempt — no retry loop chasing the lock mismatch.
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
+    const [cmd] = vi.mocked(execCb).mock.calls[0];
+    expect(String(cmd)).not.toContain('--force');
+  });
+});
+
+// ── Spawn-health classification (degraded backend spawn) ──────────────────────
+
+describe('isDegradedSpawnFailure', () => {
+  it('classifies empty stderr + killed=true as a degraded spawn', () => {
+    expect(isDegradedSpawnFailure({ stderr: '', killed: true })).toBe(true);
+  });
+
+  it('classifies empty stderr + a signal as a degraded spawn', () => {
+    expect(
+      isDegradedSpawnFailure({ stderr: '', signal: 'SIGKILL', killed: false }),
+    ).toBe(true);
+  });
+
+  it('does not classify a normal command failure (non-empty stderr) as degraded', () => {
+    expect(
+      isDegradedSpawnFailure({ stderr: BRANCH_EXISTS_STDERR, killed: true }),
+    ).toBe(false);
+  });
+
+  it('does not classify a clean non-killed failure as degraded', () => {
+    expect(isDegradedSpawnFailure({ stderr: '', killed: false })).toBe(false);
+  });
+
+  it('handles non-object input safely', () => {
+    expect(isDegradedSpawnFailure(null)).toBe(false);
+    expect(isDegradedSpawnFailure(undefined)).toBe(false);
+    expect(isDegradedSpawnFailure('boom')).toBe(false);
+  });
+});
+
+describe('gitWorktreeAddWithRetry — degraded spawn does not retry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('fails immediately (no retry) on a degraded-spawn-shaped error', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        const err = Object.assign(new Error('Command failed'), {
+          stderr: '',
+          killed: true,
+        });
+        callback(err);
+      },
+    );
+
+    await expect(
+      gitWorktreeAddWithRetry(
+        'git worktree add /path branch',
+        { cwd: '/project' },
+        3,
+        NO_DELAY,
+      ),
+    ).rejects.toMatchObject({ stderr: '', killed: true });
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('sendOrResume — degraded spawn on worktree recreation is a backend-health condition', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(fsModule.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+  });
+
+  it('classifies as backend_spawn_degraded, does not hit the crash budget, and surfaces a restart-recommending detail', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        if (String(_cmd).includes('worktree add')) {
+          const err = Object.assign(new Error('Command failed'), {
+            stderr: '',
+            killed: true,
+          });
+          return callback(err);
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    const emittedMessages: any[] = [];
+    sm.on('message', (msg) => emittedMessages.push(msg));
+
+    const result = await sm.sendOrResume(SESSION_ID, 'hello');
+
+    expect(result).toBe(SESSION_ID);
+    // Backend-health condition, not a session/task-level failure — must not
+    // count against the crash budget (would otherwise misattribute a
+    // degraded backend spawn to the session/task).
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+
+    const lastErrorDetailCall = vi
+      .mocked(setSessionLastErrorDetail)
+      .mock.calls.find((call) => call[0] === SESSION_ID);
+    expect(lastErrorDetailCall?.[1]).toMatch(/restart/i);
+
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
+    );
+
+    // The distinct reason code surfaced to the dashboard, not a generic
+    // worktree_recreate_failed — lets the UI/operator recognize this as a
+    // backend-health statement rather than a per-session error.
+    const actionFailedMsg = emittedMessages.find(
+      (m) => m.type === 'session_action_failed',
+    );
+    expect(actionFailedMsg?.reason).toBe(BACKEND_SPAWN_DEGRADED_REASON);
+  });
+});
+
 // ── sendOrResume — lock-contention retry integration ─────────────────────────
 
 describe('sendOrResume — lock-contention retry in worktree creation', () => {
@@ -1775,6 +2621,7 @@ describe('start() — bootstrap gate', () => {
     allowed_tools: [],
     verify: [],
     bash_rules: [],
+    session_rules: [],
     bootstrap_script: '',
     required_env: [] as string[],
     required_files: [] as string[],
@@ -1910,6 +2757,176 @@ describe('start() — bootstrap gate', () => {
       String(detail).startsWith('bootstrap'),
     );
     expect(bootstrapErrorCalls).toHaveLength(0);
+  });
+
+  it('passes taskBackend: "jira" through to buildSessionContext for a jira-sourced project', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      taskSource: 'jira',
+    });
+
+    sm.start(
+      'https://jira.example.com/task',
+      'https://jira.example.com/project',
+      START_OPTS,
+    );
+
+    await vi.waitFor(() =>
+      expect(vi.mocked(buildSessionContext)).toHaveBeenCalled(),
+    );
+
+    expect(vi.mocked(buildSessionContext)).toHaveBeenCalledWith(
+      expect.objectContaining({ taskBackend: 'jira' }),
+    );
+  });
+});
+
+// ── start() — pre-launch fetch serialization/coalescing (integration) ──────
+
+describe('start() — pre-launch fetch serialization/coalescing (integration)', () => {
+  let sm: SessionManager;
+
+  const ORCH_CONFIG = {
+    mcp_servers: undefined,
+    allowed_tools: [],
+    verify: [],
+    bash_rules: [],
+    session_rules: [],
+    bootstrap_script: '',
+    required_env: [] as string[],
+    required_files: [] as string[],
+    autofix: [],
+    ci_check_name: [],
+    test: [],
+    test_timeout_sec: 300,
+    test_max_rss_mb: 0,
+    test_fail_fast: true,
+    analyze: [],
+    analyze_timeout_sec: 300,
+    analyze_max_rss_mb: 0,
+    analyze_fail_fast: true,
+  };
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(fsModule.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({ ...ORCH_CONFIG });
+  });
+
+  it('two launches for the same project issue one coalesced fetch and both sessions still launch', async () => {
+    const projectDir = '/project-integ-same';
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      projectDir,
+    });
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        setTimeout(() => callback(null, { stdout: '', stderr: '' }), 5);
+      },
+    );
+
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'non_milestone',
+      taskName: 'task-a',
+    });
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'non_milestone',
+      taskName: 'task-b',
+    });
+
+    await vi.waitFor(() => expect(capturedSessions).toHaveLength(2));
+
+    const fetchCalls = vi
+      .mocked(execCb)
+      .mock.calls.filter(([cmd]) => String(cmd).startsWith('git fetch'));
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it('launches for different projects still fetch concurrently', async () => {
+    let fetchActive = 0;
+    let fetchMaxActive = 0;
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          fetchActive++;
+          fetchMaxActive = Math.max(fetchMaxActive, fetchActive);
+          setTimeout(() => {
+            fetchActive--;
+            callback(null, { stdout: '', stderr: '' });
+          }, 15);
+          return;
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+    vi.mocked(getProjectById).mockImplementation(
+      (id: string) =>
+        ({
+          ...makeProject(),
+          projectDir: `/project-integ-${id}`,
+        }) as any,
+    );
+
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: 'proj-a',
+      taskKind: 'non_milestone',
+      taskName: 'task-a',
+    });
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: 'proj-b',
+      taskKind: 'non_milestone',
+      taskName: 'task-b',
+    });
+
+    await vi.waitFor(() => expect(capturedSessions).toHaveLength(2));
+
+    expect(fetchMaxActive).toBe(2);
+  });
+
+  it('a fetch failure records a diagnosable signal but the session still launches', async () => {
+    const projectDir = '/project-integ-fail';
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      projectDir,
+    });
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at ae9f9803 but expected 066b562e",
+          });
+          return callback(err);
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'non_milestone',
+      taskName: 'task-fail',
+    });
+
+    await vi.waitFor(() => expect(capturedSessions).toHaveLength(1));
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'base_fetch_failed' }),
+    );
+    expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('stale'),
+    );
   });
 });
 
@@ -2073,5 +3090,106 @@ describe('findLiveSessionIdForTask — planning session exclusion', () => {
     } as any);
 
     expect(sm.findLiveSessionIdForTask(TASK_ID)).toBe('coding-session-1');
+  });
+});
+
+// ── start() — planning-flow dedup (regression: concurrent groom dispatch) ──
+
+describe('start() — planning-flow dedup', () => {
+  let sm: SessionManager;
+
+  const PLANNING_START_OPTS = {
+    projectId: PROJECT_ID,
+    taskKind: 'milestone' as const,
+    taskName: 'my-task',
+  };
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      mcp_servers: undefined,
+      allowed_tools: [],
+    } as any);
+    // clearAllMocks() clears call history but not implementations set by an
+    // earlier test in this file — reset every planning-dedup predicate to
+    // its "nothing holds this task" default before each test opts in.
+    vi.mocked(hasActivePlanningSessionForTask).mockReturnValue(false);
+  });
+
+  it('rejects a second groom dispatch for the same task while the first is still running — the observed concurrent 68e8b7f6/c159505c pair', async () => {
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      ...PLANNING_START_OPTS,
+      sessionType: 'groom',
+    });
+    await vi.waitFor(() => expect(vi.mocked(insertSession)).toHaveBeenCalled());
+
+    // Second dispatch tick: a groom session for this task is now running.
+    vi.mocked(hasActivePlanningSessionForTask).mockImplementation(
+      (_taskId, flow) => flow === 'groom',
+    );
+
+    await expect(
+      sm.start('https://notion.so/task', 'https://notion.so/project', {
+        ...PLANNING_START_OPTS,
+        sessionType: 'groom',
+      }),
+    ).rejects.toMatchObject({ alreadyRunning: true });
+  });
+
+  it('rejects a groom dispatch while a groom session is parked idle — idle blocks unconditionally, regardless of any undispositioned intent', async () => {
+    vi.mocked(hasActivePlanningSessionForTask).mockImplementation(
+      (_taskId, flow) => flow === 'groom',
+    );
+
+    await expect(
+      sm.start('https://notion.so/task', 'https://notion.so/project', {
+        ...PLANNING_START_OPTS,
+        sessionType: 'groom',
+      }),
+    ).rejects.toMatchObject({ alreadyRunning: true });
+  });
+
+  it('admits a groom dispatch once the prior groom session has reached a terminal state', async () => {
+    vi.mocked(hasActivePlanningSessionForTask).mockReturnValue(false);
+
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      ...PLANNING_START_OPTS,
+      sessionType: 'groom',
+    });
+
+    expect(vi.mocked(insertSession)).toHaveBeenCalled();
+  });
+
+  it.each(['design', 'ops'] as const)(
+    'rejects a second %s dispatch for the same task while a non-terminal %s session already holds it',
+    async (sessionType) => {
+      vi.mocked(hasActivePlanningSessionForTask).mockImplementation(
+        (_taskId, flow) => flow === sessionType,
+      );
+
+      await expect(
+        sm.start('https://notion.so/task', 'https://notion.so/project', {
+          ...PLANNING_START_OPTS,
+          sessionType,
+        }),
+      ).rejects.toMatchObject({ alreadyRunning: true });
+    },
+  );
+
+  it('a done gate-verify ops session does not suppress a fresh ops re-verify dispatch', async () => {
+    // hasActivePlanningSessionForTask already excludes 'done' sessions at the
+    // query layer (see queries.ts) — a fresh ops dispatch for the same task
+    // must not be blocked once the prior verify session is terminal.
+    vi.mocked(hasActivePlanningSessionForTask).mockReturnValue(false);
+
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      ...PLANNING_START_OPTS,
+      sessionType: 'ops',
+    });
+
+    expect(vi.mocked(insertSession)).toHaveBeenCalled();
   });
 });

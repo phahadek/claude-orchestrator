@@ -9,7 +9,7 @@
  * 4. Non-critical steps log a warning and continue.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import http from 'http';
 import { EventEmitter } from 'events';
 import type { ServerMessage } from '../ws/types';
@@ -43,6 +43,9 @@ function makeDeps(
     sessionManager: {
       resumeOrphanSessions: vi.fn().mockResolvedValue(undefined),
     },
+    planningOrchestrator: {
+      reconcilePendingApproveTerminals: vi.fn(),
+    },
     stuckSessionMonitor: {
       rehydrate: vi.fn(),
     },
@@ -72,6 +75,7 @@ function flushQueue(): Promise<void> {
 describe('runBootSequence — listen-first', () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
+  const originalBindHost = process.env.ORCHESTRATOR_BIND_HOST;
 
   beforeEach(() => {
     exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: number) => {
@@ -80,6 +84,17 @@ describe('runBootSequence — listen-first', () => {
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Boot binds to the systemd production host via ORCHESTRATOR_BIND_HOST;
+    // pin it here so the assertion doesn't depend on the ambient environment.
+    process.env.ORCHESTRATOR_BIND_HOST = '0.0.0.0';
+  });
+
+  afterEach(() => {
+    if (originalBindHost === undefined) {
+      delete process.env.ORCHESTRATOR_BIND_HOST;
+    } else {
+      process.env.ORCHESTRATOR_BIND_HOST = originalBindHost;
+    }
   });
 
   it('calls server.listen before any reconciler', async () => {

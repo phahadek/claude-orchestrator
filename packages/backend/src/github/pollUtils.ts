@@ -9,7 +9,8 @@ export type StalledPRKind =
   | 'pre_review_interrupted'
   | 'conflict_dead_session'
   | 'undelivered_review_feedback'
-  | 'orphaned_no_task_link';
+  | 'orphaned_no_task_link'
+  | 'session_inert';
 
 /**
  * True when a PR is in a terminal-stale state where PRMergeWatcher polling
@@ -76,7 +77,14 @@ export function classifyStalledPR(
   reviewSessionStatus: string | null,
   implementingSessionStatus: string | null = null,
   hasUndeliveredFeedback = false,
+  lastActivityAgeMs: number | null = null,
+  inertThresholdMs = Infinity,
 ): { kind: StalledPRKind } | null {
+  // The docs execution flow's never-auto-merged gate: an open, un-merged
+  // human_merge_only PR waits indefinitely for a human to merge it — that is
+  // its legitimate resting state, never stalled/orphaned/nudgeable.
+  if (pr.human_merge_only) return null;
+
   // Already escalated — reconciler is done with this PR
   const parsed = parsePauseReason(pr.pause_reason);
   if (parsed?.reason === 'stalled_reconcile_cap') return null;
@@ -166,6 +174,15 @@ export function classifyStalledPR(
     (reviewSessionStatus === 'error' || reviewSessionStatus === 'killed')
   ) {
     return { kind: 'errored_review_session' };
+  }
+
+  // Activity-based fallback: nothing else matched, but the implementing
+  // session hasn't emitted a session_events row in longer than the inert
+  // threshold — regardless of whether it's parked at 'idle' or still shows
+  // 'running'. A pruned/never-populated session_events table means
+  // lastActivityAgeMs is null (unknown), which must never classify as inert.
+  if (lastActivityAgeMs !== null && lastActivityAgeMs > inertThresholdMs) {
+    return { kind: 'session_inert' };
   }
 
   return null;

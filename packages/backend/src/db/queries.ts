@@ -1,9 +1,14 @@
 import type Database from 'better-sqlite3';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { db } from './db';
 import { logger } from '../logger';
-import { recordEvent } from '../audit/AuditLog';
-import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
+import { recordEvent, hasTaskEditSinceTimestamp } from '../audit/AuditLog';
+import {
+  normalizeTaskId,
+  normalizeBoardId,
+  toExternalId,
+} from '../tasks/taskId';
+import { isCodeSession, isPlanningSession } from '../session/sessionPredicates';
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
@@ -11,12 +16,10 @@ import {
 } from './pauseReason';
 import type {
   Session,
+  SessionStatus,
   NewSession,
   SessionEvent,
   NewSessionEvent,
-  PermissionEvent,
-  NewPermissionEvent,
-  PermissionRule,
   PermissionDenialRow,
   NewPermissionDenialRow,
   TaskCache,
@@ -60,10 +63,16 @@ import type {
   CompletenessDispositionRow,
   NewCompletenessDispositionRow,
   CompletenessDispositionQuestion,
+  CompletenessDispositionRecord,
+  CompletenessProbedGapClass,
   StagedIntentRow,
   StagedIntentState,
   StagedIntentGroupRow,
+  FlowArmRow,
+  ConvergenceSnapshotRow,
+  NewConvergenceSnapshotRow,
 } from './types';
+import { FLOW_IDS, DEFAULT_ARM, type FlowId } from '../orchestration/flowArm';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
 
@@ -218,6 +227,61 @@ function clearPendingDone(sessionId: string): void {
   ).run({ session_id: sessionId });
 }
 
+/**
+ * Durable record of *why* a session went terminal — written by
+ * PlanningOrchestrator.markTerminal alongside its markSessionDone call, so
+ * the reason survives past the session's own lifetime. Read by the
+ * ops-journal route's deferred close: the operator-confirmed
+ * applied-pending-confirm -> resolved journal transition typically settles
+ * well after the session has gone terminal, so it needs a durable place to
+ * ask "did this session's terminal reason justify closing the task?"
+ * instead of relying on a log line or an in-memory value.
+ */
+export function setSessionTerminalCompletionReason(
+  sessionId: string,
+  reason: string,
+): void {
+  db.prepare<{ session_id: string; terminal_completion_reason: string }>(
+    `UPDATE sessions
+     SET terminal_completion_reason = @terminal_completion_reason
+     WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId, terminal_completion_reason: reason });
+}
+
+/**
+ * Durable copy of PlanningOrchestrator's in-memory pendingApproveTerminal
+ * Set — written when an approve-driven terminal transition is deferred
+ * because the session's turn is still in flight, cleared once that
+ * transition is applied. Exported (unlike setPendingDone/clearPendingDone)
+ * because PlanningOrchestrator writes/clears it directly and
+ * SessionManager's boot-time sweep reads it to apply any transition that
+ * never got its turn-boundary drain before a restart.
+ */
+export function setPendingApproveTerminal(sessionId: string, at: number): void {
+  db.prepare<{ session_id: string; pending_approve_terminal_at: number }>(
+    `UPDATE sessions
+     SET pending_approve_terminal_at = @pending_approve_terminal_at
+     WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId, pending_approve_terminal_at: at });
+}
+
+export function clearPendingApproveTerminal(sessionId: string): void {
+  db.prepare<{ session_id: string }>(
+    `UPDATE sessions
+     SET pending_approve_terminal_at = NULL
+     WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId });
+}
+
+/** Sessions with an unapplied deferred approve-terminal transition — read by the boot-time sweep. */
+export function getSessionsWithPendingApproveTerminal(): Session[] {
+  return db
+    .prepare(
+      `SELECT * FROM sessions WHERE pending_approve_terminal_at IS NOT NULL`,
+    )
+    .all() as Session[];
+}
+
 const stmtMarkSessionIdle = db.prepare<{
   session_id: string;
   ended_at: number;
@@ -251,26 +315,37 @@ export function markSessionSuperseded(
 }
 
 /**
- * Returns other standard (non-review) sessions in status='running' for the same
- * task_id, excluding the given session. Used by sendOrResume to reconcile zombie
- * rows before respawning.
+ * Returns other standard (non-review, non-planning) sessions in
+ * status='running' for the same task_id, excluding the given session. Used
+ * by sendOrResume to reconcile zombie rows before respawning.
+ *
+ * Only meaningful for a standard-session resume: a standard session's
+ * resume is a continuation of a prior standard session's work on the same
+ * task, so a stale running standard row is genuinely superseded. A
+ * planning-session (groom/design/ops/split) resume is not a continuation of
+ * a code session — e.g. resuming a groom session to deliver an operator
+ * disposition must never retire the task's live code session — so
+ * `resumingSessionType` gates the sweep to same-lineage resumes only; a
+ * non-standard resuming type returns no rows.
  */
 export function getOtherRunningSessionsForTask(
   taskId: string,
   excludeSessionId: string,
+  resumingSessionType: string | null | undefined,
 ): Session[] {
-  const norm = taskId.replace(/-/g, '');
-  return db
-    .prepare<{ task_id: string; session_id: string }>(
+  if (resumingSessionType && !isCodeSession(resumingSessionType)) return [];
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare<{ session_id: string }>(
       `
     SELECT * FROM sessions
-    WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
-      AND session_id != @session_id
+    WHERE session_id != @session_id
       AND status = 'running'
       AND (session_type = 'standard' OR session_type IS NULL)
   `,
     )
-    .all({ task_id: norm, session_id: excludeSessionId }) as Session[];
+    .all({ session_id: excludeSessionId }) as Session[];
+  return rows.filter((row) => normalizeBoardId(row.task_id ?? '') === norm);
 }
 
 /**
@@ -394,6 +469,28 @@ export function getSessionsWithUnappliedPendingDone(): Session[] {
  */
 export const TERMINAL_SESSION_STATUSES = new Set(['done', 'error', 'killed']);
 
+/**
+ * TERMINAL_SESSION_STATUSES plus 'superseded' — the wider terminal vocabulary
+ * used by consumers below (hasActiveSessionForTask, hasActivePlanningSessionForTask,
+ * hasNonTerminalPlanningSessionForTask, archiveFinishedSessions) that also treat a
+ * superseded session as concluded. Derived, never re-enumerated, so 'idle' can
+ * never silently reappear in one of these collections.
+ */
+const TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED = new Set([
+  ...TERMINAL_SESSION_STATUSES,
+  'superseded',
+]);
+
+/** SQL `IN (...)`-ready literal list derived from TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED. */
+const TERMINAL_STATUS_SQL_LIST = [...TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED]
+  .map((s) => `'${s}'`)
+  .join(', ');
+
+/** SQL `IN (...)`-ready literal list derived from TERMINAL_SESSION_STATUSES (no 'superseded'). */
+const BASE_TERMINAL_STATUS_SQL_LIST = [...TERMINAL_SESSION_STATUSES]
+  .map((s) => `'${s}'`)
+  .join(', ');
+
 const stmtBackfillPrUrlIfNull = db.prepare<{
   session_id: string;
   pr_url: string | null;
@@ -415,14 +512,19 @@ const stmtBackfillPrUrlIfNull = db.prepare<{
  * audit event is recorded. Any scraped pr_url is still backfilled onto the
  * row when it currently has none, so recoverSession/SessionAuditor can still
  * find it.
+ *
+ * Returns the row's effective status after the call — 'idle' when the write
+ * landed, or the pre-existing terminal status when it was skipped — so
+ * callers can broadcast what's actually in the database instead of assuming
+ * the write always lands.
  */
 export function markSessionIdle(
   sessionId: string,
   endedAt: number,
   prUrl?: string | null,
-): void {
+): SessionStatus {
   const current = stmtGetSession.get({ session_id: sessionId }) as
-    | { status: string; task_id: string | null }
+    | { status: SessionStatus; task_id: string | null }
     | undefined;
   if (current && TERMINAL_SESSION_STATUSES.has(current.status)) {
     recordEvent({
@@ -435,13 +537,14 @@ export function markSessionIdle(
     if (prUrl) {
       stmtBackfillPrUrlIfNull.run({ session_id: sessionId, pr_url: prUrl });
     }
-    return;
+    return current.status;
   }
   stmtMarkSessionIdle.run({
     session_id: sessionId,
     ended_at: endedAt,
     pr_url: prUrl ?? null,
   });
+  return 'idle';
 }
 
 export interface StuckResultSessionRow {
@@ -663,10 +766,125 @@ export function getVerifySessionsForGateItems(
 }
 
 /**
+ * True if this gate item has a live (non-terminal) verify session — the
+ * gate reconciler's per-item dispatch guard, keyed on the same
+ * `gate-item:<id>` task_id convention as getVerifySessionsForGateItems.
+ * Unlike the reconciler's in-memory inFlightVerifications set, this is
+ * DB-backed and so survives a process restart — the gap that let a gate
+ * item with a still-running verify session get re-dispatched a second time.
+ */
+export function hasLiveVerifySessionForGateItem(itemId: string): boolean {
+  const taskId = `${GATE_ITEM_TASK_PREFIX}${itemId}`;
+  const row = db
+    .prepare<{ taskId: string }, { c: number }>(
+      `SELECT COUNT(*) as c FROM sessions
+       WHERE task_id = @taskId
+         AND status NOT IN ('done', 'error', 'killed', 'superseded')`,
+    )
+    .get({ taskId });
+  return (row?.c ?? 0) > 0;
+}
+
+/**
+ * Count of live (non-terminal) gate-verify sessions — task_id
+ * `gate-item:<id>`, the same convention hasLiveVerifySessionForGateItem
+ * keys on. Discriminates on task_id rather than session_type='ops' so an
+ * ordinary ops session (also session_type='ops') is never counted against
+ * the verify-specific cap (see isGateVerifySession).
+ */
+export function countLiveVerifySessions(): number {
+  const row = db
+    .prepare<[], { c: number }>(
+      `SELECT COUNT(*) as c FROM sessions
+       WHERE task_id LIKE '${GATE_ITEM_TASK_PREFIX}%'
+         AND status NOT IN ('done', 'error', 'killed', 'superseded')`,
+    )
+    .get();
+  return row?.c ?? 0;
+}
+
+/**
+ * Count of live (non-terminal, unarchived) sessions in the shared planning
+ * pool (groom/design/ops/split/docs — see isPlanningSession), DB-backed so
+ * the gate reconciler can budget against it without a SessionManager
+ * instance.
+ *
+ * Rule: an unarchived `idle` session still counts. idle is deliberately not
+ * a terminal status — a planning session parks idle between turns and is
+ * routinely resumed from it, so it is holding a slot the same as a running
+ * one. `archived` is the actual discriminator for "no longer live": it is
+ * the operator's explicit signal that a session will never be resumed, and
+ * archiving always accompanies ending the session's process (see
+ * SessionManager.archiveAndEndSession) — so it is excluded here too. Without
+ * this filter, a session archived days ago (and thus no longer holding any
+ * real capacity) still counted, which pinned this budget at zero once
+ * enough archived rows accumulated.
+ *
+ * This intentionally does not count the same population as
+ * SessionManager.getLivePlanningSessionCount(), which tracks only sessions
+ * with a live in-memory process (that map entry is removed the moment a
+ * session goes idle, see cleanupWorktree) — a narrower, in-process
+ * concurrency guard used by DispatchTriggerEvaluator to decide whether to
+ * spawn another session right now. This DB-backed count instead answers
+ * "how much of the planning pool's capacity is currently spoken for",
+ * including sessions parked idle and awaiting resume, which is what the
+ * gate reconciler needs to budget its own dispatches against.
+ */
+export function countLivePlanningSessions(): number {
+  const rows = db
+    .prepare(
+      `SELECT session_type FROM sessions
+       WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
+         AND archived = 0`,
+    )
+    .all() as { session_type: string | null }[];
+  return rows.filter((r) => isPlanningSession(r.session_type ?? '')).length;
+}
+
+export interface GateItemPendingCapabilitySession {
+  itemId: string;
+  sessionId: string;
+}
+
+/**
+ * Non-terminal gate-item verify sessions (task_id `gate-item:<id>`) that
+ * currently have an outstanding `session.requestCapability` intent —
+ * exactly the sessions a boot restart would otherwise silently abandon,
+ * since the in-memory `awaitDisposition` listener that would have resumed
+ * them died with the old process. Boot reconciliation uses this to
+ * re-attach a fresh listener per item (see gateReconciler's
+ * reattachOutstandingGateVerifications).
+ */
+export function getGateItemsWithPendingCapabilityRequest(): GateItemPendingCapabilitySession[] {
+  const rows = db
+    .prepare(
+      `SELECT s.session_id AS session_id, s.task_id AS task_id
+       FROM sessions s
+       WHERE s.task_id LIKE '${GATE_ITEM_TASK_PREFIX}%'
+         AND s.status NOT IN ('done', 'error', 'killed', 'superseded')
+         AND EXISTS (
+           SELECT 1 FROM staged_intent si
+           WHERE si.session_id = s.session_id
+             AND si.kind = 'session.requestCapability'
+             AND si.state IN ('staged', 'approved')
+         )`,
+    )
+    .all() as { session_id: string; task_id: string }[];
+  return rows.map((r) => ({
+    itemId: r.task_id.slice(GATE_ITEM_TASK_PREFIX.length),
+    sessionId: r.session_id,
+  }));
+}
+
+/**
  * True if this task has a non-terminal planning (groom/design/ops) session —
  * including one parked idle awaiting operator disposition. Per the no-timeout
  * decision for planning sessions, an idle groom/design/ops session is never
  * an orphan: OrphanedTaskSweeper must skip revert/nudge for such a task.
+ * Excludes archived sessions: archiving is only reachable via
+ * archiveAndEndSession, which reaps any live subprocess first, so an
+ * archived row is never a running one — it's the operator's explicit
+ * "this session is done" signal, and must not keep suppressing dispatch.
  */
 export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
   const norm = normalizeBoardId(taskId);
@@ -674,12 +892,55 @@ export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
     .prepare<[], { task_id: string | null }>(
       `
     SELECT task_id FROM sessions
-    WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
+    WHERE status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND session_type IN ('groom', 'design', 'ops')
+      AND archived = 0
   `,
     )
     .all();
   return rows.some((row) => normalizeBoardId(row.task_id ?? '') === norm);
+}
+
+/** A planning flow whose dispatch-eligibility predicate needs its own re-dispatch dedup — see planningCandidates.ts. */
+export type DedupedPlanningFlow = 'groom' | 'design' | 'ops' | 'docs';
+
+/**
+ * True if this task has a non-terminal (running OR parked idle) session of
+ * the given planning flow. The flow-parameterised counterpart to
+ * hasActiveSessionForTask, which is standard-session-only and left
+ * unchanged — this is additive so the three planning candidate predicates
+ * (isGroomCandidate/isOpsCandidate/isDesignCandidate) can each dedup against
+ * their own flow's sessions instead of being blind to all of them.
+ */
+export function hasActivePlanningSessionForTask(
+  taskId: string,
+  flow: DedupedPlanningFlow,
+): boolean {
+  return getActivePlanningSessionForTask(taskId, flow) !== undefined;
+}
+
+/**
+ * The row-returning counterpart to hasActivePlanningSessionForTask — used by
+ * the abort route (routes/taskAbort.ts) to resolve the specific session id
+ * to kill, rather than just a boolean. Same non-terminal (running OR parked
+ * idle), flow-scoped, archived=0 filter.
+ */
+export function getActivePlanningSessionForTask(
+  taskId: string,
+  flow: DedupedPlanningFlow,
+): Session | undefined {
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare<{ flow: string }, Session>(
+      `
+    SELECT * FROM sessions
+    WHERE status NOT IN (${TERMINAL_STATUS_SQL_LIST})
+      AND session_type = @flow
+      AND archived = 0
+  `,
+    )
+    .all({ flow }) as Session[];
+  return rows.find((row) => normalizeBoardId(row.task_id ?? '') === norm);
 }
 
 export function hasActiveSessionForTask(taskId: string): boolean {
@@ -689,8 +950,9 @@ export function hasActiveSessionForTask(taskId: string): boolean {
       `
     SELECT 1 FROM sessions
     WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
-      AND status NOT IN ('idle', 'done', 'error', 'killed', 'superseded')
+      AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND (session_type = 'standard' OR session_type IS NULL)
+      AND archived = 0
     LIMIT 1
   `,
     )
@@ -709,6 +971,7 @@ export function getActiveSessions(): Session[] {
       s.project_id, s.status, s.started_at, s.ended_at, s.worktree_path,
       s.archived, s.favorited, s.session_type, s.note, s.tags,
       s.total_input_tokens, s.total_output_tokens, s.model, s.task_name,
+      s.granted_capabilities,
       COALESCE(s.pr_url, (
         SELECT p.pr_url FROM pull_requests p WHERE p.session_id = s.session_id LIMIT 1
       )) AS pr_url
@@ -756,17 +1019,22 @@ export function unfavoriteSession(sessionId: string): boolean {
   return result.changes > 0;
 }
 
+/**
+ * Archives concluded sessions only (status derived from TERMINAL_SESSION_STATUSES).
+ * A session parked idle is still alive and resumable — never terminal — and
+ * must never be swept up by this basis alone.
+ */
 export function archiveFinishedSessions(): number {
   const result = db
     .prepare(
-      `UPDATE sessions SET archived = 1 WHERE status IN ('done', 'error', 'killed', 'idle')`,
+      `UPDATE sessions SET archived = 1 WHERE status IN (${BASE_TERMINAL_STATUS_SQL_LIST})`,
     )
     .run();
   return result.changes;
 }
 
 /**
- * Archive concluded sessions (status IN ('done','error','killed'), archived=0)
+ * Archive concluded sessions (status derived from TERMINAL_SESSION_STATUSES, archived=0)
  * whose ended_at is older than the given cutoff timestamp (ms).
  * Idle sessions are excluded — the CLI subprocess is still alive and resumable.
  * Returns the session_ids of archived sessions.
@@ -775,7 +1043,7 @@ export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
   const rows = db
     .prepare(
       `SELECT session_id FROM sessions
-       WHERE status IN ('done', 'error', 'killed')
+       WHERE status IN (${BASE_TERMINAL_STATUS_SQL_LIST})
          AND archived = 0
          AND ended_at IS NOT NULL
          AND ended_at < @cutoff`,
@@ -872,6 +1140,22 @@ export function addGrantedCapability(
   return next;
 }
 
+/**
+ * Remove a capability from the session's durable granted set (idempotent —
+ * a no-op if the capability isn't present). Mirrors addGrantedCapability.
+ */
+export function removeGrantedCapability(
+  sessionId: string,
+  capability: string,
+): string[] {
+  const existing = getGrantedCapabilities(sessionId);
+  const next = existing.filter((c) => c !== capability);
+  db.prepare(
+    'UPDATE sessions SET granted_capabilities = ? WHERE session_id = ?',
+  ).run(JSON.stringify(next), sessionId);
+  return next;
+}
+
 export function setDerivedTitle(sessionId: string, title: string): void {
   setSessionMetadata(sessionId, { derivedTitle: title });
 }
@@ -948,10 +1232,12 @@ const stmtGetEventsBySession = db.prepare<{ session_id: string }>(`
   SELECT * FROM session_events WHERE session_id = @session_id ORDER BY id ASC
 `);
 
-/** Returns the timestamp of the most recent session_events row for the session, or null. */
-export function getLatestSessionEventTimestamp(
-  sessionId: string,
-): number | null {
+/**
+ * Epoch ms of the most recent session_events row for the session, or null
+ * when it has none (pruned or never emitted — callers must treat null as
+ * "unknown", never as "inert").
+ */
+export function getSessionLastActivityMs(sessionId: string): number | null {
   const row = db
     .prepare<
       [string],
@@ -1020,51 +1306,124 @@ export function getEventsBySession(sessionId: string): SessionEvent[] {
   }) as SessionEvent[];
 }
 
-// ─── permission_events ─────────────────────────────────────────────────────
+// ─── session_events (project-scoped aggregate read) ────────────────────────
 
-const stmtInsertPermissionEvent = db.prepare<NewPermissionEvent>(`
-  INSERT INTO permission_events
-    (session_id, tool_name, proposed_action, decision, rule_matched, decided_at)
-  VALUES
-    (@session_id, @tool_name, @proposed_action, @decision, @rule_matched, @decided_at)
-`);
-
-export function insertPermissionEvent(e: NewPermissionEvent): void {
-  stmtInsertPermissionEvent.run(e);
+/**
+ * Filters accepted by the project-scoped session_events read
+ * (`sessionEvents.query` MCP tool, see mcp/tools/sessionEventsReadTools.ts).
+ * Mirrors AuditLogQueryFilters' `since`/`until` shape, but there is no
+ * `eventType` filter — session_events only has four values (system, text,
+ * user_message, rate_limit), which makes it a near-useless discriminator —
+ * and `pattern` replaces it as the filter that actually matters: a
+ * substring match against the (large, assistant-turn-JSON) `payload` column.
+ */
+export interface SessionEventsProjectQueryFilters {
+  /** Substring match against `payload` (SQL LIKE, case-sensitive per SQLite's default). */
+  pattern?: string;
+  /** Inclusive lower bound on `timestamp` (epoch ms — session_events stores this as an integer, never ISO text). */
+  since?: number;
+  /** Inclusive upper bound on `timestamp` (epoch ms). */
+  until?: number;
 }
 
-export function getRecentPermissionEvents(
-  limit: number,
-): Array<PermissionEvent & { task_url: string | null }> {
+/** One session's aggregate slice of a project-scoped session_events query — the default, payload-free return shape. */
+export interface SessionEventsAggregateRow {
+  session_id: string;
+  count: number;
+  first_timestamp: number;
+  last_timestamp: number;
+}
+
+/** Hard cap on rows returned when a caller opts into payload bodies — see querySessionEventsByProjectRows. */
+export const SESSION_EVENTS_ROW_CAP = 200;
+
+function buildSessionEventsFilterClauses(
+  filters: SessionEventsProjectQueryFilters,
+): { clauses: string[]; params: (string | number)[] } {
+  const clauses: string[] = [];
+  const params: (string | number)[] = [];
+  if (filters.pattern !== undefined) {
+    clauses.push('session_events.payload LIKE ?');
+    params.push(`%${filters.pattern}%`);
+  }
+  if (filters.since !== undefined) {
+    clauses.push('session_events.timestamp >= ?');
+    params.push(filters.since);
+  }
+  if (filters.until !== undefined) {
+    clauses.push('session_events.timestamp <= ?');
+    params.push(filters.until);
+  }
+  return { clauses, params };
+}
+
+/**
+ * Aggregate-first project-scoped read over session_events — grouped by
+ * session_id, with counts and a first/last timestamp per session rather
+ * than payload bodies (see SESSION_EVENTS_ROW_CAP's sibling,
+ * querySessionEventsByProjectRows, for the explicit-opt-in raw read). This
+ * is the default shape `sessionEvents.query` returns: it answers "did X
+ * happen, across any session in this project" without ever risking the
+ * tool-result size limit a naive `SELECT *` over every session's raw
+ * assistant-turn JSON would blow.
+ */
+export function querySessionEventsByProjectAggregate(
+  projectId: string,
+  filters: SessionEventsProjectQueryFilters = {},
+): SessionEventsAggregateRow[] {
+  const { clauses, params } = buildSessionEventsFilterClauses(filters);
+  const whereExtra = clauses.map((c) => `AND ${c}`).join(' ');
   return db
-    .prepare(
-      `SELECT pe.*, s.task_url FROM permission_events pe
-       LEFT JOIN sessions s ON pe.session_id = s.session_id
-       ORDER BY pe.decided_at DESC LIMIT ?`,
+    .prepare<(string | number)[], SessionEventsAggregateRow>(
+      `
+      SELECT session_events.session_id AS session_id,
+             COUNT(*) AS count,
+             MIN(session_events.timestamp) AS first_timestamp,
+             MAX(session_events.timestamp) AS last_timestamp
+      FROM session_events
+      JOIN sessions ON sessions.session_id = session_events.session_id
+      WHERE sessions.project_id = ? ${whereExtra}
+      GROUP BY session_events.session_id
+      ORDER BY last_timestamp DESC
+    `,
     )
-    .all(limit) as Array<PermissionEvent & { task_url: string | null }>;
+    .all(projectId, ...params);
 }
 
-const stmtClearPermissionEvents = db.prepare(`DELETE FROM permission_events`);
-
-export function clearPermissionEvents(): void {
-  stmtClearPermissionEvents.run();
+/**
+ * Explicit-opt-in raw read over session_events, project-scoped and capped
+ * at `limit` (never more than SESSION_EVENTS_ROW_CAP) rows — the only path
+ * back to actual payload bodies, since those are large assistant-turn JSON
+ * blobs and an unbounded project-wide read of them is exactly what blew the
+ * tool-result size limit on the audit_log equivalent (see the task context:
+ * a single unscoped auditLog.query returned 1.4M characters).
+ */
+export function querySessionEventsByProjectRows(
+  projectId: string,
+  filters: SessionEventsProjectQueryFilters = {},
+  limit: number = SESSION_EVENTS_ROW_CAP,
+): SessionEvent[] {
+  const cappedLimit = Math.min(limit, SESSION_EVENTS_ROW_CAP);
+  const { clauses, params } = buildSessionEventsFilterClauses(filters);
+  const whereExtra = clauses.map((c) => `AND ${c}`).join(' ');
+  return db
+    .prepare<(string | number)[], SessionEvent>(
+      `
+      SELECT session_events.*
+      FROM session_events
+      JOIN sessions ON sessions.session_id = session_events.session_id
+      WHERE sessions.project_id = ? ${whereExtra}
+      ORDER BY session_events.timestamp DESC
+      LIMIT ?
+    `,
+    )
+    .all(projectId, ...params, cappedLimit);
 }
 
 const stmtClearPermissionDenials = db.prepare(`DELETE FROM permission_denials`);
 
 export function clearPermissionDenials(): void {
   stmtClearPermissionDenials.run();
-}
-
-// ─── permission_rules ──────────────────────────────────────────────────────
-
-const stmtGetRules = db.prepare(`
-  SELECT * FROM permission_rules WHERE enabled = 1 ORDER BY order_index ASC
-`);
-
-export function getRules(): PermissionRule[] {
-  return stmtGetRules.all() as PermissionRule[];
 }
 
 // ─── permission_denials ─────────────────────────────────────────────────────
@@ -1169,6 +1528,73 @@ export function deleteTaskCacheRow(taskId: string): void {
   db.prepare(`DELETE FROM task_cache WHERE task_id = ?`).run(taskId);
 }
 
+const stmtGetBoardCacheRows = db.prepare(
+  `SELECT task_id, fetched_at, raw_json FROM task_cache WHERE task_id LIKE 'board:%'`,
+);
+
+/**
+ * Write-through for a status change: patches the `status` field of the
+ * given task in place inside every cached `board:*` blob that contains it
+ * (a task can appear in several board rows at once — per-milestone,
+ * hyphenless-id, and project-prefixed keys all coexist). Does not delete
+ * rows or trigger a project re-warm, so it stays off the Notion API; the
+ * periodic TaskCacheRefresher remains the source of truth and will later
+ * overwrite these rows with authoritative data.
+ *
+ * Ids are matched via normalizeTaskId, which canonicalizes both the
+ * `notion:` source prefix and hyphenation — board blobs carry bare ids
+ * while callers may pass any prefixed/hyphenless variant. Best-effort and
+ * non-fatal throughout: a missing, empty, or unparseable board row is
+ * skipped rather than allowed to fail the status write.
+ */
+export function updateTaskStatusInBoardCaches(
+  taskId: string,
+  status: string,
+): void {
+  const normalized = normalizeTaskId(taskId);
+  let rows: Array<{ task_id: string; fetched_at: number; raw_json: string }>;
+  try {
+    rows = stmtGetBoardCacheRows.all() as Array<{
+      task_id: string;
+      fetched_at: number;
+      raw_json: string;
+    }>;
+  } catch {
+    return;
+  }
+  for (const row of rows) {
+    let tasks: unknown;
+    try {
+      tasks = JSON.parse(row.raw_json);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(tasks)) continue;
+    let changed = false;
+    for (const entry of tasks) {
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        typeof (entry as { id?: unknown }).id === 'string' &&
+        normalizeTaskId((entry as { id: string }).id) === normalized
+      ) {
+        (entry as { status: string }).status = status;
+        changed = true;
+      }
+    }
+    if (!changed) continue;
+    try {
+      stmtUpsertTaskCache.run({
+        task_id: row.task_id,
+        fetched_at: row.fetched_at,
+        raw_json: JSON.stringify(tasks),
+      });
+    } catch {
+      // Non-fatal: leave the row as-is rather than failing the status write.
+    }
+  }
+}
+
 export function incrementTokens(
   sessionId: string,
   inputTokens: number,
@@ -1261,6 +1687,7 @@ export function upsertPullRequest(
     | 'session_initiated_close_at'
     | 'reviewer_requested_at'
     | 'flake_recovery_attempts'
+    | 'human_merge_only'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -1519,14 +1946,42 @@ export function getMergedPRForTask(taskId: string): PullRequestRow | null {
     .get({ task_id: taskId }) as PullRequestRow | null;
 }
 
-export function getPRs(repo: string): PullRequestRow[] {
-  return db
+/**
+ * Default cap on terminal (merged/closed) rows returned by getPRs. Open rows
+ * are never subject to this cap — the request-scoped stale-open reconciliation
+ * in routes/prs.ts is the only repair path for escalated state='open' rows,
+ * so every open row must always be visible to it.
+ */
+const PR_LIST_TERMINAL_LIMIT = 50;
+
+/**
+ * Returns all open PRs for a repo plus the most recently updated terminal
+ * (merged/closed) PRs, capped at `terminalLimit`. Unlike a flat "most recent
+ * N overall" query, this guarantees every open row is present regardless of
+ * how many terminal rows the project has accumulated.
+ */
+export function getPRs(
+  repo: string,
+  terminalLimit: number = PR_LIST_TERMINAL_LIMIT,
+): PullRequestRow[] {
+  const openRows = db
     .prepare<{ repo: string }>(
       `
-    SELECT * FROM pull_requests WHERE repo = @repo ORDER BY pr_number DESC
+    SELECT * FROM pull_requests WHERE repo = @repo AND state = 'open' ORDER BY pr_number DESC
   `,
     )
     .all({ repo }) as PullRequestRow[];
+  const terminalRows = db
+    .prepare<{ repo: string; limit: number }>(
+      `
+    SELECT * FROM pull_requests WHERE repo = @repo AND state != 'open'
+    ORDER BY updated_at DESC LIMIT @limit
+  `,
+    )
+    .all({ repo, limit: terminalLimit }) as PullRequestRow[];
+  return [...openRows, ...terminalRows].sort(
+    (a, b) => b.pr_number - a.pr_number,
+  );
 }
 
 export function getPRByNumber(
@@ -2078,6 +2533,22 @@ export function clearTaskPauseReason(taskId: string): void {
 }
 
 /**
+ * Every task-level pause reason currently on record — the milestone-attention
+ * blocked/stalled detector's raw input. Task ids aren't pre-joined to a
+ * milestone here (the table has no milestone column), so callers resolve
+ * that via resolveMilestoneForTaskId per row, same as the staged_intent
+ * milestone backfill does.
+ */
+export function listTaskPauseReasons(): {
+  task_id: string;
+  pause_reason: string;
+}[] {
+  return db
+    .prepare(`SELECT task_id, pause_reason FROM task_pause_reasons`)
+    .all() as { task_id: string; pause_reason: string }[];
+}
+
+/**
  * Clear the pause_reason on all PRs associated with a task (used when the task
  * transitions back to Ready so the next launch attempt is not blocked by a
  * stale PR-level pause such as stuck_timeout).
@@ -2103,9 +2574,28 @@ export function getApprovedOpenPRs(): PullRequestRow[] {
     WHERE state = 'open'
       AND review_result LIKE '%approved%'
       AND pause_reason IS NULL
+      AND (human_merge_only IS NULL OR human_merge_only = 0)
   `,
     )
     .all() as PullRequestRow[];
+}
+
+/**
+ * Sets the docs execution flow's never-auto-merged output gate at PR-open
+ * time. Idempotent — a repeat call with the same value is a no-op.
+ */
+export function setHumanMergeOnly(
+  prNumber: number,
+  repo: string,
+  value: boolean,
+): void {
+  db.prepare<{ pr_number: number; repo: string; human_merge_only: number }>(
+    `
+    UPDATE pull_requests
+    SET human_merge_only = @human_merge_only
+    WHERE pr_number = @pr_number AND repo = @repo
+  `,
+  ).run({ pr_number: prNumber, repo, human_merge_only: value ? 1 : 0 });
 }
 
 export function getAllOpenPRs(): PullRequestRow[] {
@@ -2434,6 +2924,29 @@ export function getLatestCodeSessionByNotionTaskId(
     .get({ task_id: taskId }) as Session | undefined;
 }
 
+/**
+ * Returns the most recent ops session for a given task ID. Read by the
+ * ops-journal route's deferred close (see setEntryState -> 'resolved'
+ * handler) to look up the terminal_completion_reason of the session whose
+ * journal entry just settled, since the operator-confirmed
+ * applied-pending-confirm -> resolved transition typically happens well
+ * after that session has gone terminal.
+ */
+export function getLatestOpsSessionByTaskId(
+  taskId: string,
+): Session | undefined {
+  return db
+    .prepare<{ task_id: string }>(
+      `
+    SELECT * FROM sessions
+    WHERE task_id = @task_id AND session_type = 'ops'
+    ORDER BY started_at DESC
+    LIMIT 1
+  `,
+    )
+    .get({ task_id: taskId }) as Session | undefined;
+}
+
 // ─── projects ──────────────────────────────────────────────────────────────
 
 export function insertProject(p: NewProjectRow): ProjectRow {
@@ -2637,13 +3150,14 @@ export function insertMilestone(m: NewMilestoneRow): MilestoneRow {
     db.prepare<NewMilestoneRow>(
       `
     INSERT INTO milestones
-      (id, project_id, name, source_id, canonical_short_id, display_order, created_at, updated_at)
+      (id, project_id, name, source_id, canonical_short_id, display_order, wrapped_at, created_at, updated_at)
     VALUES
-      (@id, @project_id, @name, @source_id, @canonical_short_id, @display_order, @created_at, @updated_at)
+      (@id, @project_id, @name, @source_id, @canonical_short_id, @display_order, @wrapped_at, @created_at, @updated_at)
   `,
     ).run({
       ...m,
       display_order: m.display_order ?? 0,
+      wrapped_at: m.wrapped_at ?? null,
       created_at: m.created_at ?? now,
       updated_at: m.updated_at ?? now,
     });
@@ -2681,6 +3195,7 @@ export interface MilestonePatch {
   source_id?: string | null;
   canonical_short_id?: string | null;
   display_order?: number;
+  wrapped_at?: number | null;
 }
 
 export function updateMilestone(
@@ -2701,6 +3216,7 @@ export function updateMilestone(
       source_id: string | null;
       canonical_short_id: string | null;
       display_order: number;
+      wrapped_at: number | null;
       updated_at: number;
     }>(
       `
@@ -2709,6 +3225,7 @@ export function updateMilestone(
         source_id = @source_id,
         canonical_short_id = @canonical_short_id,
         display_order = @display_order,
+        wrapped_at = @wrapped_at,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -2719,6 +3236,8 @@ export function updateMilestone(
         patch.source_id !== undefined ? patch.source_id : existing.source_id,
       canonical_short_id: nextCanonicalShortId,
       display_order: patch.display_order ?? existing.display_order,
+      wrapped_at:
+        patch.wrapped_at !== undefined ? patch.wrapped_at : existing.wrapped_at,
       updated_at: now,
     });
   } catch (err) {
@@ -3508,6 +4027,7 @@ export interface StuckSessionTimerRow {
   notify_remaining_ms: number | null;
   pause_remaining_ms: number | null;
   hard_stop_remaining_ms: number | null;
+  suspended: number;
 }
 
 export function upsertStuckSessionTimer(
@@ -3520,6 +4040,7 @@ export function upsertStuckSessionTimer(
   notifyRemainingMs: number | null,
   pauseRemainingMs: number | null,
   hardStopRemainingMs: number | null,
+  suspended: boolean,
 ): void {
   db.prepare<{
     session_id: string;
@@ -3531,14 +4052,15 @@ export function upsertStuckSessionTimer(
     notify_remaining_ms: number | null;
     pause_remaining_ms: number | null;
     hard_stop_remaining_ms: number | null;
+    suspended: number;
   }>(
     `
     INSERT INTO stuck_session_timers
       (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
-       hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+       hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms, suspended)
     VALUES
       (@session_id, @task_name, @notify_deadline, @pause_deadline, @hard_stop_deadline,
-       @hard_stop_armed, @notify_remaining_ms, @pause_remaining_ms, @hard_stop_remaining_ms)
+       @hard_stop_armed, @notify_remaining_ms, @pause_remaining_ms, @hard_stop_remaining_ms, @suspended)
     ON CONFLICT(session_id) DO UPDATE SET
       task_name              = excluded.task_name,
       notify_deadline        = excluded.notify_deadline,
@@ -3547,7 +4069,8 @@ export function upsertStuckSessionTimer(
       hard_stop_armed        = excluded.hard_stop_armed,
       notify_remaining_ms    = excluded.notify_remaining_ms,
       pause_remaining_ms     = excluded.pause_remaining_ms,
-      hard_stop_remaining_ms = excluded.hard_stop_remaining_ms
+      hard_stop_remaining_ms = excluded.hard_stop_remaining_ms,
+      suspended              = excluded.suspended
   `,
   ).run({
     session_id: sessionId,
@@ -3559,6 +4082,7 @@ export function upsertStuckSessionTimer(
     notify_remaining_ms: notifyRemainingMs,
     pause_remaining_ms: pauseRemainingMs,
     hard_stop_remaining_ms: hardStopRemainingMs,
+    suspended: suspended ? 1 : 0,
   });
 }
 
@@ -3903,6 +4427,108 @@ export function pruneSchedulerAudit(keepPerJob = 1000): void {
   }
 }
 
+// ─── convergence_snapshot ───────────────────────────────────────────────────
+
+let _stmtInsertConvergenceSnapshot: Database.Statement | null = null;
+let _stmtGetLatestConvergenceSnapshot: Database.Statement | null = null;
+let _stmtListConvergenceSnapshotHistory: Database.Statement | null = null;
+
+export function insertConvergenceSnapshot(
+  row: NewConvergenceSnapshotRow,
+): void {
+  _stmtInsertConvergenceSnapshot ??= db.prepare<ConvergenceSnapshotRow>(`
+    INSERT INTO convergence_snapshot
+      (id, project, milestone, ts, tasks_open, tasks_closed, gate_open, gate_closed,
+       seed_open, seed_closed, ops_open, ops_closed, total_scope, distance_to_green, status)
+    VALUES
+      (@id, @project, @milestone, @ts, @tasks_open, @tasks_closed, @gate_open, @gate_closed,
+       @seed_open, @seed_closed, @ops_open, @ops_closed, @total_scope, @distance_to_green, @status)
+  `);
+  _stmtInsertConvergenceSnapshot.run({
+    id: randomUUID(),
+    ...row,
+  });
+}
+
+/** Latest stored snapshot for a milestone — the dedup baseline for ConvergenceSnapshotJob. */
+export function getLatestConvergenceSnapshot(
+  project: string,
+  milestone: string,
+): ConvergenceSnapshotRow | undefined {
+  _stmtGetLatestConvergenceSnapshot ??= db.prepare<{
+    project: string;
+    milestone: string;
+  }>(
+    `SELECT * FROM convergence_snapshot
+     WHERE project = @project AND milestone = @milestone
+     ORDER BY ts DESC LIMIT 1`,
+  );
+  return _stmtGetLatestConvergenceSnapshot.get({ project, milestone }) as
+    | ConvergenceSnapshotRow
+    | undefined;
+}
+
+export interface ConvergenceSnapshotHistoryWindow {
+  /** Cap on rows returned — the most recent N, still ordered oldest first. */
+  limit?: number;
+  /** Only rows with ts >= this ISO-8601 timestamp. */
+  sinceTs?: string;
+}
+
+/**
+ * Series for a milestone, oldest first — feeds the burndown viz's history
+ * route. With no window, returns the full retained (never-pruned) series, so
+ * existing callers keep their current unbounded meaning. A window bounds the
+ * query itself rather than relying on the caller to slice a full fetch.
+ */
+export function listConvergenceSnapshotHistory(
+  project: string,
+  milestone: string,
+  window?: ConvergenceSnapshotHistoryWindow,
+): ConvergenceSnapshotRow[] {
+  if (!window?.limit && !window?.sinceTs) {
+    _stmtListConvergenceSnapshotHistory ??= db.prepare<{
+      project: string;
+      milestone: string;
+    }>(
+      `SELECT * FROM convergence_snapshot
+       WHERE project = @project AND milestone = @milestone
+       ORDER BY ts ASC`,
+    );
+    return _stmtListConvergenceSnapshotHistory.all({
+      project,
+      milestone,
+    }) as ConvergenceSnapshotRow[];
+  }
+
+  const conditions = ['project = @project', 'milestone = @milestone'];
+  const params: Record<string, string | number> = { project, milestone };
+  if (window.sinceTs) {
+    conditions.push('ts >= @sinceTs');
+    params.sinceTs = window.sinceTs;
+  }
+
+  const whereClause = conditions.join(' AND ');
+  if (!window.limit) {
+    return db
+      .prepare(
+        `SELECT * FROM convergence_snapshot WHERE ${whereClause} ORDER BY ts ASC`,
+      )
+      .all(params) as ConvergenceSnapshotRow[];
+  }
+
+  params.limit = window.limit;
+  return db
+    .prepare(
+      `SELECT * FROM (
+         SELECT * FROM convergence_snapshot WHERE ${whereClause}
+         ORDER BY ts DESC LIMIT @limit
+       ) recent
+       ORDER BY recent.ts ASC`,
+    )
+    .all(params) as ConvergenceSnapshotRow[];
+}
+
 export interface SchedulerAuditStats {
   job: string;
   lastDurationMs: number | null;
@@ -3993,13 +4619,28 @@ let _stmtListOpsJournalEntries: Database.Statement | null = null;
 let _stmtUpsertOpsJournalEntry: Database.Statement | null = null;
 let _stmtDeleteOpsJournalEntry: Database.Statement | null = null;
 
+/**
+ * ops_journal.task_id is stored bare (no `source:` prefix — see reconcileJournal),
+ * but callers may hold either form (e.g. OrphanedTaskSweeper holds the
+ * `notion:`-prefixed dispatch id). Strip the prefix via toExternalId so both
+ * forms resolve to the same row; a bare id (no colon) passes through
+ * unchanged since toExternalId/parseTaskId only understands prefixed ids.
+ */
+function toBareOpsJournalTaskId(taskId: string): string {
+  try {
+    return toExternalId(taskId);
+  } catch {
+    return taskId;
+  }
+}
+
 export function getOpsJournalEntry(taskId: string): OpsJournalRow | undefined {
   _stmtGetOpsJournalEntry ??= db.prepare<{ task_id: string }>(
     `SELECT * FROM ops_journal WHERE task_id = @task_id`,
   );
-  return _stmtGetOpsJournalEntry.get({ task_id: taskId }) as
-    | OpsJournalRow
-    | undefined;
+  return _stmtGetOpsJournalEntry.get({
+    task_id: toBareOpsJournalTaskId(taskId),
+  }) as OpsJournalRow | undefined;
 }
 
 export function listOpsJournalEntries(): OpsJournalRow[] {
@@ -4031,14 +4672,17 @@ export function upsertOpsJournalEntry(row: OpsJournalRow): void {
       resolution = @resolution,
       updated_at = @updated_at
   `);
-  _stmtUpsertOpsJournalEntry.run(row);
+  _stmtUpsertOpsJournalEntry.run({
+    ...row,
+    task_id: toBareOpsJournalTaskId(row.task_id),
+  });
 }
 
 export function deleteOpsJournalEntry(taskId: string): void {
   _stmtDeleteOpsJournalEntry ??= db.prepare<{ task_id: string }>(
     `DELETE FROM ops_journal WHERE task_id = @task_id`,
   );
-  _stmtDeleteOpsJournalEntry.run({ task_id: taskId });
+  _stmtDeleteOpsJournalEntry.run({ task_id: toBareOpsJournalTaskId(taskId) });
 }
 
 // ─── gate_item ────────────────────────────────────────────────────────────
@@ -4081,10 +4725,10 @@ export function insertGateItem(row: GateItemRow): void {
   _stmtInsertGateItem ??= db.prepare<GateItemRow>(`
     INSERT INTO gate_item
       (id, project, milestone, text, classification, min_deployed_commit,
-       state, current_disposition, updated_at)
+       state, current_disposition, latest_disposition, updated_at)
     VALUES
       (@id, @project, @milestone, @text, @classification, @min_deployed_commit,
-       @state, @current_disposition, @updated_at)
+       @state, @current_disposition, @latest_disposition, @updated_at)
   `);
   _stmtInsertGateItem.run(row);
 }
@@ -4099,6 +4743,7 @@ export function updateGateItem(row: GateItemRow): void {
       min_deployed_commit = @min_deployed_commit,
       state = @state,
       current_disposition = @current_disposition,
+      latest_disposition = @latest_disposition,
       updated_at = @updated_at
     WHERE id = @id
   `);
@@ -4197,28 +4842,15 @@ export function listGateItemEvents(gateItemId: string): GateItemEventRow[] {
 export function insertGateItemEvent(row: NewGateItemEventRow): void {
   _stmtInsertGateItemEvent ??= db.prepare<NewGateItemEventRow>(`
     INSERT INTO gate_item_event
-      (gate_item_id, disposition, evidence, filed_followon, deploy_sha, operator, at)
+      (gate_item_id, disposition, evidence, filed_followon, deploy_sha, operator, unattended, min_deployed_commit_at_fail, at)
     VALUES
-      (@gate_item_id, @disposition, @evidence, @filed_followon, @deploy_sha, @operator, @at)
+      (@gate_item_id, @disposition, @evidence, @filed_followon, @deploy_sha, @operator, @unattended, @min_deployed_commit_at_fail, @at)
   `);
   _stmtInsertGateItemEvent.run(row);
 }
 
-let _stmtListGateItemsByMilestoneAllProjects: Database.Statement | null = null;
 let _stmtListAllGateItems: Database.Statement | null = null;
 let _stmtUpdateGateItemMinDeployedCommit: Database.Statement | null = null;
-
-/** All gate items for a milestone, regardless of project (mirrors ops_journal's milestone-only lookup). */
-export function listGateItemsByMilestoneAllProjects(
-  milestone: string,
-): GateItemRow[] {
-  _stmtListGateItemsByMilestoneAllProjects ??= db.prepare<{
-    milestone: string;
-  }>(`SELECT * FROM gate_item WHERE milestone = @milestone`);
-  return _stmtListGateItemsByMilestoneAllProjects.all({
-    milestone,
-  }) as GateItemRow[];
-}
 
 /** Every gate item across all projects/milestones — the reconciler's working set. */
 export function listAllGateItems(): GateItemRow[] {
@@ -4246,9 +4878,37 @@ export function updateGateItemMinDeployedCommit(
 }
 
 let _stmtTouchGateItemUpdatedAt: Database.Statement | null = null;
+let _stmtTouchGateItemUpdatedAtWithDisposition: Database.Statement | null =
+  null;
 
-/** Stamps updated_at only — never touches state/current_disposition. For non-resolving events (e.g. needs-setup). */
-export function touchGateItemUpdatedAt(id: string, updatedAt: string): void {
+/**
+ * Stamps updated_at, and — when `latestDisposition` is supplied — also
+ * writes it to the latest_disposition column, without ever touching
+ * state/current_disposition. Used both for a dispositionless log entry
+ * (updated_at only) and a non-resolving event like needs-setup/noted, which
+ * must surface on the item's latest-disposition column despite not
+ * advancing state.
+ */
+export function touchGateItemUpdatedAt(
+  id: string,
+  updatedAt: string,
+  latestDisposition?: string,
+): void {
+  if (latestDisposition !== undefined) {
+    _stmtTouchGateItemUpdatedAtWithDisposition ??= db.prepare<{
+      id: string;
+      updated_at: string;
+      latest_disposition: string;
+    }>(
+      `UPDATE gate_item SET updated_at = @updated_at, latest_disposition = @latest_disposition WHERE id = @id`,
+    );
+    _stmtTouchGateItemUpdatedAtWithDisposition.run({
+      id,
+      updated_at: updatedAt,
+      latest_disposition: latestDisposition,
+    });
+    return;
+  }
   _stmtTouchGateItemUpdatedAt ??= db.prepare<{
     id: string;
     updated_at: string;
@@ -4320,6 +4980,8 @@ export interface GateItemFilter {
   state?: string;
   classification?: GateItemClassification;
   runnable?: boolean;
+  /** True: only items whose latest event is a needs-setup abstain — "attempted, inconclusive". */
+  awaitingSetup?: boolean;
 }
 
 function buildGateItemWhereClause(filter: GateItemFilter): {
@@ -4347,6 +5009,13 @@ function buildGateItemWhereClause(filter: GateItemFilter): {
   if (filter.runnable !== undefined) {
     conditions.push(
       filter.runnable ? "state = 'runnable'" : "state != 'runnable'",
+    );
+  }
+  if (filter.awaitingSetup !== undefined) {
+    conditions.push(
+      filter.awaitingSetup
+        ? "latest_disposition = 'needs-setup'"
+        : "(latest_disposition IS NULL OR latest_disposition != 'needs-setup')",
     );
   }
   return {
@@ -4450,7 +5119,6 @@ export function deleteGateContribution(
 
 let _stmtGetSeedItem: Database.Statement | null = null;
 let _stmtListSeedItemsByMilestone: Database.Statement | null = null;
-let _stmtListSeedItemsByMilestoneAllProjects: Database.Statement | null = null;
 let _stmtListAllSeedItems: Database.Statement | null = null;
 let _stmtListSeedItemsByProject: Database.Statement | null = null;
 let _stmtInsertSeedItem: Database.Statement | null = null;
@@ -4481,18 +5149,6 @@ export function listSeedItemsByMilestone(
   );
   return _stmtListSeedItemsByMilestone.all({
     project,
-    milestone,
-  }) as SeedItemRow[];
-}
-
-/** All seed items for a milestone, regardless of project — the readiness/applyability API's lookup. */
-export function listSeedItemsByMilestoneAllProjects(
-  milestone: string,
-): SeedItemRow[] {
-  _stmtListSeedItemsByMilestoneAllProjects ??= db.prepare<{
-    milestone: string;
-  }>(`SELECT * FROM seed_item WHERE milestone = @milestone`);
-  return _stmtListSeedItemsByMilestoneAllProjects.all({
     milestone,
   }) as SeedItemRow[];
 }
@@ -4879,6 +5535,7 @@ export function listCompletenessDispositions(
 let _stmtGetCompletenessDisposition: Database.Statement | null = null;
 let _stmtUpdateCompletenessDispositionApproval: Database.Statement | null =
   null;
+let _stmtDeleteCompletenessDisposition: Database.Statement | null = null;
 
 /** Point read of one completeness-disposition run by id — the row a staged `completeness.disposition` intent's payload names. */
 function getCompletenessDisposition(
@@ -4893,23 +5550,27 @@ function getCompletenessDisposition(
 }
 
 /**
- * Advances every question in one completeness-disposition run off `proposed`
- * — `approved` once the operator approves the run's staged intent, `rejected`
- * once they reject it. The durable write-through at critic time (`proposed`)
- * happens immediately, before this ever runs, so a session dying mid-pass
- * never loses the findings; this only resolves the lifecycle once the
- * operator has actually disposed of them.
+ * Advances every question in one completeness-disposition run's record off
+ * `proposed` to `approved`, once the operator approves the run's staged
+ * intent. The durable write-through at critic time (`proposed`) happens
+ * immediately, before this ever runs, so a session dying mid-pass never
+ * loses the findings; this only resolves the lifecycle once the operator has
+ * actually approved them. A rejection instead deletes the row outright — see
+ * deleteCompletenessDisposition — so there is no `rejected` terminal state
+ * to advance to here.
  */
 export function updateCompletenessDispositionApproval(
   id: number,
-  approvalStatus: 'approved' | 'rejected',
+  approvalStatus: 'approved',
 ): CompletenessDispositionRow | undefined {
   const row = getCompletenessDisposition(id);
   if (!row) return undefined;
-  const questions = (
-    JSON.parse(row.questions) as CompletenessDispositionQuestion[]
-  ).map((q) => ({ ...q, approvalStatus }));
-  const updatedQuestions = JSON.stringify(questions);
+  const record = JSON.parse(row.questions) as CompletenessDispositionRecord;
+  const updatedRecord: CompletenessDispositionRecord = {
+    probed: record.probed,
+    questions: record.questions.map((q) => ({ ...q, approvalStatus })),
+  };
+  const updatedQuestions = JSON.stringify(updatedRecord);
   _stmtUpdateCompletenessDispositionApproval ??= db.prepare<{
     id: number;
     questions: string;
@@ -4924,20 +5585,37 @@ export function updateCompletenessDispositionApproval(
 }
 
 /**
+ * Removes a completeness-disposition run outright — the reject-time
+ * counterpart to insertCompletenessDisposition's stage-time durable write.
+ * Rejecting the run's staged `completeness.disposition` intent calls this
+ * (routes/stagedIntents.ts) so the store never carries an orphaned row for
+ * a run the operator explicitly declined; a session is still free to re-run
+ * the critic and stage a fresh disposition afterward.
+ */
+export function deleteCompletenessDisposition(id: number): void {
+  _stmtDeleteCompletenessDisposition ??= db.prepare<{ id: number }>(`
+    DELETE FROM completeness_disposition WHERE id = @id
+  `);
+  _stmtDeleteCompletenessDisposition.run({ id });
+}
+
+/**
  * Shared row-shape builder for the completeness-disposition durable write —
  * used identically by the completeness.disposition MCP tool
  * (mcp/tools/completenessTools.ts) and the device-authed HTTP route
  * (routes/design.ts), so the two writers can never diverge on defaulting.
- * Every question defaults to `approvalStatus: 'proposed'` (recorded is not
- * approved), and `runAt` is normalized to a full ISO timestamp — a bare
- * date-only string (or any other Date-parseable value) round-trips to one via
- * `toISOString()`; a value Date cannot parse is passed through unchanged
- * rather than silently coerced to "Invalid Date".
+ * `probed` is stored verbatim (the caller has already validated it is
+ * non-empty). Every question defaults to `approvalStatus: 'proposed'`
+ * (recorded is not approved), and `runAt` is normalized to a full ISO
+ * timestamp — a bare date-only string (or any other Date-parseable value)
+ * round-trips to one via `toISOString()`; the caller is expected to have
+ * already rejected a value Date cannot parse.
  */
 export function buildCompletenessDispositionRow(input: {
   taskId: string;
   project: string | null;
   milestone: string | null;
+  probed: CompletenessProbedGapClass[];
   questions: CompletenessDispositionQuestion[];
   runAt: string;
 }): NewCompletenessDispositionRow {
@@ -4945,16 +5623,18 @@ export function buildCompletenessDispositionRow(input: {
   const runAt = Number.isNaN(parsedRunAt.getTime())
     ? input.runAt
     : parsedRunAt.toISOString();
+  const record: CompletenessDispositionRecord = {
+    probed: input.probed,
+    questions: input.questions.map((q) => ({
+      approvalStatus: 'proposed' as const,
+      ...q,
+    })),
+  };
   return {
     source_task_id: input.taskId,
     project: input.project,
     milestone: input.milestone,
-    questions: JSON.stringify(
-      input.questions.map((q) => ({
-        approvalStatus: 'proposed' as const,
-        ...q,
-      })),
-    ),
+    questions: JSON.stringify(record),
     run_at: runAt,
   };
 }
@@ -5001,7 +5681,11 @@ const STAGED_INTENT_TRANSITIONS: Record<
     'withdrawn',
   ],
   pending_verification: ['staged', 'needs_revision'],
-  needs_revision: ['rejected', 'superseded'],
+  // 'staged' is reachable here only via the operator-initiated wedged-group
+  // recovery route (POST /staged-intents/group/:groupId/recover) — it
+  // re-surfaces an intent onto the normal staged/approved surface so the
+  // usual commit or per-item disposition routes can act on it again.
+  needs_revision: ['staged', 'rejected', 'superseded'],
   approved: [
     'staged',
     'committed',
@@ -5029,21 +5713,29 @@ let _stmtListStagedIntentsByProject: Database.Statement | null = null;
 let _stmtListStagedIntentsByGroup: Database.Statement | null = null;
 let _stmtFindActiveStagedIntentForTask: Database.Statement | null = null;
 let _stmtUpdateStagedIntentState: Database.Statement | null = null;
-let _stmtHasStagedIntentForSession: Database.Statement | null = null;
+let _stmtHasStagedIntentForTask: Database.Statement | null = null;
 let _stmtHasActiveCapabilityRequestForSession: Database.Statement | null = null;
+let _stmtHasPendingDecisionForTask: Database.Statement | null = null;
+let _stmtHasDecisionPickOneForTask: Database.Statement | null = null;
 
 export function insertStagedIntent(row: StagedIntentRow): void {
   _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
     INSERT INTO staged_intent
       (id, kind, payload, payload_hash, task_id, project_id, session_id,
-       group_id, state, supersedes, annotation, decision_proposal, groom_proposal,
+       group_id, milestone, state, supersedes, annotation, decision_proposal, investigation, groom_proposal,
        advisory, disposition_reason, answer, created_at, updated_at)
     VALUES
       (@id, @kind, @payload, @payload_hash, @task_id, @project_id, @session_id,
-       @group_id, @state, @supersedes, @annotation, @decision_proposal, @groom_proposal,
+       @group_id, @milestone, @state, @supersedes, @annotation, @decision_proposal, @investigation, @groom_proposal,
        @advisory, @disposition_reason, @answer, @created_at, @updated_at)
   `);
-  _stmtInsertStagedIntent.run(row);
+  // `row.investigation` defaults to null for callers built before this column
+  // existed (test fixtures, older call sites) — better-sqlite3's named-param
+  // binding otherwise throws on a key absent from the object.
+  _stmtInsertStagedIntent.run({
+    ...row,
+    investigation: row.investigation ?? null,
+  });
 }
 
 export function getStagedIntent(id: string): StagedIntentRow | undefined {
@@ -5054,19 +5746,152 @@ export function getStagedIntent(id: string): StagedIntentRow | undefined {
 }
 
 /**
- * True if this session ever staged at least one intent (any lifecycle state —
- * even a since-rejected one still proves the session produced *something*
- * that passed validation). Used to distinguish a planning session's
- * first-turn-empty (surfaces needs_attention) from a later-turn-empty
- * (natural completion).
+ * True if ANY planning-session attempt for this task has ever staged at
+ * least one intent (any lifecycle state), across the task's full crash/retry
+ * history — not just the current session. Used to distinguish a genuinely
+ * decision-less planning task (backstop: planning_terminal_no_decision) from
+ * one where a decision was staged on an earlier attempt before it crashed.
  */
-export function hasStagedIntentForSession(sessionId: string): boolean {
-  _stmtHasStagedIntentForSession ??= db.prepare<{ session_id: string }>(
-    `SELECT 1 FROM staged_intent WHERE session_id = @session_id LIMIT 1`,
+export function hasStagedIntentForTask(taskId: string): boolean {
+  _stmtHasStagedIntentForTask ??= db.prepare<{ task_id: string }>(
+    `SELECT 1 FROM staged_intent WHERE task_id = @task_id LIMIT 1`,
+  );
+  return _stmtHasStagedIntentForTask.get({ task_id: taskId }) !== undefined;
+}
+
+/**
+ * True if this task has at least one decision.pickOne intent, staged by any
+ * session, in a non-withdrawn/non-superseded state. decision.pickOne carries
+ * no taskId of its own the way grouped kinds do (extractTaskId returns null
+ * for it — see stagedIntents.ts's assertCompletenessApproval doc comment), so
+ * this joins staged_intent to sessions on session_id and scopes by the
+ * session's own bound task_id instead — normalized the same way
+ * getTerminalSessionsForTask normalizes, so a hyphenated/bare id mismatch
+ * never hides a real predecessor decision. Scoped to the *task*, not the
+ * staging session, so a resumed or re-dispatched design session sees
+ * decisions an earlier session on the same task already staged or had
+ * answered.
+ */
+export function hasDecisionPickOneForTask(taskId: string): boolean {
+  _stmtHasDecisionPickOneForTask ??= db.prepare<{ task_id: string }>(
+    `SELECT 1 FROM staged_intent si
+     JOIN sessions s ON s.session_id = si.session_id
+     WHERE si.kind = 'decision.pickOne'
+       AND si.state NOT IN ('withdrawn', 'superseded')
+       AND REPLACE(COALESCE(s.task_id, ''), '-', '') = @task_id
+     LIMIT 1`,
   );
   return (
-    _stmtHasStagedIntentForSession.get({ session_id: sessionId }) !== undefined
+    _stmtHasDecisionPickOneForTask.get({
+      task_id: taskId.replace(/-/g, ''),
+    }) !== undefined
   );
+}
+
+/**
+ * True if this task has a staged_intent outstanding in a state the operator
+ * still owns a disposition for — staged/needs_revision/pending_verification.
+ * Used by StrandedOpsTaskMonitor to distinguish "legitimately waiting on the
+ * operator" (never reported, however old) from "nothing exists that can
+ * move this" (reported once stale).
+ */
+export function hasPendingDecisionForTask(taskId: string): boolean {
+  _stmtHasPendingDecisionForTask ??= db.prepare<{ task_id: string }>(
+    `SELECT 1 FROM staged_intent
+     WHERE task_id = @task_id
+       AND state IN ('staged', 'needs_revision', 'pending_verification')
+     LIMIT 1`,
+  );
+  return _stmtHasPendingDecisionForTask.get({ task_id: taskId }) !== undefined;
+}
+
+let _stmtGetLatestNoOpForTask: Database.Statement | null = null;
+
+/**
+ * The task's most recent planning.noOp staged intent (by creation order),
+ * in whatever state it currently holds. isGroomNoOpSuppressed reads its
+ * state/updated_at to decide whether the deliberate "leave it at Backlog"
+ * decision it recorded still stands.
+ */
+function getLatestNoOpForTask(taskId: string): StagedIntentRow | undefined {
+  _stmtGetLatestNoOpForTask ??= db.prepare<{ task_id: string }>(
+    `SELECT * FROM staged_intent
+     WHERE task_id = @task_id AND kind = 'planning.noOp'
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+  return _stmtGetLatestNoOpForTask.get({ task_id: taskId }) as
+    | StagedIntentRow
+    | undefined;
+}
+
+/**
+ * True while a task's most recent planning.noOp still suppresses
+ * auto-grooming candidacy. Only a no-op that reached `committed` represents
+ * an accepted operator decision — staged, rejected and superseded carry no
+ * acceptance and never suppress. Suppression is derived from the committed
+ * intent itself, not from the staging session's status, so it holds after
+ * that session reaches a terminal state (see isGroomCandidate). It retires
+ * the moment a task_body_updated or task_deps_updated audit event lands for
+ * the task after the no-op's commit timestamp (its `updated_at`) — the
+ * conditions the no-op was reasoned against changing reopens candidacy with
+ * no operator action required.
+ */
+export function isGroomNoOpSuppressed(taskId: string): boolean {
+  const noOp = getLatestNoOpForTask(taskId);
+  if (!noOp || noOp.state !== 'committed') return false;
+  return !hasTaskEditSinceTimestamp(taskId, noOp.updated_at);
+}
+
+/**
+ * A planning flow whose candidacy predicate needs to consult operator kills —
+ * see isPlanningKillSuppressed.
+ */
+export type KillSuppressiblePlanningFlow = 'groom' | 'design' | 'ops';
+
+/**
+ * True while a task's most recent planning session of `flow` was ended by an
+ * explicit operator kill (reason `user_kill`) and no orchestrator-authored
+ * edit (task_body_updated / task_deps_updated) has landed for the task since
+ * that kill — the deliberate-kill analog of isGroomNoOpSuppressed, generalized
+ * across groom/design/ops. A kill is deliberately excluded from the crash
+ * budget (SessionManager's UNCOUNTED_REASONS) so it never triggers a revert or
+ * needs_attention; without this gate that exclusion left the task fully
+ * candidate-eligible again, re-dispatching on the very next scan tick despite
+ * the operator's explicit stop. A session ending for any other reason
+ * (done/error/launch_failed/etc.) never suppresses candidacy. The
+ * session_errored audit event this reads is written unconditionally by
+ * markSessionErrored for every terminal session, including kills.
+ */
+export function isPlanningKillSuppressed(
+  taskId: string,
+  flow: KillSuppressiblePlanningFlow,
+): boolean {
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare<
+      { flow: string },
+      Session
+    >(`SELECT * FROM sessions WHERE session_type = @flow ORDER BY started_at DESC`)
+    .all({ flow }) as Session[];
+  const session = rows.find(
+    (row) => normalizeBoardId(row.task_id ?? '') === norm,
+  );
+  if (!session || session.status !== 'killed') return false;
+
+  const event = db
+    .prepare<{ actor_id: string }, { payload: string }>(
+      `SELECT payload FROM audit_log
+       WHERE event_type = 'session_errored' AND actor_id = @actor_id
+       ORDER BY ts DESC LIMIT 1`,
+    )
+    .get({ actor_id: session.session_id }) as { payload: string } | undefined;
+  if (!event) return false;
+
+  const payload = JSON.parse(event.payload) as { reason?: string };
+  if (payload.reason !== 'user_kill') return false;
+
+  return !hasTaskEditSinceTimestamp(taskId, session.ended_at ?? 0);
 }
 
 /**
@@ -5095,6 +5920,25 @@ export function hasActiveCapabilityRequestForSession(
   );
 }
 
+/**
+ * True when an `idle` session is idling specifically because it is parked
+ * awaiting a capability disposition — a named, expected state distinct from
+ * a generic idle. This is always a legitimate park: the session asked for a
+ * capability and is waiting for an answer only the operator can give, never
+ * a stalled or abandoned session. Consumers that treat generic idle as a
+ * candidate for staleness handling (orphan sweep, nudge, revert-to-Ready,
+ * crash-budget accounting) must check this first and skip if true, rather
+ * than re-deriving "awaiting a capability" from intent state themselves.
+ */
+export function isSessionAwaitingCapabilityDisposition(
+  session: Pick<Session, 'status' | 'session_id'>,
+): boolean {
+  return (
+    session.status === 'idle' &&
+    hasActiveCapabilityRequestForSession(session.session_id)
+  );
+}
+
 /** Active (non-terminal-tombstone) intents for a project — superseded rows are always hidden. */
 export function listStagedIntentsByProject(
   projectId: string,
@@ -5115,6 +5959,95 @@ export function listAllActiveStagedIntents(): StagedIntentRow[] {
       `SELECT * FROM staged_intent WHERE state IN ('staged', 'approved') ORDER BY created_at ASC`,
     )
     .all() as StagedIntentRow[];
+}
+
+/** The milestone key the ?milestone list lens uses to bucket legacy/unattributable rows — never a real milestone's canonical_short_id. */
+export const UNATTRIBUTED_MILESTONE_BUCKET = 'unattributed';
+
+let _stmtListStagedIntentsByMilestone: Database.Statement | null = null;
+let _stmtListStagedIntentsUnattributed: Database.Statement | null = null;
+
+/**
+ * Active (staged/approved) *plus* blocked (needs_revision/pending_verification)
+ * intents for a project scoped to one milestone — the decision-inbox's
+ * ?milestone list lens. Blocked states are included, not just active ones,
+ * so a group with a blocked member still surfaces as a card the operator can
+ * act on (decline the member, or reject the group) instead of silently
+ * vanishing from the inbox the moment a member falls out of staged/approved —
+ * exactly the state that used to leave a wedged group with no operator-usable
+ * surface at all. `UNATTRIBUTED_MILESTONE_BUCKET` resolves to every row with
+ * milestone IS NULL (legacy rows, or a stage-time attribution that couldn't
+ * be resolved) instead of an exact-match filter — these rows are never
+ * dropped from the surface, just bucketed separately.
+ */
+export function listStagedIntentsByMilestone(
+  projectId: string,
+  milestone: string,
+): StagedIntentRow[] {
+  if (milestone === UNATTRIBUTED_MILESTONE_BUCKET) {
+    _stmtListStagedIntentsUnattributed ??= db.prepare<{
+      project_id: string;
+    }>(
+      `SELECT * FROM staged_intent
+       WHERE project_id = @project_id AND milestone IS NULL
+         AND state IN ('staged', 'approved', 'needs_revision', 'pending_verification')
+       ORDER BY created_at ASC`,
+    );
+    return _stmtListStagedIntentsUnattributed.all({
+      project_id: projectId,
+    }) as StagedIntentRow[];
+  }
+  _stmtListStagedIntentsByMilestone ??= db.prepare<{
+    project_id: string;
+    milestone: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE project_id = @project_id AND milestone = @milestone
+       AND state IN ('staged', 'approved', 'needs_revision', 'pending_verification')
+     ORDER BY created_at ASC`,
+  );
+  return _stmtListStagedIntentsByMilestone.all({
+    project_id: projectId,
+    milestone,
+  }) as StagedIntentRow[];
+}
+
+/**
+ * Best-effort, run-once-at-boot backfill for rows staged before the
+ * milestone column existed: for every staged_intent with milestone IS NULL
+ * and a task_id, attempts to resolve the owning milestone via
+ * resolveMilestoneForTaskId and, if found, persists it. Rows that can't be
+ * resolved (no cached board membership, non-milestone task, etc.) are left
+ * NULL — they stay visible in the "unattributed" bucket rather than being
+ * dropped. Never throws; a resolution failure for one row just skips it.
+ */
+export function backfillStagedIntentMilestones(
+  resolve: (projectId: string, taskId: string) => string | null,
+): number {
+  const rows = db
+    .prepare(
+      `SELECT id, project_id, task_id FROM staged_intent WHERE milestone IS NULL AND task_id IS NOT NULL`,
+    )
+    .all() as { id: string; project_id: string; task_id: string }[];
+  if (rows.length === 0) return 0;
+
+  const update = db.prepare<{ id: string; milestone: string }>(
+    `UPDATE staged_intent SET milestone = @milestone WHERE id = @id`,
+  );
+  let updated = 0;
+  for (const row of rows) {
+    let milestone: string | null;
+    try {
+      milestone = resolve(row.project_id, row.task_id);
+    } catch {
+      milestone = null;
+    }
+    if (milestone) {
+      update.run({ id: row.id, milestone });
+      updated += 1;
+    }
+  }
+  return updated;
 }
 
 /** All intents (any state, including tombstones) for a group — used by group-scoped invariant checks. */
@@ -5143,6 +6076,38 @@ export function listStagedIntentsBySession(
   return _stmtListStagedIntentsBySession.all({
     session_id: sessionId,
   }) as StagedIntentRow[];
+}
+
+let _stmtHasActiveStagedIntentForSession: Database.Statement | null = null;
+
+/**
+ * Derived "is this session's proposal set complete" signal — never a
+ * persisted flag. True exactly when the session's turn is not in flight AND
+ * it has at least one currently-active (staged/approved) staged intent.
+ * Turn-in-flight lives only on the live AgentSession instance and is never
+ * persisted (see AgentSession.hasActiveTurn()/_turnInFlight) — callers must
+ * supply it; a session with no live instance in this process (parked across
+ * a restart, or never spawned here) has no turn in flight by construction.
+ * A wake (AgentSession.sendMessage) flips turn-in-flight back to true, so a
+ * previously-complete session's staged intents refuse disposition again
+ * until the resumed turn ends — no extra bookkeeping needed.
+ */
+export function isSessionComplete(
+  sessionId: string,
+  turnInFlight: boolean,
+): boolean {
+  if (turnInFlight) return false;
+  _stmtHasActiveStagedIntentForSession ??= db.prepare<{
+    session_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE session_id = @session_id AND state IN ('staged', 'approved')
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasActiveStagedIntentForSession.get({ session_id: sessionId }) !==
+    undefined
+  );
 }
 
 /** The standing staged/approved intent (if any) for this project+kind+task — the dedup slot. */
@@ -5436,6 +6401,29 @@ export function setStagedIntentGroup(
   return getStagedIntent(id) as StagedIntentRow;
 }
 
+let _stmtClearStagedIntentGroup: Database.Statement | null = null;
+
+/**
+ * Strips group_id back to null — the wedged-group recovery counterpart to
+ * setStagedIntentGroup. Used when recovering a needs_revision intent that
+ * should never have carried a groupId (e.g. session.requestCapability),
+ * so re-surfacing it to `staged` cannot route it back into the same
+ * group-commit apply path that wedged it in the first place.
+ */
+export function clearStagedIntentGroup(id: string): StagedIntentRow {
+  _stmtClearStagedIntentGroup ??= db.prepare<{
+    id: string;
+    updated_at: number;
+  }>(
+    `UPDATE staged_intent SET group_id = NULL, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtClearStagedIntentGroup.run({
+    id,
+    updated_at: Date.now(),
+  });
+  return getStagedIntent(id) as StagedIntentRow;
+}
+
 let _stmtSetStagedIntentAdvisory: Database.Statement | null = null;
 
 /**
@@ -5515,6 +6503,128 @@ export function incrementRouteBackCount(
     route_back_count: nextCount,
     escalated,
     updated_at: updatedAt,
+  };
+}
+
+// ─── trust-precision signals ───────────────────────────────────────────────
+
+/** The auto-dispatch flows the trust-precision rejection/abstain-rate signal covers. */
+export type TrustPrecisionFlow = 'groom' | 'design' | 'ops' | 'gate-verify';
+
+const STAGED_INTENT_FLOWS: ReadonlySet<TrustPrecisionFlow> = new Set([
+  'groom',
+  'design',
+  'ops',
+]);
+
+/** A staged intent an operator sent back for revision or outright declined, vs one they approved through. */
+const STAGED_INTENT_REJECTED_STATES: StagedIntentState[] = [
+  'needs_revision',
+  'rejected',
+];
+/** Terminal-or-dispositioned states — the denominator for the staging-flow rejection rate; excludes still-pending states (staged, pending_verification, superseded, withdrawn). */
+const STAGED_INTENT_DISPOSITIONED_STATES: StagedIntentState[] = [
+  ...STAGED_INTENT_REJECTED_STATES,
+  'approved',
+  'committed',
+];
+
+export interface FlowRejectionRateResult {
+  flow: TrustPrecisionFlow;
+  project: string;
+  milestone: string;
+  /** Dispositioned items this rate was computed over (rejected + approved for staging flows; pass + fail + needs-setup for gate-verify). */
+  total: number;
+  /** Rejected/abstained items within `total`. */
+  rejected: number;
+  /** `rejected / total`, or null when there's no denominator yet. */
+  rate: number | null;
+}
+
+/**
+ * Per-flow rejection/abstain rate — the Milestone panel's trust-precision
+ * read on auto-dispatch output (Technical Architecture § "Auto-dispatch
+ * trust gates"). Flow-family-specific:
+ *  - groom/design/ops: the rate at which a staged intent from that flow's
+ *    sessions was rejected by the operator — pushback (-> needs_revision) or
+ *    decline (-> rejected) — rather than approved (-> approved/committed).
+ *    Scoped to project+milestone via staged_intent.milestone (the canonical
+ *    short id, e.g. "M13" — same key space as gate_item.milestone).
+ *  - gate-verify: auto-disposes on pass, so there is no operator
+ *    "rejection" — the signal instead is the abstain rate, needs-setup
+ *    dispositions read off gate_item_event, scoped to the given
+ *    project+milestone via gate_item.
+ * Informative only — no auto-disarm; the operator reads this and disarms
+ * auto-dispatch manually via the arm toggle if it looks untrustworthy.
+ */
+export function getFlowRejectionRate(
+  project: string,
+  milestone: string,
+  flow: TrustPrecisionFlow,
+): FlowRejectionRateResult {
+  if (!STAGED_INTENT_FLOWS.has(flow)) {
+    const row = db
+      .prepare(
+        `
+        SELECT
+          SUM(CASE WHEN e.disposition = 'needs-setup' THEN 1 ELSE 0 END) AS rejected,
+          COUNT(*) AS total
+        FROM gate_item_event e
+        JOIN gate_item i ON i.id = e.gate_item_id
+        WHERE i.project = ? AND i.milestone = ?
+          AND e.disposition IN ('pass', 'fail', 'needs-setup')
+      `,
+      )
+      .get(project, milestone) as {
+      rejected: number | null;
+      total: number | null;
+    };
+    const total = row.total ?? 0;
+    const rejected = row.rejected ?? 0;
+    return {
+      flow,
+      project,
+      milestone,
+      total,
+      rejected,
+      rate: total > 0 ? rejected / total : null,
+    };
+  }
+
+  const rejectedPlaceholders = STAGED_INTENT_REJECTED_STATES.map(
+    () => '?',
+  ).join(', ');
+  const dispositionedPlaceholders = STAGED_INTENT_DISPOSITIONED_STATES.map(
+    () => '?',
+  ).join(', ');
+  const row = db
+    .prepare(
+      `
+      SELECT
+        SUM(CASE WHEN si.state IN (${rejectedPlaceholders}) THEN 1 ELSE 0 END) AS rejected,
+        COUNT(*) AS total
+      FROM staged_intent si
+      JOIN sessions s ON s.session_id = si.session_id
+      WHERE s.project_id = ? AND s.session_type = ? AND si.milestone = ?
+        AND si.state IN (${dispositionedPlaceholders})
+    `,
+    )
+    .get(
+      ...STAGED_INTENT_REJECTED_STATES,
+      project,
+      flow,
+      milestone,
+      ...STAGED_INTENT_DISPOSITIONED_STATES,
+    ) as { rejected: number | null; total: number | null };
+  const total = row.total ?? 0;
+  const rejected = row.rejected ?? 0;
+  return {
+    flow,
+    project,
+    milestone,
+    total,
+    rejected,
+    rate: total > 0 ? rejected / total : null,
   };
 }
 
@@ -5617,4 +6727,145 @@ export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
   return db
     .prepare(`SELECT * FROM arch_unit ${where} ORDER BY updated_at DESC`)
     .all(params) as ArchUnitRow[];
+}
+
+// ─── flow_arm ──────────────────────────────────────────────────────────────
+
+let _stmtGetFlowArm: Database.Statement | undefined;
+let _stmtUpsertFlowArm: Database.Statement | undefined;
+
+/** flow_arm row for (milestoneId, flow), or null if absent (caller applies DEFAULT_ARM). */
+function getFlowArmRow(milestoneId: string, flow: FlowId): FlowArmRow | null {
+  _stmtGetFlowArm ??= db.prepare<{ milestone_id: string; flow: string }>(
+    `SELECT * FROM flow_arm WHERE milestone_id = @milestone_id AND flow = @flow`,
+  );
+  return (
+    (_stmtGetFlowArm.get({
+      milestone_id: milestoneId,
+      flow,
+    }) as FlowArmRow | undefined) ?? null
+  );
+}
+
+/**
+ * Effective arm state: the flow_arm row's value if present, else DEFAULT_ARM[flow].
+ * `milestoneId` is the milestone's DB id (UUID), NOT its gate_item/seed_item
+ * display name (e.g. "M13") — flow_arm.milestone_id is keyed by id. Resolve
+ * a display name to its row (e.g. via resolveMilestoneRowForProject) before
+ * calling this.
+ */
+export function getArm(milestoneId: string, flow: FlowId): boolean {
+  const row = getFlowArmRow(milestoneId, flow);
+  return row ? row.armed === 1 : DEFAULT_ARM[flow];
+}
+
+/** Effective per-flow arm state for a milestone, with the source of each value. */
+export function listArm(
+  milestoneId: string,
+): Record<FlowId, { armed: boolean; source: 'row' | 'default' }> {
+  const result = {} as Record<
+    FlowId,
+    { armed: boolean; source: 'row' | 'default' }
+  >;
+  for (const flow of FLOW_IDS) {
+    const row = getFlowArmRow(milestoneId, flow);
+    result[flow] = row
+      ? { armed: row.armed === 1, source: 'row' }
+      : { armed: DEFAULT_ARM[flow], source: 'default' };
+  }
+  return result;
+}
+
+/**
+ * Upsert the arm state for (milestoneId, flow). Returns the previous
+ * effective value (row value if present, else DEFAULT_ARM[flow]) so the
+ * caller can audit the transition.
+ */
+export function upsertArm(
+  milestoneId: string,
+  flow: FlowId,
+  armed: boolean,
+  updatedAt: number,
+): { previous: boolean } {
+  const previous = getArm(milestoneId, flow);
+  _stmtUpsertFlowArm ??= db.prepare<{
+    milestone_id: string;
+    flow: string;
+    armed: number;
+    updated_at: number;
+  }>(`
+    INSERT INTO flow_arm (milestone_id, flow, armed, updated_at)
+    VALUES (@milestone_id, @flow, @armed, @updated_at)
+    ON CONFLICT (milestone_id, flow) DO UPDATE SET
+      armed = excluded.armed,
+      updated_at = excluded.updated_at
+  `);
+  _stmtUpsertFlowArm.run({
+    milestone_id: milestoneId,
+    flow,
+    armed: armed ? 1 : 0,
+    updated_at: updatedAt,
+  });
+  return { previous };
+}
+
+// ─── usage_deferral ─────────────────────────────────────────────────────────
+// Global (account-wide) admission-gate state for the plan-usage five_hour /
+// seven_day windows. A row's presence with deferred_until in the future means
+// "do not launch/resume/dispatch a session until then" — persisted so the
+// gate survives a backend restart.
+
+export type UsageDeferralWindow = 'five_hour' | 'seven_day';
+
+let _stmtGetUsageDeferral: Database.Statement | null = null;
+let _stmtUpsertUsageDeferral: Database.Statement | null = null;
+let _stmtDeleteUsageDeferral: Database.Statement | null = null;
+
+/**
+ * Returns the recorded deferred-until timestamp (ms) for `window`, or null
+ * if no deferral is recorded or the recorded instant has already passed —
+ * in the latter case the stale row is deleted so it doesn't linger.
+ */
+export function getUsageDeferral(window: UsageDeferralWindow): number | null {
+  _stmtGetUsageDeferral ??= db.prepare(
+    `SELECT deferred_until FROM usage_deferral WHERE window = ?`,
+  );
+  const row = _stmtGetUsageDeferral.get(window) as
+    | { deferred_until: number }
+    | undefined;
+  if (!row) return null;
+  if (row.deferred_until <= Date.now()) {
+    clearUsageDeferral(window);
+    return null;
+  }
+  return row.deferred_until;
+}
+
+export function setUsageDeferral(
+  window: UsageDeferralWindow,
+  deferredUntil: number,
+): void {
+  _stmtUpsertUsageDeferral ??= db.prepare<{
+    window: string;
+    deferred_until: number;
+    recorded_at: number;
+  }>(`
+    INSERT INTO usage_deferral (window, deferred_until, recorded_at)
+    VALUES (@window, @deferred_until, @recorded_at)
+    ON CONFLICT (window) DO UPDATE SET
+      deferred_until = excluded.deferred_until,
+      recorded_at = excluded.recorded_at
+  `);
+  _stmtUpsertUsageDeferral.run({
+    window,
+    deferred_until: deferredUntil,
+    recorded_at: Date.now(),
+  });
+}
+
+export function clearUsageDeferral(window: UsageDeferralWindow): void {
+  _stmtDeleteUsageDeferral ??= db.prepare(
+    `DELETE FROM usage_deferral WHERE window = ?`,
+  );
+  _stmtDeleteUsageDeferral.run(window);
 }

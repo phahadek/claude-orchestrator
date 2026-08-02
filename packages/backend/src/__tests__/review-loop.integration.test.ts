@@ -10,29 +10,32 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import { EventEmitter } from 'events';
 
 // ── Module mocks (must appear before any imports that transitively use them) ──
 
-vi.mock('../db/queries.js', () => ({
-  getPRByNumber: vi.fn(),
-  getPRBySessionId: vi.fn(),
-  getPRByNotionTaskId: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  setPRReviewResult: vi.fn(),
-  setReviewSessionId: vi.fn(),
-  incrementReviewIteration: vi.fn(),
-  setLastReviewedSha: vi.fn(),
-  setHeadSha: vi.fn(),
-  setPendingPush: vi.fn(),
-  setPauseReason: vi.fn(),
-  updatePRDraftStatus: vi.fn(),
-  getSetting: vi.fn().mockReturnValue(null),
-  getSession: vi.fn().mockReturnValue(undefined),
-  getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
-  insertPendingReviewSync: vi.fn(),
-  deletePendingReviewSync: vi.fn(),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getPRByNumber: vi.fn(),
+    getPRBySessionId: vi.fn(),
+    getPRByNotionTaskId: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    setPRReviewResult: vi.fn(),
+    setReviewSessionId: vi.fn(),
+    incrementReviewIteration: vi.fn(),
+    setLastReviewedSha: vi.fn(),
+    setHeadSha: vi.fn(),
+    setPendingPush: vi.fn(),
+    setPauseReason: vi.fn(),
+    updatePRDraftStatus: vi.fn(),
+    getSetting: vi.fn().mockReturnValue(null),
+    getSession: vi.fn().mockReturnValue(undefined),
+    getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
+    insertPendingReviewSync: vi.fn(),
+    deletePendingReviewSync: vi.fn(),
+  }),
+);
 
 const projectFixture = {
   id: 'proj-1',
@@ -203,6 +206,7 @@ function makeVerdictEventPayload(
 class MockSessionManager extends EventEmitter {
   send = vi.fn();
   sendOrResume = vi.fn();
+  enqueueFeedback = vi.fn().mockResolvedValue(undefined);
   isAlive = vi.fn().mockReturnValue(false);
   endSession = vi.fn();
   start = vi.fn();
@@ -451,7 +455,6 @@ describe('ReviewOrchestrator.executeReview → pending_push → re-review', () =
       sessionManager as unknown as InstanceType<
         typeof import('../session/SessionManager.js').SessionManager
       >,
-      1,
       true,
     );
 
@@ -771,7 +774,6 @@ describe('escalation at review iteration cap', () => {
       sessionManager as unknown as InstanceType<
         typeof import('../session/SessionManager.js').SessionManager
       >,
-      1,
       true,
     );
     void orchestrator; // used implicitly via sessionManager event listeners
@@ -875,7 +877,6 @@ describe('ReviewOrchestrator gate failures route feedback to implementing sessio
       sessionManager as unknown as InstanceType<
         typeof import('../session/SessionManager.js').SessionManager
       >,
-      1,
       true,
     );
   }

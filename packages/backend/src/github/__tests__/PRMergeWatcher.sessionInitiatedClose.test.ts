@@ -147,6 +147,7 @@ function makeSessionManager(): SessionManager {
     endSession: vi.fn(),
     sendOrResume: vi.fn().mockResolvedValue('review-session-id'),
     markSessionErrored: vi.fn(),
+    on: vi.fn(),
   } as unknown as SessionManager;
 }
 

@@ -44,6 +44,7 @@ function makeSessionManager() {
   return Object.assign(sm, {
     enqueueFeedback: vi.fn().mockResolvedValue(undefined),
     endSession: vi.fn(),
+    getLiveSession: vi.fn().mockReturnValue(undefined),
   });
 }
 
@@ -94,6 +95,7 @@ function stageDependsOn(
     project_id: 'proj-groom',
     session_id: sessionId,
     group_id: groupId,
+    milestone: null,
     state: 'approved',
     supersedes: null,
     annotation: null,
@@ -129,6 +131,7 @@ function stageSetStatusReady(
     project_id: 'proj-groom',
     session_id: sessionId,
     group_id: groupId,
+    milestone: null,
     state: 'approved',
     supersedes: null,
     annotation: null,
@@ -220,6 +223,7 @@ describe('group commit drives a groom session terminal on the applied terminal g
       project_id: 'proj-groom',
       session_id: 'groom-session-mid',
       group_id: 'g-other',
+      milestone: null,
       state: 'staged',
       supersedes: null,
       annotation: null,

@@ -14,14 +14,17 @@ vi.mock('../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
-const { mockRuntimeSettings, mockGetMilestone } = vi.hoisted(() => ({
-  mockRuntimeSettings: { corporate_mode_enabled: false },
+const { mockCorporateMode, mockGetMilestone } = vi.hoisted(() => ({
+  mockCorporateMode: { enabled: false },
   mockGetMilestone: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
-  runtimeSettings: mockRuntimeSettings,
   getAllProjects: vi.fn(),
+}));
+
+vi.mock('../config/corporateMode.js', () => ({
+  getCorporateMode: () => mockCorporateMode,
 }));
 
 vi.mock('../projects/ProjectService.js', () => ({
@@ -130,7 +133,7 @@ describe('NotionTaskBackend.fetchNonMilestoneReadyTasks', () => {
 
 describe('non-milestone task branching', () => {
   beforeEach(() => {
-    mockRuntimeSettings.corporate_mode_enabled = false;
+    mockCorporateMode.enabled = false;
     mockGetMilestone.mockReset();
   });
 
@@ -145,7 +148,7 @@ describe('non-milestone task branching', () => {
   });
 
   it('uses flat branching (dev) for non-milestone tasks even with corporate mode on', () => {
-    mockRuntimeSettings.corporate_mode_enabled = true;
+    mockCorporateMode.enabled = true;
     const result = resolveStartingPoint({ milestoneBranching: null }, null);
     expect(result.startingPoint).toBe('dev');
   });

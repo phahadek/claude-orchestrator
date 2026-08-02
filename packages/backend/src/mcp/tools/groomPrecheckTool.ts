@@ -51,10 +51,12 @@ export function registerGroomPrecheckTool(
       const entry = (args.groomingGate ?? {}) as GroomingGateEntry;
       const authoritativeType = getCachedType(args.taskId) ?? entry.type;
 
-      const gateResult = checkGroomingPromotionGate(
+      const gateResult = await checkGroomingPromotionGate(
         entry,
         args.taskId,
         authoritativeType,
+        undefined,
+        ctx.projectId,
       );
 
       const backend = getTaskBackend(ctx.projectId);

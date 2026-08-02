@@ -13,6 +13,7 @@ vi.mock('../db/queries', () => ({
   getEventsBySession: vi.fn(() => []),
   getDenialsBySession: vi.fn(() => []),
   getPRByNotionTaskId: vi.fn(() => undefined),
+  listUndeliveredInboxItems: vi.fn(() => []),
 }));
 
 vi.mock('../utils/eventFilters', () => ({

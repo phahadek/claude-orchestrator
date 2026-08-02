@@ -18,12 +18,27 @@ vi.mock('../db/queries.js', () => ({
   setHeadSha: vi.fn(),
   markLocalBranchMerged: vi.fn(),
   setLocalBranchPauseReason: vi.fn(),
+  getOrphanMergeablePRs: vi.fn().mockReturnValue([]),
+  getStaleAutoMergeFailedPRs: vi.fn().mockReturnValue([]),
+  getConflictNudgeCandidates: vi.fn().mockReturnValue([]),
+  upsertActiveMerge: vi.fn(),
+  deleteActiveMerge: vi.fn(),
+  getAllActiveMerges: vi.fn().mockReturnValue([]),
+  markSessionDone: vi.fn(),
+  getTaskCache: vi.fn().mockReturnValue(null),
+  getPendingRoutedCommentCount: vi.fn().mockReturnValue(0),
+  markReviewerRequested: vi.fn(),
+  updatePRDraftStatus: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
   GITHUB_TOKEN: 'test-token',
   GITHUB_REPO: 'owner/repo',
-  getProjectByGithubRepo: vi.fn().mockReturnValue(null),
+  AUTO_REVIEW_ENABLED: true,
+  getProjectByGithubRepo: vi.fn().mockReturnValue({
+    id: 'proj-1',
+    projectDir: '/fake/project',
+  }),
   getProjectById: vi.fn().mockReturnValue(null),
   runtimeSettings: {
     ci_poll_interval_seconds: 5,
@@ -252,7 +267,7 @@ describe('PRMergeWatcher backoff on rate-limit', () => {
     const broadcast = vi.fn();
     const watcher = new PRMergeWatcher(
       mockGitHub as never,
-      {} as never,
+      { on: vi.fn() } as never,
       undefined,
       broadcast,
     );
@@ -285,7 +300,7 @@ describe('PRMergeWatcher backoff on rate-limit', () => {
     const broadcast = vi.fn();
     const watcher = new PRMergeWatcher(
       mockGitHub as never,
-      {} as never,
+      { on: vi.fn() } as never,
       undefined,
       broadcast,
     );
@@ -320,7 +335,7 @@ describe('PRMergeWatcher backoff on rate-limit', () => {
     const broadcast = vi.fn();
     const watcher = new PRMergeWatcher(
       mockGitHub as never,
-      {} as never,
+      { on: vi.fn() } as never,
       undefined,
       broadcast,
     );
@@ -343,6 +358,13 @@ describe('PRMergeWatcher backoff on rate-limit', () => {
 // ── ReviewerCommentsWatcher backoff ───────────────────────────────────────────
 
 describe('ReviewerCommentsWatcher backoff on rate-limit', () => {
+  beforeEach(() => {
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/test',
+    } as never);
+  });
+
   it('pauses polling for the backoff window on rate-limit 403', async () => {
     const rateLimitErr = new GitHubRateLimitError(
       'API rate limit exceeded',

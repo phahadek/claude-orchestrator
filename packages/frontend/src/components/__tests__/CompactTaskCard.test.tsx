@@ -195,6 +195,42 @@ describe('CompactTaskCard', () => {
     expect(screen.queryByTestId('ops-dep-blocked-reason')).toBeNull();
   });
 
+  it('renders a planning-session indicator when planningSession is present', () => {
+    render(
+      <CompactTaskCard
+        task={makeTask({
+          planningSession: {
+            sessionId: 'plan-1',
+            status: 'idle',
+            sessionType: 'groom',
+            startedAt: 0,
+            endedAt: null,
+            inputTokens: 0,
+            outputTokens: 0,
+          },
+        })}
+        showCheckbox={false}
+        checked={false}
+        onCheckChange={vi.fn()}
+        onClick={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('compact-planning-icon')).toBeDefined();
+  });
+
+  it('does not render a planning-session indicator when planningSession is null', () => {
+    render(
+      <CompactTaskCard
+        task={makeTask({ planningSession: null })}
+        showCheckbox={false}
+        checked={false}
+        onCheckChange={vi.fn()}
+        onClick={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('compact-planning-icon')).toBeNull();
+  });
+
   it('has data-status attribute matching the task displayStatus', () => {
     render(
       <CompactTaskCard

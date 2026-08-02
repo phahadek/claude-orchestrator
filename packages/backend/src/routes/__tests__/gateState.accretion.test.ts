@@ -93,6 +93,7 @@ describe('POST /api/gate/accrete-contribution', () => {
       { id: 't1', title: 'Add retry', project: 'p1', milestone: 'M12' },
       [{ text: 'Click through checkout once' }],
       'Read-Only',
+      undefined,
     );
     expect(res.status).toBe(200);
     expect(res.body).toEqual(result);
@@ -125,6 +126,7 @@ describe('POST /api/gate/accrete-contribution', () => {
       { id: 't2', title: 'Docs fix', project: 'p1', milestone: 'M12' },
       [],
       'none',
+      undefined,
     );
     expect(res.status).toBe(200);
     expect(res.body).toEqual(result);

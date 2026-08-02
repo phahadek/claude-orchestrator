@@ -13,6 +13,7 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { useBootReconciliation } from './hooks/useBootReconciliation';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useNotifications } from './hooks/useNotifications';
+import { useMilestoneAttention } from './hooks/useMilestoneAttention';
 import { useIsMobile } from './hooks/useIsMobile';
 import { useNavigationHistory } from './hooks/useNavigationHistory';
 import { apiRequest, authedFetch } from './api/projects';
@@ -33,6 +34,7 @@ import { RateLimitBanner } from './components/RateLimitBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { GateReadinessPanel } from './components/GateReadinessPanel';
 import { ArchitecturePanel } from './components/ArchitecturePanel';
+import { MilestoneView } from './components/MilestoneView';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
 import { SessionFilterBar } from './components/SessionFilterBar';
@@ -159,7 +161,7 @@ export default function App() {
   // On localhost with zero devices the WS succeeds in bootstrap mode (no 4001),
   // so the device-unauthorized event never fires — this catches that case.
   useEffect(() => {
-    fetch('/api/enrollment/needs-bootstrap')
+    authedFetch('/api/enrollment/needs-bootstrap')
       .then((r) => r.json() as Promise<{ needsBootstrap: boolean }>)
       .then(({ needsBootstrap }) => {
         if (needsBootstrap) setNeedsEnrollment(true);
@@ -198,6 +200,7 @@ export default function App() {
     lastApiOverloadedPaused,
     incompleteReviews,
     lastTaskUpdate,
+    lastStagedIntentChange,
     taskListRefreshTrigger,
     lastAutofixEvent,
     lastReviewStartedEvent,
@@ -536,7 +539,7 @@ export default function App() {
         )
         .then((data) => {
           if (data) {
-            setTaskViews(data.tasks);
+            setTaskViews(Array.isArray(data.tasks) ? data.tasks : []);
             setTaskCacheCold(data.coldCache);
           } else {
             setTaskViews([]);
@@ -626,7 +629,7 @@ export default function App() {
       .then((r) => (r.ok ? (r.json() as Promise<TasksActiveResponse>) : null))
       .then((data) => {
         if (data) {
-          setTaskViews(data.tasks);
+          setTaskViews(Array.isArray(data.tasks) ? data.tasks : []);
           setTaskCacheCold(data.coldCache);
         }
       })
@@ -675,7 +678,7 @@ export default function App() {
         const res = await authedFetch(`/api/tasks/active?${params.toString()}`);
         if (res.ok) {
           const data = (await res.json()) as TasksActiveResponse;
-          setTaskViews(data.tasks);
+          setTaskViews(Array.isArray(data.tasks) ? data.tasks : []);
           setTaskCacheCold(data.coldCache);
         }
       }
@@ -1121,6 +1124,32 @@ export default function App() {
   const activeBoardMilestone =
     activeProject?.boards?.find((b) => b.id === activeBoardId)?.name ?? null;
 
+  const { pendingCount: milestoneAttentionCount, lastTier2Batch } =
+    useMilestoneAttention({
+      projectId: activeProjectId,
+      milestoneId: activeBoardMilestone ? activeBoardId : null,
+      invalidationKey: `${lastTaskUpdate?.taskId ?? ''}:${lastStagedIntentChange?.id ?? ''}`,
+    });
+
+  useEffect(() => {
+    if (!lastTier2Batch) return;
+    for (const event of lastTier2Batch.events) {
+      const notifId = `milestone-attention-${event.key}-${event.receivedAt}`;
+      const icon =
+        event.type === 'aging' ? '⏳' : event.type === 'blocked' ? '🚧' : '📉';
+      setNotifications((prev) => [
+        ...prev,
+        {
+          id: notifId,
+          message: `${icon} ${event.message}`,
+          status: 'review',
+          onClick: () => setTopView('milestone'),
+        },
+      ]);
+      setTimeout(() => dismissNotification(notifId), 10000);
+    }
+  }, [lastTier2Batch, dismissNotification]);
+
   const anyDragging = isDragging;
 
   useNotifications(
@@ -1254,6 +1283,7 @@ export default function App() {
           autoLaunchQueuedCount={autoLaunchQueuedCount}
           autoLaunchPollIntervalMs={autoLaunchPollIntervalMs}
           bootReconciliation={bootReconciliation.state}
+          milestoneAttentionCount={milestoneAttentionCount}
         />
       </ErrorBoundary>
       {updateInfo && (
@@ -1584,6 +1614,24 @@ export default function App() {
             <div className={styles.analyticsView}>
               <ArchitecturePanel />
             </div>
+          </ErrorBoundary>
+        )}
+
+        {topView === 'milestone' && (
+          <ErrorBoundary name="MilestoneView">
+            <MilestoneView
+              activeProjectId={activeProjectId}
+              activeBoardId={activeBoardId}
+              activeBoardMilestone={activeBoardMilestone}
+              tasks={taskViews}
+              lastTaskUpdate={lastTaskUpdate}
+              lastStagedIntentChange={lastStagedIntentChange}
+              sessions={sessions}
+              send={send}
+              setSessionArchived={setSessionArchived}
+              setSessionFavorited={setSessionFavorited}
+              project={activeProject}
+            />
           </ErrorBoundary>
         )}
 

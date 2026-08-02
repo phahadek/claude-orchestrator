@@ -53,14 +53,33 @@ export interface StagedIntent {
   createdAt: number;
   /** The originating session, for panel correlation + pushback routing. Null for human-staged intents. */
   sessionId?: string | null;
+  /**
+   * Whether the originating session has signaled its proposal set for the
+   * current turn is complete. False while the session may still stage more
+   * intents this turn — disposition controls must stay disabled and the
+   * milestone inbox must suppress the card until this flips true. Undefined/
+   * null (human-staged intents, or rows predating this signal) is treated as
+   * complete.
+   */
+  sessionComplete?: boolean | null;
   /** Current lifecycle state. */
   state?: StagedIntentState;
   /** Pointer to the intent this one replaces, if any. */
   supersedes?: string | null;
   /** Correlates intents that form one structural-change unit (e.g. a split). */
   groupId?: string | null;
+  /** The milestone (canonical_short_id) this intent's target task belongs to. Null = unattributed (legacy row or unresolvable task) — the milestone decision-inbox lens's UNATTRIBUTED_MILESTONE_BUCKET. */
+  milestone?: string | null;
   /** The human-facing rationale/summary the decision surface renders beside the payload. */
   decisionProposal?: string | null;
+  /**
+   * The file:line / arch-page-section / API-result evidence
+   * `decisionProposal`'s recommendation rests on — rendered collapsed by
+   * default, distinct from `decisionProposal` which stays immediately
+   * readable. Null for kinds that don't carry one, and for rows predating
+   * this field.
+   */
+  investigation?: string | null;
   /** The /groom skill's structured proposal fields — see `GroomProposalFields`. */
   groomProposal?: GroomProposalFields | null;
   /**
@@ -71,6 +90,7 @@ export interface StagedIntent {
   annotation?:
     | { blocked: true; violations: StagedIntentViolation[] }
     | { blocked: true; reasons: string[] }
+    | { autoRejected: true }
     | null;
   /**
    * Tier-3 semantic readiness advisory — a caution signal (confidence +
@@ -82,6 +102,20 @@ export interface StagedIntent {
   dispositionReason?: string | null;
   /** The operator's answer to a decision.pickOne question-intent. Null until answered. */
   answer?: StagedIntentAnswer | null;
+  /**
+   * The decision-surface case this intent's group belongs to, computed
+   * backend-side from the owning session's session_type (and, for an ops
+   * session, its task's cached Type). Drives GroupCard's action-bar copy
+   * and the provenance badge's human-readable label.
+   */
+  groupKind?: 'groom' | 'investigation' | 'other';
+  /**
+   * `session.requestCapability` only: true when the requested `Bash(...)`
+   * capability confers file mutation — a "run this command" grant that is
+   * also a "write to any reachable file" grant. Advisory only; undefined for
+   * every other kind and for a non-file-mutating capability.
+   */
+  confersFileMutation?: boolean;
 }
 
 /** The two explicit operator-chosen outcomes for a reject disposition. */
@@ -112,6 +146,9 @@ export interface ApplyOptions {
   reason?: string;
 }
 
+/** Mirrors the backend's UNATTRIBUTED_MILESTONE_BUCKET (db/queries.ts) — the ?milestone lens value for legacy/unresolvable rows. */
+export const UNATTRIBUTED_MILESTONE_BUCKET = 'unattributed';
+
 export const stagedIntentsApi = {
   list(projectId?: string): Promise<StagedIntent[]> {
     const query = projectId
@@ -126,6 +163,21 @@ export const stagedIntentsApi = {
   listBySession(sessionId: string): Promise<StagedIntent[]> {
     return apiRequest<{ intents: StagedIntent[] }>(
       `/api/staged-intents?sessionId=${encodeURIComponent(sessionId)}`,
+    ).then((res) => res.intents);
+  },
+
+  /**
+   * The milestone decision-inbox lens: every staged decision attributed to
+   * the milestone (or the UNATTRIBUTED_MILESTONE_BUCKET), ordered by the
+   * backend's unblock-impact convergence-ranking (see decisionRanking.ts) —
+   * the frontend renders this order as-is rather than re-sorting.
+   */
+  listByMilestone(
+    projectId: string,
+    milestone: string,
+  ): Promise<StagedIntent[]> {
+    return apiRequest<{ intents: StagedIntent[] }>(
+      `/api/staged-intents?projectId=${encodeURIComponent(projectId)}&milestone=${encodeURIComponent(milestone)}`,
     ).then((res) => res.intents);
   },
 
@@ -162,6 +214,18 @@ export const stagedIntentsApi = {
   approve(id: string): Promise<StagedIntent> {
     return apiRequest<StagedIntent>(
       `/api/staged-intents/${encodeURIComponent(id)}/approve`,
+      { method: 'POST' },
+    );
+  },
+
+  /**
+   * planning.noOp's sole disposition: commits the marker straight to
+   * `committed` with no applyIntent call (there is nothing to apply) — the
+   * operator's "understood" for an informational no-op notice.
+   */
+  acknowledge(id: string): Promise<StagedIntent> {
+    return apiRequest<StagedIntent>(
+      `/api/staged-intents/${encodeURIComponent(id)}/acknowledge`,
       { method: 'POST' },
     );
   },
@@ -209,6 +273,23 @@ export const stagedIntentsApi = {
   },
 
   /**
+   * Diagnostic full-group read: every intent ever staged for the group,
+   * regardless of state — including already-committed siblings and any
+   * blocked (needs_revision/pending_verification) member — so a
+   * partially-applied group can be rendered as such instead of reading as
+   * an orphaned status-only intent.
+   */
+  listGroup(
+    groupId: string,
+  ): Promise<{ groupId: string; intents: StagedIntent[]; wedged: boolean }> {
+    return apiRequest<{
+      groupId: string;
+      intents: StagedIntent[];
+      wedged: boolean;
+    }>(`/api/staged-intents/group/${encodeURIComponent(groupId)}`);
+  },
+
+  /**
    * The group-level twin of `approveGroup`: pushback | decline the whole
    * grooming decision as one unit — every live intent in the group is
    * rejected with the same outcome + reason, none of them committed.
@@ -224,6 +305,23 @@ export const stagedIntentsApi = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(disposition),
       },
+    );
+  },
+
+  /**
+   * Wedged-group recovery: re-surfaces every needs_revision/pending_verification
+   * member of the group onto the normal staged/approved surface so the usual
+   * commit or per-item disposition routes can act on it again. Does not
+   * approve or commit anything — the caller must re-render from the
+   * returned `recovered` intents rather than assume optimistic state, since
+   * a capability-request member loses its `groupId` on recovery.
+   */
+  recoverGroup(
+    groupId: string,
+  ): Promise<{ ok: boolean; recovered: StagedIntent[] }> {
+    return apiRequest<{ ok: boolean; recovered: StagedIntent[] }>(
+      `/api/staged-intents/group/${encodeURIComponent(groupId)}/recover`,
+      { method: 'POST' },
     );
   },
 

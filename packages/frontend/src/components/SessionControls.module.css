@@ -47,6 +47,16 @@
   flex-shrink: 0;
 }
 
+.feedbackPendingBadge {
+  font-size: 0.75rem;
+  color: var(--accent);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .elapsed {
   font-size: 0.8rem;
   color: var(--text-faint);
@@ -232,6 +242,42 @@
   gap: 4px;
 }
 
+.capabilityRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.capabilityChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--ctp-text, #cdd6f4);
+  border-radius: var(--radius-sm, 4px);
+  padding: 1px 6px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capabilityChip--auto {
+  background: rgba(166, 227, 161, 0.35);
+}
+
+.capabilityChip--operator {
+  background: rgba(137, 180, 250, 0.35);
+}
+
+.capabilityProvenance {
+  font-size: 9px;
+  text-transform: uppercase;
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+
 .tagPill {
   display: inline-flex;
   align-items: center;
@@ -272,6 +318,21 @@
 
 .tagInput:focus {
   border-bottom-color: #89b4fa;
+}
+
+.capabilityRemove {
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+  opacity: 0.7;
+}
+
+.capabilityRemove:hover {
+  opacity: 1;
 }
 
 /* ── Compact disclosure toggle shared styles ─────────────────────── */

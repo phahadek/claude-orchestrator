@@ -13,8 +13,35 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 27 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(27);
+  it('contains exactly 36 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(36);
+  });
+
+  it('includes usage_limit_deferred as a recoverable, automatically-retried reason', () => {
+    expect(PAUSE_REASON_REGISTRY.usage_limit_deferred).toEqual({
+      source: 'session',
+      severity: 'recoverable',
+      retry_strategy: 'automatic',
+    });
+  });
+
+  it('includes api_overloaded_exhausted as a needs_attention reason distinct from api_overloaded', () => {
+    expect(PAUSE_REASON_REGISTRY.api_overloaded_exhausted).toEqual({
+      source: 'session',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+    expect(PAUSE_REASON_REGISTRY.api_overloaded_exhausted).not.toEqual(
+      PAUSE_REASON_REGISTRY.api_overloaded,
+    );
+  });
+
+  it('includes planning_terminal_no_decision with a valid severity and retry strategy', () => {
+    expect(PAUSE_REASON_REGISTRY.planning_terminal_no_decision).toEqual({
+      source: 'session',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
   });
 
   it('covers all 20 legacy PauseReason values', () => {
@@ -218,6 +245,7 @@ describe('deriveRecoveryDescriptor', () => {
 
   it.each([
     ['autofix_git_infra_failure', 'rerun', 'Rerun'],
+    ['autofix_tool_infra_failure', 'rerun', 'Rerun'],
     ['ci_billing_blocked', 'rerun', 'Rerun'],
     ['stalled_reconcile_cap', 'rerun', 'Rerun'],
     ['auto_merge_failed', 'rerun', 'Rerun'],

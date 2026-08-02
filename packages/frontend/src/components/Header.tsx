@@ -20,6 +20,7 @@ export type TopView =
   | 'analytics'
   | 'gate'
   | 'architecture'
+  | 'milestone'
   | 'settings';
 
 interface AutoLaunchTogglePatch {
@@ -40,6 +41,7 @@ interface Props {
   planUsage?: PlanUsage | null;
   tasks?: TaskView[];
   incompleteReviewCount?: number;
+  milestoneAttentionCount?: number;
   onAutoLaunchToggle?: (patch: AutoLaunchTogglePatch) => void;
   autoLaunchRunningCount?: number;
   autoLaunchCap?: number;
@@ -78,6 +80,7 @@ export function Header({
   planUsage,
   tasks,
   incompleteReviewCount,
+  milestoneAttentionCount,
   onAutoLaunchToggle,
   autoLaunchRunningCount,
   autoLaunchCap,
@@ -181,6 +184,23 @@ export function Header({
         aria-label="Architecture"
       >
         🏛️
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'milestone' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('milestone')}
+        title="Milestone"
+        aria-label="Milestone"
+      >
+        🎯
+        {milestoneAttentionCount != null && milestoneAttentionCount > 0 && (
+          <span
+            className={styles.incompleteBadge}
+            title="Milestone needs attention"
+          >
+            {milestoneAttentionCount}
+          </span>
+        )}
       </button>
       <button
         type="button"

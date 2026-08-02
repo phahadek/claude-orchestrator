@@ -9,11 +9,24 @@
  * - Settings → Projects UI shows gitMode field (frontend test is in Settings/__tests__).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import express from 'express';
 import supertest from 'supertest';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
+
+// POST /api/projects rejects a projectDir that does not exist on disk
+// (routes/projects.ts), so the fixture path must be a real directory. A
+// hard-coded testProjectDir passed only on hosts where that path happened to
+// exist and 400'd everywhere else — including a fresh CI runner.
+const testProjectDir = fs.mkdtempSync(
+  path.join(os.tmpdir(), 'local-only-project-'),
+);
+afterAll(() => {
+  fs.rmSync(testProjectDir, { recursive: true, force: true });
+});
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -30,40 +43,42 @@ const mockProject = {
   autoMergeEnabled: false,
 };
 
-vi.mock('../db/queries.js', () => ({
-  getSession: vi.fn(),
-  getActiveSessions: vi.fn().mockReturnValue([]),
-  getArchivedSessions: vi.fn().mockReturnValue([]),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getSessionsByProject: vi.fn().mockReturnValue([]),
-  deleteSession: vi.fn(),
-  archiveSession: vi.fn(),
-  unarchiveSession: vi.fn(),
-  archiveFinishedSessions: vi.fn().mockReturnValue(0),
-  setSessionNote: vi.fn(),
-  setSessionTags: vi.fn(),
-  favoriteSession: vi.fn(),
-  unfavoriteSession: vi.fn(),
-  deleteDenialsBySession: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  insertProject: vi.fn((p: Record<string, unknown>) => ({
-    ...p,
-    created_at: 1000,
-    updated_at: 1000,
-    git_mode: p.git_mode ?? 'github',
-  })),
-  getProjectRowById: vi.fn(),
-  listProjectRows: vi.fn().mockReturnValue([]),
-  updateProject: vi.fn(),
-  deleteProject: vi.fn().mockReturnValue(true),
-  countProjects: vi.fn().mockReturnValue(0),
-  insertMilestone: vi.fn(),
-  getMilestoneById: vi.fn(),
-  listMilestonesByProject: vi.fn().mockReturnValue([]),
-  updateMilestone: vi.fn(),
-  deleteMilestone: vi.fn(),
-  getMergeReadyPRs: vi.fn().mockReturnValue([]),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getSession: vi.fn(),
+    getActiveSessions: vi.fn().mockReturnValue([]),
+    getArchivedSessions: vi.fn().mockReturnValue([]),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getSessionsByProject: vi.fn().mockReturnValue([]),
+    deleteSession: vi.fn(),
+    archiveSession: vi.fn(),
+    unarchiveSession: vi.fn(),
+    archiveFinishedSessions: vi.fn().mockReturnValue(0),
+    setSessionNote: vi.fn(),
+    setSessionTags: vi.fn(),
+    favoriteSession: vi.fn(),
+    unfavoriteSession: vi.fn(),
+    deleteDenialsBySession: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    insertProject: vi.fn((p: Record<string, unknown>) => ({
+      ...p,
+      created_at: 1000,
+      updated_at: 1000,
+      git_mode: p.git_mode ?? 'github',
+    })),
+    getProjectRowById: vi.fn(),
+    listProjectRows: vi.fn().mockReturnValue([]),
+    updateProject: vi.fn(),
+    deleteProject: vi.fn().mockReturnValue(true),
+    countProjects: vi.fn().mockReturnValue(0),
+    insertMilestone: vi.fn(),
+    getMilestoneById: vi.fn(),
+    listMilestonesByProject: vi.fn().mockReturnValue([]),
+    updateMilestone: vi.fn(),
+    deleteMilestone: vi.fn(),
+    getMergeReadyPRs: vi.fn().mockReturnValue([]),
+  }),
+);
 
 vi.mock('../config.js', () => ({
   getProjectById: vi.fn((id: string) =>
@@ -143,7 +158,7 @@ describe('Project config schema — gitMode field', () => {
     vi.mocked(ProjectService.create).mockReturnValue({
       id: 'new-proj',
       name: 'Test',
-      projectDir: '/tmp/test',
+      projectDir: testProjectDir,
       contextUrl: null,
       githubRepo: null,
       taskSource: 'notion',
@@ -157,7 +172,7 @@ describe('Project config schema — gitMode field', () => {
     });
     const res = await supertest(buildProjectApp())
       .post('/api/projects')
-      .send({ name: 'Test', projectDir: '/tmp/test', gitMode: 'github' });
+      .send({ name: 'Test', projectDir: testProjectDir, gitMode: 'github' });
     expect(res.status).toBe(201);
     expect(res.body.gitMode).toBe('github');
   });
@@ -167,7 +182,7 @@ describe('Project config schema — gitMode field', () => {
     vi.mocked(ProjectService.create).mockReturnValue({
       id: 'new-proj',
       name: 'Test',
-      projectDir: '/tmp/test',
+      projectDir: testProjectDir,
       contextUrl: null,
       githubRepo: null,
       taskSource: 'notion',
@@ -179,17 +194,21 @@ describe('Project config schema — gitMode field', () => {
       updatedAt: 1000,
       milestones: [],
     });
-    const res = await supertest(buildProjectApp())
-      .post('/api/projects')
-      .send({ name: 'Test', projectDir: '/tmp/test', gitMode: 'local-only' });
+    const res = await supertest(buildProjectApp()).post('/api/projects').send({
+      name: 'Test',
+      projectDir: testProjectDir,
+      gitMode: 'local-only',
+    });
     expect(res.status).toBe(201);
     expect(res.body.gitMode).toBe('local-only');
   });
 
   it('rejects invalid gitMode value', async () => {
-    const res = await supertest(buildProjectApp())
-      .post('/api/projects')
-      .send({ name: 'Test', projectDir: '/tmp/test', gitMode: 'remote-only' });
+    const res = await supertest(buildProjectApp()).post('/api/projects').send({
+      name: 'Test',
+      projectDir: testProjectDir,
+      gitMode: 'remote-only',
+    });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/gitMode/);
   });
@@ -199,7 +218,7 @@ describe('Project config schema — gitMode field', () => {
     vi.mocked(ProjectService.create).mockReturnValue({
       id: 'new-proj',
       name: 'Test',
-      projectDir: '/tmp/test',
+      projectDir: testProjectDir,
       contextUrl: null,
       githubRepo: null,
       taskSource: 'notion',
@@ -213,7 +232,7 @@ describe('Project config schema — gitMode field', () => {
     });
     const res = await supertest(buildProjectApp())
       .post('/api/projects')
-      .send({ name: 'Test', projectDir: '/tmp/test' });
+      .send({ name: 'Test', projectDir: testProjectDir });
     expect(res.status).toBe(201);
     expect(ProjectService.create).toHaveBeenCalledWith(
       expect.objectContaining({ gitMode: 'github' }),
@@ -237,7 +256,7 @@ describe('gitMode and taskSource independence', () => {
       vi.mocked(ProjectService.create).mockReturnValue({
         id: 'new-proj',
         name: 'Test',
-        projectDir: '/tmp/test',
+        projectDir: testProjectDir,
         contextUrl: null,
         githubRepo: null,
         taskSource: taskSource as 'notion' | 'yaml',
@@ -251,7 +270,12 @@ describe('gitMode and taskSource independence', () => {
       });
       const res = await supertest(buildProjectApp())
         .post('/api/projects')
-        .send({ name: 'Test', projectDir: '/tmp/test', gitMode, taskSource });
+        .send({
+          name: 'Test',
+          projectDir: testProjectDir,
+          gitMode,
+          taskSource,
+        });
       expect(res.status).toBe(201);
       expect(res.body.gitMode).toBe(gitMode);
       expect(res.body.taskSource).toBe(taskSource);
@@ -266,7 +290,7 @@ describe('PATCH /api/projects/:id — gitMode', () => {
     vi.mocked(ProjectService.update).mockReturnValue({
       id: 'proj-1',
       name: 'Test',
-      projectDir: '/tmp/test',
+      projectDir: testProjectDir,
       contextUrl: null,
       githubRepo: null,
       taskSource: 'notion',
@@ -330,7 +354,9 @@ describe('POST /api/sessions/:id/mark-merged', () => {
     );
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(mockUpdateStatus).toHaveBeenCalledWith('task-abc', '✅ Done');
+    expect(mockUpdateStatus).toHaveBeenCalledWith('task-abc', '✅ Done', {
+      source: 'human',
+    });
   });
 
   it('rejects mark-merged for github project', async () => {

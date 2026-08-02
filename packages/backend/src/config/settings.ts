@@ -14,6 +14,8 @@ const SettingsSchema = z.object({
   // Numeric settings (z.coerce accepts both numbers and parseable strings)
   max_concurrent_code_sessions: z.coerce.number().int().min(1),
   max_concurrent_planning_sessions: z.coerce.number().int().min(1),
+  max_concurrent_verify_sessions: z.coerce.number().int().min(1),
+  human_reserve: z.coerce.number().int().min(0),
   auto_review_concurrency: z.coerce.number().int().min(1),
   card_preview_lines: z.coerce.number().int().min(1),
   auto_launch_concurrency: z.coerce.number().int().min(1),
@@ -22,6 +24,7 @@ const SettingsSchema = z.object({
   per_session_reserve_mb: z.coerce.number().int().min(0),
   session_notify_threshold_seconds: z.coerce.number().int().min(0),
   session_pause_threshold_seconds: z.coerce.number().int().min(0),
+  session_inert_threshold_seconds: z.coerce.number().int().min(0),
   session_hard_stop_window_seconds: z.coerce.number().int().min(0),
   ci_poll_interval_seconds: z.coerce.number().int().min(1),
   ci_poll_max_minutes: z.coerce.number().int().min(1),
@@ -34,6 +37,11 @@ const SettingsSchema = z.object({
   flake_recovery_max_retries: z.coerce.number().int().min(0),
   session_cgroup_prod_reserve_mb: z.coerce.number().int().min(0),
   session_cgroup_memory_high_fraction: z.coerce.number().min(0).max(1),
+  milestone_attention_aging_threshold_seconds: z.coerce.number().int().min(0),
+  milestone_attention_flat_convergence_window_seconds: z.coerce
+    .number()
+    .int()
+    .min(0),
 
   // Boolean settings (stored as 'true'/'false' strings; also accepts native booleans)
   auto_review: zodBoolCoerce,
@@ -46,6 +54,7 @@ const SettingsSchema = z.object({
   large_task_model: z.string(),
   planning_session_model: z.string(),
   ops_session_model: z.string(),
+  gate_verify_session_model: z.string(),
   tier3_classifier_model: z.string(),
 
   // Enum settings — only accepted values are valid
@@ -64,11 +73,20 @@ const SettingsSchema = z.object({
     'max',
   ]),
   ops_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
+  gate_verify_session_effort: z.enum([
+    '',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+  ]),
 
   // JSON-serialised string arrays
   ai_reviewer_usernames: z.array(z.string()),
   bot_comment_deny_list: z.array(z.string()),
   bot_comment_allow_list: z.array(z.string()),
+  capability_auto_approve_allowlist: z.array(z.string()),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -77,6 +95,8 @@ export type SettingKey = keyof Settings;
 export const SETTING_DEFAULTS: Settings = {
   max_concurrent_code_sessions: 20,
   max_concurrent_planning_sessions: 5,
+  max_concurrent_verify_sessions: 5,
+  human_reserve: 1,
   auto_review_concurrency: 20,
   card_preview_lines: 3,
   auto_launch_concurrency: 1,
@@ -85,6 +105,7 @@ export const SETTING_DEFAULTS: Settings = {
   per_session_reserve_mb: 3072,
   session_notify_threshold_seconds: 3600,
   session_pause_threshold_seconds: 7200,
+  session_inert_threshold_seconds: 600,
   session_hard_stop_window_seconds: 60,
   ci_poll_interval_seconds: 30,
   ci_poll_max_minutes: 30,
@@ -97,6 +118,8 @@ export const SETTING_DEFAULTS: Settings = {
   flake_recovery_max_retries: 2,
   session_cgroup_prod_reserve_mb: 4096,
   session_cgroup_memory_high_fraction: 0.9,
+  milestone_attention_aging_threshold_seconds: 24 * 60 * 60,
+  milestone_attention_flat_convergence_window_seconds: 48 * 60 * 60,
   auto_review: true,
   auto_archive_enabled: true,
   session_cgroup_deny_swap: true,
@@ -105,6 +128,7 @@ export const SETTING_DEFAULTS: Settings = {
   large_task_model: '',
   planning_session_model: '',
   ops_session_model: '',
+  gate_verify_session_model: '',
   tier3_classifier_model: 'claude-haiku-4-5-20251001',
   session_mode: 'cli',
   release_channel: 'stable',
@@ -114,9 +138,11 @@ export const SETTING_DEFAULTS: Settings = {
   large_task_effort: '',
   planning_session_effort: '',
   ops_session_effort: '',
+  gate_verify_session_effort: '',
   ai_reviewer_usernames: [],
   bot_comment_deny_list: [],
   bot_comment_allow_list: [],
+  capability_auto_approve_allowlist: [],
 };
 
 function deserializeField<K extends SettingKey>(

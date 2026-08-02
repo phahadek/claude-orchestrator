@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   BackendTaskWriteCommands,
+  NotionWriteCommands,
   getCachedType,
   type TaskStatus,
   type TaskType,
@@ -12,6 +13,7 @@ import {
   type MoveTaskTargetMilestone,
   type CreateTaskCommandFields,
 } from '../tasks/TaskWriteCommands';
+import { NotionClient } from '../notion/NotionClient';
 import type {
   TaskPropertiesPatch,
   PatchBodySectionOperation,
@@ -21,6 +23,8 @@ import {
   checkReadiness,
   composeProposedBody,
   ReadinessGateError,
+  parseManualVerificationItems,
+  checkAccretionContentMatch,
   type ReadinessViolation,
 } from '../tasks/readinessGate';
 import {
@@ -36,6 +40,8 @@ import type {
   StagedIntentAnswer,
   GroomProposalFields,
   CompletenessDispositionQuestion,
+  CompletenessProbedGapClass,
+  ReviewDisputePayload,
 } from '../db/types';
 import {
   hashIntentPayload,
@@ -43,6 +49,8 @@ import {
   getStagedIntent as getStagedIntentRow,
   listStagedIntentsByProject,
   listAllActiveStagedIntents,
+  listStagedIntentsByMilestone,
+  UNATTRIBUTED_MILESTONE_BUCKET,
   listStagedIntentsByGroup,
   listStagedIntentsBySession,
   findActiveStagedIntentForTask,
@@ -52,9 +60,17 @@ import {
   supersedeStagedIntent,
   setStagedIntentAnnotation,
   setStagedIntentGroup,
+  clearStagedIntentGroup,
   getTaskCache,
   getSession,
+  hasActiveCapabilityRequestForSession,
+  hasDecisionPickOneForTask,
   updateCompletenessDispositionApproval,
+  deleteCompletenessDisposition,
+  isSessionComplete,
+  TERMINAL_SESSION_STATUSES,
+  getPRByNumber,
+  setPRReviewResult,
 } from '../db/queries';
 import { parseTaskId, normalizeTaskId } from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
@@ -73,6 +89,7 @@ import {
   isValidOpsTransition,
   ALLOWED_TRANSITIONS,
   type OpsState,
+  type OpsJournalEntry,
 } from '../ops/opsJournal';
 import { classifyReadyProposal } from '../tasks/deferralClassifier';
 import type { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
@@ -84,9 +101,40 @@ import {
   type NewArchUnitCommandFields,
 } from '../architecture/ArchWriteCommands';
 import type { ArchUnitUpdateFields } from '../architecture/ArchUnitStore';
-import type { ArchUnitKind, ArchUnitStatus } from '../db/types';
+import type {
+  ArchUnitKind,
+  ArchUnitStatus,
+  GateItemClassification,
+} from '../db/types';
+import { getGateItem } from '../gate/gateService';
+import {
+  routeVerificationResult,
+  defaultFollowupFiler,
+  type GateVerificationResult,
+} from '../gate/gateReconciler';
 import type { ServerMessage } from '../ws/types';
 import { logger } from '../logger';
+import { getMilestoneConvergence } from '../convergence/convergenceService';
+import {
+  UnknownMilestoneError,
+  resolveMilestoneForProject,
+} from '../projects/milestoneResolver';
+import { rankDecisions } from '../convergence/decisionRanking';
+import { resolveSessionCompleteForDisplay } from '../convergence/attentionSignals';
+import {
+  isToolShapedCapability,
+  parseSessionRecordReadCapability,
+  parseAuditLogReadCapability,
+  parseSessionEventsReadCapability,
+  isSanctionedAutoApproveCapability,
+  isGrantable,
+  bashCapabilityConfersFileMutation,
+} from '../session/orchestrator-config';
+import { runtimeSettings } from '../config';
+import type {
+  PRReviewService,
+  PRReviewResult,
+} from '../github/PRReviewService';
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
 // Mirrors tasks.ts's task_updated wiring: REST stays the fetch/apply source of
@@ -110,6 +158,266 @@ function broadcastIntentById(id: string): void {
 }
 
 /**
+ * The Ready-path member set: the staged-intent kinds that only ever belong to
+ * a single Ready-flip grooming decision — gate.accrete, seed.stage,
+ * task.setDependsOn, and task.setStatus when its target status is Ready —
+ * and so must always carry the same groupId as the rest of that decision.
+ * Single-sourced here so both the stage-time invariant (assertReadyPathGrouped
+ * below) and the existing per-task completeness guards
+ * (DependsOnCompletenessError, ManualVerificationStripCompletenessError) read
+ * the same set, rather than a future Ready-path kind being taught the rule in
+ * prose and slipping past enforcement — see isReadyPathKind, which resolves
+ * task.setStatus's conditional (target-status-Ready-only) membership.
+ */
+export const READY_PATH_KINDS: readonly string[] = [
+  'gate.accrete',
+  'seed.stage',
+  'task.setDependsOn',
+  'task.setStatus',
+];
+
+/**
+ * True when this staged-intent (kind, payload) pair is a live Ready-path
+ * member. task.setStatus is conditional on its target status — a Deferred (or
+ * any non-Ready) flip is a single standalone intent and never gated; every
+ * other kind in READY_PATH_KINDS is unconditionally a member.
+ */
+function isReadyPathKind(kind: string, payload: unknown): boolean {
+  if (kind === 'task.setStatus') {
+    return (payload as Partial<SetStatusPayload> | null)?.status === 'Ready';
+  }
+  return READY_PATH_KINDS.includes(kind);
+}
+
+/**
+ * The stage-time twin of DependsOnCompletenessError /
+ * ManualVerificationStripCompletenessError: those two run at commit time and
+ * check completeness *within* a group, so an intent staged with no group at
+ * all — group_id NULL — never reaches either check and silently lands outside
+ * the decision group it belongs to. This closes that gap by rejecting a
+ * Ready-path member the moment it is staged without a groupId, naming the
+ * member set so the staging session can self-correct in-turn.
+ */
+class ReadyPathMissingGroupError extends Error {
+  constructor(kind: string) {
+    super(
+      `[stagedIntents] "${kind}" is a Ready-path member (${READY_PATH_KINDS.join(', ')}) staged with no ` +
+        'groupId. Every Ready-path intent — gate.accrete, seed.stage, task.setDependsOn, and ' +
+        'task.setStatus targeting Ready — must share the same groupId as one grooming decision. ' +
+        'Stage it again with a groupId.',
+    );
+    this.name = 'ReadyPathMissingGroupError';
+  }
+}
+
+/**
+ * Stage-time enforcement of the Ready-path grouping invariant (see
+ * ReadyPathMissingGroupError above): rejects a live Ready-path member staged
+ * with no groupId at all, before the row ever reaches `staged`. Kinds outside
+ * the Ready-path member set — decision.pickOne (which cannot belong to a
+ * group at all), planning.noOp (a standalone marker), and a Deferred-target
+ * task.setStatus — are untouched.
+ */
+function assertReadyPathGrouped(
+  kind: string,
+  payload: unknown,
+  groupId: string | null | undefined,
+): void {
+  if (groupId) return;
+  if (isReadyPathKind(kind, payload)) {
+    throw new ReadyPathMissingGroupError(kind);
+  }
+}
+
+/**
+ * The ops-terminal member set: the staged-intent kinds an ops/investigation
+ * session's closing decision is made of — the journal.setState transition
+ * that closes the investigation, the task-body write recording the finding
+ * (task.updateBody / task.patchBodySection), and the follow-on task.create(s)
+ * the investigation produces. Single-sourced here, right beside
+ * READY_PATH_KINDS, so both member sets live in the same place and cannot
+ * independently drift — see isOpsTerminalKind, which (mirroring
+ * isReadyPathKind's task.setStatus handling) resolves journal.setState's
+ * conditional (target-state-`resolved`-only) membership.
+ */
+export const OPS_TERMINAL_KINDS: readonly string[] = [
+  'journal.setState',
+  'task.updateBody',
+  'task.patchBodySection',
+  'task.create',
+];
+
+/**
+ * True when this staged-intent (kind, payload) pair is a live ops-terminal
+ * member. journal.setState is conditional on its target state: an
+ * incidental mid-run journal.setState (recording a gap without closing the
+ * investigation — see "incidental-tooling-gap-not-a-blocker" in
+ * procedureCore.ts) never targets `resolved`, ops_journal's one terminal
+ * state (ALLOWED_TRANSITIONS, opsJournal.ts), so only a transition to
+ * `resolved` is a member — the same shape as task.setStatus's
+ * target-status-Ready-only membership in the Ready path. task.updateBody /
+ * task.patchBodySection / task.create are only ops-terminal when staged by an
+ * ops session (`session_type === 'ops'`) — every other session type stages
+ * those same kinds for unrelated reasons (design's closing synthesis, a
+ * split's narrowed original, groom's Manual-verification strip), which this
+ * must not reach.
+ */
+function isOpsTerminalKind(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+): boolean {
+  if (kind === 'journal.setState') {
+    return (
+      (payload as Partial<JournalSetStatePayload> | null)?.state === 'resolved'
+    );
+  }
+  if (!OPS_TERMINAL_KINDS.includes(kind) || !sessionId) return false;
+  const session = getSession(sessionId);
+  return session?.session_type === 'ops';
+}
+
+/**
+ * The ops-terminal twin of ReadyPathMissingGroupError: rejects an
+ * ops-terminal member the moment it is staged without a groupId, naming the
+ * member set so the staging session can self-correct in-turn.
+ */
+class OpsTerminalMissingGroupError extends Error {
+  constructor(kind: string) {
+    super(
+      `[stagedIntents] "${kind}" is an ops-terminal member (${OPS_TERMINAL_KINDS.join(', ')}) staged with no ` +
+        "groupId. An ops/investigation session's closing set — the journal.setState transition to " +
+        '"resolved", any task-body write recording the finding (task.updateBody / task.patchBodySection), ' +
+        'and any follow-on task.create the investigation produces — must share the same groupId as one ' +
+        'closing decision. Stage it again with a groupId.',
+    );
+    this.name = 'OpsTerminalMissingGroupError';
+  }
+}
+
+/**
+ * Stage-time enforcement of the ops-terminal grouping invariant, mirroring
+ * assertReadyPathGrouped: rejects a live ops-terminal member staged with no
+ * groupId at all, before the row ever reaches `staged`. An incidental
+ * mid-run journal.setState, and any planning.noOp / decision.pickOne, are
+ * untouched.
+ */
+function assertOpsTerminalGrouped(
+  kind: string,
+  payload: unknown,
+  groupId: string | null | undefined,
+  sessionId: string | null | undefined,
+): void {
+  if (groupId) return;
+  if (isOpsTerminalKind(kind, payload, sessionId)) {
+    throw new OpsTerminalMissingGroupError(kind);
+  }
+}
+
+/**
+ * True when this group carries at least one live ops-terminal member (any of
+ * OPS_TERMINAL_KINDS, subject to isOpsTerminalKind's conditional membership)
+ * — i.e. this is a closing group for an ops/investigation session, whether or
+ * not it also carries the journal.setState -> "resolved" transition that
+ * closes it. Checked against the durable store (GROUP_COMPLETENESS_ACTIVE),
+ * the same shape as hasGroupDependsOn.
+ */
+function groupHasOpsTerminalMember(groupId: string): boolean {
+  return listStagedIntentsByGroup(groupId).some((row) => {
+    if (!GROUP_COMPLETENESS_ACTIVE.includes(row.state)) return false;
+    return isOpsTerminalKind(row.kind, JSON.parse(row.payload), row.session_id);
+  });
+}
+
+/**
+ * True when this group already carries a live journal.setState -> "resolved"
+ * transition — the one member of the ops-terminal closing set that actually
+ * closes the investigation (completeOpsTask's synchronous check). Checked
+ * against the durable store so a sibling committed in an earlier apply of
+ * the same group still satisfies the invariant for a later apply, the same
+ * tolerance hasGroupDependsOn gives task.setDependsOn.
+ */
+function hasGroupOpsTerminalResolvedJournal(groupId: string): boolean {
+  return listStagedIntentsByGroup(groupId).some((row) => {
+    if (
+      row.kind !== 'journal.setState' ||
+      !GROUP_COMPLETENESS_ACTIVE.includes(row.state)
+    ) {
+      return false;
+    }
+    const payload = JSON.parse(row.payload) as JournalSetStatePayload;
+    return payload.state === 'resolved';
+  });
+}
+
+/**
+ * Group-completeness twin of DependsOnCompletenessError, for the ops-terminal
+ * closing set: a group that carries any ops-terminal member (a task-body
+ * write recording the finding, or a follow-on task.create) but never carries
+ * the journal.setState -> "resolved" transition that actually closes the
+ * investigation is a group that can go terminal without ever producing that
+ * transition — see the worked instance this guards against, where a
+ * closing group contained only a task.create and the investigation's journal
+ * was left stuck at `candidate` forever. Enforced at group-commit time
+ * (checkOpsTerminalGroupCompleteness / precheckGroupCommit), not stage time —
+ * an ops-terminal group is legitimately incomplete while the session is
+ * still assembling it.
+ */
+class OpsTerminalGroupIncompleteError extends Error {
+  constructor(groupId: string) {
+    super(
+      `[stagedIntents] group "${groupId}" is an ops-terminal closing group but has no live ` +
+        'journal.setState transitioning to "resolved" — an ops/investigation session\'s closing ' +
+        'group must carry that transition, alongside any task-body write recording the finding and ' +
+        'any follow-on task.create, before it can commit. Stage the journal.setState -> "resolved" ' +
+        'transition in the same group before committing.',
+    );
+    this.name = 'OpsTerminalGroupIncompleteError';
+  }
+}
+
+/**
+ * Commit-time enforcement of the ops-terminal group-completeness invariant
+ * (see OpsTerminalGroupIncompleteError): null when the group is not an
+ * ops-terminal closing group at all, or when it already carries its
+ * journal.setState -> "resolved" member.
+ */
+function checkOpsTerminalGroupCompleteness(
+  groupId: string,
+): OpsTerminalGroupIncompleteError | null {
+  if (!groupHasOpsTerminalMember(groupId)) return null;
+  if (hasGroupOpsTerminalResolvedJournal(groupId)) return null;
+  return new OpsTerminalGroupIncompleteError(groupId);
+}
+
+/**
+ * Session-terminal twin of checkOpsTerminalGroupCompleteness: every group
+ * this session has staged into that is an ops-terminal closing group missing
+ * its journal.setState -> "resolved" member — used by
+ * PlanningOrchestrator.markTerminal to surface a session that reaches clean
+ * exit with its closing group never completed, rather than letting it
+ * complete (or fail to complete) silently. group-commit's own precheck
+ * refuses this at commit time when both members are staged together in one
+ * apply, but a session can still legitimately commit a partial group across
+ * turns and then go terminal before ever staging the rest — this is the
+ * backstop for that case.
+ */
+export function findIncompleteOpsTerminalGroupsForSession(
+  sessionId: string,
+): string[] {
+  const groupIds = [
+    ...new Set(
+      listStagedIntentsBySession(sessionId)
+        .map((row) => row.group_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  return groupIds.filter((groupId) =>
+    checkOpsTerminalGroupCompleteness(groupId),
+  );
+}
+
+/**
  * The durable replacement for groom-gate.mjs's self-reported hard_block_deps
  * array field: a task.setStatus->Ready apply is only allowed when its intent
  * group also carries a task.setDependsOn for the same task, forcing an
@@ -128,10 +436,110 @@ class DependsOnCompletenessError extends Error {
   }
 }
 
+/**
+ * Blocks a disposition against a staged intent whose owning session is not
+ * yet "complete" — see isSessionComplete: the session must have staged at
+ * least one intent since its last stop and its turn must have ended. A
+ * session's staged intents are inert until the session itself goes
+ * complete; this is the enforcement point for that invariant.
+ */
+class SessionIncompleteError extends Error {
+  constructor(sessionId: string) {
+    super(
+      `[stagedIntents] session "${sessionId}" is not yet complete — its turn ` +
+        'is still in flight or it has staged nothing since its last stop. ' +
+        'Staged intents from this session cannot be applied/committed until it stops again.',
+    );
+    this.name = 'SessionIncompleteError';
+  }
+}
+
+/**
+ * True unless the intent is owned by a session that is not yet complete.
+ * Human-staged intents (no sessionId) are never gated. Turn-in-flight is
+ * read off the live AgentSession instance when one exists in this process;
+ * absent that, the turn cannot be in flight (see isSessionComplete).
+ */
+function assertOwningSessionComplete(
+  sessionId: string | null | undefined,
+  sessionManager: SessionManager | undefined,
+): void {
+  if (!sessionId) return;
+  const turnInFlight =
+    sessionManager?.getLiveSession?.(sessionId)?.hasActiveTurn() ?? false;
+  if (!isSessionComplete(sessionId, turnInFlight)) {
+    throw new SessionIncompleteError(sessionId);
+  }
+}
+
+/**
+ * A `session.requestCapability` intent reaches the decision surface only
+ * once its staging session has parked awaiting the disposition — i.e. once
+ * isSessionComplete is true for it, the same per-session turn-completeness
+ * signal assertOwningSessionComplete gates disposition on. This makes the
+ * premise "a capability request is only ever visible after the session has
+ * stopped" true by construction: while the session's turn is still in
+ * flight, staging the request writes the row immediately (never delayed),
+ * but every decision-surface lens filters it out until the session parks.
+ *
+ * An auto-rejected member (see isAutoRejectedNeedsRevision) follows the same
+ * shape for the same reason: it is the staging session's to fix — by
+ * superseding it — for as long as that session still has a turn coming, so
+ * surfacing it to the operator mid-correction would only invite a duplicate,
+ * premature disposition. It is hidden while the owning session is still
+ * live (non-terminal) and surfaced once that session reaches a terminal
+ * state (done/error/killed) without correcting it — at which point no
+ * further session-side fix is coming and it is the operator's to decline.
+ * This is a listing-visibility rule only: getBlockedStagedIntent (the
+ * per-item reject route's lookup) is state-based, not visibility-based, so
+ * the operator can still individually decline a hidden auto-rejected member
+ * by id at any time — it never vanishes from that surface, only from the
+ * default listing.
+ *
+ * Every other intent kind/state is unaffected — visibility for those is
+ * unchanged.
+ */
+function isVisibleOnDecisionSurface(
+  row: StagedIntentRow,
+  sessionManager: SessionManager | undefined,
+): boolean {
+  if (row.kind === 'session.requestCapability') {
+    if (!row.session_id) return true;
+    const turnInFlight =
+      sessionManager?.getLiveSession?.(row.session_id)?.hasActiveTurn() ??
+      false;
+    return isSessionComplete(row.session_id, turnInFlight);
+  }
+  if (isAutoRejectedNeedsRevision(row)) {
+    if (!row.session_id) return true;
+    const owningSession = getSession(row.session_id);
+    return (
+      !owningSession || TERMINAL_SESSION_STATUSES.has(owningSession.status)
+    );
+  }
+  return true;
+}
+
+// Group-completeness ACTIVE states: 'staged'/'approved'/'committed' cover a
+// sibling live at commit time (precheckGroupCommit), and 'pending_verification'
+// covers the same sibling mid-verifyGroup — verifyGroup transitions every
+// group member to 'pending_verification' before running
+// checkGroupArmingIntentCompleteness (see verifyGroup), so omitting it here
+// would make every one of that group's own siblings invisible to its own
+// completeness check.
+const GROUP_COMPLETENESS_ACTIVE: StagedIntentState[] = [
+  'staged',
+  'pending_verification',
+  'approved',
+  'committed',
+];
+
 function hasGroupDependsOn(groupId: string, taskId: string): boolean {
-  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
   return listStagedIntentsByGroup(groupId).some((row) => {
-    if (row.kind !== 'task.setDependsOn' || !ACTIVE.includes(row.state)) {
+    if (
+      row.kind !== 'task.setDependsOn' ||
+      !GROUP_COMPLETENESS_ACTIVE.includes(row.state)
+    ) {
       return false;
     }
     const payload = JSON.parse(row.payload) as SetDependsOnPayload;
@@ -158,11 +566,57 @@ function hasGroupAccretionIntent(
   taskId: string,
   kind: 'gate.accrete' | 'seed.stage',
 ): boolean {
-  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
   return listStagedIntentsByGroup(groupId).some((row) => {
-    if (row.kind !== kind || !ACTIVE.includes(row.state)) return false;
+    if (row.kind !== kind || !GROUP_COMPLETENESS_ACTIVE.includes(row.state)) {
+      return false;
+    }
     return extractTaskId(row.kind, JSON.parse(row.payload)) === taskId;
   });
+}
+
+/**
+ * The group's live gate.accrete payload for this task, when one is staged —
+ * used by the strip⇔accrete content-match precheck to read the actual
+ * accreted item texts (visible in the staged payload before the real
+ * accretion has necessarily landed), the same "both sides visible in the
+ * proposed group" read hasGroupAccretionIntent's ACTIVE-state lookup already
+ * relies on.
+ */
+function getGroupGateAccretePayload(
+  groupId: string,
+  taskId: string,
+): GateAccretePayload | undefined {
+  const row = listStagedIntentsByGroup(groupId).find((r) => {
+    if (
+      r.kind !== 'gate.accrete' ||
+      !GROUP_COMPLETENESS_ACTIVE.includes(r.state)
+    ) {
+      return false;
+    }
+    return extractTaskId('gate.accrete', JSON.parse(r.payload)) === taskId;
+  });
+  return row ? (JSON.parse(row.payload) as GateAccretePayload) : undefined;
+}
+
+/**
+ * The seed.stage twin of getGroupGateAccretePayload — the group's live
+ * seed.stage payload for this task, when one is staged, used by the
+ * seed_contribution content-match precheck.
+ */
+function getGroupSeedStagePayload(
+  groupId: string,
+  taskId: string,
+): SeedStagePayload | undefined {
+  const row = listStagedIntentsByGroup(groupId).find((r) => {
+    if (
+      r.kind !== 'seed.stage' ||
+      !GROUP_COMPLETENESS_ACTIVE.includes(r.state)
+    ) {
+      return false;
+    }
+    return extractTaskId('seed.stage', JSON.parse(r.payload)) === taskId;
+  });
+  return row ? (JSON.parse(row.payload) as SeedStagePayload) : undefined;
 }
 
 /** The exact heading text bodyRender.ts writes for the section (see bodyRender.ts:298,463). */
@@ -172,6 +626,62 @@ function isManualVerificationSection(section: string): boolean {
   return (
     section.trim().toLowerCase() === MANUAL_VERIFICATION_SECTION.toLowerCase()
   );
+}
+
+/** The exact heading text bodyRender.ts writes for the section (see bodyRender.ts:348,493). */
+const IMPLEMENTATION_NOTES_SECTION = 'Implementation notes';
+
+function isImplementationNotesSection(section: string): boolean {
+  return (
+    section.trim().toLowerCase() === IMPLEMENTATION_NOTES_SECTION.toLowerCase()
+  );
+}
+
+/**
+ * Thrown when a groom session stages a task.patchBodySection targeting
+ * Implementation notes. That section is "the implementing session fills it"
+ * per the authoring standard — the closing synthesis a design/ops session
+ * legitimately writes there at the end of its run. Grooming's mandate is
+ * validating a Backlog task's scope/size/dependencies, never producing (or
+ * recording) the task's own deliverable — a groom writing to this section is
+ * exactly a groom session executing its target's work instead of scoping it
+ * (see the worked instance this guards against: a groom ran its target
+ * Investigation to conclusion and filed the finding here). Scoped to groom
+ * only — design and ops keep writing this section unchanged.
+ */
+class GroomImplementationNotesWriteRejectedError extends Error {
+  constructor(taskId: string) {
+    super(
+      `[stagedIntents] task.patchBodySection targeting "Implementation notes" for task "${taskId}" ` +
+        "is rejected from a groom session: that section records the task's own deliverable/decision, " +
+        'filled in by the implementing (design/ops) session — grooming validates scope, size and ' +
+        "dependencies, and must never execute or record the task's work itself.",
+    );
+    this.name = 'GroomImplementationNotesWriteRejectedError';
+  }
+}
+
+/**
+ * Stage-time twin of isOpsTerminalKind's session_type gating: rejects a
+ * task.patchBodySection targeting Implementation notes the moment a groom
+ * session stages it, before the row ever reaches `staged`.
+ */
+function assertGroomBodySectionAllowed(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'task.patchBodySection' || !sessionId) return;
+  const session = getSession(sessionId);
+  if (session?.session_type !== 'groom') return;
+  const p = payload as { taskId?: unknown; section?: unknown } | null;
+  if (
+    typeof p?.taskId === 'string' &&
+    typeof p?.section === 'string' &&
+    isImplementationNotesSection(p.section)
+  ) {
+    throw new GroomImplementationNotesWriteRejectedError(p.taskId);
+  }
 }
 
 /**
@@ -205,9 +715,11 @@ function hasGroupManualVerificationStrip(
   groupId: string,
   taskId: string,
 ): boolean {
-  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
   return listStagedIntentsByGroup(groupId).some((row) => {
-    if (row.kind !== 'task.patchBodySection' || !ACTIVE.includes(row.state)) {
+    if (
+      row.kind !== 'task.patchBodySection' ||
+      !GROUP_COMPLETENESS_ACTIVE.includes(row.state)
+    ) {
       return false;
     }
     const payload = JSON.parse(row.payload) as PatchBodySectionPayload;
@@ -224,7 +736,10 @@ function hasGroupManualVerificationStrip(
  * session intends to mutate — the set a dispatched session must be bound to
  * its own `sessions.task_id` for. task.create is deliberately excluded: a
  * groom/design session legitimately files sibling and follow-on tasks, and a
- * new task has no id yet to compare.
+ * new task has no id yet to compare. completeness.disposition is included: a
+ * design session's disposition always targets its own bound task, never a
+ * sibling or newly-created one — see the hasGroupTaskCreateForSession carve-out
+ * below, which this kind is deliberately excluded from.
  */
 const SESSION_TASK_BINDING_KINDS: ReadonlySet<string> = new Set([
   'task.updateBody',
@@ -232,6 +747,9 @@ const SESSION_TASK_BINDING_KINDS: ReadonlySet<string> = new Set([
   'task.setStatus',
   'task.setProperties',
   'task.setDependsOn',
+  'planning.noOp',
+  'completeness.disposition',
+  'review.dispute',
 ]);
 
 /**
@@ -302,9 +820,84 @@ function assertSessionTaskBinding(
   if (normalizeTaskId(payloadTaskId) === normalizeTaskId(session.task_id)) {
     return;
   }
-  if (groupId && hasGroupTaskCreateForSession(groupId, sessionId)) return;
+  if (
+    kind !== 'completeness.disposition' &&
+    groupId &&
+    hasGroupTaskCreateForSession(groupId, sessionId)
+  ) {
+    return;
+  }
 
   throw new SessionTaskBindingError(kind, session.task_id, payloadTaskId);
+}
+
+/**
+ * Thrown at stage time when a `task.create` arrives with no groupId while its
+ * dispatching session already has an open decision group for the session's
+ * own bound task — a split or spin-off's new task must carry the same
+ * groupId as the decision that produced it (see hasGroupTaskCreateForSession
+ * for the mirror-image "create-then-wire" carve-out), so it is dispositioned
+ * atomically with that decision rather than surviving or vanishing on its own.
+ */
+export class TaskCreateMissingGroupError extends Error {
+  constructor(openGroupId: string) {
+    super(
+      `[stagedIntents] "task.create" was staged with no groupId, but this session already has an open ` +
+        `decision group ("${openGroupId}") for its own task — a task.create produced by a split or ` +
+        'spin-off must carry the same groupId as the decision it belongs to, so it is dispositioned ' +
+        'atomically with it.',
+    );
+    this.name = 'TaskCreateMissingGroupError';
+  }
+}
+
+/**
+ * True when this session already has a live (staged/approved/committed)
+ * group_id among its own staged intents targeting its bound task — i.e. a
+ * decision group is already open for the task this session was dispatched
+ * against. Keys on "this session has an open group for its own task", not on
+ * "task.create always needs a group": an investigation/design session with
+ * no open decision group for its task may still file a genuinely standalone
+ * task.create ungrouped.
+ */
+function findOpenGroupIdForSessionTask(
+  sessionId: string,
+  taskId: string,
+): string | null {
+  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
+  const row = listStagedIntentsBySession(sessionId).find(
+    (r) =>
+      !!r.group_id &&
+      ACTIVE.includes(r.state) &&
+      !!r.task_id &&
+      normalizeTaskId(r.task_id) === taskId,
+  );
+  return row?.group_id ?? null;
+}
+
+/**
+ * Stage-time enforcement of the split/spin-off grouping rule: a `task.create`
+ * staged by a session that already has an open decision group for its own
+ * task must carry that same groupId. A session with no bound task, or no
+ * already-open group for that task, is not checked — the new task is
+ * legitimately standalone.
+ */
+function assertTaskCreateGrouped(
+  kind: string,
+  sessionId: string | null | undefined,
+  groupId: string | null | undefined,
+): void {
+  if (kind !== 'task.create' || groupId || !sessionId) return;
+  const session = getSession(sessionId);
+  if (!session?.task_id) return;
+
+  const openGroupId = findOpenGroupIdForSessionTask(
+    sessionId,
+    normalizeTaskId(session.task_id),
+  );
+  if (openGroupId) {
+    throw new TaskCreateMissingGroupError(openGroupId);
+  }
 }
 
 /**
@@ -336,6 +929,7 @@ export interface StagedIntent {
   annotation?:
     | { blocked: true; violations: ReadinessViolation[] }
     | { blocked: true; reasons: string[] }
+    | { autoRejected: true }
     | null;
   /**
    * Correlates multiple intents that form one structural-change unit (e.g. a
@@ -343,12 +937,22 @@ export interface StagedIntent {
    * display can present/apply them as a group rather than unrelated rows.
    */
   groupId?: string | null;
+  /** The milestone (canonical_short_id) this intent's target task belongs to. Null = unattributed (legacy row or unresolvable task). */
+  milestone?: string | null;
   /**
    * The human-facing rationale/summary the decision surface renders beside
    * the payload — the producer's proposal for why this intent should be
    * applied, distinct from `annotation` (a blocked-apply diagnostic).
    */
   decisionProposal?: string | null;
+  /**
+   * The file:line / arch-page-section / API-result evidence
+   * `decisionProposal`'s recommendation rests on — carried separately so
+   * `decisionProposal` stays at design altitude. Rendered collapsed by
+   * default. Null for kinds that don't carry one, and for rows created
+   * before this field existed.
+   */
+  investigation?: string | null;
   /**
    * The /groom skill's structured proposal fields (presentation.md's
    * 4/5-point summary), carried by a dispatched groom session's Ready-flip
@@ -374,13 +978,74 @@ export interface StagedIntent {
   dispositionReason?: string | null;
   /** The operator's answer to a decision.pickOne question-intent. Null until answered. */
   answer?: StagedIntentAnswer | null;
+  /**
+   * Derived per-session completeness (see isSessionComplete in db/queries.ts):
+   * true once the owning session has staged something since its last stop
+   * and its turn has ended — false while the turn is in flight or a wake has
+   * reverted it to incomplete. Never persisted; recomputed on every read.
+   * Null for human-staged intents (no owning session to gate on).
+   */
+  sessionComplete?: boolean | null;
+  /**
+   * The decision-surface case this intent's group belongs to, derived from
+   * the owning session's session_type (and, for an ops session, its task's
+   * cached Type) — never a live Notion call. Drives GroupCard's action-bar
+   * copy and the provenance badge's human-readable label.
+   */
+  groupKind: 'groom' | 'investigation' | 'other';
+  /**
+   * `session.requestCapability` only: true when the requested `Bash(...)`
+   * capability confers file mutation (see
+   * `bashCapabilityConfersFileMutation`) — surfaced so the operator
+   * dispositioning the request sees that a "run this command" grant is also
+   * a "write to any reachable file" grant, distinct from a denied `Edit`
+   * only by spelling. Advisory only: never blocks staging or approval.
+   * Undefined for every other kind and for a non-`Bash(...)` capability.
+   */
+  confersFileMutation?: boolean;
 }
 
+/**
+ * Resolves a StagedIntentRow to its decision-surface groupKind: `groom` for
+ * a groom session's Ready-flip decision, `investigation` for an ops
+ * session's closing decision whose task Type is Investigation, `other` for
+ * every remaining session_type (design, ops-operational, split, standard,
+ * review) and for rows with no owning session. Reads the task's Type via
+ * the existing per-project board cache (getCachedType), never a live
+ * Notion call.
+ */
+function computeGroupKind(
+  sessionId: string | null,
+): 'groom' | 'investigation' | 'other' {
+  if (!sessionId) return 'other';
+  const session = getSession(sessionId);
+  if (!session) return 'other';
+  if (session.session_type === 'groom') return 'groom';
+  if (session.session_type === 'ops' && session.task_id) {
+    const taskType = getCachedType(session.task_id);
+    if (taskType === '🔎 Investigation') return 'investigation';
+  }
+  return 'other';
+}
+
+/**
+ * The SessionManager instance wired in by createStagedIntentsRouter, used by
+ * rowToApi to compute the live sessionComplete field without threading a
+ * sessionManager param through every one of rowToApi's call sites. Set once
+ * at router construction (startup), read on every subsequent request.
+ */
+let stagedIntentSessionManager: SessionManager | undefined;
+
 function rowToApi(row: StagedIntentRow): StagedIntent {
+  const payload = JSON.parse(row.payload) as unknown;
+  const capability =
+    row.kind === 'session.requestCapability'
+      ? (payload as Partial<CapabilityRequestPayload> | null)?.capability
+      : undefined;
   return {
     id: row.id,
     kind: row.kind,
-    payload: JSON.parse(row.payload) as unknown,
+    payload,
     projectId: row.project_id,
     createdAt: row.created_at,
     sessionId: row.session_id,
@@ -390,7 +1055,9 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
       ? (JSON.parse(row.annotation) as StagedIntent['annotation'])
       : null,
     groupId: row.group_id,
+    milestone: row.milestone,
     decisionProposal: row.decision_proposal,
+    investigation: row.investigation,
     groomProposal: row.groom_proposal
       ? (JSON.parse(row.groom_proposal) as GroomProposalFields)
       : null,
@@ -399,6 +1066,17 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
       : null,
     dispositionReason: row.disposition_reason,
     answer: row.answer ? (JSON.parse(row.answer) as StagedIntentAnswer) : null,
+    sessionComplete: row.session_id
+      ? resolveSessionCompleteForDisplay(
+          row.session_id,
+          stagedIntentSessionManager,
+        )
+      : null,
+    groupKind: computeGroupKind(row.session_id),
+    confersFileMutation:
+      typeof capability === 'string'
+        ? bashCapabilityConfersFileMutation(capability)
+        : undefined,
   };
 }
 
@@ -429,6 +1107,17 @@ function extractTaskId(kind: string, payload: unknown): string | null {
     // one superseding the other, while same-section patches still supersede
     // via the existing tombstone mechanism above.
     return `${p.taskId}::${p.section.trim()}`;
+  }
+  if (kind === 'planning.noOp') {
+    const p = payload as Partial<NoOpPayload> | null;
+    if (typeof p?.taskId !== 'string') return null;
+    // One kind, N instances (decision 2): a `skippedKind`-carrying noOp
+    // dedups on (taskId, skippedKind) rather than bare taskId — mirroring
+    // task.patchBodySection's compound key above — so a pass staging a noOp
+    // for `task.create` and another for `architecture` are two independent
+    // standing markers, neither superseding the other. A whole-turn noOp
+    // (no skippedKind) keeps the plain taskId dedup slot, unchanged.
+    return p.skippedKind ? `${p.taskId}::noop:${p.skippedKind}` : p.taskId;
   }
   const taskId = (payload as { taskId?: unknown } | null)?.taskId;
   return typeof taskId === 'string' ? taskId : null;
@@ -522,6 +1211,30 @@ interface JournalSetStatePayload {
   fields?: Parameters<typeof setEntryState>[2];
 }
 /**
+ * Payload for the gate.verify staged intent — a gate-verify session's
+ * reported finding for the single gate item it was dispatched to verify,
+ * staged for operator disposition rather than written straight to
+ * gate_item_event. See mcp/tools/verdictTools.ts and
+ * AgentSession.recordGateVerifyDisposition.
+ */
+interface GateVerifyIntentPayload {
+  gateItemId: string;
+  disposition: 'pass' | 'fail' | 'needs-setup';
+  evidence?: unknown;
+  reclassify?: { to: GateItemClassification; reason: string };
+}
+/**
+ * Payload for the notion.pageEdit staged intent — the Notion
+ * source-of-truth-page twin of the task.* board-write kinds above. Each
+ * content_updates entry is a find/replace pair applied against the page's
+ * current full body at apply time; see NotionClient.applyPageEdit for the
+ * stale-base (old_str no longer matches) rejection behaviour.
+ */
+interface NotionPageEditPayload {
+  page_id: string;
+  content_updates: { old_str: string; new_str: string }[];
+}
+/**
  * How a dispatched session expresses a capability request: the exact
  * tool/command or read it wants — a Bash command prefix, a named MCP write
  * verb, or the one grantable own-record read
@@ -555,6 +1268,7 @@ export interface CompletenessDispositionIntentPayload {
   rowId: number;
   project: string | null;
   milestone: string | null;
+  probed: CompletenessProbedGapClass[];
   questions: CompletenessDispositionQuestion[];
   runAt: string;
 }
@@ -613,6 +1327,195 @@ function toArchUnitUpdateFields(
 }
 
 /**
+ * Locks the capability vocabulary at stage time (see the design task "Lock
+ * the capability vocabulary for dispatched planning sessions" and its
+ * follow-up "Capability request vocabulary is closed to tool-shaped,
+ * session-record-read, and audit-log-read shapes"): a
+ * session.requestCapability's `capability` must be tool-shaped
+ * (`isToolShapedCapability` — `Bash(...)`/`mcp__...`), the registered
+ * own-record-read prefix (`parseSessionRecordReadCapability` —
+ * `read:session-record:<id>`), the registered audit-log-read prefix
+ * (`parseAuditLogReadCapability` — `read:audit-log:<projectId>`), or the
+ * registered session-events-read prefix (`parseSessionEventsReadCapability`
+ * — `read:session-events:<projectId>`), since those are the only shapes
+ * that ever actually widen a session's access. A
+ * non-conforming string (e.g. "banana") is rejected here, before the row
+ * ever reaches `staged`, rather than being durably granted and silently
+ * never taking effect. A shape-non-conforming string that is ALSO
+ * `isGrantable`-denylisted (e.g. `Edit`, which is bare — never tool-shaped —
+ * and matches `/^Edit$/i`) is rejected as `CapabilityRequestDeniedError`
+ * instead, below, so the session is told it is refused on policy grounds
+ * rather than told it misspelled the request. `isGrantable` otherwise stays
+ * a grant/approval-time check for well-formed-but-denylisted requests (e.g.
+ * `mcp__github__resolve_review_thread`, which is tool-shaped and so reaches
+ * `staged` normally — the denylist only blocks its eventual grant).
+ */
+class CapabilityRequestValidationError extends Error {
+  constructor(capability: string) {
+    super(
+      `[stagedIntents] session.requestCapability rejected: "${capability}" is not a ` +
+        'supported capability shape — expected a tool-shaped capability ' +
+        '("Bash(...)" or "mcp__...") or "read:session-record:<id>" or ' +
+        '"read:audit-log:<projectId>" or "read:session-events:<projectId>"',
+    );
+    this.name = 'CapabilityRequestValidationError';
+  }
+}
+
+/**
+ * Sibling of CapabilityRequestValidationError for the case that error's own
+ * doc comment carves out: a `capability` string that fails the tool-shape
+ * check for the same reason a bare built-in tool name always will (`Edit`,
+ * `Write`, `NotebookEdit`, `MultiEdit` are never `Bash(...)`/`mcp__...`), but
+ * IS recognized by `isGrantable`'s denylist. Distinguished from
+ * CapabilityRequestValidationError by `.name` (and by class identity via
+ * `instanceof`) rather than by message text, so a caller can tell "this
+ * capability is denied by policy" apart from "this string isn't a supported
+ * capability shape at all" without parsing prose.
+ */
+class CapabilityRequestDeniedError extends Error {
+  constructor(public readonly capability: string) {
+    super(
+      `[stagedIntents] session.requestCapability rejected: "${capability}" is denied — ` +
+        'this capability can never be granted to a dispatched session. Stage the ' +
+        'underlying change as a task instead, or request a specific, narrower capability.',
+    );
+    this.name = 'CapabilityRequestDeniedError';
+  }
+}
+
+/**
+ * Records a refused `session.requestCapability` so the demand it represents
+ * — a session reaching for a capability the orchestrator does not offer — is
+ * queryable instead of surviving only in the requesting session's own
+ * transcript. `gate` distinguishes the refusal sites that share this event
+ * type: 'vocabulary' is validateCapabilityRequestPayload's stage-time shape
+ * check below (a missing-tool demand signal), while 'denylist' covers both
+ * validateCapabilityRequestPayload's stage-time policy check (a
+ * shape-non-conforming AND denylisted request, e.g. `Write`) and
+ * isGrantable's grant-time policy check in resumeCapabilityRequester (a
+ * well-formed request denied on policy grounds at approval) — conflating
+ * 'vocabulary' with either would make the demand signal unreadable.
+ * `capability` is stored exactly as received, unnormalized, so a malformed
+ * request and a coherent-but-unsupported one both stay verbatim-recoverable.
+ * `projectId` is required (never resolved after the fact) so the row is
+ * never dropped into the unattributed rows that `auditLog.query`'s project
+ * scoping can't see.
+ */
+function recordCapabilityRequestRefusal(
+  capability: unknown,
+  projectId: string,
+  sessionId: string | null | undefined,
+  gate: 'vocabulary' | 'denylist',
+): void {
+  recordEvent({
+    event_type: 'capability_request_refused',
+    actor_type: 'ai',
+    actor_id: sessionId ?? null,
+    project_id: projectId,
+    task_id: null,
+    payload: { capability, gate },
+  });
+}
+
+function validateCapabilityRequestPayload(
+  payload: unknown,
+  projectId: string,
+  sessionId?: string | null,
+): asserts payload is CapabilityRequestPayload {
+  const p = payload as Partial<CapabilityRequestPayload> | null;
+  const capability = p?.capability;
+  if (typeof capability !== 'string') {
+    recordCapabilityRequestRefusal(
+      capability,
+      projectId,
+      sessionId,
+      'vocabulary',
+    );
+    throw new CapabilityRequestValidationError(String(capability));
+  }
+  if (
+    !isToolShapedCapability(capability) &&
+    parseSessionRecordReadCapability(capability) === null &&
+    parseAuditLogReadCapability(capability) === null &&
+    parseSessionEventsReadCapability(capability) === null
+  ) {
+    if (!isGrantable(capability)) {
+      recordCapabilityRequestRefusal(
+        capability,
+        projectId,
+        sessionId,
+        'denylist',
+      );
+      throw new CapabilityRequestDeniedError(capability);
+    }
+    recordCapabilityRequestRefusal(
+      capability,
+      projectId,
+      sessionId,
+      'vocabulary',
+    );
+    throw new CapabilityRequestValidationError(capability);
+  }
+}
+
+/**
+ * Payload for the `planning.noOp` staged intent — a dispatched planning
+ * session's deliberate declaration that it reached terminal with nothing to
+ * change, distinct from a silent park. Rendered on the decision surface as
+ * informational/auditable and requires no operator disposition (see
+ * StagedIntentPanel.tsx's NoOpHeadline) — its purpose is to make a
+ * legitimate empty run visible to the operator, not to gate anything.
+ */
+interface NoOpPayload {
+  taskId: string;
+  reason: string;
+  /**
+   * The staged-intent kind this pass produced nothing of. Absent = the
+   * existing whole-turn no-op semantics, unchanged. When present, this is
+   * not merely informational — see EXPECTED_TERMINAL_KINDS_BY_WORKFLOW and
+   * assertExpectedTerminalKinds below: a workflow's closing-synthesis write
+   * cannot stage without either an intent of the expected kind, or a noOp
+   * naming it. That is a deliberate widening of "requires no operator
+   * disposition" (still true — this marker is never itself dispositioned),
+   * NOT a numeric gate on count/content — it gates only on the presence of
+   * a statement, the same class of check assertCompletenessApproval already
+   * performs on this same closing-synthesis write.
+   */
+  skippedKind?: string;
+}
+
+/**
+ * The no-op-as-escape-hatch guard: a bare `{}` or an empty reason would let
+ * a session declare "nothing to do" without ever having to say why, which
+ * defeats the point of the marker (the operator sees it and can judge
+ * whether the reasoning holds up).
+ */
+class NoOpValidationError extends Error {
+  constructor(reason: string) {
+    super(`[stagedIntents] planning.noOp rejected: ${reason}`);
+    this.name = 'NoOpValidationError';
+  }
+}
+
+function validateNoOpPayload(payload: unknown): asserts payload is NoOpPayload {
+  const p = payload as Partial<NoOpPayload> | null;
+  if (typeof p?.taskId !== 'string' || !p.taskId.trim()) {
+    throw new NoOpValidationError('payload.taskId is required');
+  }
+  if (typeof p?.reason !== 'string' || !p.reason.trim()) {
+    throw new NoOpValidationError(
+      'payload.reason is required — a one-line why-nothing-to-change explanation',
+    );
+  }
+  if (p?.skippedKind !== undefined && !p.skippedKind.trim()) {
+    throw new NoOpValidationError(
+      'payload.skippedKind, when present, must be a non-empty staged-intent kind',
+    );
+  }
+}
+
+/**
  * Validates a decision.pickOne payload/staging request — throws
  * DecisionPickOneValidationError on the first violation. A question-intent
  * writes no task store, so it must carry its own substantive justification
@@ -666,6 +1569,114 @@ function validateDecisionPickOnePayload(
   if (typeof p.allowFreeForm !== 'boolean') {
     throw new DecisionPickOneValidationError(
       'payload.allowFreeForm must be a boolean',
+    );
+  }
+}
+
+/**
+ * A session.requestCapability twin of DecisionPickOneValidationError: a
+ * capability request applies via SessionManager.grantCapability + a
+ * session respawn (see resumeCapabilityRequester), never via applyIntent —
+ * it cannot share atomicity with a set of task-store writes, so it must not
+ * belong to a group. Refusing this at stage time is what keeps
+ * commitGroupIntents/applyIntent from ever seeing the kind at all (the
+ * `default:` unknown-kind throw there stays reserved for a genuinely
+ * unrecognised kind). A sibling of CapabilityRequestValidationError (the
+ * capability-shape guard above) rather than a reuse of it, since this
+ * guards a structural property (groupId) rather than the payload shape.
+ */
+class CapabilityRequestGroupValidationError extends Error {
+  constructor(reason: string) {
+    super(`[stagedIntents] session.requestCapability rejected: ${reason}`);
+    this.name = 'CapabilityRequestGroupValidationError';
+  }
+}
+
+function validateCapabilityRequestDoesNotCarryGroup(
+  groupId: string | null | undefined,
+): void {
+  if (groupId) {
+    throw new CapabilityRequestGroupValidationError(
+      'a session.requestCapability cannot belong to a group — it applies via ' +
+        'SessionManager.grantCapability + a session respawn, not via a group commit',
+    );
+  }
+}
+
+/** Verdicts a review.dispute may be staged against — every blocking outcome a re-review would otherwise sit behind. */
+const DISPUTABLE_PR_VERDICTS: ReadonlySet<string> = new Set([
+  'needs_changes',
+  'incomplete',
+  'verify_failed',
+  'autofix_failed',
+]);
+
+function parsePRVerdict(reviewResultJson: string | null): string | null {
+  if (!reviewResultJson) return null;
+  try {
+    const parsed = JSON.parse(reviewResultJson) as Partial<PRReviewResult>;
+    return typeof parsed.verdict === 'string' ? parsed.verdict : null;
+  } catch {
+    return null;
+  }
+}
+
+class ReviewDisputeValidationError extends Error {
+  constructor(reason: string) {
+    super(`[stagedIntents] review.dispute rejected: ${reason}`);
+    this.name = 'ReviewDisputeValidationError';
+  }
+}
+
+/**
+ * A code session's route out of a verdict it concludes is wrong (see
+ * README §review.dispute). Refuses at stage time — before the row ever
+ * reaches `staged` — the two cases that would otherwise strand the intent:
+ * no PR to point at, and no outstanding blocking verdict to dispute (the
+ * verdict already cleared, or was never blocking in the first place).
+ */
+function validateReviewDisputePayload(
+  payload: unknown,
+  groupId: string | null | undefined,
+  decisionProposal: string | null | undefined,
+): asserts payload is ReviewDisputePayload {
+  if (groupId) {
+    throw new ReviewDisputeValidationError(
+      'a review.dispute cannot belong to a group — it applies via a direct verdict ' +
+        'override, not a group commit',
+    );
+  }
+  if (!decisionProposal?.trim()) {
+    throw new ReviewDisputeValidationError(
+      'a substantive decisionProposal (the evidence for why the verdict is wrong) is required',
+    );
+  }
+  const p = payload as Partial<ReviewDisputePayload> | null;
+  if (!p || typeof p.taskId !== 'string' || !p.taskId.trim()) {
+    throw new ReviewDisputeValidationError('payload.taskId is required');
+  }
+  if (typeof p.prNumber !== 'number' || !Number.isFinite(p.prNumber)) {
+    throw new ReviewDisputeValidationError('payload.prNumber is required');
+  }
+  if (typeof p.repo !== 'string' || !p.repo.trim()) {
+    throw new ReviewDisputeValidationError('payload.repo is required');
+  }
+  if (typeof p.rationale !== 'string' || !p.rationale.trim()) {
+    throw new ReviewDisputeValidationError(
+      'payload.rationale (the evidence the verdict is wrong) is required',
+    );
+  }
+  const pr = getPRByNumber(p.prNumber, p.repo);
+  if (!pr) {
+    throw new ReviewDisputeValidationError(
+      `PR #${p.prNumber} in ${p.repo} was not found`,
+    );
+  }
+  const verdict = parsePRVerdict(pr.review_result);
+  if (!verdict || !DISPUTABLE_PR_VERDICTS.has(verdict)) {
+    throw new ReviewDisputeValidationError(
+      `PR #${p.prNumber} has no outstanding blocking verdict to dispute ` +
+        `(current verdict: ${verdict ?? 'none'})`,
     );
   }
 }
@@ -793,13 +1804,22 @@ class OpsJournalTransitionRejectedError extends Error {
 }
 
 /**
- * Parses/normalizes one raw task-reference id. A bare id (no `source:`
- * prefix) is unambiguous — every unprefixed id surfacing in this system
- * originates from Notion (board rows, groom-context bundles) — so it is
- * normalized to `notion:<id>` rather than rejected. A prefixed id must parse
- * cleanly via taskId.ts's parseTaskId or is rejected outright: guessing at a
- * malformed prefixed id risks resolving a near-miss uuid to a real but wrong
- * task, the exact failure class the full-id matching rule exists to prevent.
+ * Parses/normalizes one raw task-reference id to the single canonical form
+ * every staged-intent write path persists (staged_intent.task_id,
+ * audit_log.task_id, dependsOn entries) — this is the write-boundary
+ * chokepoint the id-format fan-out (hyphenated uuid / hyphenless 32-hex /
+ * notion:-prefixed variant, all observed live) converges through, so a
+ * downstream reader is never handed two formats of the same id. A bare id
+ * (no `source:` prefix) is unambiguous — every unprefixed id surfacing in
+ * this system originates from Notion (board rows, groom-context bundles) —
+ * so it is normalized to `notion:<id>` rather than rejected. A prefixed id
+ * must parse cleanly via taskId.ts's parseTaskId or is rejected outright:
+ * guessing at a malformed prefixed id risks resolving a near-miss uuid to a
+ * real but wrong task, the exact failure class the full-id matching rule
+ * exists to prevent. Either way, the result is run through
+ * taskId.ts's normalizeTaskId, which canonicalizes the external id's
+ * hyphenation while preserving whatever source prefix (or its absence)
+ * denotes — the source discriminator, not decoration, is never erased.
  */
 function normalizeOrRejectTaskId(raw: unknown, fieldLabel: string): string {
   if (typeof raw !== 'string' || !raw.trim()) {
@@ -816,7 +1836,6 @@ function normalizeOrRejectTaskId(raw: unknown, fieldLabel: string): string {
           `"source:externalId" (source one of notion/yaml/jira/github): ${(err as Error).message}`,
       );
     }
-    return raw;
   }
   return normalizeTaskId(raw);
 }
@@ -850,6 +1869,7 @@ const SUBJECT_TASK_ID_KINDS: ReadonlySet<string> = new Set([
   'task.patchBodySection',
   'task.setProperties',
   'task.setDependsOn',
+  'planning.noOp',
 ]);
 
 /**
@@ -870,10 +1890,13 @@ const SUBJECT_TASK_ID_KINDS: ReadonlySet<string> = new Set([
  * shape apply time requires, since
  * NotionClient.setDependsOn parses each entry with no bare-id fallback
  * (taskId.ts's toExternalId, unlike normalizeTaskId, throws on a bare id).
- * The taskId subject is validated (existence + shape) but left as the
- * caller supplied it: every backend already normalizes its own taskId
- * argument internally (see NotionTaskBackend), so rewriting it here would
- * only risk diverging from what downstream code expects verbatim. Throws
+ * The taskId subject is likewise rewritten to its canonical
+ * (normalizeOrRejectTaskId) form — this is the write-path chokepoint that
+ * keeps staged_intent.task_id (and, via recordEvent, audit_log.task_id) from
+ * ever persisting whichever of the hyphenated/hyphenless/notion:-prefixed
+ * formats a caller happened to pass; every backend already tolerates the
+ * canonical form internally (see NotionTaskBackend), so rewriting it here
+ * costs nothing downstream. Throws
  * TaskReferenceValidationError on anything unparseable or unresolvable. A
  * no-op for kinds that carry no task reference in scope (seed.stage keys off
  * sourceTask, arch.* off unitId — neither is a board task reference), except
@@ -888,6 +1911,28 @@ export async function validateAndNormalizeTaskReferences(
   projectId: string,
   groupId?: string | null,
 ): Promise<unknown> {
+  // gate.accrete/seed.stage key off `sourceTask.id` rather than a top-level
+  // `taskId` — normalized here on the same rule as SUBJECT_TASK_ID_KINDS
+  // below so it converges with a sibling task.setStatus's now-normalized
+  // taskId in the same group (the strip<->accrete content-match precheck
+  // correlates the two by exact string equality — see
+  // getGroupGateAccretePayload/getGroupSeedStagePayload).
+  if (
+    (kind === 'gate.accrete' || kind === 'seed.stage') &&
+    payload &&
+    typeof payload === 'object' &&
+    'sourceTask' in payload
+  ) {
+    const p = payload as { sourceTask?: { id?: unknown } };
+    if (typeof p.sourceTask?.id === 'string') {
+      const normalized = normalizeOrRejectTaskId(
+        p.sourceTask.id,
+        'sourceTask.id',
+      );
+      p.sourceTask = { ...p.sourceTask, id: normalized };
+    }
+  }
+
   if (kind === 'gate.accrete') {
     const sourceTaskId = (payload as { sourceTask?: { id?: unknown } } | null)
       ?.sourceTask?.id;
@@ -938,6 +1983,7 @@ export async function validateAndNormalizeTaskReferences(
   if (SUBJECT_TASK_ID_KINDS.has(kind)) {
     const normalized = normalizeOrRejectTaskId(p.taskId, 'taskId');
     await assertTaskIdResolves(normalized, projectId);
+    p.taskId = normalized;
   }
 
   if (kind === 'task.setDependsOn' || kind === 'task.create') {
@@ -1010,6 +2056,10 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'session.requestCapability',
   'completeness.disposition',
   'intent.withdraw',
+  'planning.noOp',
+  'notion.pageEdit',
+  'gate.verify',
+  'review.dispute',
 ]);
 
 /**
@@ -1123,16 +2173,24 @@ export class ExplicitSupersedesError extends Error {
 /**
  * The design terminal-artifacts kinds DESIGN_TERMINAL_ARTIFACTS_ORDERING
  * (procedureCore.ts) requires the completeness critic's findings be accepted
- * before: the three arch.* writes, and task.updateBody — which in a design
+ * before: the three arch.* writes, task.updateBody — which in a design
  * session is staged exactly once, as the closing synthesis (see
  * "design-closing-synthesis" in procedureCore.ts), so this never conflicts
- * with a groom/ops session's unrelated task.updateBody use.
+ * with a groom/ops session's unrelated task.updateBody use — and task.create,
+ * the follow-on-task set DESIGN_TERMINAL_ARTIFACTS_ORDERING also names as a
+ * terminal artifact. task.create carries no bound taskId of its own to check
+ * against (extractTaskId returns null for it — see assertCompletenessApproval,
+ * which checks the *session's* bound task instead), so gating it here closes
+ * task …3012260f's ordering hole: a follow-on task could otherwise be staged
+ * (and, in a group, committed) minutes before the disposition that was
+ * supposed to gate it was even approved.
  */
 const COMPLETENESS_GATED_KINDS: ReadonlySet<string> = new Set([
   'arch.createUnit',
   'arch.updateUnit',
   'arch.supersedeUnit',
   'task.updateBody',
+  'task.create',
 ]);
 
 /**
@@ -1140,14 +2198,30 @@ const COMPLETENESS_GATED_KINDS: ReadonlySet<string> = new Set([
  * COMPLETENESS_GATED_KINDS before its bound task's completeness.disposition
  * intent has been approved — tightens DESIGN_TERMINAL_ARTIFACTS_ORDERING
  * from "the critic has run" to "the critic's findings were accepted".
+ *
+ * `mismatchedTaskId`, when set, means the session has at least one
+ * committed completeness.disposition, but none of them are keyed to the
+ * session's own bound task — the stranded-session case a mis-keyed
+ * disposition produces (see SessionTaskBindingError, which now prevents new
+ * ones, but a legacy stranded row can still leave a session in this state).
+ * That case needs a different remedy than "none staged yet": re-running the
+ * critic to get a freshly, correctly-keyed disposition approved, not staging
+ * a first one — so the message must not point back at a remedy already
+ * completed.
  */
 class CompletenessApprovalRequiredError extends Error {
-  constructor(kind: string, taskId: string) {
+  constructor(kind: string, taskId: string, mismatchedTaskId?: string) {
     super(
-      `[stagedIntents] "${kind}" for design task "${taskId}" is blocked: the completeness critic's ` +
-        'dispositions for this task have not been approved yet. Stage a completeness.disposition ' +
-        'intent (if one is not already staged) and get operator approval before staging architecture ' +
-        'or closing-synthesis writes.',
+      mismatchedTaskId
+        ? `[stagedIntents] "${kind}" for design task "${taskId}" is blocked: this session has a ` +
+            `committed completeness.disposition, but it is keyed to task "${mismatchedTaskId}", not ` +
+            `this session's bound task "${taskId}" — re-run the completeness critic to stage a fresh, ` +
+            'correctly-keyed completeness.disposition intent and get operator approval before staging ' +
+            'architecture or closing-synthesis writes.'
+        : `[stagedIntents] "${kind}" for design task "${taskId}" is blocked: the completeness critic's ` +
+            'dispositions for this task have not been approved yet. Stage a completeness.disposition ' +
+            'intent (if one is not already staged) and get operator approval before staging architecture ' +
+            'or closing-synthesis writes.',
     );
     this.name = 'CompletenessApprovalRequiredError';
   }
@@ -1177,7 +2251,160 @@ function assertCompletenessApproval(
   if (!session?.task_id || session.session_type !== 'design') return;
   const taskId = normalizeTaskId(session.task_id);
 
+  let mismatchedTaskId: string | undefined;
   const approved = listStagedIntentsBySession(sessionId).some((row) => {
+    if (row.kind !== 'completeness.disposition' || row.state !== 'committed') {
+      return false;
+    }
+    const payload = JSON.parse(
+      row.payload,
+    ) as CompletenessDispositionIntentPayload;
+    const payloadTaskId = normalizeTaskId(payload.taskId);
+    if (payloadTaskId === taskId) return true;
+    mismatchedTaskId = mismatchedTaskId ?? payloadTaskId;
+    return false;
+  });
+  if (!approved) {
+    throw new CompletenessApprovalRequiredError(kind, taskId, mismatchedTaskId);
+  }
+}
+
+/**
+ * Thrown at stage time when a gate-verify session stages a `gate.verify`
+ * disposition while it still has an outstanding `session.requestCapability`
+ * intent of its own (state `staged` or `approved`) — the same predicate
+ * `onBudgetFire` already uses to suspend the verification budget rather than
+ * time the session out (see GateItemVerifier). That precedent covers the
+ * timeout path; this covers the disposition path: a session should never
+ * spend its one `gate.verify` verdict while the read it asked for to reach
+ * that verdict is still pending. Unlike the budget suspension (which
+ * silently retries on a timer), this rejects in-band at stage time so the
+ * session sees the feedback immediately and knows to end its turn and wait
+ * for the grant, rather than believing it already reported.
+ */
+class GateVerifyCapabilityRequestOutstandingError extends Error {
+  constructor(capability: string | undefined) {
+    super(
+      `[stagedIntents] "gate.verify" is blocked: this session has an outstanding ` +
+        `session.requestCapability request${capability ? ` for "${capability}"` : ''} ` +
+        'that has not yet been granted or refused. End the turn and wait for the ' +
+        'operator grant to resume — do not stage gate.verify until that request clears.',
+    );
+    this.name = 'GateVerifyCapabilityRequestOutstandingError';
+  }
+}
+
+/**
+ * Stage-time twin of `onBudgetFire`'s capability-request check: reuses
+ * `hasActiveCapabilityRequestForSession` (never a second predicate) to
+ * refuse a `gate.verify` staged while that same session has an unresolved
+ * `session.requestCapability` intent. Scoped to sessions only — a
+ * human-staged gate.verify with no session_id is never checked here.
+ */
+function assertNoOutstandingCapabilityRequest(
+  kind: string,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'gate.verify' || !sessionId) return;
+  if (!hasActiveCapabilityRequestForSession(sessionId)) return;
+  const pending = listStagedIntentsBySession(sessionId).find(
+    (row) =>
+      row.kind === 'session.requestCapability' &&
+      (row.state === 'staged' || row.state === 'approved'),
+  );
+  const capability = pending
+    ? (JSON.parse(pending.payload) as { capability?: string }).capability
+    : undefined;
+  throw new GateVerifyCapabilityRequestOutstandingError(capability);
+}
+
+/**
+ * Thrown at stage time when a design session attempts to stage
+ * completeness.disposition before its bound task has a single decision.pickOne
+ * to run the critic against — the open half of the …3012260f ordering
+ * invariant (see COMPLETENESS_GATED_KINDS's own doc comment for the other,
+ * already-enforced half). Names the precondition and tells the session what
+ * to do instead, mirroring CompletenessApprovalRequiredError's phrasing.
+ */
+class CompletenessRequiresDecisionError extends Error {
+  constructor(taskId: string) {
+    super(
+      `[stagedIntents] "completeness.disposition" for design task "${taskId}" is blocked: no ` +
+        'decision.pickOne has been staged for this task yet — surface the open questions to the ' +
+        'operator as decision.pickOne intents first, then run the completeness critic against the ' +
+        'locked decisions.',
+    );
+    this.name = 'CompletenessRequiresDecisionError';
+  }
+}
+
+/**
+ * Stage-time enforcement of the other half of the ordering invariant
+ * assertCompletenessApproval enforces: a dispatched design session cannot
+ * stage completeness.disposition for its own bound task until at least one
+ * decision.pickOne exists for that task, in any state but withdrawn or
+ * superseded (see hasDecisionPickOneForTask). Scoped by *task*, not by the
+ * staging session's own id, so a design session resumed or re-dispatched onto
+ * a task whose decisions were locked by an earlier session is not blocked —
+ * only a task with zero decisions ever staged against it, by anyone, trips
+ * this. Scoped the same way assertCompletenessApproval scopes itself: a
+ * dispatched session bound to a task (`sessions.task_id`) whose session_type
+ * is `design`; a human-staged intent with no originating session, or any
+ * non-design session, is not checked here.
+ */
+function assertCompletenessRequiresDecision(
+  kind: string,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'completeness.disposition' || !sessionId) return;
+  const session = getSession(sessionId);
+  if (!session?.task_id || session.session_type !== 'design') return;
+  // Raw, not normalizeTaskId'd — hasDecisionPickOneForTask joins against
+  // other sessions' own raw sessions.task_id column and hyphen-strips both
+  // sides (getTerminalSessionsForTask's pattern), so the lookup side must
+  // stay in that same raw form for the comparison to line up.
+  if (!hasDecisionPickOneForTask(session.task_id)) {
+    throw new CompletenessRequiresDecisionError(
+      normalizeTaskId(session.task_id),
+    );
+  }
+}
+
+/**
+ * The two terminal-artifact kinds a design session's completeness approval
+ * unblocks — deliberately excludes `task.create` from COMPLETENESS_GATED_KINDS:
+ * a follow-on task set can already exist before the disposition that gates it
+ * (see COMPLETENESS_GATED_KINDS's own doc comment on the …3012260f ordering
+ * hole), so its presence or absence is not a reliable "still owed" signal the
+ * way an architecture write or the closing-synthesis body update is.
+ */
+const DESIGN_OWED_ARTIFACT_KINDS: ReadonlySet<string> = new Set([
+  'arch.createUnit',
+  'arch.updateUnit',
+  'arch.supersedeUnit',
+  'task.updateBody',
+]);
+
+/**
+ * True when a design session has an operator-approved completeness.disposition
+ * for its own bound task but has not yet staged either of the artifact kinds
+ * that approval exists to unblock (an architecture-unit write, or the
+ * closing-synthesis `task.updateBody`) — i.e. the session still owes work an
+ * approval-driven terminal transition must not foreclose. See
+ * PlanningOrchestrator.handleApproveDisposition and .checkTerminal, which
+ * both consult this before marking a session terminal on an approval: a
+ * session refused a gated write (assertCompletenessApproval, above) leaves no
+ * other trace that it still owes one, so this is that signal, derived fresh
+ * from the session's own staged-intent history rather than tracked
+ * separately.
+ */
+export function sessionOwesGatedDesignArtifacts(sessionId: string): boolean {
+  const session = getSession(sessionId);
+  if (!session?.task_id || session.session_type !== 'design') return false;
+  const taskId = normalizeTaskId(session.task_id);
+  const intents = listStagedIntentsBySession(sessionId);
+
+  const approved = intents.some((row) => {
     if (row.kind !== 'completeness.disposition' || row.state !== 'committed') {
       return false;
     }
@@ -1186,9 +2413,284 @@ function assertCompletenessApproval(
     ) as CompletenessDispositionIntentPayload;
     return normalizeTaskId(payload.taskId) === taskId;
   });
-  if (!approved) {
-    throw new CompletenessApprovalRequiredError(kind, taskId);
+  if (!approved) return false;
+
+  return !intents.some((row) => DESIGN_OWED_ARTIFACT_KINDS.has(row.kind));
+}
+
+/**
+ * One expected terminal deliverable a workflow's closing-synthesis write
+ * requires — satisfied either by ≥1 staged intent of a `matches` kind, or by
+ * a `planning.noOp` naming `key` as its `skippedKind` (see
+ * assertExpectedTerminalKinds below). `label` is the phrase used in the
+ * stage-time refusal message so the operator/session sees which deliverable
+ * is unaccounted for, not just a bare kind string.
+ */
+interface ExpectedTerminalKindGroup {
+  key: string;
+  label: string;
+  matches: ReadonlySet<string>;
+}
+
+/**
+ * design-architecture-and-followon-required (procedureCore.ts) names two
+ * required deliverables beyond the locked decisions themselves — this is
+ * that list made machine-readable. Keyed per workflow (session_type) rather
+ * than hard-coded so a future workflow can adopt the same mechanism (see the
+ * task's locked decision "build this so other kinds can adopt it later") —
+ * gate.accrete/seed.stage's own none-forms are NOT migrated onto this table.
+ */
+const DESIGN_EXPECTED_TERMINAL_KINDS: readonly ExpectedTerminalKindGroup[] = [
+  {
+    key: 'task.create',
+    label: 'follow-on Code tasks (task.create)',
+    matches: new Set(['task.create']),
+  },
+  {
+    key: 'architecture',
+    label:
+      'architecture-unit writes (arch.createUnit / arch.updateUnit / arch.supersedeUnit)',
+    matches: new Set([
+      'arch.createUnit',
+      'arch.updateUnit',
+      'arch.supersedeUnit',
+    ]),
+  },
+];
+
+const EXPECTED_TERMINAL_KINDS_BY_WORKFLOW: Readonly<
+  Record<string, readonly ExpectedTerminalKindGroup[]>
+> = {
+  design: DESIGN_EXPECTED_TERMINAL_KINDS,
+};
+
+/**
+ * Thrown at stage time when a workflow's closing-synthesis `task.updateBody`
+ * arrives before every expected terminal kind (EXPECTED_TERMINAL_KINDS_BY_
+ * WORKFLOW) is accounted for — by a staged artifact of that kind, or a
+ * `planning.noOp` naming it. Names the specific unaccounted-for deliverable
+ * so the session (or operator) knows exactly what is missing.
+ */
+class ExpectedTerminalKindMissingError extends Error {
+  constructor(label: string) {
+    super(
+      `[stagedIntents] closing-synthesis "task.updateBody" is blocked: no ${label} ` +
+        'staged for this pass, and no planning.noOp naming this kind — stage the ' +
+        'deliverable, or a planning.noOp ({taskId, reason, skippedKind}) explaining ' +
+        'why there is none, before staging the closing synthesis.',
+    );
+    this.name = 'ExpectedTerminalKindMissingError';
   }
+}
+
+/**
+ * Per-expected-kind XOR (see the task's locked decision 3): for a workflow
+ * with an EXPECTED_TERMINAL_KINDS_BY_WORKFLOW entry, its closing-synthesis
+ * `task.updateBody` — scoped the same way assertCompletenessApproval scopes
+ * COMPLETENESS_GATED_KINDS, to a session bound to the task the write targets
+ * — cannot stage until every expected kind is satisfied. This gates on the
+ * *presence* of a statement (an artifact or a noOp naming the kind), never on
+ * its count or content — design-architecture-and-followon-required's "no
+ * minimum count of architecture units or follow-on tasks" still holds; this
+ * does not reintroduce a numeric gate, only a mandatory disposition.
+ */
+function assertExpectedTerminalKinds(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'task.updateBody' || !sessionId) return;
+  const session = getSession(sessionId);
+  if (!session?.task_id) return;
+  const groups = EXPECTED_TERMINAL_KINDS_BY_WORKFLOW[session.session_type];
+  if (!groups) return;
+
+  const boundTaskId = normalizeTaskId(session.task_id);
+  const payloadTaskId = extractTaskId(kind, payload);
+  if (!payloadTaskId || normalizeTaskId(payloadTaskId) !== boundTaskId) {
+    return;
+  }
+
+  const intents = listStagedIntentsBySession(sessionId).filter((row) =>
+    ACTIVE_STATES.includes(row.state),
+  );
+  const noOpSkippedKinds = new Set(
+    intents
+      .filter((row) => row.kind === 'planning.noOp')
+      .map((row) => (JSON.parse(row.payload) as NoOpPayload).skippedKind)
+      .filter((skippedKind): skippedKind is string => Boolean(skippedKind)),
+  );
+
+  for (const group of groups) {
+    const satisfiedByArtifact = intents.some((row) =>
+      group.matches.has(row.kind),
+    );
+    if (satisfiedByArtifact) continue;
+    if (noOpSkippedKinds.has(group.key)) continue;
+    throw new ExpectedTerminalKindMissingError(group.label);
+  }
+}
+
+/**
+ * Describes one staged terminal artifact for the generated closing-synthesis
+ * account below — the title a human reads, independent of the intent kind's
+ * payload shape.
+ */
+function describeStagedArtifactTitle(row: StagedIntentRow): string {
+  const payload = JSON.parse(row.payload) as {
+    title?: unknown;
+    replacement?: { title?: unknown };
+  };
+  const title =
+    row.kind === 'arch.supersedeUnit'
+      ? payload.replacement?.title
+      : payload.title;
+  return typeof title === 'string' && title.trim() ? title.trim() : row.kind;
+}
+
+/**
+ * Generates parts 4 and 5 of the design closing synthesis — "Architecture
+ * pages updated" and "Follow-on Code tasks filed" — from the already-staged
+ * terminal-artifact set (plus any noOp markers), at the moment the closing
+ * synthesis itself stages. Per the task's design intent: the operator then
+ * approves exactly the content they were shown (no payload mutating after
+ * approval), and there is a single source of truth rather than a
+ * hand-authored duplicate of what staging already recorded.
+ */
+function generateDesignClosingSynthesisAccount(sessionId: string): {
+  architectureLine: string;
+  followOnLine: string;
+} {
+  const intents = listStagedIntentsBySession(sessionId).filter((row) =>
+    ACTIVE_STATES.includes(row.state),
+  );
+
+  const findNoOpReason = (skippedKind: string): string | undefined =>
+    intents
+      .filter((row) => row.kind === 'planning.noOp')
+      .map((row) => JSON.parse(row.payload) as NoOpPayload)
+      .find((p) => p.skippedKind === skippedKind)?.reason;
+
+  const architectureGroup = DESIGN_EXPECTED_TERMINAL_KINDS.find(
+    (group) => group.key === 'architecture',
+  )!;
+  const archRows = intents.filter((row) =>
+    architectureGroup.matches.has(row.kind),
+  );
+  const architectureLine = archRows.length
+    ? `(4) Architecture pages updated — ${archRows
+        .map((row) => describeStagedArtifactTitle(row))
+        .join('; ')}`
+    : `(4) Architecture pages updated — none — these decisions change no ` +
+      `architecture page${
+        findNoOpReason('architecture')
+          ? ` (${findNoOpReason('architecture')})`
+          : ''
+      }`;
+
+  const taskRows = intents.filter((row) => row.kind === 'task.create');
+  const followOnLine = taskRows.length
+    ? `(5) Follow-on Code tasks filed — ${taskRows
+        .map((row) => describeStagedArtifactTitle(row))
+        .join('; ')}`
+    : `(5) Follow-on Code tasks filed — none — no implementation work beyond ` +
+      `the locked decisions${
+        findNoOpReason('task.create')
+          ? ` (${findNoOpReason('task.create')})`
+          : ''
+      }`;
+
+  return { architectureLine, followOnLine };
+}
+
+/**
+ * Injects the generated parts 4/5 account into a design closing-synthesis
+ * `task.updateBody` at stage time — appended to `decisionProposal` (so the
+ * operator approves exactly the content they were shown — no payload
+ * mutating after approval) and into `sections.implementationNotes` (so the
+ * generated account survives on the durable task page even though the
+ * authored synthesis no longer carries it twice — the task's "the durable
+ * record must survive" constraint). A no-op for any other kind, or for a
+ * task.updateBody not scoped to a design session's own bound task (e.g. a
+ * groom/ops session's unrelated task.updateBody use).
+ */
+/**
+ * Thrown at stage time when a session-originated `task.setStatus` targets
+ * Done — Done is set by the orchestrator on the session's natural terminal,
+ * never proposed by a session (groom, design, or ops alike). Refusing here,
+ * before the row is ever inserted, keeps a session's own illegitimate
+ * proposal from leaving a permanent `rejected` row that the planning-session
+ * closure guard (`intents.some((i) => i.state === 'rejected')`) would then
+ * treat as a blocker forever.
+ */
+export class SessionStagedDoneError extends Error {
+  constructor(taskId: string) {
+    super(
+      `[stagedIntents] "task.setStatus" -> Done for task "${taskId}" is refused: Done is set by the ` +
+        "orchestrator on the session's natural terminal, and is never a session's to propose — this " +
+        'applies to every planning session (groom, design, or ops).',
+    );
+    this.name = 'SessionStagedDoneError';
+  }
+}
+
+/**
+ * Stage-time twin of TaskWriteCommands's apply-time transition guard
+ * (VALID_TRANSITIONS['In Progress'] has no Done): rejects a session-staged
+ * `task.setStatus` -> Done before it ever becomes a `staged` row, so it
+ * cannot later be refused-and-rejected and poison the closure guard. Gated on
+ * the staging intent carrying a sessionId (a session-originated write) — a
+ * human-staged task.setStatus (no sessionId) is unaffected.
+ */
+function assertNotSessionStagedDone(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'task.setStatus' || !sessionId) return;
+  const p = payload as Partial<SetStatusPayload> | null;
+  if (p?.status !== 'Done') return;
+  throw new SessionStagedDoneError(p.taskId ?? 'unknown');
+}
+
+function applyDesignClosingSynthesisGeneration(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+  decisionProposal: string | null | undefined,
+): { payload: unknown; decisionProposal: string | null | undefined } {
+  if (kind !== 'task.updateBody' || !sessionId) {
+    return { payload, decisionProposal };
+  }
+  const session = getSession(sessionId);
+  if (!session?.task_id || session.session_type !== 'design') {
+    return { payload, decisionProposal };
+  }
+  const boundTaskId = normalizeTaskId(session.task_id);
+  const payloadTaskId = extractTaskId(kind, payload);
+  if (!payloadTaskId || normalizeTaskId(payloadTaskId) !== boundTaskId) {
+    return { payload, decisionProposal };
+  }
+
+  const { architectureLine, followOnLine } =
+    generateDesignClosingSynthesisAccount(sessionId);
+  const generatedAccount = `${architectureLine}\n${followOnLine}`;
+
+  const p = payload as UpdateBodyPayload;
+  const nextPayload: UpdateBodyPayload = {
+    ...p,
+    sections: {
+      ...p.sections,
+      implementationNotes: p.sections.implementationNotes
+        ? `${p.sections.implementationNotes}\n\n${generatedAccount}`
+        : generatedAccount,
+    },
+  };
+  const nextDecisionProposal = decisionProposal?.trim()
+    ? `${decisionProposal.trim()}\n\n${generatedAccount}`
+    : generatedAccount;
+
+  return { payload: nextPayload, decisionProposal: nextDecisionProposal };
 }
 
 export function stageIntent(
@@ -1200,13 +2702,46 @@ export function stageIntent(
   decisionProposal?: string | null,
   groomProposal?: GroomProposalFields | null,
   explicitSupersedes?: string | null,
+  milestone?: string | null,
+  investigation?: string | null,
 ): StagedIntent {
+  // Normalize a caller-supplied milestone (DB UUID, display name, or already
+  // the canonical short id) to the canonical short id before it ever reaches
+  // the row — resolveMilestoneForProject is a no-op on an already-canonical
+  // value, so the server-derived ctx.milestone path is unaffected. An
+  // unresolvable value rejects at stage time rather than silently spawning a
+  // shadow key nothing queries.
+  const resolvedMilestone =
+    milestone != null ? resolveMilestoneForProject(projectId, milestone) : null;
+
   if (kind === 'decision.pickOne') {
     validateDecisionPickOnePayload(payload, groupId, decisionProposal);
   }
+  if (kind === 'session.requestCapability') {
+    validateCapabilityRequestPayload(payload, projectId, sessionId);
+    validateCapabilityRequestDoesNotCarryGroup(groupId);
+  }
+  if (kind === 'planning.noOp') {
+    validateNoOpPayload(payload);
+  }
+  if (kind === 'review.dispute') {
+    validateReviewDisputePayload(payload, groupId, decisionProposal);
+  }
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
+  assertNotSessionStagedDone(kind, payload, sessionId);
   assertCompletenessApproval(kind, sessionId);
+  assertCompletenessRequiresDecision(kind, sessionId);
+  assertNoOutstandingCapabilityRequest(kind, sessionId);
+  assertExpectedTerminalKinds(kind, payload, sessionId);
+  assertTaskCreateGrouped(kind, sessionId, groupId);
+
+  ({ payload, decisionProposal } = applyDesignClosingSynthesisGeneration(
+    kind,
+    payload,
+    sessionId,
+    decisionProposal,
+  ));
 
   const taskId = extractTaskId(kind, payload);
   const titleKey = extractTitleKey(kind, payload);
@@ -1273,6 +2808,9 @@ export function stageIntent(
       }
       return rowToApi(existing);
     }
+    assertReadyPathGrouped(kind, payload, groupId);
+    assertOpsTerminalGrouped(kind, payload, groupId, sessionId);
+    assertGroomBodySectionAllowed(kind, payload, sessionId);
     const newRow: StagedIntentRow = {
       id: randomUUID(),
       kind,
@@ -1282,10 +2820,12 @@ export function stageIntent(
       project_id: projectId,
       session_id: sessionId ?? null,
       group_id: groupId ?? null,
+      milestone: resolvedMilestone ?? existing.milestone ?? null,
       state: 'staged',
       supersedes: null,
       annotation: null,
       decision_proposal: decisionProposal ?? null,
+      investigation: investigation ?? null,
       groom_proposal: groomProposalJson,
       advisory: null,
       disposition_reason: null,
@@ -1298,6 +2838,9 @@ export function stageIntent(
     return superseded;
   }
 
+  assertReadyPathGrouped(kind, payload, groupId);
+  assertOpsTerminalGrouped(kind, payload, groupId, sessionId);
+  assertGroomBodySectionAllowed(kind, payload, sessionId);
   const row: StagedIntentRow = {
     id: randomUUID(),
     kind,
@@ -1307,10 +2850,12 @@ export function stageIntent(
     project_id: projectId,
     session_id: sessionId ?? null,
     group_id: groupId ?? null,
+    milestone: resolvedMilestone,
     state: 'staged',
     supersedes: null,
     annotation: null,
     decision_proposal: decisionProposal ?? null,
+    investigation: investigation ?? null,
     groom_proposal: groomProposalJson,
     advisory: null,
     disposition_reason: null,
@@ -1322,6 +2867,87 @@ export function stageIntent(
   const staged = rowToApi(row);
   broadcastIntentChange(staged);
   return staged;
+}
+
+/** The state at which an ops_journal entry becomes an operator-reviewable
+ *  decision — the point both the HTTP route and the staged-intent apply path
+ *  mirror it into a staged_intent so it renders on the decision surface
+ *  (DecisionPanel reads staged_intent, not ops_journal). */
+export const STAGED_PROPOSAL_STATE: OpsState = 'staged-proposal';
+
+/** Best-effort short human-readable summary of a journal entry's finding for
+ *  the staged intent's `decisionProposal` — the payload itself carries the
+ *  full structured finding, this is just the panel headline. */
+function summarizeJournalDecision(entry: OpsJournalEntry): string {
+  const finding = entry.findingOrProposal;
+  if (typeof finding === 'string' && finding.trim()) return finding.trim();
+  if (finding && typeof finding === 'object') {
+    const candidate =
+      (finding as Record<string, unknown>).summary ??
+      (finding as Record<string, unknown>).proposal;
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return `ops_journal proposal for ${entry.taskId} — awaiting sign-off`;
+}
+
+/**
+ * Stage (or re-stage) the journal.setState decision for this entry so it
+ * shows up on the decision surface. Shared by both paths that can drive an
+ * ops_journal entry to staged-proposal — the direct HTTP write
+ * (routes/opsJournal.ts) and a dispatched session's staged journal.setState
+ * intent (applyIntent's 'journal.setState' case below) — so a staged-proposal
+ * reached either way produces exactly one operator-dispositionable decision.
+ * Idempotent: stageIntent keys journal.setState on taskId
+ * (findActiveStagedIntentForTask), so a second call for the same entry either
+ * no-ops (unchanged payload hash) or supersedes the prior mirror, never
+ * producing a second competing decision card.
+ */
+export function stageJournalDecision(
+  entry: OpsJournalEntry,
+  sessionId: string | null,
+): void {
+  stageIntent(
+    'journal.setState',
+    {
+      taskId: entry.taskId,
+      state: entry.state,
+      fields: {
+        disposition: entry.disposition,
+        findingOrProposal: entry.findingOrProposal,
+        evidence: entry.evidence,
+        resolution: entry.resolution,
+      },
+    },
+    entry.project,
+    null,
+    sessionId,
+    summarizeJournalDecision(entry),
+    null,
+    null,
+    entry.milestone,
+  );
+}
+
+/**
+ * Mirrors a committed journal.setState intent onto the decision surface when
+ * its apply transitioned the entry to staged-proposal — the staged-intent
+ * apply path's counterpart to the mirror in routes/opsJournal.ts's POST
+ * /api/ops-journal/:taskId/state handler. Must run only after `intent` has
+ * already transitioned out of 'staged'/'approved' (i.e. after
+ * transitionStagedIntent(intent.id, 'committed', ...) has returned):
+ * stageJournalDecision's dedup (findActiveStagedIntentForTask) matches on
+ * (project, kind, taskId) among *active* rows only, and this very intent — if
+ * still active — would otherwise be the row it collides with.
+ */
+function mirrorJournalDecisionIfStagedProposal(intent: StagedIntent): void {
+  if (intent.kind !== 'journal.setState') return;
+  const payload = intent.payload as JournalSetStatePayload;
+  const updated = getOpsJournalEntry(payload.taskId);
+  if (updated && updated.state === STAGED_PROPOSAL_STATE) {
+    stageJournalDecision(updated, intent.sessionId ?? null);
+  }
 }
 
 /** States a session may still withdraw from — mirrors ACTIVE_STATES below (declared later in this file). */
@@ -1416,6 +3042,7 @@ const HUMAN_APPLY_ONLY_KINDS: ReadonlySet<string> = new Set([
   'arch.createUnit',
   'arch.updateUnit',
   'arch.supersedeUnit',
+  'gate.verify',
 ]);
 
 type ApplyActorType = 'human' | 'session';
@@ -1434,10 +3061,12 @@ async function applyIntent(
   override?: { reason: string },
   actorType: ApplyActorType = 'human',
   triageMilestoneLabel?: string,
+  sessionManager?: SessionManager,
 ): Promise<unknown> {
   if (HUMAN_APPLY_ONLY_KINDS.has(intent.kind) && actorType !== 'human') {
     throw new HumanApplyOnlyError(intent.kind);
   }
+  assertOwningSessionComplete(intent.sessionId, sessionManager);
 
   const backend = getTaskBackend(intent.projectId);
   const commands = new BackendTaskWriteCommands(backend, intent.projectId);
@@ -1452,13 +3081,13 @@ async function applyIntent(
     case 'task.setStatus': {
       const payload = intent.payload as SetStatusPayload;
       if (
-        payload.status === 'Ready' &&
+        isReadyPathKind('task.setStatus', payload) &&
         (!intent.groupId || !hasGroupDependsOn(intent.groupId, payload.taskId))
       ) {
         throw new DependsOnCompletenessError(payload.taskId);
       }
       if (
-        payload.status === 'Ready' &&
+        isReadyPathKind('task.setStatus', payload) &&
         payload.groomingGate?.hasManualVerificationSection &&
         (!intent.groupId ||
           !hasGroupManualVerificationStrip(intent.groupId, payload.taskId))
@@ -1563,6 +3192,38 @@ async function applyIntent(
       setEntryState(payload.taskId, payload.state, payload.fields);
       return { ok: true };
     }
+    case 'gate.verify': {
+      const payload = intent.payload as GateVerifyIntentPayload;
+      const item = getGateItem(payload.gateItemId);
+      if (!item) {
+        throw new Error(
+          `[stagedIntents] gate.verify apply: gate item "${payload.gateItemId}" was not found`,
+        );
+      }
+      const result: GateVerificationResult = {
+        disposition: payload.disposition,
+        evidence: payload.evidence,
+        reclassify: payload.reclassify,
+      };
+      // The operator's approval is the verdict itself — reuse the exact
+      // routing gateReconciler already applies to an operator-triggered
+      // manual verify dispatch (fail-followup filing/dedup, reclassify,
+      // appendGateItemEvent), rather than a second bespoke write path.
+      return routeVerificationResult(
+        item,
+        result,
+        defaultFollowupFiler,
+        null,
+        {},
+        false,
+      );
+    }
+    case 'notion.pageEdit': {
+      const payload = intent.payload as NotionPageEditPayload;
+      const notionCommands = new NotionWriteCommands(new NotionClient());
+      await notionCommands.applyPageEdit(payload);
+      return { ok: true };
+    }
     case 'arch.createUnit': {
       const payload = intent.payload as ArchCreateUnitPayload;
       const unit = await archCommands.createUnit(toNewArchUnitFields(payload));
@@ -1621,6 +3282,7 @@ function transitionRejectedIntent(
   row: StagedIntentRow,
   outcome: StagedIntentRejectOutcome,
   reason: string,
+  provenance: 'auto' | 'operator' = 'operator',
 ): { intent: StagedIntent; row: StagedIntentRow } {
   // pushback (including an apply-time failure, which is always pushback) is
   // revisable — it lands in needs_revision, the same state the stage-time
@@ -1630,19 +3292,36 @@ function transitionRejectedIntent(
   // it stays in rejected, which EXPLICIT_SUPERSEDES_ALLOWED_STATES excludes.
   const targetState: StagedIntentState =
     outcome === 'pushback' ? 'needs_revision' : 'rejected';
-  const rejected = transitionStagedIntent(row.id, targetState, {
+  // pending_verification has no direct edge to `rejected` (only to `staged`
+  // or `needs_revision` — see STAGED_INTENT_TRANSITIONS) — hop through
+  // needs_revision first so a member blocked in pending_verification can
+  // still be declined via the same per-member exit as a needs_revision one.
+  const current =
+    row.state === 'pending_verification' && targetState === 'rejected'
+      ? transitionStagedIntent(row.id, 'needs_revision')
+      : row;
+  // Auto (validator-driven) rejections are tagged on the row itself, via the
+  // same annotation channel a stage-time block already uses, so the
+  // decision-surface visibility rule (see isVisibleOnDecisionSurface) can
+  // tell an auto-rejection apart from an operator pushback landing in the
+  // same needs_revision state — the operator path leaves annotation
+  // untouched (whatever it already was).
+  const rejected = transitionStagedIntent(current.id, targetState, {
     dispositionReason: reason,
+    ...(provenance === 'auto'
+      ? { annotation: JSON.stringify({ autoRejected: true }) }
+      : {}),
   });
   const rejectedIntent = rowToApi(rejected);
   broadcastIntentChange(rejectedIntent);
 
   recordEvent({
     event_type: 'staged_intent_disposition',
-    actor_type: 'human',
+    actor_type: provenance === 'auto' ? 'system' : 'human',
     actor_id: null,
     project_id: rejectedIntent.projectId,
     task_id: row.task_id,
-    payload: { intentId: row.id, disposition: outcome, reason },
+    payload: { intentId: row.id, disposition: outcome, reason, provenance },
   });
 
   return { intent: rejectedIntent, row: rejected };
@@ -1661,20 +3340,29 @@ async function rejectStagedIntentRow(
     reason,
   );
 
-  // Records the operator's disposition on the underlying
-  // completeness_disposition row(s) too — not just the intent — so a caller
-  // reading the durable store directly (never just the intent) sees the
-  // outcome. A session left in `needs_revision` (pushback) or terminal
-  // `rejected` (decline) can, either way, re-run completeness.disposition to
-  // stage a fresh intent — no second critic pass required.
+  // Removes the underlying completeness_disposition row outright — not just
+  // the intent — so the store never carries a row the operator explicitly
+  // declined (task …3012260f, defect 5: the row is durably written before
+  // the intent that gates it, so rejecting the intent must not leave that
+  // row behind as an orphan). A session left in `needs_revision` (pushback)
+  // or terminal `rejected` (decline) can, either way, re-run
+  // completeness.disposition to stage a fresh intent with a fresh row — no
+  // second critic pass required.
   if (rejectedIntent.kind === 'completeness.disposition') {
     const payload =
       rejectedIntent.payload as CompletenessDispositionIntentPayload;
-    updateCompletenessDispositionApproval(payload.rowId, 'rejected');
+    deleteCompletenessDisposition(payload.rowId);
   }
 
   if (rejectedIntent.kind === 'session.requestCapability') {
     await resumeCapabilityRequester(
+      sessionManager,
+      rejectedIntent,
+      outcome,
+      reason,
+    );
+  } else if (rejectedIntent.kind === 'review.dispute') {
+    await resumeReviewDisputeAuthor(
       sessionManager,
       rejectedIntent,
       outcome,
@@ -1690,14 +3378,56 @@ async function rejectStagedIntentRow(
   return rejectedIntent;
 }
 
+/**
+ * Every capability request's terminal disposition, one of the four buckets
+ * the audit trail distinguishes (see recordEvent call below): an auto-
+ * approved grant never reaches an operator; the other three are the
+ * existing operator-approve/pushback/decline outcomes, unchanged.
+ */
+function capabilityRequestDisposition(
+  outcome: 'approved' | StagedIntentRejectOutcome,
+  provenance: 'auto' | 'operator',
+): 'auto_approved' | 'operator_approved' | 'operator_denied' | 'declined' {
+  if (outcome === 'approved') {
+    return provenance === 'auto' ? 'auto_approved' : 'operator_approved';
+  }
+  return outcome === 'pushback' ? 'operator_denied' : 'declined';
+}
+
 async function resumeCapabilityRequester(
   sessionManager: SessionManager | undefined,
   intent: StagedIntent,
   outcome: 'approved' | StagedIntentRejectOutcome,
   reason?: string | null,
+  provenance: 'auto' | 'operator' = 'operator',
 ): Promise<void> {
-  if (!sessionManager || !intent.sessionId) return;
+  if (!intent.sessionId) return;
   const payload = intent.payload as CapabilityRequestPayload;
+
+  recordEvent({
+    event_type: 'capability_request_disposition',
+    actor_type: provenance === 'auto' ? 'system' : 'human',
+    actor_id: intent.sessionId,
+    project_id: intent.projectId,
+    task_id: null,
+    payload: {
+      intentId: intent.id,
+      capability: payload.capability,
+      disposition: capabilityRequestDisposition(outcome, provenance),
+      provenance,
+    },
+  });
+
+  if (outcome === 'approved' && !isGrantable(payload.capability)) {
+    recordCapabilityRequestRefusal(
+      payload.capability,
+      intent.projectId,
+      intent.sessionId,
+      'denylist',
+    );
+  }
+
+  if (!sessionManager) return;
 
   if (outcome === 'approved') {
     await sessionManager.grantCapability(intent.sessionId, payload.capability);
@@ -1715,12 +3445,128 @@ async function resumeCapabilityRequester(
       intent.sessionId,
       'operator-disposition',
       message,
+      { attemptTerminalResume: false },
     );
   } catch (err) {
     logger.error(
       `[stagedIntents] resume failed for session ${intent.sessionId.slice(0, 8)} after capability-request ${outcome}: ${err}`,
     );
   }
+}
+
+/**
+ * A review.dispute's disposition twin of resumeCapabilityRequester: records
+ * the operator's call on the dispute, then — for a pushback/decline — resumes
+ * the authoring session for a normal revision turn, carrying the operator's
+ * reason so the session knows the original review feedback still stands. An
+ * approved dispute needs no revision turn (the verdict-clear + PR-proceed
+ * side effects are handled by the caller via PRReviewService), so it only
+ * sends an informational note.
+ */
+async function resumeReviewDisputeAuthor(
+  sessionManager: SessionManager | undefined,
+  intent: StagedIntent,
+  outcome: 'approved' | StagedIntentRejectOutcome,
+  reason?: string | null,
+): Promise<void> {
+  if (!intent.sessionId) return;
+  const payload = intent.payload as ReviewDisputePayload;
+
+  recordEvent({
+    event_type: 'review_dispute_disposition',
+    actor_type: 'human',
+    actor_id: null,
+    project_id: intent.projectId,
+    task_id: payload.taskId,
+    payload: {
+      intentId: intent.id,
+      prNumber: payload.prNumber,
+      repo: payload.repo,
+      disposition: outcome,
+      reason: reason ?? null,
+    },
+  });
+
+  if (!sessionManager) return;
+
+  const message =
+    outcome === 'approved'
+      ? `Review dispute approved: the operator agreed the prior review verdict on PR #${payload.prNumber} was ` +
+        `wrong. It has been cleared without a new commit and the PR can proceed — no revision needed.`
+      : `Review dispute for PR #${payload.prNumber} was not upheld — sent back for revision. ` +
+        `${reason ? `Operator reason: ${reason}` : ''}\n\n` +
+        `The original review feedback still applies; please address it and push.`;
+
+  try {
+    await sessionManager.enqueueFeedback(
+      intent.sessionId,
+      'operator-disposition',
+      message,
+      { attemptTerminalResume: false },
+    );
+  } catch (err) {
+    logger.error(
+      `[stagedIntents] resume failed for session ${intent.sessionId.slice(0, 8)} after review.dispute ${outcome}: ${err}`,
+    );
+  }
+}
+
+/**
+ * Stage-time auto-approve for `session.requestCapability`: when the
+ * requested capability exactly matches the curated sanctioned read-only
+ * allowlist (`isSanctionedAutoApproveCapability` — the requesting session's
+ * own-record reader, or the audit-log reader for the requesting session's
+ * own dispatched project), the request is granted and the
+ * session re-dispatched immediately through the same
+ * grant -> resume path an operator approval takes (`resumeCapabilityRequester`
+ * with provenance `'auto'`), never parking for the operator. Every other
+ * request — a write, a raw Bash/mcp-verb grant, another session's
+ * own-record capability — is left in `staged` for the existing
+ * grant-on-re-dispatch operator surface, unchanged. Gated entirely off by
+ * `runtimeSettings.capability_auto_approve_enabled`: when disabled, every
+ * request parks as before, regardless of the allowlist. Called once, at
+ * stage time, by `routeStageTimeBlock` — the sole path a dispatched
+ * session's `session.requestCapability` MCP call reaches (see
+ * mcp/tools/stageProposalTools.ts's `stage`).
+ */
+async function maybeAutoApproveCapabilityRequest(
+  intent: StagedIntent,
+  sessionManager: SessionManager | undefined,
+): Promise<StagedIntent> {
+  if (
+    intent.kind !== 'session.requestCapability' ||
+    !intent.sessionId ||
+    !runtimeSettings.capability_auto_approve_enabled
+  ) {
+    return intent;
+  }
+
+  const payload = intent.payload as CapabilityRequestPayload;
+  const requestingSession = getSession(intent.sessionId);
+  if (
+    !isSanctionedAutoApproveCapability(
+      payload.capability,
+      intent.sessionId,
+      intent.projectId,
+      requestingSession?.session_type,
+    )
+  ) {
+    return intent;
+  }
+
+  const committed = transitionStagedIntent(intent.id, 'committed', {
+    annotation: null,
+  });
+  const committedIntent = rowToApi(committed);
+  broadcastIntentChange(committedIntent);
+  await resumeCapabilityRequester(
+    sessionManager,
+    committedIntent,
+    'approved',
+    null,
+    'auto',
+  );
+  return committedIntent;
 }
 
 /**
@@ -1756,17 +3602,21 @@ export function translateApplyError(
 
 /**
  * Apply-time twin of routeStageTimeBlock's redrive: an unexpected exception
- * from applyIntent (a provider failure the stage-time gates didn't catch) used
- * to reach the operator as a raw exception with the intent left dangling —
- * no route back to the session that staged it. This rejects the intent (so
- * it can never be silently re-applied — a corrected intent must be freshly
- * staged and freshly disposed by the operator, never auto-retried here) and
- * routes the translated failure to the originating session through the same
- * pushback path PlanningOrchestrator.handleDisposition already uses for an
- * operator pushback — reusing its enqueue-and-resume mechanics rather than
- * adding a parallel one. handleDisposition itself no-ops (logs only) when
- * the intent has no originating session or that session no longer exists; in
- * either case `redriven` comes back false so the caller still surfaces the
+ * from applyIntent — most commonly a TaskWriteCommands payload-validation
+ * failure the stage-time gates didn't catch, occasionally a genuine provider
+ * failure — used to reach the operator as a raw exception with the intent
+ * left dangling — no route back to the session that staged it. This rejects
+ * the intent (so it can never be silently re-applied — a corrected intent
+ * must be freshly staged and freshly disposed, never auto-retried here) with
+ * `provenance: 'auto'` — this is the session's mistake to fix, not an
+ * operator judgement call, so it is recorded and routed back as a system
+ * rejection rather than one attributed to the operator — and routes the
+ * translated failure to the originating session through the same pushback
+ * path PlanningOrchestrator.handleDisposition already uses for an operator
+ * pushback — reusing its enqueue-and-resume mechanics rather than adding a
+ * parallel one. handleDisposition itself no-ops (logs only) when the intent
+ * has no originating session or that session no longer exists; in either
+ * case `redriven` comes back false so the caller still surfaces the
  * translated error to the operator instead of treating the failure as
  * silently handled.
  */
@@ -1783,7 +3633,12 @@ async function routeApplyTimeFailure(
   // untouched, mirroring routeStageTimeBlock's own no-session bail-out.
   if (!row.session_id) return { reason, redriven: false };
 
-  const { row: rejected } = transitionRejectedIntent(row, 'pushback', reason);
+  const { row: rejected } = transitionRejectedIntent(
+    row,
+    'pushback',
+    reason,
+    'auto',
+  );
   broadcastIntentChange(rowToApi(rejected));
 
   const redriven = Boolean(getSession(row.session_id));
@@ -1792,6 +3647,7 @@ async function routeApplyTimeFailure(
       intent: rejected,
       disposition: 'pushback',
       reason,
+      provenance: 'auto',
     });
   }
   return { reason, redriven };
@@ -1800,9 +3656,48 @@ async function routeApplyTimeFailure(
 /** Active surface = staged | approved. Terminal states (committed/rejected) and the superseded tombstone are hidden, matching the old delete-on-resolve Map semantics. */
 const ACTIVE_STATES: StagedIntentState[] = ['staged', 'approved'];
 
+/** Blocked = stuck off the active surface pending operator recovery — the state the commit guard refuses on and the one this task adds a resolvable exit for. */
+const BLOCKED_STATES: StagedIntentState[] = [
+  'needs_revision',
+  'pending_verification',
+];
+
+/** Active + blocked — the decision-inbox visibility surface: a blocked member must stay visible so the operator can decline it, not vanish the instant it falls out of ACTIVE_STATES. */
+const VISIBLE_STATES: StagedIntentState[] = [
+  ...ACTIVE_STATES,
+  ...BLOCKED_STATES,
+];
+
 function getActiveStagedIntent(id: string): StagedIntentRow | undefined {
   const row = getStagedIntentRow(id);
   return row && ACTIVE_STATES.includes(row.state) ? row : undefined;
+}
+
+/** The operator-resolvable-exit surface: a member stuck in needs_revision/pending_verification, reachable so it can be individually declined off the commit guard's predicate. */
+function getBlockedStagedIntent(id: string): StagedIntentRow | undefined {
+  const row = getStagedIntentRow(id);
+  return row && BLOCKED_STATES.includes(row.state) ? row : undefined;
+}
+
+/**
+ * Substrings unique to this module's own auto-generated commit/precheck
+ * refusal messages (commitGroupIntents' blocked-member guard, its
+ * no-live-intents 404, precheckGroupCommit's completeness/readiness 409s).
+ * Guards the reject routes against the exact failure mode that wedged the
+ * existing population: an operator (or a script) copying a failed commit's
+ * `error` text back in as the `reason` for a pushback/decline, which
+ * destroys the record of why the member was actually blocked. A refusal is
+ * never a disposition reason, so it is refused here rather than persisted.
+ */
+const SYSTEM_REFUSAL_REASON_MARKERS = [
+  'it must be recovered or resolved before this group can commit',
+  'no live staged intents found for group',
+];
+
+function looksLikeSystemRefusalReason(reason: string): boolean {
+  return SYSTEM_REFUSAL_REASON_MARKERS.some((marker) =>
+    reason.includes(marker),
+  );
 }
 
 /** A task.setStatus -> Ready intent — the single arming write that must commit LAST within a group. */
@@ -1955,7 +3850,7 @@ export async function runStageTimeReadyChecks(
   const resolvedType =
     getCachedType(payload.taskId) ?? payload.groomingGate?.type;
 
-  const gateResult = checkGroomingPromotionGate(
+  const gateResult = await checkGroomingPromotionGate(
     payload.groomingGate ?? {},
     payload.taskId,
     resolvedType,
@@ -1969,6 +3864,7 @@ export async function runStageTimeReadyChecks(
     intent.groupId
       ? { skipGateContributionCheck: true, skipSeedContributionCheck: true }
       : undefined,
+    intent.projectId,
   );
   if (!gateResult.allowed) {
     setStagedIntentAnnotation(
@@ -2016,10 +3912,23 @@ export interface GroupVerificationOutcome {
 function describeBlockedAnnotation(
   annotation: StagedIntent['annotation'],
 ): string | null {
-  if (!annotation?.blocked) return null;
+  if (!annotation || !('blocked' in annotation) || !annotation.blocked) {
+    return null;
+  }
   return 'violations' in annotation
     ? annotation.violations.map((v) => v.detail).join('; ')
     : annotation.reasons.join('; ');
+}
+
+/** True when this row was auto-rejected (a validator-driven pushback, tagged by transitionRejectedIntent's `provenance: 'auto'`) and is still sitting in needs_revision awaiting a session-side correction — as opposed to an operator pushback, which lands in the same state but carries no such tag. */
+function isAutoRejectedNeedsRevision(row: StagedIntentRow): boolean {
+  if (row.state !== 'needs_revision' || !row.annotation) return false;
+  try {
+    const annotation = JSON.parse(row.annotation) as { autoRejected?: unknown };
+    return annotation.autoRejected === true;
+  } catch {
+    return false;
+  }
 }
 
 function formatStageTimeBlockFeedback(
@@ -2028,7 +3937,10 @@ function formatStageTimeBlockFeedback(
 ): string {
   return (
     `Staged intent ${intent.id} (${intent.kind}) failed stage-time validation ` +
-    `and was sent back for revision:\n- ${detail}`
+    `and was sent back for revision:\n- ${detail}\n` +
+    `To fix this, stage the corrected intent with supersedes set to "${intent.id}" ` +
+    `(the id of this blocked intent) so it retires the blocked one instead of leaving it ` +
+    "in place — staging an unlinked correction does not retire it and will wedge this intent's group."
   );
 }
 
@@ -2049,6 +3961,10 @@ export async function routeStageTimeBlock(
   intent: StagedIntent,
   sessionManager: SessionManager | undefined,
 ): Promise<StagedIntent> {
+  if (intent.kind === 'session.requestCapability') {
+    return maybeAutoApproveCapabilityRequest(intent, sessionManager);
+  }
+
   const checked = await runStageTimeReadyChecks(intent);
   const detail = describeBlockedAnnotation(checked.annotation);
   // No originating session — nothing to auto-correct and re-verify this via
@@ -2107,6 +4023,20 @@ async function verifyGroup(
     if (detail) {
       errors.push(`${row.kind} (${row.task_id ?? row.id}): ${detail}`);
     }
+
+    if (isArmingReadyIntent(row)) {
+      const payload = JSON.parse(row.payload) as SetStatusPayload;
+      const failure = await checkGroupArmingIntentCompleteness(
+        groupId,
+        row,
+        payload,
+      );
+      if (failure) {
+        errors.push(
+          `${row.kind} (${row.task_id ?? row.id}): ${describeGroupCompletenessFailure(failure)}`,
+        );
+      }
+    }
   }
 
   if (errors.length === 0) {
@@ -2143,11 +4073,18 @@ async function verifyGroup(
  * Group-level verify gate run at turn-end (see
  * PlanningOrchestrator.onSessionParked, the "group submitted" signal): for
  * every proposal group the session staged something into this turn, re-runs
- * runStageTimeReadyChecks across the group's live members and gates the
- * whole group on the result — a clean group is (re)surfaced to the operator,
- * a blocked one is hidden (moved to `needs_revision`) so its errors can be
- * routed back to the session instead, bounded to MAX_AUTO_REVISE_ROUNDS
- * consecutive failures per group before escalating to the operator anyway.
+ * runStageTimeReadyChecks across the group's live members and, for every
+ * arming task.setStatus -> Ready member, also re-runs
+ * checkGroupArmingIntentCompleteness (the same mandatory-member check
+ * precheckGroupCommit enforces at commit time) — so a group missing its
+ * setDependsOn write, a required manual-verification strip, or a required
+ * gate/seed accretion is caught here, before it ever surfaces to the
+ * operator, rather than only 409ing at commit time. Both checks feed the
+ * same errors array and gate the whole group on the result — a clean group
+ * is (re)surfaced to the operator, a blocked one is hidden (moved to
+ * `needs_revision`) so its errors can be routed back to the session instead,
+ * bounded to MAX_AUTO_REVISE_ROUNDS consecutive failures per group before
+ * escalating to the operator anyway.
  */
 export async function verifyDispatchedGroupsForSession(
   sessionId: string,
@@ -2210,6 +4147,139 @@ function readinessOverrideWouldApply(
 }
 
 /**
+ * Result of checkGroupArmingIntentCompleteness: which mandatory-member check
+ * failed for a given arming task.setStatus -> Ready intent, carrying enough
+ * detail for each caller to build its own error/annotation shape.
+ */
+type GroupCompletenessFailure =
+  | { kind: 'dependsOn'; taskId: string }
+  | { kind: 'manualVerificationStrip'; taskId: string }
+  | { kind: 'gateContribution'; taskId: string; reasons: string[] }
+  | { kind: 'seedContribution'; taskId: string; reasons: string[] }
+  | { kind: 'groomingGate'; taskId: string; reasons: string[] };
+
+function describeGroupCompletenessFailure(
+  failure: GroupCompletenessFailure,
+): string {
+  switch (failure.kind) {
+    case 'dependsOn':
+      return new DependsOnCompletenessError(failure.taskId).message;
+    case 'manualVerificationStrip':
+      return new ManualVerificationStripCompletenessError(failure.taskId)
+        .message;
+    case 'gateContribution':
+    case 'seedContribution':
+    case 'groomingGate':
+      return new GroomingGateError(failure.reasons).message;
+  }
+}
+
+/**
+ * Per-arming-intent group-completeness check: re-derives, for a single
+ * task.setStatus -> Ready intent in a group, whether every mandatory sibling
+ * member it depends on has actually been staged — the setDependsOn write
+ * (hasGroupDependsOn), the manual-verification-strip (when the body carries
+ * one), the gate.accrete/seed.stage accretion content-match (when the body
+ * requires it), and finally the grooming promotion gate itself. Shared by
+ * precheckGroupCommit (commit time, the final authority) and verifyGroup
+ * (turn-end, so an incomplete group is caught before it ever surfaces to the
+ * operator) — a pure read with no side effects, so each caller controls its
+ * own annotation/broadcast/response shape.
+ */
+async function checkGroupArmingIntentCompleteness(
+  groupId: string,
+  row: StagedIntentRow,
+  payload: SetStatusPayload,
+): Promise<GroupCompletenessFailure | null> {
+  if (!hasGroupDependsOn(groupId, payload.taskId)) {
+    return { kind: 'dependsOn', taskId: payload.taskId };
+  }
+
+  if (
+    payload.groomingGate?.hasManualVerificationSection &&
+    !hasGroupManualVerificationStrip(groupId, payload.taskId)
+  ) {
+    return { kind: 'manualVerificationStrip', taskId: payload.taskId };
+  }
+
+  if (payload.groomingGate?.hasManualVerificationSection) {
+    const gatePayload = getGroupGateAccretePayload(groupId, payload.taskId);
+    if (
+      gatePayload &&
+      gatePayload.classification !== 'none' &&
+      gatePayload.classification !== 'n/a'
+    ) {
+      const backend = getTaskBackend(row.project_id);
+      const storedBody = (await backend.fetchTaskPage(payload.taskId)) ?? '';
+      const strippedItems = parseManualVerificationItems(storedBody);
+      const accretedItems = gatePayload.items.map((item) => item.text);
+      const match = checkAccretionContentMatch(
+        'gate_contribution',
+        strippedItems,
+        accretedItems,
+      );
+      if (!match.ok) {
+        return {
+          kind: 'gateContribution',
+          taskId: payload.taskId,
+          reasons: match.reasons,
+        };
+      }
+    }
+  }
+
+  if (payload.groomingGate?.seedContributionCandidates?.length) {
+    const seedPayload = getGroupSeedStagePayload(groupId, payload.taskId);
+    if (seedPayload && seedPayload.decision === 'seeds') {
+      const strippedItems = payload.groomingGate.seedContributionCandidates.map(
+        (c) => c.spec,
+      );
+      const accretedItems = seedPayload.seeds.map((s) => s.spec);
+      const match = checkAccretionContentMatch(
+        'seed_contribution',
+        strippedItems,
+        accretedItems,
+      );
+      if (!match.ok) {
+        return {
+          kind: 'seedContribution',
+          taskId: payload.taskId,
+          reasons: match.reasons,
+        };
+      }
+    }
+  }
+
+  const gateResult = await checkGroomingPromotionGate(
+    payload.groomingGate ?? {},
+    payload.taskId,
+    getCachedType(payload.taskId) ?? payload.groomingGate?.type,
+    {
+      skipGateContributionCheck: hasGroupAccretionIntent(
+        groupId,
+        payload.taskId,
+        'gate.accrete',
+      ),
+      skipSeedContributionCheck: hasGroupAccretionIntent(
+        groupId,
+        payload.taskId,
+        'seed.stage',
+      ),
+    },
+    row.project_id,
+  );
+  if (!gateResult.allowed) {
+    return {
+      kind: 'groomingGate',
+      taskId: payload.taskId,
+      reasons: gateResult.reasons,
+    };
+  }
+
+  return null;
+}
+
+/**
  * Whole-group pre-commit gate check: re-derives, for every arming
  * task.setStatus -> Ready intent in the group, the exact same gates
  * `applyIntent`'s task.setStatus case would hit (the DependsOn-completeness
@@ -2226,51 +4296,46 @@ async function precheckGroupCommit(
   ordered: StagedIntentRow[],
   opts: GroupCommitOptions,
 ): Promise<GroupCommitResult | null> {
+  const opsTerminalFailure = checkOpsTerminalGroupCompleteness(groupId);
+  if (opsTerminalFailure) {
+    return {
+      status: 409,
+      body: { error: opsTerminalFailure.message, precheck: true },
+    };
+  }
+
   for (const row of ordered) {
     if (!isArmingReadyIntent(row)) continue;
     const payload = JSON.parse(row.payload) as SetStatusPayload;
 
-    if (!hasGroupDependsOn(groupId, payload.taskId)) {
-      const err = new DependsOnCompletenessError(payload.taskId);
-      return { status: 409, body: { error: err.message, precheck: true } };
-    }
-
-    if (
-      payload.groomingGate?.hasManualVerificationSection &&
-      !hasGroupManualVerificationStrip(groupId, payload.taskId)
-    ) {
-      const err = new ManualVerificationStripCompletenessError(payload.taskId);
-      return { status: 409, body: { error: err.message, precheck: true } };
-    }
-
-    const gateResult = checkGroomingPromotionGate(
-      payload.groomingGate ?? {},
-      payload.taskId,
-      getCachedType(payload.taskId) ?? payload.groomingGate?.type,
-      {
-        skipGateContributionCheck: hasGroupAccretionIntent(
-          groupId,
-          payload.taskId,
-          'gate.accrete',
-        ),
-        skipSeedContributionCheck: hasGroupAccretionIntent(
-          groupId,
-          payload.taskId,
-          'seed.stage',
-        ),
-      },
+    const failure = await checkGroupArmingIntentCompleteness(
+      groupId,
+      row,
+      payload,
     );
-    if (!gateResult.allowed) {
+    if (failure) {
+      if (
+        failure.kind === 'dependsOn' ||
+        failure.kind === 'manualVerificationStrip'
+      ) {
+        return {
+          status: 409,
+          body: {
+            error: describeGroupCompletenessFailure(failure),
+            precheck: true,
+          },
+        };
+      }
       setStagedIntentAnnotation(
         row.id,
-        JSON.stringify({ blocked: true, reasons: gateResult.reasons }),
+        JSON.stringify({ blocked: true, reasons: failure.reasons }),
       );
       broadcastIntentById(row.id);
       return {
         status: 409,
         body: {
-          error: new GroomingGateError(gateResult.reasons).message,
-          reasons: gateResult.reasons,
+          error: describeGroupCompletenessFailure(failure),
+          reasons: failure.reasons,
           precheck: true,
         },
       };
@@ -2312,14 +4377,85 @@ async function commitGroupIntents(
   groupId: string,
   opts: GroupCommitOptions,
   planningOrchestrator?: PlanningOrchestrator,
+  sessionManager?: SessionManager,
 ): Promise<GroupCommitResult> {
-  const live = listStagedIntentsByGroup(groupId).filter((r) =>
-    ACTIVE_STATES.includes(r.state),
+  const allMembers = listStagedIntentsByGroup(groupId);
+  // A member stuck in pending_verification/needs_revision is not in
+  // ACTIVE_STATES, so `live` below silently excludes it — without this
+  // check the group would commit over the remaining members and strand the
+  // blocked one behind, exactly the partial-commit bug this guards against.
+  // Hold the whole group rather than dropping the blocked member from it.
+  const blockedMembers = allMembers.filter(
+    (r) => r.state === 'needs_revision' || r.state === 'pending_verification',
   );
+  if (blockedMembers.length > 0) {
+    const [blockedMember] = blockedMembers;
+    const otherIds = blockedMembers
+      .slice(1)
+      .map((r) => r.id)
+      .join(', ');
+    return {
+      status: 409,
+      body: {
+        error:
+          `group "${groupId}" has a blocked member ("${blockedMember.id}", ` +
+          `state "${blockedMember.state}") — it must be recovered or ` +
+          'resolved before this group can commit' +
+          (otherIds ? ` (also blocked: ${otherIds})` : ''),
+        blockingId: blockedMember.id,
+        blockedMembers: blockedMembers.map((r) => ({
+          id: r.id,
+          kind: r.kind,
+          state: r.state,
+          reason: r.disposition_reason,
+        })),
+      },
+    };
+  }
+
+  const live = allMembers.filter((r) => ACTIVE_STATES.includes(r.state));
   if (live.length === 0) {
     return {
       status: 404,
       body: { error: `no live staged intents found for group "${groupId}"` },
+    };
+  }
+  // Precheck every live member's owning session up front — a partial
+  // commit that fails midway through `ordered` would leave the group in a
+  // worse state than refusing outright before anything applies.
+  const incompleteMember = live.find((r) => {
+    if (!r.session_id) return false;
+    const turnInFlight =
+      sessionManager?.getLiveSession?.(r.session_id)?.hasActiveTurn() ?? false;
+    return !isSessionComplete(r.session_id, turnInFlight);
+  });
+  if (incompleteMember) {
+    return {
+      status: 409,
+      body: {
+        error: new SessionIncompleteError(incompleteMember.session_id!).message,
+      },
+    };
+  }
+  // Defense-in-depth alongside the stage-time refusal in stageIntent: a
+  // session.requestCapability applies via SessionManager.grantCapability + a
+  // session respawn, never via applyIntent, so it must never reach the
+  // apply loop below — where it would otherwise fall through applyIntent's
+  // `default:` unknown-kind throw and wedge the whole group (every other
+  // live member left uncommitted behind it in `ordered`).
+  const strayCapabilityRequest = live.find(
+    (r) => r.kind === 'session.requestCapability',
+  );
+  if (strayCapabilityRequest) {
+    return {
+      status: 409,
+      body: {
+        error:
+          `[stagedIntents] group "${groupId}" contains a session.requestCapability ` +
+          `intent ("${strayCapabilityRequest.id}") — it cannot be committed as part of a group; ` +
+          'approve or reject it individually via POST /staged-intents/:id/approve or /:id/reject',
+        precheck: true,
+      },
     };
   }
   if (!opts.autoApprove) {
@@ -2394,6 +4530,7 @@ async function commitGroupIntents(
         opts.override ? { reason: opts.reason } : undefined,
         opts.actorType,
         opts.triageMilestoneLabel,
+        sessionManager,
       );
       if (intent.kind === 'task.create') {
         createdTaskIds.set(intent.id, (result as { id: string }).id);
@@ -2402,6 +4539,7 @@ async function commitGroupIntents(
         annotation: null,
       });
       broadcastIntentChange(rowToApi(committedRow));
+      mirrorJournalDecisionIfStagedProposal(intent);
       await planningOrchestrator?.handleDisposition({
         intent: committedRow,
         disposition: 'approve',
@@ -2513,24 +4651,78 @@ async function commitGroupIntents(
 export function createStagedIntentsRouter(
   planningOrchestrator?: PlanningOrchestrator,
   sessionManager?: SessionManager,
+  prReviewService?: PRReviewService,
 ): Router {
   const router = Router();
+  stagedIntentSessionManager = sessionManager;
+
+  // A session's turn ending flips its already-staged intents' sessionComplete
+  // from false to true (see isSessionComplete), but no staged_intent row
+  // changes when that happens — so the milestone inbox's cached copies would
+  // stay suppressed until a refetch with no notification otherwise. Ride the
+  // existing session_event/'result' signal already on the SessionManager
+  // 'message' stream (the same channel server.ts forwards to WS clients) and
+  // re-broadcast each of that session's still-active staged intents via the
+  // existing per-intent broadcastIntentById — recomputing sessionComplete
+  // through rowToApi/isSessionComplete exactly as any other read, rather
+  // than deriving it a second way.
+  sessionManager?.on?.('message', (msg: ServerMessage) => {
+    if (msg.type !== 'session_event' || msg.eventType !== 'result') return;
+    const active = listStagedIntentsBySession(msg.sessionId).filter((row) =>
+      (['staged', 'approved'] as StagedIntentState[]).includes(row.state),
+    );
+    for (const row of active) broadcastIntentById(row.id);
+  });
 
   // ── GET /api/staged-intents ─────────────────────────────────────────────
   // ?sessionId=<id> is the SessionPanel decision-panel lens: correlates
   // proposals back to the session that produced them, active states only.
+  // ?milestone=<key> (with ?projectId=<id>) is the milestone decision-inbox
+  // lens: scopes to one milestone's staged decisions (or the "unattributed"
+  // bucket for legacy/unresolvable rows), ordered by unblock-impact via
+  // rankDecisions — joined against that milestone's convergence read-surface
+  // where resolvable, unranked-by-blocking (kind/direction + needs-attention
+  // only) for the unattributed bucket or an unresolvable milestone.
   router.get('/staged-intents', (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;
     const sessionId =
       typeof req.query.sessionId === 'string' ? req.query.sessionId : null;
-    const rows = sessionId
-      ? listStagedIntentsBySession(sessionId).filter((r) =>
-          ACTIVE_STATES.includes(r.state),
-        )
-      : projectId
-        ? listStagedIntentsByProject(projectId)
-        : listAllActiveStagedIntents();
+    const milestone =
+      typeof req.query.milestone === 'string' ? req.query.milestone : null;
+
+    if (milestone) {
+      if (!projectId) {
+        res
+          .status(400)
+          .json({ error: 'projectId is required when milestone is set' });
+        return;
+      }
+      const rows = listStagedIntentsByMilestone(projectId, milestone).filter(
+        (r) => isVisibleOnDecisionSurface(r, sessionManager),
+      );
+      let convergence = null;
+      if (milestone !== UNATTRIBUTED_MILESTONE_BUCKET) {
+        try {
+          convergence = getMilestoneConvergence(projectId, milestone);
+        } catch (err) {
+          if (!(err instanceof UnknownMilestoneError)) throw err;
+        }
+      }
+      const ranked = rankDecisions(rows, convergence);
+      res.json({ intents: ranked.map(rowToApi) });
+      return;
+    }
+
+    const rows = (
+      sessionId
+        ? listStagedIntentsBySession(sessionId).filter((r) =>
+            VISIBLE_STATES.includes(r.state),
+          )
+        : projectId
+          ? listStagedIntentsByProject(projectId)
+          : listAllActiveStagedIntents()
+    ).filter((r) => isVisibleOnDecisionSurface(r, sessionManager));
     res.json({ intents: rows.map(rowToApi) });
   });
 
@@ -2542,8 +4734,10 @@ export function createStagedIntentsRouter(
       projectId?: unknown;
       groupId?: unknown;
       decisionProposal?: unknown;
+      investigation?: unknown;
       groomProposal?: unknown;
       supersedes?: unknown;
+      milestone?: unknown;
     };
     const kind = typeof body.kind === 'string' ? body.kind : null;
     const projectId =
@@ -2551,9 +4745,13 @@ export function createStagedIntentsRouter(
     const groupId = typeof body.groupId === 'string' ? body.groupId : null;
     const decisionProposal =
       typeof body.decisionProposal === 'string' ? body.decisionProposal : null;
+    const investigation =
+      typeof body.investigation === 'string' ? body.investigation : null;
     const groomProposal = parseGroomProposal(body.groomProposal);
     const supersedes =
       typeof body.supersedes === 'string' ? body.supersedes : null;
+    const milestone =
+      typeof body.milestone === 'string' ? body.milestone : null;
 
     if (!kind) {
       res.status(400).json({ error: 'kind is required' });
@@ -2588,16 +4786,30 @@ export function createStagedIntentsRouter(
       throw err;
     }
 
-    const intent = stageIntent(
-      kind,
-      normalizedPayload,
-      projectId,
-      groupId,
-      null,
-      decisionProposal,
-      groomProposal,
-      supersedes,
-    );
+    let intent: StagedIntent;
+    try {
+      intent = stageIntent(
+        kind,
+        normalizedPayload,
+        projectId,
+        groupId,
+        null,
+        decisionProposal,
+        groomProposal,
+        supersedes,
+        milestone,
+        investigation,
+      );
+    } catch (err) {
+      if (
+        err instanceof ReadyPathMissingGroupError ||
+        err instanceof UnknownMilestoneError
+      ) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
 
     const checked = await runStageTimeReadyChecks(intent);
     res.status(201).json(checked);
@@ -2635,6 +4847,12 @@ export function createStagedIntentsRouter(
         });
         return;
       }
+      if (row.kind === 'review.dispute') {
+        res.status(409).json({
+          error: `staged intent "${row.id}" is a review.dispute — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
+        });
+        return;
+      }
       const intent = rowToApi(row);
 
       const body = req.body as {
@@ -2658,11 +4876,14 @@ export function createStagedIntentsRouter(
           intent,
           override ? { reason } : undefined,
           actorType,
+          undefined,
+          sessionManager,
         );
         const committed = transitionStagedIntent(intent.id, 'committed', {
           annotation: null,
         });
         broadcastIntentChange(rowToApi(committed));
+        mirrorJournalDecisionIfStagedProposal(intent);
         await planningOrchestrator?.handleDisposition({
           intent: committed,
           disposition: 'approve',
@@ -2699,7 +4920,8 @@ export function createStagedIntentsRouter(
         }
         if (
           err instanceof DependsOnCompletenessError ||
-          err instanceof ManualVerificationStripCompletenessError
+          err instanceof ManualVerificationStripCompletenessError ||
+          err instanceof SessionIncompleteError
         ) {
           res.status(409).json({ error: err.message });
           return;
@@ -2781,6 +5003,63 @@ export function createStagedIntentsRouter(
         return;
       }
 
+      // A review.dispute has no separate apply step either — approval is
+      // terminal: it clears the blocking verdict on the disputed PR (a
+      // synthesized approved result carrying the dispute's provenance,
+      // through the same setPRReviewResult write every other verdict uses),
+      // runs the standard approved-verdict side effects (draft -> ready,
+      // task -> In Review, mergeability check, auto-merge attempt), and
+      // notifies the authoring session. No new head SHA is produced or
+      // required — see PreReviewPipeline's SHA-keyed caches, which is
+      // exactly why this route exists instead of asking for one.
+      if (intent.kind === 'review.dispute') {
+        const payload = intent.payload as ReviewDisputePayload;
+        const pr = getPRByNumber(payload.prNumber, payload.repo);
+        if (!pr) {
+          res.status(404).json({
+            error: `PR #${payload.prNumber} in ${payload.repo} was not found`,
+          });
+          return;
+        }
+        const priorVerdict = parsePRVerdict(pr.review_result);
+        const priorResult = pr.review_result
+          ? (JSON.parse(pr.review_result) as Partial<PRReviewResult>)
+          : null;
+        const clearedResult: PRReviewResult = {
+          prNumber: payload.prNumber,
+          repo: payload.repo,
+          verdict: 'approved',
+          dimensions: priorResult?.dimensions ?? [],
+          summary:
+            `Review dispute upheld by operator — prior verdict "${priorVerdict ?? 'unknown'}" ` +
+            `cleared without a new commit. ${payload.rationale}`,
+          reviewedAt: new Date().toISOString(),
+        };
+        setPRReviewResult(
+          payload.prNumber,
+          payload.repo,
+          JSON.stringify(clearedResult),
+        );
+        const committed = transitionStagedIntent(intent.id, 'committed', {
+          annotation: null,
+        });
+        const committedIntent = rowToApi(committed);
+        broadcastIntentChange(committedIntent);
+        await resumeReviewDisputeAuthor(
+          sessionManager,
+          committedIntent,
+          'approved',
+        );
+        await prReviewService?.handleApprovedVerdict(
+          payload.prNumber,
+          payload.repo,
+          payload.taskId,
+          intent.projectId,
+        );
+        res.json(committedIntent);
+        return;
+      }
+
       // A decision.pickOne question has no approve step of its own — it is
       // resolved only by POST /staged-intents/:id/answer.
       if (intent.kind === 'decision.pickOne') {
@@ -2819,6 +5098,128 @@ export function createStagedIntentsRouter(
     },
   );
 
+  // ── POST /api/staged-intents/:id/acknowledge ──────────────────────────────
+  // planning.noOp's sole disposition: the intent proposes nothing, so there
+  // is nothing to route through applyIntent (which has, and must keep, no
+  // case for this kind — see the default: unknown-kind throw). Acknowledging
+  // transitions the row straight to `committed`, records the same
+  // staged_intent_disposition audit event every other disposition uses, and
+  // does not call planningOrchestrator.handleDisposition: a noOp's session
+  // already reached terminal by staging it (checkTerminal's `countable`
+  // filter excludes it), so there is no session left to resume and no
+  // decision for it to act on.
+  router.post(
+    '/staged-intents/:id/acknowledge',
+    (req: Request, res: Response) => {
+      const row = getActiveStagedIntent(String(req.params.id));
+      if (!row) {
+        res.status(404).json({ error: 'staged intent not found' });
+        return;
+      }
+      if (row.kind !== 'planning.noOp') {
+        res.status(409).json({
+          error: `staged intent "${row.id}" is not a planning.noOp — acknowledge only resolves a no-op marker`,
+        });
+        return;
+      }
+
+      const committed = transitionStagedIntent(row.id, 'committed', {
+        annotation: null,
+      });
+      const committedIntent = rowToApi(committed);
+      broadcastIntentChange(committedIntent);
+
+      recordEvent({
+        event_type: 'staged_intent_disposition',
+        actor_type: 'human',
+        actor_id: null,
+        project_id: committedIntent.projectId,
+        task_id: row.task_id,
+        payload: { intentId: row.id, disposition: 'acknowledge' },
+      });
+
+      res.json(committedIntent);
+    },
+  );
+
+  // ── GET /api/staged-intents/group/:groupId ────────────────────────────────
+  // Diagnostic surface: every intent ever staged for this group, regardless
+  // of state — including needs_revision/pending_verification, which
+  // /staged-intents (ACTIVE_STATES only) never surfaces. `wedged` flags the
+  // exact failure mode this route exists for: a non-empty group whose every
+  // member sits in needs_revision and/or pending_verification, reachable by
+  // no commit (commitGroupIntents refuses outright while any member is
+  // needs_revision/pending_verification) and no per-item apply/reject
+  // (getActiveStagedIntent finds nothing live either).
+  router.get(
+    '/staged-intents/group/:groupId',
+    (req: Request, res: Response) => {
+      const groupId = String(req.params.groupId);
+      const members = listStagedIntentsByGroup(groupId);
+      const wedged =
+        members.length > 0 &&
+        members.every(
+          (r) =>
+            r.state === 'needs_revision' || r.state === 'pending_verification',
+        );
+      res.json({ groupId, intents: members.map(rowToApi), wedged });
+    },
+  );
+
+  // ── POST /api/staged-intents/group/:groupId/recover ───────────────────────
+  // Wedged-group recovery: re-surfaces every needs_revision/pending_verification
+  // member of the group onto the normal staged/approved surface
+  // (ACTIVE_STATES), so the usual commit or per-item disposition
+  // (approve/reject) routes can act on it again — the state machine
+  // (STAGED_INTENT_TRANSITIONS in db/queries.ts) permits needs_revision ->
+  // staged and pending_verification -> staged only via this
+  // operator-initiated route, never implicitly. Also strips group_id: a
+  // session.requestCapability must never carry one (see
+  // validateCapabilityRequestDoesNotCarryGroup), so a recovered instance of
+  // the exact bug this guards against is freed to its individual
+  // approve/reject surface instead of being re-wedged by the next group
+  // commit. A non-capability-request member keeps its group_id — recovery
+  // only clears what stage-time validation would have refused.
+  router.post(
+    '/staged-intents/group/:groupId/recover',
+    (req: Request, res: Response) => {
+      const groupId = String(req.params.groupId);
+      const blocked = listStagedIntentsByGroup(groupId).filter(
+        (r) =>
+          r.state === 'needs_revision' || r.state === 'pending_verification',
+      );
+      if (blocked.length === 0) {
+        res.status(404).json({
+          error: `no needs_revision or pending_verification intents found for group "${groupId}"`,
+        });
+        return;
+      }
+
+      const recovered = blocked.map((row) => {
+        const staged = transitionStagedIntent(row.id, 'staged', {
+          annotation: null,
+        });
+        const cleared =
+          staged.kind === 'session.requestCapability' && staged.group_id
+            ? clearStagedIntentGroup(staged.id)
+            : staged;
+        const recoveredIntent = rowToApi(cleared);
+        broadcastIntentChange(recoveredIntent);
+        recordEvent({
+          event_type: 'staged_intent_disposition',
+          actor_type: 'human',
+          actor_id: null,
+          project_id: recoveredIntent.projectId,
+          task_id: row.task_id,
+          payload: { intentId: row.id, disposition: 'recover' },
+        });
+        return recoveredIntent;
+      });
+
+      res.json({ ok: true, recovered });
+    },
+  );
+
   // ── POST /api/staged-intents/group/:groupId/commit ───────────────────────
   // Atomic, dependency-ordered group commit: requires every live (staged |
   // approved) intent in the group to be approved, then applies them
@@ -2854,6 +5255,7 @@ export function createStagedIntentsRouter(
         groupId,
         { override, reason, actorType },
         planningOrchestrator,
+        sessionManager,
       );
       res.status(result.status).json(result.body);
     },
@@ -2891,6 +5293,7 @@ export function createStagedIntentsRouter(
         groupId,
         { override, reason, actorType, autoApprove: true },
         planningOrchestrator,
+        sessionManager,
       );
       res.status(result.status).json(result.body);
     },
@@ -2898,11 +5301,25 @@ export function createStagedIntentsRouter(
 
   // ── POST /api/staged-intents/group/:groupId/reject ───────────────────────
   // The group-level twin of `/group/:groupId/approve`: pushback | decline the
-  // whole grooming decision as one unit — every live intent in the group is
-  // rejected with the same outcome + reason, none of them committed. This is
-  // the group-disposition layer above the unchanged per-item reject-form
-  // surface (`/:id/reject`), which stays available for standalone intents
-  // (e.g. a decision.pickOne) that were never grouped in the first place.
+  // whole grooming decision as one unit. This is the group-disposition layer
+  // above the unchanged per-item reject-form surface (`/:id/reject`), which
+  // stays available for standalone intents (e.g. a decision.pickOne) that
+  // were never grouped in the first place.
+  //
+  // `decline` operates on live (staged/approved) AND blocked
+  // (needs_revision/pending_verification) members alike — a group whose only
+  // members are blocked (60 of the 64 wedged groups measured live had no
+  // live member at all) used to 404 here with nothing else able to
+  // disposition it. Declining a blocked member never touches a live sibling
+  // (it is by definition not live), so this never disturbs in-flight work.
+  //
+  // `pushback` only ever touches live members — needs_revision ->
+  // needs_revision isn't a legal transition — and is refused outright when
+  // the group already has a blocked member: pushing back every live sibling
+  // would leave zero live members and the group permanently uncommittable
+  // (the exact amplifier that produced the wedged population), so the
+  // operator is routed to decline the blocked member(s) first, or decline
+  // the whole group instead.
   router.post(
     '/staged-intents/group/:groupId/reject',
     async (req: Request, res: Response) => {
@@ -2923,20 +5340,52 @@ export function createStagedIntentsRouter(
         res.status(400).json({ error: 'reason is required' });
         return;
       }
-
-      const live = listStagedIntentsByGroup(groupId).filter((r) =>
-        ACTIVE_STATES.includes(r.state),
-      );
-      if (live.length === 0) {
-        res.status(404).json({
-          error: `no live staged intents found for group "${groupId}"`,
+      if (looksLikeSystemRefusalReason(reason)) {
+        res.status(400).json({
+          error:
+            'reason looks like a copied system refusal/error message, not an ' +
+            'operator explanation — describe why this is being dispositioned instead',
         });
         return;
       }
 
+      const members = listStagedIntentsByGroup(groupId);
+      const live = members.filter((r) => ACTIVE_STATES.includes(r.state));
+      const blocked = members.filter((r) => BLOCKED_STATES.includes(r.state));
+      if (live.length === 0 && blocked.length === 0) {
+        res.status(404).json({
+          error: `no live or blocked staged intents found for group "${groupId}"`,
+        });
+        return;
+      }
+
+      let target: StagedIntentRow[];
+      if (outcome === 'pushback') {
+        if (blocked.length > 0) {
+          res.status(409).json({
+            error:
+              `group "${groupId}" already has ${blocked.length} blocked member(s) — ` +
+              'pushing back its live members would leave the group with no live ' +
+              'members and permanently uncommittable; decline the blocked member(s) ' +
+              'individually (POST /staged-intents/:id/reject) or decline the whole group instead',
+            blockedIds: blocked.map((r) => r.id),
+          });
+          return;
+        }
+        if (live.length === 0) {
+          res.status(404).json({
+            error: `no live staged intents found for group "${groupId}"`,
+          });
+          return;
+        }
+        target = live;
+      } else {
+        target = [...live, ...blocked];
+      }
+
       const rejected: string[] = [];
       const forGroupDisposition: StagedIntentRow[] = [];
-      for (const row of live) {
+      for (const row of target) {
         const { intent: rejectedIntent, row: rejectedRow } =
           transitionRejectedIntent(row, outcome, reason);
         rejected.push(rejectedIntent.id);
@@ -3020,6 +5469,7 @@ export function createStagedIntentsRouter(
             triageMilestoneLabel: milestoneLabel,
           },
           planningOrchestrator,
+          sessionManager,
         );
         if (result.status === 200) {
           committed.push(groupId);
@@ -3051,14 +5501,24 @@ export function createStagedIntentsRouter(
   // intent (disposition_reason) and recorded in audit_log regardless of
   // whether the originating session still exists — a disposition on an
   // intent whose session has already ended is still durably recorded.
+  //
+  // Also the operator-usable exit for a blocked member (needs_revision |
+  // pending_verification): getActiveStagedIntent only finds staged/approved
+  // rows, so a blocked row falls back to getBlockedStagedIntent. Only
+  // `decline` is legal on a blocked row — needs_revision -> needs_revision
+  // isn't a transition (STAGED_INTENT_TRANSITIONS), so a pushback would just
+  // throw; the operator-facing recovery for "revise this" is the group
+  // recover route instead, which re-surfaces it to staged first.
   router.post(
     '/staged-intents/:id/reject',
     async (req: Request, res: Response) => {
-      const row = getActiveStagedIntent(String(req.params.id));
+      const id = String(req.params.id);
+      const row = getActiveStagedIntent(id) ?? getBlockedStagedIntent(id);
       if (!row) {
         res.status(404).json({ error: 'staged intent not found' });
         return;
       }
+      const isBlocked = BLOCKED_STATES.includes(row.state);
       const body = req.body as { outcome?: unknown; reason?: unknown };
       const outcome: StagedIntentRejectOutcome | null =
         body?.outcome === 'pushback' || body?.outcome === 'decline'
@@ -3071,8 +5531,25 @@ export function createStagedIntentsRouter(
           .json({ error: 'outcome must be "pushback" or "decline"' });
         return;
       }
+      if (isBlocked && outcome === 'pushback') {
+        res.status(400).json({
+          error:
+            `staged intent "${id}" is already blocked (state "${row.state}") — ` +
+            'it can only be declined, not pushed back; use POST ' +
+            '/staged-intents/group/:groupId/recover to re-surface it for revision first',
+        });
+        return;
+      }
       if (!reason) {
         res.status(400).json({ error: 'reason is required' });
+        return;
+      }
+      if (looksLikeSystemRefusalReason(reason)) {
+        res.status(400).json({
+          error:
+            'reason looks like a copied system refusal/error message, not an ' +
+            'operator explanation — describe why this is being dispositioned instead',
+        });
         return;
       }
 

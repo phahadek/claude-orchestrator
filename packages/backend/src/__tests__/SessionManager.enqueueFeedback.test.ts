@@ -52,8 +52,8 @@ vi.mock('fs', async () => {
 });
 
 vi.mock('../config', () => ({
-  config: { maxConcurrentCodeSessions: 10 },
-  runtimeSettings: { session_mode: 'cli' },
+  config: {},
+  runtimeSettings: { session_mode: 'cli', max_concurrent_code_sessions: 10 },
   getProjectById: vi.fn().mockReturnValue(null),
   normalizePath: (p: string) => p,
 }));
@@ -423,5 +423,142 @@ describe('SessionManager.enqueueFeedback()', () => {
     const [, combined] = vi.mocked(sm.sendOrResume).mock.calls[0];
     expect(combined).toContain('first item');
     expect(combined).toContain('second item');
+  });
+
+  describe('session_feedback_pending', () => {
+    it('idle (parked) session: emits pending=true before sendOrResume resolves, then pending=false once delivered', async () => {
+      vi.mocked(queries.getSession).mockReturnValue({
+        session_id: 'sess-parked',
+        status: 'idle',
+      } as never);
+
+      const sm = new SessionManager();
+      const emitSpy = vi.spyOn(sm, 'emit');
+      let resolveResume!: (v: string) => void;
+      vi.spyOn(sm, 'sendOrResume').mockReturnValue(
+        new Promise((resolve) => {
+          resolveResume = resolve;
+        }),
+      );
+
+      const done = sm.enqueueFeedback(
+        'sess-parked',
+        'operator-disposition',
+        'capability granted',
+      );
+
+      // pending=true must be emitted before sendOrResume resolves.
+      expect(emitSpy).toHaveBeenCalledWith(
+        'message',
+        expect.objectContaining({
+          type: 'session_feedback_pending',
+          sessionId: 'sess-parked',
+          pending: true,
+        }),
+      );
+      expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+
+      resolveResume('sess-parked');
+      await done;
+
+      expect(emitSpy).toHaveBeenCalledWith(
+        'message',
+        expect.objectContaining({
+          type: 'session_feedback_pending',
+          sessionId: 'sess-parked',
+          pending: false,
+        }),
+      );
+      expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
+    });
+
+    it('live, idle session (direct send() path): does not leave a pending state visible after delivery', async () => {
+      vi.mocked(queries.getSession).mockReturnValue({
+        session_id: 'sess-live-idle-2',
+        status: 'running',
+      } as never);
+
+      const sm = new SessionManager();
+      (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(
+        'sess-live-idle-2',
+        { hasActiveTurn: () => false },
+      );
+      const emitSpy = vi.spyOn(sm, 'emit');
+      vi.spyOn(sm, 'sendOrResume').mockResolvedValue('sess-live-idle-2');
+
+      await sm.enqueueFeedback(
+        'sess-live-idle-2',
+        'ai-reviewer',
+        'needs_changes feedback',
+      );
+
+      const pendingCalls = emitSpy.mock.calls.filter(
+        ([, msg]) =>
+          (msg as { type?: string }).type === 'session_feedback_pending',
+      );
+      expect(pendingCalls.length).toBeGreaterThan(0);
+      // The last emitted pending state must be cleared (false), not left as true.
+      const lastPending = pendingCalls[pendingCalls.length - 1][1] as {
+        pending: boolean;
+      };
+      expect(lastPending.pending).toBe(false);
+    });
+
+    it('is distinguishable from session_action_failed on message shape', async () => {
+      vi.mocked(queries.getSession).mockReturnValue({
+        session_id: 'sess-dead-2',
+        status: 'error',
+      } as never);
+
+      const sm = new SessionManager();
+      const emitSpy = vi.spyOn(sm, 'emit');
+      vi.spyOn(sm, 'sendOrResume').mockResolvedValue(null);
+
+      await sm.enqueueFeedback(
+        'sess-dead-2',
+        'operator-disposition',
+        'pushback reason',
+      );
+
+      const pendingMsg = emitSpy.mock.calls
+        .map(([, msg]) => msg as Record<string, unknown>)
+        .find((msg) => msg.type === 'session_feedback_pending');
+      const failedMsg = emitSpy.mock.calls
+        .map(([, msg]) => msg as Record<string, unknown>)
+        .find((msg) => msg.type === 'session_action_failed');
+
+      expect(pendingMsg).toBeDefined();
+      expect(failedMsg).toBeDefined();
+      // Distinct message shapes: the pending state never carries a
+      // failure/reason field, and is never rendered by the same path.
+      expect(pendingMsg).not.toHaveProperty('reason');
+      expect(pendingMsg).not.toHaveProperty('action');
+      expect(pendingMsg).not.toHaveProperty('detail');
+    });
+
+    it('sendOrResume that throws clears the pending state without asserting delivery is still in progress', async () => {
+      vi.mocked(queries.getSession).mockReturnValue({
+        session_id: 'sess-idle-3',
+        status: 'idle',
+      } as never);
+
+      const sm = new SessionManager();
+      const emitSpy = vi.spyOn(sm, 'emit');
+      vi.spyOn(sm, 'sendOrResume').mockRejectedValue(
+        new Error('respawn failed'),
+      );
+
+      await sm.enqueueFeedback('sess-idle-3', 'system:nudge', 'nudge text');
+
+      const pendingCalls = emitSpy.mock.calls.filter(
+        ([, msg]) =>
+          (msg as { type?: string }).type === 'session_feedback_pending',
+      );
+      expect(pendingCalls.length).toBe(2);
+      expect((pendingCalls[0][1] as { pending: boolean }).pending).toBe(true);
+      expect((pendingCalls[1][1] as { pending: boolean }).pending).toBe(false);
+      expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+      expect(queries.listUndeliveredInboxItems('sess-idle-3')).toHaveLength(1);
+    });
   });
 });

@@ -12,10 +12,7 @@ import { setTaskWriteRefreshFn } from './tasks/TaskWriteCommands';
 import { sendInitialStateBurst } from './ws/initialStateBurst';
 import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
-import {
-  permissionEventsRouter,
-  permissionDenialsRouter,
-} from './routes/rules';
+import { permissionDenialsRouter } from './routes/rules';
 import configRouter from './routes/config';
 import settingsRouter, {
   loadRuntimeSettingsFromDb,
@@ -33,6 +30,7 @@ import {
   setTaskCacheRefresher,
 } from './routes/tasks';
 import { TaskCacheRefresher } from './orchestration/TaskCacheRefresher';
+import { ConvergenceSnapshotJob } from './orchestration/ConvergenceSnapshotJob';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
 import {
@@ -60,11 +58,18 @@ import { AutoMerger } from './github/AutoMerger';
 import { ReviewerCommentsWatcher } from './github/ReviewerCommentsWatcher';
 import { AUTO_REVIEW_ENABLED, GITHUB_TOKEN } from './config';
 import { getCorporateMode } from './config/corporateMode';
-import { getOrchestratorConfig } from './config/appConfig';
+import {
+  getOrchestratorConfig,
+  logConfigProvenanceSummary,
+} from './config/appConfig';
+import { createConfigStatusRouter } from './routes/configStatus';
 import { AutoLauncher } from './orchestration/AutoLauncher';
+import { DispatchTriggerEvaluator } from './orchestration/DispatchTriggerEvaluator';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { PlanUsagePoller } from './orchestration/PlanUsagePoller';
+import { registerUsagePoller } from './orchestration/usageAdmission';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
+import { StrandedOpsTaskMonitor } from './orchestration/StrandedOpsTaskMonitor';
 import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
@@ -73,10 +78,16 @@ import { register as registerWorktreeReconciler } from './orchestration/Worktree
 import {
   register as registerGateReconciler,
   configureGateVerification,
+  reattachOutstandingGateVerifications,
 } from './gate/gateReconciler';
 import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
 import { SessionGateItemVerifier } from './gate/gateItemVerifier';
-import { deleteGhostSessions, getPRBySessionId } from './db/queries';
+import {
+  deleteGhostSessions,
+  getPRBySessionId,
+  backfillStagedIntentMilestones,
+} from './db/queries';
+import { resolveMilestoneForTaskId } from './projects/milestoneResolver';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
@@ -94,8 +105,10 @@ import {
 import { createOrchestratorMcpRouter } from './mcp/orchestratorMcpServer';
 import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
 import { createOpsJournalRouter } from './routes/opsJournal';
+import { createTaskAbortRouter } from './routes/taskAbort';
 import { createGateStateRouter } from './routes/gateState';
 import { createSeedStateRouter } from './routes/seedState';
+import { createConvergenceRouter } from './routes/convergence';
 import { createArchitectureRouter } from './routes/architecture';
 import { createDesignRouter } from './routes/design';
 import { createDesignContextRouter } from './routes/designContext';
@@ -103,6 +116,7 @@ import { createGroomContextRouter } from './routes/groomContext';
 import { createGroomFlipRouter } from './routes/groomFlip';
 import { createMergeCandidatesRouter } from './routes/mergeCandidates';
 import { createOpsContextRouter } from './routes/opsContext';
+import { createMilestonesRouter } from './routes/milestones';
 import { createPlanningLaunchRouter } from './routes/planningLaunch';
 import {
   OpsSessionLauncher,
@@ -120,6 +134,17 @@ runMigrations(db);
 loadRuntimeSettingsFromDb();
 setupSessionCgroup();
 importProjectsFromEnv(process.env.PROJECTS);
+
+// Best-effort backfill of pre-milestone-column staged_intent rows — never
+// blocks boot, and rows that don't resolve just stay in the "unattributed"
+// bucket (see backfillStagedIntentMilestones in db/queries.ts).
+try {
+  backfillStagedIntentMilestones(resolveMilestoneForTaskId);
+} catch (err) {
+  logger.error(
+    `[server] staged_intent milestone backfill failed: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
 
 // Resume-at-boot: a project's deploy_run left `running` by a self-deploy
 // restart (the restart step reboots this very backend) never finalizes on
@@ -178,6 +203,7 @@ setSettingsReviewOrchestrator(reviewOrchestrator);
 const planningOrchestrator = new PlanningOrchestrator(sessionManager);
 
 const PORT = getOrchestratorConfig().server.port;
+logConfigProvenanceSummary();
 
 const app = express();
 app.use(express.json());
@@ -201,6 +227,9 @@ app.use('/api', createSessionRecordReadRouter());
 // been retired in favor of staging journal.setState through the MCP tool
 // surface above.
 app.use('/api', createOpsJournalRouter());
+// Device-authed-only abort route for a mis-filed Backlog task — flips it to
+// Deferred and kills its bound groom session, if any (see routes/taskAbort.ts).
+app.use('/api', createTaskAbortRouter(sessionManager));
 // Setup endpoints are public — wizard UI uses them before credentials exist
 app.use('/api', setupRouter);
 // Gate all other /api routes when setup has not been completed
@@ -213,7 +242,6 @@ app.use('/api', createSetupModeGuard());
 app.use('/api', requireDeviceAuth);
 // Auth-gated enrollment routes (approve, devices) — valid enrolled-device token required
 app.use('/api/enrollment', createGatedEnrollmentRouter());
-app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/permission-denials', permissionDenialsRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/sessions', sessionsRouter);
@@ -272,16 +300,22 @@ app.use('/api', createTasksRouter(sessionManager, reviewOrchestrator));
 app.use('/api/analytics', analyticsRouter);
 app.use('/api', projectsRouter);
 app.use('/api', configRouter);
+app.use('/api', createConfigStatusRouter());
 app.use('/api', updateRouter);
 app.use('/api/diagnostics', createDiagnosticsRouter());
 app.use('/api', createPlanUsageRouter());
 app.use(
   '/api',
-  createStagedIntentsRouter(planningOrchestrator, sessionManager),
+  createStagedIntentsRouter(
+    planningOrchestrator,
+    sessionManager,
+    prReviewService,
+  ),
 );
 app.use('/api', createGateStateRouter());
 app.use('/api', createDeployRouter());
 app.use('/api', createSeedStateRouter());
+app.use('/api', createConvergenceRouter(sessionManager));
 app.use('/api', createArchitectureRouter());
 app.use('/api', createDesignRouter());
 app.use('/api', createDesignContextRouter());
@@ -290,6 +324,7 @@ const opsSessionLauncher = new OpsSessionLauncher(sessionManager);
 app.use('/api', createGroomFlipRouter(opsSessionLauncher));
 app.use('/api', createMergeCandidatesRouter());
 app.use('/api', createOpsContextRouter());
+app.use('/api', createMilestonesRouter());
 app.use('/api', createPlanningLaunchRouter(opsSessionLauncher));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
@@ -420,6 +455,15 @@ wss.on('connection', (ws, req) => {
 // orphan resume, and the Scheduler drives subsequent periodic polls.
 const autoLauncher = new AutoLauncher(sessionManager, broadcast);
 
+// DispatchTriggerEvaluator: sibling to AutoLauncher — scans armed flows
+// (groom/ops/design) across all projects' non-Done milestones and dispatches
+// planning sessions via dispatchPlanningFlow. Only the groom candidate
+// predicate is wired so far; ops/design land in a sibling task.
+const dispatchTriggerEvaluator = new DispatchTriggerEvaluator(
+  sessionManager,
+  opsSessionLauncher,
+);
+
 // TaskCacheRefresher: background loop that keeps per-project board caches warm.
 // Handlers always serve from cache; the refresher populates it on an interval.
 const taskCacheRefresher = new TaskCacheRefresher(broadcast);
@@ -454,6 +498,7 @@ const stuckSessionMonitor = new StuckSessionMonitor(
 // device is on an API key or the OAuth token can't be read.
 const planUsagePoller = new PlanUsagePoller(broadcast);
 setPlanUsagePoller(planUsagePoller);
+registerUsagePoller(planUsagePoller);
 
 // Orphaned-task sweep: finds tasks stuck at In Progress with no live session.
 // enqueueFeedback is wired so idle sessions without a PR are nudged via the
@@ -463,7 +508,17 @@ const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
     sessionManager.enqueueFeedback(sessionId, source, payload),
 });
 
+// Stranded-ops detector: surfaces (never reverts) an Investigation/Operational
+// task whose ops_journal has advanced past pending but then stalled with no
+// live session and no pending operator decision — the gap OrphanedTaskSweeper's
+// exemption for such tasks otherwise leaves permanently unobserved.
+const strandedOpsTaskMonitor = new StrandedOpsTaskMonitor();
+
 const sessionEventsPruner = new SessionEventsPruner();
+
+// Convergence snapshot: samples the live milestone convergence every 5
+// minutes and writes a durable burndown row only when it changes.
+const convergenceSnapshotJob = new ConvergenceSnapshotJob();
 
 const stalledPRReconciler = new StalledPRReconciler(broadcast);
 stalledPRReconciler.setReviewOrchestrator(reviewOrchestrator);
@@ -479,36 +534,54 @@ updateChecker.register(scheduler);
 
 // Register all periodic sweepers with the Scheduler.
 autoLauncher.register(scheduler);
+dispatchTriggerEvaluator.register(scheduler);
 opsSessionLauncher.register(scheduler);
 // Local-branch merge sweep — independent of GitHub/PRMergeWatcher so
 // local-only projects (no PR) still get approved branches squash-merged.
 autoMerger.register(scheduler);
 orphanedTaskSweeper.register(scheduler);
+strandedOpsTaskMonitor.register(scheduler);
 stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
+convergenceSnapshotJob.register(scheduler);
 registerWorktreeReconciler(scheduler);
+// Session-map reconciler: defense-in-depth sweep dropping stale in-memory
+// this.sessions entries whose DB row is terminal or missing, so a slot leak
+// from any (known or future) code path self-heals without operator
+// intervention. Same cadence pattern as registerWorktreeReconciler above.
+scheduler.register({
+  name: 'session_map_reconciler',
+  intervalMs: 30 * 60_000,
+  runOnBoot: true,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    sessionManager.reconcileSessionsMap();
+  },
+});
 // Gate-verification reconciler: runnability/readiness reconcile on every
-// tick; auto-run verification stays inert here (no verifier passed to
-// register()) — M12 excludes reconciler auto-launch, that's the deferred
-// M13+ phase. The verifier + followupFiler + concurrency config are wired
-// via configureGateVerification instead, for the sibling manual-dispatch
+// tick; auto-run verification drives the same wired verifier, gated by the
+// global gate_verification_enabled master switch and, per item, by that
+// item's milestone's (milestone, 'gate-verify') arm. The same config is
+// also stashed via configureGateVerification for the sibling manual-dispatch
 // surface (an operator-triggered /gate verify) to read back and invoke
 // directly on selected items.
-registerGateReconciler(scheduler);
-configureGateVerification({
+const gateVerificationOptions = {
   verifier: new SessionGateItemVerifier(sessionManager),
   concurrency: {
     maxDispatchAttempts: 3,
     maxFixAttempts: 3,
   },
-});
+};
+registerGateReconciler(scheduler, gateVerificationOptions);
+configureGateVerification(gateVerificationOptions);
 
 void runBootSequence({
   jsonlReader,
   sessionManager,
+  planningOrchestrator,
   stuckSessionMonitor,
   autoMerger,
   githubClient,
@@ -516,6 +589,9 @@ void runBootSequence({
   scheduler,
   sessionEventsPruner,
   stalledPRReconciler,
+  gateVerifyReconciler: {
+    reattachOutstanding: reattachOutstandingGateVerifications,
+  },
   server,
   port: PORT,
   broadcast,

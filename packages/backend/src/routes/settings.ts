@@ -20,6 +20,7 @@ const router = Router();
 const SETTING_KEYS = [
   'max_concurrent_code_sessions',
   'max_concurrent_planning_sessions',
+  'max_concurrent_verify_sessions',
   'auto_review_concurrency',
   'auto_review',
   'card_preview_lines',
@@ -37,6 +38,7 @@ const SETTING_KEYS = [
   'session_cgroup_deny_swap',
   'session_notify_threshold_seconds',
   'session_pause_threshold_seconds',
+  'session_inert_threshold_seconds',
   'session_hard_stop_window_seconds',
   'ci_poll_interval_seconds',
   'ci_poll_max_minutes',
@@ -51,7 +53,12 @@ const SETTING_KEYS = [
   'planning_session_effort',
   'ops_session_model',
   'ops_session_effort',
+  'gate_verify_session_model',
+  'gate_verify_session_effort',
   'tier3_classifier_model',
+  'capability_auto_approve_allowlist',
+  'milestone_attention_aging_threshold_seconds',
+  'milestone_attention_flat_convergence_window_seconds',
 ] as const satisfies readonly SettingKey[];
 
 type RouteSettingKey = (typeof SETTING_KEYS)[number];
@@ -66,6 +73,9 @@ function applyToRuntime(
       break;
     case 'max_concurrent_planning_sessions':
       runtimeSettings.max_concurrent_planning_sessions = value as number;
+      break;
+    case 'max_concurrent_verify_sessions':
+      runtimeSettings.max_concurrent_verify_sessions = value as number;
       break;
     case 'auto_review_concurrency':
       runtimeSettings.auto_review_concurrency = value as number;
@@ -122,6 +132,9 @@ function applyToRuntime(
     case 'session_pause_threshold_seconds':
       runtimeSettings.session_pause_threshold_seconds = value as number;
       break;
+    case 'session_inert_threshold_seconds':
+      runtimeSettings.session_inert_threshold_seconds = value as number;
+      break;
     case 'session_hard_stop_window_seconds':
       runtimeSettings.session_hard_stop_window_seconds = value as number;
       break;
@@ -164,8 +177,25 @@ function applyToRuntime(
     case 'ops_session_effort':
       runtimeSettings.ops_session_effort = value as string;
       break;
+    case 'gate_verify_session_model':
+      runtimeSettings.gate_verify_session_model = value as string;
+      break;
+    case 'gate_verify_session_effort':
+      runtimeSettings.gate_verify_session_effort = value as string;
+      break;
     case 'tier3_classifier_model':
       runtimeSettings.tier3_classifier_model = value as string;
+      break;
+    case 'capability_auto_approve_allowlist':
+      runtimeSettings.capability_auto_approve_allowlist = value as string[];
+      break;
+    case 'milestone_attention_aging_threshold_seconds':
+      runtimeSettings.milestone_attention_aging_threshold_seconds =
+        value as number;
+      break;
+    case 'milestone_attention_flat_convergence_window_seconds':
+      runtimeSettings.milestone_attention_flat_convergence_window_seconds =
+        value as number;
       break;
   }
 }
@@ -177,13 +207,18 @@ export function loadRuntimeSettingsFromDb(): void {
   }
 }
 
-function runtimeSettingsAsRecord(): Record<RouteSettingKey, string> {
+function runtimeSettingsAsRecord(): {
+  [K in RouteSettingKey]: Settings[K] extends string[] ? string[] : string;
+} {
   return {
     max_concurrent_code_sessions: String(
       runtimeSettings.max_concurrent_code_sessions,
     ),
     max_concurrent_planning_sessions: String(
       runtimeSettings.max_concurrent_planning_sessions,
+    ),
+    max_concurrent_verify_sessions: String(
+      runtimeSettings.max_concurrent_verify_sessions,
     ),
     auto_review_concurrency: String(runtimeSettings.auto_review_concurrency),
     auto_review: String(runtimeSettings.auto_review),
@@ -212,6 +247,9 @@ function runtimeSettingsAsRecord(): Record<RouteSettingKey, string> {
     session_pause_threshold_seconds: String(
       runtimeSettings.session_pause_threshold_seconds,
     ),
+    session_inert_threshold_seconds: String(
+      runtimeSettings.session_inert_threshold_seconds,
+    ),
     session_hard_stop_window_seconds: String(
       runtimeSettings.session_hard_stop_window_seconds,
     ),
@@ -234,7 +272,17 @@ function runtimeSettingsAsRecord(): Record<RouteSettingKey, string> {
     planning_session_effort: runtimeSettings.planning_session_effort,
     ops_session_model: runtimeSettings.ops_session_model,
     ops_session_effort: runtimeSettings.ops_session_effort,
+    gate_verify_session_model: runtimeSettings.gate_verify_session_model,
+    gate_verify_session_effort: runtimeSettings.gate_verify_session_effort,
     tier3_classifier_model: runtimeSettings.tier3_classifier_model,
+    capability_auto_approve_allowlist:
+      runtimeSettings.capability_auto_approve_allowlist,
+    milestone_attention_aging_threshold_seconds: String(
+      runtimeSettings.milestone_attention_aging_threshold_seconds,
+    ),
+    milestone_attention_flat_convergence_window_seconds: String(
+      runtimeSettings.milestone_attention_flat_convergence_window_seconds,
+    ),
   };
 }
 

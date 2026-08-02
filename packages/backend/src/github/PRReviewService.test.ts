@@ -3319,14 +3319,20 @@ describe('PRReviewService — taskUrl strips notion: prefix', () => {
     manualItemsForHuman: [],
   };
 
-  it('passes https://www.notion.so/task-abc123 (not notion:task-abc123) to sessionManager.start', async () => {
+  it('passes the project context URL as taskUrl and carries the real task association via taskId (not notion:task-abc123)', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // task_id: 'notion:task-abc123'
 
     const mockSM = makeMockSessionManager();
     let capturedTaskUrl = '';
+    let capturedTaskId: string | undefined;
     (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      (taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+      (
+        taskUrl: string,
+        _ctxUrl: string,
+        opts: { sessionId: string; taskId?: string },
+      ) => {
         capturedTaskUrl = taskUrl;
+        capturedTaskId = opts.taskId;
         setImmediate(() =>
           mockSM.emit(
             'message',
@@ -3353,7 +3359,10 @@ describe('PRReviewService — taskUrl strips notion: prefix', () => {
       makeMockDiffSource(),
     );
 
-    expect(capturedTaskUrl).toBe('https://www.notion.so/task-abc123');
-    expect(capturedTaskUrl).not.toContain('notion:task-abc123');
+    // taskUrl is only used for display/storage for a review session — the
+    // actual task association is carried by taskId, so it works for any
+    // backend (github, notion, etc.).
+    expect(capturedTaskUrl).toBe('https://notion.so/ctx');
+    expect(capturedTaskId).toBe('notion:task-abc123');
   });
 });

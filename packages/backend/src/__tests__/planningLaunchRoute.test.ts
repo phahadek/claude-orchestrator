@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import express from 'express';
 import request from 'supertest';
 
@@ -13,10 +14,12 @@ vi.mock('../ops/opsLoad.js', () => ({
   loadOpsContext: mockLoadOpsContext,
 }));
 
-vi.mock('../db/queries.js', () => ({
-  getMilestoneById: mockGetMilestoneById,
-  getProjectRowById: mockGetProjectRowById,
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getMilestoneById: mockGetMilestoneById,
+    getProjectRowById: mockGetProjectRowById,
+  }),
+);
 
 import {
   createPlanningLaunchRouter,
@@ -78,6 +81,10 @@ describe('resolveSessionType', () => {
     expect(resolveSessionType('investigation')).toBe('ops');
   });
 
+  it('resolves docs to its own sessionType', () => {
+    expect(resolveSessionType('docs')).toBe('docs');
+  });
+
   it('returns null for an unrecognized workflow', () => {
     expect(resolveSessionType('nonsense')).toBeNull();
   });
@@ -103,9 +110,11 @@ describe('POST /api/planning/launch', () => {
     expect(launchSelected).toHaveBeenCalledTimes(1);
     const call = launchSelected.mock.calls[0][0];
     expect(call.sessionType).toBe('groom');
+    // groom/design dispatch now normalizes (not strips) task ids — the
+    // source prefix is retained, see normalizeTaskId in routes/planningLaunch.ts.
     expect(call.tasks.map((t: { id: string }) => t.id)).toEqual([
-      'task-a',
-      'task-b',
+      'notion:task-a',
+      'notion:task-b',
     ]);
     expect(res.body.launched).toEqual(['task-a', 'task-b']);
     expect(mockLoadOpsContext).not.toHaveBeenCalled();

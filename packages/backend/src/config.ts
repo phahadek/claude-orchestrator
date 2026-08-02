@@ -70,9 +70,6 @@ export const config = {
   port: _oc.server.port,
   projectDir: normalizePath(process.env.PROJECT_DIR ?? process.cwd()),
   claudePath: resolveClaudePath(),
-  maxConcurrentCodeSessions: Number(
-    process.env.MAX_CONCURRENT_CODE_SESSIONS ?? 20,
-  ),
   anthropicApiKey: getSecret('ANTHROPIC_API_KEY') ?? '',
 };
 
@@ -98,6 +95,24 @@ export const BASH_DEFAULT_TIMEOUT_MS = Number(
 process.env.BASH_MAX_OUTPUT_LENGTH = String(BASH_MAX_OUTPUT_LENGTH);
 process.env.BASH_DEFAULT_TIMEOUT_MS = String(BASH_DEFAULT_TIMEOUT_MS);
 
+// The Tier-B (capability-gated) read MCP tools — session.getRecord (own
+// runtime record by target session id, mcp/tools/sessionRecordReadTool.ts),
+// auditLog.query (project-scoped audit_log, mcp/tools/auditLogReadTools.ts),
+// and sessionEvents.query (project-scoped, aggregate-first session_events,
+// mcp/tools/sessionEventsReadTools.ts). Registered unconditionally on every
+// MCP connection (see orchestratorMcpServer.ts) since the grant check
+// happens per-call inside each tool handler, not at connection time — but
+// the CLI's own --allowed-tools gate is a separate, prior boundary, so
+// every one of these tools must also appear here (and in every planning
+// workflow's *_MCP_TOOLS below), in the CLI-exposed underscore-sanitized
+// form `orchestratorMcpToolName` produces, for any session type to be able
+// to call them at all once granted the underlying capability.
+const TIER_B_READ_MCP_TOOLS = [
+  orchestratorMcpToolName('session.getRecord'),
+  orchestratorMcpToolName('auditLog.query'),
+  orchestratorMcpToolName('sessionEvents.query'),
+];
+
 export const ALLOWED_TOOLS = [
   'Bash(git:*)',
   'Bash(npm:*)',
@@ -121,7 +136,13 @@ export const ALLOWED_TOOLS = [
   'Bash(sort:*)',
   'Bash(pwd:*)',
   // GitHub MCP — explicit allowlist; create_pull_request and merge_pull_request are
-  // backend-owned and must not be available to session agents.
+  // backend-owned and must not be available to session agents. The one
+  // reviewed exception is DOCS_ALLOWED_TOOLS below, which grants
+  // create_pull_request (plus the `gh pr create` Bash verb) to docs sessions
+  // only — a repo-file Docs task has no backend-driven PR-open path the way
+  // a Code session does, so the docs session must open its own never-auto-merge
+  // PR. This is a narrow, scoped precedent for docs sessions specifically,
+  // not a relaxation of this exclusion for any other session type.
   'mcp__github__add_issue_comment',
   'mcp__github__create_branch',
   'mcp__github__create_issue',
@@ -154,6 +175,7 @@ export const ALLOWED_TOOLS = [
   orchestratorMcpToolName('health'),
   orchestratorMcpToolName('review.disposition'),
   orchestratorMcpToolName('flaky.confirm'),
+  ...TIER_B_READ_MCP_TOOLS,
 ];
 
 // Read-only Bash subset shared by planning sessions (groom/design/ops) — no
@@ -227,11 +249,34 @@ const ARCHITECTURE_READ_MCP_TOOLS = [
   orchestratorMcpToolName('architecture.queryUnits'),
 ];
 
+// task.getById — the read-only task-summary ({title, type, status}) lookup
+// (mcp/tools/taskReadTools.ts), always-on for groom/design/ops by the same
+// precedent as ARCHITECTURE_READ_MCP_TOOLS above. Not a staged-intent kind,
+// so it isn't in PLANNING_INTENT_KINDS — added here explicitly.
+const TASK_READ_MCP_TOOLS = [orchestratorMcpToolName('task.getById')];
+
+// pullRequest.getByTaskId — the read-only PR lookup
+// (mcp/tools/pullRequestReadTools.ts), registered unconditionally by
+// buildMcpServer for any session resolving to a project (see
+// orchestratorMcpServer.ts's doc comment) — added here explicitly to every
+// planning workflow's tool set to keep this allow-list in parity with what
+// the server actually registers. gateSeed.getState is NOT included here for
+// groom/design: it stays ops-only (see OPS_MCP_TOOLS below) even though the
+// server also registers it unconditionally for groom/design — a groom/design
+// session must never be CLI-permitted to call it, only ever see it listed
+// (see orchestrator-config.test.ts's "never a mutating gate/seed tool" guard).
+const PROJECT_READ_MCP_TOOLS = [
+  orchestratorMcpToolName('pullRequest.getByTaskId'),
+];
+
 const GROOM_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
   ...PLANNING_INTENT_KINDS.groom.map(orchestratorMcpToolName),
   orchestratorMcpToolName('groom.precheck'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
+  ...TASK_READ_MCP_TOOLS,
+  ...PROJECT_READ_MCP_TOOLS,
+  ...TIER_B_READ_MCP_TOOLS,
 ];
 
 // Plus completeness.disposition / completeness.traceCoverage — the /design
@@ -252,20 +297,33 @@ const DESIGN_MCP_TOOLS = [
   orchestratorMcpToolName('completeness.disposition'),
   orchestratorMcpToolName('completeness.traceCoverage'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
+  ...TASK_READ_MCP_TOOLS,
+  ...PROJECT_READ_MCP_TOOLS,
+  ...TIER_B_READ_MCP_TOOLS,
 ];
 
-// Plus gate.verify — a gate-item-verification session is sessionType 'ops'
-// (see sessionPredicates.ts#isGateVerifySession) and reports its finding
-// through this same verdict-delivery tool (mcp/tools/verdictTools.ts),
-// replacing the retired stdout-scraped `gate_verify` JSON block. gate.verify
-// is not a staged-intent kind (it's a direct verdict call, not something a
-// procedure stages), so it isn't in PLANNING_INTENT_KINDS.ops — it's added
-// here explicitly instead.
+// gate.verify — a gate-item-verification session is sessionType 'ops' (see
+// sessionPredicates.ts#isGateVerifySession) and stages its finding through
+// this same verdict-delivery tool (mcp/tools/verdictTools.ts), landing as a
+// normal gate.verify staged intent an operator disposes on the decision
+// surface. It IS a staged-intent kind (see PLANNING_INTENT_KINDS.ops), so it
+// is already covered by the spread below — no explicit entry needed here.
+//
+// Plus gateSeed.getState — the read-only gate_item/seed_item state lookup
+// (mcp/tools/gateSeedReadTools.ts) a gate-verify session needs to gather
+// evidence for the same gate item it verifies via gate.verify above. Only
+// the read belongs here; any mutating gate/seed surface must continue to
+// require an explicit capability grant instead of living in this always-on
+// set. Not a staged-intent kind, so it isn't in PLANNING_INTENT_KINDS.ops —
+// added here explicitly.
 const OPS_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
   ...PLANNING_INTENT_KINDS.ops.map(orchestratorMcpToolName),
-  orchestratorMcpToolName('gate.verify'),
+  orchestratorMcpToolName('gateSeed.getState'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
+  ...TASK_READ_MCP_TOOLS,
+  ...PROJECT_READ_MCP_TOOLS,
+  ...TIER_B_READ_MCP_TOOLS,
 ];
 
 /**
@@ -323,17 +381,16 @@ export const DESIGN_ALLOWED_TOOLS = [
  * audited MCP/read-endpoint tools merged in separately from
  * .claude-orchestrator.yml (see getSessionAllowedTools). No prod-mutating
  * tool is ever in this base; write capability is earned per-session via
- * grant-on-re-dispatch, not by widening this constant.
- * 'Bash(node ~/.claude/scripts/read-session-record.mjs:*)' is scoped to that
- * one vendored client — the granted-capability read it authenticates
- * (`read:session-record:<id>`) isn't tool-shaped so it never widens the CLI
- * allowlist itself (see orchestrator-config.ts#isToolShapedCapability); the
- * session still needs Bash access to invoke the script.
+ * grant-on-re-dispatch, not by widening this constant. The own-record and
+ * audit-log reads (`read:session-record:<id>` / `read:audit-log:<projectId>`)
+ * are granted-capability reads brokered by the `session.getRecord` /
+ * `auditLog.query` MCP tools, not tool-shaped (see
+ * orchestrator-config.ts#isToolShapedCapability), so they need no Bash
+ * allowlist entry here.
  */
 export const OPS_ALLOWED_TOOLS = [
   ...PLANNING_READONLY_BASH_TOOLS,
   ...OPS_MCP_TOOLS,
-  'Bash(node ~/.claude/scripts/read-session-record.mjs:*)',
   'Bash(git log:*)',
   'Bash(git diff:*)',
   'Bash(git show:*)',
@@ -343,6 +400,56 @@ export const OPS_ALLOWED_TOOLS = [
   'Bash(git rev-parse:*)',
   'Bash(git branch --list:*)',
 ];
+
+// The orchestrator MCP stage-proposal tools a docs session is allowed to
+// call — derived from PLANNING_INTENT_KINDS.docs (the notion.pageEdit
+// staged-edit path for a Notion-page Target surface, plus intent.withdraw),
+// same precedent as GROOM_MCP_TOOLS/DESIGN_MCP_TOOLS/OPS_MCP_TOOLS above. A
+// repo-file Target surface never stages a kind here — it opens a PR
+// directly through the GitHub MCP tools in DOCS_ALLOWED_TOOLS below.
+const DOCS_MCP_TOOLS = [
+  ORCHESTRATOR_MCP_HEALTH_TOOL,
+  ...PLANNING_INTENT_KINDS.docs.map(orchestratorMcpToolName),
+  ...ARCHITECTURE_READ_MCP_TOOLS,
+  ...TASK_READ_MCP_TOOLS,
+  ...TIER_B_READ_MCP_TOOLS,
+];
+
+/**
+ * docs session base tool set: the planning read set + Write/Edit (repo-file
+ * authoring) + the Code-session git-write and PR-open path (git-write Bash,
+ * the `gh pr create` verb, and the narrowly-scoped mcp__github__create_pull_request
+ * exception — see the comment on ALLOWED_TOOLS above) + the Notion
+ * staged-edit path (notion.pageEdit, above). WebFetch is deliberately NOT
+ * included here — it's merged in per-dispatch, scoped to the docs task's
+ * declared Source domain(s) (see getSessionAllowedTools's docsSourceDomains
+ * param), since a static, module-load-time constant cannot know a task's
+ * declared domains. No open WebSearch and no un-allowlisted WebFetch ever
+ * appear in this base — broader egress is a grantable capability via the
+ * existing granted[] / isGrantable path, never the autonomous base.
+ */
+export const DOCS_ALLOWED_TOOLS = [
+  ...PLANNING_READONLY_BASH_TOOLS,
+  ...DOCS_MCP_TOOLS,
+  'Write',
+  'Edit',
+  'Bash(git:*)',
+  'Bash(gh pr create:*)',
+  'mcp__github__create_pull_request',
+];
+
+/**
+ * Builds the docs session's per-dispatch WebFetch allowlist from a Docs
+ * task's declared Source domains (see the Docs task-body convention —
+ * Target surface + Source domains). Each domain becomes its own
+ * `WebFetch(domain:<domain>)` entry rather than a single wildcard, so the
+ * CLI's own domain match (not just this array's presence) enforces the
+ * boundary. Empty input grants no WebFetch at all — never a wildcard
+ * fallback.
+ */
+export function docsWebFetchTools(sourceDomains: string[]): string[] {
+  return sourceDomains.map((domain) => `WebFetch(domain:${domain})`);
+}
 
 function hydrateProject(p: {
   id: string;
@@ -461,6 +568,8 @@ export interface RuntimeSettings {
   session_notify_threshold_seconds: number;
   /** Stuck-session timer: seconds before injecting a pause message. */
   session_pause_threshold_seconds: number;
+  /** Activity-based stall detector: seconds since the last session_events row before a PR's implementing session is classified session_inert. */
+  session_inert_threshold_seconds: number;
   /** After pause, seconds during which a tool_use triggers a hard-stop. */
   session_hard_stop_window_seconds: number;
   /** Auto-merger: seconds between CI status polls while waiting for green. */
@@ -494,12 +603,25 @@ export interface RuntimeSettings {
   ops_session_model: string;
   /** Reasoning effort for ops sessions passed via --effort; empty string = model default. */
   ops_session_effort: string;
+  /** Model used for gate-verify sessions; empty string = fall back to ops_session_model. */
+  gate_verify_session_model: string;
+  /** Reasoning effort for gate-verify sessions; empty string = fall back to ops_session_effort. */
+  gate_verify_session_effort: string;
   /**
    * Shared concurrency cap across all planning session types (groom/design/ops).
    * One pool, not per-type caps — they compete for the same operator review
    * attention.
    */
   max_concurrent_planning_sessions: number;
+  /**
+   * Sub-limit of max_concurrent_planning_sessions dedicated to gate-verify
+   * dispatch (see gateReconciler.ts) — verify sessions still count against
+   * the shared planning pool at SessionManager.start; this only bounds how
+   * many of that pool the reconciler will claim for verify in one tick.
+   * Setting it above max_concurrent_planning_sessions does not raise the
+   * real ceiling.
+   */
+  max_concurrent_verify_sessions: number;
   /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
   task_cache_refresh_interval_ms: number;
   /** GateReconciler: built but not activated by default (no-coexistence rule) — off until an operator opts in. */
@@ -508,6 +630,27 @@ export interface RuntimeSettings {
   gate_verification_interval_ms: number;
   /** Model used by the Tier-3 semantic readiness advisory (paraphrased-deferral) classifier. */
   tier3_classifier_model: string;
+  /**
+   * Kill switch for the session.requestCapability auto-approve policy (see
+   * orchestrator-config.ts#isSanctionedAutoApproveCapability): when true
+   * (default), a request for a sanctioned read-only capability is granted
+   * and the session re-dispatched without an operator park. When false,
+   * every request parks for grant-on-re-dispatch as before, regardless of
+   * the allowlist. Writes and raw command-prefix grants are never affected
+   * either way — this only gates the auto-approve fast path.
+   */
+  capability_auto_approve_enabled: boolean;
+  /**
+   * Curated allowlist of sanctioned read-only capability strings that
+   * session.requestCapability auto-approves without an operator park (see
+   * orchestrator-config.ts#isSanctionedAutoApproveCapability). Operator-
+   * editable from the Settings UI; empty by default.
+   */
+  capability_auto_approve_allowlist: string[];
+  /** Milestone view tier-2 attention: seconds a staged decision may sit before it's flagged aging. */
+  milestone_attention_aging_threshold_seconds: number;
+  /** Milestone view tier-2 attention: seconds of no distanceToGreen improvement before convergence is flagged flat. */
+  milestone_attention_flat_convergence_window_seconds: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -526,8 +669,13 @@ export const runtimeSettings: RuntimeSettings = {
   planning_session_effort: '',
   ops_session_model: '',
   ops_session_effort: '',
+  gate_verify_session_model: '',
+  gate_verify_session_effort: '',
   max_concurrent_planning_sessions: Number(
     process.env.MAX_CONCURRENT_PLANNING_SESSIONS ?? 5,
+  ),
+  max_concurrent_verify_sessions: Number(
+    process.env.MAX_CONCURRENT_VERIFY_SESSIONS ?? 5,
   ),
   session_mode: process.env.SESSION_MODE === 'api' ? 'api' : 'cli',
   auto_launch_concurrency: Number(process.env.AUTO_LAUNCH_CONCURRENCY ?? 1),
@@ -549,8 +697,18 @@ export const runtimeSettings: RuntimeSettings = {
   session_pause_threshold_seconds: Number(
     process.env.SESSION_PAUSE_THRESHOLD_SECONDS ?? 7200,
   ),
+  session_inert_threshold_seconds: Number(
+    process.env.SESSION_INERT_THRESHOLD_SECONDS ?? 600,
+  ),
   session_hard_stop_window_seconds: Number(
     process.env.SESSION_HARD_STOP_WINDOW_SECONDS ?? 60,
+  ),
+  milestone_attention_aging_threshold_seconds: Number(
+    process.env.MILESTONE_ATTENTION_AGING_THRESHOLD_SECONDS ?? 24 * 60 * 60,
+  ),
+  milestone_attention_flat_convergence_window_seconds: Number(
+    process.env.MILESTONE_ATTENTION_FLAT_CONVERGENCE_WINDOW_SECONDS ??
+      48 * 60 * 60,
   ),
   ci_poll_interval_seconds: Number(process.env.CI_POLL_INTERVAL_SECONDS ?? 30),
   ci_poll_max_minutes: Number(process.env.CI_POLL_MAX_MINUTES ?? 30),
@@ -579,4 +737,7 @@ export const runtimeSettings: RuntimeSettings = {
     process.env.GATE_VERIFICATION_INTERVAL_MS ?? 60_000,
   ),
   tier3_classifier_model: 'claude-haiku-4-5-20251001',
+  capability_auto_approve_enabled:
+    process.env.CAPABILITY_AUTO_APPROVE_ENABLED !== 'false',
+  capability_auto_approve_allowlist: [],
 };

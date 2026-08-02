@@ -1,4 +1,9 @@
 import { ProjectService } from './ProjectService';
+import type { ProjectMilestone } from './ProjectService';
+import { getTaskCache, getGateItem } from '../db/queries';
+import { normalizeTaskId } from '../tasks/taskId';
+import type { NotionTask } from '../notion/types';
+import { isGateVerifySession } from '../session/sessionPredicates';
 
 /**
  * Thrown when a milestone reference doesn't resolve to exactly one known
@@ -14,7 +19,7 @@ export class UnknownMilestoneError extends Error {
 }
 
 /** The canonical short-form key for a milestone — its stored canonical_short_id, falling back to its full name. */
-function canonicalMilestoneKey(milestone: {
+export function canonicalMilestoneKey(milestone: {
   name: string;
   canonicalShortId?: string | null;
 }): string {
@@ -94,6 +99,89 @@ export function resolveMilestoneDatabaseId(
     );
   }
   return match.sourceId;
+}
+
+/**
+ * Resolves a milestone reference to its full milestones row — the
+ * convergence read-surface's single resolution point (task-writing §
+ * "skill-first scoping of an orchestrator surface"): gate/seed/ops key on
+ * canonical_short_id, the task axis on source_id, and both need the row.
+ */
+export function resolveMilestoneRowForProject(
+  projectId: string,
+  milestone: string,
+): ProjectMilestone {
+  const project = ProjectService.getById(projectId);
+  if (!project) {
+    throw new UnknownMilestoneError(`unknown project "${projectId}"`);
+  }
+  const match = findMilestone(project.milestones, milestone);
+  if (!match) {
+    const known = project.milestones.map((m) => m.name).join(', ');
+    throw new UnknownMilestoneError(
+      `"${milestone}" is not a known milestone for project "${projectId}"` +
+        (known
+          ? ` — expected one of: ${known}`
+          : ' — project has no milestones configured'),
+    );
+  }
+  return match;
+}
+
+/**
+ * Best-effort task -> milestone attribution: scans each of the project's
+ * milestone board caches (the same `board:${milestone.id}` task_cache rows
+ * getMilestoneConvergence's task axis reads) for the given task id, and
+ * returns the owning milestone's canonical short-form key. Used to attribute
+ * a staged_intent to a milestone at stage time when the caller doesn't
+ * already know it explicitly (e.g. a dispatched planning session).
+ * Returns null — never throws — when the project is unknown, the task isn't
+ * found in any cached board, or a board cache is missing/stale/unparseable;
+ * the caller falls back to the "unattributed" bucket in that case.
+ */
+export function resolveMilestoneForTaskId(
+  projectId: string,
+  taskId: string,
+): string | null {
+  const project = ProjectService.getById(projectId);
+  if (!project) return null;
+  const normalized = normalizeTaskId(taskId);
+  for (const milestone of project.milestones) {
+    if (!milestone.sourceId) continue;
+    const row = getTaskCache(`board:${milestone.id}`);
+    if (!row) continue;
+    let tasks: NotionTask[];
+    try {
+      tasks = JSON.parse(row.raw_json) as NotionTask[];
+    } catch {
+      continue;
+    }
+    if (tasks.some((t) => normalizeTaskId(t.id) === normalized)) {
+      return canonicalMilestoneKey(milestone);
+    }
+  }
+  return null;
+}
+
+/**
+ * Same as resolveMilestoneForTaskId, but aware of a gate-verify session's
+ * sentinel task id (`gate-item:<uuid>`, see isGateVerifySession) — a value
+ * that never matches any milestone board cache row. For that case, reads
+ * the milestone straight off the referenced gate_item row instead (the same
+ * untransformed field AgentSession.recordGateVerifyDisposition's gate.verify
+ * fix already stages with no conversion step); otherwise delegates
+ * unchanged to resolveMilestoneForTaskId. Returns null — never throws — when
+ * the gate item is missing or itself carries no milestone.
+ */
+export function resolveMilestoneForSessionTask(
+  projectId: string,
+  taskId: string,
+): string | null {
+  if (isGateVerifySession(taskId)) {
+    const itemId = taskId.slice('gate-item:'.length);
+    return getGateItem(itemId)?.milestone ?? null;
+  }
+  return resolveMilestoneForTaskId(projectId, taskId);
 }
 
 /**

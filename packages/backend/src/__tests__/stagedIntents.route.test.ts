@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
+import { EventEmitter } from 'events';
 
 const { mockGetTaskBackend, mockRecordEvent } = vi.hoisted(() => ({
   mockGetTaskBackend: vi.fn(),
@@ -40,7 +41,17 @@ vi.mock('../db/queries', async (importOriginal) => {
 });
 
 import { db } from '../db/db';
-import { createStagedIntentsRouter } from '../routes/stagedIntents';
+import { insertStagedIntent, insertSession, getTaskCache } from '../db/queries';
+import type { StagedIntentRow } from '../db/types';
+import {
+  createStagedIntentsRouter,
+  setStagedIntentBroadcast,
+  stageIntent,
+  READY_PATH_KINDS,
+  OPS_TERMINAL_KINDS,
+} from '../routes/stagedIntents';
+import type { SessionManager } from '../session/SessionManager';
+import type { ServerMessage } from '../ws/types';
 
 function makeApp() {
   const app = express();
@@ -49,11 +60,31 @@ function makeApp() {
   return app;
 }
 
+/**
+ * gate.accrete / seed.stage resolve their sourceTask's milestone against a
+ * real project (resolveMilestoneForProject -> ProjectService.getById) —
+ * seed a project + milestone row so that lookup succeeds.
+ */
+function insertProjectWithMilestone(
+  projectId: string,
+  milestone: string,
+): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO projects (id, name, project_dir, task_source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(projectId, projectId, `/tmp/${projectId}`, 'notion', now, now);
+  db.prepare(
+    `INSERT INTO milestones (id, project_id, name, source_id, display_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(`${projectId}-ms`, projectId, milestone, null, 0, now, now);
+}
+
 beforeEach(() => {
   mockGetTaskBackend.mockReset();
   mockRecordEvent.mockReset();
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
+  db.prepare('DELETE FROM milestones').run();
+  db.prepare('DELETE FROM projects').run();
 });
 
 /**
@@ -215,10 +246,14 @@ describe('POST /api/staged-intents/group/:groupId/commit — readiness gate', ()
     const app = makeApp();
     const agent = supertest(app);
 
+    // Backlog, not Ready — a Ready-targeting task.setStatus is a Ready-path
+    // member and must carry a groupId (see ReadyPathMissingGroupError),
+    // which would force it through the group commit route instead of this
+    // standalone /apply override+reason check.
     const staged = await agent.post('/api/staged-intents').send({
       kind: 'task.setStatus',
       projectId: 'proj-no-reason',
-      payload: { taskId: 'notion:abc', status: 'Ready' },
+      payload: { taskId: 'notion:abc', status: 'Backlog' },
     });
 
     const applied = await agent
@@ -347,6 +382,13 @@ describe('POST /api/staged-intents/group/:groupId/commit — grooming promotion 
 
 describe('POST /api/staged-intents — kind validation', () => {
   it('accepts task.updateBody, task.setProperties, and task.archive', async () => {
+    // task.updateBody / task.setProperties resolve their subject taskId at
+    // stage time (assertTaskIdResolves) — the task cache is mocked to miss
+    // in this file, so it falls back to a live backend fetch.
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
+    });
     const app = makeApp();
     const agent = supertest(app);
 
@@ -364,6 +406,7 @@ describe('POST /api/staged-intents — kind validation', () => {
         kind,
         projectId: 'proj-kinds',
         payload: { taskId: 'notion:abc' },
+        groupId: 'group-kinds',
       });
       expect(res.status).toBe(201);
     }
@@ -390,6 +433,10 @@ describe('POST /api/staged-intents/:id/apply — new kinds', () => {
       updateBody,
       setProperties,
       archive,
+      // task.updateBody / task.setProperties resolve their subject taskId at
+      // stage time via a live backend fetch (assertTaskIdResolves) since the
+      // task cache is mocked to miss in this file.
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
     });
     const app = makeApp();
     const agent = supertest(app);
@@ -448,6 +495,10 @@ describe('POST /api/staged-intents/:id/apply — new kinds', () => {
       archive,
       updateBody,
       setProperties,
+      // task.updateBody / task.setProperties / task.move resolve their
+      // subject taskId at stage time via a live backend fetch
+      // (assertTaskIdResolves) since the task cache is mocked to miss.
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
     });
     const app = makeApp();
     const agent = supertest(app);
@@ -564,13 +615,25 @@ describe('POST /api/staged-intents/:id/apply — task.setType', () => {
 
 describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / journal.setState', () => {
   it('applies gate.accrete by dispatching through accreteGateContribution', async () => {
-    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    // accreteGateContribution validates the source task exists on the board
+    // (assertTaskExists -> fetchTaskPage) before minting gate items, and
+    // resolves sourceTask.milestone against a real project/milestone row
+    // (resolveMilestoneForProject).
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
+    });
+    insertProjectWithMilestone('proj-gate', 'M1');
     const app = makeApp();
     const agent = supertest(app);
 
+    // gate.accrete is a Ready-path member and must carry a groupId (see
+    // ReadyPathMissingGroupError), so it applies via the group commit route
+    // rather than standalone /apply.
     const staged = await agent.post('/api/staged-intents').send({
       kind: 'gate.accrete',
       projectId: 'proj-gate',
+      groupId: 'group-gate',
       payload: {
         sourceTask: {
           id: 'notion:abc',
@@ -584,27 +647,33 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
     });
     expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+    const committed = await agent
+      .post('/api/staged-intents/group/group-gate/commit')
       .send({});
-    expect(applied.status).toBe(200);
-    expect(applied.body.result.itemIds).toHaveLength(1);
-    expect(applied.body.result.marker).toEqual(
-      expect.objectContaining({
-        sourceTaskId: 'notion:abc',
-        decision: 'items',
-      }),
-    );
+    expect(committed.status).toBe(200);
+    expect(committed.body.committed).toEqual([staged.body.id]);
   });
 
   it('applies seed.stage by dispatching through stageSeedContribution', async () => {
-    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    // stageSeedContribution likewise validates the source task exists
+    // (assertTaskExists -> fetchTaskPage) before staging seeds, and resolves
+    // sourceTask.milestone against a real project/milestone row.
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
+    });
+    insertProjectWithMilestone('proj-seed', 'M1');
     const app = makeApp();
     const agent = supertest(app);
 
+    // seed.stage is a Ready-path member and must carry a groupId (see
+    // ReadyPathMissingGroupError), so it applies via the group commit route
+    // rather than standalone /apply.
     const staged = await agent.post('/api/staged-intents').send({
       kind: 'seed.stage',
       projectId: 'proj-seed',
+      groupId: 'group-seed',
       payload: {
         sourceTask: {
           id: 'notion:def',
@@ -618,23 +687,22 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
     });
     expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+    const committed = await agent
+      .post('/api/staged-intents/group/group-seed/commit')
       .send({});
-    expect(applied.status).toBe(200);
-    expect(applied.body.result.itemIds).toHaveLength(1);
-    expect(applied.body.result.marker).toEqual(
-      expect.objectContaining({
-        sourceTaskId: 'notion:def',
-        decision: 'seeds',
-      }),
-    );
+    expect(committed.status).toBe(200);
+    expect(committed.body.committed).toEqual([staged.body.id]);
   });
 
   it('applies journal.setState by dispatching through the validated setEntryState', async () => {
     const { upsertOpsJournalEntry } = await import('../db/queries');
     upsertOpsJournalEntry({
-      task_id: 'notion:ghi',
+      // ops_journal.task_id is stored bare in production (see reconcileJournal);
+      // seed it that way here so the notion:-prefixed lookups below exercise
+      // getOpsJournalEntry's cross-id-form normalization instead of trivially
+      // matching on an identical literal.
+      task_id: 'ghi',
       project: 'proj-journal',
       milestone: 'M1',
       state: 'pending',
@@ -674,7 +742,12 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
     const app = makeApp();
     const agent = supertest(app);
 
-    for (const [kind, payload] of [
+    // gate.accrete and seed.stage are Ready-path members and must carry a
+    // groupId (see ReadyPathMissingGroupError), so the human-apply-only
+    // check for them is exercised via the group commit route instead of
+    // standalone /apply; journal.setState is unaffected and keeps using
+    // standalone /apply directly.
+    for (const [kind, payload, groupId] of [
       [
         'gate.accrete',
         {
@@ -687,6 +760,7 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
           items: [],
           classification: 'n/a',
         },
+        'group-session-gate',
       ],
       [
         'seed.stage',
@@ -700,19 +774,408 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
           seeds: [],
           decision: 'n/a',
         },
+        'group-session-seed',
       ],
-      ['journal.setState', { taskId: 'notion:pqr', state: 'candidate' }],
+      ['journal.setState', { taskId: 'notion:pqr', state: 'candidate' }, null],
     ] as const) {
       const staged = await agent.post('/api/staged-intents').send({
         kind,
         projectId: 'proj-session-2',
         payload,
+        ...(groupId ? { groupId } : {}),
       });
-      const applied = await agent
-        .post(`/api/staged-intents/${staged.body.id}/apply`)
-        .send({ actorType: 'session' });
-      expect(applied.status).toBe(403);
+      if (groupId) {
+        await agent
+          .post(`/api/staged-intents/${staged.body.id}/approve`)
+          .send({});
+        const committed = await agent
+          .post(`/api/staged-intents/group/${groupId}/commit`)
+          .send({ actorType: 'session' });
+        expect(committed.status).toBe(403);
+      } else {
+        const applied = await agent
+          .post(`/api/staged-intents/${staged.body.id}/apply`)
+          .send({ actorType: 'session' });
+        expect(applied.status).toBe(403);
+      }
     }
+  });
+});
+
+describe('the ops-terminal closing set is mandated under one shared groupId', () => {
+  function seedOpsSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+    });
+  }
+
+  it('rejects an ops-terminal journal.setState targeting resolved when staged with no groupId', async () => {
+    const { upsertOpsJournalEntry } = await import('../db/queries');
+    upsertOpsJournalEntry({
+      task_id: 'notion:ops-1',
+      project: 'proj-ops',
+      milestone: 'M1',
+      state: 'candidate',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    expect(() =>
+      stageIntent(
+        'journal.setState',
+        { taskId: 'notion:ops-1', state: 'resolved' },
+        'proj-ops',
+      ),
+    ).toThrow(/ops-terminal member/);
+  });
+
+  it('accepts the no-change terminal — journal.setState staged-proposal -> resolved staged with a shared groupId — and rejects it without one', async () => {
+    const { upsertOpsJournalEntry } = await import('../db/queries');
+    upsertOpsJournalEntry({
+      task_id: 'notion:ops-no-change',
+      project: 'proj-ops',
+      milestone: 'M1',
+      state: 'staged-proposal',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    expect(() =>
+      stageIntent(
+        'journal.setState',
+        { taskId: 'notion:ops-no-change', state: 'resolved' },
+        'proj-ops',
+      ),
+    ).toThrow(/ops-terminal member/);
+
+    const intent = stageIntent(
+      'journal.setState',
+      { taskId: 'notion:ops-no-change', state: 'resolved' },
+      'proj-ops',
+      'group-no-change-1',
+    );
+    expect(intent.groupId).toBe('group-no-change-1');
+  });
+
+  it('an incidental mid-run journal.setState (not targeting resolved) may still be staged standalone', async () => {
+    const { upsertOpsJournalEntry } = await import('../db/queries');
+    upsertOpsJournalEntry({
+      task_id: 'notion:ops-2',
+      project: 'proj-ops',
+      milestone: 'M1',
+      state: 'pending',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    const intent = stageIntent(
+      'journal.setState',
+      { taskId: 'notion:ops-2', state: 'candidate' },
+      'proj-ops',
+    );
+    expect(intent.groupId).toBeNull();
+  });
+
+  it('rejects a follow-on task.create staged by an ops session with no groupId', () => {
+    seedOpsSession('ops-session-1', 'notion:ops-3');
+    expect(() =>
+      stageIntent(
+        'task.create',
+        { title: 'Follow-on from investigation', body: 'x' },
+        'proj-ops',
+        null,
+        'ops-session-1',
+      ),
+    ).toThrow(/ops-terminal member/);
+  });
+
+  it('rejects a task-body write recording the finding (task.updateBody / task.patchBodySection) staged by an ops session with no groupId', () => {
+    seedOpsSession('ops-session-2', 'notion:ops-4');
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: 'notion:ops-4', sections: {} },
+        'proj-ops',
+        null,
+        'ops-session-2',
+      ),
+    ).toThrow(/ops-terminal member/);
+
+    expect(() =>
+      stageIntent(
+        'task.patchBodySection',
+        {
+          taskId: 'notion:ops-4',
+          section: '### Finding',
+          operation: 'append',
+          content: 'x',
+        },
+        'proj-ops',
+        null,
+        'ops-session-2',
+      ),
+    ).toThrow(/ops-terminal member/);
+  });
+
+  it('a task.updateBody staged by a non-ops session is unaffected — the mandate is ops-scoped', () => {
+    insertSession({
+      session_id: 'groom-session-1',
+      task_id: 'notion:ops-5',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'groom',
+    });
+    const intent = stageIntent(
+      'task.updateBody',
+      { taskId: 'notion:ops-5', sections: {} },
+      'proj-ops',
+      null,
+      'groom-session-1',
+    );
+    expect(intent.groupId).toBeNull();
+  });
+
+  it('planning.noOp and decision.pickOne remain legitimately ungrouped for an ops session', () => {
+    seedOpsSession('ops-session-3', 'notion:ops-6');
+    const noOp = stageIntent(
+      'planning.noOp',
+      { taskId: 'notion:ops-6', reason: 'nothing to add' },
+      'proj-ops',
+      null,
+      'ops-session-3',
+    );
+    expect(noOp.groupId).toBeNull();
+
+    const pickOne = stageIntent(
+      'decision.pickOne',
+      {
+        prompt: 'Which mitigation?',
+        options: [
+          { label: 'a', description: 'Option A' },
+          { label: 'b', description: 'Option B' },
+        ],
+        allowFreeForm: false,
+      },
+      'proj-ops',
+      null,
+      'ops-session-3',
+      'A decision the operator must make.',
+    );
+    expect(pickOne.groupId).toBeNull();
+  });
+
+  it('single-sources the ops-terminal member set, and it cannot drift from the Ready-path set — they are disjoint kinds carried in the same module', () => {
+    expect(OPS_TERMINAL_KINDS).toEqual(
+      expect.arrayContaining([
+        'journal.setState',
+        'task.updateBody',
+        'task.patchBodySection',
+        'task.create',
+      ]),
+    );
+    expect(OPS_TERMINAL_KINDS).toHaveLength(4);
+    for (const kind of OPS_TERMINAL_KINDS) {
+      expect(READY_PATH_KINDS).not.toContain(kind);
+    }
+  });
+
+  it('accepts the same closing set once staged under one shared groupId', async () => {
+    const { upsertOpsJournalEntry } = await import('../db/queries');
+    upsertOpsJournalEntry({
+      task_id: 'notion:ops-7',
+      project: 'proj-ops',
+      milestone: 'M1',
+      state: 'candidate',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+    seedOpsSession('ops-session-4', 'notion:ops-7');
+
+    const groupId = 'group-ops-close';
+    const journal = stageIntent(
+      'journal.setState',
+      { taskId: 'notion:ops-7', state: 'resolved' },
+      'proj-ops',
+      groupId,
+    );
+    const body = stageIntent(
+      'task.updateBody',
+      { taskId: 'notion:ops-7', sections: {} },
+      'proj-ops',
+      groupId,
+      'ops-session-4',
+    );
+    const followOn = stageIntent(
+      'task.create',
+      { title: 'Follow-on Code task', body: 'x' },
+      'proj-ops',
+      groupId,
+      'ops-session-4',
+    );
+
+    expect([journal.groupId, body.groupId, followOn.groupId]).toEqual([
+      groupId,
+      groupId,
+      groupId,
+    ]);
+  });
+});
+
+describe('an ops-terminal closing group is refused at commit unless it actually carries the resolved transition', () => {
+  function seedOpsSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+    });
+  }
+
+  async function seedJournal(taskId: string, state: string) {
+    const { upsertOpsJournalEntry } = await import('../db/queries');
+    upsertOpsJournalEntry({
+      task_id: taskId,
+      project: 'proj-ops-commit',
+      milestone: 'M1',
+      state: state as any,
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  it('refuses to commit a group carrying only a follow-on task.create — the worked-instance bug — naming the missing journal.setState -> resolved member', async () => {
+    seedOpsSession('ops-commit-1', 'notion:ops-commit-1');
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const groupId = 'group-ops-commit-1';
+    stageIntent(
+      'task.create',
+      { title: 'Follow-on from investigation', body: 'x', databaseId: 'db-1' },
+      'proj-ops-commit',
+      groupId,
+      'ops-commit-1',
+    );
+
+    const result = await approveAndCommitGroup(agent, groupId);
+    expect(result.status).toBe(409);
+    expect(result.body.error).toContain('journal.setState');
+    expect(result.body.error).toContain('resolved');
+    expect(result.body.committed ?? []).toEqual([]);
+  });
+
+  it('commits an ops-terminal group that does carry the journal.setState -> resolved member', async () => {
+    seedOpsSession('ops-commit-2', 'notion:ops-commit-2');
+    await seedJournal('notion:ops-commit-2', 'candidate');
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask: vi.fn().mockResolvedValue('notion:new-followon'),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const groupId = 'group-ops-commit-2';
+    stageIntent(
+      'journal.setState',
+      { taskId: 'notion:ops-commit-2', state: 'resolved' },
+      'proj-ops-commit',
+      groupId,
+    );
+    stageIntent(
+      'task.create',
+      { title: 'Follow-on from investigation', body: 'x', databaseId: 'db-1' },
+      'proj-ops-commit',
+      groupId,
+      'ops-commit-2',
+    );
+
+    const result = await approveAndCommitGroup(agent, groupId);
+    expect(result.status).toBe(200);
+    expect(result.body.committed).toHaveLength(2);
+  });
+
+  it('succeeds when the resolved transition was committed in an earlier apply of the same group', async () => {
+    seedOpsSession('ops-commit-3', 'notion:ops-commit-3');
+    await seedJournal('notion:ops-commit-3', 'candidate');
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask: vi.fn().mockResolvedValue('notion:new-followon-2'),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const groupId = 'group-ops-commit-3';
+    stageIntent(
+      'journal.setState',
+      { taskId: 'notion:ops-commit-3', state: 'resolved' },
+      'proj-ops-commit',
+      groupId,
+    );
+    const firstCommit = await approveAndCommitGroup(agent, groupId);
+    expect(firstCommit.status).toBe(200);
+
+    // A later turn stages a further member into the same group — the
+    // journal.setState -> resolved sibling is already `committed`, not
+    // `staged`/`approved`, so this exercises the durable-store (not
+    // in-memory) tolerance.
+    stageIntent(
+      'task.create',
+      { title: 'Follow-on from investigation', body: 'x', databaseId: 'db-1' },
+      'proj-ops-commit',
+      groupId,
+      'ops-commit-3',
+    );
+
+    const secondCommit = await approveAndCommitGroup(agent, groupId);
+    expect(secondCommit.status).toBe(200);
+    expect(secondCommit.body.committed).toHaveLength(1);
   });
 });
 
@@ -745,6 +1208,13 @@ describe('POST /api/staged-intents — decision-proposal annotation', () => {
   });
 
   it('stages a task.setStatus -> Deferred discard/defer proposal with its rationale, and it round-trips to the decision surface', async () => {
+    // task.setStatus resolves its subject taskId at stage time
+    // (assertTaskIdResolves) — the task cache is mocked to miss in this
+    // file, so it falls back to a live backend fetch.
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
+    });
     const app = makeApp();
     const agent = supertest(app);
 
@@ -772,5 +1242,279 @@ describe('POST /api/staged-intents — decision-proposal annotation', () => {
     expect(found.decisionProposal).toBe(
       'Superseded by task notion:abc — defer instead of grooming to Ready.',
     );
+  });
+});
+
+describe('milestone-inbox turn-boundary reveal', () => {
+  const SESSION_ID = 'session-turn-boundary';
+  let turnInFlight: boolean;
+  let sessionManager: SessionManager & EventEmitter;
+
+  function makeSessionManager() {
+    turnInFlight = true;
+    const emitter = new EventEmitter();
+    return Object.assign(emitter, {
+      getLiveSession: vi.fn().mockReturnValue({
+        hasActiveTurn: () => turnInFlight,
+      }),
+    }) as unknown as SessionManager & EventEmitter;
+  }
+
+  let counter = 0;
+  function stageIntent(
+    overrides: Partial<StagedIntentRow> = {},
+  ): StagedIntentRow {
+    counter += 1;
+    const now = Date.now();
+    const row: StagedIntentRow = {
+      id: `intent-${counter}`,
+      kind: 'task.updateBody',
+      payload: JSON.stringify({ taskId: 'task-1' }),
+      payload_hash: `hash-${counter}`,
+      task_id: 'task-1',
+      project_id: 'proj-turn-boundary',
+      session_id: SESSION_ID,
+      group_id: null,
+      milestone: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: now,
+      updated_at: now,
+      ...overrides,
+    };
+    insertStagedIntent(row);
+    return row;
+  }
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+    counter = 0;
+    sessionManager = makeSessionManager();
+    setStagedIntentBroadcast(() => {});
+  });
+
+  it('an intent staged mid-turn reads sessionComplete: false', async () => {
+    const staged = stageIntent();
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter(undefined, sessionManager));
+    const agent = supertest(app);
+
+    const res = await agent
+      .get('/api/staged-intents')
+      .query({ sessionId: SESSION_ID });
+    const found = res.body.intents.find(
+      (i: { id: string }) => i.id === staged.id,
+    );
+    expect(found.sessionComplete).toBe(false);
+  });
+
+  it("re-broadcasts staged_intent_changed for each of a session's still-active intents when its turn ends, recomputed through isSessionComplete/rowToApi", async () => {
+    const staged = stageIntent();
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter(undefined, sessionManager));
+
+    const broadcasts: ServerMessage[] = [];
+    setStagedIntentBroadcast((msg) => broadcasts.push(msg));
+
+    // Turn ends: hasActiveTurn flips false, then the existing
+    // session_event/'result' signal lands on the SessionManager 'message'
+    // stream — the same channel server.ts forwards to WS clients.
+    turnInFlight = false;
+    sessionManager.emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'result',
+      content: '{}',
+    } satisfies ServerMessage);
+
+    const changed = broadcasts.filter(
+      (m): m is Extract<ServerMessage, { type: 'staged_intent_changed' }> =>
+        m.type === 'staged_intent_changed',
+    );
+    expect(changed).toHaveLength(1);
+    expect(changed[0].intent.id).toBe(staged.id);
+    expect(changed[0].intent.sessionComplete).toBe(true);
+  });
+
+  it('does not re-broadcast for an unrelated session_event, or for a different session', async () => {
+    stageIntent();
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter(undefined, sessionManager));
+
+    const broadcasts: ServerMessage[] = [];
+    setStagedIntentBroadcast((msg) => broadcasts.push(msg));
+
+    sessionManager.emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'text',
+      content: 'not a turn boundary',
+    } satisfies ServerMessage);
+    sessionManager.emit('message', {
+      type: 'session_event',
+      sessionId: 'some-other-session',
+      eventType: 'result',
+      content: '{}',
+    } satisfies ServerMessage);
+
+    expect(
+      broadcasts.filter((m) => m.type === 'staged_intent_changed'),
+    ).toHaveLength(0);
+  });
+});
+
+describe('rowToApi groupKind', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+    vi.mocked(getTaskCache).mockReturnValue(undefined);
+    setStagedIntentBroadcast(() => {});
+  });
+
+  function stageForSession(sessionId: string): StagedIntentRow {
+    const now = Date.now();
+    const row: StagedIntentRow = {
+      id: `intent-groupkind-${sessionId}`,
+      kind: 'task.updateBody',
+      payload: JSON.stringify({ taskId: 'task-1' }),
+      payload_hash: `hash-groupkind-${sessionId}`,
+      task_id: 'task-1',
+      project_id: 'proj-groupkind',
+      session_id: sessionId,
+      group_id: null,
+      milestone: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: now,
+      updated_at: now,
+    };
+    insertStagedIntent(row);
+    return row;
+  }
+
+  async function groupKindFor(sessionId: string): Promise<string> {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter());
+    const staged = stageForSession(sessionId);
+    const res = await supertest(app)
+      .get('/api/staged-intents')
+      .query({ sessionId });
+    const found = res.body.intents.find(
+      (i: { id: string }) => i.id === staged.id,
+    );
+    return found.groupKind;
+  }
+
+  it('a groom session yields groupKind "groom"', async () => {
+    insertSession({
+      session_id: 'session-groupkind-groom',
+      task_id: 'task-1',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'groom',
+    });
+    expect(await groupKindFor('session-groupkind-groom')).toBe('groom');
+  });
+
+  it('an ops session whose task Type is Investigation yields groupKind "investigation"', async () => {
+    insertSession({
+      session_id: 'session-groupkind-ops-inv',
+      task_id: 'task-1',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+    });
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 'task-1',
+      raw_json: JSON.stringify({ type: '🔎 Investigation' }),
+      cached_at: 0,
+    } as ReturnType<typeof getTaskCache>);
+    expect(await groupKindFor('session-groupkind-ops-inv')).toBe(
+      'investigation',
+    );
+  });
+
+  it('an ops session whose task Type is not Investigation yields groupKind "other"', async () => {
+    insertSession({
+      session_id: 'session-groupkind-ops-other',
+      task_id: 'task-1',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+    });
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 'task-1',
+      raw_json: JSON.stringify({ type: '🔧 Operational' }),
+      cached_at: 0,
+    } as ReturnType<typeof getTaskCache>);
+    expect(await groupKindFor('session-groupkind-ops-other')).toBe('other');
+  });
+
+  it('a design session yields groupKind "other"', async () => {
+    insertSession({
+      session_id: 'session-groupkind-design',
+      task_id: 'task-1',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'design',
+    });
+    expect(await groupKindFor('session-groupkind-design')).toBe('other');
+  });
+
+  it('a human-staged intent (no session) yields groupKind "other"', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter());
+    const now = Date.now();
+    const row: StagedIntentRow = {
+      id: 'intent-groupkind-human',
+      kind: 'task.updateBody',
+      payload: JSON.stringify({ taskId: 'task-1' }),
+      payload_hash: 'hash-groupkind-human',
+      task_id: 'task-1',
+      project_id: 'proj-groupkind',
+      session_id: null,
+      group_id: null,
+      milestone: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: now,
+      updated_at: now,
+    };
+    insertStagedIntent(row);
+    const res = await supertest(app)
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-groupkind' });
+    const found = res.body.intents.find((i: { id: string }) => i.id === row.id);
+    expect(found.groupKind).toBe('other');
   });
 });

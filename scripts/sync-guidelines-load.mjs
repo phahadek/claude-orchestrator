@@ -41,6 +41,11 @@
  *   - skills:         `skill:groom`, `skill:design`, `skill:ops`,
  *                     `skill:deploy`, `skill:wrap`, `skill:sync-guidelines`,
  *                     `skill:gate`                                     → ~/.claude/skills/<name>
+ *   - shared deps:    `shared:_shared`                                 → ~/.claude/skills/_shared
+ *                     (not a skill itself — no SKILL.md, never invoked — but a dependency of
+ *                     groom/design/ops, which link to its reference/hard-rules.md rather than
+ *                     restating it; tracked as its own kind so it deploys and baselines like
+ *                     everything else without skill-shaped loaders mistaking it for one)
  *   - route clients:  `script:<name>.mjs`                              → ~/.claude/scripts/<name>
  *   - hook mechanism: `hook:load-procedures.mjs`                       → <config-tree>/hooks/
  *
@@ -65,6 +70,8 @@ const SKILLS = [
   'wrap',
   'sync-guidelines',
   'gate',
+  'milestone-wrap',
+  'docs',
 ];
 const SCRIPT_SOURCES = [
   {
@@ -81,6 +88,7 @@ const SCRIPT_SOURCES = [
     dir: join('packages', 'backend', 'scripts'),
     names: [
       'groom-context-client.mjs',
+      'design-context-client.mjs',
       'groom-flip-client.mjs',
       'gate-state-client.mjs',
       'seed-state-client.mjs',
@@ -178,6 +186,13 @@ function buildItems() {
       livePath: join(claudeHome, 'skills', name),
     });
   }
+  items.push({
+    id: 'shared:_shared',
+    kind: 'shared',
+    repoRelPath: join('skills', '_shared'),
+    upstreamPath: join(repo, 'skills', '_shared'),
+    livePath: join(claudeHome, 'skills', '_shared'),
+  });
   for (const { dir, names } of SCRIPT_SOURCES) {
     for (const name of names) {
       items.push({

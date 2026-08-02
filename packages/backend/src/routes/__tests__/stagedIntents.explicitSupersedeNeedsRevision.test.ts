@@ -22,7 +22,11 @@ import {
   withdrawIntent,
   ExplicitSupersedesError,
 } from '../stagedIntents.js';
-import { getStagedIntent, transitionStagedIntent } from '../../db/queries.js';
+import {
+  getStagedIntent,
+  transitionStagedIntent,
+  listStagedIntentsByGroup,
+} from '../../db/queries.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM staged_intent').run();
@@ -66,6 +70,18 @@ describe('stageIntent — explicit supersedes targeting a needs_revision intent'
     const persistedOld = getStagedIntent(blocked.id)!;
     expect(persistedOld.state).toBe('superseded');
     expect(persistedOld.state).not.toBe('needs_revision');
+
+    // commitGroupIntents' blocked-member guard (stagedIntents.ts) refuses a
+    // group commit while any member sits in needs_revision/pending_verification
+    // — with the blocked member superseded, no member of the group is left in
+    // either state, so the group's commit is no longer held.
+    const groupMembers = listStagedIntentsByGroup('group-1');
+    expect(
+      groupMembers.some(
+        (r) =>
+          r.state === 'needs_revision' || r.state === 'pending_verification',
+      ),
+    ).toBe(false);
   });
 
   it('an explicit supersedes naming a staged intent still works (no regression)', () => {

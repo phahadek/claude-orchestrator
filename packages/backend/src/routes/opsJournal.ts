@@ -6,62 +6,12 @@ import {
   setEntryState,
   isValidOpsTransition,
   type OpsState,
-  type OpsJournalEntry,
 } from '../ops/opsJournal';
 import { requireDeviceAuth } from '../auth/DeviceAuth';
-import { stageIntent } from './stagedIntents';
-
-/** The state at which an ops_journal entry becomes an operator-reviewable
- *  decision — the point this route also mirrors it into a staged_intent so
- *  it renders on the decision surface (DecisionPanel reads staged_intent,
- *  not ops_journal). */
-const STAGED_PROPOSAL_STATE: OpsState = 'staged-proposal';
-
-/** Best-effort short human-readable summary of a journal entry's finding for
- *  the staged intent's `decisionProposal` — the payload itself carries the
- *  full structured finding, this is just the panel headline. */
-function summarizeDecision(entry: OpsJournalEntry): string {
-  const finding = entry.findingOrProposal;
-  if (typeof finding === 'string' && finding.trim()) return finding.trim();
-  if (finding && typeof finding === 'object') {
-    const candidate =
-      (finding as Record<string, unknown>).summary ??
-      (finding as Record<string, unknown>).proposal;
-    if (typeof candidate === 'string' && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  return `ops_journal proposal for ${entry.taskId} — awaiting sign-off`;
-}
-
-/**
- * Stage (or re-stage) the journal.setState decision for this entry so it
- * shows up on the decision surface. Content-idempotent (stageIntent dedups
- * by payload hash), so a re-transition into staged-proposal with unchanged
- * fields is a no-op rather than a duplicate row.
- */
-function stageJournalDecision(
-  entry: OpsJournalEntry,
-  sessionId: string | null,
-): void {
-  stageIntent(
-    'journal.setState',
-    {
-      taskId: entry.taskId,
-      state: entry.state,
-      fields: {
-        disposition: entry.disposition,
-        findingOrProposal: entry.findingOrProposal,
-        evidence: entry.evidence,
-        resolution: entry.resolution,
-      },
-    },
-    entry.project,
-    null,
-    sessionId,
-    summarizeDecision(entry),
-  );
-}
+import { stageJournalDecision, STAGED_PROPOSAL_STATE } from './stagedIntents';
+import { getLatestOpsSessionByTaskId } from '../db/queries';
+import { closeDeferredOpsTask } from '../orchestration/PlanningOrchestrator';
+import { logger } from '../logger';
 
 /**
  * Read/operator-write surface for the Ops(N) staged-intent view: exposes
@@ -98,7 +48,7 @@ export function createOpsJournalRouter(): Router {
   router.post(
     '/ops-journal/:taskId/state',
     requireDeviceAuth,
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       const taskId = String(req.params.taskId);
 
       const body = req.body as {
@@ -160,6 +110,25 @@ export function createOpsJournalRouter(): Router {
         // session also stages a journal.setState intent itself.
         if (updated && updated.state === STAGED_PROPOSAL_STATE) {
           stageJournalDecision(updated, null);
+        }
+        // The operator-confirmed applied-pending-confirm -> resolved path is
+        // the deferred half of ops-task closure: the owning session has
+        // typically already gone terminal by the time this lands (see
+        // closeDeferredOpsTask's docstring), so completeOpsTask's
+        // synchronous check at markTerminal's exact instant never catches
+        // it. Best-effort — a failure here must not roll back the journal
+        // write, which already succeeded.
+        if (updated && updated.state === 'resolved') {
+          const opsSession = getLatestOpsSessionByTaskId(taskId);
+          if (opsSession) {
+            try {
+              await closeDeferredOpsTask(opsSession);
+            } catch (err) {
+              logger.error(
+                `[opsJournal] deferred close failed for task ${taskId}: ${err}`,
+              );
+            }
+          }
         }
         res.json(updated);
       } catch (err) {

@@ -4,6 +4,8 @@ import { EventEmitter } from 'events';
 vi.mock('../../db/queries', () => ({
   getSession: vi.fn(),
   markSessionDone: vi.fn(),
+  hasActiveCapabilityRequestForSession: vi.fn().mockReturnValue(false),
+  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
 }));
 
 vi.mock('../../config', () => ({
@@ -16,351 +18,16 @@ vi.mock('../gateService', () => ({
   appendGateItemEvent: vi.fn(),
 }));
 
+import { SessionGateItemVerifier } from '../gateItemVerifier';
 import {
-  admitsLiveRecordUnreachable,
-  assertsStructuralUnverifiability,
-  citesMissingIdentifierWithoutSearch,
-  enforceAbstentionEvidenceContract,
-  enforcePassEvidenceContract,
-  hasConcreteRuntimeRecordEvidence,
-  hasOperationalEvidence,
-  isPreconditionOnlyEvidence,
-  SessionGateItemVerifier,
-} from '../gateItemVerifier';
-import { getSession, markSessionDone } from '../../db/queries';
+  getSession,
+  markSessionDone,
+  hasActiveCapabilityRequestForSession,
+} from '../../db/queries';
 import { appendGateItemEvent } from '../gateService';
 import type { GateItem } from '../gateStore';
 
-describe('hasOperationalEvidence', () => {
-  it('is true for evidence.basis "operational"', () => {
-    expect(hasOperationalEvidence({ basis: 'operational' })).toBe(true);
-  });
-
-  it('is true for an array basis that includes "operational"', () => {
-    expect(hasOperationalEvidence({ basis: ['source', 'operational'] })).toBe(
-      true,
-    );
-  });
-
-  it('is false for evidence.basis "source"', () => {
-    expect(hasOperationalEvidence({ basis: 'source' })).toBe(false);
-  });
-
-  it('is false for missing/malformed evidence', () => {
-    expect(hasOperationalEvidence(undefined)).toBe(false);
-    expect(hasOperationalEvidence(null)).toBe(false);
-    expect(hasOperationalEvidence('some string')).toBe(false);
-    expect(hasOperationalEvidence({})).toBe(false);
-  });
-
-  it('is true for a JSON string with basis "operational"', () => {
-    expect(
-      hasOperationalEvidence(JSON.stringify({ basis: 'operational' })),
-    ).toBe(true);
-  });
-
-  it('is false for a JSON string with basis "source"', () => {
-    expect(hasOperationalEvidence(JSON.stringify({ basis: 'source' }))).toBe(
-      false,
-    );
-  });
-});
-
-describe('isPreconditionOnlyEvidence', () => {
-  it('is true when evidence only confirms the PR was merged via an ancestry check', () => {
-    expect(
-      isPreconditionOnlyEvidence({
-        basis: 'operational',
-        note: 'Confirmed PR #974 merged via git merge-base --is-ancestor',
-      }),
-    ).toBe(true);
-  });
-
-  it('is true when evidence only confirms the commit was deployed', () => {
-    expect(
-      isPreconditionOnlyEvidence({
-        basis: 'operational',
-        note: 'commit deployed to production',
-      }),
-    ).toBe(true);
-  });
-
-  it('is false when evidence describes the behavior itself, even alongside a merge mention', () => {
-    expect(
-      isPreconditionOnlyEvidence({
-        basis: 'operational',
-        note: 'audit_log shows the gate-verify session transitioned running -> done after PR #974 merged, confirming the described behavior actually ran',
-      }),
-    ).toBe(false);
-  });
-
-  it('is false for evidence with no precondition-only phrasing', () => {
-    expect(
-      isPreconditionOnlyEvidence({
-        basis: 'operational',
-        note: 'audit_log shows the deploy',
-      }),
-    ).toBe(false);
-  });
-
-  it('is false for missing/malformed evidence', () => {
-    expect(isPreconditionOnlyEvidence(undefined)).toBe(false);
-    expect(isPreconditionOnlyEvidence(null)).toBe(false);
-    expect(isPreconditionOnlyEvidence('some string')).toBe(false);
-  });
-});
-
-describe('hasConcreteRuntimeRecordEvidence', () => {
-  it('is true for a note naming audit_log', () => {
-    expect(
-      hasConcreteRuntimeRecordEvidence({ note: 'audit_log shows the run' }),
-    ).toBe(true);
-  });
-
-  it('is true for a note naming session_events', () => {
-    expect(
-      hasConcreteRuntimeRecordEvidence({
-        note: 'session_events confirms the disposition was recorded',
-      }),
-    ).toBe(true);
-  });
-
-  it('is true for a note describing a live API or DB read', () => {
-    expect(
-      hasConcreteRuntimeRecordEvidence({
-        note: 'queried the database and read the live record',
-      }),
-    ).toBe(true);
-  });
-
-  it('is false for a CI check + test file + source-path trace with no captured runtime record', () => {
-    expect(
-      hasConcreteRuntimeRecordEvidence({
-        note: 'the CI build check passed, the test file covers this case, and a source-path trace through gateItemVerifier.ts confirms the code path',
-      }),
-    ).toBe(false);
-  });
-
-  it('is false for missing/malformed evidence', () => {
-    expect(hasConcreteRuntimeRecordEvidence(undefined)).toBe(false);
-    expect(hasConcreteRuntimeRecordEvidence(null)).toBe(false);
-    expect(hasConcreteRuntimeRecordEvidence('some string')).toBe(false);
-  });
-});
-
-describe('admitsLiveRecordUnreachable', () => {
-  it('is true when a limitation admits the live record was not read', () => {
-    expect(
-      admitsLiveRecordUnreachable({
-        note: 'audit_log entries look consistent',
-        limitation: 'no live record was read to confirm this directly',
-      }),
-    ).toBe(true);
-  });
-
-  it('is true when evidence says the record was unreachable', () => {
-    expect(
-      admitsLiveRecordUnreachable({
-        note: 'the session_events store was unreachable during this check',
-      }),
-    ).toBe(true);
-  });
-
-  it('is false when evidence has no such admission', () => {
-    expect(
-      admitsLiveRecordUnreachable({
-        basis: 'operational',
-        note: 'audit_log shows the deploy',
-      }),
-    ).toBe(false);
-  });
-
-  it('is false for missing/malformed evidence', () => {
-    expect(admitsLiveRecordUnreachable(undefined)).toBe(false);
-    expect(admitsLiveRecordUnreachable(null)).toBe(false);
-    expect(admitsLiveRecordUnreachable('some string')).toBe(false);
-  });
-});
-
-describe('assertsStructuralUnverifiability', () => {
-  it('is true when evidence traces a code path that never records the behavior by design', () => {
-    expect(
-      assertsStructuralUnverifiability({
-        reason:
-          'traced the refresh code path; it never calls recordEvent, so ' +
-          'no audit_log entry is produced by design',
-      }),
-    ).toBe(true);
-  });
-
-  it('is false for a plain turn/time budget abstention', () => {
-    expect(
-      assertsStructuralUnverifiability({
-        reason:
-          'ran out of turn budget before reaching a conclusive determination',
-      }),
-    ).toBe(false);
-  });
-
-  it('is false for a missing-capability abstention', () => {
-    expect(
-      assertsStructuralUnverifiability({
-        reason:
-          'could not read session_events for the target session — no ' +
-          'capability grant for that read this run',
-      }),
-    ).toBe(false);
-  });
-
-  it('is false for missing/malformed evidence', () => {
-    expect(assertsStructuralUnverifiability(undefined)).toBe(false);
-    expect(assertsStructuralUnverifiability('a string')).toBe(false);
-  });
-});
-
-describe('enforcePassEvidenceContract', () => {
-  it('downgrades a pass grounded only in "PR merged" to needs-setup', () => {
-    const result = enforcePassEvidenceContract({
-      disposition: 'pass',
-      evidence: {
-        basis: 'operational',
-        note: 'Ran git merge-base --is-ancestor and confirmed PR #974 merged',
-      },
-    });
-    expect(result.disposition).toBe('needs-setup');
-    expect(result.evidence).toMatchObject({
-      reason: expect.stringContaining('guaranteed precondition'),
-    });
-  });
-
-  it('downgrades a pass grounded only in "commit deployed" to needs-setup', () => {
-    const result = enforcePassEvidenceContract({
-      disposition: 'pass',
-      evidence: { basis: 'operational', note: 'deployed to production' },
-    });
-    expect(result.disposition).toBe('needs-setup');
-  });
-
-  it('downgrades a source-only pass to needs-setup', () => {
-    const result = enforcePassEvidenceContract({
-      disposition: 'pass',
-      evidence: { basis: 'source', note: 'read the component, looks right' },
-    });
-    expect(result.disposition).toBe('needs-setup');
-    expect(result.evidence).toMatchObject({
-      reason: expect.stringContaining('operational'),
-    });
-  });
-
-  it('downgrades a pass with no evidence at all', () => {
-    const result = enforcePassEvidenceContract({ disposition: 'pass' });
-    expect(result.disposition).toBe('needs-setup');
-  });
-
-  it('keeps a pass grounded in operational evidence', () => {
-    const result = enforcePassEvidenceContract({
-      disposition: 'pass',
-      evidence: { basis: 'operational', note: 'audit_log shows the deploy' },
-    });
-    expect(result.disposition).toBe('pass');
-  });
-
-  it('downgrades a pass grounded in a CI check + test file + source-path trace with no captured runtime record', () => {
-    const result = enforcePassEvidenceContract({
-      disposition: 'pass',
-      evidence: {
-        basis: 'operational',
-        note: 'PR #974 merged, CI build check passed, test file gateItemVerifier.test.ts covers this, and a source-path trace through gateItemVerifier.ts confirms the code path',
-      },
-    });
-    expect(result.disposition).toBe('needs-setup');
-    expect(result.evidence).toMatchObject({
-      reason: expect.stringContaining('concrete captured runtime record'),
-    });
-  });
-
-  it('downgrades a pass whose evidence admits the live record could not be read', () => {
-    const result = enforcePassEvidenceContract({
-      disposition: 'pass',
-      evidence: {
-        basis: 'operational',
-        note: 'merged PR #974, a CI build check, and a source-path trace',
-        limitation: 'no live record was read to confirm this ran',
-      },
-    });
-    expect(result.disposition).toBe('needs-setup');
-    expect(result.evidence).toMatchObject({
-      reason: expect.stringContaining('live'),
-    });
-  });
-
-  it('keeps a pass naming a concrete captured runtime record', () => {
-    const result = enforcePassEvidenceContract({
-      disposition: 'pass',
-      evidence: {
-        basis: 'operational',
-        note: 'session_events shows the gate-verify session reported pass after reading audit_log entries for the run',
-      },
-    });
-    expect(result.disposition).toBe('pass');
-  });
-
-  it('leaves fail and needs-setup dispositions untouched', () => {
-    const fail = enforcePassEvidenceContract({
-      disposition: 'fail',
-      evidence: { basis: 'source' },
-    });
-    expect(fail.disposition).toBe('fail');
-
-    const needsSetup = enforcePassEvidenceContract({
-      disposition: 'needs-setup',
-    });
-    expect(needsSetup.disposition).toBe('needs-setup');
-  });
-
-  it('keeps a pass whose evidence is a JSON string declaring operational basis with a captured runtime record', () => {
-    const result = enforcePassEvidenceContract({
-      disposition: 'pass',
-      evidence: JSON.stringify({
-        basis: 'operational',
-        summary:
-          'session_events shows the gate-verify session reported pass after reading audit_log entries for the run',
-      }),
-    });
-    expect(result.disposition).toBe('pass');
-  });
-
-  it('downgrades a pass whose evidence is a JSON string declaring source basis, same as the object form', () => {
-    const result = enforcePassEvidenceContract({
-      disposition: 'pass',
-      evidence: JSON.stringify({
-        basis: 'source',
-        summary: 'read the component, looks right',
-      }),
-    });
-    expect(result.disposition).toBe('needs-setup');
-    expect(result.evidence).toMatchObject({
-      reason: expect.stringContaining('operational'),
-    });
-  });
-
-  it('downgrades a pass whose evidence is an unparseable string, naming the shape problem distinctly from source-only wording', () => {
-    const result = enforcePassEvidenceContract({
-      disposition: 'pass',
-      evidence: '{"basis": "operational", "summary": ',
-    });
-    expect(result.disposition).toBe('needs-setup');
-    expect(result.evidence).toMatchObject({
-      reason:
-        "pass disposition's evidence could not be interpreted as an evidence object (it was a string that could not be parsed as JSON) — this is a shape problem, not a judgment that the evidence was source-only, and no operational/source determination could be made",
-    });
-    expect((result.evidence as { reason: string }).reason).not.toBe(
-      'pass disposition lacked operational/runtime evidence — a source-only verdict cannot pass',
-    );
-  });
-});
-
-describe('SessionGateItemVerifier — archives its dispatched session once the disposition is consumed', () => {
+describe('SessionGateItemVerifier — leaves a reporting session live, archives only on dispatch failure', () => {
   const item: GateItem = {
     id: 'item-1',
     project: 'proj',
@@ -386,9 +53,12 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     vi.mocked(getSession).mockReset();
     vi.mocked(markSessionDone).mockReset();
     vi.mocked(appendGateItemEvent).mockReset();
+    vi.mocked(hasActiveCapabilityRequestForSession)
+      .mockReset()
+      .mockReturnValue(false);
   });
 
-  it('marks the session done once the gate_verify_disposition event fires', async () => {
+  it('resolves awaitingDisposition:true and leaves the session live once the gate_verify_disposition event fires — no archive, no gate_item_event write here', async () => {
     const sessionManager = makeSessionManager();
     vi.mocked(getSession).mockReturnValue({
       status: 'running',
@@ -411,13 +81,60 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
 
     const result = await resultPromise;
     expect(result.disposition).toBe('pass');
-    expect(markSessionDone).toHaveBeenCalledWith(
-      'sess-1',
-      expect.any(Number),
-      null,
-      'gate_item_verifier_consumed',
+    expect(result.awaitingDisposition).toBe(true);
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sessionManager.archiveAndEndSession).not.toHaveBeenCalled();
+    expect(appendGateItemEvent).not.toHaveBeenCalled();
+  });
+
+  it('resolves a reported pass unmodified even when its evidence carries a negation next to a live-record mention — the verbatim evidence session 0f26fbd1 reported for gate item 702f69bd, which the retired contract used to downgrade', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verbatimEvidence = {
+      basis: 'operational',
+      note:
+        'queried audit_log with a windowed since/until range and by task_id; ' +
+        'there are no audit_log rows of any kind for this task in between, ' +
+        'confirming the auto-dispatch and pickup happened with no manual ' +
+        'database intervention.',
+    };
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: { disposition: 'pass', evidence: verbatimEvidence },
+    });
+
+    const result = await resultPromise;
+    expect(result.disposition).toBe('pass');
+    expect(result.evidence).toEqual(verbatimEvidence);
+    // No contract, no downgrade, no appeal — the operator sees exactly what
+    // the session reported.
+    expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
+    expect(appendGateItemEvent).not.toHaveBeenCalled();
+  });
+
+  it('sets dispatchFailed:true and preserves reason/error evidence when sessionManager.start() rejects', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(sessionManager.start).mockRejectedValue(
+      new Error('Max concurrent planning sessions (20) reached'),
     );
-    expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith('sess-1');
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const result = await verifier.verify(item);
+
+    expect(result).toMatchObject({
+      disposition: 'needs-setup',
+      dispatchFailed: true,
+      evidence: {
+        reason: 'failed to dispatch verification session',
+        error: 'Max concurrent planning sessions (20) reached',
+      },
+    });
   });
 
   it('names the session "Gate verify: <item text>", unaffected by the groom/design/ops planning-session naming scheme', async () => {
@@ -516,6 +233,41 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     expect(recordFirstIndex).toBeGreaterThan(-1);
     expect(sourceOrientIndex).toBeGreaterThan(-1);
     expect(recordFirstIndex).toBeLessThan(sourceOrientIndex);
+  });
+
+  it('names the required expected/found/query evidence fields, fail-only source', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: { disposition: 'needs-setup' },
+    });
+    await resultPromise;
+
+    const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+    const injectedProcedureContent = (
+      dispatchOpts as { injectedProcedureContent: string }
+    ).injectedProcedureContent;
+
+    // The prompting names the terse contract fields, not a free-prose
+    // explanation/basis pair.
+    expect(injectedProcedureContent).toMatch(/`expected`/);
+    expect(injectedProcedureContent).toMatch(/`found`/);
+    expect(injectedProcedureContent).toMatch(/`query`/);
+    expect(injectedProcedureContent).not.toMatch(/evidence\.explanation/);
+    expect(injectedProcedureContent).not.toMatch(/prose paragraph stating/);
+
+    // The JSON report template mandates the three keys.
+    expect(injectedProcedureContent).toMatch(
+      /"expected":\s*"\.\.\.",\s*"found":\s*"\.\.\.",\s*"query":\s*"\.\.\."/,
+    );
+
+    // source is shown as fail-only, not part of the base template.
+    expect(injectedProcedureContent).toMatch(/admissible only on fail/);
   });
 
   it('defines the operational record with distinct IS / IS-NOT sections', async () => {
@@ -622,6 +374,44 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     expect(sessionManager.archiveAndEndSession).not.toHaveBeenCalled();
   });
 
+  it('exempts the wall-clock budget while a capability request is outstanding, and still resolves once granted', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+    // Outstanding past the (tiny, test-scale) budget window — the budget
+    // must not tear the session down while this holds true.
+    vi.mocked(hasActiveCapabilityRequestForSession).mockReturnValue(true);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      budgetMs: 15,
+      pollIntervalMs: 5,
+    });
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Well past the 15ms budget — without the exemption this would already
+    // have torn the session down as a budget-exceeded needs-setup.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sessionManager.archiveAndEndSession).not.toHaveBeenCalled();
+
+    // The request clears (operator grants it) — the session resumes and
+    // eventually reports its disposition.
+    vi.mocked(hasActiveCapabilityRequestForSession).mockReturnValue(false);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: {
+        disposition: 'pass',
+        evidence: { basis: 'operational', note: 'audit_log shows the run' },
+      },
+    });
+
+    const result = await resultPromise;
+    expect(result.disposition).toBe('pass');
+    expect(result.awaitingDisposition).toBe(true);
+    expect(sessionManager.archiveAndEndSession).not.toHaveBeenCalled();
+  });
+
   it('captures a gate_verify_disposition emitted synchronously as start() resolves, before the poll fallback can fire', async () => {
     // A fast session can emit its disposition the instant sessionManager.start()
     // resolves — before any code after the `await` has had a chance to attach a
@@ -654,12 +444,9 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     const result = await verifier.verify(item);
 
     expect(result.disposition).toBe('fail');
-    expect(markSessionDone).toHaveBeenCalledWith(
-      'sess-fast',
-      expect.any(Number),
-      null,
-      'gate_item_verifier_consumed',
-    );
+    expect(result.awaitingDisposition).toBe(true);
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sessionManager.archiveAndEndSession).not.toHaveBeenCalled();
   });
 
   it('records the session emitted disposition, not the needs-setup timeout fallback, when the event beat the poll', async () => {
@@ -742,519 +529,91 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     expect(injectedProcedureContent).toContain('.claude/session-prompts/');
     expect(injectedProcedureContent).toMatch(/must say what you\s+searched/i);
   });
-});
 
-describe('SessionGateItemVerifier — one-shot gate-verify appeal', () => {
-  const item: GateItem = {
-    id: 'item-appeal-1',
-    project: 'proj',
-    milestone: 'm1',
-    text: 'some behavior',
-    classification: 'Read-Only',
-    state: 'open',
-    updatedAt: new Date(0).toISOString(),
-    sources: [],
-    events: [],
-  };
-
-  // Fails only the "concrete captured runtime record" clause — operational,
-  // not precondition-only, no unreachable-record admission, but no
-  // audit_log/session_events/live-API-read mention either.
-  const sourceGradeEvidence = {
-    basis: 'operational',
-    note: 'traced the code path and a CI check',
-  };
-  const revisedRuntimeEvidence = {
-    basis: 'operational',
-    note: 'audit_log confirms the described behavior actually ran',
-  };
-
-  function makeSessionManager() {
-    const emitter = new EventEmitter();
-    return Object.assign(emitter, {
-      start: vi.fn().mockResolvedValue('sess-appeal'),
-      archiveAndEndSession: vi.fn(),
-      enqueueFeedback: vi.fn().mockResolvedValue(undefined),
-    });
-  }
-
-  beforeEach(() => {
-    vi.mocked(getSession).mockReset();
-    vi.mocked(markSessionDone).mockReset();
-    vi.mocked(appendGateItemEvent).mockReset();
-  });
-
-  it('delivers appeal feedback naming the failing clause while the session is still live, before any teardown', async () => {
+  it('permits exactly one bounded instrumental write and states its boundaries', async () => {
     const sessionManager = makeSessionManager();
     vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
 
-    const verifier = new SessionGateItemVerifier(sessionManager as never, {
-      budgetMs: 60_000,
-    });
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
     const resultPromise = verifier.verify(item);
     await new Promise((resolve) => setTimeout(resolve, 0));
-
     sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-appeal',
-      disposition: { disposition: 'pass', evidence: sourceGradeEvidence },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    // Feedback was sent while the session was still live — no teardown yet.
-    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
-    expect(markSessionDone).not.toHaveBeenCalled();
-    expect(sessionManager.archiveAndEndSession).not.toHaveBeenCalled();
-
-    const [sessionId, source, message] = vi.mocked(
-      sessionManager.enqueueFeedback,
-    ).mock.calls[0];
-    expect(sessionId).toBe('sess-appeal');
-    expect(source).toBe('gate-verifier:appeal');
-    expect(message).toMatch(
-      /source\/CI-grade evidence.*rather than a concrete captured runtime record/i,
-    );
-
-    // The original verdict is preserved as a distinct log entry, not silently
-    // discarded.
-    expect(appendGateItemEvent).toHaveBeenCalledTimes(1);
-    expect(appendGateItemEvent).toHaveBeenCalledWith(
-      item.id,
-      expect.objectContaining({
-        disposition: 'noted',
-        operator: 'gate-verifier',
-        evidence: expect.objectContaining({
-          originalDisposition: 'pass',
-          originalEvidence: sourceGradeEvidence,
-          downgradeReason: expect.stringMatching(/concrete captured runtime/i),
-        }),
-      }),
-    );
-
-    // Still awaiting the revision — settle it so the test doesn't leak timers.
-    sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-appeal',
+      sessionId: 'sess-1',
       disposition: { disposition: 'needs-setup' },
     });
     await resultPromise;
-  });
 
-  it('records a revised verdict that satisfies the contract as final, and only then tears the session down', async () => {
-    const sessionManager = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+    const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+    const injectedProcedureContent = (
+      dispatchOpts as { injectedProcedureContent: string }
+    ).injectedProcedureContent;
 
-    const verifier = new SessionGateItemVerifier(sessionManager as never, {
-      budgetMs: 60_000,
-    });
-    const resultPromise = verifier.verify(item);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-appeal',
-      disposition: { disposition: 'pass', evidence: sourceGradeEvidence },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(markSessionDone).not.toHaveBeenCalled();
-
-    sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-appeal',
-      disposition: { disposition: 'pass', evidence: revisedRuntimeEvidence },
-    });
-
-    const result = await resultPromise;
-    expect(result.disposition).toBe('pass');
-    expect(result.evidence).toEqual(revisedRuntimeEvidence);
-    expect(markSessionDone).toHaveBeenCalledWith(
-      'sess-appeal',
-      expect.any(Number),
-      null,
-      'gate_item_verifier_consumed',
+    // The narrow write exception is documented, bounded to one atomic action.
+    expect(injectedProcedureContent).toMatch(/one narrow write exception/i);
+    expect(injectedProcedureContent).toMatch(
+      /exactly\s+one atomic,?\s+instrumental write/i,
     );
-    expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith(
-      'sess-appeal',
+    expect(injectedProcedureContent).toMatch(
+      /never a multi-step or open-ended action|never the start of a longer procedure/i,
     );
-    // Exactly one appeal — no second round.
-    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
-  });
 
-  it('downgrades a revised verdict that still fails the contract, final with no second appeal', async () => {
-    const sessionManager = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+    // What remains explicitly out of scope for the exception.
+    expect(injectedProcedureContent).toMatch(/reconcile-and-capture/i);
+    expect(injectedProcedureContent).toMatch(/ops_journal/);
+    expect(injectedProcedureContent).toMatch(
+      /any other\s+multi-step operational change/i,
+    );
+    expect(injectedProcedureContent).toMatch(/any gate-write call/i);
 
-    const verifier = new SessionGateItemVerifier(sessionManager as never, {
-      budgetMs: 60_000,
-    });
-    const resultPromise = verifier.verify(item);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The write is instrumental only, never the verdict itself.
+    expect(injectedProcedureContent).toMatch(
+      /instrumental only and never itself the verdict/i,
+    );
+    expect(injectedProcedureContent).toMatch(
+      /backend remains the sole writer of gate state/i,
+    );
 
-    sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-appeal',
-      disposition: { disposition: 'pass', evidence: sourceGradeEvidence },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Abstain stays the default until the single closing action is identified.
+    expect(injectedProcedureContent).toMatch(/abstain remains the default/i);
+    expect(injectedProcedureContent).toMatch(
+      /single closing action.*already\s+identified|already identified.*single closing action/i,
+    );
+    expect(injectedProcedureContent).toMatch(/genuine ambiguity.*needs-setup/i);
 
-    // Revised, still source-grade — a second pass that still fails.
-    sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-appeal',
-      disposition: { disposition: 'pass', evidence: sourceGradeEvidence },
-    });
-
-    const result = await resultPromise;
-    expect(result.disposition).toBe('needs-setup');
-    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
-    expect(markSessionDone).toHaveBeenCalledWith(
-      'sess-appeal',
-      expect.any(Number),
-      null,
-      'gate_item_verifier_consumed',
+    // A worked session.requestCapability payload example for this write class.
+    expect(injectedProcedureContent).toMatch(
+      /"capability":"<one Bash command prefix or one named\s+MCP write verb>"/,
+    );
+    expect(injectedProcedureContent).toMatch(
+      /seed\/trigger exactly this one row\/event/i,
     );
   });
 
-  it('produces no appeal turn for a verdict that satisfies the contract on the first attempt', async () => {
+  it('describes staging + operator pushback, never a one-shot appeal, in the injected procedure', async () => {
     const sessionManager = makeSessionManager();
     vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
 
     const verifier = new SessionGateItemVerifier(sessionManager as never);
     const resultPromise = verifier.verify(item);
     await new Promise((resolve) => setTimeout(resolve, 0));
-
     sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-appeal',
-      disposition: { disposition: 'pass', evidence: revisedRuntimeEvidence },
+      sessionId: 'sess-1',
+      disposition: { disposition: 'needs-setup' },
     });
+    await resultPromise;
 
-    const result = await resultPromise;
-    expect(result.disposition).toBe('pass');
-    expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
-    expect(appendGateItemEvent).not.toHaveBeenCalled();
-    expect(markSessionDone).toHaveBeenCalledWith(
-      'sess-appeal',
-      expect.any(Number),
-      null,
-      'gate_item_verifier_consumed',
+    const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+    const injectedProcedureContent = (
+      dispatchOpts as { injectedProcedureContent: string }
+    ).injectedProcedureContent;
+
+    expect(injectedProcedureContent).toMatch(
+      /stages your report as a normal decision for a human operator/i,
     );
-  });
-
-  it('caps a session that never answers its appeal by the existing verification budget, and still tears it down', async () => {
-    const sessionManager = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
-
-    const verifier = new SessionGateItemVerifier(sessionManager as never, {
-      budgetMs: 20,
-      pollIntervalMs: 100_000,
-    });
-    const resultPromise = verifier.verify(item);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-appeal',
-      disposition: { disposition: 'pass', evidence: sourceGradeEvidence },
-    });
-
-    const result = await resultPromise;
-    expect(result.disposition).toBe('needs-setup');
-    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
-    expect(markSessionDone).toHaveBeenCalledWith(
-      'sess-appeal',
-      expect.any(Number),
-      null,
-      'gate_item_verifier_consumed',
+    expect(injectedProcedureContent).toMatch(
+      /no limit on how many times this can happen/i,
     );
-    expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith(
-      'sess-appeal',
-    );
-  });
-});
-
-describe('SessionGateItemVerifier — one-shot reclassify-omission appeal', () => {
-  const item: GateItem = {
-    id: 'item-reclassify-appeal-1',
-    project: 'proj',
-    milestone: 'm1',
-    text: 'a rendered-colour assertion',
-    classification: 'Read-Only',
-    state: 'open',
-    updatedAt: new Date(0).toISOString(),
-    sources: [],
-    events: [],
-  };
-
-  const structuralEvidence = {
-    reason:
-      'traced the refresh code path; it never calls recordEvent, so no ' +
-      'audit_log entry is produced by design',
-  };
-  const budgetEvidence = {
-    reason: 'ran out of turn budget before reaching a conclusive determination',
-  };
-
-  function makeSessionManager() {
-    const emitter = new EventEmitter();
-    return Object.assign(emitter, {
-      start: vi.fn().mockResolvedValue('sess-reclassify-appeal'),
-      archiveAndEndSession: vi.fn(),
-      enqueueFeedback: vi.fn().mockResolvedValue(undefined),
-    });
-  }
-
-  beforeEach(() => {
-    vi.mocked(getSession).mockReset();
-    vi.mocked(markSessionDone).mockReset();
-    vi.mocked(appendGateItemEvent).mockReset();
-  });
-
-  it('delivers exactly one appeal naming the omission for a needs-setup asserting structural unverifiability with no reclassify', async () => {
-    const sessionManager = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
-
-    const verifier = new SessionGateItemVerifier(sessionManager as never, {
-      budgetMs: 60_000,
-    });
-    const resultPromise = verifier.verify(item);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-reclassify-appeal',
-      disposition: { disposition: 'needs-setup', evidence: structuralEvidence },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    // Appeal sent while the session is still live — no teardown yet.
-    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
-    expect(markSessionDone).not.toHaveBeenCalled();
-
-    const [sessionId, source, message] = vi.mocked(
-      sessionManager.enqueueFeedback,
-    ).mock.calls[0];
-    expect(sessionId).toBe('sess-reclassify-appeal');
-    expect(source).toBe('gate-verifier:reclassify-appeal');
-    expect(message).toMatch(/did not include a `reclassify` field/i);
-
-    expect(appendGateItemEvent).toHaveBeenCalledTimes(1);
-    expect(appendGateItemEvent).toHaveBeenCalledWith(
-      item.id,
-      expect.objectContaining({
-        disposition: 'noted',
-        operator: 'gate-verifier',
-        evidence: expect.objectContaining({
-          appeal: 'reclassify-omission',
-          originalDisposition: 'needs-setup',
-          originalEvidence: structuralEvidence,
-        }),
-      }),
-    );
-
-    // Answer the appeal so the test doesn't leak timers.
-    sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-reclassify-appeal',
-      disposition: {
-        disposition: 'needs-setup',
-        evidence: structuralEvidence,
-        reclassify: {
-          to: 'Human-Observation',
-          reason: 'no operational trace can ever be produced for this item',
-        },
-      },
-    });
-    const result = await resultPromise;
-    expect(result.disposition).toBe('needs-setup');
-    expect(result.reclassify).toEqual({
-      to: 'Human-Observation',
-      reason: 'no operational trace can ever be produced for this item',
-    });
-    // Exactly one appeal — no second round.
-    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
-  });
-
-  it('produces no appeal for a needs-setup citing a budget/capability limit', async () => {
-    const sessionManager = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
-
-    const verifier = new SessionGateItemVerifier(sessionManager as never);
-    const resultPromise = verifier.verify(item);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-reclassify-appeal',
-      disposition: { disposition: 'needs-setup', evidence: budgetEvidence },
-    });
-
-    const result = await resultPromise;
-    expect(result.disposition).toBe('needs-setup');
-    expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
-    expect(appendGateItemEvent).not.toHaveBeenCalled();
-    expect(markSessionDone).toHaveBeenCalledWith(
-      'sess-reclassify-appeal',
-      expect.any(Number),
-      null,
-      'gate_item_verifier_consumed',
-    );
-  });
-
-  it('treats the revision as final with no second appeal, even if it repeats needs-setup with no reclassify', async () => {
-    const sessionManager = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
-
-    const verifier = new SessionGateItemVerifier(sessionManager as never, {
-      budgetMs: 60_000,
-    });
-    const resultPromise = verifier.verify(item);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-reclassify-appeal',
-      disposition: { disposition: 'needs-setup', evidence: structuralEvidence },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    // Revision still omits reclassify — this must be final, not a second appeal.
-    sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-reclassify-appeal',
-      disposition: { disposition: 'needs-setup', evidence: structuralEvidence },
-    });
-
-    const result = await resultPromise;
-    expect(result.disposition).toBe('needs-setup');
-    expect(result.reclassify).toBeUndefined();
-    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
-    expect(markSessionDone).toHaveBeenCalledWith(
-      'sess-reclassify-appeal',
-      expect.any(Number),
-      null,
-      'gate_item_verifier_consumed',
-    );
-  });
-
-  it('produces no appeal when the needs-setup already carries a reclassify proposal', async () => {
-    const sessionManager = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
-
-    const verifier = new SessionGateItemVerifier(sessionManager as never);
-    const resultPromise = verifier.verify(item);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    sessionManager.emit('gate_verify_disposition', {
-      sessionId: 'sess-reclassify-appeal',
-      disposition: {
-        disposition: 'needs-setup',
-        evidence: structuralEvidence,
-        reclassify: {
-          to: 'Human-Observation',
-          reason: 'no operational trace can ever be produced for this item',
-        },
-      },
-    });
-
-    const result = await resultPromise;
-    expect(result.reclassify).toEqual({
-      to: 'Human-Observation',
-      reason: 'no operational trace can ever be produced for this item',
-    });
-    expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
-  });
-});
-
-describe('citesMissingIdentifierWithoutSearch', () => {
-  it('is true for a bare "no target session ID" abstention', () => {
-    expect(
-      citesMissingIdentifierWithoutSearch({
-        reason:
-          'no accessible session_events/audit_log for an actual groom/design ' +
-          'dispatch (no target session ID, no read surface for the live setting value)',
-      }),
-    ).toBe(true);
-  });
-
-  it('is false once the evidence records a local search', () => {
-    expect(
-      citesMissingIdentifierWithoutSearch({
-        reason:
-          'no target session ID up front, but checked .claude/session-prompts/ ' +
-          'and found no matching groom/design dispatch',
-      }),
-    ).toBe(false);
-  });
-
-  it('is false when nothing about a missing identifier is mentioned', () => {
-    expect(
-      citesMissingIdentifierWithoutSearch({
-        reason: 'verification budget exceeded',
-      }),
-    ).toBe(false);
-  });
-
-  it('is false for empty/non-object evidence', () => {
-    expect(citesMissingIdentifierWithoutSearch(undefined)).toBe(false);
-    expect(citesMissingIdentifierWithoutSearch('a string')).toBe(false);
-  });
-});
-
-describe('enforceAbstentionEvidenceContract', () => {
-  it('leaves pass/fail dispositions untouched', () => {
-    const pass = enforceAbstentionEvidenceContract({
-      disposition: 'pass',
-      evidence: { basis: 'operational' },
-    });
-    expect(pass.evidence).toEqual({ basis: 'operational' });
-
-    const fail = enforceAbstentionEvidenceContract({
-      disposition: 'fail',
-      evidence: { basis: 'operational' },
-    });
-    expect(fail.evidence).toEqual({ basis: 'operational' });
-  });
-
-  it('leaves a needs-setup with no missing-identifier citation untouched', () => {
-    const result = enforceAbstentionEvidenceContract({
-      disposition: 'needs-setup',
-      evidence: { reason: 'verification budget exceeded' },
-    });
-    expect(result.evidence).toEqual({ reason: 'verification budget exceeded' });
-  });
-
-  it('leaves a needs-setup untouched when it records what was searched', () => {
-    const evidence = {
-      reason:
-        'no target session ID; checked .claude/session-prompts/ and found none',
-    };
-    const result = enforceAbstentionEvidenceContract({
-      disposition: 'needs-setup',
-      evidence,
-    });
-    expect(result.evidence).toEqual(evidence);
-  });
-
-  it('flags a needs-setup whose evidence is a JSON string citing a missing identifier with no recorded search', () => {
-    const result = enforceAbstentionEvidenceContract({
-      disposition: 'needs-setup',
-      evidence: JSON.stringify({
-        reason:
-          'no target session ID, no read surface for the live setting value',
-      }),
-    });
-    expect(result.disposition).toBe('needs-setup');
-    expect(result.evidence).toMatchObject({
-      reason:
-        'no target session ID, no read surface for the live setting value',
-      abstentionIncomplete: true,
-    });
-  });
-
-  it('flags a needs-setup citing a missing identifier with no recorded search', () => {
-    const result = enforceAbstentionEvidenceContract({
-      disposition: 'needs-setup',
-      evidence: {
-        reason:
-          'no target session ID, no read surface for the live setting value',
-      },
-    });
-    expect(result.disposition).toBe('needs-setup');
-    expect(result.evidence).toMatchObject({
-      reason:
-        'no target session ID, no read surface for the live setting value',
-      abstentionIncomplete: true,
-    });
-    expect(
-      (result.evidence as { abstentionNote: string }).abstentionNote,
-    ).toMatch(/session-prompts/);
+    expect(injectedProcedureContent).not.toMatch(/one[- ]shot appeal/i);
+    expect(injectedProcedureContent).not.toMatch(/one chance to revise/i);
   });
 });

@@ -32,9 +32,11 @@ import {
   insertLocalBranch,
   markLocalBranchMerged,
   recordProjectDeployedSha,
+  updateProject,
 } from '../../db/queries.js';
 import { loadOpsContext } from '../opsLoad.js';
 import { getEntry } from '../opsJournal.js';
+import { createUnit } from '../../architecture/ArchUnitStore.js';
 
 const TARGET_BOARD = 'target-board-id';
 const PROJECT = 'proj-1';
@@ -295,6 +297,140 @@ describe('loadOpsContext — classification', () => {
   });
 });
 
+describe('loadOpsContext — architecture dual-read', () => {
+  it('resolves archUnits/archSource via selectUnitsFromStore({}) (no regions/topic) to exactly the active-invariant set when archStoreAdopted is true', async () => {
+    updateProject(PROJECT, { arch_store_adopted: 1 });
+    createUnit({
+      title: 'Sessions dispatch through the SessionManager invariant',
+      kind: 'invariant',
+      topic: 'general',
+      regions: [],
+      body: 'invariant body',
+      at: '2026-01-01T00:00:00Z',
+    });
+    // Region- and topic-matched units must NOT surface — an ops task has no
+    // file scope and no topic (see selectUnitsFromStore's no-regions/no-topic
+    // behaviour).
+    createUnit({
+      title: 'Region-matched unit that must not surface',
+      kind: 'subsystem',
+      topic: 'sessions',
+      regions: ['packages/backend/src/sessions'],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    rows = [
+      {
+        id: 'task-op-ready',
+        name: 'Op ready no deps',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+
+    const result = await loadOpsContext(MILESTONE);
+
+    expect(result.archSource).toBe('store');
+    const task = result.worklist.executable.find(
+      (t) => t.id === 'task-op-ready',
+    );
+    expect(task?.archSource).toBe('store');
+    expect(task?.archUnits.map((u) => u.title)).toEqual([
+      'Sessions dispatch through the SessionManager invariant',
+    ]);
+  });
+
+  it("keeps returning the project's Notion architecture pages (source: notion) when archStoreAdopted is not set", async () => {
+    createUnit({
+      title: 'Should never surface — project has not adopted the store',
+      kind: 'invariant',
+      topic: 'general',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+    rows = [
+      {
+        id: 'task-op-ready',
+        name: 'Op ready no deps',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+
+    const result = await loadOpsContext(MILESTONE);
+
+    expect(result.archSource).toBe('notion');
+    const task = result.worklist.executable.find(
+      (t) => t.id === 'task-op-ready',
+    );
+    expect(task?.archSource).toBe('notion');
+  });
+
+  it("scopes each task's archUnits to its own declared region, not one uniform project-wide list", async () => {
+    // Point the fixture project at this real git checkout so
+    // resolveTaskRegions has a genuine tracked-file set to validate declared
+    // paths against (mirrors the "dep deploy-gating" describe block below).
+    const repoDir = process.cwd();
+    db.prepare('UPDATE projects SET project_dir = ? WHERE id = ?').run(
+      repoDir,
+      PROJECT,
+    );
+    updateProject(PROJECT, { arch_store_adopted: 1 });
+    db.prepare('DELETE FROM arch_unit').run();
+    db.prepare('DELETE FROM arch_unit_event').run();
+    createUnit({
+      title: 'Ops-region unit',
+      kind: 'subsystem',
+      topic: 'ops',
+      regions: ['src/ops'],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+    createUnit({
+      title: 'Planning-region unit',
+      kind: 'subsystem',
+      topic: 'planning',
+      regions: ['src/planning'],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    rows = [
+      {
+        id: 'task-ops-region',
+        name: 'Touches the ops loader',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+      {
+        id: 'task-planning-region',
+        name: 'Touches the planning core',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+    testingBodies['task-ops-region'] =
+      'Touches src/ops/opsLoad.ts for the loader change.';
+    testingBodies['task-planning-region'] =
+      'Touches src/planning/procedureCore.ts for the principle change.';
+
+    const result = await loadOpsContext(MILESTONE);
+
+    const taskA = result.worklist.executable.find(
+      (t) => t.id === 'task-ops-region',
+    );
+    const taskB = result.worklist.executable.find(
+      (t) => t.id === 'task-planning-region',
+    );
+    expect(taskA?.archUnits.map((u) => u.title)).toEqual(['Ops-region unit']);
+    expect(taskB?.archUnits.map((u) => u.title)).toEqual([
+      'Planning-region unit',
+    ]);
+  });
+});
+
 describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
   it('pre-seeds exactly one pending entry per executable task', async () => {
     rows = [
@@ -502,11 +638,13 @@ describe('loadOpsContext — dep deploy-gating', () => {
 
   beforeEach(() => {
     // Point the fixture project at this real git checkout so the ancestry
-    // check has a genuine repo to run `git merge-base` against.
-    db.prepare('UPDATE projects SET project_dir = ? WHERE id = ?').run(
-      repoDir,
-      PROJECT,
-    );
+    // check has a genuine repo to run `git merge-base` against. Also mark it
+    // arch-store-adopted so selectArchitectureContext takes the arch_unit
+    // store branch instead of falling back to a Notion-architecture-pages
+    // manifest lookup that has no fixture on disk for this project id.
+    db.prepare(
+      'UPDATE projects SET project_dir = ?, arch_store_adopted = 1 WHERE id = ?',
+    ).run(repoDir, PROJECT);
     db.prepare('DELETE FROM sessions').run();
     db.prepare('DELETE FROM local_branches').run();
     db.prepare('DELETE FROM project_deployed_sha').run();

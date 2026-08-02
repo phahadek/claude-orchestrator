@@ -14,6 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import { EventEmitter } from 'events';
 import { makeEventRow } from '../../test/helpers/eventFixtures';
 
@@ -26,34 +27,47 @@ vi.mock('../db/db.js', async () => {
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries.js', () => ({
-  getPRByNumber: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  setReviewSessionId: vi.fn(),
-  setLastReviewedSha: vi.fn(),
-  setPRReviewResult: vi.fn(),
-  updatePRDraftStatus: vi.fn(),
-  incrementReviewIteration: vi.fn(),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getPausedPrReasonForTask: vi.fn().mockReturnValue(null),
-  getMergedPRForTask: vi.fn().mockReturnValue(null),
-  getLocalBranchById: vi.fn(),
-  setLocalBranchReviewResult: vi.fn(),
-  getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
-  insertPendingReviewSync: vi.fn(),
-  deletePendingReviewSync: vi.fn(),
-  getSetting: vi.fn().mockReturnValue(null),
-  getSession: vi.fn(),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getPRByNumber: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    setReviewSessionId: vi.fn(),
+    setLastReviewedSha: vi.fn(),
+    setPRReviewResult: vi.fn(),
+    updatePRDraftStatus: vi.fn(),
+    incrementReviewIteration: vi.fn(),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getPausedPrReasonForTask: vi.fn().mockReturnValue(null),
+    getMergedPRForTask: vi.fn().mockReturnValue(null),
+    getLocalBranchById: vi.fn(),
+    setLocalBranchReviewResult: vi.fn(),
+    getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
+    insertPendingReviewSync: vi.fn(),
+    deletePendingReviewSync: vi.fn(),
+    getSetting: vi.fn().mockReturnValue(null),
+    getSession: vi.fn(),
+  }),
+);
 
 vi.mock('../projects/ProjectService.js', () => ({
   ProjectService: {
     getMilestone: vi.fn(),
   },
+  getProjectRepos: vi.fn().mockReturnValue(['owner/repo']),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
+}));
+
+vi.mock('../orchestration/memoryAdmission.js', () => ({
+  hasMemoryHeadroom: vi.fn().mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  }),
 }));
 
 vi.mock('../config.js', () => ({
@@ -175,6 +189,7 @@ function makeSessionManager() {
     sendOrResume: ReturnType<typeof vi.fn>;
     getLiveCodeSessionCount: ReturnType<typeof vi.fn>;
     hasLiveSessionForTask: ReturnType<typeof vi.fn>;
+    findLiveSessionIdForTask: ReturnType<typeof vi.fn>;
   };
   em.start = vi.fn();
   em.isAlive = vi.fn().mockReturnValue(false);
@@ -182,6 +197,7 @@ function makeSessionManager() {
   em.sendOrResume = vi.fn();
   em.getLiveCodeSessionCount = vi.fn().mockReturnValue(0);
   em.hasLiveSessionForTask = vi.fn().mockReturnValue(false);
+  em.findLiveSessionIdForTask = vi.fn().mockReturnValue(undefined);
   return em;
 }
 
@@ -299,9 +315,8 @@ describe('GithubTaskSourceProvider — milestone resolution', () => {
     await provider.fetchReadyTasks(null);
 
     expect(client.listIssues).toHaveBeenCalledWith(REPO, {
-      labels: ['status:ready'],
       milestone: undefined,
-      state: 'open',
+      state: 'all',
     });
     expect(ProjectService.getMilestone).not.toHaveBeenCalled();
   });
@@ -319,9 +334,8 @@ describe('GithubTaskSourceProvider — milestone resolution', () => {
 
     expect(ProjectService.getMilestone).toHaveBeenCalledWith(MILESTONE_UUID);
     expect(client.listIssues).toHaveBeenCalledWith(REPO, {
-      labels: ['status:ready'],
       milestone: 1,
-      state: 'open',
+      state: 'all',
     });
   });
 
@@ -443,9 +457,8 @@ describe('AutoLauncher — github milestone gating', () => {
     await launcher.pollOnce();
 
     expect(client.listIssues).toHaveBeenCalledWith(REPO, {
-      labels: ['status:ready'],
       milestone: 1,
-      state: 'open',
+      state: 'all',
     });
     expect(sessionManager.start).toHaveBeenCalledOnce();
   });

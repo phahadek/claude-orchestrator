@@ -2,25 +2,28 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { makeEventRow } from '../../test/helpers/eventFixtures';
 import express from 'express';
 import supertest from 'supertest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  getSession: vi.fn(),
-  getActiveSessions: vi.fn(() => []),
-  getArchivedSessions: vi.fn(() => []),
-  getSessionsByStatus: vi.fn(() => []),
-  getSessionsByProject: vi.fn(() => []),
-  deleteSession: vi.fn(),
-  archiveSession: vi.fn(),
-  unarchiveSession: vi.fn(),
-  archiveFinishedSessions: vi.fn(() => 0),
-  setSessionNote: vi.fn(),
-  setSessionTags: vi.fn(),
-  favoriteSession: vi.fn(),
-  unfavoriteSession: vi.fn(),
-  deleteDenialsBySession: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    getSession: vi.fn(),
+    getActiveSessions: vi.fn(() => []),
+    getArchivedSessions: vi.fn(() => []),
+    getSessionsByStatus: vi.fn(() => []),
+    getSessionsByProject: vi.fn(() => []),
+    deleteSession: vi.fn(),
+    archiveSession: vi.fn(),
+    unarchiveSession: vi.fn(),
+    archiveFinishedSessions: vi.fn(() => 0),
+    setSessionNote: vi.fn(),
+    setSessionTags: vi.fn(),
+    favoriteSession: vi.fn(),
+    unfavoriteSession: vi.fn(),
+    deleteDenialsBySession: vi.fn(),
+    getEventsBySession: vi.fn(() => []),
+  }),
+);
 
 vi.mock('../utils/eventFilters', () => ({
   isSystemOnlyUserEvent: vi.fn(() => false),

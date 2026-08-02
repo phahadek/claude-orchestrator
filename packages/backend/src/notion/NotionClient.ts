@@ -787,6 +787,25 @@ export class NotionClient {
   }
 
   /**
+   * Fetch just a task page's title/type/status properties (no body, no
+   * pagination) — cheaper than fetchTaskPage for callers that don't need the
+   * body. Returns null on a 404 (task not found) rather than throwing.
+   */
+  async fetchTaskSummary(taskId: string): Promise<NotionTask | null> {
+    const externalId = toExternalId(taskId);
+    try {
+      const page = await notionRequest<NotionPage>(
+        'GET',
+        `/pages/${externalId}`,
+      );
+      return mapPageToTask(page);
+    } catch (err) {
+      if (err instanceof NotionApiError && err.statusCode === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
    * Append a PR URL to the Notes rich_text property on a Notion task page.
    * Fetches the current Notes content first so existing text is preserved.
    */
@@ -970,6 +989,62 @@ export class NotionClient {
       await notionRequest('DELETE', `/blocks/${block.id as string}`);
     }
     deleteTaskCacheRow(taskPageCacheKey(taskId));
+  }
+
+  /**
+   * Applies a notion.pageEdit staged intent's content_updates (each an
+   * old_str/new_str find/replace pair) to an arbitrary Notion page's full
+   * body. Unlike patchBodySection this is not heading-scoped — the payload
+   * targets a source-of-truth doc page rather than a task, so there is no
+   * fixed section to anchor on.
+   *
+   * Stale-base handling: the page may have changed since this edit was
+   * staged, so every old_str is re-checked against a fresh fetch of the
+   * page's current content before any write happens. If any old_str no
+   * longer matches exactly, the whole apply is rejected with
+   * NotionPageEditStaleBaseError rather than guessing at a partial or
+   * best-effort match — the caller routes this back to the staging surface
+   * for re-anchoring/re-staging.
+   */
+  async applyPageEdit(
+    pageId: string,
+    contentUpdates: { old_str: string; new_str: string }[],
+  ): Promise<void> {
+    const externalId = toExternalId(pageId);
+    const blocks = await fetchBlockChildren(externalId);
+    const text = blocks.map(blockToLine).join('\n');
+
+    let mutated = text;
+    for (const { old_str, new_str } of contentUpdates) {
+      if (!mutated.includes(old_str)) {
+        throw new NotionPageEditStaleBaseError(pageId, old_str);
+      }
+      mutated = mutated.replace(old_str, new_str);
+    }
+
+    const newBlocks = markdownToBlocks(mutated);
+    // Insert-before-delete: the new content lands before the stale blocks
+    // are torn down, so a crash mid-apply never leaves the page empty.
+    await insertChildBlocks(externalId, newBlocks);
+    for (const block of blocks) {
+      await notionRequest('DELETE', `/blocks/${block.id as string}`);
+    }
+    deleteTaskCacheRow(taskPageCacheKey(pageId));
+  }
+}
+
+/**
+ * Thrown by applyPageEdit when a content_update's old_str no longer appears
+ * verbatim in the page's current content — the page changed between staging
+ * and commit. Never mis-applied as a partial/best-effort match.
+ */
+export class NotionPageEditStaleBaseError extends Error {
+  constructor(pageId: string, oldStr: string) {
+    super(
+      `[NotionClient] applyPageEdit: old_str no longer matches on page ${pageId} — ` +
+        `the page changed since this edit was staged. Reject and re-stage: ${truncateForError(oldStr)}`,
+    );
+    this.name = 'NotionPageEditStaleBaseError';
   }
 }
 

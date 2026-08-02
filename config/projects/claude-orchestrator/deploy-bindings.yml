@@ -1,0 +1,13 @@
+# Host bindings for this repo's own tactical deploy playbook
+# (.claude-deploy-playbook.yml). Read by loadDeployBindings() — see
+# packages/backend/src/deploy/loadDeployBindings.ts and
+# deployBindingsSchema.ts for the loading/substitution mechanism.
+#
+# This is the host-local copy for THIS orchestrator's own self-hosting
+# deploy: it lives in the central config tree (resolved via
+# resolveConfigDir()/$ORCHESTRATOR_CONFIG_DIR), never in the versioned
+# runtime checkout, so the runtime directory and marker paths below can
+# change without touching the in-repo playbook.
+
+RUNTIME_DIR: /srv/orchestrator/runtime
+DEPLOYED_SHA_PATH: /srv/orchestrator/projects/config/projects/claude-orchestrator/DEPLOYED_SHA

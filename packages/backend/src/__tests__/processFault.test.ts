@@ -135,6 +135,9 @@ function makeBootDeps(broadcast: (msg: ServerMessage) => void): BootDeps {
       reconcileInboxAtBoot: vi.fn().mockResolvedValue(undefined),
       isAlive: vi.fn().mockReturnValue(true),
     },
+    planningOrchestrator: {
+      reconcilePendingApproveTerminals: vi.fn(),
+    },
     stuckSessionMonitor: { rehydrate: vi.fn() },
     autoMerger: { rehydrate: vi.fn() },
     githubClient: {} as never,

@@ -27,7 +27,8 @@ import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
 import { parsePauseReason, deriveRecoveryDescriptor } from '../db/pauseReason';
 import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
-import { normalizeTaskId } from '../tasks/taskId';
+import { groomBlockingDepTitles } from '../orchestration/planningCandidates';
+import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
 import yaml from 'js-yaml';
 export type { TaskView } from '../ws/types';
 
@@ -169,6 +170,32 @@ async function annotateOpsDepBlocking(
   }
 }
 
+/**
+ * Mutates `views` in place with groomDepBlocked/groomDepBlockedReason for
+ * every 🔲 Backlog task — mirrors passesGroomDepGate's per-dep Type+Status
+ * logic so the frontend can exclude dep-blocked tasks from Select All / the
+ * Groom(N) count instead of offering them as though they were eligible.
+ * Unlike the ops case, this needs no deploy lookup, so it's synchronous.
+ */
+function annotateGroomDepBlocking(
+  views: TaskView[],
+  allTasks: NotionTask[],
+): void {
+  const backlogTasks = allTasks.filter((t) => t.status.includes('Backlog'));
+  if (backlogTasks.length === 0) return;
+  const tasksById = new Map(allTasks.map((t) => [normalizeBoardId(t.id), t]));
+  for (const task of backlogTasks) {
+    const view = views.find((v) => v.taskId === task.id);
+    if (!view) continue;
+    const blockingTitles = groomBlockingDepTitles(task, tasksById);
+    view.groomDepBlocked = blockingTitles.length > 0;
+    view.groomDepBlockedReason =
+      blockingTitles.length > 0
+        ? `waiting on ${blockingTitles.join(', ')}`
+        : null;
+  }
+}
+
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
 let taskBroadcastFn: ((msg: ServerMessage) => void) | null = null;
 
@@ -196,6 +223,15 @@ export function emitTaskUpdated(notionTaskId: string): void {
   });
 }
 
+/** Broadcast a task_status_changed message directly, without a full TaskView rebuild. */
+export function broadcastTaskStatusChanged(
+  notionTaskId: string,
+  newStatus: string,
+): void {
+  if (!taskBroadcastFn) return;
+  taskBroadcastFn({ type: 'task_status_changed', notionTaskId, newStatus });
+}
+
 /** Build a TaskView for a single notionTaskId from current DB state. Returns null if not found. */
 async function buildTaskView(notionTaskId: string): Promise<TaskView | null> {
   const rows = getActiveTaskAggregates([notionTaskId]);
@@ -211,6 +247,7 @@ async function buildTaskView(notionTaskId: string): Promise<TaskView | null> {
   if (notionTask) {
     const contextTasks = collectDependencyContext(notionTask);
     resolveDependencyBlocking([view], contextTasks);
+    annotateGroomDepBlocking([view], contextTasks);
 
     if (isOpsEligibleType(notionTask.type)) {
       const projectId = findProjectIdForTask(notionTaskId);
@@ -639,6 +676,8 @@ export function createTasksRouter(
 
     resolveDependencyBlocking(views, notionTasks);
 
+    annotateGroomDepBlocking(views, notionTasks);
+
     await annotateOpsDepBlocking(views, notionTasks, projectId);
 
     res.json(views);
@@ -697,6 +736,8 @@ export function createTasksRouter(
       .filter((v) => !v.notionStatus.includes('Deferred'));
 
     resolveDependencyBlocking(views, allBoardTasks);
+
+    annotateGroomDepBlocking(views, allBoardTasks);
 
     await annotateOpsDepBlocking(views, allBoardTasks, projectId);
 

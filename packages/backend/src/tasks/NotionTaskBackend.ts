@@ -4,6 +4,7 @@ import type {
   NewTaskFields,
   TaskPropertiesPatch,
   PatchBodySectionOperation,
+  TaskSummary,
 } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
@@ -101,6 +102,13 @@ export class NotionTaskBackend implements TaskBackend {
   async fetchTaskPage(taskId: string): Promise<string> {
     const page = await this.client.fetchTaskPage(normalizeTaskId(taskId));
     return page.rawMarkdown;
+  }
+
+  async fetchTaskSummary(taskId: string): Promise<TaskSummary | null> {
+    const task = await this.client.fetchTaskSummary(normalizeTaskId(taskId));
+    return task
+      ? { title: task.title, type: task.type, status: task.status }
+      : null;
   }
 
   async updateNotes(taskId: string, notes: string): Promise<void> {

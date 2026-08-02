@@ -1,26 +1,29 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
-vi.mock('../../db/queries', () => ({
-  upsertSessionEvent: vi.fn().mockReturnValue(1),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  incrementTokens: vi.fn(),
-  incrementCompactionCount: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  setSessionModel: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  setSessionPauseReason: vi.fn(),
-  insertPauseInterval: vi.fn(),
-}));
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    upsertSessionEvent: vi.fn().mockReturnValue(1),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    incrementTokens: vi.fn(),
+    incrementCompactionCount: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    setSessionModel: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    setSessionPauseReason: vi.fn(),
+    insertPauseInterval: vi.fn(),
+  }),
+);
 
 vi.mock('../../config', () => ({
   ALLOWED_TOOLS: [],
@@ -28,6 +31,7 @@ vi.mock('../../config', () => ({
   BASH_MAX_OUTPUT_LENGTH: 30000,
   BASH_DEFAULT_TIMEOUT_MS: 300000,
   runtimeSettings: { corporate_mode_enabled: false },
+  getProjectById: vi.fn(() => undefined),
 }));
 
 vi.mock('../../tasks/TaskBackend', () => ({
@@ -68,6 +72,18 @@ vi.mock('child_process', () => ({
       return 'refs/remotes/origin/dev\n';
     if (cmd === 'git push -u origin feature/my-task') return '';
     throw new Error(`unexpected: ${cmd}`);
+  }),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
+  exec: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
   }),
 }));
 

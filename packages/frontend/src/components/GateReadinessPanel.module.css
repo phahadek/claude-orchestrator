@@ -193,6 +193,15 @@
   gap: 4px;
 }
 
+.reclassifySelect {
+  background: var(--bg-secondary, #1e1e2e);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--text-primary, #cdd6f4);
+  padding: 2px 6px;
+  font-size: 0.8125rem;
+}
+
 .detailBody {
   display: flex;
   gap: 24px;

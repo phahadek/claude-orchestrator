@@ -8,29 +8,32 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 const { mockGetSession, mockArchiveSession } = vi.hoisted(() => ({
   mockGetSession: vi.fn(),
   mockArchiveSession: vi.fn(),
 }));
 
-vi.mock('../db/queries', () => ({
-  getSession: mockGetSession,
-  getActiveSessions: vi.fn(),
-  getArchivedSessions: vi.fn(),
-  getSessionsByStatus: vi.fn(),
-  getSessionsByProject: vi.fn(),
-  deleteSession: vi.fn(),
-  archiveSession: mockArchiveSession,
-  unarchiveSession: vi.fn(),
-  archiveFinishedSessions: vi.fn(),
-  setSessionNote: vi.fn(),
-  setSessionTags: vi.fn(),
-  favoriteSession: vi.fn(),
-  unfavoriteSession: vi.fn(),
-  deleteDenialsBySession: vi.fn(),
-  getEventsBySession: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getSession: mockGetSession,
+    getActiveSessions: vi.fn(),
+    getArchivedSessions: vi.fn(),
+    getSessionsByStatus: vi.fn(),
+    getSessionsByProject: vi.fn(),
+    deleteSession: vi.fn(),
+    archiveSession: mockArchiveSession,
+    unarchiveSession: vi.fn(),
+    archiveFinishedSessions: vi.fn(),
+    setSessionNote: vi.fn(),
+    setSessionTags: vi.fn(),
+    favoriteSession: vi.fn(),
+    unfavoriteSession: vi.fn(),
+    deleteDenialsBySession: vi.fn(),
+    getEventsBySession: vi.fn(),
+  }),
+);
 
 vi.mock('../config', () => ({
   getProjectById: vi.fn(),
@@ -57,22 +60,23 @@ describe('PATCH /api/sessions/:id/archive', () => {
   });
 
   it('ends the session in addition to archiving it, reaping a still-live subprocess', async () => {
-    const endSession = vi.fn();
-    setSessionManager({ endSession } as unknown as SessionManager);
+    // Archiving now goes through a single combined SessionManager method
+    // rather than a separate archiveSession() + endSession() call pair.
+    const archiveAndEndSession = vi.fn();
+    setSessionManager({ archiveAndEndSession } as unknown as SessionManager);
 
     const res = await supertest(buildApp()).patch(
       '/api/sessions/sess-1/archive',
     );
 
     expect(res.status).toBe(200);
-    expect(mockArchiveSession).toHaveBeenCalledWith('sess-1');
-    expect(endSession).toHaveBeenCalledWith('sess-1');
+    expect(archiveAndEndSession).toHaveBeenCalledWith('sess-1');
   });
 
   it('404s without archiving or ending when the session does not exist', async () => {
     mockGetSession.mockReturnValue(undefined);
-    const endSession = vi.fn();
-    setSessionManager({ endSession } as unknown as SessionManager);
+    const archiveAndEndSession = vi.fn();
+    setSessionManager({ archiveAndEndSession } as unknown as SessionManager);
 
     const res = await supertest(buildApp()).patch(
       '/api/sessions/missing/archive',
@@ -80,6 +84,6 @@ describe('PATCH /api/sessions/:id/archive', () => {
 
     expect(res.status).toBe(404);
     expect(mockArchiveSession).not.toHaveBeenCalled();
-    expect(endSession).not.toHaveBeenCalled();
+    expect(archiveAndEndSession).not.toHaveBeenCalled();
   });
 });

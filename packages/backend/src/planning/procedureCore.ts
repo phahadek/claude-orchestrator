@@ -22,7 +22,7 @@
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import { ALLOWED_TRANSITIONS, type OpsState } from '../ops/opsJournal';
 
-export type SkillId = 'groom' | 'design' | 'ops' | 'split';
+export type SkillId = 'groom' | 'design' | 'ops' | 'split' | 'docs';
 
 /** `blocked` / `incident-frozen` are freezes reachable from (and returning to) any non-terminal state — not part of the normal path. */
 const OPS_JOURNAL_FREEZE_STATES: ReadonlySet<OpsState> = new Set([
@@ -77,6 +77,7 @@ export const SKILL_LABELS: Record<SkillId, string> = {
   design: 'Design Execution',
   ops: 'ops',
   split: 'Split',
+  docs: 'Docs Authoring',
 };
 
 /** A cross-cutting rule that would otherwise be restated per-skill. */
@@ -132,13 +133,24 @@ export const DESIGN_TERMINAL_ARTIFACTS_ORDERING =
   'above), never several at once. EXEMPT: a file-sibling ' +
   "`task.create` (the Split-don't-trim overflow disposition) scopes the " +
   'work rather than following from a locked decision, and may be staged ' +
-  'before Open Questions resolve.';
+  'before Open Questions resolve. Once the completeness approval clears, ' +
+  'every remaining terminal artifact — the arch.createUnit/arch.updateUnit/' +
+  'arch.supersedeUnit writes, the closing-synthesis task.updateBody, and the ' +
+  'follow-on task.create set — is staged together under the same shared ' +
+  '`groupId` as one design decision, never individually or ungrouped: the ' +
+  "operator disposes the design's closing set as a single group-level " +
+  'approve/reject, not a scatter of unrelated-looking cards. The ' +
+  '`completeness.disposition` intent itself stays outside that group — it ' +
+  "is the gate the group's members are refused behind, staged and approved " +
+  'on its own before the group exists — and each `decision.pickOne` stays ' +
+  'individually staged and ungrouped, one per turn, exactly as "One Open ' +
+  'Question per turn" above already requires.';
 
 export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'deterministic-load-first',
     title: 'Deterministic load, not hand-fetch',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     text:
       'Load project and task context through the sanctioned deterministic loader ' +
       '(a backend route, or a vendored script that wraps one) before any judgment ' +
@@ -148,7 +160,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'human-is-gate',
     title: 'The human is the gate',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     text:
       'Every state-changing decision — a status flip, a locked design decision, an ' +
       'applied operational change — waits for explicit human (operator) sign-off. ' +
@@ -196,6 +208,78 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     text: renderOpsJournalStateMachine(),
   },
   {
+    id: 'ops-consult-architecture-before-diagnosing',
+    title: 'Consult architecture units before diagnosing or staging a proposal',
+    appliesTo: ['ops'],
+    text:
+      `DO call ${orchestratorMcpToolName('architecture.getUnit')} / ` +
+      `${orchestratorMcpToolName('architecture.queryUnits')} against the ` +
+      "digest's listed archUnits (and any unit they reference) before " +
+      'diagnosing the mandate or staging a write — an invariant or a prior ' +
+      'design decision recorded there can rule out a candidate root cause or ' +
+      'a candidate fix outright, and re-deriving from source alone risks ' +
+      're-litigating a call already made and recorded. The digest names which ' +
+      'units are in scope; dereferencing one is a normal, expected step of ' +
+      'working the mandate, not an optional extra. DO NOT stage a diagnosis, a ' +
+      '`decision.pickOne`, or a write whose correctness turns on how the ' +
+      'system is *supposed* to behave without first checking whether the ' +
+      "digest's archUnits already answer that question. DO NOT treat an empty " +
+      'digest archUnits list as license to skip this — query ' +
+      `${orchestratorMcpToolName('architecture.queryUnits')} directly when the ` +
+      'mandate touches a region the digest left unscoped.',
+  },
+  {
+    id: 'dispatched-ops-write-capable',
+    title:
+      'A dispatched ops run is write-capable — drive to applied-pending-confirm or stage the no-change terminal, never park a staged proposal without one',
+    appliesTo: ['ops'],
+    text:
+      'A dispatched {skillLabel} run IS write-capable: it earns capabilities on ' +
+      'request and drives the ops_journal to `applied-pending-confirm` (the change ' +
+      'actually applied, reconciled, evidence captured) through the ' +
+      'request → grant → apply → reconcile loop, for a decision that changes ' +
+      'something. IS NOT: a session limited to staging a proposal and parking it ' +
+      'for someone else to execute — that is not the target terminal for work ' +
+      'this session can perform, or can become equipped to perform. DO keep ' +
+      'driving the journal — stage the next legal transition, apply once a ' +
+      'capability is granted or a proposal is approved, reconcile and capture ' +
+      'evidence, repeat — until it reaches `applied-pending-confirm`, rather than ' +
+      'stopping at `staged-proposal` merely because every prerequisite for that ' +
+      'state is satisfied. DO NOT treat "the proposal is ready to stage" as a ' +
+      'stopping point when the session already holds, or could earn by request, ' +
+      'the tool needed to carry it further. `applied-pending-confirm` names a ' +
+      'change actually applied — it has no legal meaning for an Investigation ' +
+      'whose conclusion is that no change is needed, so THE NO-CHANGE TERMINAL ' +
+      'exists for exactly that outcome, and staging it is not the parking this ' +
+      'rule forbids. Once a decided-no-change conclusion is reached, DO stage ' +
+      'the no-change terminal directly — `journal.setState` → `resolved`, alone ' +
+      '— from whichever state the decision was reached in, `candidate` or ' +
+      '`staged-proposal`; `staged-proposal` → `resolved` is a legal ' +
+      '`journal.setState` target exactly for this case (see "ops_journal state ' +
+      'machine" above). DO NOT stage `task.setStatus` → ✅ Done alongside it, or ' +
+      "ever — marking the task ✅ Done is the orchestrator's to do on the " +
+      "session's natural terminal, never a session's to propose; that intent is " +
+      'refused at stage time. That `journal.setState` stage IS the terminal ' +
+      'action a no-change investigation takes, and ends the turn. DO NOT apply ' +
+      'it yourself — the session stages the transition, it never makes the ' +
+      '`resolved` transition happen; the operator approving the staged intent is ' +
+      'the device-auth step that actually performs it, which is what "a ' +
+      'dispatched session never reaches resolved itself" (below) means. A ' +
+      'missing write tool IS a capability request, never a blocker: DO call ' +
+      `\`${orchestratorMcpToolName('session.requestCapability')}\` the moment a ` +
+      "write the task needs is outside this session's tools, with " +
+      '`{"payload":{"capability":"<the exact tool or capability>","plan":"<what ' +
+      'you will do once granted>","evidence":"<why this write is needed>"}}` — ' +
+      'then end the turn and wait to be re-dispatched, and apply the write once ' +
+      're-dispatched with it granted. DO NOT record the missing tool as `blocked` ' +
+      'or `needs-setup` when a capability request can reach it — request first. ' +
+      'A genuine external blocker (no sanctioned request path resolves it: a real ' +
+      'dependency has not landed, an external system is down, the decision is ' +
+      "only a human's to make) still terminates as `blocked` / `needs-setup`, " +
+      'naming the blocker explicitly — that terminal stays legitimate and is not ' +
+      'what this rule forbids.',
+  },
+  {
     id: 'atomic-single-action-request',
     title: 'Atomic single-action requests',
     appliesTo: ['ops'],
@@ -226,12 +310,16 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'A capability grant issued to a dispatched {skillLabel} session must be safe to redrive: ' +
       'a retried/resumed turn re-runs the same write without duplicating its effect. A ' +
       'dispatched {skillLabel} session never reaches resolved / ✅ Done / task-apply itself — ' +
-      'that transition is device-auth/operator-only.',
+      'that transition is device-auth/operator-only. This holds even for the no-change ' +
+      'terminal (see "drive to applied-pending-confirm or stage the no-change terminal" ' +
+      'above): the session stages the `journal.setState` → `resolved` transition, it ' +
+      "never applies it — the operator's approval of that staged intent is the " +
+      'device-auth action that performs the transition.',
   },
   {
     id: 'ask-permission-not-speculative',
     title: 'Ask for what you need — never fabricate',
-    appliesTo: ['groom', 'design', 'ops'],
+    appliesTo: ['groom', 'design', 'ops', 'docs'],
     text:
       'DO stage `session.requestCapability` naming the exact capability the moment a ' +
       'read/write the task needs is blocked by the sandbox — nothing beyond the base ' +
@@ -245,7 +333,13 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       '(session_events/audit_log for a session by id) rather than project/prod data — ' +
       'never request a Bash command prefix for that read: a Bash prefix can neither ' +
       "reach this orchestrator's own DB (outside the sandbox) nor authenticate to its " +
-      'device-authed API, so it never materialises the read even once granted. DO NOT ' +
+      'device-authed API, so it never materialises the read even once granted. Once ' +
+      `granted, read it by calling the \`${orchestratorMcpToolName('session.getRecord')}\` ` +
+      'tool with `{"targetSessionId":"<target-session-id>"}`. DO request ' +
+      '`read:audit-log:<project-id>` instead, the same way, when the blocked read is ' +
+      "this project's own audit_log rather than a single session's record — once " +
+      `granted, read it by calling the \`${orchestratorMcpToolName('auditLog.query')}\` ` +
+      'tool with `{"projectId":"<project-id>"}`. DO NOT ' +
       'abstain straight to `needs-setup` when a live record is reachable this way — ' +
       'request the capability first. DO report `needs-setup` naming the missing ' +
       "capability when staging isn't possible or the need is a one-off read-only " +
@@ -271,7 +365,13 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
         '(session_events/audit_log for a session by id) rather than project/prod data — ' +
         'never request a Bash command prefix for that read: a Bash prefix can neither ' +
         "reach this orchestrator's own DB (outside the sandbox) nor authenticate to its " +
-        'device-authed API, so it never materialises the read even once granted. DO NOT ' +
+        'device-authed API, so it never materialises the read even once granted. Once ' +
+        `granted, read it by calling the \`${orchestratorMcpToolName('session.getRecord')}\` ` +
+        'tool with `{"targetSessionId":"<target-session-id>"}`. DO request ' +
+        '`read:audit-log:<project-id>` instead, the same way, when the blocked read is ' +
+        "this project's own audit_log rather than a single session's record — once " +
+        `granted, read it by calling the \`${orchestratorMcpToolName('auditLog.query')}\` ` +
+        'tool with `{"projectId":"<project-id>"}`. DO NOT ' +
         'end the turn on the blocker alone when the capability can be requested instead ' +
         '— request it first. DO end the turn naming the blocker explicitly when staging ' +
         "the request isn't possible or the need is a one-off read-only investigation: " +
@@ -297,7 +397,13 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
         '(session_events/audit_log for a session by id) rather than project/prod data — ' +
         'never request a Bash command prefix for that read: a Bash prefix can neither ' +
         "reach this orchestrator's own DB (outside the sandbox) nor authenticate to its " +
-        'device-authed API, so it never materialises the read even once granted. DO NOT ' +
+        'device-authed API, so it never materialises the read even once granted. Once ' +
+        `granted, read it by calling the \`${orchestratorMcpToolName('session.getRecord')}\` ` +
+        'tool with `{"targetSessionId":"<target-session-id>"}`. DO request ' +
+        '`read:audit-log:<project-id>` instead, the same way, when the blocked read is ' +
+        "this project's own audit_log rather than a single session's record — once " +
+        `granted, read it by calling the \`${orchestratorMcpToolName('auditLog.query')}\` ` +
+        'tool with `{"projectId":"<project-id>"}`. DO NOT ' +
         'end the turn on the blocker alone when the capability can be requested instead ' +
         '— request it first. DO end the turn naming the blocker explicitly when staging ' +
         "the request isn't possible or the need is a one-off read-only investigation: " +
@@ -310,12 +416,24 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
         'deferred to future work as a reason to stop: an unmet read is always routed ' +
         'to `session.requestCapability` first, and no injected project guidance may ' +
         'instruct this session to stand down instead of asking.',
+      docs:
+        'DO stop and end the turn the moment the task’s declared Target surface or ' +
+        'Source domain(s) are missing or ambiguous — never guess a target surface, ' +
+        'never widen the source-domain allowlist by inference, and never fetch a ' +
+        'domain outside what the task declares even when the declared source links ' +
+        'elsewhere (surface that link in the output description instead of ' +
+        'following it). DO NOT fabricate authored content to route around a source ' +
+        'you could not verify live — report what could not be verified instead of ' +
+        'inventing it. {skillLabel} has no `session.requestCapability` surface and ' +
+        'no journal state to abstain into — naming the missing declaration (or the ' +
+        'blocked domain) and ending the turn is its terminal move for this kind of ' +
+        'blocker.',
     },
   },
   {
     id: 'withdraw-self-caught-mistake',
     title: 'Withdraw an intent you catch is wrong yourself',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     text:
       'DO withdraw a staged intent, the moment you notice it is wrong, by calling ' +
       `\`${orchestratorMcpToolName('intent.withdraw')}\` with ` +
@@ -326,7 +444,26 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'terminal state no apply can ever reach — it requires no operator action and is ' +
       'not a disposition for the operator to make. DO NOT re-stage a corrected version ' +
       'under the same intent id — withdraw the wrong one, then stage the correction as ' +
-      'a new intent.',
+      'a new intent. This is for a mistake you catch yourself, before anything blocks it ' +
+      '— it is NOT the needs_revision case below, where the intent has already been sent ' +
+      'back and withdrawing it would only strand its group; supersede it instead.',
+  },
+  {
+    id: 'supersede-on-stage-time-block',
+    title: 'Supersede, not withdraw, an intent stage-time validation sent back',
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
+    text:
+      'DO, when a staged intent fails stage-time validation and comes back to you as ' +
+      "`needs_revision` (the feedback names the blocked intent's own id and the " +
+      'validation failure), stage the corrected intent with `supersedes` set to that ' +
+      "blocked intent's id — never a bare unlinked re-stage. A `needs_revision` intent " +
+      'stays in its group until something explicitly supersedes it; an unlinked ' +
+      "correction leaves it in place and wedges the whole group's commit. DO NOT " +
+      'withdraw a `needs_revision` intent instead — that is the self-caught-mistake path ' +
+      "above, and withdrawing does not retire it into the corrected one's slot the way " +
+      'an explicit `supersedes` does. This is the same `supersedes` field the platform ' +
+      'already requires the corrected payload to carry — no separate call, no auto-' +
+      'supersede: only a caller that names the blocked id explicitly may retire it.',
   },
   {
     id: 'incidental-tooling-gap-not-a-blocker',
@@ -490,12 +627,13 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'candidate plus its own trade-offs — DO NOT let it carry another option’s ' +
       'rationale, and DO NOT concatenate every candidate’s analysis into a single ' +
       'option’s field. DO carry evidence — file:line citations, arch-page section ' +
-      'names, API-result specifics — in `decisionProposal`’s investigation summary ' +
-      'rather than inside an option description; this evidence requirement still ' +
-      'applies, this only relocates where it is carried, since the payload has no ' +
-      'separate Investigation field. DO name the preferred solution and its ' +
-      'load-bearing reason explicitly in `decisionProposal`, alongside that ' +
-      'investigation summary. A single `options` entry stays valid — a confident ' +
+      'names, API-result specifics — in the payload’s separate `investigation` ' +
+      'field rather than inside an option description or `decisionProposal`; this ' +
+      'evidence requirement still applies, this only names where it is carried. DO ' +
+      'name the preferred solution and its load-bearing reason explicitly in ' +
+      '`decisionProposal`, kept to that recommendation and its reason — design ' +
+      'altitude — with the supporting investigation left to `investigation`. A ' +
+      'single `options` entry stays valid — a confident ' +
       'recommendation the operator accepts or pushes back on (see ‘One Open ' +
       'Question per turn’ above) — this shape governs how it, or each of several, ' +
       'is written, never whether more than one is required. See "Option framing" ' +
@@ -555,7 +693,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'design-option-framing',
     title:
-      'Option framing — architecture-level shape, evidence stays in decisionProposal, a contrast pair required',
+      'Option framing — architecture-level shape, evidence stays in investigation, a contrast pair required',
     appliesTo: ['design'],
     text:
       'Extends "decision.pickOne payload shape" above. An option’s `description` ' +
@@ -564,9 +702,9 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'live with — never an implementation-level restatement of the question ' +
       'itself (which function, which line, which config flag) in place of that ' +
       'architectural framing. DO NOT put evidence — file:line citations, arch-page ' +
-      'section names, API-result specifics — inside an option `description`; that ' +
-      'evidence belongs in `decisionProposal`’s investigation summary, and only ' +
-      'there. DO include an explicit rejected/accepted contrast pair among the ' +
+      'section names, API-result specifics — inside an option `description` or ' +
+      '`decisionProposal`; that evidence belongs in the `investigation` field, and ' +
+      'only there. DO include an explicit rejected/accepted contrast pair among the ' +
       'staged options — at least one option stated as genuinely considered and ' +
       'rejected, with the reason it lost, sitting alongside the accepted one — ' +
       'never only the winning option dressed up with a rationale and no real ' +
@@ -623,58 +761,70 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     title: "Disposition-don't-drop",
     appliesTo: ['design'],
     text:
-      'DO dispose every candidate the completeness critic raises with a recorded ' +
-      'reason — one of `resolved` / `out-of-scope` / `not-a-decision` / `fold` / ' +
-      "`file-sibling` / `sibling-owned` — folded into the API's accepted/dismissed " +
-      'disposition (`resolved` is `accepted`; the rest are `dismissed` carrying that ' +
-      'reason). DO call the ' +
-      `\`${orchestratorMcpToolName('completeness.disposition')}\` tool with ` +
-      '`{taskId, questions: [{question, disposition: "accepted"|"dismissed", reason, ' +
-      'approvalStatus: "proposed"}], runAt}` at critic time, for every critic run — ' +
-      'this durable store, never body prose, is the record, and it is written ' +
-      'immediately so nothing is silently lost even before the operator has seen ' +
-      'it. This same call also stages a `completeness.disposition` intent for ' +
+      'DO dispose every candidate the completeness critic raises with one of the ' +
+      'named dispositions — `resolved` / `out-of-scope` / `not-a-decision` / `fold` ' +
+      '/ `file-sibling` / `sibling-owned` — and a recorded reason; the named value ' +
+      'is stored verbatim, never collapsed to a binary accepted/dismissed. DO call ' +
+      `the \`${orchestratorMcpToolName('completeness.disposition')}\` tool with ` +
+      '`{taskId, probed: [<every gap class actually checked>], questions: ' +
+      '[{question, disposition: <named value>, reason, approvalStatus: "proposed"}], ' +
+      'runAt}` at critic time, for every critic run — this durable store, never ' +
+      'body prose, is the record, and it is written immediately so nothing is ' +
+      'silently lost even before the operator has seen it. `probed` is never empty: ' +
+      'a clean pass (no gaps) still names every gap class the critic checked, so ' +
+      'the record reads as an affirmative "ran clean," never as indistinguishable ' +
+      'from a skipped run. This same call also stages a `completeness.disposition` ' +
+      'intent for ' +
       'operator approval — DO wait for that intent to be approved before staging ' +
-      'any `arch.createUnit` / `arch.updateUnit` / `arch.supersedeUnit` write or the ' +
-      'closing-synthesis `task.updateBody` (see DESIGN_TERMINAL_ARTIFACTS_ORDERING ' +
-      'above) — staging one earlier is rejected at stage time, naming the missing ' +
-      'approval. DO NOT drop a candidate silently. DO NOT record a disposition only ' +
+      'any `arch.createUnit` / `arch.updateUnit` / `arch.supersedeUnit` write, the ' +
+      'closing-synthesis `task.updateBody`, or the follow-on `task.create` set (see ' +
+      'DESIGN_TERMINAL_ARTIFACTS_ORDERING above) — staging one earlier is rejected ' +
+      'at stage time, naming the missing approval. DO NOT drop a candidate silently. ' +
+      'DO NOT record a disposition only ' +
       'as Implementation-notes prose; prose may summarize it, but the store call is ' +
       'the disposition. DO NOT confuse "recorded" with "approved": a `proposed` ' +
       'disposition is provisional until the operator approves the staged ' +
       '`completeness.disposition` intent — a rejected intent is not a dead end: ' +
       're-call the tool with a revised disposition/reason to stage a fresh intent, ' +
-      'never a second critic pass, and never treating the first write as final.',
+      'never a second critic pass, and never treating the first write as final. DO ' +
+      'write each `reason` the same way `decisionProposal` is written — lead with ' +
+      'the named disposition and its load-bearing reason at design altitude, not ' +
+      'an anchor-dense audit paragraph; this kind carries no separate ' +
+      '`investigation` field, so cite supporting file:line/arch-section/API-result ' +
+      'evidence briefly, in service of that reason, rather than letting the ' +
+      'evidence become the reason.',
   },
   {
     id: 'design-closing-synthesis',
     title: 'Closing synthesis — the terminal decisionProposal, not a body diff',
     appliesTo: ['design'],
     text:
-      'DO carry the exact five-part closing synthesis below as the ' +
+      'DO carry the three-part authored synthesis below as the ' +
       '`decisionProposal` of the ' +
       '`task.updateBody` intent: (1) Decision summary — one paragraph on what was ' +
       'decided and why; (2) Open questions resolved — a table, one row per listed ' +
       'Open Question, included only when there are ≥2 questions; (3) Completeness-' +
       'critic dispositions — every gap the pass raised, its disposition, and the ' +
-      'run date, or "none — pass run, no gaps" when clean; (4) Architecture pages ' +
-      'updated — each architecture unit and the section changed in this same pass, ' +
-      'or "none — these decisions change no architecture page" when genuinely ' +
-      'nothing applies; (5) Follow-on Code tasks filed — each staged as a ' +
-      '`task.create` intent in this same pass, with Type and a one-line scope, or ' +
-      '"none — no implementation work beyond the locked decisions" when nothing ' +
-      'further is implied. DO frame the operator’s decision as approving ' +
+      'run date, or "none — pass run, no gaps" when clean. DO NOT author parts 4 ' +
+      '("Architecture pages updated") and 5 ("Follow-on Code tasks filed") — ' +
+      'stagedIntents.ts generates both, at the moment the closing synthesis ' +
+      'stages, from the architecture-unit / `task.create` intents (and any ' +
+      '`planning.noOp` markers) already staged this pass, and appends them to ' +
+      'both `decisionProposal` and the body write’s Implementation-notes content. ' +
+      'The generated text is not this session’s to write — writing it anyway ' +
+      'only duplicates what the stage-time generator already produces from the ' +
+      'same staged set. DO frame the operator’s decision as approving ' +
       'this synthesis — the body write is its consequence, not a separate thing to ' +
       'diff. DO NOT ask the operator to validate the `task.updateBody` payload’s ' +
       'prose as if reviewing a diff; the synthesis is the reviewable artifact, ' +
       'carried in `decisionProposal`, not the body text itself. DO NOT fold the ' +
-      'decision summary straight into the write without the other four parts — all ' +
-      'five sections are required every time, per the skill’s hard checkpoint. DO ' +
-      'NOT report parts 4 or 5 as "pending" or "see next messages" — by the time ' +
-      'the closing synthesis stages, the architecture-unit intents and follow-on ' +
-      '`task.create` intents it reports are already staged (or the "none" ' +
-      'disposition is genuine); the synthesis reports what was done in this pass, ' +
-      'never a promise of what comes next.',
+      'decision summary straight into the write without the other two authored ' +
+      'parts — all three sections are required every time, per the skill’s hard ' +
+      'checkpoint. Staging this `task.updateBody` before every expected terminal ' +
+      'kind is accounted for (an architecture write and a follow-on `task.create`, ' +
+      'each either staged or covered by a `planning.noOp` naming it — see ' +
+      '"design-architecture-and-followon-required" below) is refused at stage ' +
+      'time, naming the unaccounted-for kind.',
   },
   {
     id: 'design-architecture-and-followon-required',
@@ -695,15 +845,21 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'work a locked design implies as `task.create` intents (landing at 🔲 ' +
       'Backlog, typed 💻 Code) in this same pass — this is not limited to the ' +
       "'Split-don't-trim' overflow case below; any locked design that implies code " +
-      'work files that work now. DO state explicitly, for either deliverable, when ' +
-      'the locked decisions genuinely touch no architecture page or spawn no ' +
-      'follow-on task — silence is never an acceptable substitute for that ' +
-      'statement, mirroring the disposition-don’t-drop rule the completeness ' +
-      'critic follows above. DO NOT treat either statement as a numeric gate: there ' +
-      'is no minimum count of architecture units or follow-on tasks, and neither is ' +
-      'wired into a promotion block — this is an advisory-but-required reporting ' +
-      'obligation, the same posture the trace-coverage signal already takes, not a ' +
-      'size or count threshold.',
+      'work files that work now. DO stage a `planning.noOp` naming the skipped ' +
+      'kind (`{taskId, reason, skippedKind: "task.create"}` or ' +
+      '`skippedKind: "architecture"`) when the locked decisions genuinely touch no ' +
+      'architecture page, or spawn no follow-on task — silence is never an ' +
+      'acceptable substitute for that statement, mirroring the disposition-don’t-' +
+      'drop rule the completeness critic follows above. This is enforced, not just ' +
+      'advisory: the closing-synthesis `task.updateBody` is refused at stage time, ' +
+      'naming the unaccounted-for kind, until each of `task.create` and the ' +
+      'architecture-unit writes is satisfied — by ≥1 staged intent of that kind, or ' +
+      'by a `planning.noOp` naming it (one `planning.noOp` per skipped kind, never ' +
+      'one covering both). DO NOT treat this as a numeric gate: there is no minimum ' +
+      'count of architecture units or follow-on tasks, and neither is wired into a ' +
+      'promotion block — gating on the presence of a statement is a different thing ' +
+      'from gating on its content or count, the same posture the trace-coverage ' +
+      'signal already takes.',
   },
   {
     id: 'design-split-dont-trim',
@@ -736,6 +892,37 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'it can never name a `task.create` staged in a different group.',
   },
 ] as const;
+
+/**
+ * States the dispatched session's checkout path explicitly, so a session
+ * never has to search the filesystem to find it. The registry id the
+ * session knows itself by (e.g. `claude-dashboard`) is NOT the checkout
+ * directory's name — the checkout is named after the project's config-dir
+ * key instead (see `resolveConfigDir` in `groom/groomLoad.ts`), so a
+ * `find` / `ls` search for the registry id as a path fragment matches
+ * nothing and escalates into a filesystem-wide walk from `/`. This
+ * generalizes across every managed project, not just the self-hosted one —
+ * the divergence between registry id and directory name is a property of
+ * the project registry, not a one-off.
+ *
+ * `checkoutDir` must be the literal, resolved project directory — never a
+ * placeholder or a "see context.md" pointer, per
+ * `INJECTED_PROCEDURE_STYLE.md`'s inline-constraint rule for a dispatched
+ * session's own surface. `procedureAssembler.ts` is the only caller with
+ * access to the project record, and resolves it the same way the launcher
+ * resolves the spawned session's `cwd`.
+ */
+export function renderCheckoutPathStatement(checkoutDir: string): string {
+  return (
+    "This session's working directory is already the project checkout: " +
+    `\`${checkoutDir}\`. The \`PROJECT_DIR\` environment variable names the ` +
+    "same path. The checkout directory is NOT named after this project's " +
+    'registry id (the project name this session knows itself by) — do not ' +
+    '`find` / `ls` / grep the filesystem searching for the registry id as a ' +
+    'path fragment, it will not match anything. The path above is already ' +
+    'correct; use it directly instead of searching for it.'
+  );
+}
 
 /** Resolve `{skillLabel}` against the given skill and return the finished prose. */
 export function renderPrinciple(p: ProcedurePrinciple, skill: SkillId): string {
@@ -843,7 +1030,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
   {
     id: 'deterministic-load',
     title: 'Deterministic load',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     summary:
       'For an injected/dispatched session, the task context and worklist digest are ' +
       'already injected into this prompt — there is no loader to run and no ' +
@@ -855,14 +1042,21 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
   {
     id: 'investigate',
     title: 'Investigate (cached, judgment where needed)',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     summary:
       'Read the code / live data / architecture pages the open items actually turn ' +
       'on, once per region, keeping the reads in subagents so the main window stays ' +
-      'small. The injected digest (resolved regions + verbatim task body) is ' +
-      'authoritative for a dispatched session — verify scope by spot-checking the ' +
-      'specific claims the decision actually turns on, not by re-deriving findings ' +
-      'the digest already traced from git history or from scratch. When a ' +
+      'small. The injected digest (resolved regions + verbatim task body + any ' +
+      '`Arch-store-selected units` section) is authoritative for a dispatched ' +
+      'session — verify scope by spot-checking the specific claims the decision ' +
+      'actually turns on, not by re-deriving findings the digest already traced ' +
+      'from git history or from scratch. EXCEPTION: a store-sourced arch-unit ' +
+      'selection (design/ops) renders titles/ids only, with an explicit hint to ' +
+      `fetch full bodies via ${orchestratorMcpToolName('architecture.getUnit')} / ` +
+      `${orchestratorMcpToolName('architecture.queryUnits')} — dereferencing a ` +
+      'unit through those tools when the decision turns on its content is the ' +
+      'sanctioned way to consult it, not the forbidden "fetch/re-derive context ' +
+      'by hand" behavior this step otherwise rules out. When a ' +
       'spot-check contradicts the digest, that contradiction is itself a blocker ' +
       'to surface, never to wave away or quietly resolve around: keep the task at ' +
       'Backlog with a decisionProposal naming the contradicting finding, rather ' +
@@ -870,11 +1064,21 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'did not happen. This is a premise that needs re-investigation, not scope ' +
       'superseded by another task — Backlog, never Deferred, keeps it in the ' +
       'grooming queue instead of skipping it forever.',
+    summaryOverrides: {
+      docs:
+        "Read the task's declared Source domain(s) live via `WebFetch` — never " +
+        "rely on training-data memory of the source's content, and never fetch " +
+        'outside the declared domains even when the source links elsewhere ' +
+        '(surface that link in the output description instead of following it). ' +
+        'If the task references a design task or architecture unit as its spec, ' +
+        'read that too, so the authored content matches what was locked there ' +
+        'rather than improvising a new shape.',
+    },
   },
   {
     id: 'present-for-signoff',
     title: 'Present for sign-off',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     titleOverrides: {
       dispatched: 'Present (stage — the terminal action)',
     },
@@ -882,6 +1086,21 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'Present findings and a recommendation in batches (or one task/question at a ' +
       'time), and stop for explicit human sign-off before proceeding.',
     summaryOverrides: {
+      docs:
+        '**Directive — staging/opening the output is the terminal action:**\n' +
+        '- DO stage the authored content the moment it is ready: for a Notion-page ' +
+        'Target surface, stage one or more precise `notion.pageEdit` find/replace ' +
+        "intents against the page's current body; for a repo-file Target surface, " +
+        'open a draft PR scoped to the declared Target surface.\n' +
+        '- DO NOT end the turn on a chat write-up describing what you plan to ' +
+        'author — staging the intent or opening the PR is what puts reviewable ' +
+        'output in front of the operator; a description of intended changes is ' +
+        'never the deliverable.\n' +
+        '- DO NOT ask for sign-off before staging/opening.\n\n' +
+        'A dispatched docs session has no synchronous chat turn to wait within — ' +
+        'end the turn and it parks. So presenting IS staging (or opening the PR): ' +
+        'once the source is read and the content is authored, land it on its ' +
+        'declared Target surface rather than describing it in chat first.',
       split:
         '**Directive — staging is the terminal action:**\n' +
         '- DO stage the full split the moment the cut is decided (which acceptance ' +
@@ -925,7 +1144,24 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'capability this session lacks, stage a `session.requestCapability` ' +
         'naming the exact write. Never ask in chat whether to stage or request ' +
         'first — staging/requesting is what puts the decision in front of the ' +
-        'operator; asking first leaves them with nothing to act on.',
+        'operator; asking first leaves them with nothing to act on. ' +
+        "**Closing the session's decision is one shared group, not loose " +
+        'intents:** once an investigation reaches its conclusion, the closing ' +
+        'set — the `journal.setState` transition to `resolved`, any task-body ' +
+        'write recording the finding (`task.updateBody` / ' +
+        '`task.patchBodySection`), and any follow-on `task.create` the ' +
+        'investigation produces — is staged all under the same shared ' +
+        '`groupId` as one closing decision, never as loose ungrouped intents ' +
+        'the operator has to disposition one at a time. This is enforced at ' +
+        'stage time, the same way the grooming Ready path enforces its own ' +
+        'member set (see the Ready-path directive under `groom` below): each ' +
+        'is rejected the moment it is staged with no `groupId`. This grouping ' +
+        'mandate governs correlation, not legality — the ops_journal state ' +
+        'machine above still decides which transitions are legal; a mid-run ' +
+        '`journal.setState` that records an incidental gap without closing the ' +
+        'investigation (see "An incidental tooling gap is not a blocker" ' +
+        'above) never targets `resolved`, so it remains a standalone write, ' +
+        'exactly as before.',
       groom:
         '**Directive — staging is the terminal action:**\n' +
         '- DO stage the grooming decision (Ready or Deferred) as the last action ' +
@@ -957,7 +1193,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'is never the deliverable and is never a valid place to end the turn; a ' +
         'session that ends there has produced nothing an operator can act on, ' +
         'no matter how correct its analysis was. The terminal intent set is ' +
-        'exactly one of two paths, by intent kind: the Ready path stages ' +
+        'exactly one of three paths, by intent kind: the Ready path stages ' +
         '`task.setStatus` (status: "Ready", carrying every `groomingGate` field) ' +
         '+ `task.setDependsOn` (always — the promotion gate requires it even ' +
         'when there are no dependencies, staged as an empty array) + ' +
@@ -971,7 +1207,75 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'body strip staged separately or ungrouped; the Deferred path stages a ' +
         'single ' +
         '`task.setStatus` (status: "Deferred") carrying a `decisionProposal` ' +
-        'naming why. See the Structured Output Contract below for the ' +
+        'naming why; the third path, `planning.noOp`, is for the rare turn ' +
+        'that reaches terminal with no task-write at all — not "the task is ' +
+        'not ready" (that is Deferred, and always carries a `decisionProposal` ' +
+        'against a specific gap) but "nothing about this task needs a decision ' +
+        'right now" (e.g. a re-dispatch of an already-Ready task with nothing ' +
+        'new to add). Stage `planning.noOp` (`{taskId, reason}`, one line ' +
+        'naming why nothing changed) rather than ending the turn on a chat ' +
+        'write-up or silently parking — a park with nothing staged is ' +
+        'indistinguishable from a session that crashed mid-thought, while a ' +
+        'staged no-op is an auditable, deliberate signal the operator can ' +
+        'see and judge. Reach for Deferred whenever there is a real gap to ' +
+        'name; reach for `planning.noOp` only when there genuinely is none. ' +
+        'The promotion rule (distinct from the dispatch-satisfaction rule ' +
+        'below) — this is what decides whether a dependency blocks the Ready ' +
+        "path, and it is the dep gate's own behavior " +
+        '(`orchestration/planningCandidates.ts` `passesGroomDepGate`), stated ' +
+        'here so a groom session applies it rather than reasoning about ' +
+        'dependencies from first principles: a Depends-On of a ' +
+        'decision-producing Type — 📐 Design / 📋 Planning / 🔎 Investigation — ' +
+        'blocks promotion to Ready for as long as it is not ✅ Done. A ' +
+        'Depends-On of any other Type, including 💻 Code, never blocks ' +
+        'promotion while it sits at 🔲 Backlog — grooming is not dispatch, ' +
+        'so a dependency merely not-yet-groomed does not stop this task from ' +
+        'being groomed. It still blocks while ⏭️ Deferred, a terminal, ' +
+        "distinct state (the dependency's scope was superseded, or it will " +
+        'never be done) rather than "not yet groomed." Promotion is not ' +
+        'dispatch: staging the ' +
+        'Ready path for a task with such a dependency does not skip ahead of ' +
+        'it — the auto-dispatcher independently holds every Ready task until ' +
+        'all of its dependencies reach ✅ Done, regardless of what this dep ' +
+        'gate allowed at grooming time. A groom session must not withhold a ' +
+        'promotion the dep gate would allow in order to additionally enforce ' +
+        'that later, dispatch-time sequencing itself — that duplicates a rule ' +
+        'the dispatcher already owns and leaves a groomable task stranded at ' +
+        'Backlog. (This is separate from the Deferred-path warning below, ' +
+        "which is about what a split leaves for a task's own dependents to " +
+        "satisfy — not about what blocks this task's own promotion.) " +
+        'When investigation concludes the task is simply too large — a coherent ' +
+        'subset should be retained and the rest carved off — that is still the ' +
+        'Ready path, not Deferred: stage a `task.updateBody` (or targeted ' +
+        '`task.patchBodySection` operations) that narrows the original in place ' +
+        'to exactly the retained scope (Summary, Context, acceptance criteria, ' +
+        'and Files/paths all reduced to match), stage one `task.create` per ' +
+        'excised piece (landing at 🔲 Backlog, each naming in its Context that ' +
+        'it was split off this task and which part it carries) under the ' +
+        'same shared `groupId` as the narrowing decision — a split/spin-off ' +
+        '`task.create` is never staged ungrouped; it is dispositioned atomically ' +
+        "with the narrowing it belongs to, exactly like the Ready path's other " +
+        'grouped members above. Stage ' +
+        '`task.setDependsOn` where the cut creates a genuine ordering ' +
+        'constraint between the narrowed original and a sibling, then take the ' +
+        'Ready path for the narrowed original as normal — it has been groomed, ' +
+        "not abandoned. Recommend the narrowed original's body also carry a " +
+        'short one-line note (e.g. in Context) naming the siblings it was ' +
+        'split into, so the redistribution stays traceable from the surviving ' +
+        'task. The Deferred path is for scope genuinely superseded or ' +
+        'genuinely not ready — never for "I split this up"; a split that ends ' +
+        "on Deferred silently blocks the original's dependents, since only " +
+        '✅ Done satisfies a Depends On (config/procedures.md § Task types) ' +
+        'and Deferred does not. Relatedly, a session that narrows in place ' +
+        'must record `size_check.decision` as `no_split` — the retained ' +
+        'scope, after narrowing, genuinely does not need further splitting — ' +
+        'never `split_now`: `split_now` nominates the separate, untested ' +
+        'split-session flow (`routes/groomFlip.ts` routing to ' +
+        '`split/splitSession.ts`), which this in-place narrowing does not ' +
+        'invoke, and recording it would divert the Ready flip into that ' +
+        'routing and fail with a 409 instead of landing the narrowed task at ' +
+        'Ready. ' +
+        'See the Structured Output Contract below for the ' +
         'field-level format of every field in each — reaching the right ' +
         'conclusion and not staging it in full is the same failure as reaching ' +
         'no conclusion at all.',
@@ -984,19 +1288,22 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'on an as-yet-unresolved one, stating the dependency, rather than staging ' +
         'it.\n' +
         '- DO stage `task.updateBody` (the Implementation notes) exactly once, ' +
-        'the last of the decision-recording steps — carrying the five-part ' +
-        'closing synthesis (decision summary, open questions resolved, ' +
-        'completeness-critic dispositions, architecture pages updated, follow-on ' +
-        'Code tasks filed) as its `decisionProposal`, presented for the operator ' +
-        'to approve, never a bare body-write diff to validate. ' +
+        'the last of the decision-recording steps — carrying the three-part ' +
+        'authored synthesis (decision summary, open questions resolved, ' +
+        'completeness-critic dispositions) as its `decisionProposal`, presented ' +
+        'for the operator to approve, never a bare body-write diff to validate. ' +
+        'Parts 4 and 5 (architecture pages updated, follow-on Code tasks filed) ' +
+        'are generated at stage time from the staged terminal set — do not author ' +
+        'them. ' +
         DESIGN_TERMINAL_ARTIFACTS_ORDERING +
         '\n' +
         '- DO stage the architecture-unit change(s) each locked decision implies, ' +
-        'or an explicit "none" statement when genuinely no page applies, and the ' +
-        'follow-on `task.create` intents a locked design implies, or an explicit ' +
-        '"none" statement when nothing further is implied — both in this same ' +
-        'pass, reported in the closing synthesis, never left for the operator to ' +
-        'request afterward.\n' +
+        'or a `planning.noOp` naming `skippedKind: "architecture"` when genuinely ' +
+        'no page applies, and the follow-on `task.create` intents a locked design ' +
+        'implies, or a `planning.noOp` naming `skippedKind: "task.create"` when ' +
+        'nothing further is implied — both in this same pass, generated into the ' +
+        'closing synthesis, never left for the operator to request afterward. The ' +
+        'closing synthesis is refused at stage time until each is accounted for.\n' +
         '- DO NOT end the turn on a chat write-up, findings recap, or "here is ' +
         'what I think" summary — none of those is a valid stopping point. Staging ' +
         'the Implementation-notes write is not the end of the session either: it ' +
@@ -1134,9 +1441,11 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         '`task.create` intents (landing at 🔲 Backlog, typed 💻 Code) in the same ' +
         "pass, not only in the '🔲 Backlog' split-overflow case. Do this for every " +
         'Design task, not just one that overflows into a sibling: when the locked ' +
-        'decisions imply no implementation work beyond themselves, state that ' +
-        'explicitly ("none — no implementation work beyond the locked decisions") ' +
-        'rather than leaving the deliverable unaddressed. The operator disposes ' +
+        'decisions imply no implementation work beyond themselves, stage a ' +
+        '`planning.noOp` naming `skippedKind: "task.create"` rather than leaving ' +
+        'the deliverable unaddressed — the closing synthesis is refused at stage ' +
+        'time until this is staged or the follow-on task itself is. The operator ' +
+        'disposes ' +
         'each staged task like any other intent; never treat handing a task spec ' +
         'back in chat as an acceptable substitute for staging it. ' +
         DESIGN_TERMINAL_ARTIFACTS_ORDERING,
@@ -1155,7 +1464,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
   {
     id: 'apply-on-signoff',
     title: 'Apply on sign-off',
-    appliesTo: ['groom', 'design', 'ops', 'split'],
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     titleOverrides: {
       dispatched: 'Apply (operator/device-auth only)',
     },
@@ -1163,14 +1472,26 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'Only after explicit sign-off, stage and apply the write through the ' +
       'sanctioned surface, and confirm the result in chat.',
     summaryOverrides: {
+      docs:
+        'A dispatched docs session never applies a write itself. For a ' +
+        'Notion-page Target surface it only stages the `notion.pageEdit` ' +
+        'intent(s), for the operator to apply from the shared staged-intent ' +
+        'display. For a repo-file Target surface it opens the draft PR but never ' +
+        'merges it — merging, like applying a staged intent, is the operator’s ' +
+        'action alone. DO end the turn the moment the intent is staged or the PR ' +
+        'is opened.',
       groom:
         'A dispatched groom session never applies a write itself — it only ' +
         'stages. The staged intent set (task.setStatus / setProperties / ' +
-        'setDependsOn for the Ready path, or task.setStatus for the Deferred ' +
-        'path) is the terminal action; the operator applies it from the shared ' +
-        'staged-intent display. DO NOT drive the write to applied or wait in ' +
-        'chat for confirmation of an applied result. DO end the turn the ' +
-        'moment it is staged.',
+        'setDependsOn for the Ready path, task.setStatus for the Deferred ' +
+        'path, or planning.noOp for the no-decision-needed path) is the ' +
+        'terminal action; the operator applies the Ready/Deferred paths from ' +
+        'the shared staged-intent display, while a `planning.noOp` needs no ' +
+        'operator disposition at all — it is informational/auditable, ' +
+        'rendered so the operator can see the turn was a deliberate no-op ' +
+        'rather than a silent park. DO NOT drive the write to applied or ' +
+        'wait in chat for confirmation of an applied result. DO end the ' +
+        'turn the moment it is staged.',
       split:
         'A dispatched split session never applies a write itself — it only ' +
         'stages the narrowed-original `task.updateBody`, the sibling ' +
@@ -1186,20 +1507,28 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'at a time, until the journal reaches `applied-pending-confirm`, or park ' +
         'because you are genuinely blocked on the next operator decision (a ' +
         'pending capability grant, or a step only a human can perform, like ' +
-        'secret provisioning). The one transition this session never makes ' +
-        'itself is `applied-pending-confirm` → `resolved` — that confirmation is ' +
+        'secret provisioning). For a decided-no-change Investigation there is no ' +
+        'change to apply, reconcile, or capture evidence for, so this loop never ' +
+        "starts — instead stage the no-change terminal's closing set (see " +
+        '"drive to applied-pending-confirm or stage the no-change terminal" ' +
+        'above) and end the turn. The one transition this session never makes ' +
+        'itself, on either path, is the `resolved` transition — whether reached ' +
+        'via `applied-pending-confirm` → `resolved` or staged directly as the ' +
+        "no-change terminal's closing set — that confirmation is " +
         'device-auth/operator-only, always.',
       design:
         'A dispatched design session never applies a write itself — it only ' +
         'stages. DO stage `task.updateBody` (the Implementation notes) exactly ' +
         'once, the last of the decision-recording steps — carrying the ' +
-        'five-part closing synthesis as its `decisionProposal` (see "Closing ' +
-        'synthesis" below). The operator is approving that synthesis, not ' +
+        'three-part authored synthesis as its `decisionProposal` (see "Closing ' +
+        'synthesis" below); parts 4 and 5 are generated at stage time, not ' +
+        'authored. The operator is approving that synthesis, not ' +
         'diffing the body write — presenting IS staging, so the synthesis rides ' +
         'on the same intent the body write does, rather than a separate ' +
         "validation step. This write is not the pass's terminal action: the " +
         'architecture-unit updates and follow-on `task.create` intents the ' +
-        'locked decisions imply (or an explicit "none" for either) are staged in ' +
+        'locked decisions imply (or a `planning.noOp` naming the skipped kind, ' +
+        'for either) are staged in ' +
         'this same pass and reported in that synthesis. ' +
         DESIGN_TERMINAL_ARTIFACTS_ORDERING +
         ' DO NOT drive any of ' +
@@ -1243,13 +1572,18 @@ export const READINESS_BAR = {
  */
 export const SIZE_TYPE_CHECK = {
   locSplitThreshold: 500,
+  fileSplitThreshold: 20,
   description:
-    'Code/Tooling tasks default to < 500 LoC estimated; larger tasks split unless ' +
-    'demonstrably unsplittable. Design/Planning tasks are sized in open-question ' +
-    'count instead, recorded as `{decision: "n/a"}`. type_check is an advisory ' +
-    'keyword/heuristic scan for a task body whose content does not match its ' +
-    'declared Type ("smuggling") — it never hard-blocks; the groomer records a ' +
-    'disposition.',
+    'Code/Tooling tasks default to < 500 LoC estimated and < 20 files touched; ' +
+    'exceeding either threshold nominates the task for a split — the threshold ' +
+    'nominates, it does not force, and `unsplittable` with a recorded reason ' +
+    "remains a legitimate outcome above either one. Where a task's files cluster " +
+    'into distinct root-causes, the file-count signal should read as a nomination ' +
+    'to split along those clusters rather than a flat count. Design/Planning ' +
+    'tasks are sized in open-question count instead, recorded as ' +
+    '`{decision: "n/a"}`. type_check is an advisory keyword/heuristic scan for a ' +
+    'task body whose content does not match its declared Type ("smuggling") — it ' +
+    'never hard-blocks; the groomer records a disposition.',
   implementedBy: [
     'packages/backend/src/groom/groomLoad.ts (sizeCheckSeed)',
     'packages/backend/src/groom/typeCheck.ts',

@@ -51,9 +51,42 @@
   overflow-x: auto;
 }
 
+.bodyProse {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  font-family: inherit;
+}
+
 .error {
   font-size: 0.8rem;
   color: var(--ctp-red);
+}
+
+.skippedKindLine {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  border-left: 3px solid var(--ctp-yellow);
+  padding-left: 8px;
+}
+
+.fileMutationWarning {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  border-left: 3px solid var(--ctp-yellow);
+  padding-left: 8px;
+}
+
+.skippedKindLabel {
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  margin-right: 6px;
 }
 
 .permissionButtons {
@@ -169,6 +202,31 @@
 .diffUnchanged {
   color: var(--text-faint);
   white-space: pre-wrap;
+}
+
+.expandDetail {
+  margin-top: 4px;
+}
+
+.expandSummary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.traceList {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 0.8rem;
+  color: var(--text-faint);
+}
+
+.traceList li {
+  margin-bottom: 2px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .blockingRegister {

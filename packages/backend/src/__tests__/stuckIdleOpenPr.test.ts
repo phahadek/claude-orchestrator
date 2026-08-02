@@ -62,6 +62,9 @@ function makeMockSessionManager(): SessionManager {
   (sm as unknown as { kill: ReturnType<typeof vi.fn> }).kill = vi
     .fn()
     .mockResolvedValue(undefined);
+  (sm as unknown as { isAlive: ReturnType<typeof vi.fn> }).isAlive = vi
+    .fn()
+    .mockReturnValue(false);
   return sm;
 }
 

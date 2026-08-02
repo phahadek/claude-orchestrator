@@ -56,12 +56,16 @@ vi.mock('js-yaml', () => ({
   load: vi.fn(),
 }));
 
+// existsSync defaults to true: runAutofix checks the worktree path exists
+// before doing any work (see autofix-runner.ts's early-exit guard), and
+// getChangedFiles filters candidate paths through fs.existsSync too — tests
+// exercising the real command/commit flow need both to appear present.
 vi.mock('fs', () => ({
   default: {
-    existsSync: vi.fn().mockReturnValue(false),
+    existsSync: vi.fn().mockReturnValue(true),
     readFileSync: vi.fn().mockReturnValue(''),
   },
-  existsSync: vi.fn().mockReturnValue(false),
+  existsSync: vi.fn().mockReturnValue(true),
   readFileSync: vi.fn().mockReturnValue(''),
 }));
 
@@ -76,11 +80,19 @@ beforeEach(() => {
 });
 
 /**
- * Queue the standard git plumbing responses used in most tests.
+ * Queue the standard git plumbing responses used in most tests, for the full
+ * happy-path flow (dirty worktree, one in-scope changed file, no banned
+ * files). Must be called AFTER pushing the autofix command's own result,
+ * since getChangedFiles() runs before the command loop but this queues
+ * everything that happens after it.
  *
- * Spawn call order inside runAutofix after the autofix commands:
+ * Spawn call order inside runAutofix:
+ *  (getChangedFiles: git diff --name-only <base>...HEAD — queued separately
+ *   by the caller via queueChangedFiles, since it runs before the autofix
+ *   command itself)
+ *  (the autofix command(s) themselves — queued by the caller)
  *  0: git status --porcelain (dirty check)
- *  1: git add -A
+ *  1: git add -- <changedFiles>
  *  2: git diff --cached --name-only (list staged files)
  *  3: git diff --cached --name-only (after un-staging banned files)
  *  4: git commit --no-verify
@@ -92,10 +104,14 @@ beforeEach(() => {
  * 10: git reset --hard origin/<branch>
  * 11: git rev-parse HEAD (synced sha)
  */
+function queueChangedFiles(stagedFile = 'src/foo.py') {
+  spawnQueue.push({ exitCode: 0, stdout: `${stagedFile}\n` }); // git diff --name-only <base>...HEAD
+}
+
 function queueGitSuccess(stagedFile = 'src/foo.py') {
   spawnQueue.push(
     { exitCode: 0, stdout: `M ${stagedFile}\n` }, // git status --porcelain (dirty)
-    { exitCode: 0, stdout: '' }, // git add -A
+    { exitCode: 0, stdout: '' }, // git add -- <changedFiles>
     { exitCode: 0, stdout: `${stagedFile}\n` }, // git diff --cached --name-only
     { exitCode: 0, stdout: `${stagedFile}\n` }, // git diff --cached --name-only (post un-stage)
     { exitCode: 0, stdout: '' }, // git commit
@@ -113,6 +129,7 @@ function queueGitSuccess(stagedFile = 'src/foo.py') {
 
 describe('git commit --no-verify', () => {
   it('includes --no-verify so the target repo pre-commit hooks do not run', async () => {
+    queueChangedFiles();
     // Autofix command: succeeds (exit 0)
     spawnQueue.push({ exitCode: 0, stdout: 'fixed 1 file' });
     queueGitSuccess();
@@ -134,6 +151,7 @@ describe('unfixable violations (exit 1 with output)', () => {
   it('returns success=true and populates unfixableViolations', async () => {
     const violationOutput =
       'src/foo.py:42:89: E501 Line too long (92 > 88 characters)';
+    queueChangedFiles();
     // Autofix command exits 1 with violation output (e.g. ruff couldn't fix E501)
     spawnQueue.push({ exitCode: 1, stdout: violationOutput });
     queueGitSuccess();
@@ -151,13 +169,12 @@ describe('unfixable violations (exit 1 with output)', () => {
   });
 
   it('omits unfixableViolations when exit-1 produces no output', async () => {
-    // exit 1 with empty output → treated as fatal failure
+    queueChangedFiles();
+    // exit 1 with empty output → treated as fatal failure, added to
+    // `failures`. The git commit/push flow still runs (the worktree is
+    // still dirty), but the fatal failure keeps the final success flag
+    // false regardless of how the git flow itself resolves.
     spawnQueue.push({ exitCode: 1, stdout: '' });
-    // No need to queue git calls — the failure aborts before committing
-    // (Actually the code still tries to commit since failures≠fatalErrors here)
-    // In this case exitCode=1 with empty output goes into fatalErrors
-    // so success=false. No commit happens when there's a fatal error and
-    // the worktree is dirty.
     queueGitSuccess();
 
     const result = await runAutofix(
@@ -177,13 +194,14 @@ describe('unfixable violations (exit 1 with output)', () => {
 
 describe('fatal error (exit >= 2)', () => {
   it('returns success=false when a command exits 2 (e.g. ruff internal error)', async () => {
+    queueChangedFiles();
     spawnQueue.push({
       exitCode: 2,
       stdout: 'internal error: config parse failed',
     });
     // Worktree is dirty
     spawnQueue.push({ exitCode: 0, stdout: 'M src/foo.py\n' }); // git status
-    // git add, diff --cached, diff --cached, commit (not reached due to failures)
+    // git add, diff --cached, diff --cached, commit, rev-parse, diff, branch
     spawnQueue.push({ exitCode: 0 }); // git add
     spawnQueue.push({ exitCode: 0, stdout: 'src/foo.py\n' }); // diff staged
     spawnQueue.push({ exitCode: 0, stdout: 'src/foo.py\n' }); // diff staged post-unstage
@@ -212,14 +230,17 @@ describe('banned-file-only stage', () => {
     const { isHardBanned } = await import('../github/PRFileValidator.js');
     vi.mocked(isHardBanned).mockReturnValue(true);
 
+    queueChangedFiles('CLAUDE.md');
     // Autofix command succeeds
     spawnQueue.push({ exitCode: 0, stdout: 'fixed CLAUDE.md' });
     // git status: dirty
     spawnQueue.push({ exitCode: 0, stdout: 'M CLAUDE.md\n' });
-    // git add -A
+    // git add -- CLAUDE.md
     spawnQueue.push({ exitCode: 0, stdout: '' });
     // git diff --cached: CLAUDE.md staged
     spawnQueue.push({ exitCode: 0, stdout: 'CLAUDE.md\n' });
+    // git restore --staged -- CLAUDE.md (un-staging the banned file)
+    spawnQueue.push({ exitCode: 0, stdout: '' });
     // After un-staging CLAUDE.md, git diff --cached: nothing left
     spawnQueue.push({ exitCode: 0, stdout: '' });
 
@@ -231,7 +252,7 @@ describe('banned-file-only stage', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(result.summary).toMatch(/only banned files were staged/);
+    expect(result.summary).toMatch(/no in-scope changes staged/);
     // No git commit call should have happened
     const commitCall = spawnCalls.find(
       (c) =>

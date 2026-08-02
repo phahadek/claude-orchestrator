@@ -7,13 +7,66 @@ vi.mock('../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../projects/ProjectService', () => ({
+  ProjectService: {
+    getById: () => ({
+      id: 'polimarket-analyser',
+      milestones: [{ id: 'ms-12', name: 'M12', canonicalShortId: 'M12' }],
+    }),
+  },
+}));
+
+const mockUpdateStatus = vi.fn(async () => {});
+const mockFetchTaskSummary = vi.fn(
+  async () => null as { status: string } | null,
+);
+
+vi.mock('../tasks/TaskBackend', () => ({
+  getTaskBackend: vi.fn(() => ({
+    type: 'notion',
+    fetchReadyTasks: vi.fn(async () => []),
+    attachPR: vi.fn(async () => {}),
+    updateStatus: mockUpdateStatus,
+    fetchTaskPage: vi.fn(async () => ''),
+    fetchTaskSummary: mockFetchTaskSummary,
+    fetchNonMilestoneReadyTasks: vi.fn(async () => []),
+    updateNotes: vi.fn(async () => {}),
+    appendImplementationNote: vi.fn(async () => {}),
+    listTasksByStatus: vi.fn(async () => []),
+  })),
+}));
+
 import { db } from '../db/db.js';
 import {
   upsertOpsJournalEntry,
   listStagedIntentsBySession,
   listStagedIntentsByProject,
+  insertSession,
+  insertStagedIntent,
+  setSessionTerminalCompletionReason,
 } from '../db/queries.js';
 import { createOpsJournalRouter } from '../routes/opsJournal.js';
+import { DESIGN_DONE_STATUS } from '../orchestration/PlanningOrchestrator.js';
+
+function seedOpsSession(
+  sessionId: string,
+  taskId: string,
+  reason: string,
+  overrides: Partial<{ projectId: string }> = {},
+) {
+  insertSession({
+    session_id: sessionId,
+    task_id: taskId,
+    task_url: null,
+    project_context_url: null,
+    project_id: overrides.projectId ?? 'polimarket-analyser',
+    status: 'done',
+    started_at: 0,
+    ended_at: 0,
+    session_type: 'ops',
+  } as any);
+  setSessionTerminalCompletionReason(sessionId, reason);
+}
 
 function makeApp() {
   const app = express();
@@ -48,6 +101,10 @@ function seedEntry(
 beforeEach(() => {
   db.prepare('DELETE FROM ops_journal').run();
   db.prepare('DELETE FROM staged_intent').run();
+  db.prepare('DELETE FROM sessions').run();
+  mockUpdateStatus.mockClear();
+  mockFetchTaskSummary.mockClear();
+  mockFetchTaskSummary.mockResolvedValue(null);
 });
 
 describe('GET /api/ops-journal', () => {
@@ -169,6 +226,96 @@ describe('POST /api/ops-journal/:taskId/state', () => {
     const payload = JSON.parse(staged[0].payload);
     expect(payload.fields.findingOrProposal).toEqual({
       summary: 'Stand up off-box backups',
+    });
+  });
+
+  describe('deferred ops-task close on applied-pending-confirm -> resolved', () => {
+    it('closes the task when the owning session already went terminal with a completing reason', async () => {
+      seedEntry('task-1', 'M12', { state: 'applied-pending-confirm' });
+      seedOpsSession('session-1', 'task-1', 'planning_no_pending_dispositions');
+
+      const res = await request(makeApp())
+        .post('/api/ops-journal/task-1/state')
+        .send({ state: 'resolved', disposition: 'pass' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.state).toBe('resolved');
+      expect(mockUpdateStatus).toHaveBeenCalledTimes(1);
+      expect(mockUpdateStatus).toHaveBeenCalledWith(
+        'task-1',
+        DESIGN_DONE_STATUS,
+        expect.objectContaining({ sessionId: 'session-1' }),
+      );
+    });
+
+    it('does not close the task when no ops session exists for the task', async () => {
+      seedEntry('task-1', 'M12', { state: 'applied-pending-confirm' });
+
+      const res = await request(makeApp())
+        .post('/api/ops-journal/task-1/state')
+        .send({ state: 'resolved' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+    });
+
+    it('does not close the task when the session terminal reason is not a completing reason (e.g. operator-ended)', async () => {
+      seedEntry('task-1', 'M12', { state: 'applied-pending-confirm' });
+      seedOpsSession('session-1', 'task-1', 'planning_operator_end');
+
+      const res = await request(makeApp())
+        .post('/api/ops-journal/task-1/state')
+        .send({ state: 'resolved' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+    });
+
+    it('does not double-close a task the synchronous path already closed', async () => {
+      seedEntry('task-1', 'M12', { state: 'applied-pending-confirm' });
+      seedOpsSession('session-1', 'task-1', 'planning_no_pending_dispositions');
+      mockFetchTaskSummary.mockResolvedValue({ status: DESIGN_DONE_STATUS });
+
+      const res = await request(makeApp())
+        .post('/api/ops-journal/task-1/state')
+        .send({ state: 'resolved' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+    });
+
+    it('does not close the task when a staged intent for the session was rejected', async () => {
+      seedEntry('task-1', 'M12', { state: 'applied-pending-confirm' });
+      seedOpsSession('session-1', 'task-1', 'planning_no_pending_dispositions');
+      insertStagedIntent({
+        id: 'intent-1',
+        kind: 'journal.setState',
+        payload: '{}',
+        payload_hash: 'hash-1',
+        task_id: 'task-1',
+        project_id: 'polimarket-analyser',
+        session_id: 'session-1',
+        group_id: null,
+        milestone: 'M12',
+        state: 'rejected',
+        supersedes: null,
+        annotation: null,
+        decision_proposal: null,
+        investigation: null,
+        groom_proposal: null,
+        advisory: null,
+        disposition_reason: null,
+        answer: null,
+        created_at: 0,
+        updated_at: 0,
+      } as any);
+
+      const res = await request(makeApp())
+        .post('/api/ops-journal/task-1/state')
+        .send({ state: 'resolved' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
     });
   });
 });

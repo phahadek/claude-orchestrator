@@ -1,4 +1,5 @@
 .panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -6,7 +7,24 @@
   overflow-y: auto;
   border-left: 1px solid var(--border);
   min-width: 280px;
-  max-width: 380px;
+  max-width: 640px;
+  flex-shrink: 0;
+}
+
+.resizeHandle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+  z-index: 1;
+}
+
+.resizeHandle:hover {
+  background: var(--ctp-blue, #89b4fa);
 }
 
 .headingRow {
@@ -68,7 +86,7 @@
   .panel {
     min-width: 0;
     max-width: none;
-    width: 100%;
+    width: 100% !important;
     max-height: 45vh;
     border-left: none;
     border-top: 1px solid var(--border);
@@ -79,13 +97,17 @@
     border-left: none;
     border-top: 1px solid var(--border);
   }
+
+  .resizeHandle {
+    display: none;
+  }
 }
 
 .group {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border: 1px dashed var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: 8px;
 }
@@ -188,6 +210,19 @@
   cursor: pointer;
   font-size: 0.78rem;
   padding: 4px 10px;
+}
+
+/* Shown on the session DecisionPanel while its owning session hasn't
+   signaled its proposal set complete for the turn — the milestone inbox
+   suppresses these cards entirely instead of showing them disabled. */
+.stillFilingBadge {
+  background: rgba(249, 226, 175, 0.15);
+  border: 1px solid rgba(249, 226, 175, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-yellow);
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  flex-shrink: 0;
 }
 
 .reasonInput {

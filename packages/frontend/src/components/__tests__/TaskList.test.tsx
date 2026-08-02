@@ -936,6 +936,80 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('groom-btn')).toBeNull();
     });
 
+    it('renders when there are zero Backlog Code tasks but a groomable non-Code Backlog task exists, and launches it', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched: ['bn1'], deferred: [] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'bn1',
+            taskName: 'Backlog Operational Task',
+            displayStatus: 'backlog',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      expect(screen.queryByTestId('backlog-section')).toBeNull();
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
+      expect(groomBtn.textContent).toContain('Groom (0)');
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+      expect(groomBtn.textContent).toContain('Groom (1)');
+
+      fireEvent.click(groomBtn);
+
+      await waitFor(() => {
+        expect(
+          (global.fetch as ReturnType<typeof vi.fn>).mock.calls.some(
+            ([url, init]) =>
+              typeof url === 'string' &&
+              url.includes('/api/planning/launch') &&
+              JSON.stringify(init?.body ?? '').includes('bn1'),
+          ),
+        ).toBe(true);
+      });
+    });
+
+    it('renders exactly once when both Code and non-Code groomable Backlog tasks are present', () => {
+      renderList([
+        makeTask({
+          taskId: 'bc1',
+          taskName: 'Backlog Code Task',
+          displayStatus: 'backlog',
+          taskType: '💻 Code',
+        }),
+        makeTask({
+          taskId: 'bn1',
+          taskName: 'Backlog Design Task',
+          displayStatus: 'backlog',
+          taskType: '📐 Design',
+        }),
+      ]);
+
+      expect(screen.getAllByTestId('groom-btn')).toHaveLength(1);
+    });
+
     it('renders on the Backlog section and reflects the selected count', () => {
       renderList([
         makeTask({
@@ -951,9 +1025,7 @@ describe('TaskList', () => {
         within(backlogSection).getByTestId('group-header-backlog'),
       );
 
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       expect(groomBtn.textContent).toContain('Groom (0)');
       expect(groomBtn.disabled).toBe(true);
 
@@ -982,13 +1054,9 @@ describe('TaskList', () => {
       fireEvent.click(
         within(backlogSection).getByTestId('group-header-backlog'),
       );
-      fireEvent.click(
-        within(backlogSection).getByTestId('groom-select-all-btn'),
-      );
+      fireEvent.click(screen.getByTestId('groom-select-all-btn'));
 
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       expect(groomBtn.textContent).toContain('Groom (2)');
     });
 
@@ -1043,9 +1111,7 @@ describe('TaskList', () => {
           .querySelector('input[type="checkbox"]') as HTMLInputElement,
       );
 
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       fireEvent.click(groomBtn);
 
       await waitFor(() => {
@@ -1105,9 +1171,7 @@ describe('TaskList', () => {
           .querySelector('input[type="checkbox"]') as HTMLInputElement,
       );
 
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       fireEvent.click(groomBtn);
 
       await waitFor(() => {
@@ -1174,9 +1238,7 @@ describe('TaskList', () => {
           .querySelector('input[type="checkbox"]') as HTMLInputElement,
       );
 
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       fireEvent.click(groomBtn);
 
       await waitFor(() => {
@@ -1251,7 +1313,7 @@ describe('TaskList', () => {
         .querySelectorAll('input[type="checkbox"]');
       designCheckboxes.forEach((checkbox) => fireEvent.click(checkbox));
 
-      const groomBtn = within(backlogSection).getByTestId('groom-btn');
+      const groomBtn = screen.getByTestId('groom-btn');
       fireEvent.click(groomBtn);
 
       await waitFor(() => {
@@ -1289,13 +1351,75 @@ describe('TaskList', () => {
 
       fireEvent.click(checkbox);
 
+      expect(screen.queryByTestId('backlog-section')).toBeNull();
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
+      expect(groomBtn.textContent).toContain('Groom (1)');
+    });
+
+    it('excludes a groom-dep-blocked Backlog non-code task from the Groom checkbox and shows its blocker reason', () => {
+      renderList(
+        [
+          makeTask({
+            taskId: 'bn-blocked',
+            taskName: 'Blocked Backlog Investigation Task',
+            displayStatus: 'backlog',
+            taskType: '🔎 Investigation',
+            groomDepBlocked: true,
+            groomDepBlockedReason: 'waiting on Design Task',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      fireEvent.click(
+        within(nonCodeSection).getByTestId('type-card-header-investigation'),
+      );
+      const typeCard = within(nonCodeSection).getByTestId(
+        'type-card-investigation',
+      );
+      expect(typeCard.querySelector('input[type="checkbox"]')).toBeNull();
+      expect(
+        within(typeCard).getByTestId('ops-dep-blocked-reason').textContent,
+      ).toContain('waiting on Design Task');
+    });
+
+    it('excludes a groom-dep-blocked Backlog Code task from Select All / the Groom(N) count and shows its blocker reason', () => {
+      renderList(
+        [
+          makeTask({
+            taskId: 'bc-blocked',
+            taskName: 'Blocked Backlog Code Task',
+            displayStatus: 'backlog',
+            taskType: '💻 Code',
+            groomDepBlocked: true,
+            groomDepBlockedReason: 'waiting on Investigation Task',
+          }),
+          makeTask({
+            taskId: 'bc-ready',
+            taskName: 'Groomable Backlog Code Task',
+            displayStatus: 'backlog',
+            taskType: '💻 Code',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
       const backlogSection = screen.getByTestId('backlog-section');
       fireEvent.click(
         within(backlogSection).getByTestId('group-header-backlog'),
       );
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+
+      const checkboxes = within(backlogSection).queryAllByRole('checkbox');
+      // Only the eligible task renders a checkbox — the dep-blocked task renders none.
+      expect(checkboxes).toHaveLength(1);
+      expect(
+        within(backlogSection).getByTestId('ops-dep-blocked-reason')
+          .textContent,
+      ).toContain('waiting on Investigation Task');
+
+      fireEvent.click(screen.getByTestId('groom-select-all-btn'));
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       expect(groomBtn.textContent).toContain('Groom (1)');
     });
 
@@ -1315,7 +1439,7 @@ describe('TaskList', () => {
         within(backlogSection).getByTestId('group-header-backlog'),
       );
       fireEvent.click(within(backlogSection).getByRole('checkbox'));
-      fireEvent.click(within(backlogSection).getByTestId('groom-btn'));
+      fireEvent.click(screen.getByTestId('groom-btn'));
 
       expect(screen.queryByTestId('groom-launched-panel')).toBeNull();
       expect(fetch).not.toHaveBeenCalled();
@@ -1354,7 +1478,7 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('ops-btn')).toBeNull();
     });
 
-    it('renders a checkbox for each not-Done 🔧/🔎/observational-🧪 task and none for 📝 Docs', () => {
+    it('renders an Ops checkbox for each not-Done 🔧/🔎/observational-🧪 task and a Docs checkbox (not an Ops one) for 📝 Docs', () => {
       renderList(
         [
           makeTask({
@@ -1419,10 +1543,14 @@ describe('TaskList', () => {
         screen
           .getByTestId('type-card-docs')
           .querySelector('input[type="checkbox"]'),
-      ).toBeNull();
+      ).not.toBeNull();
+
+      const docsBtn = screen.getByTestId('docs-btn') as HTMLButtonElement;
+      expect(docsBtn.textContent).toContain('Docs (0)');
 
       fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
       expect(opsBtn.textContent).toContain('Ops (3)');
+      expect(docsBtn.textContent).toContain('Docs (1)');
     });
 
     it('hides the checkbox for a dep-blocked ops task and shows the reason, instead of allowing select-then-silent-drop', () => {
@@ -1513,10 +1641,10 @@ describe('TaskList', () => {
         { boardId: 'milestone-1' },
       );
 
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
       const opTaskCheckbox = screen
         .getByTestId('type-card-operational')
         .querySelector('input[type="checkbox"]') as HTMLInputElement;
-      fireEvent.click(screen.getByTestId('type-card-header-operational'));
       fireEvent.click(opTaskCheckbox);
 
       fireEvent.click(screen.getByTestId('type-card-header-testing'));
@@ -1840,16 +1968,9 @@ describe('TaskList', () => {
       fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
       expect(opsBtn.textContent).toContain('Ops (2)');
 
-      const backlogSection = screen.getByTestId('backlog-section');
-      fireEvent.click(
-        within(backlogSection).getByTestId('group-header-backlog'),
-      );
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
-      fireEvent.click(
-        within(backlogSection).getByTestId('groom-select-all-btn'),
-      );
+      expect(screen.queryByTestId('backlog-section')).toBeNull();
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
+      fireEvent.click(screen.getByTestId('groom-select-all-btn'));
       expect(groomBtn.textContent).toContain('Groom (1)');
     });
 
@@ -1942,25 +2063,18 @@ describe('TaskList', () => {
       expect(screen.getByTestId('design-btn')).toBeDefined();
 
       fireEvent.click(screen.getByTestId('type-card-header-design'));
-      const readyCheckbox = screen
-        .getByTestId('type-card-design')
-        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      const readyCheckbox = screen.getByRole('checkbox', {
+        name: 'Select Ready Design Task',
+      }) as HTMLInputElement;
       expect(readyCheckbox).not.toBeNull();
 
       const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
       fireEvent.click(readyCheckbox);
       expect(designBtn.textContent).toContain('Design (1)');
 
-      const backlogSection = screen.getByTestId('backlog-section');
-      fireEvent.click(
-        within(backlogSection).getByTestId('group-header-backlog'),
-      );
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
-      fireEvent.click(
-        within(backlogSection).getByTestId('groom-select-all-btn'),
-      );
+      expect(screen.queryByTestId('backlog-section')).toBeNull();
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
+      fireEvent.click(screen.getByTestId('groom-select-all-btn'));
       expect(groomBtn.textContent).toContain('Groom (1)');
     });
 
@@ -2112,6 +2226,176 @@ describe('TaskList', () => {
     });
   });
 
+  describe('Docs(N) button', () => {
+    function mockPlanningEndpoint(
+      launched: string[],
+      entries: unknown[],
+      failed: { taskId: string; reason: string }[] = [],
+    ) {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched, deferred: [], failed }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ entries }),
+          });
+        },
+      );
+    }
+
+    it('renders a Docs checkbox for a Ready 📝 Docs task and a Groom checkbox for a Backlog 📝 Docs task', () => {
+      renderList([
+        makeTask({
+          taskId: 'docs-ready',
+          taskName: 'Ready Docs Task',
+          displayStatus: 'ready',
+          taskType: '📝 Docs',
+        }),
+        makeTask({
+          taskId: 'docs-backlog',
+          taskName: 'Backlog Docs Task',
+          displayStatus: 'backlog',
+          taskType: '📝 Docs',
+        }),
+      ]);
+
+      expect(screen.getByTestId('docs-btn')).toBeDefined();
+
+      fireEvent.click(screen.getByTestId('type-card-header-docs'));
+      const readyCheckbox = within(
+        screen.getByTestId('type-card-docs'),
+      ).getByRole('checkbox', {
+        name: 'Select Ready Docs Task',
+      }) as HTMLInputElement;
+      expect(readyCheckbox).not.toBeNull();
+
+      const docsBtn = screen.getByTestId('docs-btn') as HTMLButtonElement;
+      fireEvent.click(readyCheckbox);
+      expect(docsBtn.textContent).toContain('Docs (1)');
+
+      // The Backlog task renders a Groom checkbox instead of a Docs one — it
+      // is not Docs-eligible (mirrors the Design predicate: Backlog stays
+      // groomable rather than directly launchable).
+      const backlogCheckbox = within(
+        screen.getByTestId('type-card-docs'),
+      ).getByRole('checkbox', {
+        name: 'Select Backlog Docs Task',
+      });
+      expect(backlogCheckbox).not.toBeNull();
+    });
+
+    it('renders no checkbox for a Docs task in a non-launchable status', () => {
+      renderList([
+        makeTask({
+          taskId: 'docs-done',
+          taskName: 'Done Docs Task',
+          displayStatus: 'deferred',
+          taskType: '📝 Docs',
+        }),
+      ]);
+
+      expect(screen.queryByTestId('docs-btn')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('type-card-header-docs'));
+      const card = screen.getByTestId('type-card-docs');
+      expect(card.querySelector('input[type="checkbox"]')).toBeNull();
+    });
+
+    it('clicking Docs(N) posts workflow "docs" with the selected task ids and reconciles launched without a false error', async () => {
+      mockPlanningEndpoint(
+        ['docs1'],
+        [
+          {
+            taskId: 'docs1',
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'docs1',
+            taskName: 'Docs Task',
+            displayStatus: 'ready',
+            taskType: '📝 Docs',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
+      const docsBtn = screen.getByTestId('docs-btn') as HTMLButtonElement;
+      expect(docsBtn.textContent).toContain('Docs (1)');
+
+      fireEvent.click(docsBtn);
+
+      await waitFor(() => {
+        expect(docsBtn.textContent).toContain('Docs (0)');
+      });
+      expect(screen.queryByTestId('docs-error')).toBeNull();
+
+      const launchCall = (
+        global.fetch as ReturnType<typeof vi.fn>
+      ).mock.calls.find(([url]) =>
+        (url as string).includes('/api/planning/launch'),
+      );
+      expect(launchCall).toBeDefined();
+      const body = JSON.parse((launchCall![1] as RequestInit).body as string);
+      expect(body.workflow).toBe('docs');
+      expect(body.taskIds).toEqual(['docs1']);
+    });
+
+    it('reports a genuinely-failed task with its failure reason', async () => {
+      const notLaunchedUuid = 'docs-not-launched-uuid';
+      mockPlanningEndpoint(
+        [],
+        [],
+        [
+          {
+            taskId: `notion:${notLaunchedUuid}`,
+            reason: 'Max concurrent planning sessions (5) reached',
+          },
+        ],
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: `notion:${notLaunchedUuid}`,
+            taskName: 'Docs Task',
+            displayStatus: 'ready',
+            taskType: '📝 Docs',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
+      fireEvent.click(screen.getByTestId('docs-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('docs-error')).toBeDefined();
+      });
+      expect(screen.getByTestId('docs-error').textContent).toContain(
+        `notion:${notLaunchedUuid}`,
+      );
+      expect(screen.getByTestId('docs-error').textContent).toContain(
+        'Max concurrent planning sessions (5) reached',
+      );
+    });
+  });
+
   describe('shared NON-CODE Select All / Clear', () => {
     function renderMixedNonCode() {
       renderList(
@@ -2134,6 +2418,12 @@ describe('TaskList', () => {
             displayStatus: 'ready',
             taskType: '📐 Design',
           }),
+          makeTask({
+            taskId: 'docs1',
+            taskName: 'Docs Task',
+            displayStatus: 'ready',
+            taskType: '📝 Docs',
+          }),
         ],
         { boardId: 'milestone-1' },
       );
@@ -2146,32 +2436,38 @@ describe('TaskList', () => {
       expect(within(nonCodeSection).getAllByText('Clear').length).toBe(1);
     });
 
-    it('shared Select All selects both Ops-eligible and Design-eligible tasks into their own buckets', () => {
+    it('shared Select All selects Ops-, Design-, and Docs-eligible tasks into their own buckets', () => {
       renderMixedNonCode();
       const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
       const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
+      const docsBtn = screen.getByTestId('docs-btn') as HTMLButtonElement;
       expect(opsBtn.textContent).toContain('Ops (0)');
       expect(designBtn.textContent).toContain('Design (0)');
+      expect(docsBtn.textContent).toContain('Docs (0)');
 
       fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
 
       expect(opsBtn.textContent).toContain('Ops (2)');
       expect(designBtn.textContent).toContain('Design (1)');
+      expect(docsBtn.textContent).toContain('Docs (1)');
     });
 
-    it('shared Clear resets both Ops and Design selections to zero', () => {
+    it('shared Clear resets Ops, Design, and Docs selections to zero', () => {
       renderMixedNonCode();
       const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
       const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
+      const docsBtn = screen.getByTestId('docs-btn') as HTMLButtonElement;
 
       fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
       expect(opsBtn.textContent).toContain('Ops (2)');
       expect(designBtn.textContent).toContain('Design (1)');
+      expect(docsBtn.textContent).toContain('Docs (1)');
 
       fireEvent.click(screen.getByTestId('non-code-clear-btn'));
 
       expect(opsBtn.textContent).toContain('Ops (0)');
       expect(designBtn.textContent).toContain('Design (0)');
+      expect(docsBtn.textContent).toContain('Docs (0)');
     });
   });
 
@@ -2614,7 +2910,7 @@ describe('TaskList', () => {
       fireEvent.click(stageButton);
 
       const applyButton = await screen.findByRole('button', {
-        name: /apply/i,
+        name: /commit/i,
       });
       expect(onForceRefetch).not.toHaveBeenCalled();
 

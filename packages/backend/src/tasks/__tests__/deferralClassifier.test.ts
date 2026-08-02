@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 const { mockGetTaskBackend, mockRecordEvent, mockSpawn } = vi.hoisted(() => ({
   mockGetTaskBackend: vi.fn(),
@@ -25,6 +26,19 @@ vi.mock('../../audit/AuditLog', () => ({
 
 vi.mock('child_process', () => ({
   spawn: mockSpawn,
+  execSync: vi.fn(),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
+  exec: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
 }));
 
 const {
@@ -37,13 +51,15 @@ const {
   mockSetStagedIntentAdvisory: vi.fn(),
 }));
 
-vi.mock('../../db/queries', () => ({
-  listStagedIntentsByGroup: mockListStagedIntentsByGroup,
-  getTaskCache: mockGetTaskCache,
-  setStagedIntentAdvisory: mockSetStagedIntentAdvisory,
-  getMergeCommitForTask: vi.fn(),
-  deleteTaskCacheRow: vi.fn(),
-}));
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    listStagedIntentsByGroup: mockListStagedIntentsByGroup,
+    getTaskCache: mockGetTaskCache,
+    setStagedIntentAdvisory: mockSetStagedIntentAdvisory,
+    getMergeCommitForTask: vi.fn(),
+    deleteTaskCacheRow: vi.fn(),
+  }),
+);
 
 vi.mock('../../gate/gateStore', () => ({
   insertItem: vi.fn(),
@@ -433,8 +449,12 @@ describe('classifyReadyProposal — task id normalization', () => {
     expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
   });
 
-  it('reaches classifyDeferral for a hyphenless payload id whose cache row is keyed notion:<hyphenless-id>', async () => {
+  it('reaches classifyDeferral for a hyphenless payload id whose cache row is keyed by the canonicalized (dashed) id', async () => {
     const hyphenlessId = '3aa22f9152f381e4adaefd58a25e6afa';
+    // getCachedType normalizes via normalizeTaskId, which canonicalizes a
+    // 32-hex-char external id to its dashed UUID form regardless of the
+    // input's own hyphenation — so the cache row is keyed dashed, not bare.
+    const dashedId = '3aa22f91-52f3-81e4-adae-fd58a25e6afa';
     mockListStagedIntentsByGroup.mockReturnValue([
       makeRow({
         payload: JSON.stringify({ taskId: hyphenlessId, status: 'Ready' }),
@@ -442,7 +462,7 @@ describe('classifyReadyProposal — task id normalization', () => {
       }),
     ]);
     mockGetTaskCache.mockImplementation((key: string) =>
-      key === `notion:${hyphenlessId}`
+      key === `notion:${dashedId}`
         ? { raw_json: JSON.stringify({ type: '💻 Code' }) }
         : null,
     );

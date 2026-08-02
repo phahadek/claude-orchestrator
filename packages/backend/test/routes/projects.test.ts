@@ -195,13 +195,16 @@ describe('GET /api/projects/:id/milestones', () => {
 describe('POST /api/projects/:id/milestones', () => {
   it('creates a milestone with a server-generated UUID', async () => {
     ProjectService.create({ id: 'p1', name: 'P', projectDir: '/p1' });
+    // Project defaults to taskSource='notion', which validates sourceId as a
+    // Notion page/database id — a bare 'src-1' string is now rejected.
+    const sourceId = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4';
     const res = await supertest(buildApp())
       .post('/api/projects/p1/milestones')
-      .send({ name: 'M', sourceId: 'src-1' });
+      .send({ name: 'M', sourceId });
     expect(res.status).toBe(201);
     expect(res.body.id).toBeTruthy();
     expect(res.body.projectId).toBe('p1');
-    expect(res.body.sourceId).toBe('src-1');
+    expect(res.body.sourceId).toBe(sourceId);
   });
 
   it('returns 400 when name is missing', async () => {

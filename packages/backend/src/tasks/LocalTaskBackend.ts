@@ -1,7 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
-import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
+import type {
+  TaskBackend,
+  NonMilestoneSourceConfig,
+  TaskSummary,
+} from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
 import { toExternalId, formatTaskId } from './taskId';
@@ -9,6 +13,22 @@ import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
 import { logger } from '../logger';
 import { ProjectService } from '../projects/ProjectService';
+
+/**
+ * Thrown when a milestone registered in the orchestrator DB has no matching
+ * entry in tasks.yaml. This is a config-drift condition, not a transient I/O
+ * failure — callers (TaskCacheRefresher) use the distinct type to classify it
+ * separately from ordinary fetch errors and avoid re-warning at poll cadence.
+ */
+export class MilestoneNotFoundError extends Error {
+  constructor(
+    public readonly filePath: string,
+    public readonly milestoneId: string,
+  ) {
+    super(`milestone not found in ${filePath}: ${milestoneId}`);
+    this.name = 'MilestoneNotFoundError';
+  }
+}
 
 // ── tasks.yaml schema ────────────────────────────────────────────────────────
 
@@ -225,9 +245,7 @@ export class LocalTaskBackend implements TaskBackend {
     } else {
       const milestone = file.milestones.find((m) => m.id === milestoneId);
       if (!milestone) {
-        throw new Error(
-          `[LocalTaskBackend] milestone not found in ${this.filePath}: ${milestoneId}`,
-        );
+        throw new MilestoneNotFoundError(this.filePath, milestoneId);
       }
       allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
     }
@@ -273,6 +291,18 @@ export class LocalTaskBackend implements TaskBackend {
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
     found.task.status = fromDisplayStatus(status);
     this.writeFile(file);
+  }
+
+  async fetchTaskSummary(taskId: string): Promise<TaskSummary | null> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) return null;
+    return {
+      title: found.task.name,
+      type: toDisplayType(found.task.type ?? 'Code'),
+      status: toDisplayStatus(found.task.status),
+    };
   }
 
   async fetchTaskPage(taskId: string): Promise<string> {

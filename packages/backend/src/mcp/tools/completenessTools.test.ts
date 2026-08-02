@@ -13,6 +13,15 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../../projects/ProjectService', () => ({
+  ProjectService: {
+    getById: () => ({
+      id: 'proj-1',
+      milestones: [{ id: 'ms-13', name: 'M13', canonicalShortId: 'M13' }],
+    }),
+  },
+}));
+
 import { db } from '../../db/db';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -20,24 +29,40 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerCompletenessTools } from './completenessTools';
 import {
   listCompletenessDispositions,
+  listStagedIntentsByMilestone,
   listStagedIntentsByProject,
+  upsertTaskCache,
 } from '../../db/queries';
 import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
+
+const PROBED = ['unstated-premises'];
 
 beforeEach(() => {
   db.prepare('DELETE FROM completeness_disposition').run();
   db.prepare('DELETE FROM staged_intent').run();
+  db.prepare('DELETE FROM task_cache').run();
+  for (const taskId of [
+    'notion:design1',
+    'notion:design2',
+    'notion:design3',
+    'notion:design4',
+    'notion:design5',
+  ]) {
+    upsertTaskCache(taskId, JSON.stringify({ type: '📐 Design' }));
+  }
 });
 
 async function connectedClient(
   workflow: PlanningWorkflow | null = 'design',
   projectId?: string,
+  milestone?: string | null,
 ) {
   const server = new McpServer({ name: 'test', version: '1.0.0' });
   registerCompletenessTools(server, {
     sessionId: 'session-1',
     workflow,
     projectId,
+    milestone,
   });
   const [serverTransport, clientTransport] =
     InMemoryTransport.createLinkedPair();
@@ -96,10 +121,11 @@ describe('completeness.disposition', () => {
         taskId: 'notion:design1',
         project: 'demo',
         milestone: 'M13',
+        probed: PROBED,
         questions: [
           {
             question: 'Should X be configurable?',
-            disposition: 'dismissed',
+            disposition: 'out-of-scope',
             reason: 'Out of scope.',
           },
         ],
@@ -109,17 +135,142 @@ describe('completeness.disposition', () => {
 
     const body = resultOf(result as never);
     expect(body.source_task_id).toBe('notion:design1');
+    expect(body.probed).toEqual(PROBED);
 
     const rows = listCompletenessDispositions('notion:design1');
     expect(rows).toHaveLength(1);
-    expect(JSON.parse(rows[0].questions)).toEqual([
-      {
-        question: 'Should X be configurable?',
-        disposition: 'dismissed',
-        reason: 'Out of scope.',
-        approvalStatus: 'proposed',
+    expect(JSON.parse(rows[0].questions)).toEqual({
+      probed: PROBED,
+      questions: [
+        {
+          question: 'Should X be configurable?',
+          disposition: 'out-of-scope',
+          reason: 'Out of scope.',
+          approvalStatus: 'proposed',
+        },
+      ],
+    });
+    await close();
+  });
+
+  it('round-trips each of the six named dispositions', async () => {
+    const named = [
+      'resolved',
+      'out-of-scope',
+      'not-a-decision',
+      'fold',
+      'file-sibling',
+      'sibling-owned',
+    ] as const;
+    const { client, close } = await connectedClient();
+    for (const disposition of named) {
+      const result = await client.callTool({
+        name: 'completeness.disposition',
+        arguments: {
+          taskId: 'notion:design1',
+          probed: PROBED,
+          questions: [{ question: 'Q?', disposition, reason: 'r' }],
+          runAt: '2026-07-28T00:00:00.000Z',
+        },
+      });
+      const body = resultOf(result as never) as {
+        questions: Array<{ disposition: string }>;
+      };
+      expect(body.questions[0].disposition).toBe(disposition);
+    }
+    await close();
+  });
+
+  it('rejects a legacy accepted/dismissed value — not one of the six named dispositions', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design1',
+        probed: PROBED,
+        questions: [
+          { question: 'Q?', disposition: 'accepted', reason: 'resolved' },
+        ],
+        runAt: '2026-07-28T00:00:00.000Z',
       },
-    ]);
+    });
+    expect(result.isError).toBeTruthy();
+    await close();
+  });
+
+  it('rejects an empty probed array — a clean pass must still name what it checked', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design1',
+        probed: [],
+        questions: [],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+    });
+    expect(result.isError).toBeTruthy();
+    expect(listCompletenessDispositions('notion:design1')).toHaveLength(0);
+    await close();
+  });
+
+  it('records a clean pass as an affirmative statement of what was probed', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design1',
+        probed: [
+          'durability-failure-modes',
+          'dual-read-consumer-set',
+          'interaction-bugs',
+          'missing-scaffolding',
+          'state-mutation-granularity',
+          'unstated-premises',
+        ],
+        questions: [],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+    });
+    const body = resultOf(result as never) as {
+      probed: string[];
+      questions: unknown[];
+    };
+    expect(body.probed).toHaveLength(6);
+    expect(body.questions).toEqual([]);
+    await close();
+  });
+
+  it('rejects a task id that does not resolve, and writes no row', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:does-not-exist',
+        probed: PROBED,
+        questions: [],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+    });
+    expect(result.isError).toBeTruthy();
+    expect(listCompletenessDispositions('notion:does-not-exist')).toHaveLength(
+      0,
+    );
+    await close();
+  });
+
+  it('rejects a malformed/non-timestamp runAt', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design1',
+        probed: PROBED,
+        questions: [],
+        runAt: 'not-a-timestamp',
+      },
+    });
+    expect(result.isError).toBeTruthy();
     await close();
   });
 
@@ -129,14 +280,17 @@ describe('completeness.disposition', () => {
       name: 'completeness.disposition',
       arguments: {
         taskId: 'notion:design2',
+        probed: PROBED,
         questions: [
-          { question: 'Q?', disposition: 'accepted', reason: 'resolved' },
+          { question: 'Q?', disposition: 'resolved', reason: 'resolved' },
         ],
         runAt: '2026-07-28T00:00:00.000Z',
       },
     });
     const rows = listCompletenessDispositions('notion:design2');
-    expect(JSON.parse(rows[0].questions)[0].approvalStatus).toBe('proposed');
+    expect(JSON.parse(rows[0].questions).questions[0].approvalStatus).toBe(
+      'proposed',
+    );
     await close();
   });
 
@@ -146,8 +300,9 @@ describe('completeness.disposition', () => {
       name: 'completeness.disposition',
       arguments: {
         taskId: 'notion:design3',
+        probed: PROBED,
         questions: [
-          { question: 'Q?', disposition: 'accepted', reason: 'resolved' },
+          { question: 'Q?', disposition: 'resolved', reason: 'resolved' },
         ],
         runAt: '2026-07-28',
       },
@@ -163,8 +318,9 @@ describe('completeness.disposition', () => {
       name: 'completeness.disposition',
       arguments: {
         taskId: 'notion:design4',
+        probed: PROBED,
         questions: [
-          { question: 'Q?', disposition: 'accepted', reason: 'resolved' },
+          { question: 'Q?', disposition: 'resolved', reason: 'resolved' },
         ],
         runAt: '2026-07-28T00:00:00.000Z',
       },
@@ -181,14 +337,84 @@ describe('completeness.disposition', () => {
     await close();
   });
 
+  it('attributes the staged intent to the session-derived milestone, not a supplied milestone argument', async () => {
+    const { client, close } = await connectedClient('design', 'proj-1', 'M13');
+    await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design4',
+        milestone: 'M99',
+        probed: PROBED,
+        questions: [
+          { question: 'Q?', disposition: 'resolved', reason: 'resolved' },
+        ],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+    });
+
+    const intents = listStagedIntentsByProject('proj-1');
+    expect(intents).toHaveLength(1);
+    expect(intents[0].milestone).toBe('M13');
+
+    const attributed = listStagedIntentsByMilestone('proj-1', 'M13');
+    expect(attributed).toHaveLength(1);
+    expect(attributed[0].kind).toBe('completeness.disposition');
+
+    const unattributed = listStagedIntentsByMilestone('proj-1', 'unattributed');
+    expect(unattributed).toHaveLength(0);
+    await close();
+  });
+
+  it('stages the intent with milestone = null and does not throw when the session resolves to no milestone', async () => {
+    const { client, close } = await connectedClient('design', 'proj-1', null);
+    const result = await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design4',
+        probed: PROBED,
+        questions: [
+          { question: 'Q?', disposition: 'resolved', reason: 'resolved' },
+        ],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+    });
+    expect(result.isError).toBeFalsy();
+
+    const intents = listStagedIntentsByProject('proj-1');
+    expect(intents).toHaveLength(1);
+    expect(intents[0].milestone).toBeNull();
+    await close();
+  });
+
+  it('leaves the durable completeness_disposition row milestone column driven by the argument, unchanged in behaviour', async () => {
+    const { client, close } = await connectedClient('design', 'proj-1', 'M13');
+    await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design4',
+        milestone: 'M99',
+        probed: PROBED,
+        questions: [
+          { question: 'Q?', disposition: 'resolved', reason: 'resolved' },
+        ],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+    });
+
+    const rows = listCompletenessDispositions('notion:design4');
+    expect(rows[0].milestone).toBe('M99');
+    await close();
+  });
+
   it('stages no intent when the session resolves to no project — the durable write still happens', async () => {
     const { client, close } = await connectedClient('design');
     const result = await client.callTool({
       name: 'completeness.disposition',
       arguments: {
         taskId: 'notion:design5',
+        probed: PROBED,
         questions: [
-          { question: 'Q?', disposition: 'accepted', reason: 'resolved' },
+          { question: 'Q?', disposition: 'resolved', reason: 'resolved' },
         ],
         runAt: '2026-07-28T00:00:00.000Z',
       },

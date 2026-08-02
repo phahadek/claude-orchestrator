@@ -23,8 +23,11 @@ import {
   resolveMilestoneForProject,
   resolveMilestoneAnyProject,
   resolveMilestoneDatabaseId,
+  resolveMilestoneForSessionTask,
   UnknownMilestoneError,
 } from '../milestoneResolver.js';
+import * as queries from '../../db/queries.js';
+import type { GateItemRow } from '../../db/types.js';
 
 const M11 = {
   id: 'ms-uuid-11',
@@ -207,5 +210,45 @@ describe('resolveMilestoneAnyProject', () => {
     };
     projectServiceMock.list.mockReturnValue([project([notionSynced, M12])]);
     expect(resolveMilestoneAnyProject('M11')).toBe('M11');
+  });
+});
+
+describe('resolveMilestoneForSessionTask', () => {
+  const gateItem: GateItemRow = {
+    id: 'gi-1',
+    project: 'p1',
+    milestone: 'M13',
+    text: 'some gate item',
+    classification: 'code',
+    min_deployed_commit: null,
+    state: 'open',
+    current_disposition: null,
+    latest_disposition: null,
+    updated_at: '2026-01-01T00:00:00.000Z',
+  } as GateItemRow;
+
+  it("returns a gate-verify session's gate item milestone for a gate-item:<uuid> task id", () => {
+    vi.spyOn(queries, 'getGateItem').mockReturnValue(gateItem);
+    expect(resolveMilestoneForSessionTask('p1', 'gate-item:gi-1')).toBe('M13');
+  });
+
+  it('falls back to resolveMilestoneForTaskId, unchanged, for a non-gate-verify task id', () => {
+    projectServiceMock.getById.mockReturnValue(undefined);
+    expect(resolveMilestoneForSessionTask('p1', 'task-123')).toBeNull();
+  });
+
+  it('returns null, not a crash, when the referenced gate item carries no milestone', () => {
+    vi.spyOn(queries, 'getGateItem').mockReturnValue({
+      ...gateItem,
+      milestone: null as unknown as string,
+    });
+    expect(resolveMilestoneForSessionTask('p1', 'gate-item:gi-1')).toBeNull();
+  });
+
+  it('returns null when the referenced gate item does not exist', () => {
+    vi.spyOn(queries, 'getGateItem').mockReturnValue(undefined);
+    expect(
+      resolveMilestoneForSessionTask('p1', 'gate-item:missing'),
+    ).toBeNull();
   });
 });

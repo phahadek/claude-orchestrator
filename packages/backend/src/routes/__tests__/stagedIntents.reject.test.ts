@@ -30,8 +30,12 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
-import { getStagedIntent } from '../../db/queries';
+import {
+  createStagedIntentsRouter,
+  stageIntent,
+  SessionStagedDoneError,
+} from '../stagedIntents';
+import { getStagedIntent, listStagedIntentsBySession } from '../../db/queries';
 import type { PlanningOrchestrator } from '../../orchestration/PlanningOrchestrator';
 
 function makePlanningOrchestrator() {
@@ -44,12 +48,27 @@ function makePlanningOrchestrator() {
   };
 }
 
+function makeSessionManager() {
+  return {
+    enqueueFeedback: vi.fn().mockResolvedValue(undefined),
+    grantCapability: vi.fn().mockResolvedValue([]),
+    on: vi.fn(),
+  } as unknown as import('../../session/SessionManager').SessionManager & {
+    enqueueFeedback: ReturnType<typeof vi.fn>;
+    grantCapability: ReturnType<typeof vi.fn>;
+  };
+}
+
 function makeApp(
   planningOrchestrator?: ReturnType<typeof makePlanningOrchestrator>,
+  sessionManager?: ReturnType<typeof makeSessionManager>,
 ) {
   const app = express();
   app.use(express.json());
-  app.use('/api', createStagedIntentsRouter(planningOrchestrator));
+  app.use(
+    '/api',
+    createStagedIntentsRouter(planningOrchestrator, sessionManager as any),
+  );
   return app;
 }
 
@@ -67,6 +86,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-1', dependsOn: [] },
       'proj-1',
+      'group-1',
     );
 
     const empty = await supertest(app)
@@ -88,6 +108,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-1', dependsOn: [] },
       'proj-1',
+      'group-1',
     );
 
     const res = await supertest(app)
@@ -108,7 +129,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-1', dependsOn: [] },
       'proj-1',
-      null,
+      'group-1',
       'planning-session-1',
     );
 
@@ -124,6 +145,10 @@ describe('POST /api/staged-intents/:id/reject', () => {
     expect(mockRecordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'staged_intent_disposition',
+        // An operator disposition is a human judgement call, unchanged by
+        // the auto-rejection provenance work — the audit trail must still
+        // attribute it to a human, never 'system'.
+        actor_type: 'human',
         payload: expect.objectContaining({
           intentId: intent.id,
           disposition: 'decline',
@@ -147,7 +172,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-1', dependsOn: [] },
       'proj-1',
-      null,
+      'group-1',
       'planning-session-1',
     );
 
@@ -161,6 +186,20 @@ describe('POST /api/staged-intents/:id/reject', () => {
     // terminal rejected state, which is reserved for an operator decline.
     expect(row.state).toBe('needs_revision');
     expect(row.disposition_reason).toBe('please reconsider');
+
+    // An operator pushback is still a human judgement call — unchanged by
+    // the auto-rejection provenance work.
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'staged_intent_disposition',
+        actor_type: 'human',
+        payload: expect.objectContaining({
+          intentId: intent.id,
+          disposition: 'pushback',
+          reason: 'please reconsider',
+        }),
+      }),
+    );
 
     expect(planningOrchestrator.handleDisposition).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -177,7 +216,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-9', dependsOn: [] },
       'proj-1',
-      null,
+      'group-1',
       'planning-session-1',
     );
 
@@ -190,7 +229,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-9', dependsOn: ['t-other'] },
       'proj-1',
-      null,
+      'group-1',
       'planning-session-1',
       null,
       null,
@@ -207,7 +246,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-10', dependsOn: [] },
       'proj-1',
-      null,
+      'group-1',
       'planning-session-1',
     );
 
@@ -221,7 +260,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
         'task.setDependsOn',
         { taskId: 't-10', dependsOn: ['t-other'] },
         'proj-1',
-        null,
+        'group-1',
         'planning-session-1',
         null,
         null,
@@ -236,7 +275,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-1', dependsOn: [] },
       'proj-1',
-      null,
+      'group-1',
       'session-long-gone',
     );
 
@@ -247,6 +286,64 @@ describe('POST /api/staged-intents/:id/reject', () => {
     expect(res.status).toBe(200);
     expect(mockRecordEvent).toHaveBeenCalled();
     expect(getStagedIntent(intent.id)!.disposition_reason).toBe('stale');
+  });
+
+  it('a capability-request decline still transitions the intent to rejected and routes the outcome via enqueueFeedback with attemptTerminalResume:false, so a terminal originating session is not resumed', async () => {
+    const sessionManager = makeSessionManager();
+    const app = makeApp(makePlanningOrchestrator(), sessionManager);
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'Bash(ls)',
+        plan: 'verify a gate item',
+        evidence: 'no other grantable capability reaches this',
+      },
+      'proj-1',
+      null,
+      'planning-session-1',
+    );
+
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/reject`)
+      .send({ outcome: 'decline', reason: 'not needed' });
+
+    expect(res.status).toBe(200);
+    expect(getStagedIntent(intent.id)!.state).toBe('rejected');
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      expect.any(String),
+      { attemptTerminalResume: false },
+    );
+  });
+
+  it('a capability-request pushback lands in needs_revision and also routes via enqueueFeedback with attemptTerminalResume:false', async () => {
+    const sessionManager = makeSessionManager();
+    const app = makeApp(makePlanningOrchestrator(), sessionManager);
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'Bash(ls)',
+        plan: 'verify a gate item',
+        evidence: 'no other grantable capability reaches this',
+      },
+      'proj-1',
+      null,
+      'planning-session-1',
+    );
+
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/reject`)
+      .send({ outcome: 'pushback', reason: 'reconsider' });
+
+    expect(res.status).toBe(200);
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      expect.any(String),
+      { attemptTerminalResume: false },
+    );
   });
 });
 
@@ -355,12 +452,16 @@ describe('POST /api/staged-intents/:id/apply — group atomicity', () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
-      setDependsOn: vi.fn(),
+      setProperties: vi.fn(),
     });
     const app = makeApp();
+    // task.setProperties, not task.setDependsOn — task.setDependsOn is a
+    // Ready-path member and must always carry a groupId (see
+    // ReadyPathMissingGroupError), which would force it through the group
+    // commit route instead of standalone /apply.
     const intent = stageIntent(
-      'task.setDependsOn',
-      { taskId: 't-1', dependsOn: [] },
+      'task.setProperties',
+      { taskId: 't-1', patch: { title: 'Renamed' } },
       'proj-1',
     );
 
@@ -370,5 +471,97 @@ describe('POST /api/staged-intents/:id/apply — group atomicity', () => {
 
     expect(res.status).toBe(200);
     expect(getStagedIntent(intent.id)!.state).toBe('committed');
+  });
+});
+
+describe('stageIntent — a session-staged task.setStatus -> Done is refused at stage time', () => {
+  for (const sessionType of [
+    'groom-session',
+    'design-session',
+    'ops-session',
+  ]) {
+    it(`refuses a task.setStatus -> Done staged by a ${sessionType}, naming that Done is the orchestrator's to set, and creates no row`, () => {
+      expect(() =>
+        stageIntent(
+          'task.setStatus',
+          { taskId: 't-1', status: 'Done' },
+          'proj-1',
+          null,
+          sessionType,
+        ),
+      ).toThrow(SessionStagedDoneError);
+
+      expect(() =>
+        stageIntent(
+          'task.setStatus',
+          { taskId: 't-1', status: 'Done' },
+          'proj-1',
+          null,
+          sessionType,
+        ),
+      ).toThrow(/orchestrator/);
+
+      // No row of any state — rejected or otherwise — was ever created.
+      expect(listStagedIntentsBySession(sessionType)).toHaveLength(0);
+    });
+  }
+
+  it('a human-staged (no sessionId) task.setStatus -> Done is unaffected by the refusal', () => {
+    const intent = stageIntent(
+      'task.setStatus',
+      { taskId: 't-1', status: 'Done' },
+      'proj-1',
+      null,
+      null,
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('staged');
+  });
+
+  it('an ops session staging task.setStatus -> a legitimate target (Blocked) still succeeds', () => {
+    const intent = stageIntent(
+      'task.setStatus',
+      { taskId: 't-2', status: 'Blocked' },
+      'proj-1',
+      null,
+      'ops-session-2',
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('staged');
+  });
+
+  it('an ops session staging task.setStatus -> Deferred still succeeds', () => {
+    const intent = stageIntent(
+      'task.setStatus',
+      { taskId: 't-3', status: 'Deferred' },
+      'proj-1',
+      null,
+      'ops-session-3',
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('staged');
+  });
+
+  it("a refused Done proposal leaves the rest of the session's closing group intact — no wedged member", () => {
+    const sessionId = 'design-session-4';
+    const kept = stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-4', dependsOn: [] },
+      'proj-1',
+      'group-4',
+      sessionId,
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.setStatus',
+        { taskId: 't-4', status: 'Done' },
+        'proj-1',
+        'group-4',
+        sessionId,
+      ),
+    ).toThrow(SessionStagedDoneError);
+
+    // The refused Done never became a row, so it cannot wedge the group —
+    // the sibling member staged before it is untouched.
+    expect(getStagedIntent(kept.id)!.state).toBe('staged');
+    expect(listStagedIntentsBySession(sessionId)).toHaveLength(1);
   });
 });

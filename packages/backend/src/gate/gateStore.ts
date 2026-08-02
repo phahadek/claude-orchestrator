@@ -3,7 +3,6 @@ import { recordEvent } from '../audit/AuditLog';
 import {
   getGateItem,
   listGateItemsByMilestone,
-  listGateItemsByMilestoneAllProjects,
   listAllGateItems,
   listGateItemsByProject,
   listGateItemsFiltered,
@@ -45,6 +44,14 @@ export interface GateItemEvent {
   filedFollowon?: string;
   deploySha?: string;
   operator?: string;
+  /** true = a fully-unattended reconciler auto-launch verified this event; false = a manual dispatch; absent = not verifier-originated. */
+  unattended?: boolean;
+  /**
+   * Stamped server-side by appendEvent (never trusted from the caller) when
+   * disposition is `fail`, from the item's own min_deployed_commit at write
+   * time. Absent for any other disposition.
+   */
+  minDeployedCommitAtFail?: string;
   at: string;
 }
 
@@ -57,6 +64,8 @@ export interface GateItem {
   minDeployedCommit?: string;
   state: string;
   currentDisposition?: string;
+  /** The disposition on the item's most recent event, whether or not it advanced state — the queryable "attempted, inconclusive" signal (needs-setup/noted) that current_disposition can't carry. */
+  latestDisposition?: string;
   updatedAt: string;
   sources: GateItemSource[];
   events: GateItemEvent[];
@@ -88,6 +97,7 @@ export function getItem(id: string): GateItem | undefined {
     minDeployedCommit: row.min_deployed_commit ?? undefined,
     state: row.state,
     currentDisposition: row.current_disposition ?? undefined,
+    latestDisposition: row.latest_disposition ?? undefined,
     updatedAt: row.updated_at,
     sources: listGateItemSources(row.id).map((s) => ({
       sourceTaskId: s.source_task_id,
@@ -101,6 +111,8 @@ export function getItem(id: string): GateItem | undefined {
       filedFollowon: e.filed_followon ?? undefined,
       deploySha: e.deploy_sha ?? undefined,
       operator: e.operator ?? undefined,
+      unattended: e.unattended === null ? undefined : e.unattended === 1,
+      minDeployedCommitAtFail: e.min_deployed_commit_at_fail ?? undefined,
       at: e.at,
     })),
   };
@@ -126,13 +138,6 @@ export function listByMilestone(
   milestone: string,
 ): GateItem[] {
   return listGateItemsByMilestone(project, milestone)
-    .map((row) => getItem(row.id))
-    .filter((item): item is GateItem => item !== undefined);
-}
-
-/** All gate items for a milestone, regardless of project — the readiness/runnability API's lookup. */
-export function listByMilestoneAllProjects(milestone: string): GateItem[] {
-  return listGateItemsByMilestoneAllProjects(milestone)
     .map((row) => getItem(row.id))
     .filter((item): item is GateItem => item !== undefined);
 }
@@ -197,6 +202,7 @@ export function insertItem(input: NewGateItemInput): GateItem {
     min_deployed_commit: alreadyMergedCommit,
     state: 'open',
     current_disposition: null,
+    latest_disposition: null,
     updated_at: input.updatedAt,
   });
   for (const source of input.sources) {
@@ -221,7 +227,14 @@ export function insertItem(input: NewGateItemInput): GateItem {
   return item;
 }
 
-/** Appends an immutable event (evidence carried by value, with provenance) to an item's history. */
+/**
+ * Appends an immutable event (evidence carried by value, with provenance) to
+ * an item's history. For a `fail` disposition, stamps
+ * min_deployed_commit_at_fail from the item's own min_deployed_commit at
+ * write time — server-side, regardless of what the caller's `evidence`
+ * contains, since the /gate skill's documented contract is a free-text
+ * string that can't be trusted to carry this.
+ */
 export function appendEvent(gateItemId: string, event: GateItemEvent): void {
   const row = getGateItem(gateItemId);
   if (!row) {
@@ -234,9 +247,17 @@ export function appendEvent(gateItemId: string, event: GateItemEvent): void {
     filed_followon: event.filedFollowon ?? null,
     deploy_sha: event.deploySha ?? null,
     operator: event.operator ?? null,
+    unattended:
+      event.unattended === undefined ? null : event.unattended ? 1 : 0,
+    min_deployed_commit_at_fail:
+      event.disposition === 'fail' ? (row.min_deployed_commit ?? null) : null,
     at: event.at,
   });
-  touchGateItemUpdatedAt(gateItemId, event.at);
+  if (event.disposition !== undefined) {
+    touchGateItemUpdatedAt(gateItemId, event.at, event.disposition);
+  } else {
+    touchGateItemUpdatedAt(gateItemId, event.at);
+  }
   recordEvent({
     event_type: 'gate_item_event_appended',
     actor_type: 'system',
@@ -312,6 +333,7 @@ export function setClassification(
   updateGateItem({
     ...row,
     classification,
+    latest_disposition: 'reclassified',
     updated_at: updatedAt,
   });
   insertGateItemEvent({
@@ -321,6 +343,8 @@ export function setClassification(
     filed_followon: null,
     deploy_sha: null,
     operator: operator ?? null,
+    unattended: null,
+    min_deployed_commit_at_fail: null,
     at: updatedAt,
   });
   recordEvent({

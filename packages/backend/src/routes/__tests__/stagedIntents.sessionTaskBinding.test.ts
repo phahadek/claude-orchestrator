@@ -87,6 +87,18 @@ const BINDING_CASES: Array<{ kind: string; payload: unknown }> = [
     kind: 'task.setDependsOn',
     payload: { taskId: OTHER_TASK_ID_SAME_PREFIX, dependsOn: [] },
   },
+  {
+    kind: 'completeness.disposition',
+    payload: {
+      taskId: OTHER_TASK_ID_SAME_PREFIX,
+      rowId: 1,
+      project: 'demo',
+      milestone: 'M13',
+      probed: [],
+      questions: [],
+      runAt: '2026-07-29T00:00:00.000Z',
+    },
+  },
 ];
 
 describe('stageIntent — session/task binding', () => {
@@ -199,6 +211,68 @@ describe('stageIntent — session/task binding', () => {
     );
 
     expect(intent.state).toBe('staged');
+  });
+
+  it('does not extend the create-then-wire escape hatch to completeness.disposition', () => {
+    mockGetSession.mockReturnValue({
+      session_id: 'sess-1',
+      task_id: SESSION_TASK_ID,
+    });
+
+    stageIntent(
+      'task.create',
+      { title: 'Follow-on task' },
+      'proj-1',
+      'group-1',
+      'sess-1',
+    );
+
+    expect(() =>
+      stageIntent(
+        'completeness.disposition',
+        {
+          taskId: OTHER_TASK_ID_SAME_PREFIX,
+          rowId: 1,
+          project: 'demo',
+          milestone: 'M13',
+          probed: [],
+          questions: [],
+          runAt: '2026-07-29T00:00:00.000Z',
+        },
+        'proj-1',
+        'group-1',
+        'sess-1',
+      ),
+    ).toThrow(SessionTaskBindingError);
+  });
+
+  it('mismatch error message names both the session-bound task id and the rejected payload task id', () => {
+    mockGetSession.mockReturnValue({
+      session_id: 'sess-1',
+      task_id: SESSION_TASK_ID,
+    });
+
+    expect(() =>
+      stageIntent(
+        'completeness.disposition',
+        {
+          taskId: OTHER_TASK_ID_SAME_PREFIX,
+          rowId: 1,
+          project: 'demo',
+          milestone: 'M13',
+          probed: [],
+          questions: [],
+          runAt: '2026-07-29T00:00:00.000Z',
+        },
+        'proj-1',
+        null,
+        'sess-1',
+      ),
+    ).toThrow(
+      new RegExp(
+        `${SESSION_TASK_ID}.*${OTHER_TASK_ID_SAME_PREFIX}|${OTHER_TASK_ID_SAME_PREFIX}.*${SESSION_TASK_ID}`,
+      ),
+    );
   });
 
   it('does not extend the create-then-wire escape hatch to a different group', () => {

@@ -785,7 +785,7 @@ export class PRMergeWatcher extends EventEmitter {
                 `[PRMergeWatcher] autofix PR #${pr.pr_number}: ${msg}`,
               ),
             'dev',
-            mergeWatcherConfig?.autofix_skip_ci ?? true,
+            mergeWatcherConfig?.autofix_skip_ci ?? false,
           );
           if (result.commitSha) {
             addAutofixSha(pr.pr_number, pr.repo, result.commitSha);

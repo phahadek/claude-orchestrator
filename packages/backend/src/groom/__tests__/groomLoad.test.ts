@@ -13,13 +13,16 @@ import { tmpdir } from 'os';
 import {
   loadGroomContext,
   GroomManifest,
+  GroomTaskSourceUnsupportedError,
   NotionReadClient,
   NotionTaskLike,
+  isSizeCheckSeedOverThreshold,
 } from '../groomLoad';
 import { toExternalId } from '../../tasks/taskId';
 import { bindingConstraintIdsForRegions } from '../constraintCatalog';
 import { insertProject, updateProject } from '../../db/queries';
 import { createUnit } from '../../architecture/ArchUnitStore';
+import { SIZE_TYPE_CHECK } from '../../planning/procedureCore';
 
 function git(args: string[], cwd: string) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -452,6 +455,68 @@ describe('loadGroomContext', () => {
     ).rejects.toThrow(/not registered/);
   });
 
+  describe('non-Notion task source', () => {
+    const PROJECT_ID = 'proj-groom-yaml-source';
+
+    beforeEach(() => {
+      db.prepare('DELETE FROM projects').run();
+    });
+
+    it('refuses with GroomTaskSourceUnsupportedError instead of reaching Notion for a YAML-backed project', async () => {
+      ({ repoDir } = setupRepo());
+      insertProject({
+        id: PROJECT_ID,
+        name: 'YAML-backed Project',
+        project_dir: repoDir,
+        context_url: null,
+        github_repo: null,
+        task_source: 'yaml',
+      });
+
+      // No notionClient is supplied — if the loader ever reached the
+      // NotionClient branch it would throw trying to construct a real
+      // client (no Notion API key configured in the test env), not the
+      // task-source error this test asserts on.
+      await expect(
+        loadGroomContext('M-test', {
+          repoRoot: repoDir,
+          manifest: MANIFEST,
+          projectId: PROJECT_ID,
+        }),
+      ).rejects.toThrow(GroomTaskSourceUnsupportedError);
+      await expect(
+        loadGroomContext('M-test', {
+          repoRoot: repoDir,
+          manifest: MANIFEST,
+          projectId: PROJECT_ID,
+        }),
+      ).rejects.toThrow(/task source "yaml"/);
+    });
+
+    it('still loads normally for a Notion-backed project (unchanged behavior)', async () => {
+      ({ repoDir } = setupRepo());
+      insertProject({
+        id: PROJECT_ID,
+        name: 'Notion-backed Project',
+        project_dir: repoDir,
+        context_url: null,
+        github_repo: null,
+        task_source: 'notion',
+      });
+
+      const result = await loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST,
+        projectId: PROJECT_ID,
+        notionClient: fakeNotion(),
+      });
+
+      expect(result.targetTasks.map((t) => t.id).sort()).toEqual(
+        [CODE_ROW.id, TOOL_ROW.id].sort(),
+      );
+    });
+  });
+
   describe('architecture dual-read', () => {
     const PROJECT_ID = 'proj-groom-dual-read';
 
@@ -610,5 +675,42 @@ describe('loadGroomContext', () => {
         'Notion-client subsystem unit',
       ]);
     });
+  });
+});
+
+describe('isSizeCheckSeedOverThreshold', () => {
+  it('nominates a split when files exceeds the file threshold, even with locEstimate below the LoC threshold', () => {
+    expect(
+      isSizeCheckSeedOverThreshold({
+        files: SIZE_TYPE_CHECK.fileSplitThreshold + 1,
+        locEstimate: SIZE_TYPE_CHECK.locSplitThreshold - 1,
+      }),
+    ).toBe(true);
+  });
+
+  it('nominates a split when locEstimate exceeds the LoC threshold, even with files below the file threshold', () => {
+    expect(
+      isSizeCheckSeedOverThreshold({
+        files: SIZE_TYPE_CHECK.fileSplitThreshold - 1,
+        locEstimate: SIZE_TYPE_CHECK.locSplitThreshold + 1,
+      }),
+    ).toBe(true);
+  });
+
+  it('does not nominate a split when both files and locEstimate are below their thresholds', () => {
+    expect(
+      isSizeCheckSeedOverThreshold({
+        files: SIZE_TYPE_CHECK.fileSplitThreshold - 1,
+        locEstimate: SIZE_TYPE_CHECK.locSplitThreshold - 1,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not nominate a split when locEstimate is omitted and files is below the file threshold', () => {
+    expect(
+      isSizeCheckSeedOverThreshold({
+        files: SIZE_TYPE_CHECK.fileSplitThreshold - 1,
+      }),
+    ).toBe(false);
   });
 });

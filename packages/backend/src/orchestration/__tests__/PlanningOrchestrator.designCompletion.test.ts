@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 /**
  * Coverage for the design-completion gap: a design session's natural
@@ -13,14 +14,21 @@ vi.mock('../../logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock('../../db/queries', () => ({
-  getSession: vi.fn(),
-  listStagedIntentsBySession: vi.fn().mockReturnValue([]),
-  markSessionDone: vi.fn(),
-}));
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    getSession: vi.fn(),
+    listStagedIntentsBySession: vi.fn().mockReturnValue([]),
+    listStagedIntentsByGroup: vi.fn().mockReturnValue([]),
+    markSessionDone: vi.fn(),
+    setPendingApproveTerminal: vi.fn(),
+    clearPendingApproveTerminal: vi.fn(),
+    getSessionsWithPendingApproveTerminal: vi.fn().mockReturnValue([]),
+  }),
+);
 
 vi.mock('../../routes/stagedIntents', () => ({
   verifyDispatchedGroupsForSession: vi.fn().mockResolvedValue([]),
+  sessionOwesGatedDesignArtifacts: vi.fn().mockReturnValue(false),
 }));
 
 const updateStatus = vi.fn().mockResolvedValue(undefined);
@@ -50,6 +58,7 @@ function makeSessionManager() {
   return Object.assign(sm, {
     enqueueFeedback: vi.fn().mockResolvedValue(undefined),
     endSession: vi.fn(),
+    getLiveSession: vi.fn().mockReturnValue(undefined),
   });
 }
 
@@ -129,6 +138,154 @@ describe('PlanningOrchestrator — design task completion', () => {
     );
   });
 
+  it('transitions the target task to Done when a design session reaches terminal via planning_approved from handleApproveDisposition (direct path)', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const approveIntent = makeIntent({
+      id: 'intent-1',
+      state: 'committed',
+      group_id: null,
+    });
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([approveIntent]);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    await orch.handleDisposition({
+      intent: approveIntent,
+      disposition: 'approve',
+    });
+    await flush();
+
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'design-session-1',
+      expect.any(Number),
+      null,
+      'planning_approved',
+      expect.objectContaining({ skipInFlightGuard: true }),
+    );
+    expect(updateStatus).toHaveBeenCalledWith(
+      'task-1',
+      '✅ Done',
+      expect.objectContaining({
+        source: 'orchestrator',
+        sessionId: 'design-session-1',
+      }),
+    );
+  });
+
+  it('transitions the target task to Done when a design session reaches terminal via planning_approved from the deferred-drain path', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const approveIntent = makeIntent({
+      id: 'intent-1',
+      state: 'committed',
+      group_id: null,
+    });
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([approveIntent]);
+    sm.getLiveSession.mockReturnValue({
+      hasActiveTurn: () => true,
+    });
+    const orch = new PlanningOrchestrator(sm as any);
+
+    // The turn is in flight, so the terminal transition is deferred rather
+    // than applied inline.
+    await orch.handleDisposition({
+      intent: approveIntent,
+      disposition: 'approve',
+    });
+    await flush();
+    expect(updateStatus).not.toHaveBeenCalled();
+
+    // The turn's boundary arrives (session_ended) and drains the deferred
+    // approve-terminal transition.
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'design-session-1',
+      status: 'idle',
+    });
+    await flush();
+
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'design-session-1',
+      expect.any(Number),
+      null,
+      'planning_approved',
+      expect.objectContaining({ skipInFlightGuard: true }),
+    );
+    expect(updateStatus).toHaveBeenCalledWith(
+      'task-1',
+      '✅ Done',
+      expect.objectContaining({
+        source: 'orchestrator',
+        sessionId: 'design-session-1',
+      }),
+    );
+  });
+
+  it('leaves the task status unchanged when a closing intent was rejected, even on the planning_approved reason', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const approveIntent = makeIntent({
+      id: 'intent-1',
+      state: 'committed',
+      group_id: null,
+    });
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      approveIntent,
+      makeIntent({
+        id: 'intent-2',
+        kind: 'arch.createUnit',
+        state: 'rejected',
+        group_id: null,
+      }),
+    ]);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    await orch.handleDisposition({
+      intent: approveIntent,
+      disposition: 'approve',
+    });
+    await flush();
+
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'design-session-1',
+      expect.any(Number),
+      null,
+      'planning_approved',
+      expect.objectContaining({ skipInFlightGuard: true }),
+    );
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not close the task for a groom session reaching terminal via planning_approved', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ session_type: 'groom' }),
+    );
+    const approveIntent = makeIntent({
+      id: 'intent-1',
+      kind: 'task.setStatus',
+      state: 'committed',
+      group_id: null,
+    });
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([approveIntent]);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    await orch.handleDisposition({
+      intent: approveIntent,
+      disposition: 'approve',
+    });
+    await flush();
+
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'design-session-1',
+      expect.any(Number),
+      null,
+      'planning_approved',
+      expect.objectContaining({ skipInFlightGuard: true }),
+    );
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+
   it('leaves the task status unchanged when a closing intent was declined', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
@@ -186,21 +343,6 @@ describe('PlanningOrchestrator — design task completion', () => {
     const orch = new PlanningOrchestrator(sm as any);
 
     orch.checkTerminal('design-session-1');
-    const terminal = orch.checkTerminal('design-session-1');
-    await flush();
-
-    expect(terminal).toBe(true);
-    expect(updateStatus).not.toHaveBeenCalled();
-  });
-
-  it('does not close the task for an ops session reaching terminal', async () => {
-    const sm = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue(
-      makeSessionRow({ session_type: 'ops' }),
-    );
-    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
-    const orch = new PlanningOrchestrator(sm as any);
-
     const terminal = orch.checkTerminal('design-session-1');
     await flush();
 

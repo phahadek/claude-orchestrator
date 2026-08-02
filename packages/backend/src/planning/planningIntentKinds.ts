@@ -29,6 +29,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.patchBodySection',
     'decision.pickOne',
     'intent.withdraw',
+    'planning.noOp',
   ],
   design: [
     'decision.pickOne',
@@ -43,6 +44,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'arch.updateUnit',
     'arch.supersedeUnit',
     'intent.withdraw',
+    'planning.noOp',
   ],
   ops: [
     'journal.setState',
@@ -52,6 +54,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.updateBody',
     'task.patchBodySection',
     'intent.withdraw',
+    'gate.verify',
   ],
   split: [
     'task.updateBody',
@@ -59,4 +62,11 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.setDependsOn',
     'intent.withdraw',
   ],
+  // A dispatched Docs session's only staged-write path is a Notion-page
+  // Target surface (a repo-file Target surface opens a PR directly through
+  // the GitHub MCP tools instead — see config.ts's DOCS_ALLOWED_TOOLS
+  // comment for that precedent). No task.* kind: per the vendored /docs
+  // skill's "What this session cannot do", a Docs session has no task-status
+  // or board-bookkeeping surface beyond reading its own task.
+  docs: ['notion.pageEdit', 'intent.withdraw'],
 };

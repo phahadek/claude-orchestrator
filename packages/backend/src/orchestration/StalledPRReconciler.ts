@@ -17,11 +17,15 @@ import {
   lookupSessionByBranch,
   linkPRTaskAndSession,
   setPendingPush,
+  getSessionLastActivityMs,
 } from '../db/queries';
 import { parsePauseReason } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
 import { typedGetSetting } from '../config/settings';
-import { recordEvent } from '../audit/AuditLog';
+import {
+  recordEvent,
+  hasPrBodyMarkerUpdateSinceTimestamp,
+} from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import { classifyStalledPR, parseVerdict } from '../github/pollUtils';
@@ -48,6 +52,10 @@ const DEFAULT_RETRY_CAP = 2;
  *    instead — that push is new content the failed gate never evaluated.
  *  - conflict_dead_session: merge conflict/blocked with a dead implementing
  *    session → relaunch the coding fixer with a rebase prompt
+ *  - session_inert: no other kind matched but the implementing session has
+ *    emitted no session_events row past the inert threshold, regardless of
+ *    its status field (running or idle) → relaunch the coding fixer with a
+ *    nudge prompt
  *
  * Retry bound: after DEFAULT_RETRY_CAP attempts per head_sha the PR is escalated
  * to pause_reason='stalled_reconcile_cap' and left for human intervention.
@@ -102,6 +110,13 @@ export class StalledPRReconciler {
     let itemsProcessed = 0;
 
     for (const pr of openPRs) {
+      // The docs execution flow's never-auto-merged gate: an open
+      // human_merge_only PR is legitimately waiting for a human merge —
+      // never re-drive it (classifyStalledPR also excludes it, but skip the
+      // mergeability refresh/session lookups below entirely rather than
+      // relying on that alone).
+      if (pr.human_merge_only) continue;
+
       // Skip PRs already escalated to the human-attention queue
       const existing = parsePauseReason(pr.pause_reason);
       if (existing?.reason === 'stalled_reconcile_cap') continue;
@@ -133,11 +148,24 @@ export class StalledPRReconciler {
         ? countUndeliveredInboxItems(pr.session_id) > 0
         : false;
 
+      // Activity age is resolved here (I/O) and handed to the pure
+      // classifier as a plain number — session_events rows can be pruned, so
+      // a null last-activity timestamp means "unknown," not "inert."
+      const lastActivityTs = pr.session_id
+        ? getSessionLastActivityMs(pr.session_id)
+        : null;
+      const lastActivityAgeMs =
+        lastActivityTs !== null ? Date.now() - lastActivityTs : null;
+      const inertThresholdMs =
+        typedGetSetting('session_inert_threshold_seconds') * 1000;
+
       const stalled = classifyStalledPR(
         effectivePr,
         reviewSessionStatus,
         implementingSessionStatus,
         hasUndeliveredFeedback,
+        lastActivityAgeMs,
+        inertThresholdMs,
       );
       if (!stalled) continue;
 
@@ -218,7 +246,16 @@ export class StalledPRReconciler {
     const sessionId = pr.session_id;
     const headSha = pr.head_sha ?? null;
 
-    if (kind === 'gate_failed' || kind === 'conflict_dead_session') {
+    if (kind === 'session_inert') {
+      const forced = this.tryForceReReviewForAppliedRemedy(pr);
+      if (forced !== null) return forced;
+    }
+
+    if (
+      kind === 'gate_failed' ||
+      kind === 'conflict_dead_session' ||
+      kind === 'session_inert'
+    ) {
       return this.reDriveViaFixerRelaunch(pr, kind);
     }
 
@@ -363,16 +400,91 @@ export class StalledPRReconciler {
   }
 
   /**
-   * gate_failed / conflict_dead_session: re-reviewing is futile because the
-   * implementing session already died (or is dead-conflicted) — the pre-review
-   * gate delivers its fix prompt via SessionManager.send/sendOrResume to that
-   * same session, so a fresh review job would just repeat the same silent
-   * delivery failure. Relaunch a coding fixer bound to the PR's existing branch
-   * instead.
+   * gate_failed / conflict_dead_session / session_inert: re-reviewing is
+   * futile because the implementing session already died (or is
+   * dead-conflicted, or has simply stopped producing activity) — the
+   * pre-review gate delivers its fix prompt via
+   * SessionManager.send/sendOrResume to that same session, so a fresh review
+   * job would just repeat the same silent delivery failure. Relaunch a
+   * coding fixer bound to the PR's existing branch instead.
    */
+  /**
+   * session_inert only: disambiguates "the coding session already applied a
+   * PR-body-only remedy to an outstanding needs_changes verdict and is
+   * waiting on a re-review that neither the push trigger (no new head SHA)
+   * nor the session-end trigger (the session hasn't terminated) can fire"
+   * from "the session is genuinely silent and never responded" — the case
+   * the existing nudge (reDriveViaFixerRelaunch) already handles correctly.
+   *
+   * Disambiguated via the pr_body_updated_via_marker audit trail: if that
+   * event was recorded for this task after the outstanding needs_changes
+   * verdict, the session already responded and is parked waiting, so force a
+   * re-review at the current (unchanged) head SHA through
+   * ReviewOrchestrator.enqueueReview — which does not consult
+   * last_reviewed_sha, so a push-only dedup guard never blocks this
+   * non-push-triggered re-review.
+   *
+   * Returns null when the force-re-review conditions aren't met (caller
+   * should fall through to the existing nudge), or a boolean when this
+   * method fully handled the PR.
+   */
+  private tryForceReReviewForAppliedRemedy(pr: PullRequestRow): boolean | null {
+    const { pr_number: prNumber, repo } = pr;
+
+    if (!this.reviewOrchestrator || !pr.task_id || !pr.review_at) return null;
+    if (parseVerdict(pr.review_result) !== 'needs_changes') return null;
+
+    const maxIter = typedGetSetting('max_review_iterations');
+    if (pr.review_iteration >= maxIter) return null;
+
+    const verdictTs = new Date(pr.review_at).getTime();
+    if (!hasPrBodyMarkerUpdateSinceTimestamp(pr.task_id, verdictTs)) {
+      return null;
+    }
+
+    if (this.reviewOrchestrator.isReviewInFlight(prNumber, repo)) {
+      logger.info(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): review already in-flight — skipping forced re-review`,
+      );
+      return false;
+    }
+
+    const newCount = incrementStalledPRRetryCount(prNumber, repo);
+    const project = getProjectByGithubRepo(repo);
+    const session = pr.session_id ? getSession(pr.session_id) : null;
+
+    logger.info(
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): forcing re-review at unchanged head — needs_changes remedy applied via PR-body update without a new push (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
+    );
+
+    recordEvent({
+      event_type: 'stalled_pr_reconcile_attempt',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: project?.id ?? null,
+      task_id: pr.task_id,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        kind: 'session_inert_body_only_remedy',
+        attempt: newCount,
+      },
+    });
+
+    this.reviewOrchestrator.enqueueReview({
+      prNumber,
+      repo,
+      taskId: pr.task_id,
+      taskUrl: session?.task_url ?? '',
+      contextUrl: project?.contextUrl ?? '',
+    });
+
+    return true;
+  }
+
   private async reDriveViaFixerRelaunch(
     pr: PullRequestRow,
-    kind: 'gate_failed' | 'conflict_dead_session',
+    kind: 'gate_failed' | 'conflict_dead_session' | 'session_inert',
   ): Promise<boolean> {
     const { pr_number: prNumber, repo } = pr;
 
@@ -413,13 +525,15 @@ export class StalledPRReconciler {
             branchName: pr.head_branch ?? `feature/pr-${prNumber}`,
             baseBranch: pr.base_branch ?? 'dev',
           })
-        : formatCIFailureFeedback({
-            source: 'verify',
-            failedCommand: parseGateFailureSummary(pr.review_result),
-            truncatedOutput: undefined,
-            conflicted: pr.merge_state === 'dirty',
-            baseBranch: pr.base_branch ?? 'dev',
-          });
+        : kind === 'session_inert'
+          ? `This session has shown no activity for a while, but PR #${prNumber} (${repo}) is still open and unmerged. Please check the current state of the branch and PR and continue toward getting it mergeable, or report back if it's already complete.`
+          : formatCIFailureFeedback({
+              source: 'verify',
+              failedCommand: parseGateFailureSummary(pr.review_result),
+              truncatedOutput: undefined,
+              conflicted: pr.merge_state === 'dirty',
+              baseBranch: pr.base_branch ?? 'dev',
+            });
 
     await this.sessionManager.relaunchFixerForPR(pr, prompt);
 

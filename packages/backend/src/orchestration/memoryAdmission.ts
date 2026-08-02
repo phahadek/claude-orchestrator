@@ -10,10 +10,23 @@ export interface MemoryHeadroomInputs {
   perSessionReserveMB: number;
 }
 
+export interface MemoryHeadroomResult extends MemoryHeadroomInputs {
+  /** Whether dispatch is admitted. */
+  allowed: boolean;
+  /** freeMemMB - perSessionReserveMB — the value the decision branches on. */
+  projectedFreeMB: number;
+}
+
 /**
  * Pure admission check: true when launching one more session would leave
  * projected free memory (current free minus the per-session reserve) at or
  * above the configured floor.
+ *
+ * The reserve is scaled for exactly one additional session, not multiplied
+ * by the count of already-running sessions — os.freemem() (MemAvailable)
+ * already reflects the memory those running sessions are using, so scaling
+ * by active count would double-count them. The reserve only needs to cover
+ * the one new session this check is gating.
  */
 export function evaluateMemoryHeadroom(inputs: MemoryHeadroomInputs): boolean {
   const projectedFreeMB = inputs.freeMemMB - inputs.perSessionReserveMB;
@@ -23,15 +36,27 @@ export function evaluateMemoryHeadroom(inputs: MemoryHeadroomInputs): boolean {
 /**
  * Host-backed admission check used by the dispatcher. Reads live free memory
  * via os.freemem() (overridable for tests) and the configured budget from
- * runtimeSettings.
+ * runtimeSettings. Returns the decision along with the inputs and projected
+ * value it was computed from, so the caller can log/audit them without
+ * recomputing (and risking drift from) the actual decision.
  */
 export function hasMemoryHeadroom(
   freeMemBytes: number = os.freemem(),
-): boolean {
+): MemoryHeadroomResult {
   const freeMemMB = freeMemBytes / (1024 * 1024);
-  return evaluateMemoryHeadroom({
+  const minHostFreeMemoryMB = runtimeSettings.min_host_free_memory_mb;
+  const perSessionReserveMB = runtimeSettings.per_session_reserve_mb;
+  const projectedFreeMB = freeMemMB - perSessionReserveMB;
+  const allowed = evaluateMemoryHeadroom({
     freeMemMB,
-    minHostFreeMemoryMB: runtimeSettings.min_host_free_memory_mb,
-    perSessionReserveMB: runtimeSettings.per_session_reserve_mb,
+    minHostFreeMemoryMB,
+    perSessionReserveMB,
   });
+  return {
+    allowed,
+    freeMemMB,
+    minHostFreeMemoryMB,
+    perSessionReserveMB,
+    projectedFreeMB,
+  };
 }

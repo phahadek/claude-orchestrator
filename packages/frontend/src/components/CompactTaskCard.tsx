@@ -21,6 +21,12 @@ const PRIORITY_ICONS: Record<string, string> = {
   '🟢 Low': '🟢',
 };
 
+function planningSessionTypeLabel(sessionType: string): string {
+  if (sessionType === 'groom') return 'Grooming';
+  if (sessionType === 'design') return 'Design';
+  return 'Ops';
+}
+
 export function CompactTaskCard({
   task,
   showCheckbox,
@@ -71,6 +77,16 @@ export function CompactTaskCard({
           {task.taskType.split(' ')[0]}
         </span>
         <span className={styles.taskName}>{task.taskName}</span>
+
+        {task.planningSession && (
+          <span
+            className={styles.planningIcon}
+            data-testid="compact-planning-icon"
+            title={`Held by ${planningSessionTypeLabel(task.planningSession.sessionType)} session (${task.planningSession.status})`}
+          >
+            🧭
+          </span>
+        )}
 
         {showStatus && (
           <span

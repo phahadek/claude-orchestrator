@@ -38,27 +38,6 @@ export function runMigrations(target: Database.Database): void {
       FOREIGN KEY (session_id) REFERENCES sessions(session_id)
     );
 
-    CREATE TABLE IF NOT EXISTS permission_events (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id      TEXT    NOT NULL,
-      tool_name       TEXT    NOT NULL,
-      proposed_action TEXT,
-      decision        TEXT    NOT NULL,
-      rule_matched    TEXT,
-      decided_at      INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS permission_rules (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      order_index INTEGER NOT NULL,
-      pattern     TEXT    NOT NULL,
-      match_type  TEXT    NOT NULL,
-      decision    TEXT    NOT NULL,
-      label       TEXT,
-      enabled     INTEGER NOT NULL DEFAULT 1
-    );
-
     CREATE TABLE IF NOT EXISTS permission_denials (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id  TEXT    NOT NULL,
@@ -139,6 +118,7 @@ export function runMigrations(target: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
     CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_project_task ON audit_log(project_id, task_id);
 
     CREATE TABLE IF NOT EXISTS devices (
       id          TEXT    PRIMARY KEY,
@@ -236,6 +216,7 @@ export function runMigrations(target: Database.Database): void {
       min_deployed_commit    TEXT,
       state                  TEXT    NOT NULL,
       current_disposition    TEXT,
+      latest_disposition     TEXT,
       updated_at             TEXT    NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_gate_item_project_milestone ON gate_item(project, milestone);
@@ -259,6 +240,8 @@ export function runMigrations(target: Database.Database): void {
       filed_followon TEXT,
       deploy_sha     TEXT,
       operator       TEXT,
+      unattended     INTEGER,
+      min_deployed_commit_at_fail TEXT,
       at             TEXT    NOT NULL,
       FOREIGN KEY (gate_item_id) REFERENCES gate_item(id) ON DELETE CASCADE
     );
@@ -331,7 +314,8 @@ export function runMigrations(target: Database.Database): void {
       hard_stop_armed        INTEGER NOT NULL DEFAULT 0,
       notify_remaining_ms    INTEGER,
       pause_remaining_ms     INTEGER,
-      hard_stop_remaining_ms INTEGER
+      hard_stop_remaining_ms INTEGER,
+      suspended              INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS active_merges (
@@ -387,6 +371,26 @@ export function runMigrations(target: Database.Database): void {
       error          TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_scheduler_audit_job ON scheduler_audit(job, started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS convergence_snapshot (
+      id                TEXT    PRIMARY KEY,
+      project           TEXT    NOT NULL,
+      milestone         TEXT    NOT NULL,
+      ts                TEXT    NOT NULL,
+      tasks_open        INTEGER NOT NULL,
+      tasks_closed      INTEGER NOT NULL,
+      gate_open         INTEGER NOT NULL,
+      gate_closed       INTEGER NOT NULL,
+      seed_open         INTEGER NOT NULL,
+      seed_closed       INTEGER NOT NULL,
+      ops_open          INTEGER NOT NULL,
+      ops_closed        INTEGER NOT NULL,
+      total_scope       INTEGER NOT NULL,
+      distance_to_green INTEGER NOT NULL,
+      status            TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_convergence_snapshot_project_milestone_ts
+      ON convergence_snapshot(project, milestone, ts DESC);
 
     CREATE TABLE IF NOT EXISTS session_feedback_inbox (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -794,30 +798,6 @@ export function runMigrations(target: Database.Database): void {
         CREATE INDEX idx_session_events_session_id_id ON session_events(session_id, id DESC);
         CREATE INDEX idx_session_events_session_id_event_type ON session_events(session_id, event_type);
         CREATE INDEX idx_session_events_timestamp ON session_events(timestamp DESC);
-        COMMIT;
-      `);
-    }
-
-    if (!getTableSql('permission_events').includes('ON DELETE CASCADE')) {
-      target.exec(`
-        BEGIN TRANSACTION;
-        DROP TABLE IF EXISTS permission_events__new;
-        CREATE TABLE permission_events__new (
-          id              INTEGER PRIMARY KEY AUTOINCREMENT,
-          session_id      TEXT    NOT NULL,
-          tool_name       TEXT    NOT NULL,
-          proposed_action TEXT,
-          decision        TEXT    NOT NULL,
-          rule_matched    TEXT,
-          decided_at      INTEGER NOT NULL,
-          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-        );
-        INSERT INTO permission_events__new (id, session_id, tool_name, proposed_action, decision, rule_matched, decided_at)
-          SELECT id, session_id, tool_name, proposed_action, decision, rule_matched, decided_at
-          FROM permission_events
-          WHERE session_id IN (SELECT session_id FROM sessions);
-        DROP TABLE permission_events;
-        ALTER TABLE permission_events__new RENAME TO permission_events;
         COMMIT;
       `);
     }
@@ -1243,6 +1223,34 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // staged_intent.investigation: the file:line / arch-section / API-result
+  // evidence a decision.pickOne intent's recommendation rests on, carried
+  // separately from decision_proposal (which now stays at design altitude —
+  // the named recommendation and its load-bearing reason). Forward-only:
+  // existing rows get NULL and render exactly as before this column existed.
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN investigation TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // staged_intent.milestone: the milestone (canonical_short_id) the intent's
+  // target task belongs to — populated at every stage path (dispatched
+  // planning sessions, which know their milestone at dispatch, and the human
+  // POST /staged-intents route). Legacy rows and intents whose task can't be
+  // resolved to a milestone stay NULL, surfaced on the decision-inbox
+  // ?milestone lens as the "unattributed" bucket — never dropped.
+  // Forward-only: existing rows get NULL until best-effort backfilled (see
+  // backfillStagedIntentMilestones in queries.ts, run once at boot).
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN milestone TEXT`);
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_staged_intent_project_milestone ON staged_intent(project_id, milestone);
+  `);
+
   // ── arch_unit: architecture-information store ───────────────────────────
   // A single titled architecture statement (kind/topic/regions/status envelope
   // + markdown body). Mirrors the gate_item/seed_item shape: envelope as typed
@@ -1502,6 +1510,225 @@ export function runMigrations(target: Database.Database): void {
   }
   try {
     target.exec(`ALTER TABLE sessions ADD COLUMN pending_done_call_site TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // sessions.pending_approve_terminal_at: an approve-driven terminal
+  // transition (PlanningOrchestrator.handleApproveDisposition) that arrives
+  // while the session's turn is still in flight (AgentSession.hasActiveTurn())
+  // is deferred rather than applied immediately. The in-memory
+  // pendingApproveTerminal Set that also tracks this is empty on a fresh
+  // process, so this column is the durable copy a boot-time sweep
+  // (SessionManager.resumeOrphanSessions) reads to apply any deferred
+  // transition that never got its turn-boundary drain (result event or
+  // session_ended) before a restart.
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN pending_approve_terminal_at INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // gate_item_event.unattended: distinguishes a fully-unattended reconciler
+  // auto-launch pass from an operator-triggered manual dispatch — both write
+  // through the same appendGateItemEvent path (gateReconciler.ts's
+  // processItem / dispatchGateItemVerification) and were previously
+  // indistinguishable in the event log. 1 = auto-launched with zero human
+  // involvement, 0 = manual dispatch, NULL = not a verifier-originated event
+  // (pre-existing rows, or an operator/system event with no dispatch mode).
+  try {
+    target.exec(`ALTER TABLE gate_item_event ADD COLUMN unattended INTEGER`);
+  } catch {
+    /* already exists */
+  }
+
+  // pull_requests.human_merge_only: the docs execution flow's never-auto-merged
+  // output gate for repo-file docs PRs — set at PR-open time by the /docs
+  // skill's dispatch path. Excluded from auto-merge at getApprovedOpenPRs
+  // (the periodic sweep query) AND independently at AutoMerger's actual
+  // merge-attempt choke point (attempt()), since attempt() is also invoked
+  // directly by callers that bypass getApprovedOpenPRs entirely (see
+  // AutoMerger.ts). Waits indefinitely for a human to merge — never stalled,
+  // orphaned, nudged, or escalated by the sweepers.
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN human_merge_only INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // flow_arm: per-(milestone, flow) auto-dispatch arm state. Absent row
+  // means "use the flow's DEFAULT_ARM" (see orchestration/flowArm.ts) —
+  // this migration creates the empty table only, no seeded rows.
+  // Orphan-tolerant by design (no FK to milestones): the read path already
+  // defaults on an absent row, so a stale milestone_id is harmless and
+  // arming can't be blocked by milestone sync ordering.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS flow_arm (
+      milestone_id TEXT    NOT NULL,
+      flow         TEXT    NOT NULL,
+      armed        INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL,
+      PRIMARY KEY (milestone_id, flow)
+    );
+  `);
+
+  // milestones.wrapped_at: nullable Done marker, set once /milestone-wrap
+  // closes out a milestone. Convergence and the milestone list read filter
+  // wrapped_at IS NULL to scope to active + in-planning milestones — the
+  // non-Done scope rule.
+  try {
+    target.exec(`ALTER TABLE milestones ADD COLUMN wrapped_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+
+  // stuck_session_timers.suspended: true while notify/pause are cancelled
+  // for a code session's PR review (pr_created / push_detected), so that
+  // an activity-based reset (session_event) does not re-arm timers a
+  // review verdict hasn't yet asked to resume.
+  try {
+    target.exec(
+      `ALTER TABLE stuck_session_timers ADD COLUMN suspended INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // usage_deferral: global (account-wide, not per-session-type) admission
+  // gate state for the plan-usage five_hour/seven_day windows. A row means
+  // "do not launch/resume/dispatch until deferred_until" — populated from
+  // the poller's resets_at when a window is observed exhausted, and
+  // persisted so a deferral survives a backend restart (in-memory-only
+  // state would otherwise resume the relaunch loop after any restart
+  // during the deferral window).
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS usage_deferral (
+      window          TEXT    PRIMARY KEY,
+      deferred_until  INTEGER NOT NULL,
+      recorded_at     INTEGER NOT NULL
+    );
+  `);
+
+  // Wedged-group-recovery backfill: before this migration, a grouped member
+  // stuck in needs_revision/pending_verification had no route off that
+  // state — commitGroupIntents refuses any group containing one, and
+  // nothing could move it to `rejected`. This declines every such member
+  // outright (the same exit routes/stagedIntents.ts now exposes going
+  // forward per-member and per-group), never touching a live
+  // (staged/approved) sibling, so a group still doing live work keeps that
+  // work untouched — only its non-live blocked member is retired. Also
+  // scrubs the specific self-referential failure mode observed live: a
+  // prior pushback that recorded the commit guard's own 409 refusal text as
+  // disposition_reason, which destroyed the record of why the member was
+  // actually blocked. Runs on every startup; idempotent — once no row is
+  // left in either state, the UPDATE matches nothing.
+  target.exec(`
+    UPDATE staged_intent
+    SET state = 'rejected',
+        disposition_reason = CASE
+          WHEN disposition_reason IS NULL OR trim(disposition_reason) = '' THEN
+            'Auto-resolved by migration: this member was blocked with no operator-usable route to disposition it.'
+          WHEN disposition_reason LIKE '%it must be recovered or resolved before this group can commit%' THEN
+            'Auto-resolved by migration: the previously recorded reason was the commit-refusal message itself, not a real disposition reason.'
+          ELSE disposition_reason
+        END,
+        updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE group_id IS NOT NULL AND state IN ('needs_revision', 'pending_verification');
+  `);
+
+  // gate_item.latest_disposition: the disposition carried by an item's most
+  // recent event, regardless of whether that event advanced state. Before
+  // this column, a non-terminal disposition (needs-setup, noted) was a pure
+  // log entry — recorded in gate_item_event but invisible on the item's
+  // denormalized row, byte-identical to an item that was never dispatched
+  // for verification at all. Backfilled from each item's most recent event
+  // (ordered by id, i.e. insertion order) so pre-existing rows are
+  // trustworthy too, not just events appended after this migration.
+  try {
+    target.exec(`ALTER TABLE gate_item ADD COLUMN latest_disposition TEXT`);
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    UPDATE gate_item
+    SET latest_disposition = (
+      SELECT e.disposition
+      FROM gate_item_event e
+      WHERE e.gate_item_id = gate_item.id AND e.disposition IS NOT NULL
+      ORDER BY e.id DESC
+      LIMIT 1
+    )
+    WHERE latest_disposition IS NULL
+      AND EXISTS (
+        SELECT 1 FROM gate_item_event e
+        WHERE e.gate_item_id = gate_item.id AND e.disposition IS NOT NULL
+      );
+  `);
+
+  // sessions.terminal_completion_reason: durable copy of the `reason` string
+  // PlanningOrchestrator.markTerminal already threads through to
+  // markSessionDone's `callSite` argument (previously log/audit-only). Read
+  // by the ops-journal route's deferred close: the operator-confirmed
+  // applied-pending-confirm -> resolved transition happens well after the
+  // session has gone terminal, so completeOpsTask's synchronous check
+  // misses it — the route needs a durable, queryable record of *why* the
+  // session ended to decide whether to close the task itself.
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN terminal_completion_reason TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // Backfill audit_log.project_id for historical rows written before
+  // recordEvent (audit/AuditLog.ts) started deriving it from actor_id/task_id
+  // — otherwise every project-scoped auditLog.query silently drops them.
+  // Only ever touches rows still NULL, so this is safe to re-run.
+  target.exec(`
+    UPDATE audit_log
+    SET project_id = (
+      SELECT sessions.project_id FROM sessions
+      WHERE sessions.session_id = audit_log.actor_id
+    )
+    WHERE project_id IS NULL
+      AND actor_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM sessions
+        WHERE sessions.session_id = audit_log.actor_id
+          AND sessions.project_id IS NOT NULL
+      );
+  `);
+  target.exec(`
+    UPDATE audit_log
+    SET project_id = (
+      SELECT task_repo_assignments.project_id FROM task_repo_assignments
+      WHERE task_repo_assignments.task_id = audit_log.task_id
+    )
+    WHERE project_id IS NULL
+      AND task_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM task_repo_assignments
+        WHERE task_repo_assignments.task_id = audit_log.task_id
+      );
+  `);
+
+  // gate_item_event.min_deployed_commit_at_fail: stamped server-side (in
+  // gateStore.appendEvent) at write time for a `fail` disposition, from the
+  // item's own min_deployed_commit — never trusted from client-supplied
+  // evidence, which the /gate skill documents as a plain string and can't be
+  // relied on to carry this. reconcileGateRunnability's auto-reopen reads
+  // this column (via minDeployedCommitAtLastFail) instead of parsing
+  // evidence, so a fail only auto-reopens once min_deployed_commit has
+  // genuinely advanced past its value at fail-time.
+  try {
+    target.exec(
+      `ALTER TABLE gate_item_event ADD COLUMN min_deployed_commit_at_fail TEXT`,
+    );
   } catch {
     /* already exists */
   }

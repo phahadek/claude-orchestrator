@@ -5,6 +5,7 @@ import path from 'path';
 
 // Must mock before importing the modules under test
 vi.mock('../db/queries.js', () => ({}));
+vi.mock('../config/dataDir.js', () => ({ getDataDir: vi.fn() }));
 
 import {
   DataDirConfigSource,
@@ -12,8 +13,10 @@ import {
 } from '../config/DataDirConfigSource.js';
 import { EnvFileConfigSource } from '../config/EnvFileConfigSource.js';
 import { ConfigValidationError } from '../config/types.js';
+import { getDataDir } from '../config/dataDir.js';
 import {
   getOrchestratorConfig,
+  getConfigProvenance,
   writeOrchestratorConfig as _writeOrchestratorConfig,
   _setConfigSourceForTesting,
   _resetAppConfigCache,
@@ -131,6 +134,31 @@ describe('DataDirConfigSource', () => {
       const cfg = src.read();
       expect(cfg.notion.apiKey).toBe('ntn-ok');
       expect(cfg.server.port).toBe(3000);
+    });
+  });
+
+  describe('readWithExplicitFields', () => {
+    it('reports only the fields explicitly present in config.json', () => {
+      // write() always merges onto a full CONFIG_DEFAULTS clone and persists
+      // every field (including untouched ones at their default value) — so
+      // every key ends up "present" in the file. To exercise explicit-field
+      // detection (present vs filled-from-defaults), write a sparse raw file
+      // directly, bypassing write()'s full-merge behavior.
+      fs.writeFileSync(
+        path.join(tmpDir, 'config.json'),
+        JSON.stringify({ notion: { apiKey: 'ntn-explicit' } }),
+        'utf8',
+      );
+      const src = new DataDirConfigSource(tmpDir);
+      const { explicitFields } = src.readWithExplicitFields();
+      expect(explicitFields.has('notion.apiKey')).toBe(true);
+      expect(explicitFields.has('github.token')).toBe(false);
+    });
+
+    it('reports an empty set when config.json is absent', () => {
+      const src = new DataDirConfigSource(tmpDir);
+      const { explicitFields } = src.readWithExplicitFields();
+      expect(explicitFields.size).toBe(0);
     });
   });
 });
@@ -273,5 +301,205 @@ describe('writeOrchestratorConfig', () => {
     _setConfigSourceForTesting(src);
     const cfg = getOrchestratorConfig();
     expect(cfg.github.token).toBe('ghp-new');
+  });
+});
+
+// ── .env fallback merge (2026-07-30 outage regression) ────────────────────────
+// A config.json's mere existence used to disable .env for every field, with
+// no fallback and no warning — one real field and six placeholders overrode a
+// fully-populated .env wholesale. Per-field fallback closes that gap.
+
+describe('getOrchestratorConfig .env fallback merge', () => {
+  let tmpDir: string;
+  let prevXdgDataHome: string | undefined;
+  const envKeys = [
+    'NOTION_API_KEY',
+    'GITHUB_TOKEN',
+    'GITHUB_REPO',
+    'PORT',
+    'DB_PATH',
+    'SESSIONS_DIR',
+  ] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    _resetAppConfigCache();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-fallback-'));
+    vi.mocked(getDataDir).mockReturnValue(tmpDir);
+    // The getDataDir mock above never actually reaches getOrchestratorConfig()'s
+    // own resolve() (its default `new DataDirConfigSource()` — no override —
+    // calls the real, unmocked getDataDir() due to Vitest's setupFile-ordering
+    // pitfall; see setup.route.test.ts for the same issue). Without also
+    // pointing the real XDG_DATA_HOME at tmpDir, every test in this block
+    // shares the one real data dir the global testSetupDb.ts setupFile
+    // pointed at, leaking config.json state across tests.
+    prevXdgDataHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = tmpDir;
+    for (const k of envKeys) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+
+  afterEach(() => {
+    _resetAppConfigCache();
+    if (prevXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prevXdgDataHome;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    for (const k of envKeys) {
+      if (saved[k] !== undefined) process.env[k] = saved[k];
+      else delete process.env[k];
+    }
+    vi.restoreAllMocks();
+  });
+
+  it('falls back to a populated .env value when config.json omits the field', () => {
+    process.env.GITHUB_TOKEN = 'ghp-from-env-1234567890';
+    const src = new DataDirConfigSource();
+    src.write({ notion: { apiKey: 'ntn-from-json' } });
+
+    const cfg = getOrchestratorConfig();
+    expect(cfg.notion.apiKey).toBe('ntn-from-json');
+    expect(cfg.github.token).toBe('ghp-from-env-1234567890');
+  });
+
+  it('falls back to .env when config.json holds an explicit empty string', () => {
+    process.env.GITHUB_REPO = 'real-owner/real-repo';
+    const src = new DataDirConfigSource();
+    src.write({ github: { repo: '' } });
+
+    const cfg = getOrchestratorConfig();
+    expect(cfg.github.repo).toBe('real-owner/real-repo');
+  });
+
+  it('prefers config.json over .env when both are set (migration path intact)', () => {
+    process.env.GITHUB_TOKEN = 'ghp-env-1234567890';
+    const src = new DataDirConfigSource();
+    src.write({ github: { token: 'ghp-json-1234567890' } });
+
+    const cfg = getOrchestratorConfig();
+    expect(cfg.github.token).toBe('ghp-json-1234567890');
+  });
+
+  it('a fully-populated config.json is read in preference to .env for every field', () => {
+    process.env.NOTION_API_KEY = 'ntn-env';
+    process.env.GITHUB_TOKEN = 'ghp-env-1234567890';
+    process.env.GITHUB_REPO = 'env-owner/env-repo';
+    const src = new DataDirConfigSource();
+    src.write({
+      notion: { apiKey: 'ntn-json' },
+      github: { token: 'ghp-json-1234567890', repo: 'json-owner/json-repo' },
+    });
+
+    const cfg = getOrchestratorConfig();
+    expect(cfg.notion.apiKey).toBe('ntn-json');
+    expect(cfg.github.token).toBe('ghp-json-1234567890');
+    expect(cfg.github.repo).toBe('json-owner/json-repo');
+  });
+});
+
+// ── Provenance tracking ────────────────────────────────────────────────────
+// Each effective-config field must report where its value actually came
+// from: config.json, .env fallback, or the shipped default. This is the
+// diagnostic surface the 2026-07-30 outage lacked.
+
+describe('getConfigProvenance', () => {
+  let tmpDir: string;
+  let prevXdgDataHome: string | undefined;
+  const envKeys = [
+    'NOTION_API_KEY',
+    'GITHUB_TOKEN',
+    'GITHUB_REPO',
+    'PORT',
+    'DB_PATH',
+    'SESSIONS_DIR',
+    'AUTO_REVIEW',
+  ] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    _resetAppConfigCache();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-provenance-'));
+    vi.mocked(getDataDir).mockReturnValue(tmpDir);
+    prevXdgDataHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = tmpDir;
+    for (const k of envKeys) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+
+  afterEach(() => {
+    _resetAppConfigCache();
+    if (prevXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prevXdgDataHome;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    for (const k of envKeys) {
+      if (saved[k] !== undefined) process.env[k] = saved[k];
+      else delete process.env[k];
+    }
+    vi.restoreAllMocks();
+  });
+
+  it('reports "config.json" for a field explicitly set in config.json', () => {
+    const src = new DataDirConfigSource();
+    src.write({ github: { repo: 'real-owner/real-repo' } });
+
+    const provenance = getConfigProvenance();
+    expect(provenance['github.repo']).toBe('config.json');
+  });
+
+  it('reports ".env fallback" (env) for a field empty in config.json but set in .env', () => {
+    process.env.GITHUB_REPO = 'env-owner/env-repo';
+    const src = new DataDirConfigSource();
+    src.write({ github: { repo: '' } });
+
+    const provenance = getConfigProvenance();
+    expect(provenance['github.repo']).toBe('env');
+  });
+
+  it('reports "default" for a field unset in both config.json and .env', () => {
+    const src = new DataDirConfigSource();
+    src.write({ notion: { apiKey: 'ntn-set' } });
+
+    const provenance = getConfigProvenance();
+    expect(provenance['github.repo']).toBe('default');
+  });
+
+  it('reports "default" for every field on a fresh install with neither source', () => {
+    // No config.json written, no relevant env vars set.
+    const provenance = getConfigProvenance();
+    for (const key of Object.keys(provenance)) {
+      expect(provenance[key]).toBe('default');
+    }
+  });
+
+  it('reports "env" in legacy mode (no config.json) when the env var is set', () => {
+    process.env.NOTION_API_KEY = 'ntn-legacy';
+    // No config.json written — legacy .env-only mode.
+    const provenance = getConfigProvenance();
+    expect(provenance['notion.apiKey']).toBe('env');
+    expect(provenance['github.repo']).toBe('default');
+  });
+
+  it('reports "config.json" for a non-fallback field (server.port) when set', () => {
+    const src = new DataDirConfigSource();
+    src.write({ server: { port: 4321 } });
+
+    const provenance = getConfigProvenance();
+    expect(provenance['server.port']).toBe('config.json');
+  });
+
+  it('is cached alongside the resolved config and invalidated together', () => {
+    const src = new DataDirConfigSource();
+    src.write({ github: { repo: 'first/repo' } });
+    getOrchestratorConfig();
+    const first = getConfigProvenance();
+
+    src.write({ github: { repo: 'second/repo' } });
+    const second = getConfigProvenance();
+    // Cache wasn't invalidated by writing directly via the source, so it's
+    // the same reference — mirrors getOrchestratorConfig()'s own caching.
+    expect(second).toBe(first);
   });
 });

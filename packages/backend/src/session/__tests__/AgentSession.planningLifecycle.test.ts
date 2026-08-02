@@ -4,7 +4,7 @@ vi.mock('../../db/queries', () => ({
   upsertSessionEvent: vi.fn().mockReturnValue(1),
   updateSessionStatus: vi.fn(),
   markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
+  markSessionIdle: vi.fn().mockReturnValue('idle'),
   getEventsBySession: vi.fn().mockReturnValue([]),
   insertPermissionDenial: vi.fn(),
   upsertPullRequest: vi.fn(),
@@ -22,9 +22,8 @@ vi.mock('../../db/queries', () => ({
   setSessionTags: vi.fn(),
   resetTaskCrashCount: vi.fn(),
   getSession: vi.fn().mockReturnValue(null),
-  setTaskPauseReason: vi.fn(),
-  hasStagedIntentForSession: vi.fn().mockReturnValue(true),
   hasActiveCapabilityRequestForSession: vi.fn().mockReturnValue(false),
+  listStagedIntentsBySession: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock('../../config', () => ({
@@ -45,7 +44,6 @@ vi.mock('../../tasks/TaskBackend', () => ({
 vi.mock('../../audit/AuditLog', () => ({
   recordEvent: vi.fn(),
   countPushFailureEvents: vi.fn().mockReturnValue(0),
-  countEventsBySessionAndType: vi.fn().mockReturnValue(1),
 }));
 
 vi.mock('../filePollutionCheck', () => ({
@@ -80,12 +78,26 @@ import {
   markSessionIdle,
   markSessionDone,
   getEventsBySession,
-  setTaskPauseReason,
-  hasStagedIntentForSession,
   hasActiveCapabilityRequestForSession,
+  listStagedIntentsBySession,
 } from '../../db/queries';
 import { recoverSession } from '../sessionRecovery';
-import { countEventsBySessionAndType } from '../../audit/AuditLog';
+
+function stagedIntent(
+  overrides: Partial<{ kind: string; state: string }> = {},
+) {
+  return {
+    id: 'intent-1',
+    session_id: 'test-session-id',
+    task_id: 'task-123',
+    group_id: null,
+    kind: 'task.setStatus',
+    state: 'approved',
+    payload: '{}',
+    created_at: 0,
+    ...overrides,
+  } as never;
+}
 
 function makeSession(
   sessionType: 'standard' | 'groom' | 'design' | 'ops',
@@ -113,7 +125,7 @@ describe('AgentSession.handleCleanExit — planning session gating', () => {
     vi.clearAllMocks();
   });
 
-  it('groom session parks into idle without scraping for a PR or calling recoverSession', async () => {
+  it('groom session with nothing staged yet parks into idle without scraping for a PR or calling recoverSession', async () => {
     const session = makeSession('groom');
     const messages: unknown[] = [];
     session.on('message', (m) => messages.push(m));
@@ -127,6 +139,7 @@ describe('AgentSession.handleCleanExit — planning session gating', () => {
       expect.any(Number),
       null,
     );
+    expect(markSessionDone).not.toHaveBeenCalled();
     expect(getEventsBySession).not.toHaveBeenCalled();
     expect(recoverSession).not.toHaveBeenCalled();
     expect(messages).toContainEqual(
@@ -136,6 +149,88 @@ describe('AgentSession.handleCleanExit — planning session gating', () => {
         status: 'idle',
       }),
     );
+  });
+
+  it('groom session with a fully-dispositioned decision-bearing intent reaches done directly instead of parking idle', async () => {
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      stagedIntent({ kind: 'task.setStatus', state: 'approved' }),
+    ]);
+    const session = makeSession('groom');
+    const messages: unknown[] = [];
+    session.on('message', (m) => messages.push(m));
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+      'planning_no_pending_dispositions',
+    );
+    expect(markSessionIdle).not.toHaveBeenCalled();
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: 'session_ended',
+        sessionId: 'test-session-id',
+        status: 'done',
+      }),
+    );
+  });
+
+  it('groom session with a still-pending (staged) intent parks idle rather than going done', async () => {
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      stagedIntent({ kind: 'task.setStatus', state: 'staged' }),
+    ]);
+    const session = makeSession('groom');
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionIdle).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('groom session with a blocked (needs_revision) member parks idle rather than going done', async () => {
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      stagedIntent({ kind: 'task.setStatus', state: 'needs_revision' }),
+    ]);
+    const session = makeSession('groom');
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionIdle).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('design session with a fully-dispositioned decision-bearing intent still parks idle (design completion goes through the async PlanningOrchestrator path, not this fast path)', async () => {
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      stagedIntent({ kind: 'task.setStatus', state: 'approved' }),
+    ]);
+    const session = makeSession('design');
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionIdle).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
   });
 
   it('design session parks into idle without scraping for a PR or calling recoverSession', async () => {
@@ -165,13 +260,13 @@ describe('AgentSession.handleCleanExit — planning session gating', () => {
   });
 });
 
-describe('AgentSession.handleCleanExit — gate-verify session archival', () => {
+describe('AgentSession.handleCleanExit — gate-verify session parking', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(hasActiveCapabilityRequestForSession).mockReturnValue(false);
   });
 
-  it('a gate-verify session (task_id gate-item:%) is marked done, not idle', async () => {
+  it('a gate-verify session (task_id gate-item:%) parks idle after reporting, exactly like an ordinary ops session — not archived done', async () => {
     const session = makeSession('ops', 'gate-item:abc-123');
     const messages: unknown[] = [];
     session.on('message', (m) => messages.push(m));
@@ -180,24 +275,22 @@ describe('AgentSession.handleCleanExit — gate-verify session archival', () => 
       session as unknown as { handleCleanExit: () => Promise<void> }
     ).handleCleanExit();
 
-    expect(markSessionDone).toHaveBeenCalledWith(
+    expect(markSessionIdle).toHaveBeenCalledWith(
       'test-session-id',
       expect.any(Number),
       null,
-      'gate_verify_clean_exit',
     );
-    expect(markSessionIdle).not.toHaveBeenCalled();
-    expect(getEventsBySession).not.toHaveBeenCalled();
+    expect(markSessionDone).not.toHaveBeenCalled();
     expect(messages).toContainEqual(
       expect.objectContaining({
         type: 'session_ended',
         sessionId: 'test-session-id',
-        status: 'done',
+        status: 'idle',
       }),
     );
   });
 
-  it('a gate-verify session with an unresolved capability request parks idle instead of being archived done', async () => {
+  it('a gate-verify session with an unresolved capability request also parks idle (unchanged — never archived done)', async () => {
     vi.mocked(hasActiveCapabilityRequestForSession).mockReturnValue(true);
     const session = makeSession('ops', 'gate-item:abc-123');
 
@@ -226,88 +319,5 @@ describe('AgentSession.handleCleanExit — gate-verify session archival', () => 
       null,
     );
     expect(markSessionDone).not.toHaveBeenCalled();
-  });
-});
-
-describe('AgentSession.handleCleanExit — first-turn-empty vs later-turn-empty', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('surfaces needs_attention when the first turn stages nothing', async () => {
-    vi.mocked(countEventsBySessionAndType).mockReturnValue(0); // no prior turn
-    vi.mocked(hasStagedIntentForSession).mockReturnValue(false); // staged nothing
-
-    const session = makeSession('design');
-    const messages: unknown[] = [];
-    session.on('message', (m) => messages.push(m));
-
-    await (
-      session as unknown as { handleCleanExit: () => Promise<void> }
-    ).handleCleanExit();
-
-    expect(setTaskPauseReason).toHaveBeenCalledWith(
-      'task-123',
-      'planning_first_turn_empty',
-      expect.any(String),
-    );
-    expect(messages).toContainEqual(
-      expect.objectContaining({
-        type: 'auto_launch_paused',
-        taskId: 'task-123',
-        reason: 'planning_first_turn_empty',
-      }),
-    );
-    // Still parks into idle — surfacing does not replace the idle transition.
-    expect(markSessionIdle).toHaveBeenCalledWith(
-      'test-session-id',
-      expect.any(Number),
-      null,
-    );
-  });
-
-  it('does not surface when the first turn stages something', async () => {
-    vi.mocked(countEventsBySessionAndType).mockReturnValue(0);
-    vi.mocked(hasStagedIntentForSession).mockReturnValue(true);
-
-    const session = makeSession('groom');
-    const messages: unknown[] = [];
-    session.on('message', (m) => messages.push(m));
-
-    await (
-      session as unknown as { handleCleanExit: () => Promise<void> }
-    ).handleCleanExit();
-
-    expect(setTaskPauseReason).not.toHaveBeenCalled();
-    expect(
-      messages.some(
-        (m) => (m as { type: string }).type === 'auto_launch_paused',
-      ),
-    ).toBe(false);
-  });
-
-  it('does not surface a later turn that stages nothing (natural completion)', async () => {
-    vi.mocked(countEventsBySessionAndType).mockReturnValue(1); // already had a turn
-    vi.mocked(hasStagedIntentForSession).mockReturnValue(false);
-
-    const session = makeSession('design');
-    const messages: unknown[] = [];
-    session.on('message', (m) => messages.push(m));
-
-    await (
-      session as unknown as { handleCleanExit: () => Promise<void> }
-    ).handleCleanExit();
-
-    expect(setTaskPauseReason).not.toHaveBeenCalled();
-    expect(
-      messages.some(
-        (m) => (m as { type: string }).type === 'auto_launch_paused',
-      ),
-    ).toBe(false);
-    expect(markSessionIdle).toHaveBeenCalledWith(
-      'test-session-id',
-      expect.any(Number),
-      null,
-    );
   });
 });

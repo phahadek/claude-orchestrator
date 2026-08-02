@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mocks must be declared before imports ─────────────────────────────────────
 
@@ -27,8 +28,19 @@ let mockProc: ReturnType<typeof createMockProc>;
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
-  execFile: vi.fn(),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
   execSync: vi.fn(() => 'claude'),
+  exec: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
 }));
 
 vi.mock('../github/PRFileReverter', () => ({
@@ -55,6 +67,11 @@ vi.mock('../routes/tasks', () => ({
   emitTaskUpdated: vi.fn(),
 }));
 
+vi.mock('../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config')>();
+  return { ...actual, getProjectById: vi.fn(() => undefined) };
+});
+
 vi.mock('../session/SessionAuditor', () => ({
   SessionAuditor: vi.fn().mockImplementation(() => ({
     audit: vi.fn().mockResolvedValue({
@@ -69,27 +86,29 @@ vi.mock('../session/SessionAuditor', () => ({
   })),
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  upsertSessionEvent: vi.fn(() => 1),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  incrementTokens: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  insertSessionAudit: vi.fn(),
-  setSessionModel: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  getProjectRowById: vi.fn(() => null),
-  insertLocalBranch: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    upsertSessionEvent: vi.fn(() => 1),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn(() => []),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    incrementTokens: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    insertSessionAudit: vi.fn(),
+    setSessionModel: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    getProjectRowById: vi.fn(() => null),
+    insertLocalBranch: vi.fn(),
+  }),
+);
 
 // ── PR row shape used by push-detected tests ──────────────────────────────────
 

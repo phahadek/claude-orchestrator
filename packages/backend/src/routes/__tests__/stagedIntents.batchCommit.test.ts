@@ -102,9 +102,10 @@ describe('POST /api/staged-intents/batch/commit', () => {
     const updateStatus = vi.fn();
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi
-        .fn()
-        .mockResolvedValue('## Open Questions\n- Still open?\n'),
+      // 📐 Design is exempt from the Open Questions readiness tier — use
+      // grooming residue instead so the readiness gate still fires, forcing
+      // the triage-clean override path this test exists to cover.
+      fetchTaskPage: vi.fn().mockResolvedValue('Confirm scope at grooming.\n'),
       updateStatus,
       setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
@@ -125,7 +126,7 @@ describe('POST /api/staged-intents/batch/commit', () => {
 
     expect(updateStatus).toHaveBeenCalledTimes(2);
     expect(mockRecordEvent).toHaveBeenCalledTimes(2);
-    for (const [taskId] of [['t-1'], ['t-2']]) {
+    for (const [taskId] of [['notion:t-1'], ['notion:t-2']]) {
       expect(mockRecordEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           event_type: 'readiness_override',

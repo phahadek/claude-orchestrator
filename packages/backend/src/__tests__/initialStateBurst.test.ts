@@ -16,6 +16,7 @@ vi.mock('../db/queries', () => ({
   getEventsBySession: vi.fn(() => []),
   getDenialsBySession: vi.fn(() => []),
   getPRByNotionTaskId: vi.fn(() => undefined),
+  listUndeliveredInboxItems: vi.fn(() => []),
 }));
 
 vi.mock('../utils/eventFilters', () => ({
@@ -148,5 +149,47 @@ describe('sendInitialStateBurst', () => {
     expect(started).toBeDefined();
     expect(started.compaction_count).toBe(0);
     expect(started.context_occupancy_tokens).toBe(0);
+  });
+
+  it('replays session_feedback_pending for a session with an undelivered inbox item', () => {
+    vi.mocked(queries.getActiveSessions).mockReturnValue([
+      makeSession('a', 'idle'),
+    ]);
+    vi.mocked(queries.listUndeliveredInboxItems).mockImplementation(
+      (sessionId: string) =>
+        sessionId === 'a'
+          ? [
+              {
+                id: 1,
+                session_id: 'a',
+                source: 'operator-disposition',
+                payload: 'capability granted',
+                enqueued_at: 1_000,
+                delivered_at: null,
+              },
+            ]
+          : [],
+    );
+
+    const sent: ServerMessage[] = [];
+    sendInitialStateBurst((msg) => sent.push(msg));
+
+    expect(sent).toContainEqual({
+      type: 'session_feedback_pending',
+      sessionId: 'a',
+      pending: true,
+    });
+  });
+
+  it('does not replay session_feedback_pending when the inbox has no undelivered items', () => {
+    vi.mocked(queries.getActiveSessions).mockReturnValue([
+      makeSession('a', 'idle'),
+    ]);
+    vi.mocked(queries.listUndeliveredInboxItems).mockReturnValue([]);
+
+    const sent: ServerMessage[] = [];
+    sendInitialStateBurst((msg) => sent.push(msg));
+
+    expect(sent.some((m) => m.type === 'session_feedback_pending')).toBe(false);
   });
 });

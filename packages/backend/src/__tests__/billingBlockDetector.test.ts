@@ -1,15 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries.js', () => ({
-  setPauseReason: vi.fn(),
-  getPRByNumber: vi.fn(),
-  setCiRemediationAttemptedSha: vi.fn(),
-  updateMergeState: vi.fn(),
-  getApprovedOpenPRs: vi.fn(() => []),
-  getApprovedLocalBranches: vi.fn(() => []),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    setPauseReason: vi.fn(),
+    getPRByNumber: vi.fn(),
+    setCiRemediationAttemptedSha: vi.fn(),
+    updateMergeState: vi.fn(),
+    getApprovedOpenPRs: vi.fn(() => []),
+    getApprovedLocalBranches: vi.fn(() => []),
+  }),
+);
 
 vi.mock('../config.js', () => ({
   GITHUB_TOKEN: 'test-token',

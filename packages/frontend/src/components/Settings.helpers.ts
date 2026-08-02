@@ -1,6 +1,7 @@
 export interface SettingsValues {
   max_concurrent_code_sessions: string;
   max_concurrent_planning_sessions: string;
+  max_concurrent_verify_sessions: string;
   auto_review_concurrency: string;
   auto_review: string;
   card_preview_lines: string;
@@ -12,6 +13,8 @@ export interface SettingsValues {
   planning_session_effort: string;
   ops_session_model: string;
   ops_session_effort: string;
+  gate_verify_session_model: string;
+  gate_verify_session_effort: string;
   session_mode: string;
   auto_launch_concurrency: string;
   auto_launch_poll_interval_ms: string;
@@ -27,6 +30,7 @@ export interface SettingsValues {
   large_task_model: string;
   large_task_effort: string;
   tier3_classifier_model: string;
+  capability_auto_approve_allowlist: string[];
 }
 
 export const MIN_POLL_INTERVAL_MS = 5000;
@@ -57,6 +61,8 @@ const NON_NUMERIC_KEYS = new Set<keyof SettingsValues>([
   'planning_session_effort',
   'ops_session_model',
   'ops_session_effort',
+  'gate_verify_session_model',
+  'gate_verify_session_effort',
   'session_mode',
   'large_task_model',
   'large_task_effort',
@@ -74,6 +80,8 @@ export function validateField(
   if (!Number.isInteger(num) || isNaN(num)) return 'Must be a whole number';
   if (key === 'auto_launch_concurrency' && num < 1) return 'Minimum is 1';
   if (key === 'max_review_iterations' && num < 1) return 'Minimum is 1';
+  if (key === 'max_concurrent_verify_sessions' && num < 1)
+    return 'Minimum is 1';
   if (key === 'auto_launch_poll_interval_ms' && num < MIN_POLL_INTERVAL_MS)
     return `Minimum is ${MIN_POLL_INTERVAL_MS} ms`;
   return null;

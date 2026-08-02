@@ -28,6 +28,11 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerStageProposalTools } from './stageProposalTools';
 import { getStagedIntent, listStagedIntentsByGroup } from '../../db/queries';
+import {
+  gateContributionDecisionSchema,
+  gateContributionItemInputSchema,
+} from './schemas';
+import { GATE_ITEM_TIER_SELECTION_GUIDANCE } from '../../gate/gateItemClassificationGuidance';
 
 const SESSION_ID = 'session-1';
 const PROJECT_ID = 'proj-1';
@@ -72,7 +77,7 @@ beforeEach(() => {
 });
 
 describe('stage-proposal MCP tools — registration', () => {
-  it('registers exactly the 15 stage-proposal tool names', async () => {
+  it('registers exactly the 18 stage-proposal tool names', async () => {
     const { client, close } = await connectedClient();
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -85,6 +90,9 @@ describe('stage-proposal MCP tools — registration', () => {
         'gate.accrete',
         'intent.withdraw',
         'journal.setState',
+        'notion.pageEdit',
+        'planning.noOp',
+        'review.dispute',
         'seed.stage',
         'session.requestCapability',
         'task.create',
@@ -95,6 +103,27 @@ describe('stage-proposal MCP tools — registration', () => {
         'task.updateBody',
       ].sort(),
     );
+    await close();
+  });
+
+  it('notion.pageEdit stages a notion.pageEdit intent carrying page_id/content_updates', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'notion.pageEdit',
+      arguments: {
+        payload: {
+          page_id: 'page-1',
+          content_updates: [{ old_str: 'old', new_str: 'new' }],
+        },
+      },
+    });
+    const intent = parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(intent.kind).toBe('notion.pageEdit');
+    expect(intent.projectId).toBe(PROJECT_ID);
+    expect(intent.sessionId).toBe(SESSION_ID);
+    expect(getStagedIntent(intent.id as string)).toBeTruthy();
     await close();
   });
 
@@ -186,6 +215,38 @@ describe('stage-proposal MCP tools — delegation', () => {
       },
     });
     expect((result as { isError?: boolean }).isError).toBe(true);
+    await close();
+  });
+
+  it('decision.pickOne threads investigation separately from decisionProposal', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'decision.pickOne',
+      arguments: {
+        payload: {
+          prompt: 'Which approach?',
+          options: [
+            { label: 'A', description: 'first option' },
+            { label: 'B', description: 'second option' },
+          ],
+          allowFreeForm: false,
+        },
+        decisionProposal: 'Recommend A — it keeps memory flat under load.',
+        investigation: 'Evidence: reader.ts:12-40, queries.ts:88.',
+      },
+    });
+    const intent = parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(intent.decisionProposal).toBe(
+      'Recommend A — it keeps memory flat under load.',
+    );
+    expect(intent.investigation).toBe(
+      'Evidence: reader.ts:12-40, queries.ts:88.',
+    );
+
+    const row = getStagedIntent(intent.id as string)!;
+    expect(row.investigation).toBe('Evidence: reader.ts:12-40, queries.ts:88.');
     await close();
   });
 });
@@ -289,6 +350,7 @@ describe('stage-proposal MCP tools — schema validation', () => {
               },
             },
           },
+          groupId: 'group-1',
         },
       });
       expect((result as { isError?: boolean }).isError).toBeFalsy();
@@ -405,6 +467,251 @@ describe('stage-proposal MCP tools — schema validation', () => {
       },
     });
     expect((result as { isError?: boolean }).isError).toBe(true);
+    await close();
+  });
+});
+
+describe('stage-proposal MCP tools — envelope fields misplaced inside payload', () => {
+  const SAMPLE_GROOM_PROPOSAL = {
+    achieves: 'Flips the task to Ready.',
+    openQuestions: 'None.',
+    automatedTests: 'Existing suite covers it.',
+    manualVerification: 'n/a',
+    operationalSeed: 'n/a',
+  };
+
+  it('rejects a groomProposal nested inside payload, naming the key and where it belongs', async () => {
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'task.setStatus',
+      arguments: {
+        payload: {
+          taskId: 't-1',
+          status: 'Ready',
+          groomProposal: SAMPLE_GROOM_PROPOSAL,
+        },
+      },
+    })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(result.isError).toBe(true);
+    const text = result.content[0]?.text ?? '';
+    expect(text).toMatch(/groomProposal/);
+    expect(text).toMatch(/alongside payload/);
+    expect(db.prepare('SELECT COUNT(*) as n FROM staged_intent').get()).toEqual(
+      { n: 0 },
+    );
+    await close();
+  });
+
+  it.each(['decisionProposal', 'investigation', 'groupId', 'supersedes'])(
+    'rejects %s nested inside payload the same way',
+    async (envelopeField) => {
+      const { client, close } = await connectedClient();
+      const result = (await client.callTool({
+        name: 'task.setStatus',
+        arguments: {
+          payload: {
+            taskId: 't-1',
+            status: 'Ready',
+            [envelopeField]: 'should have been a sibling of payload',
+          },
+        },
+      })) as {
+        isError?: boolean;
+        content: Array<{ type: string; text?: string }>;
+      };
+      expect(result.isError).toBe(true);
+      const text = result.content[0]?.text ?? '';
+      expect(text).toMatch(new RegExp(envelopeField));
+      expect(text).toMatch(/alongside payload/);
+      await close();
+    },
+  );
+
+  it('stages exactly as before when groomProposal is passed as a sibling of payload', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'task.setStatus',
+      arguments: {
+        payload: { taskId: 't-1', status: 'Ready' },
+        groomProposal: SAMPLE_GROOM_PROPOSAL,
+        groupId: 'group-1',
+      },
+    });
+    const intent = parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(intent.groomProposal).toEqual(SAMPLE_GROOM_PROPOSAL);
+    const stored = getStagedIntent(intent.id as string);
+    expect(
+      stored?.groom_proposal ? JSON.parse(stored.groom_proposal) : null,
+    ).toEqual(SAMPLE_GROOM_PROPOSAL);
+    await close();
+  });
+
+  it('still fails with the existing error when a required payload field is missing', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'gate.accrete',
+      arguments: {
+        payload: {
+          items: [{ text: 'an item' }],
+          classification: 'Read-Only',
+        },
+      },
+    });
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    const text =
+      (result as { content: Array<{ type: string; text?: string }> }).content[0]
+        ?.text ?? '';
+    expect(text).toMatch(/sourceTask/);
+    await close();
+  });
+
+  it('rejects an unrecognized key inside payload that is not an envelope field', async () => {
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'task.setDependsOn',
+      arguments: {
+        payload: { taskId: 't-1', dependsOn: [], triage: 'clean' },
+      },
+    })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text ?? '').toMatch(/triage/);
+    await close();
+  });
+
+  it('every tool registered through envelope() rejects an unknown payload key', async () => {
+    const ENVELOPE_TOOL_PAYLOADS: Record<string, Record<string, unknown>> = {
+      'task.create': { title: 'New task' },
+      'task.setStatus': { taskId: 't-1', status: 'Ready' },
+      'task.setDependsOn': { taskId: 't-1', dependsOn: [] },
+      'task.updateBody': {
+        taskId: 't-1',
+        sections: {
+          summary: 's',
+          dependencies: [],
+          context: [],
+          automatedCriteria: [],
+          manualCriteria: [],
+        },
+      },
+      'task.setProperties': { taskId: 't-1', patch: {} },
+      'gate.accrete': {
+        sourceTask: { id: 't-1', title: 'Task', project: 'p', milestone: 'm' },
+        items: [{ text: 'an item' }],
+        classification: 'Read-Only',
+      },
+      'seed.stage': {
+        sourceTask: { id: 't-1', title: 'Task', project: 'p', milestone: 'm' },
+        seeds: [{ spec: 'a seed' }],
+        decision: 'seeds',
+      },
+      'arch.createUnit': {
+        title: 'A unit',
+        metadata: { kind: 'subsystem', topic: 't', regions: [] },
+        body: 'body',
+      },
+      'arch.updateUnit': { unitId: 'u-1', baseVersion: 1 },
+      'arch.supersedeUnit': {
+        unitId: 'u-1',
+        baseVersion: 1,
+        replacement: {
+          title: 'A unit',
+          metadata: { kind: 'subsystem', topic: 't', regions: [] },
+          body: 'body',
+        },
+      },
+      'decision.pickOne': {
+        prompt: 'Which?',
+        options: [{ label: 'A', description: 'a' }],
+        allowFreeForm: false,
+      },
+      'journal.setState': { taskId: 't-1', state: 'pending' },
+      'session.requestCapability': {
+        capability: 'x',
+        plan: 'y',
+        evidence: 'z',
+      },
+      'planning.noOp': { taskId: 't-1', reason: 'nothing to do' },
+    };
+
+    const { client, close } = await connectedClient();
+    for (const [name, payload] of Object.entries(ENVELOPE_TOOL_PAYLOADS)) {
+      const result = (await client.callTool({
+        name,
+        arguments: { payload: { ...payload, bogusExtraKey: 'nope' } },
+      })) as {
+        isError?: boolean;
+        content: Array<{ type: string; text?: string }>;
+      };
+      expect(
+        result.isError,
+        `${name} should reject an unknown payload key`,
+      ).toBe(true);
+      expect(result.content[0]?.text ?? '').toMatch(/bogusExtraKey/);
+    }
+    await close();
+  });
+});
+
+describe('gate.accrete — classification tier guidance', () => {
+  const REAL_TIERS = [
+    'Read-Only',
+    'Prod-Mutating',
+    'Opportunistic',
+    'Human-Observation',
+  ];
+
+  it('the batch-level classification field exposes a non-empty description naming all four real tiers', () => {
+    const description = gateContributionDecisionSchema.description;
+    expect(description).toBeTruthy();
+    for (const tier of REAL_TIERS) {
+      expect(description).toContain(tier);
+    }
+  });
+
+  it('the per-item classification field exposes the same tier guidance', () => {
+    const description =
+      gateContributionItemInputSchema.shape.classification.description;
+    expect(description).toBeTruthy();
+    for (const tier of REAL_TIERS) {
+      expect(description).toContain(tier);
+    }
+  });
+
+  it('the tier guidance states the live-session-vs-human-observation distinction', () => {
+    const description = gateContributionDecisionSchema.description ?? '';
+    expect(description).toMatch(/live dispatched session/);
+    expect(description).toMatch(/not Human-Observation/);
+    expect(description).toMatch(/session_events/);
+  });
+
+  it('the gate.accrete tool description carries the tier-selection guidance', async () => {
+    const { client, close } = await connectedClient();
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'gate.accrete');
+    expect(tool?.description).toContain(GATE_ITEM_TIER_SELECTION_GUIDANCE);
+    await close();
+  });
+
+  it('the schema field description and the tool description are sourced from the same shared constant (no drift)', async () => {
+    const { client, close } = await connectedClient();
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'gate.accrete');
+
+    expect(gateContributionDecisionSchema.description).toContain(
+      GATE_ITEM_TIER_SELECTION_GUIDANCE,
+    );
+    expect(
+      gateContributionItemInputSchema.shape.classification.description,
+    ).toContain(GATE_ITEM_TIER_SELECTION_GUIDANCE);
+    expect(tool?.description).toContain(GATE_ITEM_TIER_SELECTION_GUIDANCE);
     await close();
   });
 });

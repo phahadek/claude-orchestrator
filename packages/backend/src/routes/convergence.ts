@@ -1,0 +1,126 @@
+import { Router } from 'express';
+import type { Request, Response } from 'express';
+import {
+  getMilestoneConvergence,
+  listProjectConvergence,
+} from '../convergence/convergenceService';
+import {
+  UnknownMilestoneError,
+  canonicalMilestoneKey,
+  resolveMilestoneRowForProject,
+} from '../projects/milestoneResolver';
+import { listConvergenceSnapshotHistory } from '../db/queries';
+import { computeMilestoneAttentionSignals } from '../convergence/attentionSignals';
+import type { SessionManager } from '../session/SessionManager';
+
+/**
+ * The milestone convergence read-surface: composes the four readiness axes
+ * (Notion tasks, gate, seed, ops) at request time. Consumed by the M13
+ * Milestone view, the decision inbox, and the trigger evaluator.
+ */
+export function createConvergenceRouter(
+  sessionManager?: SessionManager,
+): Router {
+  const router = Router();
+
+  // GET /api/milestones/:project/:milestone/convergence
+  router.get(
+    '/milestones/:project/:milestone/convergence',
+    (req: Request, res: Response) => {
+      const project = String(req.params.project);
+      const milestone = String(req.params.milestone);
+      try {
+        res.json(getMilestoneConvergence(project, milestone));
+      } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
+
+  // GET /api/milestones/:project/convergence
+  router.get(
+    '/milestones/:project/convergence',
+    (req: Request, res: Response) => {
+      const project = String(req.params.project);
+      try {
+        res.json(listProjectConvergence(project));
+      } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
+
+  // GET /api/milestones/:project/:milestone/convergence/history
+  router.get(
+    '/milestones/:project/:milestone/convergence/history',
+    (req: Request, res: Response) => {
+      const project = String(req.params.project);
+      const milestone = String(req.params.milestone);
+      try {
+        const row = resolveMilestoneRowForProject(project, milestone);
+        const key = canonicalMilestoneKey(row);
+
+        const limitParam = req.query.limit;
+        const sinceParam = req.query.since;
+        const window: { limit?: number; sinceTs?: string } = {};
+        if (typeof limitParam === 'string' && limitParam.trim() !== '') {
+          const parsedLimit = Number(limitParam);
+          if (Number.isFinite(parsedLimit) && parsedLimit > 0) {
+            window.limit = Math.floor(parsedLimit);
+          }
+        }
+        if (typeof sinceParam === 'string' && sinceParam.trim() !== '') {
+          window.sinceTs = sinceParam;
+        }
+        const hasWindow =
+          window.limit !== undefined || window.sinceTs !== undefined;
+
+        res.json(
+          listConvergenceSnapshotHistory(
+            project,
+            key,
+            hasWindow ? window : undefined,
+          ),
+        );
+      } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
+
+  // GET /api/milestones/:project/:milestone/attention
+  router.get(
+    '/milestones/:project/:milestone/attention',
+    (req: Request, res: Response) => {
+      const project = String(req.params.project);
+      const milestone = String(req.params.milestone);
+      try {
+        const row = resolveMilestoneRowForProject(project, milestone);
+        const key = canonicalMilestoneKey(row);
+        res.json(
+          computeMilestoneAttentionSignals(project, key, sessionManager),
+        );
+      } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
+
+  return router;
+}

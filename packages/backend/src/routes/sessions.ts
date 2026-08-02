@@ -16,13 +16,31 @@ import {
   unfavoriteSession,
   deleteDenialsBySession,
   getEventsBySession,
+  removeGrantedCapability,
+  getGrantedCapabilities,
+  getSessionLastActivityMs,
 } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
 import { getProjectById } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ServerMessage } from '../ws/types';
 import { eventKind } from '../session/eventKind';
 import type { SessionManager } from '../session/SessionManager';
+import { deriveCapabilityProvenance } from '../audit/capabilityProvenance';
+import type { Session } from '../db/types';
+
+/** Attaches lastActivityAgeMs — ms since the session's last session_events row, null when unknown (none recorded, or pruned). */
+function withActivityAge<T extends Session>(
+  session: T,
+): T & { lastActivityAgeMs: number | null } {
+  const lastActivityTs = getSessionLastActivityMs(session.session_id);
+  return {
+    ...session,
+    lastActivityAgeMs:
+      lastActivityTs !== null ? Date.now() - lastActivityTs : null,
+  };
+}
 
 let _broadcast: (msg: ServerMessage) => void = () => {};
 export function setBroadcast(fn: (msg: ServerMessage) => void): void {
@@ -38,7 +56,7 @@ export const sessionsRouter = Router();
 
 // GET /api/sessions/archived
 sessionsRouter.get('/archived', (_req: Request, res: Response) => {
-  res.json(getArchivedSessions());
+  res.json(getArchivedSessions().map(withActivityAge));
 });
 
 // GET /api/sessions?status=running,done&projectId=claude-orchestrator
@@ -49,7 +67,7 @@ sessionsRouter.get('/', (req: Request, res: Response) => {
     typeof req.query.status === 'string' ? req.query.status : '';
 
   if (projectId) {
-    res.json(getSessionsByProject(projectId));
+    res.json(getSessionsByProject(projectId).map(withActivityAge));
     return;
   }
   if (statusParam) {
@@ -57,20 +75,21 @@ sessionsRouter.get('/', (req: Request, res: Response) => {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    res.json(getSessionsByStatus(statuses));
+    res.json(getSessionsByStatus(statuses).map(withActivityAge));
   } else {
-    res.json(getActiveSessions());
+    res.json(getActiveSessions().map(withActivityAge));
   }
 });
 
 // GET /api/sessions/:id/events
 sessionsRouter.get('/:id/events', (req: Request, res: Response) => {
   const sessionId = String(req.params.id);
-  const session = getSession(sessionId);
-  if (!session) {
+  const rawSession = getSession(sessionId);
+  if (!rawSession) {
     res.status(404).json({ error: 'Session not found' });
     return;
   }
+  const session = withActivityAge(rawSession);
   const events = getEventsBySession(sessionId)
     .filter((ev) => !isSystemOnlyUserEvent(ev.payload))
     .map((ev) => ({
@@ -80,6 +99,21 @@ sessionsRouter.get('/:id/events', (req: Request, res: Response) => {
       ...(ev.message_id != null && { messageId: ev.message_id }),
     }));
   res.json({ session, events });
+});
+
+// GET /api/sessions/:id/capabilities
+sessionsRouter.get('/:id/capabilities', (req: Request, res: Response) => {
+  const sessionId = String(req.params.id);
+  const session = getSession(sessionId);
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  const capabilities = deriveCapabilityProvenance(
+    sessionId,
+    getGrantedCapabilities(sessionId),
+  );
+  res.json({ capabilities });
 });
 
 // DELETE /api/sessions/:id/denials
@@ -199,6 +233,39 @@ sessionsRouter.patch('/:id/tags', (req: Request, res: Response) => {
   _broadcast({ type: 'session_updated', sessionId, tags });
   res.json({ ok: true });
 });
+
+// PATCH /api/sessions/:id/capabilities/revoke
+sessionsRouter.patch(
+  '/:id/capabilities/revoke',
+  async (req: Request, res: Response) => {
+    const sessionId = String(req.params.id);
+    const existing = getSession(sessionId);
+    if (!existing) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    const capability = String(req.body.capability ?? '');
+    if (!capability) {
+      res.status(400).json({ error: 'capability is required' });
+      return;
+    }
+    const grantedCapabilities = _sessionManager
+      ? await _sessionManager.revokeCapability(sessionId, capability)
+      : removeGrantedCapability(sessionId, capability);
+
+    recordEvent({
+      event_type: 'capability_revoked',
+      actor_type: 'human',
+      actor_id: sessionId,
+      project_id: existing.project_id,
+      task_id: existing.task_id,
+      payload: { capability },
+    });
+
+    _broadcast({ type: 'session_updated', sessionId, grantedCapabilities });
+    res.json({ ok: true, grantedCapabilities });
+  },
+);
 
 // POST /api/sessions/:id/mark-merged
 // For local-only projects: mark the task as Done (mirrors the merge step for GitHub projects).

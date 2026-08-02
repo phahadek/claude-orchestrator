@@ -32,6 +32,7 @@ interface SessionState {
   project_id?: string | null;
   note?: string | null;
   tags?: string[];
+  grantedCapabilities?: string[];
   totalInputTokens?: number;
   totalOutputTokens?: number;
   compaction_count?: number;
@@ -79,6 +80,10 @@ export interface TaskView {
   opsDepBlocked?: boolean;
   /** Human-readable reason when opsDepBlocked, e.g. "waiting on <dep title>". */
   opsDepBlockedReason?: string | null;
+  /** 🔲 Backlog task's groom dep-gate satisfaction (passesGroomDepGate) — absent for non-Backlog tasks. */
+  groomDepBlocked?: boolean;
+  /** Human-readable reason when groomDepBlocked, e.g. "waiting on <dep title>". */
+  groomDepBlockedReason?: string | null;
   codeSession: {
     sessionId: string;
     status: string;
@@ -177,6 +182,7 @@ export type ServerMessage =
       sessionId: string;
       note?: string | null;
       tags?: string[];
+      grantedCapabilities?: string[];
       totalInputTokens?: number;
       totalOutputTokens?: number;
       compactionCount?: number;
@@ -301,7 +307,8 @@ export type ServerMessage =
       reason:
         | 'launch_failed'
         | 'planning_crashed'
-        | 'planning_first_turn_empty';
+        | 'planning_first_turn_empty'
+        | 'planning_terminal_no_decision';
       detail: string;
     }
   | { type: 'session_launch_failed'; taskId: string; sessionId: string }
@@ -408,6 +415,20 @@ export type ServerMessage =
       detail: string;
     }
   | {
+      /**
+       * Transient in-progress delivery state, not a failure: a disposition
+       * has been enqueued for this session and is being delivered via
+       * sendOrResume, which may require resuming a parked session (spawning
+       * a fresh CLI process) before it lands. Cleared once the underlying
+       * inbox items are marked delivered (or once the delivery attempt
+       * concludes, success or failure) — must never be rendered as a fault
+       * or needs-attention condition the way session_action_failed is.
+       */
+      type: 'session_feedback_pending';
+      sessionId: string;
+      pending: boolean;
+    }
+  | {
       type: 'boot_reconciliation_started';
       steps: string[];
       started_at: string;
@@ -448,7 +469,8 @@ export type ServerMessage =
         | 'pre_review_interrupted'
         | 'conflict_dead_session'
         | 'undelivered_review_feedback'
-        | 'orphaned_no_task_link';
+        | 'orphaned_no_task_link'
+        | 'session_inert';
     };
 
 // ── Client → Server ──────────────────────────────────────────────

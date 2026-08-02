@@ -23,6 +23,7 @@ type EventType =
   | 'task_orphan_reverted'
   | 'task_orphan_nudged'
   | 'task_orphan_surfaced'
+  | 'task_ops_stranded_surfaced'
   | 'session_errored'
   | 'session_backfilled'
   | 'verdict_routing_failed'
@@ -80,6 +81,10 @@ type EventType =
   | 'task_moved'
   | 'readiness_override'
   | 'staged_intent_disposition'
+  | 'capability_revoked'
+  | 'capability_request_disposition'
+  | 'capability_request_refused'
+  | 'review_dispute_disposition'
   | 'flake_recovery_attempted'
   | 'flake_recovery_f2_invalidated'
   | 'flake_recovery_f2_rerun'
@@ -87,7 +92,17 @@ type EventType =
   | 'arch_unit_updated'
   | 'arch_unit_superseded'
   | 'project_record_access_guide_missing'
-  | 'project_record_access_guide_blocks_escalation';
+  | 'project_record_access_guide_blocks_escalation'
+  | 'flow_arm_changed'
+  | 'milestone_wrapped'
+  | 'base_fetch_failed'
+  | 'mcp_stage_credential_rejected'
+  | 'mcp_connection_established'
+  | 'mcp_connection_closed'
+  | 'mcp_session_credential_revoked'
+  | 'memory_admission_deferred'
+  | 'task_aborted'
+  | 'planning_dispatch_launched';
 
 type ActorType = 'ai' | 'human' | 'system';
 
@@ -98,4 +113,17 @@ export interface AuditEvent {
   project_id?: string | null;
   task_id?: string | null;
   payload: Record<string, unknown>;
+}
+
+/**
+ * trigger_source discriminates the two dispatch call sites so evaluator vs
+ * operator activity can be told apart in the audit record — see
+ * DispatchTriggerEvaluator.ts and routes/planningLaunch.ts. milestone_id is
+ * always the flow_arm UUID key space (milestone.id), never gate_item's
+ * display-name space.
+ */
+export interface PlanningDispatchLaunchedPayload {
+  trigger_source: 'evaluator' | 'operator';
+  flow: string;
+  milestone_id: string;
 }

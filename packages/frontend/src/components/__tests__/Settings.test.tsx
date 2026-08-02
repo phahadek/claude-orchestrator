@@ -18,6 +18,7 @@ vi.mock('../../hooks/useWebSocket', () => ({
 const defaultSettings = {
   max_concurrent_code_sessions: '4',
   max_concurrent_planning_sessions: '6',
+  max_concurrent_verify_sessions: '11',
   auto_review_concurrency: '2',
   auto_review: 'false',
   card_preview_lines: '5',
@@ -25,6 +26,8 @@ const defaultSettings = {
   review_session_model: '',
   code_session_effort: '',
   review_session_effort: '',
+  ops_session_effort: '',
+  gate_verify_session_effort: '',
   session_mode: 'cli',
   auto_launch_concurrency: '1',
   auto_launch_poll_interval_ms: '60000',
@@ -39,6 +42,7 @@ const defaultSettings = {
   auto_archive_sweep_interval_minutes: '5',
   large_task_model: '',
   large_task_effort: '',
+  capability_auto_approve_allowlist: ['read:existing-entry'],
 };
 
 function makeFetch(getBody: object = defaultSettings, patchBody: object = {}) {
@@ -306,6 +310,59 @@ describe('Settings — max_concurrent_planning_sessions', () => {
   });
 });
 
+describe('Settings — max_concurrent_verify_sessions', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', makeFetch());
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn().mockReturnValue(null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  it('returns "Must be a whole number" for a non-integer', () => {
+    expect(validateField('max_concurrent_verify_sessions', 'abc')).toBe(
+      'Must be a whole number',
+    );
+  });
+
+  it('rejects values below 1', () => {
+    expect(validateField('max_concurrent_verify_sessions', '0')).toBe(
+      'Minimum is 1',
+    );
+  });
+
+  it('renders the input with the value from the API', async () => {
+    render(<Settings />);
+    const input = await screen.findByDisplayValue('11');
+    expect(input).toBeDefined();
+  });
+
+  it('fires PATCH with max_concurrent_verify_sessions when a valid value is entered', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByDisplayValue('11');
+
+    const inputs = screen.getAllByRole('spinbutton');
+    const verifyInput = inputs.find(
+      (el) => (el as HTMLInputElement).value === '11',
+    )!;
+    fireEvent.change(verifyInput, { target: { value: '9' } });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).max_concurrent_verify_sessions ===
+            '9',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+});
+
 describe('Settings — non-numeric settings PATCH', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', makeFetch());
@@ -384,12 +441,12 @@ describe('Settings — effort dropdowns', () => {
       );
   }
 
-  it('renders five effort selects, each listing Default first then the levels', async () => {
+  it('renders six effort selects, each listing Default first then the levels', async () => {
     render(<Settings />);
     await screen.findByText('(off)');
 
     const effortSelects = findEffortSelects();
-    expect(effortSelects).toHaveLength(5);
+    expect(effortSelects).toHaveLength(6);
 
     for (const select of effortSelects) {
       const labels = Array.from((select as HTMLSelectElement).options).map(
@@ -472,7 +529,7 @@ describe('Settings — effort dropdowns', () => {
     render(<Settings />);
     await screen.findByText('(off)');
 
-    const [, , , , largeTaskEffortSelect] = findEffortSelects();
+    const [, , , , , largeTaskEffortSelect] = findEffortSelects();
     fireEvent.change(largeTaskEffortSelect, { target: { value: 'max' } });
 
     await waitFor(() => {
@@ -503,6 +560,66 @@ describe('Settings — planning/ops model selectors', () => {
 
     expect(screen.getByText('Planning session model')).toBeDefined();
     expect(screen.getByText('Ops session model')).toBeDefined();
+  });
+});
+
+describe('Settings — capability auto-approve allowlist', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', makeFetch());
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn().mockReturnValue(null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  it('renders the existing allowlist entry as a chip', async () => {
+    render(<Settings />);
+    expect(await screen.findByText('read:existing-entry')).toBeDefined();
+  });
+
+  it('adds a new entry and fires PATCH with the appended array', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByText('read:existing-entry');
+
+    const input = screen.getByPlaceholderText('Add capability string...');
+    fireEvent.change(input, { target: { value: 'read:new-entry' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.stringify(
+            JSON.parse(opts.body as string).capability_auto_approve_allowlist,
+          ) === JSON.stringify(['read:existing-entry', 'read:new-entry']),
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+
+  it('removes an entry and fires PATCH with the filtered array', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByText('read:existing-entry');
+
+    fireEvent.click(screen.getByLabelText('Remove read:existing-entry'));
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.stringify(
+            JSON.parse(opts.body as string).capability_auto_approve_allowlist,
+          ) === JSON.stringify([]),
+      );
+      expect(patchCall).toBeDefined();
+    });
   });
 });
 

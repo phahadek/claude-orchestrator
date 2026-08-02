@@ -43,7 +43,7 @@ describe('parseTaskId', () => {
   });
 
   it('throws on unknown source', () => {
-    expect(() => parseTaskId('github:abc')).toThrow(/unknown task source/i);
+    expect(() => parseTaskId('bogus:abc')).toThrow(/unknown task source/i);
   });
 
   it('throws on empty external ID', () => {
@@ -300,6 +300,8 @@ describe('Schema migration — task_id column in pull_requests', () => {
   const TEST_TASK_ID = 'notion:test-task-abc';
 
   beforeEach(() => {
+    db.exec(`INSERT OR IGNORE INTO projects (id, name, project_dir, task_source, github_repo, created_at, updated_at)
+      VALUES ('pr-test-proj', 'Test', '/tmp', 'notion', '${TEST_REPO}', 1, 1)`);
     upsertPullRequest({
       pr_number: TEST_PR_NUMBER,
       pr_url: TEST_PR_URL,
@@ -318,6 +320,7 @@ describe('Schema migration — task_id column in pull_requests', () => {
       updated_at: '2024-01-01T00:00:00Z',
       synced_at: '2024-01-01T00:00:00Z',
       head_sha: null,
+      node_id: null,
     });
   });
 
@@ -347,7 +350,7 @@ describe('Schema migration — task_id column in pull_requests', () => {
   it('getPausedPrReasonForTask returns the pause reason of the matching PR', () => {
     setPauseReason(TEST_PR_NUMBER, TEST_REPO, 'max_reviews');
     const reason = getPausedPrReasonForTask(TEST_TASK_ID);
-    expect(reason).toBe('max_reviews');
+    expect(reason?.reason).toBe('max_reviews');
   });
 });
 

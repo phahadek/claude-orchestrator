@@ -45,6 +45,18 @@ function makeMockProc() {
   return proc;
 }
 
+vi.mock('../planningScratchDir', () => ({
+  createScratchDir: vi.fn(
+    (projectDir: string, sessionId: string) =>
+      `${projectDir}/.claude/scratch/${sessionId}`,
+  ),
+  getScratchDir: vi.fn(
+    (projectDir: string, sessionId: string) =>
+      `${projectDir}/.claude/scratch/${sessionId}`,
+  ),
+  removeScratchDir: vi.fn(),
+}));
+
 vi.mock('child_process', () => ({
   spawn: vi.fn((cmd: string, args: string[]) => {
     if (cmd === 'docker') {

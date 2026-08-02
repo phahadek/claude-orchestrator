@@ -10,41 +10,44 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import { EventEmitter } from 'events';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries.js', () => ({
-  getPRByNumber: vi.fn(),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  setPRReviewResult: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  setReviewSessionId: vi.fn(),
-  updatePRDraftStatus: vi.fn(),
-  incrementReviewIteration: vi.fn(),
-  setLastReviewedSha: vi.fn(),
-  setLocalBranchReviewResult: vi.fn(),
-  getLocalBranchById: vi.fn(),
-  getSetting: vi.fn().mockReturnValue(null),
-  getSession: vi.fn().mockReturnValue(undefined),
-  setPendingPush: vi.fn(),
-  setPauseReason: vi.fn(),
-  insertPauseInterval: vi.fn(),
-  closePauseInterval: vi.fn(),
-  upsertStuckSessionTimer: vi.fn(),
-  deleteStuckSessionTimer: vi.fn(),
-  getAllStuckSessionTimers: vi.fn().mockReturnValue([]),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getLocalBranchBySession: vi.fn(),
-  setLocalBranchPauseReason: vi.fn(),
-  addAutofixSha: vi.fn(),
-  consumeAutofixSha: vi.fn().mockReturnValue(false),
-  getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
-  insertPendingReviewSync: vi.fn(),
-  deletePendingReviewSync: vi.fn(),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getPRByNumber: vi.fn(),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    setPRReviewResult: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    setReviewSessionId: vi.fn(),
+    updatePRDraftStatus: vi.fn(),
+    incrementReviewIteration: vi.fn(),
+    setLastReviewedSha: vi.fn(),
+    setLocalBranchReviewResult: vi.fn(),
+    getLocalBranchById: vi.fn(),
+    getSetting: vi.fn().mockReturnValue(null),
+    getSession: vi.fn().mockReturnValue(undefined),
+    setPendingPush: vi.fn(),
+    setPauseReason: vi.fn(),
+    insertPauseInterval: vi.fn(),
+    closePauseInterval: vi.fn(),
+    upsertStuckSessionTimer: vi.fn(),
+    deleteStuckSessionTimer: vi.fn(),
+    getAllStuckSessionTimers: vi.fn().mockReturnValue([]),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getLocalBranchBySession: vi.fn(),
+    setLocalBranchPauseReason: vi.fn(),
+    addAutofixSha: vi.fn(),
+    consumeAutofixSha: vi.fn().mockReturnValue(false),
+    getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
+    insertPendingReviewSync: vi.fn(),
+    deletePendingReviewSync: vi.fn(),
+  }),
+);
 
 vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
@@ -55,7 +58,9 @@ vi.mock('../config.js', () => ({
     session_notify_threshold_seconds: 3600,
     session_pause_threshold_seconds: 7200,
     session_hard_stop_window_seconds: 60,
+    auto_review_concurrency: 1,
   },
+  AUTO_REVIEW_ENABLED: true,
   getProjectByGithubRepo: vi.fn().mockReturnValue({
     id: 'proj-1',
     name: 'Test',
@@ -253,7 +258,6 @@ describe('ReviewOrchestrator — killed review session routes incomplete verdict
     const orchestrator = new ReviewOrchestrator(
       reviewService,
       sm as unknown as SessionManager,
-      1,
       true,
       github,
     );

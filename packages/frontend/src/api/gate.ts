@@ -1,4 +1,18 @@
 import { apiRequest } from './projects';
+import type {
+  FlowRejectionRateResult,
+  TrustPrecisionFlow,
+} from '@claude-orchestrator/backend/src/db/queries';
+
+export type { FlowRejectionRateResult, TrustPrecisionFlow };
+
+/** Mirrors the backend's TRUST_PRECISION_FLOWS (routes/gateState.ts) — the flows the /api/gate/trust-rate route accepts. */
+export const TRUST_PRECISION_FLOWS: TrustPrecisionFlow[] = [
+  'groom',
+  'design',
+  'ops',
+  'gate-verify',
+];
 
 export type GateItemClassification =
   | 'Read-Only'
@@ -57,6 +71,8 @@ export interface GateItem {
   minDeployedCommit?: string;
   state: string;
   currentDisposition?: string;
+  /** The disposition on the item's most recent event, whether or not it advanced state — set even for a non-resolving abstain like needs-setup/noted. */
+  latestDisposition?: string;
   updatedAt: string;
   sources: GateItemSource[];
   events: GateItemEvent[];
@@ -75,11 +91,15 @@ interface GateBlockingItem {
   text: string;
   classification: GateItemClassification;
   state: string;
+  /** True when the item's latest event carries a non-resolving disposition (needs-setup/noted) — attempted but inconclusive. */
+  nonResolving?: boolean;
 }
 
 export interface GateReadiness {
   status: 'green' | 'blocked';
   blocking: GateBlockingItem[];
+  /** Subset of `blocking` whose latest disposition is non-resolving (needs-setup/noted). */
+  nonResolvingItems: GateBlockingItem[];
   /** The milestone's full per-state item totals, independent of any table filter. */
   counts: Record<string, number>;
 }
@@ -97,6 +117,8 @@ export interface ListGateItemsParams {
   state?: string;
   classification?: GateItemClassification;
   runnable?: boolean;
+  /** True: only items whose latest event is the needs-setup abstain. */
+  awaitingSetup?: boolean;
   page?: number;
   limit?: number;
   order?: 'not-done-first';
@@ -130,6 +152,11 @@ export interface ApproveGateItemInput {
   operator?: string;
 }
 
+export interface ReclassifyGateItemInput {
+  classification: GateItemClassification;
+  operator?: string;
+}
+
 export interface GateItemVerifySession {
   itemId: string;
   sessionId: string;
@@ -149,9 +176,9 @@ function buildQuery(params: object): string {
 }
 
 export const gateApi = {
-  getGateReadiness(milestone: string): Promise<GateReadiness> {
+  getGateReadiness(project: string, milestone: string): Promise<GateReadiness> {
     return apiRequest<GateReadiness>(
-      `/api/gate/readiness${buildQuery({ milestone })}`,
+      `/api/gate/readiness${buildQuery({ project, milestone })}`,
     );
   },
 
@@ -219,6 +246,32 @@ export const gateApi = {
   approveItem(id: string, input: ApproveGateItemInput = {}): Promise<GateItem> {
     return apiRequest<GateItem>(
       `/api/gate/items/${encodeURIComponent(id)}/approve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
+  /** The Milestone panel's trust-precision read: per-flow rejection/abstain rate. Informative only — no auto-disarm. */
+  getFlowRejectionRate(
+    project: string,
+    milestone: string,
+    flow: TrustPrecisionFlow,
+  ): Promise<FlowRejectionRateResult> {
+    return apiRequest<FlowRejectionRateResult>(
+      `/api/gate/trust-rate${buildQuery({ project, milestone, flow })}`,
+    );
+  },
+
+  /** Changes a gate item's classification tier. */
+  reclassifyItem(
+    id: string,
+    input: ReclassifyGateItemInput,
+  ): Promise<GateItem> {
+    return apiRequest<GateItem>(
+      `/api/gate/items/${encodeURIComponent(id)}/classification`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

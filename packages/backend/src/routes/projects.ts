@@ -21,6 +21,7 @@ import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { GitHubClient } from '../github/GitHubClient';
 import { JiraClient } from '../tasks/JiraClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
+import { recordEvent } from '../audit/AuditLog';
 
 let _autoMerger: AutoMerger | null = null;
 export function setAutoMerger(merger: AutoMerger): void {
@@ -647,6 +648,42 @@ projectsRouter.delete('/milestones/:id', (req: Request, res: Response) => {
   }
   res.status(204).send();
 });
+
+// The audited Done marker: /milestone-wrap calls this once a milestone's
+// tasks/gate/seed all read green, so convergence and the milestone list can
+// scope to wrapped_at IS NULL (active + in-planning) without a separate
+// "is this milestone done" heuristic.
+projectsRouter.post(
+  '/milestones/:id/wrapped',
+  (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const existing = ProjectService.getMilestone(id);
+    if (!existing) {
+      res.status(404).json({ error: `Milestone '${id}' not found` });
+      return;
+    }
+    if (existing.wrappedAt != null) {
+      res.status(409).json({ error: `Milestone '${id}' is already wrapped` });
+      return;
+    }
+    const body = (req.body as Record<string, unknown>) ?? {};
+    const operator =
+      typeof body.operator === 'string' ? body.operator : undefined;
+
+    const wrappedAt = Date.now();
+    const updated = ProjectService.updateMilestone(id, {
+      wrapped_at: wrappedAt,
+    });
+    recordEvent({
+      event_type: 'milestone_wrapped',
+      actor_type: operator ? 'human' : 'system',
+      actor_id: operator ?? null,
+      project_id: existing.projectId,
+      payload: { milestoneId: id, wrappedAt },
+    });
+    res.json(updated);
+  },
+);
 
 // ── tasks.yaml stub creation (YAML projects) ─────────────────────────────────
 

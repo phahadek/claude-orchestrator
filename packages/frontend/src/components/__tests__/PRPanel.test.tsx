@@ -18,7 +18,7 @@ function makePR(overrides: Partial<PRWorkItem> = {}): PRWorkItem {
     notionTaskTitle: null,
     sessionId: null,
     reviewSessionId: null,
-    reviewResult: null,
+    reviewVerdict: null,
     reviewedAt: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
@@ -222,7 +222,7 @@ describe('PRPanel — inflight state cleared by WS events', () => {
     const pr = makePR({
       prNumber: 1,
       state: 'open',
-      reviewResult: { verdict: 'approved', summary: '' },
+      reviewVerdict: 'approved',
       mergeState: null,
     });
     const mergePending = new Promise(() => {});
@@ -408,7 +408,7 @@ describe('PRPanel — inflight state cleared by WS events', () => {
     const pr = makePR({
       prNumber: 1,
       state: 'open',
-      reviewResult: { verdict: 'approved', summary: '' },
+      reviewVerdict: 'approved',
       mergeState: null,
     });
     const mergeabilityPending = new Promise(() => {});
@@ -608,7 +608,7 @@ describe('PRPanel — differential routing (WorkItemCard vs PRHistoryRow)', () =
     render(<PRPanel activeProjectId="proj-1" />);
     await waitFor(() => {
       // PRHistoryRow renders the title as a link — no WorkItemCard action buttons
-      expect(screen.getByRole('link', { name: 'Merged PR' })).toBeDefined();
+      expect(screen.getByRole('link', { name: '#10 Merged PR' })).toBeDefined();
       expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
     });
   });
@@ -624,7 +624,7 @@ describe('PRPanel — differential routing (WorkItemCard vs PRHistoryRow)', () =
     setupFetchWithPRs([closedPR]);
     render(<PRPanel activeProjectId="proj-1" />);
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'Closed PR' })).toBeDefined();
+      expect(screen.getByRole('link', { name: '#11 Closed PR' })).toBeDefined();
       expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
     });
   });

@@ -49,7 +49,12 @@ beforeEach(() => {
 });
 
 describe('POST /api/staged-intents — stage-time gate/seed accretion feedback', () => {
-  it('annotates a Code task.setStatus -> Ready intent staged with no gate/seed accretion marker', async () => {
+  it('rejects an ungrouped Code task.setStatus -> Ready intent at stage time before the missing-accretion check ever runs', async () => {
+    // A grouped Ready-flip defers gate/seed contribution enforcement to
+    // commit time (see runStageTimeReadyChecks), so this annotation is no
+    // longer reachable via a real staged intent at all: ungrouped is
+    // rejected outright (ReadyPathMissingGroupError) and grouped skips the
+    // check until commit.
     const app = buildApp();
     const res = await supertest(app)
       .post('/api/staged-intents')
@@ -67,19 +72,8 @@ describe('POST /api/staged-intents — stage-time gate/seed accretion feedback',
         projectId: 'proj-1',
       });
 
-    expect(res.status).toBe(201);
-    expect(res.body.annotation).toBeTruthy();
-    expect(res.body.annotation.blocked).toBe(true);
-    expect(
-      res.body.annotation.reasons.some((r: string) =>
-        r.includes('gate_contribution'),
-      ),
-    ).toBe(true);
-    expect(
-      res.body.annotation.reasons.some((r: string) =>
-        r.includes('seed_contribution'),
-      ),
-    ).toBe(true);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Ready-path member/);
   });
 
   it('does not annotate when both accretion markers are already recorded', async () => {
@@ -121,6 +115,7 @@ describe('POST /api/staged-intents — stage-time gate/seed accretion feedback',
           },
         },
         projectId: 'proj-1',
+        groupId: 'group-1',
       });
 
     expect(res.status).toBe(201);

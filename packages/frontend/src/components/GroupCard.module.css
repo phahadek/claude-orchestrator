@@ -1,0 +1,103 @@
+.selected {
+  border-color: var(--ctp-blue);
+}
+
+.cardTitleGroup {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.cardTitle {
+  color: var(--text-primary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardTitleDetail {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  margin-left: 4px;
+}
+
+.members {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.member {
+  display: flex;
+  flex-direction: column;
+}
+
+.memberSummary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.memberSummary:hover {
+  border-color: var(--border-strong);
+}
+
+.memberChevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.memberSummaryText {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memberDetail {
+  border-left: 2px solid var(--border);
+  margin-left: 6px;
+  padding-left: 8px;
+}
+
+.recoveryBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: rgba(250, 179, 135, 0.12);
+  border: 1px solid rgba(250, 179, 135, 0.4);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+}
+
+.recoveryBannerText {
+  color: var(--ctp-peach);
+  font-size: 0.78rem;
+}
+
+.recoverButton {
+  background: rgba(250, 179, 135, 0.15);
+  border: 1px solid rgba(250, 179, 135, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-peach);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+}
+
+.recoverButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

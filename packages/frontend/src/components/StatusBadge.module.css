@@ -48,3 +48,7 @@
   background: rgba(180, 190, 254, 0.15);
   color: var(--ctp-lavender);
 }
+.badge-activity-age {
+  opacity: 0.7;
+  font-weight: 400;
+}

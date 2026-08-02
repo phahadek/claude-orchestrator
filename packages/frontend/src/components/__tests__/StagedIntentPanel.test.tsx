@@ -53,10 +53,11 @@ describe('StagedIntentPanel', () => {
             rowId: 1,
             project: 'demo',
             milestone: 'M13',
+            probed: ['unstated-premises'],
             questions: [
               {
                 question: 'Should X be configurable?',
-                disposition: 'dismissed',
+                disposition: 'out-of-scope',
                 reason: 'Out of scope.',
                 approvalStatus: 'proposed',
               },
@@ -97,6 +98,78 @@ describe('StagedIntentPanel', () => {
         'Superseded by task notion:xyz — defer instead of grooming.',
       ),
     ).toBeTruthy();
+  });
+
+  it('renders a task.setStatus -> Ready card with a condensed groomingGate summary that expands to constraints and files/paths', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'task.setStatus',
+          payload: {
+            taskId: 'notion:abc',
+            status: 'Ready',
+            groomingGate: {
+              size_check: { decision: 'no_split' },
+              type_check: { decision: 'none' },
+              type: '💻 Code',
+              regions: {
+                packages: ['packages/frontend'],
+                files: ['a.ts', 'b.ts'],
+              },
+              constraintsDispositioned: {
+                'constraint-1': {
+                  disposition: 'n/a',
+                  why: 'Not applicable here.',
+                },
+                'constraint-2': { disposition: 'complies' },
+              },
+              filesPathsEntries: [
+                {
+                  raw: 'packages/frontend/src/a.ts',
+                  isNew: false,
+                  existsInRepo: true,
+                },
+                {
+                  raw: 'packages/frontend/src/b.ts',
+                  isNew: true,
+                  existsInRepo: false,
+                },
+              ],
+            },
+          },
+        })}
+      />,
+    );
+
+    const headline = screen.getByTestId('staged-intent-promote-ready');
+    expect(headline.textContent).toContain('notion:abc');
+    const summary = screen.getByTestId('staged-intent-grooming-gate-summary');
+    expect(summary.textContent).toContain('no_split');
+    expect(summary.textContent).toContain('💻 Code');
+    expect(summary.textContent).toContain('3 regions');
+    expect(summary.textContent).toContain('2 constraints');
+
+    fireEvent.click(screen.getByText('Show grooming detail'));
+    expect(summary.textContent).toContain('Not applicable here.');
+    expect(summary.textContent).toContain('packages/frontend/src/a.ts');
+    expect(summary.textContent).toContain('packages/frontend/src/b.ts');
+  });
+
+  it('renders a task.setStatus -> Ready card with only the task id when the intent has no groomProposal, no decisionProposal, and no groomingGate', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'task.setStatus',
+          payload: { taskId: 'notion:abc', status: 'Ready' },
+        })}
+      />,
+    );
+
+    const headline = screen.getByTestId('staged-intent-promote-ready');
+    expect(headline.textContent).toContain('notion:abc');
+    expect(
+      screen.queryByTestId('staged-intent-grooming-gate-summary'),
+    ).toBeNull();
   });
 
   it('renders ops_journal (journal.setState) as a decision-surface kind with a task/state headline', () => {
@@ -142,6 +215,36 @@ describe('StagedIntentPanel', () => {
       screen.getByTestId('staged-intent-ops-journal-finding'),
     ).toBeTruthy();
     expect(screen.getByText('Stand up off-box backups')).toBeTruthy();
+  });
+
+  it('renders investigation via CollapsibleField, collapsed by default, alongside decisionProposal', () => {
+    const longInvestigation = Array.from(
+      { length: 20 },
+      (_, i) => `evidence line ${i}: reader.ts:${i}`,
+    ).join('\n');
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          decisionProposal: 'Stand up off-box backups',
+          investigation: longInvestigation,
+        })}
+      />,
+    );
+
+    expect(screen.getByText('Stand up off-box backups')).toBeTruthy();
+    const investigation = screen.getByTestId('staged-intent-investigation');
+    expect(investigation.textContent).toContain('evidence line 0');
+    expect(screen.getByText(/Show all \d+ lines/)).toBeTruthy();
+  });
+
+  it('omits the investigation block when the intent carries none — no regression for existing rows', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({ decisionProposal: 'Stand up off-box backups' })}
+      />,
+    );
+
+    expect(screen.queryByTestId('staged-intent-investigation')).toBeNull();
   });
 
   it('Commit calls the general command-layer route, not a bespoke endpoint', async () => {
@@ -314,6 +417,56 @@ describe('StagedIntentPanel', () => {
     expect(screen.getByText('task.setStatus')).toBeTruthy();
   });
 
+  it('a blocked (needs_revision) grouped member only offers Decline — no Pushback radio, no Approve button', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({ groupId: 'group-1', state: 'needs_revision' })}
+      />,
+    );
+
+    expect(screen.queryByRole('radio', { name: /pushback/i })).toBeNull();
+    expect(screen.getByRole('radio', { name: /decline/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^approve$/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /decline/i })).toBeTruthy();
+  });
+
+  it('declining a blocked (pending_verification) member posts { outcome: "decline" } via the reject route', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+    } as Response);
+    const onRejected = vi.fn();
+
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          groupId: 'group-1',
+          state: 'pending_verification',
+        })}
+        onRejected={onRejected}
+      />,
+    );
+    fireEvent.change(
+      screen.getByPlaceholderText(/why is this being declined/i),
+      {
+        target: { value: 'superseded' },
+      },
+    );
+    fireEvent.click(screen.getByRole('button', { name: /decline/i }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/staged-intents/intent-1/reject',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ outcome: 'decline', reason: 'superseded' }),
+        }),
+      );
+    });
+    await waitFor(() => expect(onRejected).toHaveBeenCalled());
+  });
+
   it("renders the /groom skill's structured proposal fields instead of decisionProposal prose", () => {
     render(
       <StagedIntentPanel
@@ -340,5 +493,395 @@ describe('StagedIntentPanel', () => {
     expect(
       screen.queryByText('this should not render when groomProposal is set'),
     ).toBeNull();
+  });
+
+  it('renders a whole-turn planning.noOp with the original no-op headline', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'planning.noOp',
+          payload: {
+            taskId: 'notion:abc',
+            reason: 'task is already Ready, nothing to add',
+          },
+        })}
+        hideActions
+      />,
+    );
+
+    expect(screen.getByTestId('staged-intent-no-op')).toBeTruthy();
+    expect(screen.getByText(/No-op: nothing staged for/)).toBeTruthy();
+    expect(
+      screen.getByText(/task is already Ready, nothing to add/),
+    ).toBeTruthy();
+    expect(screen.queryByTestId('staged-intent-no-op-skipped-kind')).toBeNull();
+  });
+
+  it('renders a skippedKind planning.noOp as a discrete line naming the skipped kind and reason, distinct from the whole-turn headline', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'planning.noOp',
+          payload: {
+            taskId: 'notion:abc',
+            reason: 'no implementation work beyond the locked decisions',
+            skippedKind: 'task.create',
+          },
+        })}
+        hideActions
+      />,
+    );
+
+    const skippedLine = screen.getByTestId('staged-intent-no-op-skipped-kind');
+    expect(skippedLine).toBeTruthy();
+    expect(skippedLine.textContent).toContain('task.create');
+    expect(skippedLine.textContent).toContain(
+      'no implementation work beyond the locked decisions',
+    );
+    expect(screen.queryByTestId('staged-intent-no-op')).toBeNull();
+    expect(screen.queryByText(/No-op: nothing staged for/)).toBeNull();
+  });
+
+  it('a skippedKind planning.noOp still offers no operator disposition controls', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'planning.noOp',
+          payload: {
+            taskId: 'notion:abc',
+            reason: 'these decisions change no architecture page',
+            skippedKind: 'architecture',
+          },
+        })}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /approve/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /pushback/i })).toBeNull();
+  });
+
+  describe('task.create body contrast', () => {
+    function hexToRgb(hex: string) {
+      const clean = hex.replace('#', '');
+      return [0, 2, 4].map((i) => parseInt(clean.slice(i, i + 2), 16));
+    }
+
+    function relativeLuminance([r, g, b]: number[]) {
+      const [rs, gs, bs] = [r, g, b].map((c) => {
+        const s = c / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
+    }
+
+    function contrastRatio(hexA: string, hexB: string) {
+      const lumA = relativeLuminance(hexToRgb(hexA));
+      const lumB = relativeLuminance(hexToRgb(hexB));
+      const [lighter, darker] = lumA > lumB ? [lumA, lumB] : [lumB, lumA];
+      return (lighter + 0.05) / (darker + 0.05);
+    }
+
+    // Token values sourced from src/styles/global.css — --text-primary (body
+    // copy) and --bg-secondary (the card background StagedIntentPanel renders
+    // on), not hard-coded independently of the design tokens.
+    const TEXT_PRIMARY_HEX = '#cdd6f4'; // --ctp-text, resolves --text-primary
+    const CARD_BG_HEX = '#181825'; // --ctp-mantle, resolves --bg-secondary
+
+    it('renders a task.create body as readable prose, not the faint payload style', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'task.create',
+            payload: {
+              title: 'New task',
+              body: 'Some long-form task body prose that must stay readable.',
+            },
+          })}
+        />,
+      );
+
+      const bodyEl = screen.getByText(
+        /Some long-form task body prose that must stay readable\./,
+      );
+      expect(bodyEl.className).not.toMatch(/payload/i);
+      const computed = getComputedStyle(bodyEl);
+      expect(computed.wordBreak).not.toBe('break-all');
+    });
+
+    it('meets the 4.5:1 contrast threshold for normal-size text against the card background', () => {
+      const ratio = contrastRatio(TEXT_PRIMARY_HEX, CARD_BG_HEX);
+      expect(ratio).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it('keeps the raw-JSON fallback visually distinct from reviewed body copy', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'not-a-known-kind' as StagedIntent['kind'],
+            payload: { some: 'raw', json: 'value' },
+          })}
+        />,
+      );
+
+      const fallbackEl = screen.getByText(/"some": "raw"/);
+      expect(fallbackEl.className).toMatch(/payload/i);
+    });
+
+    it('still renders "No body supplied." for a task.create intent with no body', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'task.create',
+            payload: { title: 'New task' },
+          })}
+        />,
+      );
+
+      expect(screen.getByText('No body supplied.')).toBeTruthy();
+    });
+  });
+
+  describe('gate.verify', () => {
+    it('renders disposition, basis, summary as discrete elements and each trace entry on its own line, not escaped JSON', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: 'ecc8eab1-4e55-4eac-be6b-97237a6aacbb',
+              disposition: 'pass',
+              evidence: JSON.stringify({
+                basis: 'operational',
+                summary: 'Task 3a822f91 is no longer stranded.',
+                trace: [
+                  'audit_log id 164147 ts=1785536074470: human sets task status',
+                  'audit_log id 164150 ts=1785536090000: gate item resolved',
+                ],
+              }),
+            },
+          })}
+        />,
+      );
+
+      const card = screen.getByTestId('staged-intent-gate-verify');
+      expect(card.textContent).toContain(
+        'ecc8eab1-4e55-4eac-be6b-97237a6aacbb',
+      );
+      expect(card.textContent).toContain('pass');
+      expect(screen.getByText(/Basis: operational/)).toBeTruthy();
+      expect(
+        screen.getByText('Task 3a822f91 is no longer stranded.'),
+      ).toBeTruthy();
+      expect(card.textContent).not.toMatch(/\\"/);
+
+      expect(
+        screen.getByText(
+          'audit_log id 164147 ts=1785536074470: human sets task status',
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(
+          'audit_log id 164150 ts=1785536090000: gate item resolved',
+        ),
+      ).toBeTruthy();
+    });
+
+    it('renders expected/found/query as the leading lines for a new-shape report', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: 'gate-6',
+              disposition: 'pass',
+              evidence: {
+                expected: 'The endpoint records an audit_log row on success.',
+                found: 'audit_log shows one matching row from the last run.',
+                query: 'auditLog.query projectId=proj-1 action=widget_created',
+              },
+            },
+          })}
+        />,
+      );
+
+      expect(
+        screen.getByText(
+          /Expected: The endpoint records an audit_log row on success\./,
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(
+          /Found: audit_log shows one matching row from the last run\./,
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(
+          /Query: auditLog\.query projectId=proj-1 action=widget_created/,
+        ),
+      ).toBeTruthy();
+    });
+
+    it('shows unrecognised extra evidence fields rather than dropping them', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: 'gate-1',
+              disposition: 'needs-setup',
+              evidence: JSON.stringify({
+                basis: 'source',
+                summary: 'Needs config',
+                note: 'Blocked on secret rotation.',
+                queriesRun: ['SELECT 1'],
+              }),
+            },
+          })}
+        />,
+      );
+
+      expect(
+        screen.getByText(/Note: Blocked on secret rotation\./),
+      ).toBeTruthy();
+      // queriesRun is a structural (array) value, so it still collapses.
+      fireEvent.click(screen.getByText('Other evidence'));
+      expect(screen.getByText(/queriesRun/)).toBeTruthy();
+      expect(screen.getByText(/SELECT 1/)).toBeTruthy();
+    });
+
+    it('renders an off-contract string evidence key as visible text without expanding anything', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: '03a0a16f-2636-4f9b-9de7-608a3fd1ba06',
+              disposition: 'pass',
+              evidence: JSON.stringify({
+                basis: 'operational',
+                sourceOrient: 'Read gateItemVerifier.ts to find the check.',
+                operationalCheck: 'audit_log confirms the write landed.',
+              }),
+            },
+          })}
+        />,
+      );
+
+      expect(screen.getByText(/Basis: operational/)).toBeTruthy();
+      expect(
+        screen.getByText(/Read gateItemVerifier\.ts to find the check\./),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(/audit_log confirms the write landed\./),
+      ).toBeTruthy();
+      expect(screen.queryByText('Other evidence')).toBeNull();
+    });
+
+    it('falls back to the raw display without throwing when evidence is not valid JSON', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: 'gate-2',
+              disposition: 'fail',
+              evidence: '{not valid json',
+            },
+          })}
+        />,
+      );
+
+      expect(screen.getByTestId('staged-intent-gate-verify')).toBeTruthy();
+      expect(screen.getByText('{not valid json')).toBeTruthy();
+    });
+
+    it('renders without error when evidence is a plain string', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: 'gate-3',
+              disposition: 'pass',
+              evidence: 'looks fine to me',
+            },
+          })}
+        />,
+      );
+
+      expect(screen.getByText('looks fine to me')).toBeTruthy();
+    });
+
+    it('renders without error when evidence lacks a trace field', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: 'gate-4',
+              disposition: 'pass',
+              evidence: { basis: 'operational', summary: 'All good.' },
+            },
+          })}
+        />,
+      );
+
+      expect(screen.getByText('All good.')).toBeTruthy();
+    });
+
+    it('renders without error when evidence is entirely absent', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: { gateItemId: 'gate-5', disposition: 'pass' },
+          })}
+        />,
+      );
+
+      expect(screen.getByTestId('staged-intent-gate-verify')).toBeTruthy();
+    });
+  });
+
+  describe('session.requestCapability file-mutation advisory', () => {
+    it('renders the file-write advisory when confersFileMutation is true', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'session.requestCapability',
+            payload: {
+              capability: 'Bash(sed:*)',
+              plan: 'edit the workflow file in place',
+              evidence: 'operator directed this session to edit the file',
+            },
+            confersFileMutation: true,
+          })}
+        />,
+      );
+
+      expect(
+        screen.getByTestId('staged-intent-capability-file-mutation-warning'),
+      ).toBeTruthy();
+    });
+
+    it('does not render the advisory when confersFileMutation is false/undefined', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'session.requestCapability',
+            payload: {
+              capability: 'Bash(psql:*)',
+              plan: 'inspect prod row counts',
+              evidence: 'task asks for a row-count audit',
+            },
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId('staged-intent-capability-file-mutation-warning'),
+      ).toBeNull();
+    });
   });
 });

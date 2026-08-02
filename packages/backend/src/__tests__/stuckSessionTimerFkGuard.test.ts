@@ -106,6 +106,7 @@ describe('StuckSessionMonitor.persistTimerState — FK guard', () => {
       null,
       null,
       null,
+      expect.any(Boolean),
     );
 
     // Cleanup: clear timers
@@ -166,6 +167,7 @@ describe('StuckSessionMonitor.persistTimerState — normal case', () => {
       null,
       null,
       null,
+      false,
     );
 
     monitor.stop();

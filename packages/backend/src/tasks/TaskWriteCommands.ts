@@ -50,6 +50,7 @@ import {
   STATUS_DISPLAY,
   type TaskStatus,
 } from './statusCanonical';
+import type { NotionClient } from '../notion/NotionClient';
 
 export { isValidTransition, STATUS_DISPLAY, type TaskStatus };
 
@@ -273,9 +274,22 @@ export interface GateContributionSourceTask {
   milestone: string;
 }
 
-/** One stripped runtime/launch-and-observe item to mint as a gate_item. */
+/**
+ * One stripped runtime/launch-and-observe item to mint as a gate_item. `text`
+ * is also the content-match key: the staged-intent group-commit precheck
+ * (stagedIntents.ts's precheckGroupCommit, via readinessGate.ts's
+ * checkAccretionContentMatch) compares every item stripped from the task
+ * body's pre-groom "### 👁️ Manual verification" section against these texts
+ * before the Ready-flip is allowed to commit — accretion must be
+ * content-verified, not merely recorded. accreteGateContribution itself does
+ * not run that comparison (it has no view of the pre-strip body or the
+ * sibling strip intent); it stays the store-only write the promotion gate
+ * checks against.
+ */
 export interface GateContributionItemInput {
   text: string;
+  /** Overrides the batch-level classification for this item only; defaults to it when absent. */
+  classification?: GateItemClassification;
 }
 
 /**
@@ -298,7 +312,16 @@ export interface SeedContributionSourceTask {
   milestone: string;
 }
 
-/** One operational data/config seed (config-change spec) to mint as a seed_item. */
+/**
+ * One operational data/config seed (config-change spec) to mint as a
+ * seed_item. `spec` is also the content-match key: when the caller's
+ * groomingGate entry declares `seedContributionCandidates`, the staged-intent
+ * group-commit precheck (stagedIntents.ts's precheckGroupCommit, via
+ * readinessGate.ts's checkAccretionContentMatch) compares those declared
+ * candidates against these staged specs before the Ready-flip is allowed to
+ * commit, the seed_contribution twin of GateContributionItemInput's
+ * body-derived content-match.
+ */
 export interface SeedContributionItemInput {
   spec: string;
 }
@@ -493,10 +516,12 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
     if (status === 'Ready') {
-      const gateResult = checkGroomingPromotionGate(
+      const gateResult = await checkGroomingPromotionGate(
         options?.groomingGate ?? {},
         taskId,
         getCachedType(taskId) ?? undefined,
+        undefined,
+        this.projectId,
       );
       if (!gateResult.allowed) {
         throw new GroomingGateError(gateResult.reasons);
@@ -669,7 +694,8 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
           project: sourceTask.project,
           milestone,
           text: item.text,
-          classification: classification as GateItemClassification,
+          classification:
+            item.classification ?? (classification as GateItemClassification),
           sources: [
             {
               sourceTaskId,
@@ -1012,4 +1038,28 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     }
     await this.backend.updateStatus(taskId, STATUS_DISPLAY[status], options);
   }
+}
+
+/**
+ * Apply handler for the notion.pageEdit staged intent — the Notion
+ * source-of-truth-page twin of BackendTaskWriteCommands' task-board writes.
+ * Unlike every other TaskWriteCommands entry point, this targets an
+ * arbitrary Notion page (not a board task row bound to a TaskBackend), so it
+ * is a standalone command class rather than a BackendTaskWriteCommands
+ * method. Applies directly via NotionClient.applyPageEdit — never through a
+ * TaskBackend port, since only Notion has this concept of a free-standing
+ * doc page.
+ */
+export class NotionWriteCommands {
+  constructor(private readonly notion: Pick<NotionClient, 'applyPageEdit'>) {}
+
+  async applyPageEdit(payload: NotionPageEditPayload): Promise<void> {
+    await this.notion.applyPageEdit(payload.page_id, payload.content_updates);
+  }
+}
+
+/** Payload for the notion.pageEdit staged intent kind — see stagedIntents.ts. */
+export interface NotionPageEditPayload {
+  page_id: string;
+  content_updates: { old_str: string; new_str: string }[];
 }

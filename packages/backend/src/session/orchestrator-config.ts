@@ -7,7 +7,10 @@ import {
   GROOM_ALLOWED_TOOLS,
   DESIGN_ALLOWED_TOOLS,
   OPS_ALLOWED_TOOLS,
+  DOCS_ALLOWED_TOOLS,
+  docsWebFetchTools,
   NOTION_READ_MCP_TOOLS,
+  runtimeSettings,
 } from '../config';
 
 export interface OrchestratorConfig {
@@ -62,10 +65,11 @@ export interface OrchestratorConfig {
   /** Stop running subsequent analyze commands after the first failure. Default true. */
   analyze_fail_fast: boolean;
   /**
-   * When true (default), orchestrator autofix and file-revert commits include
-   * [skip ci] so GitHub skips pull_request workflows, saving CI minutes.
-   * Set to false on projects with required GitHub status checks — [skip ci]
-   * prevents those checks from reporting, permanently blocking the PR.
+   * When true, orchestrator autofix and file-revert commits include [skip ci]
+   * so GitHub skips pull_request workflows, saving CI minutes. Defaults to
+   * false: on projects with required GitHub status checks, [skip ci] prevents
+   * those checks from reporting, permanently blocking the PR. Opt in only on
+   * projects confirmed to have no required status checks on the base branch.
    */
   autofix_skip_ci: boolean;
 }
@@ -89,7 +93,7 @@ const DEFAULTS: OrchestratorConfig = {
   analyze_timeout_sec: 300,
   analyze_max_rss_mb: 0,
   analyze_fail_fast: true,
-  autofix_skip_ci: true,
+  autofix_skip_ci: false,
 };
 
 /**
@@ -230,10 +234,9 @@ export function isGrantable(capability: string): boolean {
 /**
  * Prefix for the one grantable own-record read capability: the
  * orchestrator's own runtime records (session_events + audit_log) for a
- * single named target session id, brokered loopback via
- * `routes/sessionRecordRead.ts` and the sanctioned
- * `read-session-record.mjs` client — never a Bash-command prefix or MCP
- * verb, since the read reaches the orchestrator's own DB (outside a
+ * single named target session id, brokered via the `session.getRecord` MCP
+ * tool (`mcp/tools/sessionRecordReadTool.ts`) — never a Bash-command prefix
+ * or MCP verb, since the read reaches the orchestrator's own DB (outside a
  * dispatched session's worktree sandbox and its device-authed API) rather
  * than a tool this session's shell can already invoke. Read-only: there is
  * no write counterpart, and `isGrantable` never denies this prefix.
@@ -255,15 +258,179 @@ export function parseSessionRecordReadCapability(
 }
 
 /**
+ * Prefix for the grantable project-scoped audit-log read capability: the
+ * orchestrator's own `audit_log` table, filtered to one project id, exposed
+ * via the `auditLog.query` MCP tool (see mcp/tools/auditLogReadTools.ts).
+ * Mirrors SESSION_RECORD_READ_PREFIX's shape — parameterized by an id, never
+ * a Bash-command prefix or bare MCP verb — but scoped to a project rather
+ * than a single target session, since audit-log rows span every session and
+ * human actor touching that project. Read-only: there is no write
+ * counterpart, and `isGrantable` never denies this prefix.
+ */
+const AUDIT_LOG_READ_PREFIX = 'read:audit-log:';
+
+/** Builds the exact capability string for querying one project's audit log. */
+export function auditLogReadCapability(projectId: string): string {
+  return `${AUDIT_LOG_READ_PREFIX}${projectId}`;
+}
+
+/** Extracts the target project id from a granted audit-log-read capability, or null if it isn't one. */
+export function parseAuditLogReadCapability(capability: string): string | null {
+  return capability.startsWith(AUDIT_LOG_READ_PREFIX)
+    ? capability.slice(AUDIT_LOG_READ_PREFIX.length)
+    : null;
+}
+
+/**
+ * Prefix for the grantable project-scoped session-events read capability:
+ * an aggregate-first read over the orchestrator's own `session_events`
+ * table across every session in one project, exposed via the
+ * `sessionEvents.query` MCP tool (see
+ * mcp/tools/sessionEventsReadTools.ts). Mirrors AUDIT_LOG_READ_PREFIX's
+ * shape and authorization rule exactly — parameterized by project id, own-
+ * project auto-approves, any other project's grant parks for operator
+ * approval — since session_events content is the same class of "another
+ * session's attributed actions" data as audit_log, just aggregated across
+ * sessions instead of read one session at a time (see
+ * SESSION_RECORD_READ_PREFIX). Read-only: there is no write counterpart,
+ * and `isGrantable` never denies this prefix.
+ */
+const SESSION_EVENTS_READ_PREFIX = 'read:session-events:';
+
+/** Builds the exact capability string for querying one project's session_events. */
+export function sessionEventsReadCapability(projectId: string): string {
+  return `${SESSION_EVENTS_READ_PREFIX}${projectId}`;
+}
+
+/** Extracts the target project id from a granted session-events-read capability, or null if it isn't one. */
+export function parseSessionEventsReadCapability(
+  capability: string,
+): string | null {
+  return capability.startsWith(SESSION_EVENTS_READ_PREFIX)
+    ? capability.slice(SESSION_EVENTS_READ_PREFIX.length)
+    : null;
+}
+
+/**
+ * Curated, operator-editable allowlist of sanctioned read-only capabilities
+ * that `session.requestCapability` auto-approves without an operator park
+ * (see stagedIntents.ts's auto-approve branch). Every entry must be an exact
+ * capability string a grant can widen access with — never a Bash/mcp prefix
+ * pattern, since a prefix cannot be certified read-only (sqlite3/node/python
+ * can all write). Backed by the `capability_auto_approve_allowlist` runtime
+ * setting (see config.ts/config/settings.ts/routes/settings.ts) — editable
+ * live from the Settings UI rather than only via a source-level constant.
+ * The only sanctioned capability shipped by default is the own-record reader
+ * below, which is checked separately since it is parameterized by the
+ * requesting session's own id rather than a fixed string.
+ */
+function sanctionedAutoApproveCapabilities(): readonly string[] {
+  return runtimeSettings.capability_auto_approve_allowlist;
+}
+
+/**
+ * True iff `capability` is exactly the sanctioned read-only capability set
+ * for `requestingSessionId` — either a literal member of the
+ * `capability_auto_approve_allowlist` runtime setting, the own-record-read
+ * capability for the requesting session itself (never another session's; a
+ * capability naming a different target session id is not a match, even
+ * though it is grantable via the existing operator-approval path), or the
+ * audit-log-read / session-events-read capability for the requesting
+ * session's own dispatched project (`requestingProjectId` — never a
+ * different project's, which parks for operator approval as usual).
+ * Exact-string comparison only — never a prefix/heuristic match, so a
+ * Bash(*:*) prefix or any other tool-shaped capability can never
+ * auto-approve.
+ *
+ * The audit-log-read / session-events-read own-project auto-approve is
+ * withheld from a `groom` session (`requestingSessionType`). Grooming's
+ * mandate is validating a Backlog task's scope, size and dependencies from
+ * the code and the board — no grooming judgement needs the orchestrator's own
+ * operational record (session_events / audit_log), and that record is
+ * exactly the investigation instrument a groom session should never
+ * self-serve (see the worked instance this guards against: a groom session
+ * auto-approved its own read:session-events grant, used it to run its target
+ * Investigation to conclusion, then promoted the task to Ready). A groom
+ * request for either capability now falls through to the ordinary
+ * operator-park path instead. ops/design/gate-verify sessions are unaffected
+ * — those flows are supposed to read the record — and the own-record reader
+ * and the allowlist are untouched for every session type, including groom.
+ */
+export function isSanctionedAutoApproveCapability(
+  capability: string,
+  requestingSessionId: string,
+  requestingProjectId?: string | null,
+  requestingSessionType?: string | null,
+): boolean {
+  return (
+    capability === sessionRecordReadCapability(requestingSessionId) ||
+    (requestingProjectId != null &&
+      requestingSessionType !== 'groom' &&
+      (capability === auditLogReadCapability(requestingProjectId) ||
+        capability === sessionEventsReadCapability(requestingProjectId))) ||
+    sanctionedAutoApproveCapabilities().includes(capability)
+  );
+}
+
+/**
  * A granted capability shaped like an actual CLI tool permission — a Bash
  * command prefix or a named MCP verb. Only these widen `--allowed-tools` at
- * spawn (see `getSessionAllowedTools` below); the own-record-read capability
- * is checked directly by `routes/sessionRecordRead.ts` against
- * `getGrantedCapabilities`, not merged into the CLI tool allowlist, since it
- * names no tool the CLI resolves.
+ * spawn (see `getSessionAllowedTools` below); the own-record-read,
+ * audit-log-read, and session-events-read capabilities are checked directly
+ * by the `session.getRecord` / `auditLog.query` / `sessionEvents.query` MCP
+ * tool handlers against `getGrantedCapabilities`, not merged into the CLI
+ * tool allowlist, since they name no tool the CLI resolves.
  */
 export function isToolShapedCapability(capability: string): boolean {
   return capability.startsWith('Bash(') || capability.startsWith('mcp__');
+}
+
+/**
+ * Command names whose Bash(...) capability, once granted, lets a session
+ * overwrite or delete file content on disk — the same ground a bare `Edit`/
+ * `Write` request covers, just reached through a shell verb the denylist
+ * (GRANT_DENYLIST_PATTERNS above) does not spell against. Not a grantability
+ * check: this list feeds `bashCapabilityConfersFileMutation` only, which is
+ * advisory display, never `isGrantable`.
+ */
+const FILE_MUTATING_BASH_COMMANDS = [
+  'sed',
+  'perl',
+  'awk',
+  'tee',
+  'dd',
+  'truncate',
+  'cp',
+  'mv',
+  'rm',
+  'install',
+  'patch',
+  'tr',
+  'chmod',
+  'chown',
+  'ln',
+  'rsync',
+  'sponge',
+];
+
+/**
+ * True when a requested `Bash(...)` capability confers the ability to mutate
+ * file contents — the equivalence a denied `Edit`/`Write` request and a
+ * differently-spelled `Bash(...)` grant can share (e.g. `Bash(sed:*)` in
+ * place of a refused `Edit`). Purely advisory: it never feeds `isGrantable`
+ * and never blocks a grant, it only marks the staged intent so an approving
+ * operator can see that a "run this command" request is also a
+ * "write to any reachable file" request. Two signals: the command name (the
+ * first token inside the parens, before any `:*` prefix wildcard or literal
+ * argument) is a known file-mutating command, or the capability string
+ * itself embeds a shell redirect (`>`/`>>`) onto a file.
+ */
+export function bashCapabilityConfersFileMutation(capability: string): boolean {
+  if (!capability.startsWith('Bash(')) return false;
+  const inner = capability.slice('Bash('.length).replace(/\)$/, '');
+  if (inner.includes('>')) return true;
+  const command = inner.trim().split(/[\s:]/, 1)[0];
+  return FILE_MUTATING_BASH_COMMANDS.includes(command);
 }
 
 /**
@@ -292,12 +459,19 @@ export function isToolShapedCapability(capability: string): boolean {
  * Jira/GitHub/YAML project gets no Notion entries — granting them here
  * without the server being registered would be permissions for tools that
  * are structurally absent, the exact bug this gating fixes.
+ *
+ * `docsSourceDomains` is a docs session's per-dispatch WebFetch allowlist,
+ * derived from the Docs task's declared Source domains (see the Docs
+ * task-body convention). Only merged in for sessionType 'docs' — every other
+ * session type ignores it. Never widens to an open WebFetch/WebSearch: an
+ * empty/omitted list grants no WebFetch at all.
  */
 export function getSessionAllowedTools(
   sessionType: string,
   orchConfig: Pick<OrchestratorConfig, 'allowed_tools'>,
   granted: string[] = [],
   taskSource?: 'notion' | 'yaml' | 'jira' | 'github',
+  docsSourceDomains: string[] = [],
 ): string[] {
   const grantable = granted.filter(isGrantable).filter(isToolShapedCapability);
   const notionExtras = taskSource === 'notion' ? NOTION_READ_MCP_TOOLS : [];
@@ -308,6 +482,12 @@ export function getSessionAllowedTools(
         ? [...DESIGN_ALLOWED_TOOLS, ...notionExtras]
         : sessionType === 'ops'
           ? [...OPS_ALLOWED_TOOLS, ...notionExtras, ...orchConfig.allowed_tools]
-          : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
+          : sessionType === 'docs'
+            ? [
+                ...DOCS_ALLOWED_TOOLS,
+                ...notionExtras,
+                ...docsWebFetchTools(docsSourceDomains),
+              ]
+            : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
   return [...new Set([...base, ...grantable])];
 }

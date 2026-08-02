@@ -12,6 +12,7 @@ import type { OpsLoadResult } from '../ops/opsLoad';
 
 function fixtureGroomLoadResult(): GroomLoadResult {
   return {
+    archSource: 'notion',
     contextPages: [{ id: 'ctx-1', title: 'Master Context', markdown: '...' }],
     board: [],
     neighbourBoards: [],
@@ -31,7 +32,22 @@ function fixtureGroomLoadResult(): GroomLoadResult {
         regions: {
           packages: ['packages/backend'],
           files: ['packages/backend/src/foo.ts'],
+          planned: [],
         },
+        bindingConstraints: [],
+        archSource: 'notion',
+        archUnits: [],
+        filesPathsEntries: [],
+        dependsOnTasks: [],
+      },
+    ],
+    codeWorklist: new Map(),
+    gitFreshness: {},
+    dependencyCandidates: [
+      {
+        taskId: 'task-1',
+        candidateBlockers: [],
+        declaredDeps: [],
       },
     ],
   } as unknown as GroomLoadResult;
@@ -39,28 +55,22 @@ function fixtureGroomLoadResult(): GroomLoadResult {
 
 function fixtureDesignLoadResult(): DesignLoadResult {
   return {
+    task: {
+      id: 'task-2',
+      title: 'Design the thing',
+      status: '📐 Design',
+      type: '📐 Design',
+      url: 'https://notion.so/task-2',
+    },
+    markdown: '## Summary\n\nDesign the thing body.',
+    openQuestions: { items: [], source: 'explicit_heading' },
+    archSource: 'notion',
+    archUnits: [],
+    unresolvedPageRefs: [],
     contextPages: [
       { id: 'ctx-2', title: 'Design Master Context', markdown: '...' },
     ],
-    board: [],
-    neighbourBoards: [],
-    targetTasks: [
-      {
-        id: 'task-2',
-        title: 'Design the thing',
-        status: '📐 Design',
-        type: '📐 Design',
-        priority: 'P1',
-        url: 'https://notion.so/task-2',
-        filesSection: '',
-        rawMarkdown: '## Summary\n\nDesign the thing body.',
-        openQuestions: [],
-        regions: {
-          packages: ['packages/backend'],
-          files: ['packages/backend/src/foo.ts'],
-        },
-      },
-    ],
+    codeMapGrounding: {},
   } as unknown as DesignLoadResult;
 }
 

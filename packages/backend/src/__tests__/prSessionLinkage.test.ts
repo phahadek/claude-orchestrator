@@ -37,6 +37,12 @@ function insertTestSession(
 beforeEach(() => {
   db.exec('DELETE FROM sessions');
   db.exec('DELETE FROM pull_requests');
+  db.exec('DELETE FROM projects');
+  // upsertPullRequest rejects PRs for repos not configured on a project, to
+  // avoid creating phantom rows — seed a project so 'o/r' is recognized.
+  db.prepare(
+    `INSERT INTO projects (id, name, project_dir, github_repo, task_source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run('proj-1', 'Test Project', '/test', 'o/r', 'notion', 1000, 1000);
 });
 
 describe('lookupSessionByBranch', () => {

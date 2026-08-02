@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
 import { makeEventRow } from '../../test/helpers/eventFixtures';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mock child_process.spawn ───────────────────────────────────────────────
 // We need to mock before importing AgentSession because it imports spawn
@@ -35,33 +36,35 @@ vi.mock('child_process', () => ({
 }));
 
 // Mock DB queries — these would hit a real SQLite db otherwise
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  upsertSessionEvent: vi.fn(() => 1),
-  insertPermissionEvent: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-  getRules: vi.fn(() => []),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  insertSessionAudit: vi.fn(),
-  incrementTokens: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  setSessionModel: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  getPRByNotionTaskId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  getSession: vi.fn(() => null),
-  getProjectRowById: vi.fn(() => null),
-  insertLocalBranch: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  listUndeliveredInboxItems: vi.fn(() => []),
-  markInboxItemsDelivered: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    upsertSessionEvent: vi.fn(() => 1),
+    insertPermissionEvent: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn(() => []),
+    getRules: vi.fn(() => []),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    insertSessionAudit: vi.fn(),
+    incrementTokens: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    setSessionModel: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    getPRByNotionTaskId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    getSession: vi.fn(() => null),
+    getProjectRowById: vi.fn(() => null),
+    insertLocalBranch: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    listUndeliveredInboxItems: vi.fn(() => []),
+    markInboxItemsDelivered: vi.fn(),
+  }),
+);
 
 // Mock local branch helpers to avoid real git calls in tests
 vi.mock('../orchestration/localBranchHelpers', () => ({
@@ -92,6 +95,7 @@ import {
   markSessionIdle,
   getPRBySessionId,
   getPRByNumber,
+  upsertPullRequest,
   setPauseReason,
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
@@ -1066,7 +1070,6 @@ describe('AgentSession', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
 
-    const { upsertPullRequest } = await import('../db/queries');
     expect(upsertPullRequest).not.toHaveBeenCalled();
     expect(prOpenedEvents).toHaveLength(0);
   });
@@ -1118,7 +1121,6 @@ describe('AgentSession', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
 
-    const { upsertPullRequest } = await import('../db/queries');
     expect(upsertPullRequest).not.toHaveBeenCalled();
     expect(prOpenedEvents).toHaveLength(0);
   });
@@ -1151,6 +1153,7 @@ describe('AgentSession', () => {
       repo: 'owner/repo',
       state: 'open',
     } as never);
+    vi.mocked(upsertPullRequest).mockReturnValue(true as never);
 
     const session = new AgentSession(
       'open-upsert-session',
@@ -1170,7 +1173,6 @@ describe('AgentSession', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
 
-    const { upsertPullRequest } = await import('../db/queries');
     expect(upsertPullRequest).toHaveBeenCalled();
     expect(prOpenedEvents).toHaveLength(1);
   });
@@ -1199,6 +1201,8 @@ describe('AgentSession', () => {
         message_id: null,
       },
     ]);
+
+    vi.mocked(upsertPullRequest).mockReturnValue(true as never);
 
     const session = new AgentSession(
       'pr-session',
@@ -1240,6 +1244,7 @@ describe('AgentSession', () => {
         id: 1,
         session_id: 'sess-overload',
         ...makeEventRow('error').live,
+        event_type: 'system',
         timestamp: Date.now(),
         message_id: null,
       },
@@ -1319,6 +1324,7 @@ describe('AgentSession', () => {
         id: 1,
         session_id: 'sess-with-pr',
         ...makeEventRow('error').live,
+        event_type: 'system',
         timestamp: Date.now(),
         message_id: null,
       },
@@ -1375,6 +1381,7 @@ describe('AgentSession', () => {
         id: 1,
         session_id: 'sess-no-pr',
         ...makeEventRow('error').live,
+        event_type: 'system',
         payload: JSON.stringify({
           type: 'error',
           error: { type: 'api_error', message: 'Internal server error' },
@@ -1584,6 +1591,7 @@ describe('AgentSession', () => {
         id: 1,
         session_id: 'sess-dedup',
         ...makeEventRow('error').live,
+        event_type: 'system',
         timestamp: Date.now(),
         message_id: null,
       },
@@ -1800,10 +1808,13 @@ describe('AgentSession', () => {
     );
   });
 
-  it('records only handle_clean_exit_entered when pre-markSessionIdle path throws', async () => {
+  it('records handle_clean_exit_session_marked_idle even when getEventsBySession throws pre-markSessionIdle', async () => {
     const notion = fakeNotionClient();
     vi.mocked(getRules).mockReturnValue([]);
-    // Make getEventsBySession throw to simulate a pre-markSessionIdle failure
+    // getEventsBySession throwing is handled resiliently: handleCleanExit logs
+    // the error and falls through with prUrl=undefined rather than propagating,
+    // so markSessionIdle still runs (see AgentSession.ts handleCleanExit's
+    // try/catch around the PR-URL scan).
     vi.mocked(getEventsBySession).mockImplementation(() => {
       throw new Error('DB read failure');
     });
@@ -1821,46 +1832,22 @@ describe('AgentSession', () => {
     mockProc.stdout.push(null);
     await new Promise((r) => setTimeout(r, 0));
     mockProc.proc.emit('exit', 0);
-    // run() will reject because handleCleanExit throws
     await runPromise.catch(() => {});
 
     const calls = vi.mocked(recordEvent).mock.calls;
     const eventTypes = calls.map((c) => c[0].event_type);
     expect(eventTypes).toContain('handle_clean_exit_entered');
-    expect(eventTypes).not.toContain('handle_clean_exit_session_marked_idle');
-  });
-});
-
-// ── AC: parseNotionPageIdDashed ───────────────────────────────────────────────
-describe('parseNotionPageIdDashed', () => {
-  it('converts a 32-hex dashless ID to dashed UUID', () => {
-    expect(parseNotionPageIdDashed('36e22f9152f381018dd2f6f7c0b402e9')).toBe(
-      '36e22f91-52f3-8101-8dd2-f6f7c0b402e9',
-    );
-  });
-
-  it('returns a dashed UUID input unchanged', () => {
-    expect(
-      parseNotionPageIdDashed('36e22f91-52f3-8101-8dd2-f6f7c0b402e9'),
-    ).toBe('36e22f91-52f3-8101-8dd2-f6f7c0b402e9');
-  });
-
-  it('passes through non-UUID inputs unchanged', () => {
-    expect(parseNotionPageIdDashed('not-a-uuid')).toBe('not-a-uuid');
-    expect(parseNotionPageIdDashed('yaml:some-id')).toBe('yaml:some-id');
-  });
-
-  it('extracts dashless ID from a Notion URL and converts to dashed', () => {
-    expect(
-      parseNotionPageIdDashed(
-        'https://www.notion.so/My-Task-36e22f9152f381018dd2f6f7c0b402e9',
-      ),
-    ).toBe('36e22f91-52f3-8101-8dd2-f6f7c0b402e9');
+    expect(eventTypes).toContain('handle_clean_exit_session_marked_idle');
   });
 
   // ── AC: handleCleanExit resilient pre-markSessionIdle ────────────────────
   // When getEventsBySession throws, markSessionIdle must still run so the
   // session transitions to status='idle' rather than remaining 'running'.
+  // NOTE: this test spawns a real session via session.run(), so it must live
+  // inside this describe block to get the beforeEach mockProc reset/mock clear
+  // — it was originally (incorrectly) placed under the plain-function
+  // `parseNotionPageIdDashed` describe below, which has no beforeEach, causing
+  // it to reuse an already-ended mockProc from a prior test and hang forever.
   it('calls markSessionIdle with null prUrl when getEventsBySession throws during clean exit', async () => {
     const notion = fakeNotionClient();
     vi.mocked(getRules).mockReturnValue([]);
@@ -1896,6 +1883,34 @@ describe('parseNotionPageIdDashed', () => {
     const ended = messages.find((m) => m.type === 'session_ended');
     expect(ended).toBeDefined();
     expect((ended as { status: string }).status).toBe('idle');
+  });
+});
+
+// ── AC: parseNotionPageIdDashed ───────────────────────────────────────────────
+describe('parseNotionPageIdDashed', () => {
+  it('converts a 32-hex dashless ID to dashed UUID', () => {
+    expect(parseNotionPageIdDashed('36e22f9152f381018dd2f6f7c0b402e9')).toBe(
+      '36e22f91-52f3-8101-8dd2-f6f7c0b402e9',
+    );
+  });
+
+  it('returns a dashed UUID input unchanged', () => {
+    expect(
+      parseNotionPageIdDashed('36e22f91-52f3-8101-8dd2-f6f7c0b402e9'),
+    ).toBe('36e22f91-52f3-8101-8dd2-f6f7c0b402e9');
+  });
+
+  it('passes through non-UUID inputs unchanged', () => {
+    expect(parseNotionPageIdDashed('not-a-uuid')).toBe('not-a-uuid');
+    expect(parseNotionPageIdDashed('yaml:some-id')).toBe('yaml:some-id');
+  });
+
+  it('extracts dashless ID from a Notion URL and converts to dashed', () => {
+    expect(
+      parseNotionPageIdDashed(
+        'https://www.notion.so/My-Task-36e22f9152f381018dd2f6f7c0b402e9',
+      ),
+    ).toBe('36e22f91-52f3-8101-8dd2-f6f7c0b402e9');
   });
 });
 

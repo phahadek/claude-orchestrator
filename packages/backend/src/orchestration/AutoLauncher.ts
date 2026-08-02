@@ -24,6 +24,8 @@ import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency } from '../utils/concurrency';
 import { getProjectRepos } from '../projects/ProjectService';
 import { hasMemoryHeadroom } from './memoryAdmission';
+import { CrashBudget } from './crashBudget';
+import { isUsageAdmitted } from './usageAdmission';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -32,6 +34,7 @@ const MIN_POLL_INTERVAL_MS = 5_000;
 const FETCH_TIMEOUT_MS = 30_000;
 const PROJECT_CONCURRENCY = 5;
 const UPDATE_CONCURRENCY = 3;
+const LAUNCH_CONCURRENCY = 3;
 
 export class AutoLauncherFetchTimeoutError extends Error {
   constructor(message: string) {
@@ -66,16 +69,12 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * use the same code path as a manual UI launch.
  */
 export class AutoLauncher {
+  private polling = false;
   private pollLastStartedAt: number | null = null;
   private cycleCounter = 0;
   private notionUpdateAttempts = new Map<
     string,
     { count: number; nextRetryAt: number; lastError: string }
-  >();
-  /** Per-task in-memory cooldown for launch_failed events (separate from crash budget). */
-  private launchFailedAttempts = new Map<
-    string,
-    { count: number; nextRetryAt: number }
   >();
   /**
    * Task IDs observed as Ready in the previous poll cycle. Null until the first
@@ -93,14 +92,24 @@ export class AutoLauncher {
     60 * 60_000,
   ];
   private static readonly MAX_ATTEMPTS_BEFORE_AUDIT = 5;
-  /** Backoff schedule for launch_failed cooldown (separate from crash budget). */
+  /**
+   * Backoff schedule for launch_failed cooldown (separate from crash budget).
+   * The first tier must outlast the auto-launch poll interval — a shorter
+   * cooldown expires before the next poll and gates nothing. See the
+   * assertion in AutoLauncher.test.ts.
+   */
   private static readonly LAUNCH_FAILED_BACKOFF_MS = [
-    30_000,
+    90_000,
     2 * 60_000,
     10 * 60_000,
   ];
   /** After this many consecutive launch_failed events, escalate to needs_attention. */
   private static readonly LAUNCH_FAILED_ESCALATE_AFTER = 3;
+  /** Per-task in-memory escalating-backoff cooldown for launch_failed events. */
+  private readonly crashBudget = new CrashBudget({
+    backoffScheduleMs: AutoLauncher.LAUNCH_FAILED_BACKOFF_MS,
+    escalateAfter: AutoLauncher.LAUNCH_FAILED_ESCALATE_AFTER,
+  });
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -125,6 +134,9 @@ export class AutoLauncher {
           this.onSessionLaunchFailed(
             (msg as { type: string; taskId: string }).taskId,
           );
+        } else if (msg.type === 'session_started') {
+          const taskId = (msg as { taskId?: string }).taskId;
+          if (taskId) this.onSessionStarted(taskId);
         }
       });
     }
@@ -138,16 +150,10 @@ export class AutoLauncher {
    * escalated to needs_attention so a human can investigate.
    */
   private onSessionLaunchFailed(taskId: string): void {
-    const prev = this.launchFailedAttempts.get(taskId);
-    const count = (prev?.count ?? 0) + 1;
-    const backoffMs =
-      AutoLauncher.LAUNCH_FAILED_BACKOFF_MS[
-        Math.min(count - 1, AutoLauncher.LAUNCH_FAILED_BACKOFF_MS.length - 1)
-      ];
-    const nextRetryAt = Date.now() + backoffMs;
-    this.launchFailedAttempts.set(taskId, { count, nextRetryAt });
+    const { count, escalated, cooldownMs } =
+      this.crashBudget.recordEvent(taskId);
 
-    if (count >= AutoLauncher.LAUNCH_FAILED_ESCALATE_AFTER) {
+    if (escalated) {
       logger.warn(
         `[AutoLauncher] task ${taskId} hit ${count} consecutive launch failures — escalating to needs_attention`,
       );
@@ -163,9 +169,22 @@ export class AutoLauncher {
       });
     } else {
       logger.warn(
-        `[AutoLauncher] task ${taskId} launch_failed (attempt ${count}) — cooldown ${backoffMs / 1000}s`,
+        `[AutoLauncher] task ${taskId} launch_failed (attempt ${count}) — cooldown ${cooldownMs / 1000}s`,
       );
     }
+  }
+
+  /**
+   * Called when a session_started event confirms a launch actually succeeded
+   * (worktree established, runner spawned) — as opposed to merely dispatched.
+   * Only a confirmed-successful launch clears the crash budget; clearing on
+   * dispatch instead would wipe the failure record before the outcome is
+   * known, letting a deterministically failing task retry forever instead of
+   * escalating.
+   */
+  private onSessionStarted(taskId: string): void {
+    clearTaskPauseReason(taskId);
+    this.crashBudget.clear(taskId);
   }
 
   register(scheduler: Scheduler): void {
@@ -185,9 +204,24 @@ export class AutoLauncher {
 
   /**
    * Run a single poll cycle. Called directly on boot (after resumeOrphanSessions)
-   * and periodically by the Scheduler thereafter.
+   * and periodically by the Scheduler thereafter — guarded here too (not just
+   * via the Scheduler's skip-if-running) since the boot-time call bypasses the
+   * Scheduler's own tracking entirely.
    */
   async pollOnce(): Promise<void> {
+    if (this.polling) {
+      logger.info('[AutoLauncher] poll already in progress — skipping');
+      return;
+    }
+    this.polling = true;
+    try {
+      await this.runPollCycle();
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  private async runPollCycle(): Promise<void> {
     const cycleId = ++this.cycleCounter;
     this.pollLastStartedAt = Date.now();
     logger.info(`[AutoLauncher] poll start cycle=${cycleId}`);
@@ -359,24 +393,33 @@ export class AutoLauncher {
     if (candidates.length === 0)
       return { eligible: 0, launched: 0, skipped: 0, readyTaskIds };
 
-    let launched = 0;
-    for (const candidate of candidates) {
-      if (!this.hasCapacity()) {
-        break;
-      }
-      // Non-milestone tasks have no milestoneId — they branch off dev directly.
-      const isNonMilestone = nonMilestoneTasks.includes(candidate);
-      if (
-        await this.launchTask(
+    // Bounded concurrency so a launch burst (worktree add, git fetch, MCP-config
+    // and system-prompt writes, claude process spawn) doesn't serialise the
+    // whole tick behind its own I/O — mirrors the catch-up pass's
+    // UPDATE_CONCURRENCY pattern above. hasCapacity() is re-checked per
+    // candidate so the cap is still respected once in-flight launches land;
+    // capacityExhausted short-circuits remaining workers once it flips.
+    let capacityExhausted = false;
+    const launchResults = await runWithConcurrency(
+      candidates,
+      LAUNCH_CONCURRENCY,
+      async (candidate) => {
+        if (capacityExhausted) return false;
+        if (!this.hasCapacity()) {
+          capacityExhausted = true;
+          return false;
+        }
+        // Non-milestone tasks have no milestoneId — they branch off dev directly.
+        const isNonMilestone = nonMilestoneTasks.includes(candidate);
+        return this.launchTask(
           project,
           candidate,
           isNonMilestone ? null : milestoneId,
           isNonMilestone ? 'non_milestone' : 'milestone',
-        )
-      ) {
-        launched++;
-      }
-    }
+        );
+      },
+    );
+    const launched = launchResults.filter(Boolean).length;
 
     return {
       eligible: candidates.length,
@@ -405,7 +448,7 @@ export class AutoLauncher {
     clearTaskPauseReason(taskId);
     clearPausedPrReasonForTask(taskId);
     resetTaskCrashCount(taskId);
-    this.launchFailedAttempts.delete(taskId);
+    this.crashBudget.clear(taskId);
     logger.info(
       `[AutoLauncher] task ${taskId} transitioned to Ready — cleared stale pause state (task_pause=${hadPause}, pr_pause=${hadPrPause})`,
     );
@@ -437,8 +480,7 @@ export class AutoLauncher {
     // Skip tasks blocked by the crash budget or escalated to needs_attention (persisted).
     if (getTaskPauseReason(task.id) != null) return false;
     // Skip tasks in launch_failed cooldown (in-memory, resets on process restart).
-    const launchFailed = this.launchFailedAttempts.get(task.id);
-    if (launchFailed && Date.now() < launchFailed.nextRetryAt) return false;
+    if (this.crashBudget.inCooldown(task.id)) return false;
     // Also skip if the task's most recent PR is paused (e.g. stuck_timeout)
     // so we don't relaunch a session that was force-paused.
     if (getPausedPrReasonForTask(task.id) != null) return false;
@@ -460,9 +502,32 @@ export class AutoLauncher {
     if (cap === 0) return false;
     const liveCodeSessions = this.countLiveCodeSessions();
     if (liveCodeSessions >= cap) return false;
-    if (!hasMemoryHeadroom()) {
+    const memoryHeadroom = hasMemoryHeadroom();
+    if (!memoryHeadroom.allowed) {
       logger.info(
-        '[AutoLauncher] deferring dispatch — projected free host memory below configured budget',
+        `[AutoLauncher] deferring dispatch — projected free host memory below configured budget ` +
+          `(freeMemMB=${memoryHeadroom.freeMemMB.toFixed(1)}, minHostFreeMemoryMB=${memoryHeadroom.minHostFreeMemoryMB}, ` +
+          `perSessionReserveMB=${memoryHeadroom.perSessionReserveMB}, projectedFreeMB=${memoryHeadroom.projectedFreeMB.toFixed(1)})`,
+      );
+      recordEvent({
+        event_type: 'memory_admission_deferred',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: null,
+        payload: {
+          freeMemMB: memoryHeadroom.freeMemMB,
+          minHostFreeMemoryMB: memoryHeadroom.minHostFreeMemoryMB,
+          perSessionReserveMB: memoryHeadroom.perSessionReserveMB,
+          projectedFreeMB: memoryHeadroom.projectedFreeMB,
+        },
+      });
+      return false;
+    }
+    const usageAdmission = isUsageAdmitted();
+    if (!usageAdmission.allowed) {
+      logger.info(
+        `[AutoLauncher] deferring dispatch — plan usage (${usageAdmission.window}) exhausted until ${usageAdmission.deferredUntil ? new Date(usageAdmission.deferredUntil).toISOString() : 'unknown'}`,
       );
       return false;
     }
@@ -533,8 +598,9 @@ export class AutoLauncher {
           repo: resolvedRepo,
         },
       );
-      clearTaskPauseReason(task.id);
-      this.launchFailedAttempts.delete(task.id);
+      // The crash budget and pause reason are cleared only once session_started
+      // confirms the launch actually succeeded (see onSessionStarted) — start()
+      // resolving here means dispatch was accepted, not that the launch worked.
       logger.info(
         `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}${resolvedRepo ? ` repo=${resolvedRepo}` : ''}`,
       );

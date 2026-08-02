@@ -13,6 +13,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerVerdictTools } from './verdictTools';
 import type { AgentSession } from '../../session/AgentSession';
+import { VERIFIER_RECLASSIFY_TARGETS } from '../../session/AgentSession';
+import { gateVerifyReclassifyToSchema } from './schemas';
 import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
 
 function fakeSession() {
@@ -159,14 +161,131 @@ describe('gate.verify', () => {
       arguments: {
         gateItemId: 'item-1',
         disposition: 'pass',
-        evidence: { note: 'confirmed via audit_log' },
+        evidence: {
+          expected: 'The endpoint records an audit_log row on success.',
+          found: 'audit_log shows one matching row from the last run.',
+          query: 'auditLog.query projectId=proj-1 action=widget_created',
+        },
       },
     });
     expect(resultOf(result as never)).toEqual({ status: 'ok' });
     expect(session.recordGateVerifyDisposition).toHaveBeenCalledWith({
       gateItemId: 'item-1',
       disposition: 'pass',
-      evidence: { note: 'confirmed via audit_log' },
+      evidence: {
+        expected: 'The endpoint records an audit_log row on success.',
+        found: 'audit_log shows one matching row from the last run.',
+        query: 'auditLog.query projectId=proj-1 action=widget_created',
+      },
+      reclassify: undefined,
+    });
+    await close();
+  });
+
+  it('rejects evidence missing expected/found/query', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'pass',
+        evidence: { expected: 'x', found: 'y' },
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(session.recordGateVerifyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('rejects an evidence line over the single-line cap', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'pass',
+        evidence: {
+          expected: 'x'.repeat(300),
+          found: 'y',
+          query: 'z',
+        },
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(session.recordGateVerifyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('rejects evidence.source when disposition is pass', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'pass',
+        evidence: {
+          expected: 'x',
+          found: 'y',
+          query: 'z',
+          source: 'packages/backend/src/gate/gateStore.ts:12',
+        },
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(session.recordGateVerifyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('rejects evidence.source when disposition is needs-setup', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'needs-setup',
+        evidence: {
+          expected: 'x',
+          found: 'nothing found',
+          query: 'z',
+          source: 'packages/backend/src/gate/gateStore.ts:12',
+        },
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(session.recordGateVerifyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('accepts evidence.source when disposition is fail', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'fail',
+        evidence: {
+          expected: 'x',
+          found: 'the record shows the opposite',
+          query: 'z',
+          source: 'packages/backend/src/gate/gateStore.ts:12',
+        },
+      },
+    });
+    expect(resultOf(result as never)).toEqual({ status: 'ok' });
+    expect(session.recordGateVerifyDisposition).toHaveBeenCalledWith({
+      gateItemId: 'item-1',
+      disposition: 'fail',
+      evidence: {
+        expected: 'x',
+        found: 'the record shows the opposite',
+        query: 'z',
+        source: 'packages/backend/src/gate/gateStore.ts:12',
+      },
       reclassify: undefined,
     });
     await close();
@@ -192,19 +311,54 @@ describe('gate.verify', () => {
     await close();
   });
 
-  it('rejects a reclassify target outside Human-Observation/needs-triage', async () => {
+  it('accepts a reclassify proposal to Opportunistic', async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session, 'ops');
-    const result = await client.callTool({
+    await client.callTool({
       name: 'gate.verify',
       arguments: {
-        gateItemId: 'item-3',
+        gateItemId: 'item-4',
         disposition: 'needs-setup',
-        reclassify: { to: 'Read-Only', reason: 'looks headless' },
+        reclassify: {
+          to: 'Opportunistic',
+          reason: 'the triggering condition has not happened yet',
+        },
       },
     });
-    expect(result.isError).toBe(true);
-    expect(session.recordGateVerifyDisposition).not.toHaveBeenCalled();
+    expect(session.recordGateVerifyDisposition).toHaveBeenCalledWith({
+      gateItemId: 'item-4',
+      disposition: 'needs-setup',
+      evidence: undefined,
+      reclassify: {
+        to: 'Opportunistic',
+        reason: 'the triggering condition has not happened yet',
+      },
+    });
     await close();
+  });
+
+  it.each(['Read-Only', 'Prod-Mutating'])(
+    'rejects a reclassify target of %s',
+    async (to) => {
+      const session = fakeSession();
+      const { client, close } = await connectedClient(() => session, 'ops');
+      const result = await client.callTool({
+        name: 'gate.verify',
+        arguments: {
+          gateItemId: 'item-3',
+          disposition: 'needs-setup',
+          reclassify: { to, reason: 'looks headless' },
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(session.recordGateVerifyDisposition).not.toHaveBeenCalled();
+      await close();
+    },
+  );
+
+  it('keeps VERIFIER_RECLASSIFY_TARGETS and gateVerifyReclassifyToSchema in sync', () => {
+    expect(new Set(gateVerifyReclassifyToSchema.options)).toEqual(
+      VERIFIER_RECLASSIFY_TARGETS,
+    );
   });
 });

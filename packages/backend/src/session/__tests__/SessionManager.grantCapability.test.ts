@@ -144,6 +144,7 @@ vi.mock('../../db/queries', () => ({
   setSessionLastErrorDetail: vi.fn(),
   setTaskPauseReason: vi.fn(),
   TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
+  getUsageDeferral: vi.fn().mockReturnValue(null),
   getGrantedCapabilities: vi.fn(
     (sessionId: string) =>
       grantedCapabilitiesStore.get(sessionId)?.slice() ?? [],
@@ -159,10 +160,14 @@ vi.mock('../../db/queries', () => ({
 }));
 
 vi.mock('../../config', () => ({
-  config: { maxConcurrentCodeSessions: 5 },
+  config: {},
   getProjectById: vi.fn(),
   normalizePath: vi.fn().mockImplementation((p: string) => p),
-  runtimeSettings: { session_mode: 'cli', corporate_mode_enabled: false },
+  runtimeSettings: {
+    session_mode: 'cli',
+    corporate_mode_enabled: false,
+    max_concurrent_code_sessions: 5,
+  },
   ALLOWED_TOOLS: ['Read', 'Grep', 'Glob'],
   GROOM_ALLOWED_TOOLS: ['Read', 'Grep', 'Glob'],
   DESIGN_ALLOWED_TOOLS: ['Read', 'Grep', 'Glob'],
@@ -186,6 +191,7 @@ vi.mock('child_process', () => ({
         callback(null, { stdout: '', stderr: '' });
       },
     ),
+  execFile: vi.fn(),
 }));
 
 // Worktree + .git always present — exercises the surviving-worktree fast path.

@@ -102,9 +102,12 @@ describe('buildOrchestratorClaudeMd', () => {
       expect(output).not.toContain('pr-body.md');
     });
 
-    it('does NOT instruct running gh pr create', () => {
+    it('does NOT instruct running gh pr create as the primary path', () => {
       const output = buildOrchestratorClaudeMd(BASE_PARAMS);
-      expect(output).not.toContain('gh pr create');
+      // `gh pr create` may be mentioned as an already-fine fallback (a session
+      // that opened its own PR that way isn't told to undo it), but the
+      // marker remains "the sanctioned path" for creating a PR.
+      expect(output).toContain('this is the sanctioned path');
     });
 
     it('does NOT include --body-file flag in PR creation instructions', () => {

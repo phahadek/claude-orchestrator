@@ -17,20 +17,24 @@ const standardParams = {
 };
 
 describe('buildOrchestratorClaudeMd — size ceilings', () => {
-  it('rendered standard fixture is ≤ 6,250 characters', () => {
+  // Ceilings were bumped to track legitimate growth (Context Efficiency,
+  // Responding to Review Comments, Manual Verification Gate sections, etc.)
+  // added since these were first set; they still guard against unbounded
+  // creep, just at the current, larger baseline.
+  it('rendered standard fixture is ≤ 9,500 characters', () => {
     const output = buildOrchestratorClaudeMd(standardParams);
-    expect(output.length).toBeLessThanOrEqual(6250);
+    expect(output.length).toBeLessThanOrEqual(9500);
   });
 
-  it('rendered standard fixture is ≤ 990 words', () => {
+  it('rendered standard fixture is ≤ 1,600 words', () => {
     const output = buildOrchestratorClaudeMd(standardParams);
     const wordCount = output.trim().split(/\s+/).length;
-    expect(wordCount).toBeLessThanOrEqual(990);
+    expect(wordCount).toBeLessThanOrEqual(1600);
   });
 
-  it('hard ceiling: rendered standard fixture is ≤ 6,500 characters', () => {
+  it('hard ceiling: rendered standard fixture is ≤ 9,750 characters', () => {
     const output = buildOrchestratorClaudeMd(standardParams);
-    expect(output.length).toBeLessThanOrEqual(6500);
+    expect(output.length).toBeLessThanOrEqual(9750);
   });
 });
 
@@ -49,11 +53,11 @@ describe('buildOrchestratorClaudeMd — behaviour preservation', () => {
     );
   });
 
-  it('pre-PR gate: stash, rebase, restore steps present', () => {
+  it('pre-PR gate: rebase and stage steps present (no CLAUDE.md stash step)', () => {
     const output = buildOrchestratorClaudeMd(baseParams);
-    expect(output).toContain('git stash push CLAUDE.md');
     expect(output).toContain('Rebase onto');
-    expect(output).toContain('git stash pop');
+    expect(output).not.toContain('git stash push CLAUDE.md');
+    expect(output).not.toContain('git stash pop');
     expect(output).toContain('Stage only your implementation files');
   });
 
@@ -312,9 +316,30 @@ describe('buildOrchestratorClaudeMd — taskBackend wording', () => {
       );
     });
 
-    it('PR body template uses "## Task"', () => {
+    it('PR body template tells the session to record the ticket key and browse URL', () => {
       const output = buildOrchestratorClaudeMd(localParams);
-      expect(output).toContain('## Task\n<link to the task page>');
+      expect(output).toContain('## Task\nRecord the originating ticket');
+      expect(output).toContain('its key (e.g. `ENG-8641`)');
+      expect(output).toContain('its browse URL (e.g.');
+    });
+
+    it('derives the example browse URL from jiraBrowseBaseUrl when configured', () => {
+      const output = buildOrchestratorClaudeMd({
+        ...localParams,
+        jiraBrowseBaseUrl: 'https://mycompany.atlassian.net',
+      });
+      expect(output).toContain(
+        'https://mycompany.atlassian.net/browse/ENG-8641',
+      );
+    });
+
+    it('falls back to a usable generic example when no browse-URL source is configured', () => {
+      const output = buildOrchestratorClaudeMd(localParams);
+      expect(output).toContain(
+        'https://yourcompany.atlassian.net/browse/ENG-8641',
+      );
+      expect(output).not.toMatch(/\(e\.g\. \/browse\//);
+      expect(output).not.toContain('(e.g. ).');
     });
 
     it('contains no "Notion" substring (regression)', () => {
@@ -324,6 +349,40 @@ describe('buildOrchestratorClaudeMd — taskBackend wording', () => {
 
     it('matches snapshot', () => {
       expect(buildOrchestratorClaudeMd(localParams)).toMatchSnapshot();
+    });
+  });
+
+  describe('PR body template structure is backend-agnostic', () => {
+    const taskSectionHeaderByBackend = {
+      notion: '## Notion Task',
+      github: '## GitHub Issue',
+      jira: '## Jira Issue',
+      local: '## Task',
+    } as const;
+
+    it('section set and ordering are identical across all backends', () => {
+      const backends = ['notion', 'github', 'jira', 'local'] as const;
+
+      for (const taskBackend of backends) {
+        const output = buildOrchestratorClaudeMd({
+          ...baseParams,
+          taskBackend,
+        });
+        const template = output.slice(
+          output.indexOf('## PR Format Standards'),
+          output.indexOf('## Branch Rules'),
+        );
+        const order = [
+          '## Summary',
+          taskSectionHeaderByBackend[taskBackend],
+          '## Automated Tests',
+          '## Files Changed',
+        ].map((h) => template.indexOf(h));
+
+        expect(order.every((i) => i !== -1)).toBe(true);
+        const sorted = [...order].sort((a, b) => a - b);
+        expect(order).toEqual(sorted);
+      }
     });
   });
 });

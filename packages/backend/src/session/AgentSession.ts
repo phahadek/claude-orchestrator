@@ -3,6 +3,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
+import { getCorporateMode } from '../config/corporateMode';
 import type { GateItemClassification } from '../db/types';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';
@@ -32,11 +33,11 @@ import {
   markInboxItemsDelivered,
   getSession,
   markSessionInitiatedPRClose,
-  setTaskPauseReason,
-  hasStagedIntentForSession,
-  hasActiveCapabilityRequestForSession,
   getGrantedCapabilities,
+  setTaskPauseReason,
+  setHumanMergeOnly,
 } from '../db/queries';
+import { groomSessionConcludedWithDecision } from '../orchestration/planningDecisionKinds';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -51,11 +52,7 @@ import {
   getSessionAllowedTools,
 } from './orchestrator-config';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
-import {
-  recordEvent,
-  countPushFailureEvents,
-  countEventsBySessionAndType,
-} from '../audit/AuditLog';
+import { recordEvent, countPushFailureEvents } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ISessionManager } from './SessionAuditor';
 import { detectInFlightEscape } from './SessionAuditor';
@@ -68,13 +65,15 @@ import {
   isGateVerifySession,
   opensPr,
 } from './sessionPredicates';
-import { hasPendingGateVerifyAppeal } from '../gate/gateItemVerifier';
+import { stageIntent } from '../routes/stagedIntents';
+import { getGateItem } from '../gate/gateService';
 import {
   VALID_EVENT_TYPES,
   SILENT_SKIP_TYPES,
   toEventType,
 } from './eventTypes';
-import { eventKind } from './eventKind';
+import { eventKind, isUsageLimitResult } from './eventKind';
+import { recordObservedUsageLimit } from '../orchestration/usageAdmission';
 import { isContextOverflow } from './contextOverflow';
 import { logger } from '../logger';
 import {
@@ -93,14 +92,19 @@ const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 
 /**
  * Classifications a gate-verify session may propose reclassifying its item
- * to — a self-correction channel, not a free-form retag. Both targets add
- * oversight (route the item out of auto-run), matching the grooming
- * decision that only downgrade-style reclassifications are permitted from
- * this channel; a verifier can never propose an auto-run tier.
+ * to — a self-correction channel, not a free-form retag. Human-Observation
+ * and needs-triage add oversight (route the item out of auto-run).
+ * Opportunistic is also permitted: a gate.verify report is staged as a
+ * normal intent and disposed by an operator, so a verifier proposing
+ * Opportunistic is a proposal an operator approves, not a self-applied
+ * escalation back into auto-run — and MAX_VERIFIER_RECLASSIFY_ATTEMPTS
+ * independently bounds ping-pong. Read-Only and Prod-Mutating remain off
+ * limits: a verifier can never propose those auto-run tiers.
  */
 export const VERIFIER_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Human-Observation',
   'needs-triage',
+  'Opportunistic',
 ]);
 
 export interface GateVerifyReclassifyProposal {
@@ -421,8 +425,8 @@ export class AgentSession extends EventEmitter {
   public model: string | null = null;
   /** Count of consecutive transient-error retries for this session instance. Resets on clean exit. */
   private retryCount = 0;
-  /** Guard: fires at most once per session to avoid duplicate pause broadcasts. */
-  private inSessionApiErrorFired = false;
+  /** Guard: prevents re-entrant handling while a retry/escalation is already in flight for this instance. */
+  private inSessionOverloadHandling = false;
   /** Set when a context-overflow result event is detected; suppresses generic retry. */
   private contextOverflowDetected = false;
   /** Set by tryEscalateForOverflow() — target model for the escalated spawn. */
@@ -445,10 +449,9 @@ export class AgentSession extends EventEmitter {
   private readonly processedPRBodyMessageIds = new Set<string>();
   /** Last-recorded verdict per key, serialized — MCP verdict tools dedup a
    *  same-content repeat call against these before emitting (see recordReviewDisposition,
-   *  recordVerifiedFlakyDisposition, recordGateVerifyDisposition below). */
+   *  recordVerifiedFlakyDisposition below). */
   private readonly recordedDispositions = new Map<number, string>();
   private recordedVerifiedFlaky: string | null = null;
-  private recordedGateVerify: string | null = null;
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
   private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
@@ -617,7 +620,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const modelSetting =
       this.launchModel ||
       (this.sessionType === 'ops'
-        ? runtimeSettings.ops_session_model
+        ? isGateVerifySession(this.taskId)
+          ? runtimeSettings.gate_verify_session_model ||
+            runtimeSettings.ops_session_model
+          : runtimeSettings.ops_session_model
         : isPlanningSession(this.sessionType)
           ? runtimeSettings.planning_session_model
           : isCodeSession(this.sessionType)
@@ -626,7 +632,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const effortSetting =
       this.launchEffort ||
       (this.sessionType === 'ops'
-        ? runtimeSettings.ops_session_effort
+        ? isGateVerifySession(this.taskId)
+          ? runtimeSettings.gate_verify_session_effort ||
+            runtimeSettings.ops_session_effort
+          : runtimeSettings.ops_session_effort
         : isPlanningSession(this.sessionType)
           ? runtimeSettings.planning_session_effort
           : isCodeSession(this.sessionType)
@@ -735,12 +744,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             ORCHESTRATOR_BACKEND_PORT: String(
               getOrchestratorConfig().server.port,
             ),
-            // Sessions stage task-write intents and deliver verdicts through
-            // the orchestrator MCP tool surface (see mcpConfigPath above),
-            // authenticated by this same per-session stage credential. The
-            // token is also read directly by the vendored
-            // ~/.claude/scripts/read-session-record.mjs client for the one
-            // brokered REST read this session may hold no other way to reach.
+            // Sessions stage task-write intents, deliver verdicts, and read
+            // their own-record/audit-log grants (session.getRecord /
+            // auditLog.query) through the orchestrator MCP tool surface (see
+            // mcpConfigPath above), authenticated by this same per-session
+            // stage credential.
             ORCHESTRATOR_STAGE_TOKEN: stageToken,
           },
         },
@@ -848,6 +856,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
       if (exitCode === 0) {
         this.retryCount = 0;
+        if (this.isUsageLimitTermination()) {
+          this.recordUsageLimitTermination();
+        }
         await this.handleCleanExit();
         return;
       }
@@ -961,6 +972,55 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   }
 
   /**
+   * Return true if the session's last DB event is a terminating 'result'
+   * event carrying api_error_status: 429 — the CLI's own usage-limit signal.
+   * The CLI exits 0 on this path, so isTransientApiError (which only fires
+   * on 'error' events) never catches it; without this check the death is
+   * indistinguishable from a normal clean park.
+   */
+  private isUsageLimitTermination(): boolean {
+    try {
+      const events = getEventsBySession(this.sessionId);
+      if (events.length === 0) return false;
+      return isUsageLimitResult(events[events.length - 1]);
+    } catch {
+      // A DB read failure here must not block the clean-exit path — worst
+      // case a usage-limit death goes unrecorded this once; handleCleanExit
+      // has its own (also best-effort) event read right after this.
+      return false;
+    }
+  }
+
+  /**
+   * Records the distinct session-scoped usage_limit_deferred pause reason
+   * and an observed-limit deferral before the normal clean-exit park runs,
+   * so a usage-limit death is visible in session_pause_intervals rather than
+   * left as an unmarked idle park indistinguishable from stalled_idle. Does
+   * not alter the clean-exit park itself (still idle, not error/killed) —
+   * this is a clean park, not a crash.
+   */
+  private recordUsageLimitTermination(): void {
+    insertPauseInterval(this.sessionId, 'usage_limit_deferred');
+    let resultMessage: string | undefined;
+    const events = getEventsBySession(this.sessionId);
+    const lastEvent = events[events.length - 1];
+    if (lastEvent) {
+      try {
+        const parsed = JSON.parse(lastEvent.payload) as Record<string, unknown>;
+        if (typeof parsed.result === 'string') resultMessage = parsed.result;
+      } catch {
+        // Fall through with resultMessage undefined — recordObservedUsageLimit
+        // falls back to a bounded deferral interval in that case.
+      }
+    }
+    recordObservedUsageLimit(resultMessage);
+    sessionLog(
+      this.sessionId,
+      'usage-limit termination detected on clean exit — recorded usage_limit_deferred',
+    );
+  }
+
+  /**
    * Build a concise one-line reason for a non-zero/null process exit, suitable for
    * last_error_detail. Appends a short snippet of the last error event when present.
    */
@@ -977,13 +1037,110 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
   /**
    * Called when a transient API error (529/500) is detected in a live session
-   * that has not exited. Pauses the session immediately without auto-retry since
-   * there is no --resume target while the CLI process is still running.
+   * that has not exited. The CLI process is still running, so there is no
+   * exit-code retry path to fall into (that path only fires post-exit) — this
+   * kills the process and respawns it in place via --resume, on a shared
+   * per-session escalating-backoff budget (SessionManager.inSessionOverloadBudget,
+   * keyed by sessionId so the count survives the respawn even though this
+   * AgentSession instance does not). Once the bounded retry budget is
+   * exhausted, falls back to a distinct needs-attention pause
+   * (api_overloaded_exhausted) instead of parking silently under the
+   * original 'api_overloaded' reason forever.
    */
   private handleInSessionApiError(): void {
-    if (this.inSessionApiErrorFired) return;
-    this.inSessionApiErrorFired = true;
+    if (this.inSessionOverloadHandling) return;
+    this.inSessionOverloadHandling = true;
 
+    if (!this.sessionManager?.recordInSessionOverloadEvent) {
+      this.pauseForManualOverloadRecovery();
+      return;
+    }
+
+    const { count, escalated, cooldownMs } =
+      this.sessionManager.recordInSessionOverloadEvent(this.sessionId);
+
+    if (escalated) {
+      this.escalateExhaustedOverloadRetries();
+      return;
+    }
+
+    sessionLog(
+      this.sessionId,
+      `in-session transient API error — auto-retry ${count} after ${cooldownMs}ms`,
+    );
+    insertPauseInterval(this.sessionId, 'api_overloaded');
+    this.broadcast({
+      type: 'session_status',
+      sessionId: this.sessionId,
+      status: 'retrying',
+    });
+    setTimeout(() => {
+      void this.retryAfterInSessionOverload();
+    }, cooldownMs);
+  }
+
+  /** Kill+respawn this session in place once the backoff delay elapses. Falls back to escalation on any failure. */
+  private async retryAfterInSessionOverload(): Promise<void> {
+    if (this.isKilling || this.isPausingForShutdown || this.hasEnded) return;
+    try {
+      const respawned =
+        (await this.sessionManager?.respawnForTransientOverload?.(
+          this.sessionId,
+        )) ?? false;
+      if (!respawned) {
+        this.escalateExhaustedOverloadRetries();
+      }
+    } catch (err) {
+      logger.warn(
+        `[AgentSession] respawnForTransientOverload failed for ${this.sessionId}: ${(err as Error).message}`,
+      );
+      this.escalateExhaustedOverloadRetries();
+    }
+  }
+
+  /**
+   * The retry budget for a mid-session 529/500 is exhausted (or a respawn
+   * attempt itself failed) — pause with the distinct api_overloaded_exhausted
+   * reason so this is visible as needing a human, not indistinguishable from
+   * a clean park.
+   */
+  private escalateExhaustedOverloadRetries(): void {
+    const pr = getPRBySessionId(this.sessionId);
+    if (pr) {
+      setPauseReason(pr.pr_number, pr.repo, 'api_overloaded_exhausted');
+    }
+    if (this.taskId) {
+      setTaskPauseReason(
+        this.taskId,
+        'api_overloaded_exhausted',
+        'in-session 529/500 auto-retry budget exhausted',
+      );
+    }
+    insertPauseInterval(this.sessionId, 'api_overloaded_exhausted');
+
+    const pauseMessage =
+      'The Anthropic API kept returning 529 Overloaded / 500 errors after ' +
+      'several automatic retries. This session has been paused and flagged ' +
+      'for manual attention.';
+    if (this.sessionManager) {
+      try {
+        this.sessionManager.send(this.sessionId, pauseMessage);
+      } catch (err) {
+        logger.warn(
+          `[AgentSession] send failed for ${this.sessionId}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    this.broadcast({
+      type: 'api_overloaded_paused',
+      sessionId: this.sessionId,
+      ...(pr ? { prNumber: pr.pr_number, repo: pr.repo } : {}),
+    });
+  }
+
+  /** Fallback for environments with no sessionManager (e.g. unit tests) — no respawn target, so pause for manual recovery under the original reason. */
+  private pauseForManualOverloadRecovery(): void {
     const pr = getPRBySessionId(this.sessionId);
     if (pr) {
       setPauseReason(pr.pr_number, pr.repo, 'api_overloaded');
@@ -1430,6 +1587,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         totalInputTokens: this.totalInputTokens,
         totalOutputTokens: this.totalOutputTokens,
       });
+      // A completed turn means the API has recovered — reset the in-session
+      // overload retry budget so a future 529/500 gets the full bounded
+      // retry allowance again instead of inheriting an exhausted count.
+      if (event.is_error !== true) {
+        this.sessionManager?.clearInSessionOverloadBudget?.(this.sessionId);
+      }
     }
 
     // Skip broadcasting user events that contain only system-injected content
@@ -1970,6 +2133,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         upsertSucceeded = false;
       }
 
+      if (upsertSucceeded && this.sessionType === 'docs') {
+        setHumanMergeOnly(prNumber, repo, true);
+      }
+
       // If head_sha or body was missing from the tool response (live-detection path
       // where gh pr create does not include body in its stream output), fetch the
       // full PR from GitHub for accurate head_sha backfill and/or body validation.
@@ -1986,7 +2153,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             if (needsBodyValidation) {
               const bodyValidation = validatePRBody(freshPR.body);
               if (!bodyValidation.valid) {
-                const isCorporate = runtimeSettings.corporate_mode_enabled;
+                const isCorporate = getCorporateMode().gates.validatePRBody;
                 recordEvent({
                   event_type: isCorporate
                     ? 'pr_body_invalid'
@@ -2034,7 +2201,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       if (prShape.body) {
         const bodyValidation = validatePRBody(prShape.body);
         if (!bodyValidation.valid) {
-          const isCorporate = runtimeSettings.corporate_mode_enabled;
+          const isCorporate = getCorporateMode().gates.validatePRBody;
           recordEvent({
             event_type: isCorporate
               ? 'pr_body_invalid'
@@ -2180,10 +2347,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
               if (pr) {
                 setPauseReason(pr.pr_number, pr.repo, 'diverged_branch');
               }
-              const baseBranch = pr?.base_branch ?? 'dev';
               const nudgeMsg =
                 `Your branch has diverged from origin/${branch} (${behind} commit(s) behind). ` +
-                `Run: git fetch origin && git rebase origin/${baseBranch}, resolve any conflicts, then ` +
+                `Run: git fetch origin && git rebase origin/${branch}, resolve any conflicts, then ` +
                 `git push --force-with-lease origin ${branch} (a bare push will be rejected after a rebase).`;
               void this.sessionManager?.sendOrResume?.(
                 this.sessionId,
@@ -2261,7 +2427,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           this.sessionId,
           this.projectId || null,
           this.taskId || null,
-          runtimeSettings.corporate_mode_enabled,
+          getCorporateMode().enabled,
         ).catch((e) =>
           logger.warn(`[AgentSession] checkCommitAttribution failed: ${e}`),
         );
@@ -2289,7 +2455,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       sessionId: this.sessionId,
       projectId: this.projectId || null,
       taskId: this.taskId || null,
-      skipCi: sessionConfig?.autofix_skip_ci ?? true,
+      skipCi: sessionConfig?.autofix_skip_ci ?? false,
       onReverted: (files) => {
         for (const f of files) this._revertLock.add(f);
       },
@@ -2416,82 +2582,52 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     });
     const endedAt = Date.now();
 
-    // A gate-verify session (task_id `gate-item:<id>`) is one-shot: it exists
-    // to settle a single gate item and has no resume purpose once it has
-    // reported (a re-verify is a fresh session, not a resume of this one).
-    // Conclude it done/archived rather than parking it idle forever — unless
-    // it ended this turn with an unresolved session.requestCapability intent
-    // (the sanctioned ask-permission path — see stagedIntents.ts's
-    // resumeCapabilityRequester) or a pending gate-verify appeal (see
-    // gateItemVerifier.ts's hasPendingGateVerifyAppeal): either needs the
-    // session to still be parkable so it can be resumed with the operator's
-    // decision, or the appeal feedback, rather than archived out from under it.
-    if (
-      isPlanningSession(this.sessionType) &&
-      isGateVerifySession(this.taskId) &&
-      !hasActiveCapabilityRequestForSession(this.sessionId) &&
-      !hasPendingGateVerifyAppeal(this.sessionId)
-    ) {
-      markSessionDone(this.sessionId, endedAt, null, 'gate_verify_clean_exit');
-      resetTaskCrashCount(this.taskId);
-      recordEvent({
-        event_type: 'handle_clean_exit_session_marked_done',
-        actor_type: 'system',
-        actor_id: this.sessionId,
-        project_id: this.projectId ?? null,
-        task_id: this.taskId || null,
-        payload: { session_id: this.sessionId, pr_url: null },
-      });
-      this.broadcast({
-        type: 'session_ended',
-        sessionId: this.sessionId,
-        status: 'done',
-        ...(this.taskId && { taskId: this.taskId }),
-      });
-      return;
-    }
-
-    // Planning sessions (groom/design) never scrape for a PR URL and never
+    // Planning sessions (groom/design/ops, including gate-verify) never
     // enter the PR/recovery chain — they park into idle awaiting disposition
     // (human/dashboard action on the session's findings), not a merge.
+    // A park that staged nothing counting as a decision (no task-write, no
+    // ops_journal transition, no explicit no-op marker) is detected and
+    // handled by PlanningOrchestrator.checkTerminal — the single authoritative
+    // signal for this, on every park including the first, not just here.
     if (isPlanningSession(this.sessionType)) {
-      // First-turn-empty / garbage: a first turn that stages nothing (or only
-      // validation-rejected intents, which never make it into staged_intent)
-      // surfaces as needs_attention — distinct from a later turn staging
-      // nothing, which is the natural-completion signal.
-      const isFirstTurn =
-        countEventsBySessionAndType(
-          this.sessionId,
-          'handle_clean_exit_session_marked_idle',
-        ) === 0;
+      // A finished groom session must reach a terminal state directly rather
+      // than park idle and wait on PlanningOrchestrator's own (asynchronous,
+      // event-driven) checkTerminal to catch up — idle is reserved for a
+      // session genuinely still awaiting operator input, never a stand-in
+      // for "concluded but not yet promoted". Scoped to groom only: unlike
+      // groom, a design session's natural completion has the side effect of
+      // closing its target task (PlanningOrchestrator.markTerminal's
+      // completeDesignTask), which this fast path does not replicate — a
+      // design session's completion still goes through the async park path.
       if (
-        isFirstTurn &&
+        this.sessionType === 'groom' &&
         this.taskId &&
-        !hasStagedIntentForSession(this.sessionId)
+        groomSessionConcludedWithDecision(this.sessionId)
       ) {
-        const detail =
-          'First planning turn completed without staging any task-write intents.';
-        setTaskPauseReason(this.taskId, 'planning_first_turn_empty', detail);
+        markSessionDone(
+          this.sessionId,
+          endedAt,
+          null,
+          'planning_no_pending_dispositions',
+        );
+        resetTaskCrashCount(this.taskId);
         recordEvent({
-          event_type: 'auto_launch_paused',
+          event_type: 'handle_clean_exit_session_marked_done',
           actor_type: 'system',
           actor_id: this.sessionId,
           project_id: this.projectId ?? null,
-          task_id: this.taskId,
-          payload: {
-            reason: 'planning_first_turn_empty',
-            sessionId: this.sessionId,
-          },
+          task_id: this.taskId || null,
+          payload: { session_id: this.sessionId, pr_url: null },
         });
         this.broadcast({
-          type: 'auto_launch_paused',
-          taskId: this.taskId,
-          reason: 'planning_first_turn_empty',
-          detail,
+          type: 'session_ended',
+          sessionId: this.sessionId,
+          status: 'done',
+          ...(this.taskId && { taskId: this.taskId }),
         });
+        return;
       }
-
-      markSessionIdle(this.sessionId, endedAt, null);
+      const effectiveStatus = markSessionIdle(this.sessionId, endedAt, null);
       if (this.taskId) resetTaskCrashCount(this.taskId);
       recordEvent({
         event_type: 'handle_clean_exit_session_marked_idle',
@@ -2504,7 +2640,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       this.broadcast({
         type: 'session_ended',
         sessionId: this.sessionId,
-        status: 'idle',
+        status: effectiveStatus,
         ...(this.taskId && { taskId: this.taskId }),
       });
       return;
@@ -2561,7 +2697,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // calls. Session becomes done only when the PR merges (PRMergeWatcher).
     // Using idle (not done) prevents the post-hoc auditor from triggering review
     // on a stale SHA before the PR has been properly reviewed/merged.
-    markSessionIdle(this.sessionId, endedAt, prUrl ?? null);
+    const effectiveStatus = markSessionIdle(
+      this.sessionId,
+      endedAt,
+      prUrl ?? null,
+    );
     if (this.taskId) resetTaskCrashCount(this.taskId);
     recordEvent({
       event_type: 'handle_clean_exit_session_marked_idle',
@@ -2574,6 +2714,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     await recoverSession(this.sessionId, {
       scope: 'clean_exit',
+      effectiveStatus,
       prUrl,
       prDetectedLive: this.prDetectedLive,
       sessionType: this.sessionType,
@@ -2695,20 +2836,40 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   }
 
   /**
-   * Record a gate-verify disposition delivered via the gate.verify MCP tool
-   * and emit the same `gate_verify_disposition` event the retired stdout
-   * parser (parseGateVerifyDisposition) used to emit, so GateItemVerifier is
-   * unaffected. Fires unconditionally (no PR gating) — a read-only
-   * gate-verify session has no PR of its own. Idempotent per session: an
-   * identical repeat call is a dedup no-op; a changed disposition is
-   * last-write-wins.
+   * Record a gate-verify disposition delivered via the gate.verify MCP tool:
+   * stages it as a normal `gate.verify` intent (see stagedIntents.ts) — the
+   * operator disposes it on the regular decision surface, with normal turns
+   * and normal pushback, exactly like any other groom/design/ops staged
+   * intent — never a direct gate_item_event write. Also emits the same
+   * `gate_verify_disposition` event the retired stdout parser
+   * (parseGateVerifyDisposition) used to emit, so GateItemVerifier's
+   * in-flight `verify()` dispatch (a distinct concern — settling the
+   * dispatch, not the verdict) is unaffected. Fires unconditionally (no PR
+   * gating) — a read-only gate-verify session has no PR of its own.
+   * Staging itself is content-idempotent (see stageIntent), so no separate
+   * dedup is needed here — unlike recordReviewDisposition/
+   * recordVerifiedFlakyDisposition above, a repeat call with the same
+   * disposition after a rejection must be allowed to re-stage.
    */
   recordGateVerifyDisposition(disposition: GateVerifyDisposition): void {
-    const serialized = JSON.stringify(disposition);
-    if (this.recordedGateVerify === serialized) {
-      return;
-    }
-    this.recordedGateVerify = serialized;
+    const item = getGateItem(disposition.gateItemId);
+    const summary =
+      `Gate item ${disposition.gateItemId}: reported ${disposition.disposition}` +
+      (disposition.reclassify
+        ? ` (proposes reclassify -> ${disposition.reclassify.to})`
+        : '');
+    stageIntent(
+      'gate.verify',
+      disposition,
+      this.projectId,
+      null,
+      this.sessionId,
+      summary,
+      null,
+      null,
+      item?.milestone ?? null,
+      null,
+    );
     const payload: GateVerifyDispositionPayload = {
       sessionId: this.sessionId,
       disposition,

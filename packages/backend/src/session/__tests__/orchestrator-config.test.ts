@@ -8,9 +8,19 @@ import {
   isGrantable,
   sessionRecordReadCapability,
   parseSessionRecordReadCapability,
+  auditLogReadCapability,
+  parseAuditLogReadCapability,
+  sessionEventsReadCapability,
+  parseSessionEventsReadCapability,
+  isSanctionedAutoApproveCapability,
+  bashCapabilityConfersFileMutation,
 } from '../orchestrator-config';
 import { NOTION_READ_MCP_TOOLS } from '../../config';
-import { NOTION_MCP_SERVER_NAME } from '../../mcp/toolNaming';
+import {
+  NOTION_MCP_SERVER_NAME,
+  orchestratorMcpToolName,
+} from '../../mcp/toolNaming';
+import { PLANNING_INTENT_KINDS } from '../../planning/planningIntentKinds';
 
 describe('loadOrchestratorConfig', () => {
   let tmpDir: string;
@@ -33,7 +43,7 @@ describe('loadOrchestratorConfig', () => {
     expect(config.bash_rules).toEqual([]);
     expect(config.bootstrap_script).toBe('');
     expect(config.mcp_servers).toBeUndefined();
-    expect(config.autofix_skip_ci).toBe(true);
+    expect(config.autofix_skip_ci).toBe(false);
   });
 
   it('returns parsed values for a well-formed config containing all six fields', () => {
@@ -136,7 +146,7 @@ describe('loadOrchestratorConfig', () => {
     expect(config.mcp_servers).toBeUndefined();
   });
 
-  it('defaults autofix_skip_ci to true when not set in config', () => {
+  it('defaults autofix_skip_ci to false when not set in config', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.claude-orchestrator.yml'),
       'autofix:\n  - npm run lint\n',
@@ -144,7 +154,7 @@ describe('loadOrchestratorConfig', () => {
     );
 
     const config = loadOrchestratorConfig(tmpDir);
-    expect(config.autofix_skip_ci).toBe(true);
+    expect(config.autofix_skip_ci).toBe(false);
   });
 
   it('parses autofix_skip_ci: false from config', () => {
@@ -280,6 +290,65 @@ describe('getSessionAllowedTools', () => {
     expect(groom).toContain('mcp__orchestrator__task_setDependsOn');
     expect(groom).not.toContain('mcp__orchestrator__journal_setState');
     expect(groom).not.toContain('mcp__orchestrator__gate_verify');
+  });
+
+  it('ops (gate-verify) session resolved allow-list includes gateSeed_getState without an operator grant, but never a mutating gate/seed tool', () => {
+    const ops = getSessionAllowedTools('ops', { allowed_tools: [] });
+    const groom = getSessionAllowedTools('groom', { allowed_tools: [] });
+    const design = getSessionAllowedTools('design', { allowed_tools: [] });
+    const standard = getSessionAllowedTools('standard', { allowed_tools: [] });
+    expect(ops).toContain('mcp__orchestrator__gateSeed_getState');
+    expect(groom).not.toContain('mcp__orchestrator__gateSeed_getState');
+    expect(design).not.toContain('mcp__orchestrator__gateSeed_getState');
+    expect(standard).not.toContain('mcp__orchestrator__gateSeed_getState');
+    expect(ops).not.toContain('mcp__orchestrator__gate_accrete');
+    expect(ops).not.toContain('mcp__orchestrator__seed_stage');
+  });
+
+  describe('docs tool set', () => {
+    it('returns DOCS_ALLOWED_TOOLS including Write/Edit, git-write, and the PR-open exception', () => {
+      const tools = getSessionAllowedTools('docs', { allowed_tools: [] });
+      expect(tools).toContain('Write');
+      expect(tools).toContain('Edit');
+      expect(tools).toContain('Bash(git:*)');
+      expect(tools).toContain('Bash(gh pr create:*)');
+      expect(tools).toContain('mcp__github__create_pull_request');
+      expect(tools).toContain('mcp__orchestrator__notion_pageEdit');
+    });
+
+    it('derives its staged-intent MCP tools from PLANNING_INTENT_KINDS.docs, not a hand-written list', () => {
+      const tools = getSessionAllowedTools('docs', { allowed_tools: [] });
+      for (const kind of PLANNING_INTENT_KINDS.docs) {
+        expect(tools).toContain(orchestratorMcpToolName(kind));
+      }
+    });
+
+    it('merges an allowlisted WebFetch entry per declared source domain and never grants open WebSearch', () => {
+      const tools = getSessionAllowedTools(
+        'docs',
+        { allowed_tools: [] },
+        [],
+        undefined,
+        ['docs.example.com', 'developer.example.org'],
+      );
+      expect(tools).toContain('WebFetch(domain:docs.example.com)');
+      expect(tools).toContain('WebFetch(domain:developer.example.org)');
+      expect(tools).not.toContain('WebSearch');
+      expect(tools.some((t) => t === 'WebFetch')).toBe(false);
+    });
+
+    it('grants no WebFetch at all when no source domains are declared', () => {
+      const tools = getSessionAllowedTools('docs', { allowed_tools: [] });
+      expect(tools.some((t) => t.startsWith('WebFetch'))).toBe(false);
+      expect(tools).not.toContain('WebSearch');
+    });
+
+    it('never merges per-project allowed_tools extras into the docs base (unlike ops)', () => {
+      const tools = getSessionAllowedTools('docs', {
+        allowed_tools: ['mcp__analyst__query_alarm_rules'],
+      });
+      expect(tools).not.toContain('mcp__analyst__query_alarm_rules');
+    });
   });
 
   describe('task-source-gated Notion read tools', () => {
@@ -427,6 +496,40 @@ describe('isGrantable', () => {
   });
 });
 
+describe('bashCapabilityConfersFileMutation', () => {
+  it.each([
+    'Bash(sed:*)',
+    'Bash(perl -i:*)',
+    'Bash(tee:*)',
+    'Bash(dd:*)',
+    'Bash(rm:*)',
+    'Bash(cp:*)',
+    'Bash(mv:*)',
+  ])('returns true for the file-mutating command %s', (capability) => {
+    expect(bashCapabilityConfersFileMutation(capability)).toBe(true);
+  });
+
+  it('returns true when the capability string embeds a shell redirect', () => {
+    expect(bashCapabilityConfersFileMutation('Bash(echo hi > file.txt)')).toBe(
+      true,
+    );
+  });
+
+  it.each(['Bash(psql:*)', 'Bash(git:*)', 'Bash(cat:*)', 'Bash(ls:*)'])(
+    'returns false for the non-mutating command %s',
+    (capability) => {
+      expect(bashCapabilityConfersFileMutation(capability)).toBe(false);
+    },
+  );
+
+  it('returns false for a non-Bash capability', () => {
+    expect(
+      bashCapabilityConfersFileMutation('mcp__github__merge_pull_request'),
+    ).toBe(false);
+    expect(bashCapabilityConfersFileMutation('Edit')).toBe(false);
+  });
+});
+
 describe('sessionRecordReadCapability / parseSessionRecordReadCapability', () => {
   it('round-trips the target session id through the capability string', () => {
     const capability = sessionRecordReadCapability('session-abc');
@@ -455,5 +558,178 @@ describe('sessionRecordReadCapability / parseSessionRecordReadCapability', () =>
       capability,
     ]);
     expect(merged).not.toContain(capability);
+  });
+});
+
+describe('auditLogReadCapability / parseAuditLogReadCapability', () => {
+  it('round-trips the target project id through the capability string', () => {
+    const capability = auditLogReadCapability('project-abc');
+    expect(capability).toBe('read:audit-log:project-abc');
+    expect(parseAuditLogReadCapability(capability)).toBe('project-abc');
+  });
+
+  it('returns null for a capability that is not an audit-log-read grant', () => {
+    expect(parseAuditLogReadCapability('Bash(psql:*)')).toBeNull();
+    expect(
+      parseAuditLogReadCapability(sessionRecordReadCapability('session-abc')),
+    ).toBeNull();
+  });
+
+  it("is never merged into the spawned session's CLI --allowed-tools", () => {
+    const capability = auditLogReadCapability('project-abc');
+    const merged = getSessionAllowedTools('ops', { allowed_tools: [] }, [
+      capability,
+    ]);
+    expect(merged).not.toContain(capability);
+  });
+});
+
+describe('sessionEventsReadCapability / parseSessionEventsReadCapability', () => {
+  it('round-trips the target project id through the capability string', () => {
+    const capability = sessionEventsReadCapability('project-abc');
+    expect(capability).toBe('read:session-events:project-abc');
+    expect(parseSessionEventsReadCapability(capability)).toBe('project-abc');
+  });
+
+  it('returns null for a capability that is not a session-events-read grant', () => {
+    expect(parseSessionEventsReadCapability('Bash(psql:*)')).toBeNull();
+    expect(
+      parseSessionEventsReadCapability(
+        sessionRecordReadCapability('session-abc'),
+      ),
+    ).toBeNull();
+    expect(
+      parseSessionEventsReadCapability(auditLogReadCapability('project-abc')),
+    ).toBeNull();
+  });
+
+  it("is never merged into the spawned session's CLI --allowed-tools", () => {
+    const capability = sessionEventsReadCapability('project-abc');
+    const merged = getSessionAllowedTools('ops', { allowed_tools: [] }, [
+      capability,
+    ]);
+    expect(merged).not.toContain(capability);
+  });
+});
+
+describe('isSanctionedAutoApproveCapability', () => {
+  it("auto-approves the audit-log capability for the requesting session's own project", () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        auditLogReadCapability('project-abc'),
+        'session-1',
+        'project-abc',
+      ),
+    ).toBe(true);
+  });
+
+  it("does not auto-approve the audit-log capability for a different project than the requester's own", () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        auditLogReadCapability('project-other'),
+        'session-1',
+        'project-abc',
+      ),
+    ).toBe(false);
+  });
+
+  it('does not auto-approve the audit-log capability when no requesting project id is supplied', () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        auditLogReadCapability('project-abc'),
+        'session-1',
+      ),
+    ).toBe(false);
+  });
+
+  it("auto-approves the session-events capability for the requesting session's own project", () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        sessionEventsReadCapability('project-abc'),
+        'session-1',
+        'project-abc',
+      ),
+    ).toBe(true);
+  });
+
+  it("does not auto-approve the session-events capability for a different project than the requester's own", () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        sessionEventsReadCapability('project-other'),
+        'session-1',
+        'project-abc',
+      ),
+    ).toBe(false);
+  });
+
+  it('still auto-approves the own-record-read capability for the requesting session', () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        sessionRecordReadCapability('session-1'),
+        'session-1',
+        'project-abc',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not auto-approve the audit-log capability for a groom session', () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        auditLogReadCapability('project-abc'),
+        'session-1',
+        'project-abc',
+        'groom',
+      ),
+    ).toBe(false);
+  });
+
+  it('does not auto-approve the session-events capability for a groom session', () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        sessionEventsReadCapability('project-abc'),
+        'session-1',
+        'project-abc',
+        'groom',
+      ),
+    ).toBe(false);
+  });
+
+  it.each(['ops', 'design', 'review'])(
+    'still auto-approves the audit-log capability for a %s session',
+    (sessionType) => {
+      expect(
+        isSanctionedAutoApproveCapability(
+          auditLogReadCapability('project-abc'),
+          'session-1',
+          'project-abc',
+          sessionType,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each(['ops', 'design', 'review'])(
+    'still auto-approves the session-events capability for a %s session',
+    (sessionType) => {
+      expect(
+        isSanctionedAutoApproveCapability(
+          sessionEventsReadCapability('project-abc'),
+          'session-1',
+          'project-abc',
+          sessionType,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it('still auto-approves the own-record-read capability for a groom session', () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        sessionRecordReadCapability('session-1'),
+        'session-1',
+        'project-abc',
+        'groom',
+      ),
+    ).toBe(true);
   });
 });

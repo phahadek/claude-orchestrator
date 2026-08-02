@@ -87,7 +87,7 @@ describe('accreteGateContribution — milestone key-space normalization', () => 
     expect(row?.milestone).toBe('M12');
     expect(row?.milestone).not.toMatch(UUID_SHAPE);
 
-    const readiness = getGateReadiness('M12');
+    const readiness = getGateReadiness('polimarket-analyser', 'M12');
     expect(readiness.blocking).toHaveLength(1);
     expect(readiness.blocking[0].text).toBe('Verify the webhook fires');
   });
@@ -157,7 +157,7 @@ describe('stageSeedContribution — milestone key-space normalization', () => {
     expect(row?.milestone).toBe('M12');
     expect(row?.milestone).not.toMatch(UUID_SHAPE);
 
-    const readiness = getSeedReadiness('M12');
+    const readiness = getSeedReadiness('polimarket-analyser', 'M12');
     expect(readiness.blocking).toHaveLength(1);
     expect(readiness.blocking[0].spec).toBe('Add webhook_url to config');
   });

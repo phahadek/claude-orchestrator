@@ -90,6 +90,14 @@ let tmpDir: string;
 beforeEach(() => {
   vi.clearAllMocks();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reconcile-test-'));
+  vi.mocked(insertMilestone).mockImplementation((m) => ({
+    ...m,
+    canonical_short_id: m.canonical_short_id ?? null,
+    display_order: m.display_order ?? 0,
+    wrapped_at: null,
+    created_at: 0,
+    updated_at: 0,
+  }));
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

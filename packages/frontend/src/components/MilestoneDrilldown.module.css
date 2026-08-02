@@ -1,0 +1,86 @@
+.drilldown {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+}
+
+.modeTabs {
+  display: flex;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.modeTab {
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.modeTab[aria-selected='true'] {
+  color: var(--text-primary, #cdd6f4);
+  border-bottom-color: #89b4fa;
+}
+
+.emptyState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+}
+
+.taskReader {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+
+.headingRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.heading {
+  font-weight: 600;
+}
+
+.headingType {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.taskMarkdown {
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.sessionEmbed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.error {
+  color: var(--error, #f38ba8);
+  font-size: 0.875rem;
+}

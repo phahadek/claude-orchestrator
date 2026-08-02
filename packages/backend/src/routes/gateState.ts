@@ -17,6 +17,8 @@ import {
 } from '../gate/gateService';
 import { dispatchGateItemVerification } from '../gate/gateReconciler';
 import type { GateItemClassification } from '../db/types';
+import { getFlowRejectionRate } from '../db/queries';
+import type { TrustPrecisionFlow } from '../db/queries';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
 import type {
@@ -38,16 +40,27 @@ import {
 export function createGateStateRouter(): Router {
   const router = Router();
 
-  // GET /api/gate/readiness?milestone=M12
+  // GET /api/gate/readiness?project=P&milestone=M12
   router.get('/gate/readiness', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : null;
     const milestone =
       typeof req.query.milestone === 'string' ? req.query.milestone : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
     if (!milestone) {
       res.status(400).json({ error: 'milestone is required' });
       return;
     }
     try {
-      res.json(getGateReadiness(resolveMilestoneAnyProject(milestone)));
+      res.json(
+        getGateReadiness(
+          project,
+          resolveMilestoneForProject(project, milestone),
+        ),
+      );
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {
         res.status(400).json({ error: err.message });
@@ -69,10 +82,16 @@ export function createGateStateRouter(): Router {
     res.json(reconcileGateRunnability(deploySha));
   });
 
-  // GET /api/gate/next?milestone=M12&classification=Read-Only&limit=5
+  // GET /api/gate/next?project=P&milestone=M12&classification=Read-Only&limit=5
   router.get('/gate/next', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : null;
     const milestone =
       typeof req.query.milestone === 'string' ? req.query.milestone : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
     if (!milestone) {
       res.status(400).json({ error: 'milestone is required' });
       return;
@@ -85,10 +104,14 @@ export function createGateStateRouter(): Router {
       typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
     try {
       res.json(
-        nextRunnableGateItems(resolveMilestoneAnyProject(milestone), {
-          classification,
-          limit: Number.isFinite(limit) ? limit : undefined,
-        }),
+        nextRunnableGateItems(
+          project,
+          resolveMilestoneForProject(project, milestone),
+          {
+            classification,
+            limit: Number.isFinite(limit) ? limit : undefined,
+          },
+        ),
       );
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {
@@ -111,6 +134,7 @@ export function createGateStateRouter(): Router {
       return Number.isFinite(n) ? n : undefined;
     };
     const runnableRaw = stringParam('runnable');
+    const awaitingSetupRaw = stringParam('awaitingSetup');
     const project = stringParam('project');
     const milestoneParam = stringParam('milestone');
     let milestone: string | undefined;
@@ -142,6 +166,10 @@ export function createGateStateRouter(): Router {
           | undefined,
         runnable:
           runnableRaw === undefined ? undefined : runnableRaw === 'true',
+        awaitingSetup:
+          awaitingSetupRaw === undefined
+            ? undefined
+            : awaitingSetupRaw === 'true',
         page: numberParam('page'),
         limit: numberParam('limit'),
         order: orderRaw,
@@ -453,6 +481,54 @@ export function createGateStateRouter(): Router {
         error:
           err instanceof Error ? err.message : 'gate verify dispatch failed',
       });
+    }
+  });
+
+  const TRUST_PRECISION_FLOWS: TrustPrecisionFlow[] = [
+    'groom',
+    'design',
+    'ops',
+    'gate-verify',
+  ];
+
+  // GET /api/gate/trust-rate?project=<id>&milestone=M12&flow=groom
+  // The Milestone panel's trust-precision read: per flow per milestone, the
+  // rate at which auto-dispatched output was rejected/abstained rather than
+  // approved — see db/queries.ts's getFlowRejectionRate for the per-flow
+  // definition. Informative only; no auto-disarm.
+  router.get('/gate/trust-rate', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : null;
+    const milestone =
+      typeof req.query.milestone === 'string' ? req.query.milestone : null;
+    const flow = typeof req.query.flow === 'string' ? req.query.flow : null;
+    if (!project || !milestone || !flow) {
+      res
+        .status(400)
+        .json({ error: 'project, milestone, and flow are all required' });
+      return;
+    }
+    if (!TRUST_PRECISION_FLOWS.includes(flow as TrustPrecisionFlow)) {
+      res.status(400).json({
+        error: `flow must be one of ${TRUST_PRECISION_FLOWS.join(', ')}`,
+      });
+      return;
+    }
+    try {
+      const canonicalMilestone = resolveMilestoneForProject(project, milestone);
+      res.json(
+        getFlowRejectionRate(
+          project,
+          canonicalMilestone,
+          flow as TrustPrecisionFlow,
+        ),
+      );
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
     }
   });
 

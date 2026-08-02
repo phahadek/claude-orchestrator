@@ -10,7 +10,7 @@
  * hard-coded.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -23,7 +23,14 @@ const deployServiceMock = vi.hoisted(() => ({
 vi.mock('../../deploy/deployService.js', () => deployServiceMock);
 
 import { db } from '../../db/db.js';
-import { upsertTaskCache } from '../../db/queries.js';
+import {
+  upsertTaskCache,
+  upsertArm,
+  archiveSession,
+} from '../../db/queries.js';
+import { typedSetSetting } from '../../config/settings.js';
+import { ProjectService } from '../../projects/ProjectService.js';
+import { logger } from '../../logger.js';
 import {
   insertItem,
   setMinDeployedCommit,
@@ -31,18 +38,46 @@ import {
   advanceState,
   getItem,
 } from '../gateStore.js';
-import { approveGateItem, reconcileGateRunnability } from '../gateService.js';
+import {
+  approveGateItem,
+  appendGateItemEvent,
+  reconcileGateRunnability,
+} from '../gateService.js';
 import {
   runGateReconcilerTick,
   register,
   configureGateVerification,
   getGateVerificationOptions,
   dispatchGateItemVerification,
+  reattachOutstandingGateVerifications,
   type DeployAdvanceTrigger,
   type GateItemVerifier,
   type FollowupFixTaskFiler,
   type GateVerificationConcurrencyConfig,
+  type ReattachableGateItemVerifier,
 } from '../gateReconciler.js';
+
+// The reconciler resolves the gate item's milestone display name (what
+// gate_item.milestone stores) to its milestone-table row id (what
+// flow_arm.milestone_id keys on) before checking the arm — see
+// resolveMilestoneRowForProject in gateReconciler.ts. M12's row is seeded
+// once here so every test's flow_arm writes below key on the same id the
+// reconciler resolves to.
+let m12Id: string;
+
+beforeAll(() => {
+  ProjectService.create({
+    id: 'polimarket-analyser',
+    name: 'Polimarket Analyser',
+    projectDir: '/tmp/polimarket-analyser',
+  });
+  m12Id = ProjectService.createMilestone({
+    id: 'ms-uuid-m12',
+    projectId: 'polimarket-analyser',
+    name: 'M12',
+    canonicalShortId: 'M12',
+  }).id;
+});
 
 beforeEach(() => {
   db.prepare('DELETE FROM gate_item_event').run();
@@ -50,7 +85,14 @@ beforeEach(() => {
   db.prepare('DELETE FROM gate_item').run();
   db.prepare('DELETE FROM audit_log').run();
   db.prepare('DELETE FROM task_cache').run();
+  db.prepare('DELETE FROM flow_arm').run();
+  db.prepare('DELETE FROM sessions').run();
+  db.prepare('DELETE FROM staged_intent').run();
   deployServiceMock.getProjectDeployedSha.mockReset().mockReturnValue(null);
+  // Most tests below exercise auto-run behavior, which needs M12's
+  // gate-verify arm on (DEFAULT_ARM is disarmed) — tests exercising the
+  // disarmed/default/unresolvable paths explicitly override this.
+  upsertArm(m12Id, 'gate-verify', true, 1);
 });
 
 function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
@@ -89,6 +131,31 @@ const fixedTrigger = (sha: string | null): DeployAdvanceTrigger => ({
   latestDeploySha: () => sha,
 });
 
+/** Seeds a `sessions` row for a gate item, bypassing the real SessionManager — for exercising the DB-backed live-session guard directly, including the process-restart case where inFlightVerifications would be empty. */
+function insertVerifySession(
+  itemId: string,
+  opts: { sessionId: string; status: string; startedAt?: number },
+) {
+  db.prepare(
+    `INSERT INTO sessions (session_id, task_id, status, started_at)
+     VALUES (@sessionId, @taskId, @status, @startedAt)`,
+  ).run({
+    sessionId: opts.sessionId,
+    taskId: `gate-item:${itemId}`,
+    status: opts.status,
+    startedAt: opts.startedAt ?? 0,
+  });
+}
+
+/** Seeds a pending `session.requestCapability` staged_intent for a session — the durable check `hasActiveCapabilityRequestForSession`/`getGateItemsWithPendingCapabilityRequest` key off. */
+function insertPendingCapabilityRequest(sessionId: string) {
+  db.prepare(
+    `INSERT INTO staged_intent
+       (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
+     VALUES (@id, 'session.requestCapability', '{}', 'hash', 'polimarket-analyser', @sessionId, 'staged', 0, 0)`,
+  ).run({ id: `intent-${sessionId}`, sessionId });
+}
+
 describe('register', () => {
   it('registers a job with the Scheduler that runs on tick', async () => {
     const run = vi.fn(async () => undefined);
@@ -100,6 +167,39 @@ describe('register', () => {
     const opts = scheduler.register.mock.calls[0][0];
     expect(opts.name).toBe('gate_verification_reconciler');
     await opts.run({ signal: new AbortController().signal });
+  });
+
+  it('reports items_processed as a negative count when the tick is skipped entirely for want of budget, distinct from a genuinely idle tick', async () => {
+    // Exhaust the verify sub-limit specifically (rather than the planning
+    // pool) so this test doesn't mutate max_concurrent_planning_sessions/
+    // human_reserve — settings persist across tests in this file (see the
+    // other describe blocks below), and doing so would leak into later
+    // tests that rely on the default planning budget.
+    typedSetSetting('max_concurrent_verify_sessions', 1);
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, session_type, status, started_at)
+       VALUES ('live-verify-1', 'gate-item:already-live', 'ops', 'running', 0)`,
+    ).run();
+    makeRunnableItem({ classification: 'Read-Only' });
+
+    const run = vi.fn(async () => undefined);
+    const scheduler = {
+      register: vi.fn(({ run: r }) => run.mockImplementation(r)),
+    };
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    register(scheduler as never, {
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    const opts = scheduler.register.mock.calls[0][0];
+    const result = await opts.run({ signal: new AbortController().signal });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.items_processed).toBe(-1);
+
+    // Restore the default so later tests in this file that don't set their
+    // own max_concurrent_verify_sessions aren't affected by this one.
+    typedSetSetting('max_concurrent_verify_sessions', 5);
   });
 });
 
@@ -147,6 +247,7 @@ describe('dispatchGateItemVerification', () => {
     expect(getItem(item.id)?.events.at(-1)).toMatchObject({
       disposition: 'pass',
       operator: 'gate-verifier',
+      unattended: false,
     });
   });
 
@@ -185,6 +286,23 @@ describe('dispatchGateItemVerification', () => {
       });
     });
     expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('dispatches an explicit operator re-verify even though the item already has a live verify session', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    insertVerifySession(item.id, { sessionId: 'sess-live', status: 'running' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    configureGateVerification({
+      verifier: { verify },
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    const result = dispatchGateItemVerification([item.id]);
+
+    expect(result.dispatched).toEqual([item.id]);
+    await vi.waitFor(() => {
+      expect(verify).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('skips an item already mid-verify rather than double-dispatching', async () => {
@@ -231,6 +349,76 @@ describe('runGateReconcilerTick', () => {
     expect(getItem(item.id)?.state).toBe('runnable');
   });
 
+  it('auto-runs a runnable item when the milestone gate-verify arm is on', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    upsertArm(m12Id, 'gate-verify', true, 1);
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' })),
+    };
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).toHaveBeenCalledTimes(1);
+    expect(result.processed).toEqual([
+      { itemId: item.id, classification: 'Read-Only', disposition: 'pass' },
+    ]);
+  });
+
+  it('does not auto-run when the milestone gate-verify arm is off, even with gate_verification_enabled', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    upsertArm(m12Id, 'gate-verify', false, 1);
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' })),
+    };
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('falls back to DEFAULT_ARM[flow] when no flow_arm row exists for the milestone', async () => {
+    db.prepare('DELETE FROM flow_arm').run();
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' })),
+    };
+    // DEFAULT_ARM['gate-verify'] is false, so with no row present at all,
+    // auto-run stays off — same as before this milestone id-space fix.
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('skips (with a warning) a milestone display name that does not resolve to a milestone row, rather than falling through to DEFAULT_ARM', async () => {
+    const item = makeRunnableItem({
+      milestone: 'M-unregistered',
+      classification: 'Read-Only',
+    });
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' })),
+    };
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('M-unregistered'),
+    );
+    warnSpy.mockRestore();
+  });
+
   it('auto-runs and auto-disposes a Read-Only item on pass', async () => {
     const item = makeRunnableItem({ classification: 'Read-Only' });
     const verifier: GateItemVerifier = {
@@ -244,10 +432,11 @@ describe('runGateReconcilerTick', () => {
       { itemId: item.id, classification: 'Read-Only', disposition: 'pass' },
     ]);
     expect(getItem(item.id)?.state).toBe('pass');
-    expect(result.readiness['M12'].status).toBe('green');
+    expect(result.readiness['polimarket-analyser::M12'].status).toBe('green');
     expect(getItem(item.id)?.events.at(-1)).toMatchObject({
       disposition: 'pass',
       operator: 'gate-verifier',
+      unattended: true,
     });
   });
 
@@ -388,6 +577,126 @@ describe('runGateReconcilerTick', () => {
     });
     expect(verifier.verify).toHaveBeenCalledTimes(1);
     expect(second.processed).toEqual([]);
+  });
+
+  it('a dispatch failure (dispatchFailed:true) leaves latest_disposition unchanged and the item still runnable on the next pull', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    upsertArm(m12Id, 'gate-verify', true, 1);
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({
+        disposition: 'needs-setup' as const,
+        dispatchFailed: true,
+        evidence: {
+          reason: 'failed to dispatch verification session',
+          error: 'Max concurrent planning sessions (20) reached',
+        },
+      })),
+    };
+
+    const first = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(first.processed).toEqual([
+      {
+        itemId: item.id,
+        classification: 'Read-Only',
+        disposition: 'needs-setup',
+      },
+    ]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+    expect(getItem(item.id)?.latestDisposition).toBeUndefined();
+
+    // Still eligible for the next tick's dispatch — a dispatch failure never
+    // occupies latest_disposition, so isAwaitingSetup does not skip it.
+    const second = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).toHaveBeenCalledTimes(2);
+    expect(second.processed).toEqual([
+      {
+        itemId: item.id,
+        classification: 'Read-Only',
+        disposition: 'needs-setup',
+      },
+    ]);
+  });
+
+  it('records a dispatch failure as a log-only event — reason/error evidence preserved, disposition null', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    upsertArm(m12Id, 'gate-verify', true, 1);
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({
+        disposition: 'needs-setup' as const,
+        dispatchFailed: true,
+        evidence: {
+          reason: 'failed to dispatch verification session',
+          error: 'Max concurrent planning sessions (20) reached',
+        },
+      })),
+    };
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+
+    expect(getItem(item.id)?.events).toHaveLength(1);
+    expect(getItem(item.id)?.events[0]).toMatchObject({
+      disposition: undefined,
+      evidence: {
+        reason: 'failed to dispatch verification session',
+        error: 'Max concurrent planning sessions (20) reached',
+      },
+    });
+    const row = db
+      .prepare(`SELECT disposition FROM gate_item_event WHERE gate_item_id = ?`)
+      .get(item.id) as { disposition: string | null };
+    expect(row.disposition).toBeNull();
+  });
+
+  it('an item previously skipped for a genuine needs-setup becomes eligible again once a later event supersedes it', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    upsertArm(m12Id, 'gate-verify', true, 1);
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({
+        disposition: 'needs-setup' as const,
+        evidence: { reason: 'budget exceeded' },
+      })),
+    };
+
+    const first = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(first.processed).toHaveLength(1);
+
+    const skipped = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(skipped.processed).toEqual([]);
+
+    // A superseding event (e.g. an operator note) clears the awaiting-setup
+    // gate, so the next pull can reach it again.
+    appendGateItemEvent(item.id, {
+      disposition: 'noted',
+      evidence: { note: 'operator re-opened for another attempt' },
+    });
+
+    const resumed = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(resumed.processed).toEqual([
+      {
+        itemId: item.id,
+        classification: 'Read-Only',
+        disposition: 'needs-setup',
+      },
+    ]);
+    expect(verifier.verify).toHaveBeenCalledTimes(2);
   });
 
   it("applies a verifier-proposed reclassification, superseding the run's disposition for routing", async () => {
@@ -626,6 +935,113 @@ describe('runGateReconcilerTick', () => {
     expect(maxConcurrent).toBe(1);
   });
 
+  it('does not dispatch a gate item that already has a live verify session from an earlier process', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    // Simulates a session dispatched before a process restart: no in-memory
+    // inFlightVerifications entry survives, only the DB-backed session row.
+    insertVerifySession(item.id, { sessionId: 'sess-live', status: 'running' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('does not re-dispatch a completed verification while its runnability inputs are unchanged', async () => {
+    makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    expect(verify).toHaveBeenCalledTimes(1);
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-dispatches a failed item once its min_deployed_commit is newly satisfied, even with a terminal session row from the earlier verify', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    let callCount = 0;
+    const verifier: GateItemVerifier = {
+      verify: async () => {
+        callCount += 1;
+        // Mirrors the real SessionGateItemVerifier: a terminal session row
+        // is left behind once the verify concludes.
+        insertVerifySession(item.id, {
+          sessionId: `sess-${callCount}`,
+          status: 'done',
+        });
+        return { disposition: 'fail', evidence: { log: 'boom' } };
+      },
+    };
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => ({
+        taskId: 'notion:followup-1',
+        taskTitle: 'fix it',
+      })),
+    };
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+      followupFiler,
+    });
+    expect(callCount).toBe(1);
+    expect(getItem(item.id)?.state).toBe('open');
+
+    // A fresh deploy covers a min_deployed_commit past the one recorded at
+    // the fail — reconcileGateRunnability reopens then re-marks runnable.
+    // Merge coverage for both the original source and the follow-up fix
+    // task the fail path attached, or the item stays open (fail-dedup test
+    // above does the same double-merge for the same reason).
+    mergeSource(item.id, 'sha2', new Date(2).toISOString());
+    setSourceMergeCommit(item.id, 'notion:followup-1', 'sha2');
+    reconcileGateRunnability('sha2');
+    expect(getItem(item.id)?.state).toBe('runnable');
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha2'),
+      verifier,
+      followupFiler,
+    });
+
+    expect(callCount).toBe(2);
+  });
+
+  it('two consecutive reconciler ticks over the same runnable item produce exactly one session', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => {
+      insertVerifySession(item.id, { sessionId: 'sess-only', status: 'done' });
+      return { disposition: 'pass' as const };
+    });
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    const sessionCount = db
+      .prepare(`SELECT COUNT(*) as c FROM sessions WHERE task_id = ?`)
+      .get(`gate-item:${item.id}`) as { c: number };
+    expect(sessionCount.c).toBe(1);
+  });
+
   it('does not advance runnability when the deploy-advance trigger reports no advance', async () => {
     const item = makeItem();
     setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
@@ -642,7 +1058,215 @@ describe('runGateReconcilerTick', () => {
     const result = await runGateReconcilerTick({
       deployAdvanceTrigger: fixedTrigger(null),
     });
-    expect(result.readiness['M20'].status).toBe('blocked');
+    expect(result.readiness['polimarket-analyser::M20'].status).toBe('blocked');
+  });
+});
+
+describe('runGateReconcilerTick — verify concurrency budgeting', () => {
+  /** Seeds a live (non-terminal) session row directly — bypasses SessionManager, for exercising the DB-backed count the reconciler budgets against. */
+  function insertLiveSession(opts: {
+    sessionId: string;
+    taskId: string;
+    sessionType?: string;
+  }) {
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, session_type, status, started_at)
+       VALUES (@sessionId, @taskId, @sessionType, 'running', 0)`,
+    ).run({
+      sessionId: opts.sessionId,
+      taskId: opts.taskId,
+      sessionType: opts.sessionType ?? 'ops',
+    });
+  }
+
+  it('dispatches no further verify sessions once live verify sessions already fill the cap', async () => {
+    typedSetSetting('max_concurrent_verify_sessions', 2);
+    insertLiveSession({
+      sessionId: 'live-verify-1',
+      taskId: 'gate-item:already-1',
+    });
+    insertLiveSession({
+      sessionId: 'live-verify-2',
+      taskId: 'gate-item:already-2',
+    });
+
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('dispatches up to the remaining verify capacity and no more when the cap exceeds live sessions', async () => {
+    typedSetSetting('max_concurrent_verify_sessions', 3);
+    insertLiveSession({
+      sessionId: 'live-verify-1',
+      taskId: 'gate-item:already-1',
+    });
+
+    const items = [
+      makeRunnableItem({ text: 'item a', classification: 'Read-Only' }),
+      makeRunnableItem({ text: 'item b', classification: 'Read-Only' }),
+      makeRunnableItem({ text: 'item c', classification: 'Read-Only' }),
+    ];
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    // cap(3) - live(1) = 2 remaining slots — exactly 2 of the 3 items dispatch.
+    expect(verify).toHaveBeenCalledTimes(2);
+    expect(result.processed).toHaveLength(2);
+    const dispatchedIds = result.processed.map((p) => p.itemId);
+    const skipped = items.filter((i) => !dispatchedIds.includes(i.id));
+    expect(skipped).toHaveLength(1);
+    expect(getItem(skipped[0].id)?.state).toBe('runnable');
+  });
+
+  it('stops dispatching while free planning capacity is down to the human reserve', async () => {
+    typedSetSetting('max_concurrent_planning_sessions', 2);
+    typedSetSetting('human_reserve', 1);
+    typedSetSetting('max_concurrent_verify_sessions', 10);
+    // One live planning (non-verify) session already occupies the pool —
+    // available = 2 - humanReserve(1) - active(1) = 0.
+    insertLiveSession({ sessionId: 'live-ops-1', taskId: 'some-ops-task' });
+
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('does not count a non-gate ops session against the verify cap', async () => {
+    typedSetSetting('max_concurrent_verify_sessions', 1);
+    typedSetSetting('max_concurrent_planning_sessions', 5);
+    typedSetSetting('human_reserve', 0);
+    // session_type='ops' but task_id has no gate-item: prefix — must not be
+    // counted as a live verify session.
+    insertLiveSession({ sessionId: 'ordinary-ops-1', taskId: 'some-ops-task' });
+
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(result.processed).toEqual([
+      { itemId: item.id, classification: 'Read-Only', disposition: 'pass' },
+    ]);
+  });
+
+  it('a dispatch that still fails on the hard cap continues to return dispatchFailed:true without touching latest_disposition or crashCounts', async () => {
+    // Budgeting leaves headroom, but the injected verifier simulates
+    // SessionManager.start throwing anyway (e.g. a race with another
+    // dispatcher) — the dispatchFailed backstop must still apply.
+    typedSetSetting('max_concurrent_verify_sessions', 5);
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({
+      disposition: 'needs-setup' as const,
+      dispatchFailed: true,
+      evidence: { reason: 'failed to dispatch verification session' },
+    }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(result.processed).toEqual([
+      {
+        itemId: item.id,
+        classification: 'Read-Only',
+        disposition: 'needs-setup',
+      },
+    ]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+    expect(getItem(item.id)?.latestDisposition).toBeUndefined();
+  });
+
+  it('does not let a pile of archived idle planning sessions pin the dispatch budget at zero', async () => {
+    typedSetSetting('max_concurrent_planning_sessions', 20);
+    typedSetSetting('human_reserve', 1);
+    typedSetSetting('max_concurrent_verify_sessions', 10);
+
+    // Reproduces the reported incident shape: 104 archived idle planning
+    // sessions (no longer holding any real capacity) plus a few genuinely
+    // live ones.
+    for (let i = 0; i < 104; i++) {
+      insertLiveSession({
+        sessionId: `archived-idle-${i}`,
+        taskId: `ops-task-${i}`,
+        sessionType: 'ops',
+      });
+      db.prepare(
+        `UPDATE sessions SET status = 'idle' WHERE session_id = ?`,
+      ).run(`archived-idle-${i}`);
+      archiveSession(`archived-idle-${i}`);
+    }
+    insertLiveSession({
+      sessionId: 'live-running',
+      taskId: 'ops-task-live',
+      sessionType: 'ops',
+    });
+
+    makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(result.processed).toHaveLength(1);
+    expect(result.skippedForBudget).toBe(0);
+  });
+
+  it('reports skippedForBudget when a runnable item is passed over solely for want of budget', async () => {
+    typedSetSetting('max_concurrent_planning_sessions', 1);
+    typedSetSetting('human_reserve', 0);
+    typedSetSetting('max_concurrent_verify_sessions', 10);
+    // available = 1 - humanReserve(0) - active(1) = 0.
+    insertLiveSession({ sessionId: 'live-ops-1', taskId: 'some-ops-task' });
+
+    makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(result.skippedForBudget).toBe(1);
+  });
+
+  it('reports skippedForBudget: 0 when a tick genuinely has no runnable items', async () => {
+    typedSetSetting('max_concurrent_planning_sessions', 5);
+    typedSetSetting('human_reserve', 0);
+    typedSetSetting('max_concurrent_verify_sessions', 10);
+
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(result.skippedForBudget).toBe(0);
   });
 });
 
@@ -695,5 +1319,82 @@ describe('runGateReconcilerTick — default deploy-advance trigger (getProjectDe
 
     expect(result.deployShaByProject['polimarket-analyser']).toBe('sha1');
     expect(getItem(gated.id)?.state).toBe('runnable');
+  });
+});
+
+describe('reattachOutstandingGateVerifications', () => {
+  it('reattaches to a gate-item session left non-terminal with a pending capability request, and routes its eventual disposition once reconciliation runs', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    insertVerifySession(item.id, {
+      sessionId: 'sess-parked',
+      status: 'running',
+    });
+    insertPendingCapabilityRequest('sess-parked');
+
+    const reattach = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const verifier: ReattachableGateItemVerifier = {
+      verify: vi.fn(),
+      reattach,
+    };
+    configureGateVerification({
+      verifier,
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    await reattachOutstandingGateVerifications();
+
+    expect(reattach).toHaveBeenCalledTimes(1);
+    expect(reattach.mock.calls[0][0]).toMatchObject({ id: item.id });
+    expect(reattach.mock.calls[0][1]).toBe('sess-parked');
+    await vi.waitFor(() => {
+      expect(getItem(item.id)?.state).toBe('pass');
+    });
+    expect(getItem(item.id)?.events.at(-1)).toMatchObject({
+      disposition: 'pass',
+      operator: 'gate-verifier',
+      unattended: true,
+    });
+  });
+
+  it('does nothing when no session has a pending capability request', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    insertVerifySession(item.id, {
+      sessionId: 'sess-live-no-request',
+      status: 'running',
+    });
+
+    const reattach = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const verifier: ReattachableGateItemVerifier = {
+      verify: vi.fn(),
+      reattach,
+    };
+    configureGateVerification({
+      verifier,
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    await reattachOutstandingGateVerifications();
+
+    expect(reattach).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the configured verifier does not support reattach', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    insertVerifySession(item.id, {
+      sessionId: 'sess-parked-2',
+      status: 'running',
+    });
+    insertPendingCapabilityRequest('sess-parked-2');
+
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    configureGateVerification({
+      verifier: { verify },
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    await expect(
+      reattachOutstandingGateVerifications(),
+    ).resolves.toBeUndefined();
+    expect(getItem(item.id)?.state).toBe('runnable');
   });
 });

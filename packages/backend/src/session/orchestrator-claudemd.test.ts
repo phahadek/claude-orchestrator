@@ -23,7 +23,7 @@ describe('buildOrchestratorClaudeMd', () => {
 
     // Section 1: Header with override warning
     expect(result).toContain('# Orchestrator Rules (DO NOT OVERRIDE)');
-    expect(result).toContain('take priority over any');
+    expect(result).toContain('takes priority over all');
 
     // Section 2: Task assignment
     expect(result).toContain('## Task Assignment');
@@ -67,7 +67,7 @@ describe('buildOrchestratorClaudeMd', () => {
 
     // Section 9: Git isolation
     expect(result).toContain('## Git Isolation');
-    expect(result).toContain('inside the worktree directory');
+    expect(result).toContain('Your worktree directory is');
     expect(result).toContain('git -C <path>');
 
     // Section 10: Bash rules
@@ -118,7 +118,7 @@ describe('buildOrchestratorClaudeMd', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
     // Repeated -m flag approach must be present
     expect(result).toContain('repeated `-m` flags');
-    expect(result).toContain('git commit -m "<subject>" -m "<paragraph 2>"');
+    expect(result).toContain('git commit -m "subject" -m "body"');
     // Old scratch-file approach must NOT be present
     expect(result).not.toContain('.claude/.commit-msg');
     expect(result).not.toContain('git commit -F');
@@ -257,9 +257,9 @@ describe('buildOrchestratorClaudeMd', () => {
       result.indexOf('---', result.indexOf('## Efficiency Rules')),
     );
     expect(efficiencySection).toContain(
-      'Prefer Edit over Write for files that already exist',
+      '**Prefer Edit over Write** for existing files',
     );
-    expect(efficiencySection).toContain('Never re-emit an unchanged file body');
+    expect(efficiencySection).toContain('never re-emit unchanged file bodies');
   });
 
   it('Efficiency Rules forbid re-reading a just-written or just-edited file', () => {
@@ -269,7 +269,7 @@ describe('buildOrchestratorClaudeMd', () => {
       result.indexOf('---', result.indexOf('## Efficiency Rules')),
     );
     expect(efficiencySection).toContain(
-      'Never Read a file you just wrote or edited',
+      "don't re-read files you just wrote or edited",
     );
   });
 

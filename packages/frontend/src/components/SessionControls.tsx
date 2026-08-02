@@ -3,6 +3,7 @@ import { authedFetch } from '../api/projects';
 import type { SessionState } from '../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
+import type { CapabilityGrant } from '@claude-orchestrator/backend/src/audit/capabilityProvenance';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import { calcElapsedMs, formatDuration } from '../utils/sessionTimer';
 import { StatusBadge } from './StatusBadge';
@@ -46,6 +47,7 @@ export function SessionControls({
   const [noteValue, setNoteValue] = useState('');
   const [tagInput, setTagInput] = useState('');
   const [compactOpen, setCompactOpen] = useState(false);
+  const [capabilities, setCapabilities] = useState<CapabilityGrant[]>([]);
 
   useEffect(() => {
     setEditingNote(false);
@@ -55,6 +57,21 @@ export function SessionControls({
     // Reset local state only on session switch — intentionally excludes session?.note
     // to avoid resetting the input while the user is editing
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.sessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch(`/api/sessions/${session.sessionId}/capabilities`)
+      .then((res) => (res.ok ? res.json() : { capabilities: [] }))
+      .then((data: { capabilities?: CapabilityGrant[] }) => {
+        if (!cancelled) setCapabilities(data.capabilities ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setCapabilities([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [session.sessionId]);
 
   const isActive =
@@ -163,6 +180,31 @@ export function SessionControls({
     });
   }
 
+  async function handleRevokeCapability(capability: string) {
+    const res = await authedFetch(
+      `/api/sessions/${session.sessionId}/capabilities/revoke`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capability }),
+      },
+    );
+    if (!res.ok) return;
+    const data: { grantedCapabilities?: string[] } = await res.json();
+    if (data.grantedCapabilities) {
+      const stillGranted = data.grantedCapabilities;
+      setCapabilities((prev) =>
+        prev.filter((c) => stillGranted.includes(c.capability)),
+      );
+    }
+  }
+
+  const grantedFromSession = session.grantedCapabilities;
+  const visibleCapabilities =
+    grantedFromSession === undefined
+      ? capabilities
+      : capabilities.filter((c) => grantedFromSession.includes(c.capability));
+
   const adminChromeClass = `${styles.adminChrome} ${compactOpen ? styles['adminChrome--open'] : ''}`;
   const headerControlsClass = `${styles.headerControls}${embedded ? ` ${styles['headerControls--embedded']}` : ''}`;
 
@@ -183,6 +225,14 @@ export function SessionControls({
           compactionCount={session.compaction_count}
           model={session.model}
         />
+        {session.feedbackPending && (
+          <span
+            className={styles.feedbackPendingBadge}
+            title="A disposition was approved and is being delivered — the session may need to resume before it lands."
+          >
+            disposition queued — resuming session
+          </span>
+        )}
 
         {/* Admin chrome group A: cost + favorite — CSS-hidden on mobile until disclosure opens */}
         <div className={adminChromeClass}>
@@ -339,6 +389,30 @@ export function SessionControls({
             </button>
           )}
         </div>
+
+        {visibleCapabilities.length > 0 && (
+          <div className={styles.capabilityRow}>
+            {visibleCapabilities.map(({ capability, provenance }) => (
+              <span
+                key={capability}
+                className={`${styles.capabilityChip} ${provenance === 'auto' ? styles['capabilityChip--auto'] : styles['capabilityChip--operator']}`}
+                title={capability}
+              >
+                {capability}
+                <span className={styles.capabilityProvenance}>
+                  {provenance === 'auto' ? 'auto' : 'operator'}
+                </span>
+                <button
+                  className={styles.capabilityRemove}
+                  onClick={() => void handleRevokeCapability(capability)}
+                  aria-label={`Revoke capability ${capability}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
 
         <div className={styles.tagRow}>
           {(session.tags ?? []).map((tag) => (

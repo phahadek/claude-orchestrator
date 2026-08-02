@@ -116,6 +116,7 @@ import {
   loadAutofixCommands,
   runAutofix,
   expandAutofixCommand,
+  isToolInfraFailureOutput,
 } from '../autofix-runner';
 import { recordEvent } from '../../audit/AuditLog';
 
@@ -1235,6 +1236,82 @@ describe('runAutofix — changedFiles path absent from worktree (committed delet
     expect(result.isGitInfraFailure).toBeUndefined();
     // No worktree-present changed files → the scoped `git add` step is skipped entirely.
     expect(addArgs.length).toBe(0);
+  });
+});
+
+// ── runAutofix — tool infrastructure failures (tool could not execute) ────────
+
+describe('runAutofix — tool infra failure classification', () => {
+  it('sets isToolInfraFailure and names the tool when the tool cannot execute', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only')
+        return makeProc(0, 'foo.go\n');
+      if (cmd === 'golangci-lint run')
+        return makeProc(
+          3,
+          '',
+          'level=error msg="[config_reader] Error reading config: go: go.mod requires go >= 1.24 (running go 1.21.5)"',
+        );
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['golangci-lint run'],
+      () => {},
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.isToolInfraFailure).toBe(true);
+    expect(result.toolFailureReason).toContain('golangci-lint run');
+    expect(result.toolFailureReason).toContain(
+      'go.mod requires go >= 1.24 (running go 1.21.5)',
+    );
+  });
+
+  it('does NOT set isToolInfraFailure for a genuine lint finding', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only')
+        return makeProc(0, 'foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'foo.ts\n');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'rev-parse') return makeProc(0, 'sha1\n');
+      if (cmd === 'eslint .')
+        return makeProc(1, 'foo.ts:12:1 error: line too long (E501)', '');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['eslint .'],
+      () => {},
+    );
+
+    expect(result.isToolInfraFailure).toBeUndefined();
+    expect(result.unfixableViolations).toContain('line too long');
+  });
+
+  it('falls through to the normal finding path on ambiguous output', () => {
+    expect(
+      isToolInfraFailureOutput('eslint .', 'foo.ts:12:1 error: unused var'),
+    ).toBeNull();
+  });
+
+  it('recognises a missing binary as a tool infra failure', () => {
+    expect(
+      isToolInfraFailureOutput(
+        'sh -c golangci-lint run',
+        'sh: golangci-lint: command not found',
+      ),
+    ).toContain('command not found');
   });
 });
 

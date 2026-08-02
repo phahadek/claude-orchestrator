@@ -39,11 +39,17 @@ export type CanonicalPauseReason =
   | 'stalled_reconcile_cap'
   | 'needs_repo'
   | 'autofix_git_infra_failure'
+  | 'autofix_tool_infra_failure'
   | 'workflow_scope_denied'
   | 'resume_failed'
   | 'review_rules_escalation'
   | 'planning_crashed'
-  | 'planning_first_turn_empty';
+  | 'planning_first_turn_empty'
+  | 'planning_terminal_no_decision'
+  | 'planning_terminal_blocked_members'
+  | 'ops_terminal_group_incomplete'
+  | 'usage_limit_deferred'
+  | 'api_overloaded_exhausted';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -187,6 +193,11 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
+  autofix_tool_infra_failure: {
+    source: 'autofix',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
   workflow_scope_denied: {
     source: 'merge',
     severity: 'needs_attention',
@@ -208,6 +219,38 @@ export const PAUSE_REASON_REGISTRY: Record<
     retry_strategy: 'manual_action',
   },
   planning_first_turn_empty: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  planning_terminal_no_decision: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  planning_terminal_blocked_members: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  ops_terminal_group_incomplete: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // Distinct death reasons for the two external-roadblock conditions the
+  // orchestrator now recognizes: a usage-limit deferral (five_hour/seven_day
+  // exhausted — auto-recovers at the recorded resets_at) and an exhausted
+  // 529/500 retry budget (transient but didn't recover within the bounded
+  // backoff — needs a human to look). Both are clean parks, not crashes, so
+  // they must be distinguishable from stalled_idle/a normal terminal park —
+  // that's what made the pre-fix relaunch loop invisible.
+  usage_limit_deferred: {
+    source: 'session',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
+  },
+  api_overloaded_exhausted: {
     source: 'session',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
@@ -234,6 +277,7 @@ const RECOVERY_ACTION_MAP: Partial<
   resume_failed: 'redispatch',
   // rerun: clear pause + re-run the pre-review pipeline
   autofix_git_infra_failure: 'rerun',
+  autofix_tool_infra_failure: 'rerun',
   ci_billing_blocked: 'rerun',
   stalled_reconcile_cap: 'rerun',
   auto_merge_failed: 'rerun',

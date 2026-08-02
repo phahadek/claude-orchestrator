@@ -72,6 +72,13 @@
   line-height: 1;
 }
 
+.planningIcon {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.85;
+}
+
 .blockers {
   display: flex;
   flex-direction: column;

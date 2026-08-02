@@ -120,7 +120,7 @@ function makeFetch() {
       ok: true,
       json: async () => {
         if (url.includes('/api/config')) return [PROJECT];
-        if (url.includes('/api/tasks')) return [];
+        if (url.includes('/api/tasks')) return { tasks: [], coldCache: false };
         return {};
       },
     }),
@@ -317,7 +317,8 @@ describe('App — detail pane sync with shared task-views source', () => {
           ok: true,
           json: async () => {
             if (url.includes('/api/config')) return [PROJECT];
-            if (url.includes('/api/tasks')) return [task];
+            if (url.includes('/api/tasks'))
+              return { tasks: [task], coldCache: false };
             return {};
           },
         }),
@@ -384,7 +385,10 @@ describe('App — detail pane sync with shared task-views source', () => {
     // Now resolve the fetch with the task data
     resolveTasksFetch({
       ok: true,
-      json: async () => [makeTaskView('task-xyz', 'Loaded Task')],
+      json: async () => ({
+        tasks: [makeTaskView('task-xyz', 'Loaded Task')],
+        coldCache: false,
+      }),
     });
 
     // TaskDetail should now appear
@@ -402,7 +406,8 @@ describe('App — detail pane sync with shared task-views source', () => {
           ok: true,
           json: async () => {
             if (url.includes('/api/config')) return [PROJECT];
-            if (url.includes('/api/tasks')) return [];
+            if (url.includes('/api/tasks'))
+              return { tasks: [], coldCache: false };
             return {};
           },
         }),
@@ -429,7 +434,8 @@ describe('App — detail pane sync with shared task-views source', () => {
           ok: true,
           json: async () => {
             if (url.includes('/api/config')) return [PROJECT];
-            if (url.includes('/api/tasks')) return [task];
+            if (url.includes('/api/tasks'))
+              return { tasks: [task], coldCache: false };
             return {};
           },
         }),

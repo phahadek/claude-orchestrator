@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ResolvedTask } from '../../notion/types';
 import type { ProjectConfig } from '../../config';
 import { WorktreeSetupError } from '../../session/WorktreeSetupError.js';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -16,25 +17,33 @@ vi.mock('../../config.js', () => ({
 }));
 
 vi.mock('../memoryAdmission.js', () => ({
-  hasMemoryHeadroom: vi.fn().mockReturnValue(true),
+  hasMemoryHeadroom: vi.fn().mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  }),
 }));
 
 vi.mock('../../tasks/TaskBackend.js', () => ({
   getTaskBackend: vi.fn(),
 }));
 
-vi.mock('../../db/queries.js', () => ({
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getPausedPrReasonForTask: vi.fn().mockReturnValue(null),
-  getMergedPRForTask: vi.fn().mockReturnValue(null),
-  setPauseReason: vi.fn(),
-  setTaskPauseReason: vi.fn(),
-  getTaskPauseReason: vi.fn().mockReturnValue(null),
-  clearTaskPauseReason: vi.fn(),
-  clearPausedPrReasonForTask: vi.fn(),
-  resetTaskCrashCount: vi.fn(),
-  getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
-}));
+vi.mock('../../db/queries.js', () =>
+  mockDbQueries({
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getPausedPrReasonForTask: vi.fn().mockReturnValue(null),
+    getMergedPRForTask: vi.fn().mockReturnValue(null),
+    setPauseReason: vi.fn(),
+    setTaskPauseReason: vi.fn(),
+    getTaskPauseReason: vi.fn().mockReturnValue(null),
+    clearTaskPauseReason: vi.fn(),
+    clearPausedPrReasonForTask: vi.fn(),
+    resetTaskCrashCount: vi.fn(),
+    getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
+  }),
+);
 
 vi.mock('../../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
@@ -57,6 +66,7 @@ import {
   resetTaskCrashCount,
 } from '../../db/queries.js';
 import { recordEvent } from '../../audit/AuditLog.js';
+import { hasMemoryHeadroom } from '../memoryAdmission.js';
 import {
   AutoLauncher,
   AutoLauncherFetchTimeoutError,
@@ -767,121 +777,6 @@ describe('AutoLauncher — fetch timeouts', () => {
   });
 });
 
-// ── Stall detection tests ─────────────────────────────────────────────────────
-
-describe('AutoLauncher — stall detection', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
-    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
-    vi.mocked(getMergedPRForTask).mockReturnValue(null);
-    (
-      runtimeSettings as { auto_launch_concurrency: number }
-    ).auto_launch_concurrency = 2;
-    (
-      runtimeSettings as { auto_launch_poll_interval_ms: number }
-    ).auto_launch_poll_interval_ms = 60_000;
-  });
-
-  it('force-resets polling=false when pollLastStartedAt exceeds 2× interval', () => {
-    const sessionManager = makeSessionManager(0);
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [],
-      pollOnStart: false,
-    });
-
-    // Simulate a stuck poll (polling=true with old timestamp)
-    (launcher as unknown as Record<string, unknown>).polling = true;
-    (launcher as unknown as Record<string, unknown>).pollLastStartedAt =
-      Date.now() - 2 * 60_000 - 1;
-    (launcher as unknown as Record<string, unknown>).stopped = false;
-
-    (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
-
-    expect((launcher as unknown as Record<string, unknown>).polling).toBe(
-      false,
-    );
-  });
-
-  it('emits STALL DETECTED warn log when force-resetting', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const sessionManager = makeSessionManager(0);
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [],
-      pollOnStart: false,
-    });
-
-    (launcher as unknown as Record<string, unknown>).polling = true;
-    (launcher as unknown as Record<string, unknown>).pollLastStartedAt =
-      Date.now() - 2 * 60_000 - 1;
-    (launcher as unknown as Record<string, unknown>).stopped = false;
-
-    (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
-
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        '[AutoLauncher] poll STALL DETECTED — force-resetting',
-      ),
-    );
-
-    warnSpy.mockRestore();
-  });
-
-  it('does not reset polling when age is below 2× interval', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const sessionManager = makeSessionManager(0);
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [],
-      pollOnStart: false,
-    });
-
-    (launcher as unknown as Record<string, unknown>).polling = true;
-    // Only 1× interval old — not stale yet
-    (launcher as unknown as Record<string, unknown>).pollLastStartedAt =
-      Date.now() - 60_000 + 1_000;
-    (launcher as unknown as Record<string, unknown>).stopped = false;
-
-    (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
-
-    expect((launcher as unknown as Record<string, unknown>).polling).toBe(true);
-    expect(warnSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining('STALL DETECTED'),
-    );
-
-    warnSpy.mockRestore();
-  });
-
-  it('subsequent pollOnce proceeds normally after stall reset', async () => {
-    const notionBackend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([]),
-    };
-    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
-    const sessionManager = makeSessionManager(0);
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend,
-      pollOnStart: false,
-    });
-
-    // Simulate stall state
-    (launcher as unknown as Record<string, unknown>).polling = true;
-    (launcher as unknown as Record<string, unknown>).pollLastStartedAt =
-      Date.now() - 2 * 60_000 - 1;
-    (launcher as unknown as Record<string, unknown>).stopped = false;
-
-    // scheduleNext detects stall and resets polling
-    (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
-    expect((launcher as unknown as Record<string, unknown>).polling).toBe(
-      false,
-    );
-
-    // A subsequent pollOnce can now proceed (not skipped due to polling=true)
-    await launcher.pollOnce();
-    expect(notionBackend.fetchReadyTasks).toHaveBeenCalledOnce();
-  });
-});
-
 // ── Tick log tests ────────────────────────────────────────────────────────────
 
 describe('AutoLauncher — tick logs', () => {
@@ -990,11 +885,17 @@ describe('AutoLauncher — tick logs', () => {
     logSpy.mockRestore();
   });
 
-  it('tick logs fire across a forced stall reset', async () => {
+  it('does not run a poll cycle while one is already in progress', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let resolveFetch: (() => void) | undefined;
     const notionBackend = {
       type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([]),
+      fetchReadyTasks: vi.fn(
+        () =>
+          new Promise<never[]>((res) => {
+            resolveFetch = () => res([]);
+          }),
+      ),
     };
     const resolveBackend = vi.fn().mockReturnValue(notionBackend);
     const sessionManager = makeSessionManager(0);
@@ -1004,24 +905,19 @@ describe('AutoLauncher — tick logs', () => {
       pollOnStart: false,
     });
 
-    // First normal cycle
-    await launcher.pollOnce();
+    const first = launcher.pollOnce();
+    await launcher.pollOnce(); // skipped — a cycle is already running
 
-    // Simulate stall then reset
-    (launcher as unknown as Record<string, unknown>).polling = true;
-    (launcher as unknown as Record<string, unknown>).pollLastStartedAt =
-      Date.now() - 2 * 60_000 - 1;
-    (launcher as unknown as Record<string, unknown>).stopped = false;
-    (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
+    expect(notionBackend.fetchReadyTasks).toHaveBeenCalledTimes(1);
 
-    // Second cycle after stall reset
-    await launcher.pollOnce();
+    resolveFetch?.();
+    await first;
 
     const calls = logSpy.mock.calls.map((c) => String(c[0]));
     expect(calls.some((c) => c.includes('poll start cycle=1'))).toBe(true);
     expect(calls.some((c) => c.includes('poll complete cycle=1'))).toBe(true);
-    expect(calls.some((c) => c.includes('poll start cycle=2'))).toBe(true);
-    expect(calls.some((c) => c.includes('poll complete cycle=2'))).toBe(true);
+    // The skipped call never entered runPollCycle, so no cycle=2 appears.
+    expect(calls.some((c) => c.includes('poll start cycle=2'))).toBe(false);
 
     logSpy.mockRestore();
   });
@@ -1256,17 +1152,13 @@ describe('AutoLauncher — launch failure tracking', () => {
     };
   }
 
-  function getLaunchFailedAttempts(
-    launcher: AutoLauncher,
-  ): Map<string, { count: number; nextRetryAt: number }> {
-    return (
-      launcher as unknown as {
-        launchFailedAttempts: Map<
-          string,
-          { count: number; nextRetryAt: number }
-        >;
-      }
-    ).launchFailedAttempts;
+  interface TestCrashBudget {
+    inCooldown(taskId: string): boolean;
+  }
+
+  function getCrashBudget(launcher: AutoLauncher): TestCrashBudget {
+    return (launcher as unknown as { crashBudget: TestCrashBudget })
+      .crashBudget;
   }
 
   function fireLaunchFailed(launcher: AutoLauncher, taskId: string): void {
@@ -1275,6 +1167,14 @@ describe('AutoLauncher — launch failure tracking', () => {
         onSessionLaunchFailed: (id: string) => void;
       }
     ).onSessionLaunchFailed(taskId);
+  }
+
+  function fireSessionStarted(launcher: AutoLauncher, taskId: string): void {
+    (
+      launcher as unknown as {
+        onSessionStarted: (id: string) => void;
+      }
+    ).onSessionStarted(taskId);
   }
 
   it('task is skipped during cooldown after launch_failed', async () => {
@@ -1298,7 +1198,7 @@ describe('AutoLauncher — launch failure tracking', () => {
     expect(sessionManager.start).not.toHaveBeenCalled();
   });
 
-  it('first launch_failed applies 30s cooldown', () => {
+  it('first launch_failed applies a cooldown longer than the poll interval', async () => {
     const task = makeResolvedTask({ id: 'task-backoff1' });
     const backend = makeFailingBackend(task);
     const sessionManager = makeSessionManager(0);
@@ -1308,17 +1208,40 @@ describe('AutoLauncher — launch failure tracking', () => {
       pollOnStart: false,
     });
 
-    const before = Date.now();
     fireLaunchFailed(launcher, 'task-backoff1');
 
-    const map = getLaunchFailedAttempts(launcher);
-    const entry = map.get('task-backoff1');
-    expect(entry).toBeDefined();
-    expect(entry!.count).toBe(1);
-    expect(entry!.nextRetryAt).toBeGreaterThanOrEqual(before + 30_000);
+    const budget = getCrashBudget(launcher);
+    expect(budget.inCooldown('task-backoff1')).toBe(true);
+    // Still in cooldown just before 90s.
+    await vi.advanceTimersByTimeAsync(89_999);
+    expect(budget.inCooldown('task-backoff1')).toBe(true);
+    // Cooldown clears once the 90s window elapses.
+    await vi.advanceTimersByTimeAsync(2);
+    expect(budget.inCooldown('task-backoff1')).toBe(false);
   });
 
-  it('second launch_failed applies 2m cooldown', () => {
+  it('first-tier cooldown outlasts the configured auto-launch poll interval', () => {
+    // Regression guard for the observed 95-session loop: a first-tier cooldown
+    // shorter than the poll interval gates nothing, since the next poll always
+    // arrives before the cooldown expires. Assert the relationship directly
+    // rather than assuming the two independently-tuned constants stay aligned.
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      { listProjects: () => [], pollOnStart: false },
+    );
+    const firstTierCooldownMs = (
+      launcher as unknown as {
+        crashBudget: { recordEvent(id: string): { cooldownMs: number } };
+      }
+    ).crashBudget.recordEvent('task-poll-interval-check').cooldownMs;
+
+    expect(firstTierCooldownMs).toBeGreaterThan(
+      runtimeSettings.auto_launch_poll_interval_ms,
+    );
+  });
+
+  it('second launch_failed applies 2m cooldown', async () => {
     const launcher = new AutoLauncher(
       makeSessionManager(0) as never,
       undefined,
@@ -1331,9 +1254,12 @@ describe('AutoLauncher — launch failure tracking', () => {
     fireLaunchFailed(launcher, 'task-backoff2');
     fireLaunchFailed(launcher, 'task-backoff2');
 
-    const entry = getLaunchFailedAttempts(launcher).get('task-backoff2');
-    expect(entry!.count).toBe(2);
-    expect(entry!.nextRetryAt).toBeGreaterThanOrEqual(Date.now() + 2 * 60_000);
+    const budget = getCrashBudget(launcher);
+    // Still in cooldown just before 2m — the second event's longer window.
+    await vi.advanceTimersByTimeAsync(2 * 60_000 - 1);
+    expect(budget.inCooldown('task-backoff2')).toBe(true);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(budget.inCooldown('task-backoff2')).toBe(false);
   });
 
   it('task is launched again after cooldown expires', async () => {
@@ -1354,12 +1280,40 @@ describe('AutoLauncher — launch failure tracking', () => {
     await launcher.pollOnce();
     expect(sessionManager.start).not.toHaveBeenCalled();
 
-    // Advance past the 30s cooldown
-    await vi.advanceTimersByTimeAsync(30_001);
+    // Advance past the 90s cooldown
+    await vi.advanceTimersByTimeAsync(90_001);
 
     // Now should launch
     await launcher.pollOnce();
     expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+
+  it('three consecutive launch failures produce counts 1, 2, 3 with escalating cooldowns and escalated:true on the third', () => {
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      { listProjects: () => [], pollOnStart: false },
+    );
+    const budget = (
+      launcher as unknown as {
+        crashBudget: {
+          recordEvent(id: string): {
+            count: number;
+            escalated: boolean;
+            cooldownMs: number;
+          };
+        };
+      }
+    ).crashBudget;
+
+    const first = budget.recordEvent('task-escalate-counts');
+    expect(first).toMatchObject({ count: 1, escalated: false });
+    const second = budget.recordEvent('task-escalate-counts');
+    expect(second).toMatchObject({ count: 2, escalated: false });
+    expect(second.cooldownMs).toBeGreaterThan(first.cooldownMs);
+    const third = budget.recordEvent('task-escalate-counts');
+    expect(third).toMatchObject({ count: 3, escalated: true });
+    expect(third.cooldownMs).toBeGreaterThan(second.cooldownMs);
   });
 
   it('after 3 consecutive launch_failed, escalates to needs_attention via setTaskPauseReason', () => {
@@ -1381,6 +1335,47 @@ describe('AutoLauncher — launch failure tracking', () => {
       'launch_failed',
       'launch_failed_escalated',
     );
+  });
+
+  it('deterministic repeatable launch failures produce at most escalateAfter sessions (regression for the 95-session loop)', async () => {
+    // Mirrors the observed bug: dispatch succeeds synchronously (start()
+    // resolves — the worktree-add failure only surfaces later, in the
+    // fire-and-forget chain, as an async session_launch_failed message) but
+    // the launch never actually succeeds, so session_started never fires and
+    // the crash budget is never cleared. Each poll cycle that finds the task
+    // still eligible re-dispatches and re-fails identically, at the observed
+    // ~poll-interval cadence.
+    const task = makeResolvedTask({ id: 'task-loop-guard' });
+    const backend = makeFailingBackend(task);
+    const sessionManager = makeSessionManager(0);
+    sessionManager.start.mockResolvedValue('session-id-abc123');
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    for (let i = 0; i < 20; i++) {
+      backend.fetchReadyTasks.mockResolvedValue([task]);
+      await launcher.pollOnce();
+      // The launch never confirms success — simulate the async
+      // session_launch_failed notification that follows every dispatch.
+      fireLaunchFailed(launcher, 'task-loop-guard');
+      // isLaunchCandidate must observe the escalated pause reason once set.
+      if (vi.mocked(setTaskPauseReason).mock.calls.length > 0) {
+        vi.mocked(getTaskPauseReason).mockImplementation((id) =>
+          id === 'task-loop-guard' ? 'needs_attention' : null,
+        );
+      }
+      await vi.advanceTimersByTimeAsync(
+        runtimeSettings.auto_launch_poll_interval_ms,
+      );
+    }
+
+    expect(sessionManager.start.mock.calls.length).toBeLessThanOrEqual(3);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    vi.mocked(setTaskPauseReason).mockClear();
   });
 
   it('escalated task is skipped by isLaunchCandidate via getTaskPauseReason gate', async () => {
@@ -1406,8 +1401,8 @@ describe('AutoLauncher — launch failure tracking', () => {
     vi.mocked(getTaskPauseReason).mockReturnValue(null);
   });
 
-  it('successful launch clears both task_pause_reasons DB entry and in-memory cooldown', async () => {
-    const task = makeResolvedTask({ id: 'task-reset' });
+  it('dispatching a launch (start() resolving) does NOT clear the crash budget on its own', async () => {
+    const task = makeResolvedTask({ id: 'task-dispatch-only' });
     const backend = makeFailingBackend(task);
     const sessionManager = makeSessionManager(0);
     sessionManager.start.mockResolvedValue('session-ok');
@@ -1419,17 +1414,56 @@ describe('AutoLauncher — launch failure tracking', () => {
     });
 
     // Simulate a prior launch_failed
-    fireLaunchFailed(launcher, 'task-reset');
-    expect(getLaunchFailedAttempts(launcher).has('task-reset')).toBe(true);
+    fireLaunchFailed(launcher, 'task-dispatch-only');
+    expect(getCrashBudget(launcher).inCooldown('task-dispatch-only')).toBe(
+      true,
+    );
 
-    // Advance past cooldown so task is eligible
-    await vi.advanceTimersByTimeAsync(30_001);
-
+    // Advance past cooldown so the task is eligible again, then dispatch.
+    await vi.advanceTimersByTimeAsync(90_001);
     backend.fetchReadyTasks.mockResolvedValue([task]);
     await launcher.pollOnce();
 
-    expect(clearTaskPauseReason).toHaveBeenCalledWith('task-reset');
-    expect(getLaunchFailedAttempts(launcher).has('task-reset')).toBe(false);
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+    // Dispatch alone (start() resolving) must NOT clear the record of the
+    // prior failure — only a confirmed session_started does. Clearing here
+    // is exactly the bug: it wipes the failure history before the outcome
+    // of this launch is known.
+    expect(clearTaskPauseReason).not.toHaveBeenCalledWith('task-dispatch-only');
+  });
+
+  it('successful launch (confirmed via session_started) resets the count to zero and clears the persisted pause reason', async () => {
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      { listProjects: () => [], pollOnStart: false },
+    );
+
+    // Simulate a prior failure.
+    fireLaunchFailed(launcher, 'task-confirmed-success');
+    expect(getCrashBudget(launcher).inCooldown('task-confirmed-success')).toBe(
+      true,
+    );
+
+    // The launch is later confirmed successful via session_started.
+    fireSessionStarted(launcher, 'task-confirmed-success');
+
+    expect(clearTaskPauseReason).toHaveBeenCalledWith('task-confirmed-success');
+    expect(getCrashBudget(launcher).inCooldown('task-confirmed-success')).toBe(
+      false,
+    );
+
+    // The count is truly reset to zero, not just out of cooldown: a
+    // subsequent failure is treated as attempt 1 again with the first-tier
+    // cooldown, not a continuation of the prior streak.
+    const outcome = (
+      launcher as unknown as {
+        crashBudget: {
+          recordEvent(id: string): { count: number; cooldownMs: number };
+        };
+      }
+    ).crashBudget.recordEvent('task-confirmed-success');
+    expect(outcome.count).toBe(1);
   });
 
   it('task is not retried when getTaskPauseReason returns non-null (needs_attention persisted)', async () => {
@@ -1809,5 +1843,174 @@ describe('AutoLauncher — ready-transition pause clearing', () => {
 
     expect(clearPausedPrReasonForTask).toHaveBeenCalledWith('task-pr-pause');
     expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+});
+
+describe('AutoLauncher — usage admission gate', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    const { clearUsageDeferral } = await import('../../db/queries.js');
+    registerUsagePoller({ getCache: () => ({ available: false }) });
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
+  });
+
+  it('does not spawn a launch while the five-hour window is exhausted', async () => {
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    const resetsAt = new Date(Date.now() + 60_000).toISOString();
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: { percent: 100, resetsAt, severity: 'exceeded' },
+      }),
+    });
+
+    const task = makeResolvedTask({ id: 'task-usage-gated' });
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).not.toHaveBeenCalled();
+  });
+
+  it('launches normally once usage is available again (existing admission unaffected)', async () => {
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: {
+          percent: 10,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
+      }),
+    });
+
+    const task = makeResolvedTask({ id: 'task-usage-ok' });
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+});
+
+describe('AutoLauncher — memory admission gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+  });
+
+  it('defers dispatch and records an audit event carrying the observed values when the gate denies', async () => {
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: false,
+      freeMemMB: 5000,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 1928,
+    });
+    const { logger } = await import('../../logger.js');
+    const infoSpy = vi.spyOn(logger, 'info');
+
+    const task = makeResolvedTask({ id: 'task-memory-gated' });
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).not.toHaveBeenCalled();
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'memory_admission_deferred',
+        payload: {
+          freeMemMB: 5000,
+          minHostFreeMemoryMB: 4096,
+          perSessionReserveMB: 3072,
+          projectedFreeMB: 1928,
+        },
+      }),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining('freeMemMB=5000'),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining('projectedFreeMB=1928'),
+    );
+  });
+
+  it('emits no audit row and no log line when the gate allows', async () => {
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: true,
+      freeMemMB: 8192,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 5120,
+    });
+    const { logger } = await import('../../logger.js');
+    const infoSpy = vi.spyOn(logger, 'info');
+
+    const task = makeResolvedTask({ id: 'task-memory-ok' });
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'memory_admission_deferred' }),
+    );
+    expect(infoSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining(
+        'deferring dispatch — projected free host memory',
+      ),
+    );
   });
 });

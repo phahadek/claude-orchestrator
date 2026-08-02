@@ -12,6 +12,7 @@
  * Any other branch-exists owner keeps the existing deterministic failure path.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // child_process mocks
 vi.mock('child_process', async (importOriginal) => {
@@ -44,17 +45,19 @@ vi.mock('fs', async () => {
       existsSync: vi.fn().mockReturnValue(false),
       readFileSync: vi.fn().mockReturnValue(''),
       statSync: vi.fn().mockReturnValue({ isFile: () => false }),
+      mkdirSync: vi.fn(),
     },
     writeFileSync: vi.fn(),
     existsSync: vi.fn().mockReturnValue(false),
     readFileSync: vi.fn().mockReturnValue(''),
     statSync: vi.fn().mockReturnValue({ isFile: () => false }),
+    mkdirSync: vi.fn(),
   };
 });
 
 vi.mock('../config', () => ({
-  config: { maxConcurrentCodeSessions: 10 },
-  runtimeSettings: { session_mode: 'cli' },
+  config: {},
+  runtimeSettings: { session_mode: 'cli', max_concurrent_code_sessions: 10 },
   getProjectById: vi.fn().mockReturnValue({
     id: 'test-proj',
     name: 'Test Project',
@@ -67,30 +70,32 @@ vi.mock('../config', () => ({
   normalizePath: (p: string) => p,
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  insertSession: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  updateSessionWorktreePath: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionSuperseded: vi.fn(),
-  insertEvent: vi.fn(),
-  getSession: vi.fn().mockReturnValue(null),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-  getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
-  setSessionPauseReason: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
-  incrementTaskCrashCount: vi.fn().mockReturnValue(1),
-  setTaskPauseReason: vi.fn(),
-  getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    insertSession: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    updateSessionWorktreePath: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionSuperseded: vi.fn(),
+    insertEvent: vi.fn(),
+    getSession: vi.fn().mockReturnValue(null),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+    getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
+    setSessionPauseReason: vi.fn(),
+    setSessionLastErrorDetail: vi.fn(),
+    incrementTaskCrashCount: vi.fn().mockReturnValue(1),
+    setTaskPauseReason: vi.fn(),
+    getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
+  }),
+);
 
 vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({
@@ -106,7 +111,12 @@ vi.mock('../session/orchestrator-config', () => ({
     bash_rules: [],
     mcp_servers: undefined,
     allowed_tools: [],
+    required_env: [],
+    required_files: [],
+    review_rules: [],
+    session_rules: [],
   }),
+  getSessionAllowedTools: vi.fn(() => []),
 }));
 
 vi.mock('../session/ContextBuilder', () => ({

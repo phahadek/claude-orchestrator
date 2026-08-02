@@ -6,8 +6,6 @@ import { setupTestDb } from '../../test/helpers/setupTestDb.js';
 const EXPECTED_TABLES = new Set([
   'sessions',
   'session_events',
-  'permission_events',
-  'permission_rules',
   'permission_denials',
   'task_cache',
   'settings',

@@ -12,6 +12,7 @@ import os from 'os';
 import path from 'path';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Child process mock ────────────────────────────────────────────────────────
 
@@ -46,34 +47,36 @@ vi.mock('child_process', () => ({
   exec: vi.fn(),
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  upsertSessionEvent: vi.fn(() => 1),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  incrementTokens: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  insertSessionAudit: vi.fn(),
-  setSessionModel: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  getProjectRowById: vi.fn(() => null),
-  insertLocalBranch: vi.fn(),
-  incrementCompactionCount: vi.fn(),
-  setSessionPauseReason: vi.fn(),
-  setPauseInterval: vi.fn(),
-  insertPauseInterval: vi.fn(),
-  getSessionTags: vi.fn(() => []),
-  setSessionTags: vi.fn(),
-  resetTaskCrashCount: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    upsertSessionEvent: vi.fn(() => 1),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn(() => []),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    incrementTokens: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    insertSessionAudit: vi.fn(),
+    setSessionModel: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    getProjectRowById: vi.fn(() => null),
+    insertLocalBranch: vi.fn(),
+    incrementCompactionCount: vi.fn(),
+    setSessionPauseReason: vi.fn(),
+    setPauseInterval: vi.fn(),
+    insertPauseInterval: vi.fn(),
+    getSessionTags: vi.fn(() => []),
+    setSessionTags: vi.fn(),
+    resetTaskCrashCount: vi.fn(),
+  }),
+);
 
 vi.mock('../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));

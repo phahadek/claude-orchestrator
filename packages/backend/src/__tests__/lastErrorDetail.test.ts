@@ -83,8 +83,12 @@ vi.mock('../config', async (importOriginal) => {
     ...actual,
     ALLOWED_TOOLS: [],
     GITHUB_REPO: 'owner/repo',
-    config: { maxConcurrentCodeSessions: 10 },
-    runtimeSettings: { sessionMode: 'cli', session_mode: 'cli' },
+    config: {},
+    runtimeSettings: {
+      sessionMode: 'cli',
+      session_mode: 'cli',
+      max_concurrent_code_sessions: 10,
+    },
     normalizePath: (p: string) => p,
     getProjectById: vi.fn(() => ({
       id: 'proj-1',

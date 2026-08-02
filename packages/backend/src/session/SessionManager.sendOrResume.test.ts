@@ -8,32 +8,35 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from '../__tests__/helpers/mockDbQueries';
 
 // ── Heavy deps mocked before SessionManager is imported ───────────────────────
 
-vi.mock('../db/queries.js', () => ({
-  getSession: vi.fn().mockReturnValue(null),
-  insertSession: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  updateSessionWorktreePath: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionSuperseded: vi.fn(),
-  insertEvent: vi.fn(),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-  getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
-  setSessionPauseReason: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
-  incrementTaskCrashCount: vi.fn(),
-  setTaskPauseReason: vi.fn(),
-  getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getSession: vi.fn().mockReturnValue(null),
+    insertSession: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    updateSessionWorktreePath: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionSuperseded: vi.fn(),
+    insertEvent: vi.fn(),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+    getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
+    setSessionPauseReason: vi.fn(),
+    setSessionLastErrorDetail: vi.fn(),
+    incrementTaskCrashCount: vi.fn(),
+    setTaskPauseReason: vi.fn(),
+    getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
+  }),
+);
 
 vi.mock('../audit/AuditLog.js', () => ({ recordEvent: vi.fn() }));
 
@@ -171,5 +174,32 @@ describe('SessionManager.sendOrResume — null sentinel on non-resumable session
     const result = await sm.sendOrResume('live-session-id', 'hello');
 
     expect(result).toBe('live-session-id');
+  });
+
+  it('does not deliver via stdin to a live map entry whose process has already ended (hasEnded) — falls through to the respawn path instead', async () => {
+    const sm = new SessionManager();
+    // A session_ended broadcast sets hasEnded=true synchronously, but the
+    // map entry itself is only removed later by cleanupWorktree (chained
+    // onto the session's run() promise) — so a caller can observe this
+    // in-between state where the entry is present but the process is gone.
+    // Writing to its stdin here would silently no-op (closed pipe) and lose
+    // the message; the fix is falling through to a --resume respawn.
+    const fakeSendMessage = vi.fn();
+    (sm as any).sessions.set('ended-session-id', {
+      sendMessage: fakeSendMessage,
+      hasEnded: true,
+    });
+    vi.mocked(getSession).mockReturnValue({
+      status: 'running',
+      project_id: 'missing-project',
+    } as any);
+
+    const result = await sm.sendOrResume('ended-session-id', 'hello');
+
+    // getProjectById is mocked to return null, so the respawn path returns
+    // early with the sessionId — the assertion that matters is that the
+    // live-delivery branch (fakeSendMessage) was never reached.
+    expect(fakeSendMessage).not.toHaveBeenCalled();
+    expect(result).toBe('ended-session-id');
   });
 });

@@ -80,13 +80,13 @@ describe('design decision.pickOne payload-shape contract', () => {
     );
   });
 
-  it('keeps option descriptions architecture-level, relocating evidence to the investigation summary', () => {
+  it('keeps option descriptions architecture-level, relocating evidence to the investigation field', () => {
     const text = renderPrinciple(principle!, 'design');
     expect(text).toMatch(/architecture-level statement/i);
     expect(text).toMatch(
       /file:line citations, arch-page section names, API-result specifics/i,
     );
-    expect(text).toMatch(/investigation summary/i);
+    expect(text).toMatch(/`investigation` field/i);
   });
 
   it('still states a single option is a valid confident recommendation', () => {

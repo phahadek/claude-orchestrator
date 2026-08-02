@@ -70,6 +70,11 @@ const OPS_TASK_TYPES = ['🔧 Operational', '🔎 Investigation', '🧪 Testing'
 // need promotion to Ready first).
 const DESIGN_TASK_TYPES = ['📐 Design', '📋 Planning'];
 
+// Task types eligible for the Docs(N) checkbox — mirrors the Design predicate's
+// reasoning: Ready/In Progress 📝 Docs tasks are launchable, Backlog tasks remain
+// groomable instead (they need promotion to Ready first).
+const DOCS_TASK_TYPES = ['📝 Docs'];
+
 /**
  * Reconciles a Groom(N)/Ops(N)/Design(N) launch response against the tasks the
  * operator selected, producing operator-facing messages:
@@ -341,6 +346,11 @@ export function TaskList({
   const [designCheckedIds, setDesignCheckedIds] = useState<Set<string>>(
     new Set(),
   );
+  // Docs(N): mirrors Design(N) — launches one individual docs session per
+  // selected task via the same unified planning-launch route.
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [docsError, setDocsError] = useState<string | null>(null);
+  const [docsCheckedIds, setDocsCheckedIds] = useState<Set<string>>(new Set());
   // Cross-milestone move: the shared staged-intent display renders whichever
   // task.move intent was most recently staged from a TaskCard on this board.
   const [moveIntent, setMoveIntent] = useState<StagedIntent | null>(null);
@@ -353,6 +363,8 @@ export function TaskList({
     setOpsCheckedIds(new Set());
     setDesignError(null);
     setDesignCheckedIds(new Set());
+    setDocsError(null);
+    setDocsCheckedIds(new Set());
     setMoveIntent(null);
   }, [activeProjectId, boardId]);
 
@@ -545,7 +557,9 @@ export function TaskList({
   const backlogNonCodeTasks = nonCodeNotDone.filter(
     (t) => t.displayStatus === 'backlog',
   );
-  const groomableTasks = [...backlogCodeTasks, ...backlogNonCodeTasks];
+  const groomableTasks = [...backlogCodeTasks, ...backlogNonCodeTasks].filter(
+    (t) => !t.groomDepBlocked,
+  );
   const groomSelectedCount = groomableTasks.filter((t) =>
     groomCheckedIds.has(t.taskId),
   ).length;
@@ -703,17 +717,79 @@ export function TaskList({
     setDesignCheckedIds(new Set());
   }
 
+  // Docs(N) checkbox eligibility: Ready/In Progress 📝 Docs tasks — mirrors the
+  // Design predicate's reasoning. Backlog tasks fall through to the Groom
+  // checkbox instead (see groomableTasks above).
+  function isDocsEligible(t: TaskView): boolean {
+    return (
+      DOCS_TASK_TYPES.includes(t.taskType) &&
+      (t.displayStatus === 'ready' || t.displayStatus === 'in_progress')
+    );
+  }
+  const docsEligibleTasks = tasks.filter(isDocsEligible);
+  const docsSelectedCount = docsEligibleTasks.filter((t) =>
+    docsCheckedIds.has(t.taskId),
+  ).length;
+
+  function toggleDocsCheck(taskId: string, checked: boolean) {
+    setDocsCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
+  }
+
+  function handleDocsSelectAll() {
+    setDocsCheckedIds(new Set(docsEligibleTasks.map((t) => t.taskId)));
+  }
+
+  function handleDocsClearSelection() {
+    setDocsCheckedIds(new Set());
+  }
+
+  // Launches one individual docs session per checked, docs-eligible task via
+  // the unified planning-launch route, mirroring handleDesignLaunch.
+  async function handleDocsLaunch() {
+    const selectedIds = docsEligibleTasks
+      .filter((t) => docsCheckedIds.has(t.taskId))
+      .map((t) => t.taskId);
+    if (!activeProjectId || !boardId || selectedIds.length === 0) return;
+    setDocsLoading(true);
+    setDocsError(null);
+    try {
+      const result = await opsJournalApi.launch(
+        'docs',
+        activeProjectId,
+        boardId,
+        selectedIds,
+      );
+      setDocsError(
+        formatLaunchMessages(selectedIds, result, 'not docs-executable'),
+      );
+      setDocsCheckedIds(new Set());
+    } catch (err) {
+      setDocsError(
+        err instanceof Error ? err.message : 'Failed to launch docs sessions',
+      );
+    } finally {
+      setDocsLoading(false);
+    }
+  }
+
   // Shared Select All / Clear for the NON-CODE panel — selects each eligible
-  // task into its own bucket (Ops/Design types never overlap, so there's no
-  // precedence to resolve here); the two launch buttons stay separate.
+  // task into its own bucket (Ops/Design/Docs types never overlap, so there's
+  // no precedence to resolve here); the launch buttons stay separate.
   function handleNonCodeSelectAll() {
     handleOpsSelectAll();
     handleDesignSelectAll();
+    handleDocsSelectAll();
   }
 
   function handleNonCodeClearSelection() {
     handleOpsClearSelection();
     handleDesignClearSelection();
+    handleDocsClearSelection();
   }
 
   // Launches one individual design/planning session per checked, design-eligible
@@ -816,6 +892,41 @@ export function TaskList({
           />
         )}
 
+        {/* Groom launcher — spans both Code and non-Code Backlog sections, so it
+            must render at this shared scope rather than inside either section. */}
+        {groomableTasks.length > 0 && (
+          <div
+            className={`${styles.groupHeader} ${styles.groomLauncher}`}
+            data-testid="groom-launcher"
+          >
+            <span className={styles.groupLabel}>🌱 Groom</span>
+            <span className={styles.groupCount}>{groomableTasks.length}</span>
+            <div className={styles.launchControls}>
+              <button
+                className={styles.selectAllBtn}
+                onClick={handleGroomSelectAll}
+                disabled={groomLoading}
+                data-testid="groom-select-all-btn"
+              >
+                Select All
+              </button>
+              <button
+                className={styles.groomBtn}
+                onClick={() => void handleGroomLaunch()}
+                disabled={groomSelectedCount === 0 || groomLoading}
+                data-testid="groom-btn"
+              >
+                {groomLoading ? 'Loading…' : `Groom (${groomSelectedCount})`}
+              </button>
+            </div>
+          </div>
+        )}
+        {groomError && (
+          <div className={styles.error} data-testid="groom-error">
+            {groomError}
+          </div>
+        )}
+
         {/* 🔲 Backlog — Code */}
         <BacklogCodeSection
           tasks={backlogCodeTasks}
@@ -824,17 +935,7 @@ export function TaskList({
           onSelectTask={onSelectTask}
           groomCheckedIds={groomCheckedIds}
           onGroomCheckChange={toggleGroomCheck}
-          groomableCount={groomableTasks.length}
-          groomSelectedCount={groomSelectedCount}
-          onGroomSelectAll={handleGroomSelectAll}
-          onGroomLaunch={() => void handleGroomLaunch()}
-          groomLoading={groomLoading}
         />
-        {groomError && (
-          <div className={styles.error} data-testid="groom-error">
-            {groomError}
-          </div>
-        )}
 
         {/* 📋 Non-code, by type */}
         {nonCodeNotDone.length > 0 && (
@@ -846,12 +947,13 @@ export function TaskList({
               <span className={styles.groupLabel}>📋 Non-code</span>
               <span className={styles.groupCount}>{nonCodeNotDone.length}</span>
               {(opsEligibleTasks.length > 0 ||
-                designEligibleTasks.length > 0) && (
+                designEligibleTasks.length > 0 ||
+                docsEligibleTasks.length > 0) && (
                 <div className={styles.launchControls}>
                   <button
                     className={styles.selectAllBtn}
                     onClick={handleNonCodeSelectAll}
-                    disabled={opsLoading || designLoading}
+                    disabled={opsLoading || designLoading || docsLoading}
                     data-testid="non-code-select-all-btn"
                   >
                     Select All
@@ -862,7 +964,10 @@ export function TaskList({
                     disabled={
                       opsLoading ||
                       designLoading ||
-                      (opsSelectedCount === 0 && designSelectedCount === 0)
+                      docsLoading ||
+                      (opsSelectedCount === 0 &&
+                        designSelectedCount === 0 &&
+                        docsSelectedCount === 0)
                     }
                     data-testid="non-code-clear-btn"
                   >
@@ -894,6 +999,18 @@ export function TaskList({
                         : `Design (${designSelectedCount})`}
                     </button>
                   )}
+                  {docsEligibleTasks.length > 0 && (
+                    <button
+                      className={styles.opsBtn}
+                      onClick={() => void handleDocsLaunch()}
+                      disabled={
+                        docsLoading || !boardId || docsSelectedCount === 0
+                      }
+                      data-testid="docs-btn"
+                    >
+                      {docsLoading ? 'Loading…' : `Docs (${docsSelectedCount})`}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -905,6 +1022,11 @@ export function TaskList({
             {designError && (
               <div className={styles.error} data-testid="design-error">
                 {designError}
+              </div>
+            )}
+            {docsError && (
+              <div className={styles.error} data-testid="docs-error">
+                {docsError}
               </div>
             )}
             <NonCodeTypeSection
@@ -919,6 +1041,9 @@ export function TaskList({
               designCheckedIds={designCheckedIds}
               onDesignCheckChange={toggleDesignCheck}
               isDesignEligible={isDesignEligible}
+              docsCheckedIds={docsCheckedIds}
+              onDocsCheckChange={toggleDocsCheck}
+              isDocsEligible={isDocsEligible}
             />
           </div>
         )}

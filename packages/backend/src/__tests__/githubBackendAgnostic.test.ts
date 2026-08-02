@@ -147,7 +147,7 @@ describe('buildOrchestratorClaudeMd — github backend', () => {
       ...baseOrchestratorParams,
       taskBackend: 'github',
     });
-    expect(output).toContain('**GitHub Issue**');
+    expect(output).toContain('**GitHub issue**');
     expect(output).not.toContain('**Notion task**');
   });
 
@@ -160,12 +160,13 @@ describe('buildOrchestratorClaudeMd — github backend', () => {
     expect(output).toContain('**Notion task**');
   });
 
-  it('lifecycle for github backend mentions skipping Notion fetch', () => {
+  it('lifecycle for github backend fetches via gh CLI, not Notion', () => {
     const output = buildOrchestratorClaudeMd({
       ...baseOrchestratorParams,
       taskBackend: 'github',
     });
-    expect(output).toMatch(/GitHub task source|skip.*Notion/i);
+    expect(output).toMatch(/Fetch the GitHub issue via the gh CLI/i);
+    expect(output).not.toContain('Fetch the Notion task page');
   });
 
   it('appends projectContextContent when provided', () => {

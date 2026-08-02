@@ -12,6 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import type { ServerMessage } from '../ws/types';
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
@@ -45,8 +46,8 @@ vi.mock('fs', async () => {
 });
 
 vi.mock('../config', () => ({
-  config: { maxConcurrentCodeSessions: 10 },
-  runtimeSettings: { session_mode: 'cli' },
+  config: {},
+  runtimeSettings: { session_mode: 'cli', max_concurrent_code_sessions: 10 },
   getProjectById: vi.fn().mockReturnValue({
     id: 'test-proj',
     name: 'Test Project',
@@ -63,25 +64,28 @@ vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn(),
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  insertSession: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  getSession: vi.fn(),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  insertEvent: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getSetting: vi.fn().mockReturnValue(null),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-  incrementTaskCrashCount: vi.fn().mockReturnValue(1),
-  resetTaskCrashCount: vi.fn(),
-  setTaskPauseReason: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    insertSession: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    getSession: vi.fn(),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    insertEvent: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getSetting: vi.fn().mockReturnValue(null),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+    incrementTaskCrashCount: vi.fn().mockReturnValue(1),
+    resetTaskCrashCount: vi.fn(),
+    setTaskPauseReason: vi.fn(),
+    setSessionLastErrorDetail: vi.fn(),
+    hasStagedIntentForTask: vi.fn().mockReturnValue(true),
+  }),
+);
 
 vi.mock('../audit/AuditLog', () => ({
   recordEvent: vi.fn(),
@@ -555,6 +559,30 @@ describe('SessionManager.markSessionErrored() — planning session (design) cras
       | undefined;
     expect(paused).toBeDefined();
     expect(paused!.reason).toBe('planning_crashed');
+    expect(paused!.taskId).toBe('notion-task-id');
+  });
+
+  it('surfaces planning_terminal_no_decision when no attempt ever staged an intent', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+    vi.mocked(queries.hasStagedIntentForTask).mockReturnValueOnce(false);
+    setupFakeBackend();
+    const sm = new SessionManager();
+    const messages: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => messages.push(m));
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(queries.setTaskPauseReason).toHaveBeenCalledWith(
+      'notion-task-id',
+      'planning_terminal_no_decision',
+      'runner_non_zero',
+    );
+    const paused = messages.find((m) => m.type === 'auto_launch_paused') as
+      | { reason: string; taskId: string }
+      | undefined;
+    expect(paused).toBeDefined();
+    expect(paused!.reason).toBe('planning_terminal_no_decision');
     expect(paused!.taskId).toBe('notion-task-id');
   });
 

@@ -29,6 +29,7 @@
   --bg-hover: var(--ctp-surface1);
   --border: var(--ctp-surface1);
   --border-subtle: var(--ctp-surface0);
+  --border-strong: var(--ctp-overlay0);
   --text-primary: var(--ctp-text);
   --text-muted: var(--ctp-subtext0);
   --text-faint: var(--ctp-overlay0);
@@ -56,4 +57,23 @@ body {
   font-size: 14px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Rendered markdown prose (task/spec/architecture bodies) can contain
+   unbreakable tokens — commit SHAs, file paths, URLs — wider than their
+   container. Let those break rather than overflow; ordinary words are
+   unaffected since overflow-wrap only breaks when a token can't otherwise
+   fit. Code blocks are intentionally excluded so copyable output keeps
+   scrolling horizontally instead of wrapping mid-token. */
+p,
+li,
+td,
+th,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  overflow-wrap: break-word;
 }

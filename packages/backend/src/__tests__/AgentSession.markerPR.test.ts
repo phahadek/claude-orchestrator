@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mock child_process (before imports that pull in AgentSession) ──────────────
 
@@ -34,30 +35,32 @@ vi.mock('child_process', () => ({
 
 // ── Mock DB queries ────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  upsertSessionEvent: vi.fn(() => 1),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  incrementTokens: vi.fn(),
-  incrementCompactionCount: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  setSessionModel: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  getPRByNotionTaskId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  insertPauseInterval: vi.fn(),
-  getSession: vi.fn(() => null),
-  getProjectRowById: vi.fn(() => null),
-  insertLocalBranch: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    upsertSessionEvent: vi.fn(() => 1),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn(() => []),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    incrementTokens: vi.fn(),
+    incrementCompactionCount: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    setSessionModel: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    getPRByNotionTaskId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    insertPauseInterval: vi.fn(),
+    getSession: vi.fn(() => null),
+    getProjectRowById: vi.fn(() => null),
+    insertLocalBranch: vi.fn(),
+  }),
+);
 
 // ── Mock config — getProjectById controlled per test ──────────────────────────
 

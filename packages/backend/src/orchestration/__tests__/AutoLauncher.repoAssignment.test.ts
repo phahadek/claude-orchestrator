@@ -24,7 +24,13 @@ vi.mock('../../config.js', () => ({
 }));
 
 vi.mock('../memoryAdmission.js', () => ({
-  hasMemoryHeadroom: vi.fn().mockReturnValue(true),
+  hasMemoryHeadroom: vi.fn().mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  }),
 }));
 
 vi.mock('../../tasks/TaskBackend.js', () => ({
@@ -40,6 +46,7 @@ vi.mock('../../db/queries.js', () => ({
   getTaskPauseReason: vi.fn().mockReturnValue(null),
   clearTaskPauseReason: vi.fn(),
   getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
+  getUsageDeferral: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../../audit/AuditLog.js', () => ({

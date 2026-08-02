@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // Mocks must be hoisted before AgentSession is imported.
 
@@ -31,33 +32,36 @@ vi.mock('child_process', () => ({
   execFile: vi.fn(),
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  upsertSessionEvent: vi.fn(() => 1),
-  updateSessionStatus: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  incrementTokens: vi.fn(),
-  incrementCompactionCount: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  setSessionModel: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  setPauseReason: vi.fn(),
-  setSessionPauseReason: vi.fn(),
-  insertPauseInterval: vi.fn(),
-  getSessionTags: vi.fn(() => null),
-  setSessionTags: vi.fn(),
-  resetTaskCrashCount: vi.fn(),
-  setHeadSha: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  getPRByNotionTaskId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  getSession: vi.fn(() => null),
-  getProjectRowById: vi.fn(() => null),
-  listMilestonesByProject: vi.fn(() => []),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    upsertSessionEvent: vi.fn(() => 1),
+    updateSessionStatus: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn(() => []),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    incrementTokens: vi.fn(),
+    incrementCompactionCount: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    setSessionModel: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    setPauseReason: vi.fn(),
+    setSessionPauseReason: vi.fn(),
+    insertPauseInterval: vi.fn(),
+    getSessionTags: vi.fn(() => null),
+    setSessionTags: vi.fn(),
+    resetTaskCrashCount: vi.fn(),
+    setHeadSha: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    getPRByNotionTaskId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    getSession: vi.fn(() => null),
+    getProjectRowById: vi.fn(() => null),
+    listMilestonesByProject: vi.fn(() => []),
+    listUndeliveredInboxItems: vi.fn(() => []),
+  }),
+);
 
 vi.mock('../audit/AuditLog', () => ({
   recordEvent: vi.fn(),

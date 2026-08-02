@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import {
   ALLOWED_TOOLS,
   GROOM_ALLOWED_TOOLS,
@@ -42,6 +43,13 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'groom.precheck',
   'architecture.getUnit',
   'architecture.queryUnits',
+  'task.getById',
+  'planning.noOp',
+  'pullRequest.getByTaskId',
+  'gateSeed.getState',
+  'session.getRecord',
+  'auditLog.query',
+  'sessionEvents.query',
 ];
 
 const REGISTERED_TOOL_NAMES = new Set(
@@ -138,6 +146,13 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     expect(GROOM_ALLOWED_TOOLS).toContain('mcp__orchestrator__groom_precheck');
   });
 
+  it('ALLOWED_TOOLS contains the underscore form of sessionEvents.query — the name the CLI actually exposes, not the dotted registration name', () => {
+    expect(ALLOWED_TOOLS).toContain('mcp__orchestrator__sessionEvents_query');
+    expect(ALLOWED_TOOLS).not.toContain(
+      'mcp__orchestrator__sessionEvents.query',
+    );
+  });
+
   it('groom/design/ops allow-lists all contain the underscore forms of architecture_getUnit and architecture_queryUnits', () => {
     for (const list of [
       GROOM_ALLOWED_TOOLS,
@@ -149,7 +164,18 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     }
   });
 
-  it('ops/gate allow-list contains the underscore forms of gate_verify, task_create, journal_setState, session_requestCapability', () => {
+  it('groom/design/ops allow-lists all contain the underscore form of task_getById', () => {
+    for (const list of [
+      GROOM_ALLOWED_TOOLS,
+      DESIGN_ALLOWED_TOOLS,
+      OPS_ALLOWED_TOOLS,
+    ]) {
+      expect(list).toContain('mcp__orchestrator__task_getById');
+    }
+  });
+
+  it('ops/gate allow-list contains the underscore forms of gate_verify, task_create, journal_setState, session_requestCapability — gate_verify granted via PLANNING_INTENT_KINDS.ops, a genuine staged-intent kind, not a hand-added entry', () => {
+    expect(PLANNING_INTENT_KINDS.ops).toContain('gate.verify');
     expect(OPS_ALLOWED_TOOLS).toContain('mcp__orchestrator__gate_verify');
     expect(OPS_ALLOWED_TOOLS).toContain('mcp__orchestrator__task_create');
     expect(OPS_ALLOWED_TOOLS).toContain('mcp__orchestrator__journal_setState');

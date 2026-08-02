@@ -1,0 +1,258 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.convergenceHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 8px 12px;
+  border-bottom: 1px solid var(--bg-tertiary, #313244);
+}
+
+.convergenceTop {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.statusDot {
+  align-self: center;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.statusGreen {
+  background: var(--color-green, #a6e3a1);
+}
+
+.statusBlocked {
+  background: var(--color-red, #f38ba8);
+}
+
+.distanceFigure {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary, #cdd6f4);
+}
+
+.distanceLabel {
+  font-size: 0.6875rem;
+  color: var(--text-faint, #6c7086);
+}
+
+.axisChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.axisChip {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.6875rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary, #313244);
+  color: var(--text-primary, #cdd6f4);
+}
+
+.axisChipClickable {
+  cursor: pointer;
+}
+
+.axisChipClickable:hover {
+  outline: 1px solid var(--color-blue, #89b4fa);
+}
+
+.axisChip_green {
+  color: var(--color-green, #a6e3a1);
+}
+
+.axisChip_blocked {
+  color: var(--color-red, #f38ba8);
+}
+
+.axisChip_unavailable {
+  color: var(--text-faint, #6c7086);
+  font-style: italic;
+}
+
+.sparklineWrap {
+  width: 100%;
+}
+
+.trustRates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 8px 8px 10px;
+  border-bottom: 1px solid var(--bg-tertiary, #313244);
+  font-size: 0.6875rem;
+}
+
+.trustRatesLabel {
+  font-weight: 500;
+  color: var(--text-faint, #6c7086);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.625rem;
+}
+
+.trustRateItem {
+  color: var(--text-primary, #cdd6f4);
+}
+
+.phaseRow {
+  all: unset;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 6px 8px;
+  transition: background 0.15s;
+}
+
+.phaseRow:hover {
+  background: var(--bg-tertiary, #313244);
+}
+
+.phaseRowActive {
+  background: var(--bg-tertiary, #313244);
+  outline: 1px solid var(--color-blue, #89b4fa);
+}
+
+.phaseHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+}
+
+.phaseLabel {
+  font-weight: 500;
+  color: var(--text-primary, #cdd6f4);
+}
+
+.phaseCount {
+  color: var(--text-faint, #6c7086);
+  font-size: 0.75rem;
+}
+
+.blockerBadge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.6875rem;
+  color: var(--color-red, #f38ba8);
+}
+
+.track {
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg-tertiary, #313244);
+  display: flex;
+  width: 100%;
+}
+
+.phaseCounts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 0.6875rem;
+  color: var(--text-faint, #6c7086);
+}
+
+.phaseCountItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.phaseCountDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.emptySegment {
+  width: 100%;
+  height: 100%;
+}
+
+.fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.fillPending {
+  background: #fab387;
+}
+
+.fillStaged {
+  background: #f9e2af;
+}
+
+.fillDone {
+  background: #a6e3a1;
+}
+
+.fillBlocked {
+  background: #f38ba8;
+}
+
+.fillInGrooming {
+  background: #89b4fa;
+}
+
+.fillUntouched {
+  background: #6c7086;
+}
+
+.fillGateOpen {
+  background: #cba6f7;
+}
+
+.fillGateRunnable {
+  background: #74c7ec;
+}
+
+.fillGatePendingApproval {
+  background: #b4befe;
+}
+
+.fillGatePass {
+  background: #94e2d5;
+}
+
+.fillGateFail {
+  background: #eba0ac;
+}
+
+.fillGateDeferred {
+  background: #f5c2e7;
+}
+
+.fillGateDiscarded {
+  background: #7f849c;
+}
+
+.blockerBadge {
+  cursor: pointer;
+}
+
+.blockerBadge:hover,
+.blockerBadgeActive {
+  text-decoration: underline;
+}

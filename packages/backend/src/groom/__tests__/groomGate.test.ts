@@ -5,28 +5,93 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+const FAKE_REPO_ROOT = 'FAKE_REPO_ROOT';
+const UNRESOLVABLE_REPO_ROOT = 'UNRESOLVABLE_REPO_ROOT';
+
 vi.mock('../../projects/ProjectService', () => ({
   ProjectService: {
     getById: (id: string) => {
-      if (id !== 'polimarket-analyser') return undefined;
-      return {
-        id,
-        milestones: [{ id: 'M12', name: 'M12', canonicalShortId: 'M12' }],
-      };
+      if (id === 'polimarket-analyser') {
+        return {
+          id,
+          projectDir: 'FAKE_REPO_ROOT',
+          milestones: [{ id: 'M12', name: 'M12', canonicalShortId: 'M12' }],
+        };
+      }
+      if (id === 'unresolvable-project') {
+        return { id, projectDir: 'UNRESOLVABLE_REPO_ROOT', milestones: [] };
+      }
+      return undefined;
     },
   },
 }));
+
+/**
+ * Real `resolveTrackedFileSet` shells out to git; this test's gate calls
+ * never touch a real repo, so it's replaced with a fixed set keyed by
+ * repoRoot (== the mocked ProjectService's `projectDir` above), leaving
+ * every other groomLoad export (in particular `filesPathsEntryExistsInRepo`,
+ * the real token-derivation logic groomGate.ts relies on) untouched.
+ */
+vi.mock('../groomLoad', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../groomLoad')>();
+  return {
+    ...actual,
+    resolveTrackedFileSet: vi.fn(async (repoRoot: string) => {
+      if (repoRoot === UNRESOLVABLE_REPO_ROOT) {
+        throw new Error('git ls-files failed (status 128) in ' + repoRoot);
+      }
+      if (repoRoot === FAKE_REPO_ROOT) {
+        return new Set([
+          'packages/backend/src/checkout.ts',
+          'packages/backend/src/deploy/DeployOrchestrator.ts',
+          'packages/backend/src/deploy/playbookSchema.ts',
+          'packages/backend/src/orchestration/flowArm.ts',
+        ]);
+      }
+      return new Set<string>();
+    }),
+  };
+});
 
 import { db } from '../../db/db.js';
 import {
   checkGroomingPromotionGate,
   checkAccretionContributions,
+  type GroomingGateEntry,
+  type AccretionCheckOptions,
 } from '../groomGate';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
 import { BackendTaskWriteCommands } from '../../tasks/TaskWriteCommands';
 import type { TaskBackend } from '../../tasks/TaskBackend';
 import { INTERACTIVE_TASK_TYPES } from '../../planning/triage';
+
+/**
+ * Every existing test in this file was written against the pre-fix
+ * synchronous `checkGroomingPromotionGate`, trusting a session-supplied
+ * `existsInRepo`. The fix makes the check async and re-derive `existsInRepo`
+ * server-side from a project's tracked-file set, so every call site needs a
+ * `projectId` to resolve against — this wrapper supplies the mocked
+ * `'polimarket-analyser'` project (whose tracked-file set is the fixed list
+ * above) by default, so none of the pre-existing call sites below need to
+ * change their arguments, only await the now-async result.
+ */
+async function gate(
+  entry: GroomingGateEntry,
+  taskId: string,
+  authoritativeType?: string,
+  accretionOpts?: AccretionCheckOptions,
+  projectId: string = 'polimarket-analyser',
+) {
+  return checkGroomingPromotionGate(
+    entry,
+    taskId,
+    authoritativeType,
+    accretionOpts,
+    projectId,
+  );
+}
 
 function makeBackend(): TaskBackend {
   return {
@@ -50,8 +115,8 @@ beforeEach(() => {
 });
 
 describe('checkGroomingPromotionGate', () => {
-  it('rejects a Ready flip whose type_check is absent', () => {
-    const result = checkGroomingPromotionGate(
+  it('rejects a Ready flip whose type_check is absent', async () => {
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: null,
@@ -62,8 +127,8 @@ describe('checkGroomingPromotionGate', () => {
     expect(result.reasons.some((r) => r.includes('type_check'))).toBe(true);
   });
 
-  it('rejects a Ready flip whose type_check is flagged but undispositioned', () => {
-    const result = checkGroomingPromotionGate(
+  it('rejects a Ready flip whose type_check is flagged but undispositioned', async () => {
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'flagged', signals: ['api key'] },
@@ -74,8 +139,8 @@ describe('checkGroomingPromotionGate', () => {
     expect(result.reasons.some((r) => r.includes('type_check'))).toBe(true);
   });
 
-  it('accepts a Ready flip with type_check {decision: "none"}', () => {
-    const result = checkGroomingPromotionGate(
+  it('accepts a Ready flip with type_check {decision: "none"}', async () => {
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
@@ -86,8 +151,8 @@ describe('checkGroomingPromotionGate', () => {
     expect(result.reasons).toEqual([]);
   });
 
-  it('accepts a Ready flip with a recorded disposition for a flagged type_check', () => {
-    const result = checkGroomingPromotionGate(
+  it('accepts a Ready flip with a recorded disposition for a flagged type_check', async () => {
+    const result = await gate(
       {
         size_check: { decision: 'no_split' },
         type_check: {
@@ -101,8 +166,8 @@ describe('checkGroomingPromotionGate', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('still rejects when size_check is missing, independent of type_check', () => {
-    const result = checkGroomingPromotionGate(
+  it('still rejects when size_check is missing, independent of type_check', async () => {
+    const result = await gate(
       {
         size_check: null,
         type_check: { decision: 'none' },
@@ -113,8 +178,8 @@ describe('checkGroomingPromotionGate', () => {
     expect(result.reasons.some((r) => r.includes('size_check'))).toBe(true);
   });
 
-  it('blocks a Code-task Ready flip with no gate_accretion marker', () => {
-    const result = checkGroomingPromotionGate(
+  it('blocks a Code-task Ready flip with no gate_accretion marker', async () => {
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
@@ -128,7 +193,7 @@ describe('checkGroomingPromotionGate', () => {
     );
   });
 
-  it('allows a Code-task Ready flip whose marker decision is "items"', () => {
+  it('allows a Code-task Ready flip whose marker decision is "items"', async () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:has-items',
       project: 'polimarket-analyser',
@@ -143,7 +208,7 @@ describe('checkGroomingPromotionGate', () => {
       decision: 'n/a',
       accretedAt: new Date(0).toISOString(),
     });
-    const result = checkGroomingPromotionGate(
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
@@ -161,8 +226,8 @@ describe('checkGroomingPromotionGate', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('retired 🛠️ Tooling no longer requires a gate_accretion marker — fails open with none recorded', () => {
-    const result = checkGroomingPromotionGate(
+  it('retired 🛠️ Tooling no longer requires a gate_accretion marker — fails open with none recorded', async () => {
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
@@ -176,8 +241,8 @@ describe('checkGroomingPromotionGate', () => {
     );
   });
 
-  it('allows a Design-task Ready flip with no marker at all (type not gate-checked)', () => {
-    const result = checkGroomingPromotionGate(
+  it('allows a Design-task Ready flip with no marker at all (type not gate-checked)', async () => {
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
@@ -191,7 +256,7 @@ describe('checkGroomingPromotionGate', () => {
 });
 
 describe('checkGroomingPromotionGate — seed_contribution', () => {
-  it('blocks a seed-carrying Code-task Ready flip with no seed_accretion marker', () => {
+  it('blocks a seed-carrying Code-task Ready flip with no seed_accretion marker', async () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:no-seed-marker',
       project: 'polimarket-analyser',
@@ -199,7 +264,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
       decision: 'n/a',
       accretedAt: new Date(0).toISOString(),
     });
-    const result = checkGroomingPromotionGate(
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
@@ -213,7 +278,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
     );
   });
 
-  it('allows a Code-task Ready flip whose seed marker decision is "seeds"', () => {
+  it('allows a Code-task Ready flip whose seed marker decision is "seeds"', async () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:has-seeds',
       project: 'polimarket-analyser',
@@ -229,7 +294,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
       decision: 'seeds',
       accretedAt: new Date(0).toISOString(),
     });
-    const result = checkGroomingPromotionGate(
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
@@ -247,8 +312,8 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('retired 🛠️ Tooling no longer requires a seed_accretion marker — fails open with none recorded', () => {
-    const result = checkGroomingPromotionGate(
+  it('retired 🛠️ Tooling no longer requires a seed_accretion marker — fails open with none recorded', async () => {
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
@@ -262,7 +327,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
     );
   });
 
-  it('allows a Code-task Ready flip whose seed marker decision is "n/a"', () => {
+  it('allows a Code-task Ready flip whose seed marker decision is "n/a"', async () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:na-seed',
       project: 'polimarket-analyser',
@@ -278,7 +343,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
       decision: 'n/a',
       accretedAt: new Date(0).toISOString(),
     });
-    const result = checkGroomingPromotionGate(
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
@@ -296,8 +361,8 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('allows a Design-task Ready flip with no seed marker at all (type not seed-checked)', () => {
-    const result = checkGroomingPromotionGate(
+  it('allows a Design-task Ready flip with no seed marker at all (type not seed-checked)', async () => {
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
@@ -332,9 +397,7 @@ describe('checkGroomingPromotionGate — via the accretion write-surface', () =>
       ],
     };
 
-    expect(checkGroomingPromotionGate(entry, sourceTask.id).allowed).toBe(
-      false,
-    );
+    expect((await gate(entry, sourceTask.id)).allowed).toBe(false);
 
     await commands.accreteGateContribution(
       sourceTask,
@@ -342,13 +405,11 @@ describe('checkGroomingPromotionGate — via the accretion write-surface', () =>
       'Read-Only',
     );
     // gate_contribution now recorded, but seed_contribution is still missing.
-    expect(checkGroomingPromotionGate(entry, sourceTask.id).allowed).toBe(
-      false,
-    );
+    expect((await gate(entry, sourceTask.id)).allowed).toBe(false);
 
     await commands.stageSeedContribution(sourceTask, [], 'none');
 
-    const result = checkGroomingPromotionGate(entry, sourceTask.id);
+    const result = await gate(entry, sourceTask.id);
     expect(result.allowed).toBe(true);
     expect(result.reasons).toEqual([]);
   });
@@ -363,8 +424,8 @@ describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
     type: '📐 Design',
   };
 
-  it('blocks promotion when a region-derived binding constraint has no recorded disposition', () => {
-    const result = checkGroomingPromotionGate(
+  it('blocks promotion when a region-derived binding constraint has no recorded disposition', async () => {
+    const result = await gate(
       {
         ...BASE,
         regions: { packages: ['packages/backend/src/gate'], files: [] },
@@ -377,8 +438,8 @@ describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
     ).toBe(true);
   });
 
-  it('allows promotion once every region-derived binding constraint is dispositioned', () => {
-    const result = checkGroomingPromotionGate(
+  it('allows promotion once every region-derived binding constraint is dispositioned', async () => {
+    const result = await gate(
       {
         ...BASE,
         regions: { packages: ['packages/backend/src/gate'], files: [] },
@@ -392,8 +453,8 @@ describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('blocks promotion when a disposition is n/a without a reason', () => {
-    const result = checkGroomingPromotionGate(
+  it('blocks promotion when a disposition is n/a without a reason', async () => {
+    const result = await gate(
       {
         ...BASE,
         regions: { packages: ['packages/backend/src/gate'], files: [] },
@@ -406,8 +467,8 @@ describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
     expect(result.allowed).toBe(false);
   });
 
-  it('blocks an unrouted conflict→route disposition', () => {
-    const result = checkGroomingPromotionGate(
+  it('blocks an unrouted conflict→route disposition', async () => {
+    const result = await gate(
       {
         ...BASE,
         regions: { packages: ['packages/backend/src/gate'], files: [] },
@@ -424,8 +485,8 @@ describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
     expect(result.reasons.some((r) => r.includes('conflict→route'))).toBe(true);
   });
 
-  it("routes a conflict→route disposition through FM1, but approve-by-standard's triage floor still forces this interactive task out of clean", () => {
-    const result = checkGroomingPromotionGate(
+  it("routes a conflict→route disposition through FM1, but approve-by-standard's triage floor still forces this interactive task out of clean", async () => {
+    const result = await gate(
       {
         ...BASE,
         regions: { packages: ['packages/backend/src/gate'], files: [] },
@@ -479,16 +540,16 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
     });
   });
 
-  it('blocks a Code task with no Files/paths entries', () => {
-    const result = checkGroomingPromotionGate(
+  it('blocks a Code task with no Files/paths entries', async () => {
+    const result = await gate(
       { ...BASE, filesPathsEntries: [] },
       'notion:fm2-task',
     );
     expect(result.allowed).toBe(false);
   });
 
-  it('blocks a Code task whose Files/paths entry contains a hedge token', () => {
-    const result = checkGroomingPromotionGate(
+  it('blocks a Code task whose Files/paths entry contains a hedge token', async () => {
+    const result = await gate(
       {
         ...BASE,
         filesPathsEntries: [
@@ -505,8 +566,8 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
     expect(result.reasons.some((r) => r.includes('hedge token'))).toBe(true);
   });
 
-  it('allows a Code task whose Files/paths entry contains confirm-gate (a StepKind, not a hedge)', () => {
-    const result = checkGroomingPromotionGate(
+  it('allows a Code task whose Files/paths entry contains confirm-gate (a StepKind, not a hedge)', async () => {
+    const result = await gate(
       {
         ...BASE,
         filesPathsEntries: [
@@ -522,8 +583,8 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
     expect(result.allowed).toBe(true);
   });
 
-  it('allows a Code task whose Files/paths entry contains confirm-restart (a playbook step id, not a hedge)', () => {
-    const result = checkGroomingPromotionGate(
+  it('allows a Code task whose Files/paths entry contains confirm-restart (a playbook step id, not a hedge)', async () => {
+    const result = await gate(
       {
         ...BASE,
         filesPathsEntries: [
@@ -539,8 +600,8 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
     expect(result.allowed).toBe(true);
   });
 
-  it('allows a Code task whose Files/paths entry contains Confirmed (an already-resolved assertion, not a hedge)', () => {
-    const result = checkGroomingPromotionGate(
+  it('allows a Code task whose Files/paths entry contains Confirmed (an already-resolved assertion, not a hedge)', async () => {
+    const result = await gate(
       {
         ...BASE,
         filesPathsEntries: [
@@ -556,8 +617,8 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
     expect(result.allowed).toBe(true);
   });
 
-  it('still blocks a Code task whose Files/paths entry contains the standalone verb confirm', () => {
-    const result = checkGroomingPromotionGate(
+  it('still blocks a Code task whose Files/paths entry contains the standalone verb confirm', async () => {
+    const result = await gate(
       {
         ...BASE,
         filesPathsEntries: [
@@ -574,8 +635,8 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
     expect(result.reasons.some((r) => r.includes('hedge token'))).toBe(true);
   });
 
-  it('blocks a Code task whose Files/paths entry does not resolve and is not marked *(new)*', () => {
-    const result = checkGroomingPromotionGate(
+  it('blocks a Code task whose Files/paths entry does not resolve and is not marked *(new)*', async () => {
+    const result = await gate(
       {
         ...BASE,
         filesPathsEntries: [
@@ -594,8 +655,8 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
     );
   });
 
-  it('allows a Code task whose Files/paths entries are all existing or *(new)*', () => {
-    const result = checkGroomingPromotionGate(
+  it('allows a Code task whose Files/paths entries are all existing or *(new)*', async () => {
+    const result = await gate(
       {
         ...BASE,
         filesPathsEntries: [
@@ -616,8 +677,8 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
     expect(result.allowed).toBe(true);
   });
 
-  it('does not apply the Files/paths check to non-Code types', () => {
-    const result = checkGroomingPromotionGate(
+  it('does not apply the Files/paths check to non-Code types', async () => {
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
@@ -627,6 +688,288 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
       'notion:fm2-non-code',
     );
     expect(result.allowed).toBe(true);
+  });
+});
+
+describe('checkGroomingPromotionGate — Files/paths non-repo-path declaration', () => {
+  const BASE = {
+    size_check: { decision: 'n/a' },
+    type_check: { decision: 'none' },
+    type: '💻 Code',
+  };
+
+  beforeEach(() => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:nonrepo-task',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:nonrepo-task',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+  });
+
+  it('rejects the observed incident entry — a Notion-prefixed design-page line marked isNew:true', async () => {
+    const result = await gate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/orchestration/flowArm.ts (update) — DEFAULT_ARM all false',
+            isNew: false,
+            existsInRepo: true,
+          },
+          {
+            raw: 'Notion: Design the per-flow arm model & graduated rollout (update — decision record amended with the reversal)',
+            isNew: true,
+            existsInRepo: false,
+          },
+        ],
+      },
+      'notion:nonrepo-task',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some(
+        (r) => r.includes('Notion:') && r.includes('does not parse as a'),
+      ),
+    ).toBe(true);
+  });
+
+  it('allows a genuinely new repo path even though existsInRepo is false', async () => {
+    const result = await gate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/foo/bar.ts (new)',
+            isNew: true,
+            existsInRepo: false,
+          },
+        ],
+      },
+      'notion:nonrepo-task',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('reports the non-repo-path failure as its own reason, distinct from type_check', async () => {
+    const result = await gate(
+      {
+        ...BASE,
+        type_check: { decision: 'none' },
+        filesPathsEntries: [
+          {
+            raw: 'Notion: some other design page',
+            isNew: true,
+            existsInRepo: false,
+          },
+        ],
+      },
+      'notion:nonrepo-task',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some((r) => r.toLowerCase().includes('type_check')),
+    ).toBe(false);
+  });
+
+  it('does not apply the non-repo-path check to non-Code types', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+        type: '📐 Design',
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+        filesPathsEntries: [
+          { raw: 'Notion: some design page', isNew: true, existsInRepo: false },
+        ],
+      },
+      'notion:nonrepo-non-code',
+    );
+    expect(result.allowed).toBe(true);
+  });
+});
+
+describe('checkGroomingPromotionGate — server-derived existsInRepo (task 3ae22f91)', () => {
+  const BASE = {
+    size_check: { decision: 'n/a' },
+    type_check: { decision: 'none' },
+    type: '💻 Code',
+  };
+
+  beforeEach(() => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:derived-task',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:derived-task',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+  });
+
+  it('blocks an entry whose raw text matches no tracked file even when the staged payload claims existsInRepo: true', async () => {
+    const result = await gate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/totally-fake-file.ts',
+            isNew: false,
+            existsInRepo: true,
+          },
+        ],
+      },
+      'notion:derived-task',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('does not resolve'))).toBe(
+      true,
+    );
+  });
+
+  it('promotes an entry naming a real tracked file even when the staged payload claims existsInRepo: false', async () => {
+    const result = await gate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/checkout.ts',
+            isNew: false,
+            existsInRepo: false,
+          },
+        ],
+      },
+      'notion:derived-task',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('still promotes an entry explicitly marked *(new)* for a not-yet-created, well-formed path', async () => {
+    const result = await gate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/brand-new-module.ts *(new)*',
+            isNew: true,
+            existsInRepo: false,
+          },
+        ],
+      },
+      'notion:derived-task',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('blocks a prose entry with no path separator or file extension regardless of either self-reported flag', async () => {
+    const result = await gate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'Investigate whether the checkout race is real',
+            isNew: true,
+            existsInRepo: true,
+          },
+        ],
+      },
+      'notion:derived-task',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('does not parse as a'))).toBe(
+      true,
+    );
+  });
+
+  it('reports FM2 resolve-in-artifact and the non-repo-path check as two separate, unmerged reasons for the same unresolvable entry', async () => {
+    const result = await gate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/totally-fake-prose-with-no-extension',
+            isNew: false,
+            existsInRepo: true,
+          },
+        ],
+      },
+      'notion:derived-task',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some(
+        (r) => r.includes('does not resolve') && r.includes('*(new)*'),
+      ),
+    ).toBe(true);
+    expect(result.reasons.some((r) => r.includes('does not parse as a'))).toBe(
+      true,
+    );
+    expect(result.reasons.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('blocks the whole promotion with a dedicated reason when the project tracked-file set is unresolvable, rather than admitting it', async () => {
+    const result = await checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/checkout.ts',
+            isNew: false,
+            existsInRepo: true,
+          },
+        ],
+      },
+      'notion:derived-task-unresolvable',
+      undefined,
+      undefined,
+      'unresolvable-project',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some(
+        (r) =>
+          r.includes('Files / paths') &&
+          (r.includes('could not be validated') ||
+            r.includes('tracked-file set')),
+      ),
+    ).toBe(true);
+  });
+
+  it('blocks the whole promotion with a dedicated reason when no project is resolvable at all', async () => {
+    const result = await checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/checkout.ts',
+            isNew: false,
+            existsInRepo: true,
+          },
+        ],
+      },
+      'notion:derived-task-no-project',
+      undefined,
+      undefined,
+      undefined,
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('Files / paths'))).toBe(true);
   });
 });
 
@@ -641,8 +984,8 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     },
   };
 
-  it('blocks promotion when Depends On carries a non-Done 📐 Design task', () => {
-    const result = checkGroomingPromotionGate(
+  it('blocks promotion when Depends On carries a non-Done 📐 Design task', async () => {
+    const result = await gate(
       {
         ...BASE,
         dependsOnTasks: [
@@ -655,8 +998,8 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     expect(result.reasons.some((r) => r.includes('dep-1'))).toBe(true);
   });
 
-  it('blocks promotion when Depends On carries a non-Done 📋 Planning task', () => {
-    const result = checkGroomingPromotionGate(
+  it('blocks promotion when Depends On carries a non-Done 📋 Planning task', async () => {
+    const result = await gate(
       {
         ...BASE,
         dependsOnTasks: [
@@ -668,8 +1011,8 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     expect(result.allowed).toBe(false);
   });
 
-  it('allows promotion once the Design Depends On task is ✅ Done', () => {
-    const result = checkGroomingPromotionGate(
+  it('allows promotion once the Design Depends On task is ✅ Done', async () => {
+    const result = await gate(
       {
         ...BASE,
         dependsOnTasks: [{ id: 'dep-1', type: '📐 Design', status: '✅ Done' }],
@@ -679,8 +1022,8 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     expect(result.allowed).toBe(true);
   });
 
-  it('does not block on a non-Design/Planning Depends On task regardless of status', () => {
-    const result = checkGroomingPromotionGate(
+  it('does not block on a non-Design/Planning Depends On task regardless of status', async () => {
+    const result = await gate(
       {
         ...BASE,
         dependsOnTasks: [
@@ -692,8 +1035,8 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     expect(result.allowed).toBe(true);
   });
 
-  it('still enforces the rest of the readiness bar for a task with an unsatisfied non-design dependency', () => {
-    const result = checkGroomingPromotionGate(
+  it('still enforces the rest of the readiness bar for a task with an unsatisfied non-design dependency', async () => {
+    const result = await gate(
       {
         ...BASE,
         type: '💻 Code',
@@ -716,8 +1059,8 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
 
   it.each(['🔲 Backlog', '🗂️ Ready', '🔄 In Progress'])(
     'blocks promotion when Depends On carries a non-Done 🔎 Investigation task at %s',
-    (status) => {
-      const result = checkGroomingPromotionGate(
+    async (status) => {
+      const result = await gate(
         {
           ...OPERATIONAL_BASE,
           dependsOnTasks: [{ id: 'dep-inv', type: '🔎 Investigation', status }],
@@ -729,8 +1072,8 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     },
   );
 
-  it('allows promotion once the Investigation Depends On task is ✅ Done', () => {
-    const result = checkGroomingPromotionGate(
+  it('allows promotion once the Investigation Depends On task is ✅ Done', async () => {
+    const result = await gate(
       {
         ...OPERATIONAL_BASE,
         dependsOnTasks: [
@@ -742,8 +1085,8 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     expect(result.allowed).toBe(true);
   });
 
-  it('allows promotion when the Investigation Depends On task is ⏭️ Deferred', () => {
-    const result = checkGroomingPromotionGate(
+  it('allows promotion when the Investigation Depends On task is ⏭️ Deferred', async () => {
+    const result = await gate(
       {
         ...OPERATIONAL_BASE,
         dependsOnTasks: [
@@ -757,7 +1100,7 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
 });
 
 describe('INTERACTIVE_TASK_TYPES — approve-by-standard set was not widened', () => {
-  it('still contains exactly 📐 Design and 📋 Planning', () => {
+  it('still contains exactly 📐 Design and 📋 Planning', async () => {
     expect(new Set(INTERACTIVE_TASK_TYPES)).toEqual(
       new Set(['📐 Design', '📋 Planning']),
     );
@@ -775,8 +1118,8 @@ describe('checkGroomingPromotionGate — triage eligibility (approve-by-standard
     },
   });
 
-  it('rejects a 💻 Code task carrying a triage verdict, naming the type as the reason', () => {
-    const result = checkGroomingPromotionGate(
+  it('rejects a 💻 Code task carrying a triage verdict, naming the type as the reason', async () => {
+    const result = await gate(
       cleanEntry('💻 Code'),
       'notion:triage-ineligible-code',
     );
@@ -784,8 +1127,8 @@ describe('checkGroomingPromotionGate — triage eligibility (approve-by-standard
     expect(result.reasons.some((r) => r.includes('💻 Code'))).toBe(true);
   });
 
-  it('rejects a 🔎 Investigation task carrying a triage verdict', () => {
-    const result = checkGroomingPromotionGate(
+  it('rejects a 🔎 Investigation task carrying a triage verdict', async () => {
+    const result = await gate(
       cleanEntry('🔎 Investigation'),
       'notion:triage-ineligible-investigation',
     );
@@ -795,8 +1138,8 @@ describe('checkGroomingPromotionGate — triage eligibility (approve-by-standard
     );
   });
 
-  it('rejects a 🔧 Operational task carrying a triage verdict', () => {
-    const result = checkGroomingPromotionGate(
+  it('rejects a 🔧 Operational task carrying a triage verdict', async () => {
+    const result = await gate(
       cleanEntry('🔧 Operational'),
       'notion:triage-ineligible-operational',
     );
@@ -804,24 +1147,24 @@ describe('checkGroomingPromotionGate — triage eligibility (approve-by-standard
     expect(result.reasons.some((r) => r.includes('🔧 Operational'))).toBe(true);
   });
 
-  it('allows a 📐 Design task carrying a triage verdict', () => {
-    const result = checkGroomingPromotionGate(
+  it('allows a 📐 Design task carrying a triage verdict', async () => {
+    const result = await gate(
       cleanEntry('📐 Design'),
       'notion:triage-eligible-design',
     );
     expect(result.allowed).toBe(true);
   });
 
-  it('allows a 📋 Planning task carrying a triage verdict', () => {
-    const result = checkGroomingPromotionGate(
+  it('allows a 📋 Planning task carrying a triage verdict', async () => {
+    const result = await gate(
       cleanEntry('📋 Planning'),
       'notion:triage-eligible-planning',
     );
     expect(result.allowed).toBe(true);
   });
 
-  it('resolves eligibility from the authoritative type, rejecting even when the payload asserts an eligible type', () => {
-    const result = checkGroomingPromotionGate(
+  it('resolves eligibility from the authoritative type, rejecting even when the payload asserts an eligible type', async () => {
+    const result = await gate(
       cleanEntry('📐 Design'),
       'notion:triage-authoritative-mismatch',
       '💻 Code',
@@ -832,7 +1175,7 @@ describe('checkGroomingPromotionGate — triage eligibility (approve-by-standard
 });
 
 describe('checkAccretionContributions', () => {
-  it('surfaces both reasons for a Code task with neither marker recorded', () => {
+  it('surfaces both reasons for a Code task with neither marker recorded', async () => {
     const result = checkAccretionContributions(
       { type: '💻 Code' },
       'notion:accretion-none',
@@ -846,7 +1189,7 @@ describe('checkAccretionContributions', () => {
     );
   });
 
-  it('allows a Code task once both markers are recorded', () => {
+  it('allows a Code task once both markers are recorded', async () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:accretion-both',
       project: 'polimarket-analyser',
@@ -869,7 +1212,7 @@ describe('checkAccretionContributions', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('blocks a Code task whose gate marker records a bare "n/a" with no reason', () => {
+  it('blocks a Code task whose gate marker records a bare "n/a" with no reason', async () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:accretion-bare-na',
       project: 'polimarket-analyser',
@@ -894,7 +1237,7 @@ describe('checkAccretionContributions', () => {
     );
   });
 
-  it('fails open for a retired 🛠️ Tooling task with no markers', () => {
+  it('fails open for a retired 🛠️ Tooling task with no markers', async () => {
     const result = checkAccretionContributions(
       { type: '🛠️ Tooling' },
       'notion:accretion-tooling',
@@ -904,7 +1247,7 @@ describe('checkAccretionContributions', () => {
 });
 
 describe('checkGroomingPromotionGate — gate_contribution per-candidate triage', () => {
-  it('blocks a Ready flip whose gate_contribution omits a classification for a candidate', () => {
+  it('blocks a Ready flip whose gate_contribution omits a classification for a candidate', async () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:candidate-unclassified',
       project: 'polimarket-analyser',
@@ -919,7 +1262,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
       decision: 'n/a',
       accretedAt: new Date(0).toISOString(),
     });
-    const result = checkGroomingPromotionGate(
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
@@ -943,7 +1286,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
     ).toBe(true);
   });
 
-  it('accepts any recorded classification without judging its content', () => {
+  it('accepts any recorded classification without judging its content', async () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:candidate-classified',
       project: 'polimarket-analyser',
@@ -958,7 +1301,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
       decision: 'n/a',
       accretedAt: new Date(0).toISOString(),
     });
-    const result = checkGroomingPromotionGate(
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
@@ -977,7 +1320,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
     expect(result.allowed).toBe(true);
   });
 
-  it('a reasoned {"decision":"none"} contribution for a task with no Manual verification section still passes', () => {
+  it('a reasoned {"decision":"none"} contribution for a task with no Manual verification section still passes', async () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:candidate-none-section',
       project: 'polimarket-analyser',
@@ -994,7 +1337,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
       decision: 'n/a',
       accretedAt: new Date(0).toISOString(),
     });
-    const result = checkGroomingPromotionGate(
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
@@ -1012,7 +1355,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
     expect(result.allowed).toBe(true);
   });
 
-  it('a bare {"decision":"none"} contribution with no reason is rejected at the promotion gate', () => {
+  it('a bare {"decision":"none"} contribution with no reason is rejected at the promotion gate', async () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:candidate-none-no-reason',
       project: 'polimarket-analyser',
@@ -1027,7 +1370,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
       decision: 'n/a',
       accretedAt: new Date(0).toISOString(),
     });
-    const result = checkGroomingPromotionGate(
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
@@ -1044,7 +1387,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
     );
   });
 
-  it('a Code promotion carrying accreted items succeeds regardless of pre-groom body content', () => {
+  it('a Code promotion carrying accreted items succeeds regardless of pre-groom body content', async () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:items-no-precontent',
       project: 'polimarket-analyser',
@@ -1059,7 +1402,7 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
       decision: 'n/a',
       accretedAt: new Date(0).toISOString(),
     });
-    const result = checkGroomingPromotionGate(
+    const result = await gate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },

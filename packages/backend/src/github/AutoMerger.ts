@@ -45,6 +45,7 @@ import type { Scheduler } from '../orchestration/Scheduler';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 const LOCAL_BRANCH_SWEEP_INTERVAL_MS = 15_000;
+const CONFLICT_NUDGE_SWEEP_INTERVAL_MS = 120_000;
 
 /**
  * Drives the post-approval auto-merge flow. After review reaches an approved
@@ -151,6 +152,8 @@ export class AutoMerger {
    */
   async conflictNudgeSweep(): Promise<void> {
     if (!this.sessions) return;
+    if (this.pausedUntil !== null && Date.now() < this.pausedUntil.getTime())
+      return;
     const candidates = getConflictNudgeCandidates();
     if (candidates.length === 0) return;
 
@@ -250,14 +253,18 @@ export class AutoMerger {
   }
 
   /**
-   * Registers the local-branch merge sweep with the Scheduler, independent of
-   * GitHub/PRMergeWatcher so local-only projects (no PR, no GitHub config)
-   * still get their approved branches squash-merged. Deliberately does NOT
-   * schedule the PR path (getApprovedOpenPRs -> attempt()) here — that path
-   * is already event-driven via PRMergeWatcher/PRReviewService, and attempt()
-   * is idempotent per PR via the `active` set, so scheduling it again here
-   * would be redundant rather than harmful, but keeping the two paths
-   * separate avoids coupling local-branch merging to GitHub polling cadence.
+   * Registers the local-branch merge sweep and the conflict-nudge sweep with
+   * the Scheduler. Deliberately does NOT schedule the PR merge-attempt path
+   * (getApprovedOpenPRs -> attempt()) here — that path is already
+   * event-driven via PRMergeWatcher/PRReviewService, and attempt() is
+   * idempotent per PR via the `active` set, so scheduling it again here would
+   * be redundant rather than harmful, but keeping the two paths separate
+   * avoids coupling local-branch merging to GitHub polling cadence.
+   *
+   * The conflict-nudge sweep IS scheduled here (unlike the PR merge-attempt
+   * path above) because attempt() deliberately no-ops on category='conflict'
+   * — conflictNudgeSweep() is the only component that re-nudges a live
+   * session, and without a recurring job it only ran at boot.
    */
   register(scheduler: Scheduler): void {
     scheduler.register({
@@ -266,6 +273,14 @@ export class AutoMerger {
       concurrency: 'skip-if-running',
       run: async () => {
         await this.sweepApprovedLocalBranches();
+      },
+    });
+    scheduler.register({
+      name: 'auto_merger_conflict_nudge_sweep',
+      intervalMs: CONFLICT_NUDGE_SWEEP_INTERVAL_MS,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.conflictNudgeSweep();
       },
     });
   }
@@ -495,6 +510,19 @@ export class AutoMerger {
       return;
     }
     if (initialRow.state !== 'open') return;
+    // Independent re-check of the docs execution flow's never-auto-merged
+    // gate — attempt()/run() is invoked directly by PRReviewService,
+    // routes/prs.ts, routes/projects.ts's bypassToggle path, and rehydrate(),
+    // all of which bypass getApprovedOpenPRs (and its own human_merge_only
+    // exclusion) entirely. This is the one choke point every merge attempt
+    // actually funnels through, so it is the only place this can be enforced
+    // unconditionally, regardless of caller.
+    if (initialRow.human_merge_only) {
+      logger.info(
+        `[AutoMerger] PR #${prNumber}: human_merge_only — never auto-merged, waiting for a human merge`,
+      );
+      return;
+    }
 
     const ciCheckNames = loadOrchestratorConfig(
       project.projectDir,
@@ -643,6 +671,16 @@ export class AutoMerger {
     pr: PullRequestRow,
     ciCheckNames: string[] = [],
   ): Promise<void> {
+    // The docs execution flow's never-auto-merged output gate — re-checked
+    // here, immediately before the actual GitHub merge API call, so no code
+    // path through attemptMerge (however it got here) can ever merge a
+    // human_merge_only PR.
+    if (pr.human_merge_only) {
+      logger.info(
+        `[AutoMerger] PR #${pr.pr_number}: human_merge_only — refusing to merge, waiting for a human`,
+      );
+      return;
+    }
     const commitTitle = pr.title ?? `Merge PR #${pr.pr_number}`;
     try {
       const result = await this.github.mergePR(

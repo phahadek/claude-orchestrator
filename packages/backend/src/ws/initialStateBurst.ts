@@ -5,6 +5,8 @@ import {
   getEventsBySession,
   getDenialsBySession,
   getPRByNotionTaskId,
+  getGrantedCapabilities,
+  listUndeliveredInboxItems,
 } from '../db/queries';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import { eventKind } from '../session/eventKind';
@@ -58,6 +60,7 @@ export function sendInitialStateBurst(
       ...(codeSessionId != null && { codeSessionId }),
       note: s.note ?? null,
       tags,
+      grantedCapabilities: getGrantedCapabilities(s.session_id),
       totalInputTokens: s.total_input_tokens ?? 0,
       totalOutputTokens: s.total_output_tokens ?? 0,
       compaction_count: s.compaction_count ?? 0,
@@ -84,6 +87,17 @@ export function sendInitialStateBurst(
         eventType: eventKind(ev),
         content: scrubSecrets(ev.payload),
         ...(ev.message_id != null && { messageId: ev.message_id }),
+      });
+    }
+
+    // Replay the pending-delivery state for a session parked mid-resume so a
+    // client connecting (or reconnecting) inside that window sees it without
+    // waiting for a live enqueue event.
+    if (listUndeliveredInboxItems(s.session_id).length > 0) {
+      send({
+        type: 'session_feedback_pending',
+        sessionId: s.session_id,
+        pending: true,
       });
     }
 

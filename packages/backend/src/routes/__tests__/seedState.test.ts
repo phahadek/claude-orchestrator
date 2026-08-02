@@ -47,36 +47,47 @@ beforeEach(() => {
 });
 
 describe('GET /api/seed/readiness', () => {
-  it('calls getSeedReadiness with the milestone and returns its result verbatim', async () => {
+  it('calls getSeedReadiness with the project and the resolved milestone', async () => {
     const readiness = { status: 'green', blocking: [] };
     seedServiceMock.getSeedReadiness.mockReturnValue(readiness);
 
     const res = await request(makeApp()).get(
-      '/api/seed/readiness?milestone=M12',
+      '/api/seed/readiness?project=p1&milestone=M12',
     );
 
-    expect(seedServiceMock.getSeedReadiness).toHaveBeenCalledWith('M12');
+    expect(
+      milestoneResolverMock.resolveMilestoneForProject,
+    ).toHaveBeenCalledWith('p1', 'M12');
+    expect(seedServiceMock.getSeedReadiness).toHaveBeenCalledWith('p1', 'M12');
     expect(res.status).toBe(200);
     expect(res.body).toEqual(readiness);
   });
 
   it('400s without a milestone, never calling the service', async () => {
-    const res = await request(makeApp()).get('/api/seed/readiness');
+    const res = await request(makeApp()).get('/api/seed/readiness?project=p1');
+    expect(res.status).toBe(400);
+    expect(seedServiceMock.getSeedReadiness).not.toHaveBeenCalled();
+  });
+
+  it('400s without a project, never calling the service', async () => {
+    const res = await request(makeApp()).get(
+      '/api/seed/readiness?milestone=M12',
+    );
     expect(res.status).toBe(400);
     expect(seedServiceMock.getSeedReadiness).not.toHaveBeenCalled();
   });
 
   it('400s a non-canonical milestone (e.g. a UUID), never calling the service', async () => {
-    milestoneResolverMock.resolveMilestoneAnyProject.mockImplementationOnce(
+    milestoneResolverMock.resolveMilestoneForProject.mockImplementationOnce(
       () => {
         throw new milestoneResolverMock.UnknownMilestoneError(
-          '"9b1e..." is not a known milestone display name for any project',
+          '"9b1e..." is not a known milestone for project "p1"',
         );
       },
     );
 
     const res = await request(makeApp()).get(
-      '/api/seed/readiness?milestone=9b1e...',
+      '/api/seed/readiness?project=p1&milestone=9b1e...',
     );
 
     expect(res.status).toBe(400);
@@ -85,20 +96,29 @@ describe('GET /api/seed/readiness', () => {
 });
 
 describe('GET /api/seed/next', () => {
-  it('calls nextApplyableSeedItems with milestone, deploySha, and limit', async () => {
+  it('calls nextApplyableSeedItems with project, milestone, deploySha, and limit', async () => {
     seedServiceMock.nextApplyableSeedItems.mockReturnValue([{ id: 'seed-1' }]);
 
     const res = await request(makeApp()).get(
-      '/api/seed/next?milestone=M12&deploySha=sha1&limit=2',
+      '/api/seed/next?project=p1&milestone=M12&deploySha=sha1&limit=2',
     );
 
     expect(seedServiceMock.nextApplyableSeedItems).toHaveBeenCalledWith(
+      'p1',
       'M12',
       'sha1',
       { limit: 2 },
     );
     expect(res.status).toBe(200);
     expect(res.body).toEqual([{ id: 'seed-1' }]);
+  });
+
+  it('400s without a project, never calling the service', async () => {
+    const res = await request(makeApp()).get(
+      '/api/seed/next?milestone=M12&deploySha=sha1',
+    );
+    expect(res.status).toBe(400);
+    expect(seedServiceMock.nextApplyableSeedItems).not.toHaveBeenCalled();
   });
 });
 

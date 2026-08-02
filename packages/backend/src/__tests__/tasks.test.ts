@@ -3,21 +3,24 @@ import express from 'express';
 import supertest from 'supertest';
 import yaml from 'js-yaml';
 import type { TaskAggregateRow } from '../db/queries.js';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries.js', () => ({
-  getTaskCache: vi.fn(),
-  getActiveTaskAggregates: vi.fn(),
-  getSetting: vi.fn().mockReturnValue(null),
-  getMilestoneById: vi.fn().mockReturnValue(null),
-  clearTaskPauseReason: vi.fn(),
-  resetTaskCrashCount: vi.fn(),
-  deleteTaskCacheRow: vi.fn(),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  clearTerminalPRFlags: vi.fn(),
-  getTaskRepoAssignment: vi.fn().mockReturnValue(null),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getTaskCache: vi.fn(),
+    getActiveTaskAggregates: vi.fn(),
+    getSetting: vi.fn().mockReturnValue(null),
+    getMilestoneById: vi.fn().mockReturnValue(null),
+    clearTaskPauseReason: vi.fn(),
+    resetTaskCrashCount: vi.fn(),
+    deleteTaskCacheRow: vi.fn(),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    clearTerminalPRFlags: vi.fn(),
+    getTaskRepoAssignment: vi.fn().mockReturnValue(null),
+  }),
+);
 
 vi.mock('../config.js', () => ({
   getProjectById: vi.fn((id: string) => {
@@ -57,6 +60,8 @@ import * as queries from '../db/queries.js';
 import { getTaskBackend } from '../tasks/TaskBackend.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import type { NotionTask } from '../notion/types.js';
+import { passesGroomDepGate } from '../orchestration/planningCandidates.js';
+import { normalizeBoardId } from '../tasks/taskId.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -122,12 +127,16 @@ beforeEach(() => {
   // Default: board cache returns three task IDs
   vi.mocked(queries.getTaskCache).mockReturnValue({
     cache_key: 'board:board-1',
+    // annotateGroomDepBlocking requires every cached task to carry a real
+    // `status` string (NotionTask.status is non-optional) — these fixtures
+    // otherwise crash the route with "Cannot read properties of undefined
+    // (reading 'includes')".
     raw_json: JSON.stringify([
-      { id: 'task-ready' },
-      { id: 'task-done' },
-      { id: 'task-deferred' },
-      { id: 'task-backlog' },
-      { id: 'task-in-progress' },
+      { id: 'task-ready', status: '🗂️ Ready', dependsOn: [] },
+      { id: 'task-done', status: '✅ Done', dependsOn: [] },
+      { id: 'task-deferred', status: '⏸️ Deferred', dependsOn: [] },
+      { id: 'task-backlog', status: '🔲 Backlog', dependsOn: [] },
+      { id: 'task-in-progress', status: '🔄 In Progress', dependsOn: [] },
     ]),
     fetched_at: Date.now(),
   } as never);
@@ -150,7 +159,7 @@ describe('GET /api/tasks/active', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    const ids = res.body.map((t: { taskId: string }) => t.taskId);
+    const ids = res.body.tasks.map((t: { taskId: string }) => t.taskId);
     expect(ids).not.toContain('task-deferred');
     expect(ids).toContain('task-ready');
   });
@@ -167,7 +176,7 @@ describe('GET /api/tasks/active', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    const ids = res.body.map((t: { taskId: string }) => t.taskId);
+    const ids = res.body.tasks.map((t: { taskId: string }) => t.taskId);
     expect(ids).toContain('task-ready');
     expect(ids).toContain('task-in-progress');
     expect(ids).toContain('task-backlog');
@@ -209,8 +218,8 @@ describe('GET /api/tasks/active', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].taskId).toBe('notion:task-abc');
+    expect(res.body.tasks).toHaveLength(1);
+    expect(res.body.tasks[0].taskId).toBe('notion:task-abc');
   });
 
   it('returns task IDs in notion:<dashed-uuid> form — no notion:notion: double-prefix in response', async () => {
@@ -245,9 +254,9 @@ describe('GET /api/tasks/active', () => {
     expect(responseText).not.toContain('notion:notion:');
 
     // The single task must have a correctly-formed taskId.
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].taskId).toBe(PREFIXED_ID);
-    expect(res.body[0].taskId).toMatch(
+    expect(res.body.tasks).toHaveLength(1);
+    expect(res.body.tasks[0].taskId).toBe(PREFIXED_ID);
+    expect(res.body.tasks[0].taskId).toMatch(
       /^notion:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
   });
@@ -285,7 +294,7 @@ describe('GET /api/tasks/active', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    const taskA = res.body.find(
+    const taskA = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'notion:task-a',
     );
     expect(taskA).toBeDefined();
@@ -336,10 +345,10 @@ describe('GET /api/tasks/active', () => {
     );
     expect(res.status).toBe(200);
 
-    const taskB = res.body.find(
+    const taskB = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'notion:task-b',
     );
-    const taskC = res.body.find(
+    const taskC = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'notion:task-c',
     );
 
@@ -395,10 +404,10 @@ describe('GET /api/tasks/active', () => {
     );
     expect(res.status).toBe(200);
 
-    const task2 = res.body.find(
+    const task2 = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'jira:PROJ-2',
     );
-    const task3 = res.body.find(
+    const task3 = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'jira:PROJ-3',
     );
 
@@ -454,10 +463,10 @@ describe('GET /api/tasks/active', () => {
     );
     expect(res.status).toBe(200);
 
-    const taskBeta = res.body.find(
+    const taskBeta = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'yaml:task-beta',
     );
-    const taskGamma = res.body.find(
+    const taskGamma = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'yaml:task-gamma',
     );
 
@@ -647,7 +656,7 @@ describe('buildTaskViewFromRow — totalTokens', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    const task = res.body.find(
+    const task = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'task-tokens',
     );
     expect(task.totalTokens.input).toBe(500);
@@ -672,7 +681,7 @@ describe('buildTaskViewFromRow — totalTokens', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    const task = res.body.find(
+    const task = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'task-code-only',
     );
     expect(task.totalTokens.input).toBe(300);
@@ -693,7 +702,7 @@ describe('buildTaskViewFromRow — totalTokens', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    const task = res.body.find(
+    const task = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'task-review-tokens',
     );
     expect(task.review.inputTokens).toBe(80);
@@ -1003,7 +1012,9 @@ describe('TaskView recoveryDescriptor', () => {
     vi.clearAllMocks();
     vi.mocked(queries.getTaskCache).mockReturnValue({
       cache_key: 'board:board-1',
-      raw_json: JSON.stringify([{ id: 'task-1' }]),
+      raw_json: JSON.stringify([
+        { id: 'task-1', status: '⚠️ Needs Attention', dependsOn: [] },
+      ]),
       fetched_at: Date.now(),
     } as never);
   });
@@ -1510,5 +1521,144 @@ describe('dependency resolution — single source of truth', () => {
     );
     const matches = source.match(/new DependencyResolver\(\)/g) ?? [];
     expect(matches.length).toBe(1);
+  });
+});
+
+describe('annotateGroomDepBlocking — key space parity with passesGroomDepGate', () => {
+  // Production-form ids: notion:-prefixed, hyphenated UUIDs — the form the
+  // board-cache loader actually produces, and the form dependsOn entries
+  // reference. annotateGroomDepBlocking must key its lookup map on
+  // normalizeBoardId(t.id) (bare, hyphenless, lowercased) to match how
+  // groomBlockingDepTitles/passesGroomDepGate look up deps, or every lookup
+  // misses and every Backlog task with a dependency is reported blocked.
+  const DEPENDENT_ID = 'notion:11111111-1111-1111-1111-111111111111';
+  const CODE_DEP_ID = 'notion:22222222-2222-2222-2222-222222222222';
+  const DESIGN_DEP_ID = 'notion:33333333-3333-3333-3333-333333333333';
+  const DEFERRED_DEP_ID = 'notion:44444444-4444-4444-4444-444444444444';
+
+  function dependentTask(dependsOn: string[]): NotionTask {
+    return {
+      id: DEPENDENT_ID,
+      title: 'Dependent Task',
+      status: '🔲 Backlog',
+      type: '💻 Code',
+      dependsOn,
+      notionUrl: '',
+    };
+  }
+
+  async function runActiveWithBoard(boardTasks: NotionTask[]) {
+    vi.mocked(queries.getTaskCache).mockImplementation(((key: string) =>
+      key === 'board:board-1'
+        ? {
+            cache_key: key,
+            raw_json: JSON.stringify(boardTasks),
+            fetched_at: Date.now(),
+          }
+        : undefined) as typeof queries.getTaskCache);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue(
+      boardTasks.map((t) =>
+        makeAggregate(t.id, t.status, { raw_json: JSON.stringify(t) }),
+      ),
+    );
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    return res.body.tasks.find(
+      (v: { taskId: string }) => v.taskId === DEPENDENT_ID,
+    );
+  }
+
+  it('groomDepBlocked is false for a dependent whose only dep is a 🔲 Backlog 💻 Code task', async () => {
+    const codeDep: NotionTask = {
+      id: CODE_DEP_ID,
+      title: 'Code Dep',
+      status: '🔲 Backlog',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const view = await runActiveWithBoard([
+      dependentTask([CODE_DEP_ID]),
+      codeDep,
+    ]);
+    expect(view.groomDepBlocked).toBe(false);
+  });
+
+  it('groomDepBlocked is false for a dependent whose only dep is a ✅ Done 📐 Design task on the same board', async () => {
+    const designDep: NotionTask = {
+      id: DESIGN_DEP_ID,
+      title: 'Design Dep',
+      status: '✅ Done',
+      type: '📐 Design',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const view = await runActiveWithBoard([
+      dependentTask([DESIGN_DEP_ID]),
+      designDep,
+    ]);
+    expect(view.groomDepBlocked).toBe(false);
+  });
+
+  it('groomDepBlocked is true with the dep title (not its id) for a dependent whose dep is ⏭️ Deferred', async () => {
+    const deferredDep: NotionTask = {
+      id: DEFERRED_DEP_ID,
+      title: 'Deferred Dep Title',
+      status: '⏭️ Deferred',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const view = await runActiveWithBoard([
+      dependentTask([DEFERRED_DEP_ID]),
+      deferredDep,
+    ]);
+    expect(view.groomDepBlocked).toBe(true);
+    expect(view.groomDepBlockedReason).toContain('Deferred Dep Title');
+    expect(view.groomDepBlockedReason).not.toContain(DEFERRED_DEP_ID);
+  });
+
+  it('agrees with passesGroomDepGate for the same task/dep fixture set', async () => {
+    const codeDep: NotionTask = {
+      id: CODE_DEP_ID,
+      title: 'Code Dep',
+      status: '🔲 Backlog',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const designDep: NotionTask = {
+      id: DESIGN_DEP_ID,
+      title: 'Design Dep',
+      status: '✅ Done',
+      type: '📐 Design',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const deferredDep: NotionTask = {
+      id: DEFERRED_DEP_ID,
+      title: 'Deferred Dep Title',
+      status: '⏭️ Deferred',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const boardTasks = [
+      dependentTask([CODE_DEP_ID, DESIGN_DEP_ID, DEFERRED_DEP_ID]),
+      codeDep,
+      designDep,
+      deferredDep,
+    ];
+
+    const view = await runActiveWithBoard(boardTasks);
+
+    const tasksById = new Map(
+      boardTasks.map((t) => [normalizeBoardId(t.id), t]),
+    );
+    const gateAllows = passesGroomDepGate(boardTasks[0], tasksById);
+
+    expect(view.groomDepBlocked).toBe(!gateAllows);
   });
 });

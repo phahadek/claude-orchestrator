@@ -38,6 +38,13 @@ interface TimerState {
   hardStopRemainingMs: number | null;
   /** When true, a tool_use within hardStopDeadline triggers a hard-stop. */
   hardStopArmed: boolean;
+  /**
+   * True while notify/pause are cancelled for a code session's PR review
+   * (pr_created / push_detected). While suspended, session activity must
+   * not re-arm the timers — only a needs_changes verdict (resetThresholds)
+   * does that.
+   */
+  suspended: boolean;
 }
 
 const PAUSE_MESSAGE =
@@ -45,8 +52,8 @@ const PAUSE_MESSAGE =
   'Stop running tools and wait for further instructions.';
 
 /**
- * Per-session timer that escalates when a session runs too long without
- * producing review activity. Three escalating responses:
+ * Per-session timer that escalates when a session goes too long without any
+ * activity. Three escalating responses:
  *
  *   1. Notify threshold — emit a toast (orchestration continues).
  *   2. Pause threshold — inject a pause message, set pause_reason on the PR,
@@ -54,10 +61,20 @@ const PAUSE_MESSAGE =
  *   3. Hard-stop — if any tool_use arrives within the hard-stop window after
  *      pause, force-kill the session process.
  *
- * Timers pause when the session opens a PR (pr_created / push_detected) and
- * only re-arm when a review verdict requests changes. Rate-limit interruptions
- * also pause timers, but preserve the remaining time so the session is judged
- * against the original wall-clock budget after resume.
+ * Both thresholds measure time since the session's most recent activity, not
+ * time since launch: every session_event (of any kind — tool_use, text,
+ * result, etc.) reschedules the notify/pause deadlines from "now", so a
+ * session that is actively working never trips either threshold regardless
+ * of how long it has been running. This covers planning sessions (groom /
+ * design / ops) the same way as code sessions, since it doesn't depend on
+ * any PR-shaped event they can't produce.
+ *
+ * Timers are additionally suspended when a code session opens a PR
+ * (pr_created / push_detected) and only re-arm when a review verdict
+ * requests changes — while suspended, activity does not re-arm them. This
+ * PR-review suspension is orthogonal to the activity reset. Rate-limit
+ * interruptions also pause timers, but preserve the remaining time so the
+ * session is judged against the same budget after resume.
  *
  * Timer state is persisted to the stuck_session_timers DB table on every state
  * change. rehydrate() restores in-memory state from the DB on backend restart.
@@ -245,6 +262,7 @@ export class StuckSessionMonitor {
         pauseRemainingMs: row.pause_remaining_ms,
         hardStopRemainingMs: row.hard_stop_remaining_ms,
         hardStopArmed: row.hard_stop_armed !== 0,
+        suspended: row.suspended !== 0,
       };
       this.timers.set(row.session_id, state);
 
@@ -338,10 +356,10 @@ export class StuckSessionMonitor {
         this.clear(msg.sessionId);
         return;
       case 'pr_created':
-        this.pauseTimers(msg.sessionId, false);
+        this.suspendForReview(msg.sessionId);
         return;
       case 'push_detected':
-        this.pauseTimers(msg.sessionId, false);
+        this.suspendForReview(msg.sessionId);
         return;
       case 'pr_review_complete':
       case 'review_verdict': {
@@ -351,13 +369,22 @@ export class StuckSessionMonitor {
         return;
       }
       case 'session_event': {
-        if (msg.eventType === 'tool_use') {
-          this.checkHardStop(msg.sessionId);
+        // A rate_limit_event is the absence of activity (the session got cut
+        // off externally), not evidence of it — it must not reset the
+        // activity deadline before pauseTimers(savingRemainder=true) reads
+        // it, or the remainder saved would always be a full fresh threshold
+        // instead of what was actually left when the rate limit hit.
+        const rateLimitStatus =
+          msg.eventType === 'other'
+            ? this.parseRateLimitStatus(msg.content)
+            : null;
+        if (rateLimitStatus) {
+          this.handleRateLimitEvent(msg.sessionId, rateLimitStatus);
           return;
         }
-        if (msg.eventType === 'other') {
-          this.handleSystemEvent(msg.sessionId, msg.content);
-          return;
+        this.recordActivity(msg.sessionId);
+        if (msg.eventType === 'tool_use') {
+          this.checkHardStop(msg.sessionId);
         }
         return;
       }
@@ -366,22 +393,26 @@ export class StuckSessionMonitor {
     }
   }
 
-  private handleSystemEvent(sessionId: string, content: string): void {
+  private parseRateLimitStatus(content: string): string | null {
     let payload: unknown;
     try {
       payload = JSON.parse(content);
     } catch {
-      return;
+      return null;
     }
-    if (!payload || typeof payload !== 'object') return;
+    if (!payload || typeof payload !== 'object') return null;
     const obj = payload as Record<string, unknown>;
-    if (obj.type !== 'rate_limit_event') return;
+    if (obj.type !== 'rate_limit_event') return null;
     const info = obj.rate_limit_info as Record<string, unknown> | undefined;
-    if (!info) return;
-    if (info.status === 'rate_limited') {
+    if (!info) return null;
+    return typeof info.status === 'string' ? info.status : null;
+  }
+
+  private handleRateLimitEvent(sessionId: string, status: string): void {
+    if (status === 'rate_limited') {
       insertPauseInterval(sessionId, 'rate_limit');
       this.pauseTimers(sessionId, true);
-    } else if (info.status === 'resumed') {
+    } else if (status === 'resumed') {
       closePauseInterval(sessionId);
       this.resumeTimers(sessionId);
     }
@@ -401,9 +432,42 @@ export class StuckSessionMonitor {
       pauseRemainingMs: null,
       hardStopRemainingMs: null,
       hardStopArmed: false,
+      suspended: false,
     };
     this.timers.set(sessionId, state);
     this.scheduleNotifyAndPause(sessionId, state);
+  }
+
+  /**
+   * Reschedule notify/pause from "now" in response to session activity
+   * (any session_event). No-op while suspended for PR review — a review
+   * verdict, not activity, is what re-arms a suspended session. Deliberately
+   * leaves hard-stop state untouched: hard-stop is a distinct mechanism keyed
+   * off tool_use within its own window, and must not be cleared just because
+   * that same tool_use also counts as activity.
+   */
+  private recordActivity(sessionId: string): void {
+    const state = this.timers.get(sessionId);
+    if (!state || state.suspended) return;
+    if (state.notifyTimer) clearTimeout(state.notifyTimer);
+    if (state.pauseTimer) clearTimeout(state.pauseTimer);
+    state.notifyTimer = null;
+    state.pauseTimer = null;
+    state.notifyDeadline = 0;
+    state.pauseDeadline = 0;
+    state.notifyRemainingMs = null;
+    state.pauseRemainingMs = null;
+    this.scheduleNotifyAndPause(sessionId, state);
+  }
+
+  /** Cancel notify/pause for a code session's PR review and mark it suspended
+   * so that subsequent activity does not re-arm them. */
+  private suspendForReview(sessionId: string): void {
+    const state = this.timers.get(sessionId);
+    if (!state) return;
+    this.pauseTimers(sessionId, false);
+    state.suspended = true;
+    this.persistTimerState(sessionId);
   }
 
   private scheduleNotifyAndPause(sessionId: string, state: TimerState): void {
@@ -430,6 +494,7 @@ export class StuckSessionMonitor {
   private resetThresholds(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state) return;
+    state.suspended = false;
     this.pauseTimers(sessionId, false);
     this.scheduleNotifyAndPause(sessionId, state);
   }
@@ -653,6 +718,7 @@ export class StuckSessionMonitor {
         state.notifyRemainingMs,
         state.pauseRemainingMs,
         state.hardStopRemainingMs,
+        state.suspended,
       );
     } catch (err) {
       logger.warn(

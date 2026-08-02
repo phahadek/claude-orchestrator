@@ -201,7 +201,7 @@ describe('MilestonesSubPanel', () => {
     expect(deleteCall?.[0]).toBe('/api/milestones/m1');
   });
 
-  it('shows YAML-specific source label when project.taskSource is yaml', async () => {
+  it('shows YAML-specific source label and hides Add milestone for yaml projects', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse([]));
     const yamlProject: Project = { ...PROJECT, taskSource: 'yaml' };
     render(<MilestonesSubPanel project={yamlProject} onBack={vi.fn()} />);
@@ -210,8 +210,11 @@ describe('MilestonesSubPanel', () => {
         screen.getByText(/No milestones yet for this project/),
       ).toBeTruthy(),
     );
-    fireEvent.click(screen.getByRole('button', { name: '+ Add milestone' }));
-    expect(screen.getByLabelText('YAML milestone id')).toBeTruthy();
+    expect(screen.getByText('tasks.yaml')).toBeTruthy();
+    expect(screen.getByText(/managed via/)).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: '+ Add milestone' }),
+    ).toBeNull();
   });
 
   it('calls onBack when ← Projects clicked', async () => {

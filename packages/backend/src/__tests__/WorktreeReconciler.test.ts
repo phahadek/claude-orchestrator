@@ -46,6 +46,7 @@ vi.mock('node:fs', async (importOriginal) => {
 vi.mock('../db/queries.js', () => ({
   getSession: vi.fn(),
   getPRBySessionId: vi.fn(),
+  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({

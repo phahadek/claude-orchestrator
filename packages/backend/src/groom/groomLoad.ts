@@ -11,7 +11,7 @@
  * for how this fits into the wider grooming flow.
  */
 
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { execFile } from 'child_process';
 import { join, resolve, basename } from 'path';
 import { promisify } from 'util';
@@ -38,6 +38,7 @@ import { bindingConstraintIdsForRegions } from './constraintCatalog';
 import type { FilesPathsEntry, DependsOnTaskRef } from './groomGate';
 import { ProjectService } from '../projects/ProjectService';
 import { selectUnitsFromStore } from '../architecture/selectiveInjection';
+import { SIZE_TYPE_CHECK } from '../planning/procedureCore';
 
 const execFileAsync = promisify(execFile);
 
@@ -130,6 +131,31 @@ interface TaskDoc extends TaskRow {
    * liveness signal to it).
    */
   dependsOnTasks: DependsOnTaskRef[];
+}
+
+/** The subset of a sizeCheckSeed the file-count/LoC nomination check needs. */
+export interface SizeCheckThresholdSeed {
+  files: number;
+  locEstimate?: number;
+}
+
+/**
+ * Deterministic split-nomination flag: trips when either axis of
+ * `SIZE_TYPE_CHECK` (file count or estimated LoC) is exceeded — a task
+ * touching many files gets nominated even when its per-file diff is small,
+ * and vice versa. This is a nomination signal only: it never forces
+ * `split_now` — `unsplittable` with a recorded reason remains a legitimate
+ * `size_check` outcome above either threshold, and the decision vocabulary
+ * itself (checked by groomGate.ts) is unaffected.
+ */
+export function isSizeCheckSeedOverThreshold(
+  seed: SizeCheckThresholdSeed,
+): boolean {
+  if (seed.files > SIZE_TYPE_CHECK.fileSplitThreshold) return true;
+  return (
+    typeof seed.locEstimate === 'number' &&
+    seed.locEstimate > SIZE_TYPE_CHECK.locSplitThreshold
+  );
 }
 
 type FreshnessStatus = 'fresh' | 'stale' | 'missing';
@@ -229,6 +255,29 @@ export interface LoadGroomContextOptions {
 
 const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
 
+/**
+ * Thrown by `loadGroomContext` when the target project's task source isn't
+ * Notion. The groom loader only knows how to assemble a worklist from a
+ * Notion board (`NotionClient` + the manifest's board id) — a YAML/Jira/
+ * GitHub-backed project has no board for it to read. Distinct from a
+ * generic Error so `OpsSessionLauncher` can refuse the dispatch (no session
+ * row created) with a reason the dashboard can tell apart from a genuine
+ * groom failure, instead of instantiating a `NotionClient` that can't ever
+ * resolve for this project.
+ */
+export class GroomTaskSourceUnsupportedError extends Error {
+  constructor(
+    public readonly projectId: string,
+    public readonly taskSource: string,
+  ) {
+    super(
+      `groomLoad: project ${projectId} has task source "${taskSource}" — ` +
+        `groom dispatch currently only supports Notion-backed projects.`,
+    );
+    this.name = 'GroomTaskSourceUnsupportedError';
+  }
+}
+
 // ─── Manifest resolution ────────────────────────────────────────────────────
 
 export function resolveConfigDir(repoRoot: string): string | null {
@@ -269,6 +318,89 @@ export function loadManifest(
   }
 }
 
+/**
+ * Which manifest milestones a given repo/project resolves to, and whether a
+ * specific milestone is among them. Returns `null` when there's nothing to
+ * check against — no central config tree, or no manifest file for this
+ * project — which callers should treat as "not applicable" rather than a
+ * rejection: a project with no grooming manifest never had a registration
+ * requirement to begin with.
+ */
+export function checkMilestoneRegistered(
+  repoRoot: string,
+  canonicalShortId: string,
+  projectKey?: string,
+): { registered: boolean; registeredKeys: string[] } | null {
+  const configDir = resolveConfigDir(repoRoot);
+  if (!configDir) return null;
+  const key = projectKey ?? basename(repoRoot);
+  const manifestPath = join(configDir, 'projects', key, 'grooming.json');
+  if (!existsSync(manifestPath)) return null;
+  let manifest: GroomManifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as GroomManifest;
+  } catch {
+    return null;
+  }
+  const registeredKeys = Object.keys(manifest.milestones ?? {});
+  return {
+    registered: registeredKeys.includes(canonicalShortId),
+    registeredKeys,
+  };
+}
+
+/**
+ * Registers a newly-created milestone in the grooming manifest — the write
+ * side of the same `milestones` map `loadGroomContext` above requires every
+ * milestone to already carry. A no-op (not an error) when there's no central
+ * config tree, or this project has no manifest yet: the manifest is
+ * host-specific and gitignored (see its own `$comment`), so a repo without
+ * one simply isn't using the grooming flow. Idempotent — an already-
+ * registered `canonicalShortId` is left untouched, so re-creating or
+ * re-importing a milestone never clobbers or duplicates its entry.
+ */
+export function registerMilestoneInManifest(
+  repoRoot: string,
+  registration: {
+    canonicalShortId: string;
+    board: string;
+    neighbour?: { canonicalShortId: string; board: string } | null;
+  },
+  projectKey?: string,
+): void {
+  const configDir = resolveConfigDir(repoRoot);
+  if (!configDir) return;
+  const key = projectKey ?? basename(repoRoot);
+  const manifestPath = join(configDir, 'projects', key, 'grooming.json');
+  if (!existsSync(manifestPath)) return;
+
+  let manifest: GroomManifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as GroomManifest;
+  } catch {
+    return;
+  }
+
+  manifest.milestones = manifest.milestones ?? {};
+  if (manifest.milestones[registration.canonicalShortId]) return;
+
+  manifest.milestones[registration.canonicalShortId] = {
+    board: registration.board,
+    ...(registration.neighbour
+      ? {
+          neighbours: [
+            {
+              id: registration.neighbour.canonicalShortId,
+              board: registration.neighbour.board,
+            },
+          ],
+        }
+      : {}),
+  };
+
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+}
+
 // ─── git helpers (read-only) ────────────────────────────────────────────────
 
 async function git(
@@ -287,9 +419,44 @@ async function git(
   }
 }
 
-async function listTrackedFiles(repoRoot: string): Promise<string[]> {
+/**
+ * Throws when `git ls-files` fails (bad repoRoot, git unavailable, etc.) —
+ * distinct from `listTrackedFiles` below, which swallows that failure for
+ * the loader's own best-effort use. Callers that must treat an unresolvable
+ * tracked-file set as a blocking condition (groomGate.ts's server-derived
+ * existsInRepo) use this instead.
+ */
+async function gitLsFilesOrThrow(repoRoot: string): Promise<string[]> {
   const r = await git(['ls-files'], repoRoot);
-  return r.status === 0 ? r.stdout.split('\n').filter(Boolean) : [];
+  if (r.status !== 0) {
+    throw new Error(
+      `groomLoad: git ls-files failed (status ${r.status}) in ${repoRoot}`,
+    );
+  }
+  return r.stdout.split('\n').filter(Boolean);
+}
+
+async function listTrackedFiles(repoRoot: string): Promise<string[]> {
+  try {
+    return await gitLsFilesOrThrow(repoRoot);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The tracked-file set for a project's repo, for server-side re-derivation
+ * of a Files/paths entry's `existsInRepo` at promotion time (groomGate.ts) —
+ * reuses the same git-backed source of truth this loader's own
+ * `parseFilesPathsEntries` validates against, instead of trusting whatever
+ * a session's staged payload asserts about itself. Throws (never silently
+ * returns an empty set) when the tracked-file set can't be resolved, so a
+ * caller can't mistake "git failed" for "genuinely empty repo".
+ */
+export async function resolveTrackedFileSet(
+  repoRoot: string,
+): Promise<Set<string>> {
+  return new Set(await gitLsFilesOrThrow(repoRoot));
 }
 
 /** Freshness of a repo-relative package path vs. the cached prior SHA. */
@@ -347,6 +514,20 @@ function extractPathToken(line: string): string | null {
 }
 
 /**
+ * Whether a Files/paths entry's raw text resolves to a tracked file — the
+ * single git-validated fact both this loader's `parseFilesPathsEntries` and
+ * groomGate.ts's promotion-time re-derivation compute from, so the two never
+ * drift on how a token is extracted from the raw line.
+ */
+export function filesPathsEntryExistsInRepo(
+  raw: string,
+  trackedFiles: Set<string>,
+): boolean {
+  const token = extractPathToken(raw);
+  return !!token && trackedFiles.has(token);
+}
+
+/**
  * FM2 — parse a task's `## Files / paths affected` section into one entry
  * per list item, git-validating each candidate path against `trackedFiles`.
  * groomGate.ts's resolve-in-artifact check re-derives the hedge-token scan
@@ -364,8 +545,7 @@ function parseFilesPathsEntries(
     const raw = m[1].trim();
     if (!raw) continue;
     const isNew = NEW_MARKER.test(raw);
-    const token = extractPathToken(raw);
-    const existsInRepo = !!token && trackedFiles.has(token);
+    const existsInRepo = filesPathsEntryExistsInRepo(raw, trackedFiles);
     entries.push({ raw, isNew, existsInRepo });
   }
   return entries;
@@ -377,6 +557,16 @@ export async function loadGroomContext(
   milestone: string,
   opts?: LoadGroomContextOptions,
 ): Promise<GroomLoadResult> {
+  if (opts?.projectId) {
+    const project = ProjectService.getById(opts.projectId);
+    if (project && project.taskSource !== 'notion') {
+      throw new GroomTaskSourceUnsupportedError(
+        opts.projectId,
+        project.taskSource,
+      );
+    }
+  }
+
   const repoRoot = opts?.repoRoot ?? config.projectDir;
   const manifest = opts?.manifest ?? loadManifest(repoRoot);
   const milestoneCfg = manifest.milestones?.[milestone];

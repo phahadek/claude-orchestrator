@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
 import fs from 'fs';
@@ -46,6 +47,7 @@ vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
   execSync: vi.fn(() => ''),
   execFile: vi.fn(),
+  exec: vi.fn(),
 }));
 
 vi.mock('fs', async () => {
@@ -85,7 +87,6 @@ vi.mock('../config', () => ({
   BASH_DEFAULT_TIMEOUT_MS: 120000,
   config: {
     claudePath: '/fake/claude',
-    maxConcurrentCodeSessions: 20,
     projectDir: '/fake/project',
   },
   getProjectById: vi.fn((id: string) =>
@@ -109,6 +110,7 @@ vi.mock('../session/orchestrator-config', () => ({
     bootstrapScript: '',
     bashRules: [],
   })),
+  getSessionAllowedTools: vi.fn(() => []),
 }));
 
 vi.mock('../session/orchestrator-claudemd', () => ({
@@ -153,35 +155,37 @@ vi.mock('../orchestration/localBranchHelpers', () => ({
   hasNonEmptyDiff: vi.fn(async () => false),
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  getSessionsByStatus: vi.fn(() => []),
-  getSession: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-  getPRByNotionTaskId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getStuckResultSessionRows: vi.fn(() => []),
-  insertSession: vi.fn(),
-  insertEvent: vi.fn(),
-  upsertSessionEvent: vi.fn(() => 1),
-  upsertPullRequest: vi.fn(),
-  insertPermissionDenial: vi.fn(),
-  incrementTokens: vi.fn(),
-  insertSessionAudit: vi.fn(),
-  setSessionModel: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  getProjectRowById: vi.fn(() => null),
-  insertLocalBranch: vi.fn(),
-  getSetting: vi.fn(() => null),
-  hasActiveSessionForTask: vi.fn(() => false),
-  getRules: vi.fn(() => []),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    getSessionsByStatus: vi.fn(() => []),
+    getSession: vi.fn(),
+    getEventsBySession: vi.fn(() => []),
+    getPRByNotionTaskId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getStuckResultSessionRows: vi.fn(() => []),
+    insertSession: vi.fn(),
+    insertEvent: vi.fn(),
+    upsertSessionEvent: vi.fn(() => 1),
+    upsertPullRequest: vi.fn(),
+    insertPermissionDenial: vi.fn(),
+    incrementTokens: vi.fn(),
+    insertSessionAudit: vi.fn(),
+    setSessionModel: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    getProjectRowById: vi.fn(() => null),
+    insertLocalBranch: vi.fn(),
+    getSetting: vi.fn(() => null),
+    hasActiveSessionForTask: vi.fn(() => false),
+    getRules: vi.fn(() => []),
+  }),
+);
 
 import { spawn, execSync } from 'child_process';
 import { AgentSession } from '../session/AgentSession';

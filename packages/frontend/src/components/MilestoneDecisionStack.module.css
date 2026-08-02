@@ -1,0 +1,40 @@
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sectionHeading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0 10px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+
+.sectionHeadingChevron {
+  font-size: 0.7rem;
+  width: 10px;
+  display: inline-block;
+}
+
+.taskRowSelected {
+  outline: 2px solid #89b4fa;
+  outline-offset: -1px;
+  border-radius: var(--radius-sm);
+}

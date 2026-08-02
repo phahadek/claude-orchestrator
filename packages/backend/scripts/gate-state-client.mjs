@@ -12,8 +12,8 @@
 // loopback-only and device-authed, exactly like groom-context-client.mjs.
 //
 // Usage:
-//   node gate-state-client.mjs readiness --milestone <M>
-//   node gate-state-client.mjs next --milestone <M> [--classification <C>] [--limit <N>]
+//   node gate-state-client.mjs readiness --project <P> --milestone <M>
+//   node gate-state-client.mjs next --project <P> --milestone <M> [--classification <C>] [--limit <N>]
 //   node gate-state-client.mjs item <gateItemId>
 //   node gate-state-client.mjs event <gateItemId> <json-payload>
 //   node gate-state-client.mjs approve <gateItemId> [operator]
@@ -86,8 +86,8 @@ export function requestGateState({ host, port, token, method, path, payload }) {
   });
 }
 
-export function fetchGateReadiness({ host, port, token, milestone }) {
-  const query = new URLSearchParams({ milestone });
+export function fetchGateReadiness({ host, port, token, project, milestone }) {
+  const query = new URLSearchParams({ project, milestone });
   return requestGateState({
     host,
     port,
@@ -101,11 +101,12 @@ export function fetchNextRunnableGateItems({
   host,
   port,
   token,
+  project,
   milestone,
   classification,
   limit,
 }) {
-  const query = new URLSearchParams({ milestone });
+  const query = new URLSearchParams({ project, milestone });
   if (classification) query.set('classification', classification);
   if (limit !== undefined) query.set('limit', String(limit));
   return requestGateState({
@@ -209,6 +210,7 @@ function parseFlags(argv) {
     return argv[i + 1];
   }
   return {
+    project: option('--project'),
     milestone: option('--milestone'),
     classification: option('--classification'),
     limit: option('--limit'),
@@ -217,8 +219,8 @@ function parseFlags(argv) {
 
 const USAGE =
   'usage:\n' +
-  '  node gate-state-client.mjs readiness --milestone <M>\n' +
-  '  node gate-state-client.mjs next --milestone <M> [--classification <C>] [--limit <N>]\n' +
+  '  node gate-state-client.mjs readiness --project <P> --milestone <M>\n' +
+  '  node gate-state-client.mjs next --project <P> --milestone <M> [--classification <C>] [--limit <N>]\n' +
   '  node gate-state-client.mjs item <gateItemId>\n' +
   '  node gate-state-client.mjs event <gateItemId> <json-payload>\n' +
   '  node gate-state-client.mjs approve <gateItemId> [operator]\n' +
@@ -252,16 +254,23 @@ async function main() {
   try {
     let result;
     if (command === 'readiness') {
-      const { milestone } = parseFlags(rest);
-      if (!milestone) return fail(USAGE);
-      result = await fetchGateReadiness({ host, port, token, milestone });
+      const { project, milestone } = parseFlags(rest);
+      if (!project || !milestone) return fail(USAGE);
+      result = await fetchGateReadiness({
+        host,
+        port,
+        token,
+        project,
+        milestone,
+      });
     } else if (command === 'next') {
-      const { milestone, classification, limit } = parseFlags(rest);
-      if (!milestone) return fail(USAGE);
+      const { project, milestone, classification, limit } = parseFlags(rest);
+      if (!project || !milestone) return fail(USAGE);
       result = await fetchNextRunnableGateItems({
         host,
         port,
         token,
+        project,
         milestone,
         classification,
         limit,

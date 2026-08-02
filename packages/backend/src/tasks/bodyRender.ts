@@ -31,6 +31,13 @@ export interface TaskBodySections {
    * Omitted/any other type preserves the boilerplate-fallback behavior.
    */
   taskType?: string;
+  /**
+   * Pre-rendered Implementation-notes body content — e.g. a design closing
+   * synthesis's generated architecture/follow-on-task account (see
+   * stagedIntents.ts's generateDesignClosingSynthesisAccount). Falls back to
+   * the standard "to be filled in" placeholder when omitted.
+   */
+  implementationNotes?: string;
 }
 
 interface NotionRichTextAnnotations {
@@ -339,7 +346,11 @@ export function renderTaskBody(sections: TaskBodySections): RenderedBlock[] {
   }
 
   blocks.push(heading2('Implementation notes'));
-  blocks.push(quote('To be filled in during/after task completion.'));
+  blocks.push(
+    sections.implementationNotes
+      ? paragraph(sections.implementationNotes)
+      : quote('To be filled in during/after task completion.'),
+  );
 
   return blocks;
 }
@@ -480,7 +491,9 @@ export function renderTaskBodyMarkdown(sections: TaskBodySections): string {
   lines.push(
     '',
     '## Implementation notes',
-    '> To be filled in during/after task completion.',
+    sections.implementationNotes
+      ? sections.implementationNotes
+      : '> To be filled in during/after task completion.',
   );
   return lines.join('\n');
 }

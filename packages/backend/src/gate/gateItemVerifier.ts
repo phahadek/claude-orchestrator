@@ -1,6 +1,11 @@
 import { logger } from '../logger';
 import { getProjectById } from '../config';
-import { getSession, markSessionDone } from '../db/queries';
+import {
+  getSession,
+  hasActiveCapabilityRequestForSession,
+  markSessionDone,
+  TERMINAL_SESSION_STATUSES,
+} from '../db/queries';
 import type { SessionManager } from '../session/SessionManager';
 import type { GateVerifyDispositionPayload } from '../session/AgentSession';
 import {
@@ -8,30 +13,11 @@ import {
   renderProjectRecordAccess,
 } from '../planning/procedureAssembler';
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
-import { appendGateItemEvent } from './gateService';
 import type { GateItem } from './gateStore';
 import type {
   GateItemVerifier,
   GateVerificationResult,
 } from './gateReconciler';
-
-const TERMINAL_SESSION_STATUSES = new Set(['done', 'error', 'killed']);
-
-/**
- * Sessions with a live, un-settled gate-verify appeal in flight — added the
- * instant a `pass` verdict is downgraded and appeal feedback is queued,
- * removed the instant the exchange settles (revised verdict, budget timeout,
- * or the session dying mid-appeal). Checked by AgentSession.handleCleanExit
- * so a gate-verify session's one-shot auto-teardown does not archive it out
- * from under its own pending appeal — mirroring the guard that path already
- * has for an outstanding `session.requestCapability` intent.
- */
-const pendingGateVerifyAppeal = new Set<string>();
-
-/** True if `sessionId` has an outstanding gate-verify appeal awaiting its one revision. */
-export function hasPendingGateVerifyAppeal(sessionId: string): boolean {
-  return pendingGateVerifyAppeal.has(sessionId);
-}
 
 export interface SessionGateItemVerifierOptions {
   /** Wall-clock budget for one verify dispatch before abstaining to needs-setup. Default 20 minutes. */
@@ -54,7 +40,7 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
  * read-only verification session. The session never runs a vendored skill
  * to assemble this itself.
  */
-function buildGateVerifyProcedure(item: GateItem): string {
+export function buildGateVerifyProcedure(item: GateItem): string {
   const isHumanObservation = item.classification === 'Human-Observation';
   return [
     '## Session Lifecycle',
@@ -121,12 +107,45 @@ function buildGateVerifyProcedure(item: GateItem): string {
       'substitute a precondition or source reading for it.',
     '',
     'This is a bounded best-effort read: settle within your time/turn ' +
-      'budget, or abstain. Never stage, commit, or mutate anything, and ' +
-      'never call a gate-write API — you have no gate-write authority; the ' +
-      'backend is the only writer of gate state, and treats this report as ' +
-      'evidence, not a command. Auto-pass only on clear, direct evidence; ' +
-      'if you cannot conclusively determine pass or fail, report ' +
+      'budget, or abstain. You hold no general write authority — no ' +
+      'staging of task/arch/gate/seed writes, no commits, no multi-step ' +
+      'operational change of any kind (the one narrow exception below ' +
+      'aside) — and never call a gate-write API: you have no gate-write ' +
+      'authority; the backend is the only writer of gate state, and your ' +
+      '`gate.verify` report stages a proposed disposition for a human to ' +
+      'approve or push back on, never a command that writes it directly. ' +
+      'Auto-pass is never inferred by this session or by any backend ' +
+      'heuristic — report clear, direct evidence and let the operator ' +
+      'decide; if you cannot conclusively determine pass or fail, report ' +
       'needs-setup — abstain rather than guess.',
+    '',
+    '**The one narrow write exception.** If settling this item requires ' +
+      'an operational trace that does not exist yet — the described ' +
+      'behavior has never run, so there is nothing in audit_log/' +
+      'session_events/live DB-API state to cite — you may request exactly ' +
+      'one atomic, instrumental write strictly to produce the trace the ' +
+      "item's described behavior would leave (e.g. seeding one row, " +
+      'triggering one event) — never a multi-step or open-ended action. ' +
+      'It is a single Bash ' +
+      'command prefix or one named MCP write verb, requested the same way ' +
+      'as any other capability (see "Capabilities" above): call ' +
+      `\`${orchestratorMcpToolName('session.requestCapability')}\` with ` +
+      '`{"payload":{"capability":"<one Bash command prefix or one named ' +
+      'MCP write verb>","plan":"seed/trigger exactly this one row/event, ' +
+      'then re-read the resulting trace and report gate.verify",' +
+      '"evidence":"<why no existing trace covers this item>"}}`. Out of ' +
+      'scope for this exception, with no exceptions of their own: ' +
+      'reconcile-and-capture, any `ops_journal` transition, any other ' +
+      'multi-step operational change, and any gate-write call — the write ' +
+      'must be one atomic action that produces the closing trace ' +
+      'directly, never the start of a longer procedure. The write is ' +
+      'instrumental only and never itself the verdict — the same ' +
+      '`gate.verify` pass/fail/needs-setup report is the only gate-facing ' +
+      'output, and the backend remains the sole writer of gate state. ' +
+      'Abstain remains the default: request this write only once the ' +
+      'single closing action that would produce the trace is already ' +
+      'identified — genuine ambiguity, or a need for more than one step, ' +
+      'still routes to `needs-setup` rather than a speculative request.',
     '',
     'This session is responsible for asking for what it needs: nothing beyond ' +
       'its base read/stage profile is ever speculatively handed to it. If ' +
@@ -134,7 +153,13 @@ function buildGateVerifyProcedure(item: GateItem): string {
       "runtime record (session_events/audit_log for a session you're verifying), " +
       'request the own-record read (see "Capabilities" above — ' +
       '`read:session-record:<target-session-id>`), not a Bash prefix like ' +
-      '`sqlite3` or a direct filesystem/DB path. This is a tool-set boundary, ' +
+      '`sqlite3` or a direct filesystem/DB path — once granted, call the ' +
+      `\`${orchestratorMcpToolName('session.getRecord')}\` tool with ` +
+      '`{"targetSessionId":"<target-session-id>"}` to read it. For a ' +
+      "project's broader audit_log (not scoped to one session), request " +
+      '`read:audit-log:<project-id>` instead, then call the ' +
+      `\`${orchestratorMcpToolName('auditLog.query')}\` tool with ` +
+      '`{"projectId":"<project-id>"}`. This is a tool-set boundary, ' +
       'not a location one: this session spawns with broad filesystem access ' +
       "(it can read the orchestrator checkout and the box's local files), but " +
       'it holds no allow-listed client for the live SQLite file and no device ' +
@@ -142,11 +167,9 @@ function buildGateVerifyProcedure(item: GateItem): string {
       'specific session stay reachable only through the brokered read, not a ' +
       "direct file or DB path. For any other read your base tools don't " +
       'cover, stage a `session.requestCapability` intent naming that exact read ' +
-      'and end the turn — an operator grant resumes you with it. If that is not ' +
-      'practical for a bounded one-shot investigation, report `needs-setup` and ' +
-      'name the missing capability. Never fabricate a pass/fail to route around ' +
-      'a permission denial — a blocked read is grounds for needs-setup, not for ' +
-      'guessing.',
+      'and end the turn — an operator grant resumes you with it. Never fabricate ' +
+      'a pass/fail to route around a permission denial — a blocked read is ' +
+      'grounds for needs-setup, not for guessing.',
     '',
     '**Before abstaining for a missing identifier** (e.g. "no target session ' +
       'ID to read"): exhaust the record surfaces your base tools already ' +
@@ -174,11 +197,23 @@ function buildGateVerifyProcedure(item: GateItem): string {
       'session_events, live DB/API state, an observed runtime occurrence). ' +
       'If the strongest evidence you found is "the source code looks like ' +
       'it does X", that is not a pass — report needs-setup and explain ' +
-      'what operational trace is missing. Set `evidence.basis` to ' +
-      '"operational" only when your pass is actually backed by such a ' +
-      'trace; set it to "source" when you only read source code. A `pass` ' +
-      'with `evidence.basis` other than "operational" will be downgraded ' +
-      'to needs-setup regardless of what you report.',
+      'what operational trace is missing.',
+    '',
+    'Report your evidence as three required one-line fields — no free-' +
+      'prose paragraph, no invented key of your own choosing (e.g. ' +
+      '`conclusion`, `summary`, `basis`, `explanation`): `expected` (the ' +
+      'behavior this item asserts), `found` (what the operational record ' +
+      'actually shows, or that nothing was found), and `query` (the ' +
+      'operational read you actually ran — tool + table/filter, e.g. ' +
+      '"auditLog.query projectId=X action=Y"). `query` names the ' +
+      'mechanism, not decoration: if all you did was grep source, you have ' +
+      'no operational read to name there truthfully, which is itself a ' +
+      'sign this should be `needs-setup`, not `pass`. A fourth field, ' +
+      '`source` (a file:line reference), is admissible only when ' +
+      '`disposition` is `fail`, to cite where the grounded error traces to ' +
+      '— it is rejected by the tool on `pass` and `needs-setup` reports. ' +
+      'These fields are the entire report; the operator reads exactly ' +
+      '`expected` and `found` on the decision surface.',
     '',
     ...(isHumanObservation
       ? [
@@ -208,8 +243,9 @@ function buildGateVerifyProcedure(item: GateItem): string {
             'human should decide) — never an auto-run tier. Include it as ' +
             'a `reclassify` field alongside your disposition (typically ' +
             '`needs-setup`, since you are also abstaining on this run); ' +
-            'the backend applies it and re-routes the item, it does not ' +
-            'change what you report for `disposition`.',
+            'the backend applies it and re-routes the item once an ' +
+            'operator approves your report, it does not change what you ' +
+            'report for `disposition`.',
           '',
           'This same routing applies, not just to a visibly wrong tier tag, ' +
             'but whenever your investigation establishes that no ' +
@@ -233,553 +269,26 @@ function buildGateVerifyProcedure(item: GateItem): string {
         ]),
     `Report your finding by calling the \`${orchestratorMcpToolName('gate.verify')}\` tool ` +
       'exactly once, as your final action — never a chat JSON block, which is ' +
-      'not delivered anywhere. `reclassify` is required whenever you ' +
-      'concluded the item cannot be settled from the operational record by ' +
-      'construction (see above) — omit it only for a genuine pass/fail or a ' +
-      'bounded-effort abstention that does not rest on structural ' +
-      'unverifiability:',
+      'not delivered anywhere. This stages your report as a normal decision ' +
+      'for a human operator: they may approve it as-is, or push back with ' +
+      'feedback asking for more/different evidence, in which case you will ' +
+      'be resumed for a normal turn to revise and report again — there is no ' +
+      'limit on how many times this can happen. `reclassify` is required ' +
+      'whenever you concluded the item cannot be settled from the ' +
+      'operational record by construction (see above) — omit it only for a ' +
+      'genuine pass/fail or a bounded-effort abstention that does not rest ' +
+      'on structural unverifiability:',
     '',
     '```json',
-    `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"basis": "operational"|"source", "...": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
+    `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"expected": "...", "found": "...", "query": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
     '```',
-  ].join('\n');
-}
-
-/**
- * The one-shot appeal message delivered via SessionManager.enqueueFeedback
- * when a `pass` verdict is downgraded by enforcePassEvidenceContract while
- * the session is still live. Names the specific clause that failed (never a
- * generic rejection) and states plainly that this is the session's one and
- * only chance to revise — a second verdict, whatever it is, is final.
- */
-function buildGateVerifyAppealMessage(
-  item: GateItem,
-  downgradeReason: string,
-  originalEvidence: unknown,
-): string {
-  return [
-    `Your \`pass\` disposition for gate item ${item.id} was downgraded ` +
-      'before being finalized — the pass-evidence contract rejected it:',
     '',
-    `> ${downgradeReason}`,
+    'On a `fail`, `evidence` may also carry `source` (admissible only on fail):',
     '',
-    'This is your one chance to revise, and the only one: whatever you ' +
-      'report next is final, appealed or not. If you have (or can now ' +
-      'gather) evidence that actually satisfies the contract — a concrete ' +
-      'captured runtime record (audit_log, session_events, a live DB/API ' +
-      'read, or an observed runtime occurrence), not source/CI-grade ' +
-      'evidence and not a guaranteed precondition (PR merged/deployed) — ' +
-      `report it now by calling \`${orchestratorMcpToolName('gate.verify')}\` ` +
-      `again for gate item ${item.id} with your revised disposition and ` +
-      'evidence.',
-    '',
-    'If you cannot produce evidence that satisfies the contract, report ' +
-      '`needs-setup` instead of repeating the same pass — a second pass ' +
-      'that still fails the contract is downgraded the same way, with no ' +
-      'further appeal.',
-    '',
-    'Your original reported evidence was:',
     '```json',
-    JSON.stringify(originalEvidence ?? null, null, 2),
+    '{"expected": "...", "found": "...", "query": "...", "source": "path/to/file.ts:123"}',
     '```',
   ].join('\n');
-}
-
-/**
- * The symmetric one-shot appeal to `buildGateVerifyAppealMessage`, for the
- * other half of the disposition contract: a `needs-setup` whose own evidence
- * establishes that no operational trace of the described behavior can exist
- * by construction, reported with no accompanying `reclassify`. Names the
- * omission plainly and states this is the session's one and only chance to
- * add one — a second verdict, reclassify or not, is final.
- */
-function buildGateVerifyReclassifyAppealMessage(
-  item: GateItem,
-  originalEvidence: unknown,
-): string {
-  return [
-    `Your \`needs-setup\` disposition for gate item ${item.id} reads as ` +
-      'having established that no operational trace of the described ' +
-      'behavior can exist by construction — not merely that you could not ' +
-      'find one within this run — but it did not include a `reclassify` ' +
-      'field.',
-    '',
-    'That is the outcome the disposition contract asks you to route ' +
-      'differently: a bare `needs-setup` here leaves the item sitting in ' +
-      'its current (auto-run) tier, to be handed to another verifier that ' +
-      'will hit the same structural wall and report the same abstention, ' +
-      'indefinitely.',
-    '',
-    'This is your one chance to revise, and the only one: whatever you ' +
-      'report next is final, appealed or not. If your conclusion stands, ' +
-      `report it again by calling \`${orchestratorMcpToolName('gate.verify')}\` ` +
-      `for gate item ${item.id} with the same \`needs-setup\` disposition, ` +
-      'this time alongside a `reclassify` field proposing `Human-Observation` ' +
-      '(if the item needs a human to judge it) or `needs-triage` (if you ' +
-      'cannot tell what tier fits and a human should decide) — never an ' +
-      'auto-run tier. If on reflection this was actually a bounded-effort ' +
-      'abstention (budget/capability limited, not structural), report ' +
-      '`needs-setup` again with no `reclassify` and explain that instead.',
-    '',
-    'Your original reported evidence was:',
-    '```json',
-    JSON.stringify(originalEvidence ?? null, null, 2),
-    '```',
-  ].join('\n');
-}
-
-/**
- * The result of trying to read an evidence payload as an object. A session
- * may report evidence as a JSON string rather than an object — that must be
- * parsed and then judged on its contents, not rejected on shape alone. A
- * string that cannot be parsed into an object is a distinct failure mode
- * ("shape") from an object whose contents don't satisfy the contract
- * ("substance") and must be reported differently.
- */
-type EvidenceShapeResult =
-  | { kind: 'object'; value: Record<string, unknown> }
-  | { kind: 'unusable' }
-  | { kind: 'shape-error'; description: string };
-
-/**
- * Parses an evidence payload into an object, accepting either an object
- * directly or a JSON-encoded string of one.
- */
-function resolveEvidenceShape(evidence: unknown): EvidenceShapeResult {
-  if (typeof evidence === 'string') {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(evidence);
-    } catch {
-      return {
-        kind: 'shape-error',
-        description: 'a string that could not be parsed as JSON',
-      };
-    }
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return { kind: 'object', value: parsed as Record<string, unknown> };
-    }
-    return {
-      kind: 'shape-error',
-      description: `a JSON string that parsed to ${
-        Array.isArray(parsed)
-          ? 'an array'
-          : parsed === null
-            ? 'null'
-            : typeof parsed
-      }, not an object`,
-    };
-  }
-  if (evidence && typeof evidence === 'object' && !Array.isArray(evidence)) {
-    return { kind: 'object', value: evidence as Record<string, unknown> };
-  }
-  return { kind: 'unusable' };
-}
-
-function toEvidenceObject(evidence: unknown): Record<string, unknown> | null {
-  const resolved = resolveEvidenceShape(evidence);
-  return resolved.kind === 'object' ? resolved.value : null;
-}
-
-/**
- * True when a `pass` result's evidence claims to be grounded in
- * operational/runtime observation rather than source-code reading alone.
- * Exported for testing.
- */
-export function hasOperationalEvidence(evidence: unknown): boolean {
-  const value = toEvidenceObject(evidence);
-  if (!value) return false;
-  const basis = value.basis;
-  if (typeof basis === 'string') {
-    return basis.toLowerCase() === 'operational';
-  }
-  if (Array.isArray(basis)) {
-    return basis.some(
-      (b) => typeof b === 'string' && b.toLowerCase() === 'operational',
-    );
-  }
-  return false;
-}
-
-/**
- * Tokens that describe a guaranteed precondition (the source PR merged, the
- * commit deployed, an ancestry check) rather than evidence the described
- * behavior actually occurred. These are mechanical/tautological by the time
- * any verifier runs — the runnable-gate already guarantees merged+deployed —
- * so confirming them proves nothing about the behavior.
- */
-const PRECONDITION_TOKENS = new Set([
-  'merge-base',
-  'is-ancestor',
-  'ancestor',
-  'merged',
-  'deployed',
-]);
-
-/**
- * Filler tokens (evidence-envelope vocabulary, connectives, PR/commit
- * nouns) that carry no behavioral content on their own and are ignored
- * when deciding whether anything substantive remains.
- */
-const FILLER_TOKENS = new Set([
-  'basis',
-  'operational',
-  'source',
-  'reason',
-  'evidence',
-  'sessionid',
-  'note',
-  'confirmed',
-  'confirming',
-  'verified',
-  'checked',
-  'via',
-  'git',
-  'ran',
-  'run',
-  'the',
-  'is',
-  'was',
-  'and',
-  'that',
-  'it',
-  'which',
-  'through',
-  'pr',
-  'commit',
-  'to',
-  'into',
-  'already',
-  'after',
-  'production',
-  'main',
-  'dev',
-  'master',
-]);
-
-const WORD_SPLIT_PATTERN = /[^a-z0-9-]+/;
-
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(WORD_SPLIT_PATTERN)
-    .map((t) => t.replace(/^-+|-+$/g, ''))
-    .filter(Boolean);
-}
-
-/**
- * True when a `pass` result's evidence, after discarding guaranteed-
- * precondition tokens (merged, deployed, ancestry checks) and filler
- * vocabulary, has no substantive tokens left — i.e. the evidence amounts to
- * confirming a precondition the item was already guaranteed to satisfy,
- * never to observing the described behavior itself. Exported for testing.
- */
-export function isPreconditionOnlyEvidence(evidence: unknown): boolean {
-  const value = toEvidenceObject(evidence);
-  if (!value) return false;
-  const tokens = tokenize(JSON.stringify(value));
-  const hasPreconditionToken = tokens.some((t) => PRECONDITION_TOKENS.has(t));
-  if (!hasPreconditionToken) return false;
-
-  const remaining = tokens.filter(
-    (t) =>
-      !PRECONDITION_TOKENS.has(t) &&
-      !FILLER_TOKENS.has(t) &&
-      !/^[0-9a-f]+$/.test(t),
-  );
-  return remaining.length === 0;
-}
-
-function evidenceText(evidence: unknown): string | null {
-  const value = toEvidenceObject(evidence);
-  if (!value) return null;
-  try {
-    return JSON.stringify(value).toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Tokens naming a store/channel this codebase actually captures runtime
- * activity into (a live API or DB read), paired with an action token that
- * shows it was read rather than merely mentioned in passing.
- */
-const RUNTIME_STORE_TOKENS = new Set(['api', 'database', 'db']);
-const RUNTIME_ACTION_TOKENS = new Set([
-  'read',
-  'call',
-  'query',
-  'queried',
-  'response',
-  'record',
-  'live',
-  'fetched',
-  'fetch',
-]);
-
-/**
- * True when a `pass` result's evidence names a concrete captured runtime
- * record — `session_events`, `audit_log`, or a live API/DB read — rather
- * than resting on source/CI-grade evidence (a CI check, a test file, a
- * source-path trace) that never touches a runtime record at all. Exported
- * for testing.
- */
-export function hasConcreteRuntimeRecordEvidence(evidence: unknown): boolean {
-  const text = evidenceText(evidence);
-  if (!text) return false;
-  if (/audit_log/.test(text) || /session_events/.test(text)) return true;
-  const tokens = tokenize(text);
-  const mentionsStore = tokens.some((t) => RUNTIME_STORE_TOKENS.has(t));
-  if (!mentionsStore) return false;
-  return tokens.some((t) => RUNTIME_ACTION_TOKENS.has(t));
-}
-
-const LIVE_RECORD_UNREACHABLE_SIGNAL_TOKENS = new Set([
-  'unreachable',
-  'inaccessible',
-  'unavailable',
-]);
-const NEGATION_TOKENS = new Set([
-  'no',
-  'not',
-  'unable',
-  'couldnt',
-  'didnt',
-  'never',
-  'failed',
-  'without',
-]);
-const LIVE_RECORD_MENTION_TOKENS = new Set([
-  'live',
-  'record',
-  'audit',
-  'log',
-  'session',
-  'events',
-  'database',
-  'db',
-  'api',
-  'operational',
-]);
-
-/**
- * True when the evidence itself carries a limitation/caveat admitting the
- * live/operational record was not or could not be read — a self-reported
- * admission that the substantive claim rests on inference rather than a
- * captured runtime record. A pass paired with an admission like this is
- * downgraded regardless of what else the evidence names. Exported for
- * testing.
- */
-export function admitsLiveRecordUnreachable(evidence: unknown): boolean {
-  const text = evidenceText(evidence);
-  if (!text) return false;
-  const tokens = tokenize(text);
-  if (tokens.some((t) => LIVE_RECORD_UNREACHABLE_SIGNAL_TOKENS.has(t))) {
-    return true;
-  }
-  const hasNegation = tokens.some((t) => NEGATION_TOKENS.has(t));
-  const hasLiveRecordMention = tokens.some((t) =>
-    LIVE_RECORD_MENTION_TOKENS.has(t),
-  );
-  return hasNegation && hasLiveRecordMention;
-}
-
-/**
- * Tokens naming a structural/by-construction reason evidence can't exist —
- * paired with a negation token and a record-surface mention, this signals a
- * `needs-setup` that has established the item can never be settled from the
- * operational record (as opposed to merely not being settled within this
- * run's budget).
- */
-const STRUCTURAL_UNVERIFIABILITY_SIGNAL_TOKENS = new Set([
-  'design',
-  'construction',
-  'structurally',
-  'structural',
-]);
-
-/**
- * True when `needs-setup` evidence asserts that no operational trace of the
- * described behavior can exist by construction — e.g. "this code path never
- * calls recordEvent, so no audit_log entry is produced by design" — rather
- * than a bounded-effort abstention that merely ran out of budget or lacked a
- * capability grant this run. The former is the case this task's appeal
- * targets: a session that reaches this conclusion but reports a bare
- * `needs-setup` with no `reclassify` has left the item mis-routed. Exported
- * for testing.
- */
-export function assertsStructuralUnverifiability(evidence: unknown): boolean {
-  const text = evidenceText(evidence);
-  if (!text) return false;
-  const tokens = tokenize(text);
-  const hasStructuralSignal = tokens.some((t) =>
-    STRUCTURAL_UNVERIFIABILITY_SIGNAL_TOKENS.has(t),
-  );
-  if (!hasStructuralSignal) return false;
-  const hasNegation = tokens.some((t) => NEGATION_TOKENS.has(t));
-  const hasRecordMention = tokens.some((t) =>
-    LIVE_RECORD_MENTION_TOKENS.has(t),
-  );
-  return hasNegation && hasRecordMention;
-}
-
-/**
- * Tokens naming an identifier the session might be missing (a target
- * session id, a record id) — paired with a negation token, this signals a
- * `needs-setup` blaming "I don't have an ID to look up."
- */
-const MISSING_IDENTIFIER_TOKENS = new Set([
-  'id',
-  'identifier',
-  'sessionid',
-  'target',
-]);
-
-/**
- * Tokens showing the session actually looked somewhere locally before
- * abstaining — either a generic search verb or the name of a known
- * base-tool-reachable surface (the dispatched-session prompt corpus).
- */
-const SEARCH_EVIDENCE_TOKENS = new Set([
-  'searched',
-  'search',
-  'checked',
-  'looked',
-  'grep',
-  'grepped',
-  'ls',
-  'find',
-  'listed',
-  'scanned',
-  'prompts',
-  'session-prompts',
-  'sessionprompts',
-]);
-
-/**
- * True when `needs-setup` evidence blames a missing identifier (e.g. "no
- * target session ID") without recording that any base-tool-reachable local
- * surface (e.g. `.claude/session-prompts/`) was actually searched for one —
- * the abstention this task exists to close off, where a session gives up on
- * "I have no ID" without ever having looked locally for one. Exported for
- * testing.
- */
-export function citesMissingIdentifierWithoutSearch(
-  evidence: unknown,
-): boolean {
-  const text = evidenceText(evidence);
-  if (!text) return false;
-  const tokens = tokenize(text);
-  const citesMissingIdentifier =
-    tokens.some((t) => NEGATION_TOKENS.has(t)) &&
-    tokens.some((t) => MISSING_IDENTIFIER_TOKENS.has(t));
-  if (!citesMissingIdentifier) return false;
-  return !tokens.some((t) => SEARCH_EVIDENCE_TOKENS.has(t));
-}
-
-function downgrade(
-  reason: string,
-  reportedEvidence: unknown,
-  reclassify?: GateVerificationResult['reclassify'],
-): GateVerificationResult {
-  return {
-    disposition: 'needs-setup',
-    evidence: { reason, reportedEvidence },
-    reclassify,
-  };
-}
-
-/**
- * The disposition contract's enforcement half of "no pass on source alone,
- * no pass on a guaranteed precondition alone, no pass without a concrete
- * captured runtime record, no pass alongside a self-admitted unreachable
- * record": a `pass` disposition is downgraded to `needs-setup` unless its
- * evidence claims operational grounding, doesn't rest solely on a
- * guaranteed/mechanical precondition (PR merged, commit deployed), names a
- * concrete captured runtime record (session_events, audit_log, or a live
- * API/DB read) rather than source/CI-grade evidence (a CI check, a test
- * file, a source-path trace), and carries no limitation admitting the live
- * record was unreachable — the prompt asks nicely, this backstops it
- * regardless of what the session actually reported. Exported for testing.
- */
-export function enforcePassEvidenceContract(
-  result: GateVerificationResult,
-): GateVerificationResult {
-  if (result.disposition !== 'pass') return result;
-  const shape = resolveEvidenceShape(result.evidence);
-  if (shape.kind === 'shape-error') {
-    return downgrade(
-      `pass disposition's evidence could not be interpreted as an evidence ` +
-        `object (it was ${shape.description}) — this is a shape problem, ` +
-        'not a judgment that the evidence was source-only, and no ' +
-        'operational/source determination could be made',
-      result.evidence,
-      result.reclassify,
-    );
-  }
-  if (!hasOperationalEvidence(result.evidence)) {
-    return downgrade(
-      'pass disposition lacked operational/runtime evidence — a source-only verdict cannot pass',
-      result.evidence,
-      result.reclassify,
-    );
-  }
-  if (isPreconditionOnlyEvidence(result.evidence)) {
-    return downgrade(
-      'pass disposition was grounded only in a guaranteed precondition (PR merged/deployed) or other mechanical check — that proves nothing about whether the described behavior holds',
-      result.evidence,
-      result.reclassify,
-    );
-  }
-  if (admitsLiveRecordUnreachable(result.evidence)) {
-    return downgrade(
-      "pass disposition's evidence admits the live/operational record was not or could not be read — a self-reported limitation like this cannot be paired with a pass",
-      result.evidence,
-      result.reclassify,
-    );
-  }
-  if (!hasConcreteRuntimeRecordEvidence(result.evidence)) {
-    return downgrade(
-      'pass disposition rested on source/CI-grade evidence (a CI check, a test file, a source-path trace) rather than a concrete captured runtime record (session_events, audit_log, or a live API/DB read)',
-      result.evidence,
-      result.reclassify,
-    );
-  }
-  return result;
-}
-
-/**
- * The disposition contract's abstention half: a `needs-setup` that blames a
- * missing identifier must record that a local, base-tool-reachable surface
- * (e.g. `.claude/session-prompts/`) was actually searched for one before
- * abstaining — an abstention with no record of a local search is
- * incomplete, not a valid bounded-effort result (see the "Before
- * abstaining for a missing identifier" guidance in
- * `buildGateVerifyProcedure`). There is no disposition below `needs-setup`
- * to downgrade to, so this annotates the evidence instead of changing the
- * disposition, leaving the incompleteness visible to whoever reconciles or
- * re-dispatches the item next. Exported for testing.
- */
-export function enforceAbstentionEvidenceContract(
-  result: GateVerificationResult,
-): GateVerificationResult {
-  if (result.disposition !== 'needs-setup') return result;
-  if (!citesMissingIdentifierWithoutSearch(result.evidence)) return result;
-  const baseEvidence = toEvidenceObject(result.evidence) ?? {
-    reportedEvidence: result.evidence,
-  };
-  return {
-    ...result,
-    evidence: {
-      ...baseEvidence,
-      abstentionIncomplete: true,
-      abstentionNote:
-        'needs-setup cites a missing identifier but does not record what ' +
-        'local, base-tool-reachable record surfaces (e.g. ' +
-        '.claude/session-prompts/) were searched for it before abstaining',
-    },
-  };
 }
 
 /**
@@ -788,9 +297,13 @@ export function enforceAbstentionEvidenceContract(
  * grant-on-re-dispatch) and awaits its terminal gate_verify report.
  *
  * Bounded best-effort: abstains to needs-setup on budget exhaustion, a
- * crashed/killed session, or an unparseable/missing report. Auto-pass only
- * ever comes from a session's clear, self-reported pass block — never
- * inferred.
+ * crashed/killed session, or an unparseable/missing report. A session's
+ * own reported disposition is never a final verdict here — it stages a
+ * `gate.verify` intent (see AgentSession.recordGateVerifyDisposition) that
+ * an operator disposes on the regular decision surface, exactly like any
+ * other groom/design/ops session's staged intent. This class's job ends
+ * the moment that report lands: it resolves `verify()` and leaves the
+ * session live, parked awaiting disposition, rather than tearing it down.
  */
 export class SessionGateItemVerifier implements GateItemVerifier {
   private readonly budgetMs: number;
@@ -817,7 +330,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
     // fast session can emit gate_verify_disposition before start() even
     // resolves, and without a listener already attached that event is lost
     // (the poll fallback would then wrongly record a needs-setup timeout
-    // instead of the session's actual verdict). We don't know sessionId yet,
+    // instead of the session's actual report). We don't know sessionId yet,
     // so buffer every disposition and filter by sessionId once start()
     // resolves.
     const captured: GateVerifyDispositionPayload[] = [];
@@ -840,6 +353,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
       this.sessionManager.off('gate_verify_disposition', capture);
       return {
         disposition: 'needs-setup',
+        dispatchFailed: true,
         evidence: {
           reason: 'failed to dispatch verification session',
           error: err instanceof Error ? err.message : String(err),
@@ -853,48 +367,55 @@ export class SessionGateItemVerifier implements GateItemVerifier {
   }
 
   /**
-   * Awaits the dispatched session's disposition, applying the pass/abstention
-   * evidence contracts while the session is still live — ahead of teardown,
-   * not after it — so a contract-downgraded `pass` can be routed back to the
-   * session as a one-shot appeal instead of being silently discarded onto a
-   * now-dead session (see the module-level contract-enforcement doc above
-   * enforcePassEvidenceContract). The exchange is capped end-to-end by the
-   * same budget/poll timers regardless of whether an appeal happens.
+   * Re-attaches an `awaitDisposition` listener to an already-dispatched,
+   * still-live gate-verify session — no new session dispatch, since the
+   * session found by boot reconciliation is already parked awaiting its
+   * operator capability-request disposition and will resume on its own.
+   * Recovers the case a backend restart loses: the in-memory listener that
+   * would have routed the session's eventual `gate_verify_disposition`
+   * report died with the old process, so without this the report fires
+   * into a void and the item never leaves its non-terminal state.
+   */
+  reattach(item: GateItem, sessionId: string): Promise<GateVerificationResult> {
+    return this.awaitDisposition(item, sessionId);
+  }
+
+  /**
+   * Awaits the dispatched session's report. Two distinct outcomes:
+   *  - The session reports (stages its `gate.verify` intent): resolves with
+   *    `awaitingDisposition: true` and leaves the session alone — it stays
+   *    live, parked awaiting the operator's disposition, exactly like any
+   *    other ops session's staged intent. Nothing here writes gate state or
+   *    tears the session down.
+   *  - Dispatch/session failure (budget exceeded, crash, no report on
+   *    conclusion): resolves with a plain `needs-setup` and reaps the
+   *    session — there is no session-authored verdict here for an operator
+   *    to review.
    */
   private awaitDisposition(
     item: GateItem,
     sessionId: string,
     preCaptured?: GateVerifyDispositionPayload,
   ): Promise<GateVerificationResult> {
+    const sessionManager = this.sessionManager;
     return new Promise((resolve) => {
       let settled = false;
-      // Set once an appeal is sent; the *next* disposition report is treated
-      // as the one revision and is final regardless of outcome — no second
-      // appeal is ever offered.
-      let appealInFlight = false;
-      // The contract-downgraded result an in-flight appeal would fall back to
-      // if the session never answers (budget exhaustion or the session dying
-      // mid-appeal) — the downgrade stands as final in that case.
-      let appealFallback: GateVerificationResult | null = null;
       const handles: {
         poll?: ReturnType<typeof setInterval>;
         budget?: ReturnType<typeof setTimeout>;
       } = {};
 
-      const teardown = (result: GateVerificationResult) => {
-        if (settled) return;
-        settled = true;
+      const cleanup = () => {
         if (handles.poll) clearInterval(handles.poll);
         if (handles.budget) clearTimeout(handles.budget);
-        this.sessionManager.off('gate_verify_disposition', onDisposition);
-        pendingGateVerifyAppeal.delete(sessionId);
-        // The disposition has now been consumed by the reconciler's caller —
-        // this one-shot session has no resume purpose from here on (a
-        // re-verify dispatches a fresh session), so archive it and reap its
-        // subprocess rather than let it linger holding a concurrency slot.
-        // Skip sessions already terminal (error/killed — AgentSession owns
-        // those transitions) or already archived by the session's own
-        // clean-exit path.
+        sessionManager.off('gate_verify_disposition', onDisposition);
+      };
+
+      /** An infra/dispatch failure — nothing for an operator to review; reap the one-shot session. */
+      const settleDispatchFailure = (result: GateVerificationResult) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         const row = getSession(sessionId);
         if (
           row &&
@@ -908,15 +429,18 @@ export class SessionGateItemVerifier implements GateItemVerifier {
             null,
             'gate_item_verifier_consumed',
           );
-          this.sessionManager.archiveAndEndSession(sessionId);
+          sessionManager.archiveAndEndSession(sessionId);
         }
         resolve(result);
       };
 
-      const applyContracts = (
-        result: GateVerificationResult,
-      ): GateVerificationResult =>
-        enforceAbstentionEvidenceContract(enforcePassEvidenceContract(result));
+      /** The session genuinely reported — leave it live and parked; the operator's disposition settles the item, not this verifier. */
+      const settleStaged = (result: GateVerificationResult) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve({ ...result, awaitingDisposition: true });
+      };
 
       const toResult = (
         payload: GateVerifyDispositionPayload,
@@ -926,130 +450,24 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         reclassify: payload.disposition.reclassify,
       });
 
-      /** Shared one-shot-appeal mechanics: marks the appeal in flight, records the pre-appeal verdict, and enqueues the appeal feedback. */
-      const sendAppeal = (
-        fallback: GateVerificationResult,
-        eventEvidence: Record<string, unknown>,
-        message: string,
-        feedbackKind: string,
-      ) => {
-        appealInFlight = true;
-        appealFallback = fallback;
-        pendingGateVerifyAppeal.add(sessionId);
-        appendGateItemEvent(item.id, {
-          disposition: 'noted',
-          operator: 'gate-verifier',
-          evidence: eventEvidence,
-        });
-        this.sessionManager
-          .enqueueFeedback(sessionId, feedbackKind, message)
-          .catch((err) => {
-            logger.error(
-              `[GateItemVerifier] failed to enqueue gate-verify appeal for session ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : err}`,
-            );
-          });
-      };
-
-      /** Sends the one-shot appeal for a `pass` downgraded by the evidence contract, recording the original verdict first so it survives the appeal un-overwritten. */
-      const startAppeal = (
-        raw: GateVerificationResult,
-        contractChecked: GateVerificationResult,
-      ) => {
-        const downgradeReason =
-          (contractChecked.evidence as { reason?: string } | undefined)
-            ?.reason ?? 'pass evidence contract violation';
-        sendAppeal(
-          contractChecked,
-          {
-            appeal: 'original-verdict',
-            originalDisposition: raw.disposition,
-            originalEvidence: raw.evidence,
-            downgradeReason,
-          },
-          buildGateVerifyAppealMessage(item, downgradeReason, raw.evidence),
-          'gate-verifier:appeal',
-        );
-      };
-
-      /** Sends the symmetric one-shot appeal for a `needs-setup` that establishes structural unverifiability but omits `reclassify`. */
-      const startReclassifyOmissionAppeal = (
-        result: GateVerificationResult,
-      ) => {
-        sendAppeal(
-          result,
-          {
-            appeal: 'reclassify-omission',
-            originalDisposition: result.disposition,
-            originalEvidence: result.evidence,
-          },
-          buildGateVerifyReclassifyAppealMessage(item, result.evidence),
-          'gate-verifier:reclassify-appeal',
-        );
-      };
-
-      /** Handles one reported disposition — either the first attempt or the one appeal revision. */
-      const handleReport = (raw: GateVerificationResult) => {
-        if (appealInFlight) {
-          // The revision — final either way, no further appeal offered.
-          appealInFlight = false;
-          teardown(applyContracts(raw));
-          return;
-        }
-        const contractChecked = enforcePassEvidenceContract(raw);
-        const isPassDowngrade =
-          raw.disposition === 'pass' && contractChecked.disposition !== 'pass';
-        const row = getSession(sessionId);
-        const sessionTerminal =
-          !!row && TERMINAL_SESSION_STATUSES.has(row.status);
-        if (isPassDowngrade) {
-          if (sessionTerminal) {
-            // No live session left to appeal to.
-            teardown(enforceAbstentionEvidenceContract(contractChecked));
-            return;
-          }
-          startAppeal(raw, contractChecked);
-          return;
-        }
-        const abstained = enforceAbstentionEvidenceContract(contractChecked);
-        if (
-          !sessionTerminal &&
-          abstained.disposition === 'needs-setup' &&
-          !abstained.reclassify &&
-          assertsStructuralUnverifiability(abstained.evidence)
-        ) {
-          startReclassifyOmissionAppeal(abstained);
-          return;
-        }
-        teardown(abstained);
-      };
-
       const onDisposition = (payload: GateVerifyDispositionPayload) => {
         if (payload.sessionId !== sessionId) return;
-        handleReport(toResult(payload));
+        settleStaged(toResult(payload));
       };
 
-      this.sessionManager.on('gate_verify_disposition', onDisposition);
+      sessionManager.on('gate_verify_disposition', onDisposition);
 
       handles.poll = setInterval(() => {
         const row = getSession(sessionId);
         if (row && TERMINAL_SESSION_STATUSES.has(row.status)) {
-          if (appealInFlight) {
-            logger.warn(
-              `[GateItemVerifier] session ${sessionId.slice(0, 8)} concluded without answering its gate-verify appeal`,
-            );
-            teardown(applyContracts(appealFallback!));
-            return;
-          }
           if (row.status === 'error' || row.status === 'killed') {
-            teardown(
-              applyContracts({
-                disposition: 'needs-setup',
-                evidence: {
-                  reason: `verification session ended ${row.status}`,
-                  sessionId,
-                },
-              }),
-            );
+            settleDispatchFailure({
+              disposition: 'needs-setup',
+              evidence: {
+                reason: `verification session ended ${row.status}`,
+                sessionId,
+              },
+            });
             return;
           }
           // 'done' with no gate_verify_disposition event yet — give the
@@ -1059,36 +477,59 @@ export class SessionGateItemVerifier implements GateItemVerifier {
           logger.warn(
             `[GateItemVerifier] session ${sessionId.slice(0, 8)} concluded with no gate_verify report`,
           );
-          teardown(
-            applyContracts({
-              disposition: 'needs-setup',
-              evidence: {
-                reason: 'no gate_verify report on conclusion',
-                sessionId,
-              },
-            }),
-          );
+          settleDispatchFailure({
+            disposition: 'needs-setup',
+            evidence: {
+              reason: 'no gate_verify report on conclusion',
+              sessionId,
+            },
+          });
         }
       }, this.pollIntervalMs);
 
-      handles.budget = setTimeout(() => {
-        if (appealInFlight) {
-          logger.warn(
-            `[GateItemVerifier] session ${sessionId.slice(0, 8)} exceeded budget while its gate-verify appeal was outstanding`,
+      /**
+       * The wall-clock budget, exempted while this session has a pending
+       * `session.requestCapability` intent outstanding — a budget firing
+       * mid-request would tear the session down (markSessionDone +
+       * archiveAndEndSession) out from under a legitimately parked request,
+       * racing the human review the request exists to wait for. While
+       * parked, recheck on the poll cadence instead of failing; once the
+       * request clears, re-arm a full, fresh budget window so the
+       * verifier's own remaining investigative effort — not the parked
+       * wait — is what gets governed from here on.
+       */
+      const onBudgetFire = () => {
+        if (hasActiveCapabilityRequestForSession(sessionId)) {
+          logger.info(
+            `[GateItemVerifier] session ${sessionId.slice(0, 8)} exceeded budget while a capability request was outstanding — suspending budget until it clears`,
           );
-          teardown(applyContracts(appealFallback!));
+          handles.budget = setTimeout(
+            waitForCapabilityClear,
+            this.pollIntervalMs,
+          );
           return;
         }
-        teardown(
-          applyContracts({
-            disposition: 'needs-setup',
-            evidence: { reason: 'verification budget exceeded', sessionId },
-          }),
-        );
-      }, this.budgetMs);
+        settleDispatchFailure({
+          disposition: 'needs-setup',
+          evidence: { reason: 'verification budget exceeded', sessionId },
+        });
+      };
+
+      const waitForCapabilityClear = () => {
+        if (hasActiveCapabilityRequestForSession(sessionId)) {
+          handles.budget = setTimeout(
+            waitForCapabilityClear,
+            this.pollIntervalMs,
+          );
+          return;
+        }
+        handles.budget = setTimeout(onBudgetFire, this.budgetMs);
+      };
+
+      handles.budget = setTimeout(onBudgetFire, this.budgetMs);
 
       if (preCaptured) {
-        handleReport(toResult(preCaptured));
+        settleStaged(toResult(preCaptured));
       }
     });
   }

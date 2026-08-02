@@ -13,25 +13,29 @@ const capturedRunOptions = vi.hoisted(() => ({
   value: null as SessionRunnerOptions | null,
 }));
 
-vi.mock('../../db/queries', () => ({
-  upsertSessionEvent: vi.fn().mockReturnValue(1),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  incrementTokens: vi.fn(),
-  incrementCompactionCount: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  setSessionModel: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  setSessionPauseReason: vi.fn(),
-  insertPauseInterval: vi.fn(),
-}));
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
+
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    upsertSessionEvent: vi.fn().mockReturnValue(1),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    incrementTokens: vi.fn(),
+    incrementCompactionCount: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    setSessionModel: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    setSessionPauseReason: vi.fn(),
+    insertPauseInterval: vi.fn(),
+  }),
+);
 
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({
@@ -64,6 +68,18 @@ vi.mock('../sessionRecovery', () => ({
 
 vi.mock('child_process', () => ({
   execSync: vi.fn(() => ''),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
+  exec: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
 }));
 
 vi.mock('../../config', () => ({

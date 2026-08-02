@@ -9,6 +9,7 @@
  *   - Never write a second session_launched entry.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Prevent real git/fs operations ─────────────────────────────────────────
 
@@ -50,8 +51,8 @@ vi.mock('fs', async () => {
 // ── Config / DB mocks ────────────────────────────────────────────────────────
 
 vi.mock('../config', () => ({
-  config: { maxConcurrentCodeSessions: 10 },
-  runtimeSettings: { session_mode: 'cli' },
+  config: {},
+  runtimeSettings: { session_mode: 'cli', max_concurrent_code_sessions: 10 },
   getProjectById: vi.fn().mockReturnValue({
     id: 'test-proj',
     name: 'Test Project',
@@ -65,19 +66,21 @@ vi.mock('../config', () => ({
   normalizePath: (p: string) => p,
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  insertSession: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getSession: vi.fn().mockReturnValue(null),
-  insertEvent: vi.fn(),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    insertSession: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getSession: vi.fn().mockReturnValue(null),
+    insertEvent: vi.fn(),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+  }),
+);
 
 vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({

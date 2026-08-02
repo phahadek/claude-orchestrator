@@ -6,7 +6,9 @@ import {
   reviewDispositionSchema,
   flakyGateSchema,
   gateVerifyDispositionSchema,
+  gateVerifyEvidenceSchema,
   gateVerifyReclassifySchema,
+  gateVerifyPayloadSchema,
 } from './schemas';
 
 /** Per-connection context a verdict-delivery tool call is scoped to. */
@@ -35,6 +37,16 @@ function notLive(): { content: { type: 'text'; text: string }[] } {
 function ok(): { content: { type: 'text'; text: string }[] } {
   return {
     content: [{ type: 'text', text: JSON.stringify({ status: 'ok' }) }],
+  };
+}
+
+function invalid(message: string): {
+  content: { type: 'text'; text: string }[];
+  isError: true;
+} {
+  return {
+    content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+    isError: true,
   };
 }
 
@@ -106,19 +118,23 @@ export function registerVerdictTools(
     server.registerTool(
       'gate.verify',
       {
-        title: 'Report a gate-item verification disposition',
+        title: 'Stage a gate-item verification disposition',
         description:
-          "Reports this read-only gate-verify session's finding for the single gate item it was dispatched to verify — pass/fail/needs-setup, plus an optional self-correction reclassify proposal (Human-Observation or needs-triage only). The backend, never the session, turns this into the authoritative gate_item_event write.",
+          "Stages this read-only gate-verify session's finding for the single gate item it was dispatched to verify — pass/fail/needs-setup, plus an optional self-correction reclassify proposal (Human-Observation or needs-triage only) — as a normal gate.verify intent for an operator to dispose on the decision surface, exactly like any other staged intent. The operator, never the session or the backend automatically, turns this into the gate_item_event write; a rejection resumes this session for a normal turn to revise and report again, with no limit on revisions.",
         inputSchema: {
           gateItemId: z.string(),
           disposition: gateVerifyDispositionSchema,
-          evidence: z.unknown().optional(),
+          evidence: gateVerifyEvidenceSchema.optional(),
           reclassify: gateVerifyReclassifySchema.optional(),
         },
       },
       async (args) => {
         const session = ctx.getSession();
         if (!session) return notLive();
+        const parsed = gateVerifyPayloadSchema.safeParse(args);
+        if (!parsed.success) {
+          return invalid(parsed.error.issues.map((i) => i.message).join('; '));
+        }
         session.recordGateVerifyDisposition({
           gateItemId: args.gateItemId,
           disposition: args.disposition,

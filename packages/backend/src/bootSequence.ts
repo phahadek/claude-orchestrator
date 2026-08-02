@@ -1,4 +1,5 @@
 import http from 'http';
+import crypto from 'crypto';
 import { GitHubClient } from './github/GitHubClient';
 import { runPRBootSweep } from './github/PRBootSweep';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
@@ -6,7 +7,11 @@ import { runGitConfigIntegrityCheck } from './orchestration/gitConfigIntegrity';
 import { logger } from './logger';
 import { getCorporateMode } from './config/corporateMode';
 import { recordEvent, getLatestEventByType } from './audit/AuditLog';
+import { getCurrentVersion } from './updater/UpdateChecker';
 import type { ServerMessage } from './ws/types';
+
+/** Generated once per process; lets audit rows sharing this value be attributed to one process. */
+const processBootId = crypto.randomUUID();
 
 function isLoopback(host: string): boolean {
   return (
@@ -41,6 +46,9 @@ export interface BootDeps {
     reconcileInboxAtBoot(): Promise<void>;
     isAlive(sessionId: string): boolean;
   };
+  planningOrchestrator: {
+    reconcilePendingApproveTerminals(): void;
+  };
   stuckSessionMonitor: {
     rehydrate(): void;
   };
@@ -59,6 +67,9 @@ export interface BootDeps {
   };
   stalledPRReconciler: {
     reconcileOnce(): Promise<void>;
+  };
+  gateVerifyReconciler: {
+    reattachOutstanding(): Promise<void>;
   };
   server: http.Server;
   port: number;
@@ -181,12 +192,16 @@ function reportRecoveryIfNeeded(broadcast: (msg: ServerMessage) => void): void {
 }
 
 /** Records the process_boot event; never throws so boot completion isn't blocked. */
-function recordBootEvent(): void {
+export function recordBootEvent(): void {
   try {
     recordEvent({
       event_type: 'process_boot',
       actor_type: 'system',
-      payload: {},
+      payload: {
+        pid: process.pid,
+        version: getCurrentVersion(),
+        bootId: processBootId,
+      },
     });
   } catch (err) {
     logger.warn('[boot] failed to record process_boot event:', err);
@@ -220,12 +235,14 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'session_events_pruner_at_boot',
     'git_config_integrity_check',
     'resume_orphan_sessions',
+    'planning_approve_terminal_reconciliation',
     'stuck_session_monitor_rehydrate',
     'auto_merger_rehydrate',
     'pr_boot_sweep',
     'boot_idle_reconciliation',
     'feedback_inbox_reconciliation',
     'stalled_pr_reconciliation',
+    'gate_verify_reattachment',
     'auto_launcher_start',
   ]);
   await tracker.runStep('jsonl_import', () => deps.jsonlReader.importAll(), {
@@ -242,6 +259,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'resume_orphan_sessions',
     () => deps.sessionManager.resumeOrphanSessions(),
     { fatalOnError: true },
+  );
+  await tracker.runStep('planning_approve_terminal_reconciliation', () =>
+    deps.planningOrchestrator.reconcilePendingApproveTerminals(),
   );
   await tracker.runStep('stuck_session_monitor_rehydrate', () =>
     deps.stuckSessionMonitor.rehydrate(),
@@ -262,6 +282,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   );
   await tracker.runStep('stalled_pr_reconciliation', () =>
     deps.stalledPRReconciler.reconcileOnce(),
+  );
+  await tracker.runStep('gate_verify_reattachment', () =>
+    deps.gateVerifyReconciler.reattachOutstanding(),
   );
   await tracker.runStep('auto_launcher_start', () =>
     deps.autoLauncher.pollOnce(),

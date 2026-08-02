@@ -70,6 +70,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(
     () => localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) !== 'false',
   );
+  const [allowlistInput, setAllowlistInput] = useState('');
   const notificationPermission =
     typeof Notification !== 'undefined' ? Notification.permission : 'default';
 
@@ -122,6 +123,38 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
     setSaveError(null);
     try {
       await patchSettings({ [key]: value });
+    } catch {
+      setSaveError('Failed to save setting');
+    }
+  }
+
+  async function handleAddAllowlistEntry() {
+    if (!settings) return;
+    const entry = allowlistInput.trim();
+    if (!entry) return;
+    const existing = settings.capability_auto_approve_allowlist ?? [];
+    if (existing.includes(entry)) {
+      setAllowlistInput('');
+      return;
+    }
+    const capability_auto_approve_allowlist = [...existing, entry];
+    setAllowlistInput('');
+    setSettings({ ...settings, capability_auto_approve_allowlist });
+    try {
+      await patchSettings({ capability_auto_approve_allowlist });
+    } catch {
+      setSaveError('Failed to save setting');
+    }
+  }
+
+  async function handleRemoveAllowlistEntry(entry: string) {
+    if (!settings) return;
+    const capability_auto_approve_allowlist = (
+      settings.capability_auto_approve_allowlist ?? []
+    ).filter((e) => e !== entry);
+    setSettings({ ...settings, capability_auto_approve_allowlist });
+    try {
+      await patchSettings({ capability_auto_approve_allowlist });
     } catch {
       setSaveError('Failed to save setting');
     }
@@ -248,6 +281,14 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                   100,
                   1,
                   'Shared pool for groom, design, ops and gate-verify sessions',
+                )}
+                {numInput(
+                  'max_concurrent_verify_sessions',
+                  'Max concurrent gate-verify sessions',
+                  1,
+                  100,
+                  1,
+                  'Sub-limit of the planning pool dedicated to gate-verify dispatch',
                 )}
                 {numInput(
                   'auto_review_concurrency',
@@ -442,6 +483,47 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                 </div>
                 <div className={styles.field}>
                   <label className={styles.label}>
+                    Gate-verify session model
+                    <span className={styles.hint}>
+                      {' '}
+                      (empty = falls back to ops session model)
+                    </span>
+                  </label>
+                  <select
+                    className={styles.select}
+                    value={settings?.gate_verify_session_model ?? ''}
+                    onChange={(e) =>
+                      void handleChange(
+                        'gate_verify_session_model',
+                        e.target.value,
+                      )
+                    }
+                  >
+                    {MODEL_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className={styles.select}
+                    value={settings?.gate_verify_session_effort ?? ''}
+                    onChange={(e) =>
+                      void handleChange(
+                        'gate_verify_session_effort',
+                        e.target.value,
+                      )
+                    }
+                  >
+                    {EFFORT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label}>
                     Large-task model
                     <span className={styles.hint}>
                       {' '}
@@ -610,6 +692,48 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                   1,
                   'How often the archiver checks for eligible sessions',
                 )}
+
+                <h3 className={styles.sectionTitle}>
+                  Capability Auto-Approve Allowlist
+                </h3>
+                <p className={styles.hint}>
+                  Sanctioned read-only capability strings that
+                  session.requestCapability auto-approves without an operator
+                  park. Exact-string match only.
+                </p>
+                <div className={styles.field}>
+                  <div className={styles.listRow}>
+                    {(settings?.capability_auto_approve_allowlist ?? []).map(
+                      (entry) => (
+                        <span key={entry} className={styles.listPill}>
+                          {entry}
+                          <button
+                            type="button"
+                            className={styles.listRemove}
+                            onClick={() =>
+                              void handleRemoveAllowlistEntry(entry)
+                            }
+                            aria-label={`Remove ${entry}`}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ),
+                    )}
+                    <input
+                      className={styles.listInput}
+                      value={allowlistInput}
+                      onChange={(e) => setAllowlistInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void handleAddAllowlistEntry();
+                        }
+                      }}
+                      placeholder="Add capability string..."
+                    />
+                  </div>
+                </div>
 
                 <h3 className={styles.sectionTitle}>About</h3>
                 <div className={styles.field}>

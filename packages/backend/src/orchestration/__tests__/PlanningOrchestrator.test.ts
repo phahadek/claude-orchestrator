@@ -1,19 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 vi.mock('../../logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock('../../db/queries', () => ({
-  getSession: vi.fn(),
-  listStagedIntentsByGroup: vi.fn().mockReturnValue([]),
-  listStagedIntentsBySession: vi.fn().mockReturnValue([]),
-  markSessionDone: vi.fn(),
-}));
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    getSession: vi.fn(),
+    listStagedIntentsByGroup: vi.fn().mockReturnValue([]),
+    listStagedIntentsBySession: vi.fn().mockReturnValue([]),
+    markSessionDone: vi.fn(),
+    setPendingApproveTerminal: vi.fn(),
+    clearPendingApproveTerminal: vi.fn(),
+    getSessionsWithPendingApproveTerminal: vi.fn().mockReturnValue([]),
+  }),
+);
 
 vi.mock('../../routes/stagedIntents', () => ({
   verifyDispatchedGroupsForSession: vi.fn().mockResolvedValue([]),
+  sessionOwesGatedDesignArtifacts: vi.fn().mockReturnValue(false),
 }));
 
 import {
@@ -21,8 +28,14 @@ import {
   listStagedIntentsByGroup,
   listStagedIntentsBySession,
   markSessionDone,
+  setPendingApproveTerminal,
+  clearPendingApproveTerminal,
+  getSessionsWithPendingApproveTerminal,
 } from '../../db/queries';
-import { verifyDispatchedGroupsForSession } from '../../routes/stagedIntents';
+import {
+  verifyDispatchedGroupsForSession,
+  sessionOwesGatedDesignArtifacts,
+} from '../../routes/stagedIntents';
 import { PlanningOrchestrator } from '../PlanningOrchestrator';
 import type { StagedIntentRow } from '../../db/types';
 
@@ -31,11 +44,17 @@ function flush() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+/** A fake live AgentSession, as returned by SessionManager.getLiveSession. */
+function makeLiveSession(hasActiveTurn: boolean) {
+  return { hasActiveTurn: () => hasActiveTurn };
+}
+
 function makeSessionManager() {
   const sm = new EventEmitter();
   return Object.assign(sm, {
     enqueueFeedback: vi.fn().mockResolvedValue(undefined),
     endSession: vi.fn(),
+    getLiveSession: vi.fn().mockReturnValue(undefined),
   });
 }
 
@@ -82,14 +101,21 @@ beforeEach(() => {
   vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
   vi.mocked(listStagedIntentsByGroup).mockReturnValue([]);
   vi.mocked(verifyDispatchedGroupsForSession).mockResolvedValue([]);
+  vi.mocked(getSessionsWithPendingApproveTerminal).mockReturnValue([]);
+  vi.mocked(sessionOwesGatedDesignArtifacts).mockReturnValue(false);
 });
 
 // ── handleDisposition — resumes the correct originating session ────────────
 
 describe('PlanningOrchestrator.handleDisposition', () => {
-  it('an approve that completes the mandate drives the session terminal without resuming', async () => {
+  it('an approve that completes the mandate drives the session terminal without resuming, even while the session row still reads status=running (its normal resting state while parked alive)', async () => {
     const sm = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    // No live session in the map at all (getLiveSession -> undefined) is the
+    // common case for a session that parks by exiting; DB status='running'
+    // here specifically proves the predicate is not session.status.
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }),
+    );
     vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
     const orch = new PlanningOrchestrator(sm as any);
 
@@ -100,11 +126,16 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     await orch.handleDisposition({ intent, disposition: 'approve' });
 
     expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+    // hasActiveTurn() (via getLiveSession) has already confirmed no turn is
+    // in flight, so markSessionDone must be called with skipInFlightGuard —
+    // otherwise its own in-flight guard would silently defer this write
+    // forever, since the DB row still reads 'running'.
     expect(markSessionDone).toHaveBeenCalledWith(
       'planning-session-1',
       expect.any(Number),
       null,
       expect.any(String),
+      { skipInFlightGuard: true },
     );
     // Must go through markTerminal (which calls endSession to reap the
     // subprocess), not write done via some other path.
@@ -142,6 +173,7 @@ describe('PlanningOrchestrator.handleDisposition', () => {
       expect.any(Number),
       null,
       expect.any(String),
+      { skipInFlightGuard: true },
     );
     expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
   });
@@ -185,12 +217,13 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     expect(markSessionDone).not.toHaveBeenCalled();
   });
 
-  it('an approve that completes the mandate while the session has a live in-flight turn defers the terminal transition instead of marking it terminal underneath the turn', async () => {
+  it('regression guard: an approve that completes the mandate while the session has a genuinely live in-flight turn (hasActiveTurn() true) defers the terminal transition instead of marking it terminal underneath the turn', async () => {
     const sm = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue(
-      makeSessionRow({ status: 'running' }),
-    );
+    // DB status is 'idle' here deliberately — proves the defer decision is
+    // driven by hasActiveTurn(), not session.status==='running'.
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
     vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    sm.getLiveSession.mockReturnValue(makeLiveSession(true));
     const orch = new PlanningOrchestrator(sm as any);
 
     const intent = makeIntent({
@@ -202,14 +235,44 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     expect(sm.enqueueFeedback).not.toHaveBeenCalled();
     expect(markSessionDone).not.toHaveBeenCalled();
     expect(sm.endSession).not.toHaveBeenCalled();
+    expect(setPendingApproveTerminal).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+    );
   });
 
-  it('applies the deferred terminal transition once the in-flight turn completes (session_ended), without re-consulting staged-intent state', async () => {
+  it('does not read session.status === "running" to decide whether a turn is in flight — a running-status row with no active turn terminates immediately', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(
       makeSessionRow({ status: 'running' }),
     );
     vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    // Live in the map, but its turn already ended.
+    sm.getLiveSession.mockReturnValue(makeLiveSession(false));
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+      null,
+      expect.any(String),
+      { skipInFlightGuard: true },
+    );
+    expect(setPendingApproveTerminal).not.toHaveBeenCalled();
+  });
+
+  it('applies the deferred terminal transition off the turn-boundary result event, without the session process exiting', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    const liveSession = makeLiveSession(true);
+    sm.getLiveSession.mockReturnValue(liveSession);
     const orch = new PlanningOrchestrator(sm as any);
 
     const intent = makeIntent({
@@ -219,7 +282,144 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     await orch.handleDisposition({ intent, disposition: 'approve' });
     expect(markSessionDone).not.toHaveBeenCalled();
 
-    // Turn completes — the session parks (or errors) and settles as done regardless.
+    // The turn ends: hasActiveTurn() flips false and the CLI broadcasts a
+    // session_event(result) — the session parks alive, no session_ended.
+    (liveSession as any).hasActiveTurn = () => false;
+    // DB status stays 'running' — the normal resting state for a session
+    // that parks alive rather than exiting.
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+      null,
+      expect.stringContaining('approved'),
+      { skipInFlightGuard: true },
+    );
+    expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
+    expect(clearPendingApproveTerminal).toHaveBeenCalledWith(
+      'planning-session-1',
+    );
+    // Deferred terminal is a one-shot — a second, unrelated result event
+    // for the same id must not re-drive markSessionDone.
+    vi.mocked(markSessionDone).mockClear();
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('does not mark terminal when the deferred approve-terminal drains but new intents were staged during the deferral window', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    const liveSession = makeLiveSession(true);
+    sm.getLiveSession.mockReturnValue(liveSession);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+    expect(markSessionDone).not.toHaveBeenCalled();
+
+    // While the turn was still in flight, the session staged new intents —
+    // the deferral window is exactly the interval in which this can happen.
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ id: 'new-intent-1', state: 'staged' }),
+      makeIntent({ id: 'new-intent-2', state: 'staged' }),
+    ]);
+    (liveSession as any).hasActiveTurn = () => false;
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sm.endSession).not.toHaveBeenCalled();
+    // The stale deferred marker is still cleared — it has been drained,
+    // whether or not it ultimately went terminal.
+    expect(clearPendingApproveTerminal).toHaveBeenCalledWith(
+      'planning-session-1',
+    );
+  });
+
+  it('once the newly staged intents are dispositioned, the session still reaches terminal — the drain re-check does not make it immortal', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    const liveSession = makeLiveSession(true);
+    sm.getLiveSession.mockReturnValue(liveSession);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+
+    const newIntent = makeIntent({ id: 'new-intent-1', state: 'staged' });
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([newIntent]);
+    (liveSession as any).hasActiveTurn = () => false;
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+    expect(markSessionDone).not.toHaveBeenCalled();
+
+    // checkTerminal now sees the new intent still staged: not terminal, and
+    // it seeds the staged-count snapshot to 1.
+    expect(orch.checkTerminal('planning-session-1')).toBe(false);
+
+    // The operator dispositions it (settles to 'committed'); nothing staged
+    // remains and the resumed turn (this same call) staged nothing new
+    // (count still 1 <= snapshot of 1), so the normal checkTerminal path
+    // drives the session terminal exactly as it would without the drain
+    // ever having deferred anything.
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      { ...newIntent, state: 'committed' },
+    ]);
+    expect(orch.checkTerminal('planning-session-1')).toBe(true);
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+      null,
+      expect.any(String),
+    );
+  });
+
+  it('also applies a deferred terminal transition on session_ended, as a safety net for a session that does exit', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    sm.getLiveSession.mockReturnValue(makeLiveSession(true));
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+    expect(markSessionDone).not.toHaveBeenCalled();
+
+    sm.getLiveSession.mockReturnValue(undefined);
     vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
     sm.emit('message', {
       type: 'session_ended',
@@ -233,19 +433,9 @@ describe('PlanningOrchestrator.handleDisposition', () => {
       expect.any(Number),
       null,
       expect.stringContaining('approved'),
+      { skipInFlightGuard: true },
     );
     expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
-    // Deferred terminal is a one-shot — a second, unrelated session_ended
-    // for the same id must not re-drive markSessionDone.
-    vi.mocked(markSessionDone).mockClear();
-    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'done' }));
-    sm.emit('message', {
-      type: 'session_ended',
-      sessionId: 'planning-session-1',
-      status: 'idle',
-    });
-    await flush();
-    expect(markSessionDone).not.toHaveBeenCalled();
   });
 
   it('resumes with a pushback message including operator feedback', async () => {
@@ -267,6 +457,61 @@ describe('PlanningOrchestrator.handleDisposition', () => {
       'planning-session-1',
       'operator-disposition',
       expect.stringContaining('please reconsider the split'),
+      { attemptTerminalResume: false },
+    );
+  });
+
+  it('an auto (validator-driven) pushback routes with a distinct source and message, naming the validation failure — not the [operator-disposition] label an operator pushback carries', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'needs_revision',
+    });
+    await orch.handleDisposition({
+      intent,
+      disposition: 'pushback',
+      reason:
+        '[TaskWriteCommands] invalid status transition for t-1: Backlog -> Ready',
+      provenance: 'auto',
+    });
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'validation-error',
+      expect.stringContaining('failed validation'),
+      { attemptTerminalResume: false },
+    );
+    expect(sm.enqueueFeedback).not.toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('an operator pushback (provenance omitted, the default) is unchanged: routes as operator-disposition with the existing message wording', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'needs_revision',
+    });
+    await orch.handleDisposition({
+      intent,
+      disposition: 'pushback',
+      reason: 'please reconsider the split',
+    });
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      `Staged intent ${intent.id} (${intent.kind}) was sent back for revision. Feedback: please reconsider the split`,
+      { attemptTerminalResume: false },
     );
   });
 
@@ -289,11 +534,13 @@ describe('PlanningOrchestrator.handleDisposition', () => {
       'planning-session-1',
       'operator-disposition',
       expect.stringContaining('declined'),
+      { attemptTerminalResume: false },
     );
     expect(sm.enqueueFeedback).toHaveBeenCalledWith(
       'planning-session-1',
       'operator-disposition',
       expect.stringContaining('no longer needed'),
+      { attemptTerminalResume: false },
     );
   });
 
@@ -315,6 +562,7 @@ describe('PlanningOrchestrator.handleDisposition', () => {
       'other-session-42',
       'operator-disposition',
       expect.any(String),
+      { attemptTerminalResume: false },
     );
     expect(sm.enqueueFeedback).not.toHaveBeenCalledWith(
       'planning-session-1',
@@ -345,6 +593,49 @@ describe('PlanningOrchestrator.handleDisposition', () => {
 
     expect(sm.enqueueFeedback).not.toHaveBeenCalled();
   });
+
+  it('an approve that completes the mandate but still owes gated design artifacts (completeness.disposition approved, no arch.*/task.updateBody staged yet) resumes the session instead of terminating it', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    vi.mocked(sessionOwesGatedDesignArtifacts).mockReturnValue(true);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      kind: 'completeness.disposition',
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      expect.stringContaining('arch.createUnit'),
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sm.endSession).not.toHaveBeenCalled();
+  });
+
+  it('an approve that completes the mandate and owes nothing further (sessionOwesGatedDesignArtifacts false, the default for non-design/groom sessions) still terminates exactly as before', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({ session_id: 'planning-session-1' });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+      null,
+      expect.any(String),
+      { skipInFlightGuard: true },
+    );
+    expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
+  });
 });
 
 // ── handleGroupDisposition — coalesces a group reject into one message ──────
@@ -374,6 +665,7 @@ describe('PlanningOrchestrator.handleGroupDisposition', () => {
       'planning-session-1',
       'operator-disposition',
       expect.any(String),
+      { attemptTerminalResume: false },
     );
   });
 
@@ -413,11 +705,13 @@ describe('PlanningOrchestrator.handleGroupDisposition', () => {
       'planning-session-1',
       'operator-disposition',
       expect.stringContaining('please reconsider the split'),
+      { attemptTerminalResume: false },
     );
     expect(sm.enqueueFeedback).toHaveBeenCalledWith(
       'planning-session-1',
       'operator-disposition',
       expect.stringContaining('group-42'),
+      { attemptTerminalResume: false },
     );
     const [, , message] = sm.enqueueFeedback.mock.calls[0];
     expect(message).toContain('intent-1');
@@ -449,6 +743,7 @@ describe('PlanningOrchestrator.handleGroupDisposition', () => {
       expect.any(Number),
       null,
       expect.any(String),
+      { skipInFlightGuard: true },
     );
     expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
   });
@@ -519,6 +814,22 @@ describe('PlanningOrchestrator terminal detection', () => {
     expect(markSessionDone).not.toHaveBeenCalled();
   });
 
+  it('is not terminal when no un-dispositioned intents remain and the turn staged nothing new, but the session still owes gated design artifacts', () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(sessionOwesGatedDesignArtifacts).mockReturnValue(true);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ kind: 'completeness.disposition', state: 'committed' }),
+    ]);
+
+    const terminal = orch.checkTerminal('planning-session-1');
+
+    expect(terminal).toBe(false);
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
   it('is not terminal when the resumed turn staged a new intent', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
@@ -550,7 +861,13 @@ describe('PlanningOrchestrator terminal detection', () => {
     vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'done' }));
     const orch = new PlanningOrchestrator(sm as any);
 
-    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    // A committed decision-kind intent so the no-staged-decision backstop
+    // doesn't intercept this call with a self-correct nudge — this test is
+    // about the already-done reap path, not that backstop.
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ state: 'committed' }),
+    ]);
+    orch.checkTerminal('planning-session-1'); // prime the staged-count snapshot
     const terminal = orch.checkTerminal('planning-session-1');
 
     expect(terminal).toBe(true);
@@ -565,7 +882,10 @@ describe('PlanningOrchestrator terminal detection', () => {
     vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'done' }));
     const orch = new PlanningOrchestrator(sm as any);
 
-    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ state: 'committed' }),
+    ]);
+    orch.checkTerminal('planning-session-1'); // prime the staged-count snapshot
     expect(() => orch.checkTerminal('planning-session-1')).not.toThrow();
     expect(() => orch.checkTerminal('planning-session-1')).not.toThrow();
 
@@ -576,8 +896,11 @@ describe('PlanningOrchestrator terminal detection', () => {
   it('drives terminal automatically off a session_ended(idle) event for a planning session', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
-    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
-    new PlanningOrchestrator(sm as any);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ state: 'committed' }),
+    ]);
+    const orch = new PlanningOrchestrator(sm as any);
+    orch.checkTerminal('planning-session-1'); // prime the staged-count snapshot
 
     sm.emit('message', {
       type: 'session_ended',
@@ -648,7 +971,9 @@ describe('PlanningOrchestrator turn-end group verification', () => {
   it('does not feed back an escalated group failure, and falls through to the terminal check', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
-    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ state: 'committed' }),
+    ]);
     vi.mocked(verifyDispatchedGroupsForSession).mockResolvedValue([
       {
         groupId: 'group-1',
@@ -658,7 +983,8 @@ describe('PlanningOrchestrator turn-end group verification', () => {
         errors: ['task.setStatus (task-1): still blocked after 2 rounds'],
       },
     ]);
-    new PlanningOrchestrator(sm as any);
+    const orch = new PlanningOrchestrator(sm as any);
+    orch.checkTerminal('planning-session-1'); // prime the staged-count snapshot
 
     sm.emit('message', {
       type: 'session_ended',
@@ -728,5 +1054,99 @@ describe('PlanningOrchestrator.endSession', () => {
     // it leaks a planning-concurrency slot forever.
     expect(markSessionDone).not.toHaveBeenCalled();
     expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
+  });
+});
+
+// ── reconcilePendingApproveTerminals — boot-time backstop ───────────────────
+
+describe('PlanningOrchestrator.reconcilePendingApproveTerminals', () => {
+  it('applies every durably-pending approve-terminal transition at boot, since no live process exists yet for any session this early', () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }),
+    );
+    vi.mocked(getSessionsWithPendingApproveTerminal).mockReturnValue([
+      makeSessionRow({ session_id: 'planning-session-1' }),
+    ] as any);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    orch.reconcilePendingApproveTerminals();
+
+    expect(clearPendingApproveTerminal).toHaveBeenCalledWith(
+      'planning-session-1',
+    );
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+      null,
+      expect.stringContaining('approved'),
+      { skipInFlightGuard: true },
+    );
+    expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
+  });
+
+  it('is a no-op when nothing is durably pending', () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSessionsWithPendingApproveTerminal).mockReturnValue([]);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    orch.reconcilePendingApproveTerminals();
+
+    expect(clearPendingApproveTerminal).not.toHaveBeenCalled();
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('leaves no session behind: a session with neither a live turn nor a live process is applied whether the drain fires in-process or via the boot sweep', async () => {
+    // In-process drain path.
+    const sm1 = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    sm1.getLiveSession.mockReturnValue(makeLiveSession(true));
+    const orch1 = new PlanningOrchestrator(sm1 as any);
+    await orch1.handleDisposition({
+      intent: makeIntent({
+        session_id: 'planning-session-1',
+        state: 'committed',
+      }),
+      disposition: 'approve',
+    });
+    expect(setPendingApproveTerminal).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+    );
+    sm1.getLiveSession.mockReturnValue(makeLiveSession(false));
+    sm1.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+    expect(clearPendingApproveTerminal).toHaveBeenCalledWith(
+      'planning-session-1',
+    );
+
+    // Boot-sweep path for a row still carrying the durable marker after a
+    // restart (in-memory Set is empty in a fresh process).
+    vi.clearAllMocks();
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }),
+    );
+    vi.mocked(getSessionsWithPendingApproveTerminal).mockReturnValue([
+      makeSessionRow({ session_id: 'planning-session-2' }),
+    ] as any);
+    const sm2 = makeSessionManager();
+    const orch2 = new PlanningOrchestrator(sm2 as any);
+    orch2.reconcilePendingApproveTerminals();
+    expect(clearPendingApproveTerminal).toHaveBeenCalledWith(
+      'planning-session-2',
+    );
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-2',
+      expect.any(Number),
+      null,
+      expect.stringContaining('approved'),
+      { skipInFlightGuard: true },
+    );
   });
 });

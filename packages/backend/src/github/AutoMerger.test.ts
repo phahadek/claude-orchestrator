@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from '../__tests__/helpers/mockDbQueries';
 
 // ── Mocks (must precede imports of the modules under test) ───────────────────
 
@@ -22,27 +23,29 @@ const { projectFixture, runtimeSettingsFixture } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('../db/queries.js', () => ({
-  getPRByNumber: vi.fn(),
-  setPauseReason: vi.fn(),
-  updateMergeState: vi.fn(),
-  updatePRDraftStatus: vi.fn(),
-  getApprovedOpenPRs: vi.fn().mockReturnValue([]),
-  getApprovedLocalBranches: vi.fn().mockReturnValue([]),
-  markLocalBranchMerged: vi.fn(),
-  setLocalBranchPauseReason: vi.fn(),
-  getSession: vi.fn(),
-  getOrphanMergeablePRs: vi.fn().mockReturnValue([]),
-  getStaleAutoMergeFailedPRs: vi.fn().mockReturnValue([]),
-  getConflictNudgeCandidates: vi.fn().mockReturnValue([]),
-  upsertActiveMerge: vi.fn(),
-  deleteActiveMerge: vi.fn(),
-  getAllActiveMerges: vi.fn().mockReturnValue([]),
-  setConflictNudgeSha: vi.fn(),
-  getTaskCache: vi.fn().mockReturnValue(undefined),
-  getPendingRoutedCommentCount: vi.fn().mockReturnValue(0),
-  markReviewerRequested: vi.fn(),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getPRByNumber: vi.fn(),
+    setPauseReason: vi.fn(),
+    updateMergeState: vi.fn(),
+    updatePRDraftStatus: vi.fn(),
+    getApprovedOpenPRs: vi.fn().mockReturnValue([]),
+    getApprovedLocalBranches: vi.fn().mockReturnValue([]),
+    markLocalBranchMerged: vi.fn(),
+    setLocalBranchPauseReason: vi.fn(),
+    getSession: vi.fn(),
+    getOrphanMergeablePRs: vi.fn().mockReturnValue([]),
+    getStaleAutoMergeFailedPRs: vi.fn().mockReturnValue([]),
+    getConflictNudgeCandidates: vi.fn().mockReturnValue([]),
+    upsertActiveMerge: vi.fn(),
+    deleteActiveMerge: vi.fn(),
+    getAllActiveMerges: vi.fn().mockReturnValue([]),
+    setConflictNudgeSha: vi.fn(),
+    getTaskCache: vi.fn().mockReturnValue(undefined),
+    getPendingRoutedCommentCount: vi.fn().mockReturnValue(0),
+    markReviewerRequested: vi.fn(),
+  }),
+);
 
 vi.mock('../config.js', () => ({
   getProjectByGithubRepo: vi.fn((repo: string) =>
@@ -354,6 +357,35 @@ describe('AutoMerger.attempt() — CI green', () => {
 });
 
 // ── attempt() — CI red and other failure modes ───────────────────────────────
+
+describe('AutoMerger — human_merge_only gate', () => {
+  it('attempt()/run() refuses to merge a human_merge_only=1 PR even when everything else is clean/approved', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ human_merge_only: 1 }),
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    // Simulates a direct invocation that bypasses getApprovedOpenPRs entirely
+    // (e.g. PRReviewService.onReviewApproved, routes/prs.ts manual-merge,
+    // rehydrate()) — attempt()/run() must independently re-check the gate.
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).not.toHaveBeenCalled();
+    expect(watcher.handleMerged).not.toHaveBeenCalled();
+    expect(setPauseReason).not.toHaveBeenCalled();
+  });
+});
 
 describe('AutoMerger.attempt() — failure modes', () => {
   it('pauses with ci_failing on ci_failed category', async () => {
@@ -1007,19 +1039,33 @@ describe('AutoMerger.sweepApprovedLocalBranches() — scheduled local-branch mer
     const watcher = makeMockWatcher();
     const merger = new AutoMerger(github, watcher, () => {});
 
-    const registered: { name: string; run: () => Promise<void> }[] = [];
+    const registered: {
+      name: string;
+      concurrency?: string;
+      run: () => Promise<void>;
+    }[] = [];
     const fakeScheduler = {
-      register: vi.fn((opts: { name: string; run: () => Promise<void> }) => {
-        registered.push(opts);
-      }),
+      register: vi.fn(
+        (opts: {
+          name: string;
+          concurrency?: string;
+          run: () => Promise<void>;
+        }) => {
+          registered.push(opts);
+        },
+      ),
     };
 
     merger.register(
       fakeScheduler as unknown as import('../orchestration/Scheduler').Scheduler,
     );
 
-    expect(fakeScheduler.register).toHaveBeenCalledTimes(1);
-    expect(registered[0].name).toBe('auto_merger_local_branch_sweep');
+    expect(fakeScheduler.register).toHaveBeenCalledTimes(2);
+    const localBranchJob = registered.find(
+      (j) => j.name === 'auto_merger_local_branch_sweep',
+    );
+    expect(localBranchJob).toBeDefined();
+    expect(localBranchJob?.concurrency).toBe('skip-if-running');
 
     const attemptSpy = vi.spyOn(merger, 'attempt');
     vi.mocked(getApprovedOpenPRs).mockReturnValue([makePRRow()]);
@@ -1027,8 +1073,49 @@ describe('AutoMerger.sweepApprovedLocalBranches() — scheduled local-branch mer
 
     // Running the registered job must only sweep local branches, never touch
     // the PR path — that stays driven by PRMergeWatcher/PRReviewService.
-    return registered[0].run().then(() => {
+    return localBranchJob!.run().then(() => {
       expect(attemptSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it('register() also schedules the conflict-nudge sweep with skip-if-running concurrency', () => {
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    const registered: {
+      name: string;
+      concurrency?: string;
+      run: () => Promise<void>;
+    }[] = [];
+    const fakeScheduler = {
+      register: vi.fn(
+        (opts: {
+          name: string;
+          concurrency?: string;
+          run: () => Promise<void>;
+        }) => {
+          registered.push(opts);
+        },
+      ),
+    };
+
+    merger.register(
+      fakeScheduler as unknown as import('../orchestration/Scheduler').Scheduler,
+    );
+
+    const conflictJob = registered.find(
+      (j) => j.name === 'auto_merger_conflict_nudge_sweep',
+    );
+    expect(conflictJob).toBeDefined();
+    expect(conflictJob?.concurrency).toBe('skip-if-running');
+
+    const sweepSpy = vi
+      .spyOn(merger, 'conflictNudgeSweep')
+      .mockResolvedValue(undefined);
+
+    return conflictJob!.run().then(() => {
+      expect(sweepSpy).toHaveBeenCalledTimes(1);
     });
   });
 });

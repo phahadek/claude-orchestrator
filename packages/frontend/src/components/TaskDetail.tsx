@@ -191,6 +191,17 @@ interface Props {
   setSessionFavorited?: (sessionId: string, favorited: boolean) => void;
 }
 
+// A concluded grooming session is historical reference; collapse it by default.
+// Design/Ops sessions are the task's primary content and always start expanded.
+function defaultShowPlanningSection(
+  planningSession: TaskView['planningSession'],
+): boolean {
+  return !(
+    planningSession?.sessionType === 'groom' &&
+    ['done', 'error', 'killed'].includes(planningSession.status)
+  );
+}
+
 // ── TaskDetail ────────────────────────────────────────────────────
 
 export function TaskDetail({
@@ -209,7 +220,9 @@ export function TaskDetail({
 }: Props) {
   const isMobile = useIsMobile();
   const [showReviewSection, setShowReviewSection] = useState(true);
-  const [showPlanningSection, setShowPlanningSection] = useState(true);
+  const [showPlanningSection, setShowPlanningSection] = useState(() =>
+    defaultShowPlanningSection(task.planningSession),
+  );
   const [showSpec, setShowSpec] = useState(!task.codeSession);
   const [mobileOpenSection, setMobileOpenSection] = useState<
     'review' | 'pr' | null
@@ -220,6 +233,10 @@ export function TaskDetail({
   const [fixConflictsInFlight, setFixConflictsInFlight] = useState(false);
   const [abortInFlight, setAbortInFlight] = useState(false);
   const [unblockInFlight, setUnblockInFlight] = useState(false);
+  const [backlogAbortInFlight, setBacklogAbortInFlight] = useState(false);
+  const [backlogAbortResult, setBacklogAbortResult] = useState<string | null>(
+    null,
+  );
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
     useState<DisplayStatus | null>(null);
@@ -238,7 +255,7 @@ export function TaskDetail({
   // Reset state when task changes
   useEffect(() => {
     setShowReviewSection(true);
-    setShowPlanningSection(true);
+    setShowPlanningSection(defaultShowPlanningSection(task.planningSession));
     setMobileOpenSection('review');
     setReviewError(null);
     setFixConflictsInFlight(false);
@@ -426,6 +443,47 @@ export function TaskDetail({
       setReviewError(err instanceof Error ? err.message : 'Network error');
     } finally {
       setUnblockInFlight(false);
+    }
+  }
+
+  async function handleAbortBacklogTask() {
+    if (!projectId) return;
+    if (
+      !confirm(
+        'Abort this Backlog task?\n\nThis will retract it to ⏭️ Deferred and, ' +
+          'if a grooming session is bound to it, kill that session.',
+      )
+    )
+      return;
+    setBacklogAbortInFlight(true);
+    setReviewError(null);
+    setBacklogAbortResult(null);
+    try {
+      const res = await authedFetch(
+        `/api/tasks/${encodeURIComponent(task.taskId)}/abort`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId }),
+        },
+      );
+      const responseBody = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        killedSessionId?: string | null;
+      };
+      if (!res.ok) {
+        setReviewError(responseBody.error ?? `HTTP ${res.status}`);
+      } else {
+        setBacklogAbortResult(
+          responseBody.killedSessionId
+            ? 'Task deferred; grooming session killed.'
+            : 'Task deferred; no session was running.',
+        );
+      }
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setBacklogAbortInFlight(false);
     }
   }
 
@@ -709,6 +767,29 @@ export function TaskDetail({
                 aria-label="Unblock task"
               >
                 {unblockInFlight ? 'Unblocking…' : '↩ Unblock'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Abort — retract a mis-filed Backlog task to Deferred ── */}
+        {effectiveDisplayStatus === 'backlog' && (
+          <div className={styles.abortSection}>
+            {reviewError && (
+              <div className={styles.errorBanner}>{reviewError}</div>
+            )}
+            {backlogAbortResult && (
+              <div className={styles.successBanner}>{backlogAbortResult}</div>
+            )}
+            <div className={styles.abortActions}>
+              <button
+                className={styles.abortButton}
+                disabled={backlogAbortInFlight}
+                onClick={() => void handleAbortBacklogTask()}
+                title="Retract this mis-filed Backlog task to ⏭️ Deferred and stop its grooming session, if any."
+                aria-label="Abort Backlog task"
+              >
+                {backlogAbortInFlight ? 'Aborting…' : 'Abort'}
               </button>
             </div>
           </div>

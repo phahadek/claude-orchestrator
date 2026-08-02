@@ -396,6 +396,8 @@ describe('JiraTaskSourceProvider.fetchReadyTasks — board cache JSON content', 
       buildReadyJql: vi
         .fn()
         .mockReturnValue('project = PROJ AND status in ("To Do")'),
+      buildEpicParentJql: vi.fn().mockReturnValue('parent = "m1"'),
+      buildSubtaskJql: vi.fn().mockReturnValue('parent in (PROJ-1, PROJ-2)'),
     } as unknown as JiraClient;
 
     const provider = new JiraTaskSourceProvider(mockClient, {

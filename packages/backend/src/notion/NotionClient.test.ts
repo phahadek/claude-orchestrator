@@ -23,6 +23,7 @@ import {
   blockToLine,
   truncateForError,
   NotionClient,
+  NotionPageEditStaleBaseError,
 } from './NotionClient';
 import {
   updateTaskCacheStatus,
@@ -654,6 +655,90 @@ describe('NotionClient.patchBodySection()', () => {
     });
 
     // Only the initial children fetch — no delete calls issued.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('NotionClient.applyPageEdit()', () => {
+  let client: NotionClient;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  function fixtureChildren() {
+    return [
+      {
+        id: 'h-summary',
+        type: 'heading_2',
+        heading_2: { rich_text: [{ plain_text: 'Summary' }] },
+      },
+      {
+        id: 'p-summary',
+        type: 'paragraph',
+        paragraph: { rich_text: [{ plain_text: 'Old summary text' }] },
+      },
+    ];
+  }
+
+  function mockChildrenFetch() {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        results: fixtureChildren(),
+        has_more: false,
+        next_cursor: null,
+      }),
+    });
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    client = new NotionClient();
+  });
+
+  it('applies matching content_updates: inserts new blocks then deletes stale ones', async () => {
+    mockChildrenFetch();
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ results: [{ id: 'new-h' }, { id: 'new-p' }] }),
+    }); // insert
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete h-summary
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete p-summary
+
+    await client.applyPageEdit('notion:abc', [
+      { old_str: 'Old summary text', new_str: 'New summary text' },
+    ]);
+
+    const insertCall = fetchSpy.mock.calls[1] as [string, RequestInit];
+    const insertBody = JSON.parse(insertCall[1].body as string);
+    const renderedText = insertBody.children
+      .map(
+        (b: { paragraph?: { rich_text: { text: { content: string } }[] } }) =>
+          b.paragraph?.rich_text[0]?.text.content,
+      )
+      .filter(Boolean)
+      .join('\n');
+    expect(renderedText).toContain('New summary text');
+    expect(renderedText).not.toContain('Old summary text');
+
+    const deleteCalls = fetchSpy.mock.calls.slice(2);
+    expect(deleteCalls.map((c) => c[0])).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('/blocks/h-summary'),
+        expect.stringContaining('/blocks/p-summary'),
+      ]),
+    );
+  });
+
+  it('rejects with NotionPageEditStaleBaseError when old_str no longer matches, without writing anything', async () => {
+    mockChildrenFetch();
+
+    await expect(
+      client.applyPageEdit('notion:abc', [
+        { old_str: 'text that no longer exists', new_str: 'replacement' },
+      ]),
+    ).rejects.toBeInstanceOf(NotionPageEditStaleBaseError);
+
+    // Only the initial children fetch — no insert/delete calls issued.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

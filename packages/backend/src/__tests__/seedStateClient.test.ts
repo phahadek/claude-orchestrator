@@ -52,11 +52,14 @@ describe('seed-state-client.mjs', () => {
     const result = await fetchSeedReadiness({
       port,
       token: 'device-token-1',
+      project: 'polimarket-analyser',
       milestone: 'M12',
     });
 
     expect(result.statusCode).toBe(200);
-    expect(receivedPath).toBe('/api/seed/readiness?milestone=M12');
+    expect(receivedPath).toBe(
+      '/api/seed/readiness?project=polimarket-analyser&milestone=M12',
+    );
     expect(receivedAuth).toBe('Bearer device-token-1');
     expect(JSON.parse(result.body)).toEqual(readiness);
   });
@@ -72,13 +75,14 @@ describe('seed-state-client.mjs', () => {
     await fetchNextApplyableSeedItems({
       port,
       token: 't',
+      project: 'polimarket-analyser',
       milestone: 'M12',
       deploySha: 'abc123',
       limit: 1,
     });
 
     expect(receivedPath).toBe(
-      '/api/seed/next?milestone=M12&deploySha=abc123&limit=1',
+      '/api/seed/next?project=polimarket-analyser&milestone=M12&deploySha=abc123&limit=1',
     );
   });
 
@@ -93,11 +97,14 @@ describe('seed-state-client.mjs', () => {
     await fetchNextApplyableSeedItems({
       port,
       token: 't',
+      project: 'polimarket-analyser',
       milestone: 'M12',
       deploySha: 'abc123',
     });
 
-    expect(receivedPath).toBe('/api/seed/next?milestone=M12&deploySha=abc123');
+    expect(receivedPath).toBe(
+      '/api/seed/next?project=polimarket-analyser&milestone=M12&deploySha=abc123',
+    );
   });
 
   it('fetches a single seed item by id', async () => {

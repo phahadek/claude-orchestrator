@@ -50,6 +50,7 @@ import {
   INTERACTIVE_TASK_TYPES,
   type TriageVerdict,
 } from '../planning/triage';
+import { ProjectService } from '../projects/ProjectService';
 
 const SIZE_CHECK_DECISIONS = new Set([
   'no_split',
@@ -88,13 +89,27 @@ const DEPENDS_ON_GATE_TYPES = new Set([
 /** and/or is a Files/paths-section hedge token only — see readinessGate.ts's Tier-2 class for the general-prose scan, which deliberately excludes it. */
 const FILES_PATHS_HEDGE_TOKENS = ['and/or', 'confirm', 'tbd', 'exact file'];
 
-/** One parsed `## Files / paths affected` list item (groomLoad.ts produces these with git-validated `existsInRepo`). */
+/**
+ * One parsed `## Files / paths affected` list item. groomLoad.ts's own
+ * loader output carries a git-validated `existsInRepo`, but the entries
+ * `checkGroomingPromotionGate` actually receives here come from whatever a
+ * dispatched session staged — a session can mislabel `existsInRepo` about
+ * itself the same way it could mislabel `isNew`. Both Files/paths checks
+ * below (`isFilesPathsResolved`, `isFilesPathsDeclaringRepoWork`) therefore
+ * re-derive `existsInRepo` server-side from the project's tracked-file set
+ * (`resolveFilesPathsEntriesServerSide`) before evaluating; the field on
+ * this interface is advisory input only, never trusted as the final answer.
+ */
 export interface FilesPathsEntry {
   /** The raw list-item text as it appeared in the task body. */
   raw: string;
   /** True when the entry explicitly marks a not-yet-created path via `*(new)*`. */
   isNew: boolean;
-  /** True when the entry's path resolves to an existing tracked file in the repo. */
+  /**
+   * Session-supplied claim that the entry's path resolves to an existing
+   * tracked file in the repo — advisory only. `checkGroomingPromotionGate`
+   * recomputes the authoritative value server-side rather than trusting this.
+   */
   existsInRepo: boolean;
 }
 
@@ -179,6 +194,23 @@ export interface GroomingGateEntry {
    * and is unaffected.
    */
   gateContributionCandidates?: GateContributionCandidate[];
+  /**
+   * The groomer's declared operational data/config seeds for seed_contribution
+   * — the assessment output stageSeedContribution's `seeds` array is supposed
+   * to mint verbatim (see task-writing.md § Milestone config-seed). Unlike
+   * gate_contribution's candidates, seeds have no pre-groom body section to
+   * re-derive server-side (they are identified from reading the change, not
+   * stripped from an author-authored list) — this is the groomer's own
+   * declared set, cross-checked at stage-group-commit time
+   * (stagedIntents.ts's precheckGroupCommit, via
+   * readinessGate.ts's checkAccretionContentMatch) against the group's live
+   * `seed.stage` intent's actual `seeds` array, the same strip⇔accrete
+   * content-match posture gate_contribution enforces against the real body.
+   * Absent entirely, this check fails open (mirrors gate_contribution's own
+   * candidates check) — a caller that hasn't started passing this yet records
+   * nothing here and is unaffected.
+   */
+  seedContributionCandidates?: { spec: string }[];
   /**
    * True when this task's pre-groom body (at Ready-flip staging time) still
    * carried a "### 👁️ Manual verification" section — a structural fact
@@ -331,6 +363,97 @@ function filesPathsHedgeTokens(raw: string): string[] {
 }
 
 /**
+ * Whether an entry's verdict can actually change based on the real
+ * `existsInRepo` value — an entry hedged or `*(new)*`-marked never reaches
+ * FM2's existence branch, and one that already parses as a plausible repo
+ * path (has a path separator + extension) passes the non-repo-work check
+ * regardless of existence. Only entries outside both of those are worth
+ * resolving a tracked-file set for; this lets a Ready-flip whose Files/paths
+ * entries are all hedge-blocked / *(new)* / well-formed skip project
+ * resolution entirely; consulted a real project (and its correspondingly
+ * higher chance of resolution failure) only when the verdict genuinely
+ * depends on the git-validated fact.
+ */
+function entryNeedsTrackedFileResolution(entry: FilesPathsEntry): boolean {
+  const neededForResolveInArtifact =
+    !entry.isNew && filesPathsHedgeTokens(entry.raw).length === 0;
+  const neededForRepoWorkCheck = !looksLikeRepoPath(entry.raw);
+  return neededForResolveInArtifact || neededForRepoWorkCheck;
+}
+
+/**
+ * Re-derives every Files/paths entry's `existsInRepo` from the project's own
+ * tracked-file set instead of trusting the session-supplied field — the
+ * fix for the incident this module's docstring (:25-31) and the
+ * isFilesPathsDeclaringRepoWork docstring below describe: a session that
+ * mislabels `existsInRepo` bypasses both Files/paths checks the same way a
+ * mislabeled `isNew` used to. Only resolves for 💻 Code tasks with a
+ * non-empty entry list whose verdict actually depends on the recomputed
+ * value (`entryNeedsTrackedFileResolution`) — the two checks that consume
+ * this both fail-open for other types/empty/unaffected entries before this
+ * would matter.
+ *
+ * Deliberately does NOT fail open when the tracked-file set can't be
+ * resolved (no project, no repoRoot, git failure): an unavailable oracle
+ * silently admitting every entry as "exists" would be the same defect one
+ * layer up, so that case instead returns a single blocking reason and
+ * leaves the two Files/paths checks unevaluated (their answer would be
+ * meaningless without a real tracked-file set to check against).
+ *
+ * `./groomLoad` is imported dynamically (not at module scope) so that
+ * groomLoad.ts's own dependency footprint (git shell-out via
+ * `child_process`, the Notion client) is only pulled in for the Ready-flips
+ * that actually need a tracked-file lookup — groomGate.ts is imported far
+ * more broadly (readinessGate, TaskWriteCommands, the precheck tool) than
+ * groomLoad.ts is, and a static import would put that whole surface area on
+ * every one of those callers' module graphs.
+ */
+async function resolveFilesPathsEntriesServerSide(
+  type: string | undefined,
+  entries: FilesPathsEntry[] | undefined,
+  projectId: string | undefined,
+): Promise<{ entries: FilesPathsEntry[] | undefined; blockedReason?: string }> {
+  if (
+    type !== '💻 Code' ||
+    !entries ||
+    entries.length === 0 ||
+    !entries.some(entryNeedsTrackedFileResolution)
+  ) {
+    return { entries };
+  }
+  const repoRoot = projectId
+    ? ProjectService.getById(projectId)?.projectDir
+    : undefined;
+  if (!repoRoot) {
+    return {
+      entries,
+      blockedReason:
+        'Files / paths affected could not be validated — no resolvable repository root for ' +
+        `project "${projectId ?? 'unknown'}"; the tracked-file set this check requires is unavailable.`,
+    };
+  }
+  const { resolveTrackedFileSet, filesPathsEntryExistsInRepo } =
+    await import('./groomLoad');
+  let trackedFiles: Set<string>;
+  try {
+    trackedFiles = await resolveTrackedFileSet(repoRoot);
+  } catch (err) {
+    return {
+      entries,
+      blockedReason:
+        'Files / paths affected could not be validated — the repository tracked-file set could not be ' +
+        `resolved for project "${projectId}": ${(err as Error).message}`,
+    };
+  }
+  return {
+    entries: entries.map((e) => ({
+      ...e,
+      existsInRepo: filesPathsEntryExistsInRepo(e.raw, trackedFiles),
+    })),
+  };
+}
+
+/**
  * FM2 — resolve-in-artifact. For 💻 Code tasks, every Files/paths entry must
  * be free of hedge tokens and resolve to a concrete file: either
  * git-validated existing, or explicitly marked `*(new)*`. Non-Code types
@@ -362,6 +485,58 @@ function isFilesPathsResolved(
     if (!e.isNew && !e.existsInRepo) {
       reasons.push(
         `Files/paths entry "${e.raw}" does not resolve to an existing tracked file and is not marked *(new)*.`,
+      );
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+/** An external-source prefix such as `Notion:` or `Slack:` — a declared line naming work in another system, never a repo path. */
+const EXTERNAL_PREFIX_RE = /^[A-Za-z][A-Za-z0-9 ]*:\s/;
+
+/**
+ * Whether a Files/paths entry's leading token could plausibly be a
+ * repository path — the discriminator for the non-repo-path check below is
+ * *shape*, not existence: a well-formed but not-yet-created source file
+ * (`packages/backend/src/foo/bar.ts`, or a bare `a.ts` at repo root) must
+ * parse as true, while a line naming work in another system
+ * (`Notion: Design the per-flow arm model...`) must parse as false. Requires
+ * a file extension on the leading token and rejects an explicit
+ * external-source prefix.
+ */
+function looksLikeRepoPath(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (EXTERNAL_PREFIX_RE.test(trimmed)) return false;
+  const candidate = trimmed.split(/[\s(]/)[0] ?? '';
+  return /\.[A-Za-z0-9]+$/.test(candidate);
+}
+
+/**
+ * The incident driver for this check (task 3ae22f91): a 💻 Code task's
+ * Files/paths entry that is existsInRepo:false AND does not parse as a
+ * plausible repo path (looksLikeRepoPath) declares work a dispatched Code
+ * session's worktree+PR cannot perform — a Notion page, a decision record,
+ * etc. Distinguishable from the legitimate case of a genuinely new source
+ * file, which is existsInRepo:false but well-formed. Independent of FM2's
+ * hedge/isNew check above (a session's own isNew label is not trustworthy —
+ * the incident entry was mislabeled isNew:true) and of type_check's
+ * advisory smuggle heuristic (which stayed "none" on this exact input) —
+ * this check is deterministic and reported as its own gate reason, never
+ * folded into type_check's disposition. Non-Code types fail-open.
+ */
+function isFilesPathsDeclaringRepoWork(
+  type: string | undefined,
+  entries: FilesPathsEntry[] | undefined,
+): { ok: boolean; reasons: string[] } {
+  if (type !== '💻 Code') return { ok: true, reasons: [] };
+  const reasons: string[] = [];
+  for (const e of entries ?? []) {
+    if (!e.existsInRepo && !looksLikeRepoPath(e.raw)) {
+      reasons.push(
+        `Files/paths entry "${e.raw}" does not resolve to an existing repo file and does not parse as a ` +
+          'plausible repository path (no path separator / file extension, or an explicit external-source ' +
+          'prefix such as "Notion:") — a 💻 Code task cannot declare non-repo work; excise the entry or ' +
+          're-type the task.',
       );
     }
   }
@@ -543,13 +718,21 @@ function isInteractiveTriageClean(
  * alone is not trustworthy: a caller can omit it to dodge accretion
  * enforcement. `entry.type` is only used as a fallback when no authoritative
  * type could be resolved.
+ *
+ * `projectId`, when resolvable to a project's repo, is used to re-derive
+ * every Files/paths entry's `existsInRepo` from that repo's own tracked-file
+ * set (`resolveFilesPathsEntriesServerSide`) before the two Files/paths
+ * checks run — a session's own `existsInRepo` claim on its staged payload is
+ * never trusted as the deciding value. Async because that re-derivation
+ * shells out to git.
  */
-export function checkGroomingPromotionGate(
+export async function checkGroomingPromotionGate(
   entry: GroomingGateEntry,
   taskId: string,
   authoritativeType?: string,
   accretionOpts?: AccretionCheckOptions,
-): GroomingGateResult {
+  projectId?: string,
+): Promise<GroomingGateResult> {
   const reasons: string[] = [];
   const resolvedType = authoritativeType ?? entry.type;
 
@@ -573,9 +756,23 @@ export function checkGroomingPromotionGate(
       .reasons,
   );
 
-  reasons.push(
-    ...isFilesPathsResolved(resolvedType, entry.filesPathsEntries).reasons,
-  );
+  const { entries: serverFilesPathsEntries, blockedReason } =
+    await resolveFilesPathsEntriesServerSide(
+      resolvedType,
+      entry.filesPathsEntries,
+      projectId,
+    );
+  if (blockedReason) {
+    reasons.push(blockedReason);
+  } else {
+    reasons.push(
+      ...isFilesPathsResolved(resolvedType, serverFilesPathsEntries).reasons,
+    );
+    reasons.push(
+      ...isFilesPathsDeclaringRepoWork(resolvedType, serverFilesPathsEntries)
+        .reasons,
+    );
+  }
   reasons.push(...isDependsOnGateClear(entry.dependsOnTasks).reasons);
   reasons.push(...isConstraintsDispositioned(entry).reasons);
   reasons.push(...isTriageEligibleForType(resolvedType, entry).reasons);

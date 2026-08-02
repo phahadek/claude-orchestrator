@@ -44,7 +44,12 @@ export interface StepDescriptor {
    * pre-restart baseline rather than greening against the outgoing process.
    */
   identity_capture?: string;
-  /** The step `id` to roll back to / reference on failure. */
+  /**
+   * The `id` of a compensating step to run on this step's failure, gated
+   * behind an operator confirm-gate — never silent. Only valid on an
+   * `is_prod_mutating: true` step; absence means no compensating action is
+   * configured, so a failure here just halts + surfaces.
+   */
   rollback_ref?: string;
 }
 
@@ -52,6 +57,8 @@ export interface FailureDiagnosis {
   symptom: string;
   cause: string;
   action: string;
+  /** The step `id` this diagnosis applies to; absent applies to no particular step. */
+  step?: string;
 }
 
 export interface CompanionDecl {
@@ -218,7 +225,15 @@ function validateFailureDiagnosis(
   if (!isString(diag.action) || diag.action.length === 0) {
     return `failure_diagnoses[${index}].action must be a non-empty string`;
   }
-  return { symptom: diag.symptom, cause: diag.cause, action: diag.action };
+  if (diag.step !== undefined && !isString(diag.step)) {
+    return `failure_diagnoses[${index}].step must be a string`;
+  }
+  return {
+    symptom: diag.symptom,
+    cause: diag.cause,
+    action: diag.action,
+    step: diag.step as string | undefined,
+  };
 }
 
 function validateCompanion(
@@ -324,6 +339,28 @@ export function validatePlaybook(
       });
     }
   }
+
+  const stepIds = new Set(steps.map((s) => s.id));
+  steps.forEach((s, i) => {
+    if (s.rollback_ref === undefined) return;
+    if (!s.is_prod_mutating) {
+      errors.push(
+        `steps[${i}].rollback_ref is only permitted on an is_prod_mutating step`,
+      );
+    }
+    if (!stepIds.has(s.rollback_ref)) {
+      errors.push(
+        `steps[${i}].rollback_ref "${s.rollback_ref}" does not match any step id`,
+      );
+    }
+  });
+  failureDiagnoses.forEach((d, i) => {
+    if (d.step !== undefined && !stepIds.has(d.step)) {
+      errors.push(
+        `failure_diagnoses[${i}].step "${d.step}" does not match any step id`,
+      );
+    }
+  });
 
   if (errors.length > 0) {
     return { errors };

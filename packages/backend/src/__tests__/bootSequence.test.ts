@@ -58,6 +58,9 @@ function makeDeps(): {
     sessionManager: {
       resumeOrphanSessions: vi.fn().mockResolvedValue(undefined),
     },
+    planningOrchestrator: {
+      reconcilePendingApproveTerminals: vi.fn(),
+    },
     stuckSessionMonitor: { rehydrate: vi.fn() },
     autoMerger: { rehydrate: vi.fn() },
     githubClient: {} as never,
@@ -66,6 +69,9 @@ function makeDeps(): {
     sessionEventsPruner: { runAtBoot: vi.fn().mockResolvedValue(undefined) },
     stalledPRReconciler: {
       reconcileOnce: vi.fn().mockResolvedValue(undefined),
+    },
+    gateVerifyReconciler: {
+      reattachOutstanding: vi.fn().mockResolvedValue(undefined),
     },
     server,
     port: 3000,
@@ -152,5 +158,46 @@ describe('boot chain — worktree_reconciliation step removed', () => {
           .step,
     );
     expect(stepNames).not.toContain('worktree_reconciliation');
+  });
+});
+
+// ── gate_verify_reattachment boot step ────────────────────────────────────────
+
+describe('boot chain — gate_verify_reattachment step', () => {
+  it('runs gateVerifyReconciler.reattachOutstanding as part of the chain', async () => {
+    const { deps } = makeDeps();
+
+    await runAndDrain(deps);
+
+    expect(deps.gateVerifyReconciler.reattachOutstanding).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it('includes gate_verify_reattachment in the announced boot steps', async () => {
+    const { deps, broadcast } = makeDeps();
+
+    await runAndDrain(deps);
+
+    const startedCall = vi
+      .mocked(broadcast)
+      .mock.calls.find(([msg]) => msg.type === 'boot_reconciliation_started');
+    const steps = (
+      startedCall![0] as Extract<
+        ServerMessage,
+        { type: 'boot_reconciliation_started' }
+      >
+    ).steps;
+    expect(steps).toContain('gate_verify_reattachment');
+  });
+
+  it('a rejection from reattachOutstanding does not block boot completion', async () => {
+    const { deps } = makeDeps();
+    vi.mocked(deps.gateVerifyReconciler.reattachOutstanding).mockRejectedValue(
+      new Error('boom'),
+    );
+
+    await expect(runAndDrain(deps)).resolves.toBeUndefined();
+    expect(deps.scheduler.start).toHaveBeenCalledTimes(1);
   });
 });

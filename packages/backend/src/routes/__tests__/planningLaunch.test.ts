@@ -16,6 +16,11 @@ vi.mock('../../db/queries.js', () => ({
   getTaskTitleFromCache: vi.fn(),
 }));
 
+vi.mock('../../db/db.js', async () => {
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
+});
+
 import {
   getMilestoneById,
   getProjectRowById,
@@ -23,13 +28,19 @@ import {
 } from '../../db/queries';
 import { createPlanningLaunchRouter } from '../planningLaunch';
 import type { OpsSessionLauncher } from '../../orchestration/OpsSessionLauncher';
+import { queryAuditLogByProject } from '../../audit/AuditLog';
 
 describe('POST /api/planning/launch', () => {
   let launchSelected: ReturnType<typeof vi.fn>;
   let launcher: OpsSessionLauncher;
   let app: express.Express;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    const { db } = await import('../../db/db.js');
+    db.prepare(
+      "DELETE FROM audit_log WHERE event_type = 'planning_dispatch_launched'",
+    ).run();
+
     vi.mocked(getMilestoneById).mockReturnValue({
       id: 'm1',
       project_id: 'proj-1',
@@ -168,5 +179,64 @@ describe('POST /api/planning/launch', () => {
         ],
       }),
     );
+  });
+
+  it('records a planning_dispatch_launched audit row with trigger_source "operator", the flow, and the milestone.id (the flow_arm UUID key space)', async () => {
+    const res = await request(app)
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'groom',
+        milestone: 'm1',
+        taskIds: ['task-1'],
+      });
+
+    expect(res.status).toBe(202);
+
+    const { entries } = queryAuditLogByProject('proj-1', {
+      eventType: 'planning_dispatch_launched',
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].payload).toEqual({
+      trigger_source: 'operator',
+      flow: 'groom',
+      milestone_id: 'm1',
+    });
+  });
+
+  it('the operator path and the evaluator path record different trigger_source values (no silent default that collapses them)', async () => {
+    const { recordEvent } = await import('../../audit/AuditLog');
+
+    await request(app)
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'groom',
+        milestone: 'm1',
+        taskIds: ['task-1'],
+      });
+
+    // The evaluator path (DispatchTriggerEvaluator.dispatchPlanningCandidate)
+    // writes the same event_type with trigger_source: 'evaluator' — asserted
+    // directly there. Here we assert the two values are distinct by
+    // recording what the evaluator path writes and comparing.
+    recordEvent({
+      event_type: 'planning_dispatch_launched',
+      actor_type: 'system',
+      project_id: 'proj-1',
+      payload: {
+        trigger_source: 'evaluator',
+        flow: 'groom',
+        milestone_id: 'm1',
+      },
+    });
+
+    const { entries } = queryAuditLogByProject('proj-1', {
+      eventType: 'planning_dispatch_launched',
+    });
+    const sources = entries.map(
+      (e) => (e.payload as { trigger_source: string }).trigger_source,
+    );
+    expect(sources).toContain('operator');
+    expect(sources).toContain('evaluator');
+    expect(new Set(sources).size).toBe(2);
   });
 });

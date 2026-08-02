@@ -17,7 +17,7 @@ import {
 import { GitHubClient } from '../github/GitHubClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 import { recordEvent } from '../audit/AuditLog';
-import { upsertTaskCache } from '../db/queries';
+import { upsertTaskCache, updateTaskStatusInBoardCaches } from '../db/queries';
 
 /**
  * Per-project configuration that identifies where non-milestone tasks are sourced from.
@@ -65,6 +65,13 @@ export interface UpdateStatusOptions {
 
 /** Provenance options shared by the write-side port methods (create / deps). */
 export type TaskWriteOptions = UpdateStatusOptions;
+
+/** Minimal task metadata returned by fetchTaskSummary — no body, no URL. */
+export interface TaskSummary {
+  title: string;
+  type: string;
+  status: string;
+}
 
 /**
  * Fields accepted by createTask. Status is intentionally absent — every
@@ -145,6 +152,12 @@ export interface TaskBackend {
 
   /** Fetch the full task page body as markdown (for review/session context). */
   fetchTaskPage(taskId: string): Promise<string>;
+
+  /**
+   * Fetch just a task's title/type/status — no body, no URL. Returns null if
+   * no task exists with the given id.
+   */
+  fetchTaskSummary(taskId: string): Promise<TaskSummary | null>;
 
   /**
    * Fetch tasks ready to launch that are not tied to a milestone.
@@ -296,6 +309,7 @@ export class AuditingTaskBackend implements TaskBackend {
     options?: UpdateStatusOptions,
   ): Promise<void> {
     await this.inner.updateStatus(taskId, status);
+    updateTaskStatusInBoardCaches(taskId, status);
     const source = options?.source ?? 'orchestrator';
     const sessionId = options?.sessionId ?? null;
     recordEvent({
@@ -315,6 +329,10 @@ export class AuditingTaskBackend implements TaskBackend {
 
   fetchTaskPage(taskId: string) {
     return this.inner.fetchTaskPage(taskId);
+  }
+
+  fetchTaskSummary(taskId: string) {
+    return this.inner.fetchTaskSummary(taskId);
   }
 
   fetchNonMilestoneReadyTasks(

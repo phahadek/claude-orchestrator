@@ -1,9 +1,14 @@
-import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
+import type {
+  TaskBackend,
+  NonMilestoneSourceConfig,
+  TaskSummary,
+} from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
 import { formatTaskId } from './taskId';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { GitHubClient } from '../github/GitHubClient';
+import { GitHubApiError } from '../github/types';
 import type { Issue } from '../github/types';
 import { ProjectService } from '../projects/ProjectService';
 import { logger } from '../logger';
@@ -229,6 +234,21 @@ export class GithubTaskSourceProvider implements TaskBackend {
     const issueNumber = this.parseIssueNumber(taskId);
     const issue = await this.client.getIssue(this.repo, issueNumber);
     return issue.body ?? '';
+  }
+
+  async fetchTaskSummary(taskId: string): Promise<TaskSummary | null> {
+    const issueNumber = this.parseIssueNumber(taskId);
+    try {
+      const issue = await this.client.getIssue(this.repo, issueNumber);
+      return {
+        title: issue.title,
+        type: resolveType(issue.labels),
+        status: resolveStatus(issue.labels, issue.id),
+      };
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 404) return null;
+      throw err;
+    }
   }
 
   async listTasksByStatus(status: string): Promise<ResolvedTask[]> {

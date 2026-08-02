@@ -4,41 +4,48 @@
  * emit the exact same internal event the retired stdout parser used to emit
  * (dispositions_parsed / verified_flaky_disposition / gate_verify_disposition,
  * see AgentSession.dispositions.test.ts / .verifiedFlaky.test.ts /
- * .gateVerify.test.ts for the parser-driven equivalents) and must be
- * idempotent per (session, item): a same-content repeat call is a dedup
- * no-op, a changed-content repeat call is last-write-wins.
+ * .gateVerify.test.ts for the parser-driven equivalents). recordReviewDisposition
+ * and recordVerifiedFlakyDisposition must be idempotent per (session, item): a
+ * same-content repeat call is a dedup no-op, a changed-content repeat call is
+ * last-write-wins. recordGateVerifyDisposition is deliberately not deduplicated
+ * at this layer — it stages a gate.verify intent (see routes/stagedIntents.ts),
+ * and staging's own content-hash dedup governs instead, since a repeat call
+ * after an operator pushback must always re-stage.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
-vi.mock('../../db/queries', () => ({
-  upsertSessionEvent: vi.fn().mockReturnValue(1),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  incrementTokens: vi.fn(),
-  incrementCompactionCount: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  setSessionModel: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  setSessionPauseReason: vi.fn(),
-  insertPauseInterval: vi.fn(),
-  getSessionTags: vi.fn().mockReturnValue([]),
-  setSessionTags: vi.fn(),
-  resetTaskCrashCount: vi.fn(),
-  getSession: vi.fn().mockReturnValue(null),
-  ackPendingComments: vi.fn(),
-  listUndeliveredInboxItems: vi.fn().mockReturnValue([]),
-  markInboxItemsDelivered: vi.fn(),
-}));
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    upsertSessionEvent: vi.fn().mockReturnValue(1),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    incrementTokens: vi.fn(),
+    incrementCompactionCount: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    setSessionModel: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    setSessionPauseReason: vi.fn(),
+    insertPauseInterval: vi.fn(),
+    getSessionTags: vi.fn().mockReturnValue([]),
+    setSessionTags: vi.fn(),
+    resetTaskCrashCount: vi.fn(),
+    getSession: vi.fn().mockReturnValue(null),
+    ackPendingComments: vi.fn(),
+    listUndeliveredInboxItems: vi.fn().mockReturnValue([]),
+    markInboxItemsDelivered: vi.fn(),
+  }),
+);
 
 vi.mock('../../config', () => ({
   ALLOWED_TOOLS: [],
@@ -83,6 +90,18 @@ vi.mock('child_process', () => ({
     if (cmd === 'git branch --show-current') return 'feature/my-task\n';
     throw new Error(`unexpected execSync: ${cmd}`);
   }),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
+  exec: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
 }));
 
 vi.mock('../CliSessionRunner', () => ({
@@ -100,10 +119,20 @@ vi.mock('../../db/pauseReason', () => ({
   serializePauseReason: vi.fn(),
 }));
 
+vi.mock('../../routes/stagedIntents', () => ({
+  stageIntent: vi.fn(),
+}));
+
+vi.mock('../../gate/gateService', () => ({
+  getGateItem: vi.fn().mockReturnValue(null),
+}));
+
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { AgentSession } from '../AgentSession';
 import { getPRBySessionId } from '../../db/queries';
+import { stageIntent } from '../../routes/stagedIntents';
+import { getGateItem } from '../../gate/gateService';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -130,6 +159,7 @@ function makeSession() {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getPRBySessionId).mockReturnValue(null);
+  vi.mocked(getGateItem).mockReturnValue(null);
 });
 
 // ── recordReviewDisposition ──────────────────────────────────────────────────
@@ -308,7 +338,7 @@ describe('AgentSession.recordVerifiedFlakyDisposition', () => {
 // ── recordGateVerifyDisposition ──────────────────────────────────────────────
 
 describe('AgentSession.recordGateVerifyDisposition', () => {
-  it('emits gate_verify_disposition unconditionally, with no PR needed', () => {
+  it('stages a gate.verify intent — never a direct gate_item_event write — and emits gate_verify_disposition unconditionally, with no PR needed', () => {
     const session = makeSession();
     const emitted: unknown[] = [];
     session.on('gate_verify_disposition', (p) => emitted.push(p));
@@ -320,6 +350,19 @@ describe('AgentSession.recordGateVerifyDisposition', () => {
     });
 
     expect(getPRBySessionId).not.toHaveBeenCalled();
+    expect(stageIntent).toHaveBeenCalledTimes(1);
+    expect(stageIntent).toHaveBeenCalledWith(
+      'gate.verify',
+      { gateItemId: 'item-1', disposition: 'pass', evidence: { note: 'ok' } },
+      expect.any(String),
+      null,
+      'test-session-id',
+      expect.any(String),
+      null,
+      null,
+      null,
+      null,
+    );
     expect(emitted).toEqual([
       {
         sessionId: 'test-session-id',
@@ -332,7 +375,40 @@ describe('AgentSession.recordGateVerifyDisposition', () => {
     ]);
   });
 
-  it('is idempotent: an identical repeat call does not double-emit', () => {
+  it("carries the gate item's milestone through to the staged intent when it resolves", () => {
+    vi.mocked(getGateItem).mockReturnValue({
+      id: 'item-1',
+      project: 'proj-1',
+      milestone: 'milestone-1',
+      text: 'does the thing',
+      classification: 'Read-Only',
+      state: 'runnable',
+      updatedAt: new Date().toISOString(),
+      sources: [],
+      events: [],
+    } as never);
+    const session = makeSession();
+
+    session.recordGateVerifyDisposition({
+      gateItemId: 'item-1',
+      disposition: 'pass',
+    });
+
+    expect(stageIntent).toHaveBeenCalledWith(
+      'gate.verify',
+      expect.objectContaining({ gateItemId: 'item-1' }),
+      expect.any(String),
+      null,
+      'test-session-id',
+      expect.any(String),
+      null,
+      null,
+      'milestone-1',
+      null,
+    );
+  });
+
+  it("is not deduplicated at the session level: a repeat call — e.g. re-reporting after an operator pushback — re-stages every time (staging's own content-hash dedup governs, not this method)", () => {
     const session = makeSession();
     const emitted: unknown[] = [];
     session.on('gate_verify_disposition', (p) => emitted.push(p));
@@ -346,10 +422,11 @@ describe('AgentSession.recordGateVerifyDisposition', () => {
       disposition: 'pass',
     });
 
-    expect(emitted).toHaveLength(1);
+    expect(stageIntent).toHaveBeenCalledTimes(2);
+    expect(emitted).toHaveLength(2);
   });
 
-  it('last-write-wins: a changed disposition re-emits', () => {
+  it('a changed disposition re-stages and re-emits', () => {
     const session = makeSession();
     const emitted: unknown[] = [];
     session.on('gate_verify_disposition', (p) => emitted.push(p));
@@ -363,6 +440,7 @@ describe('AgentSession.recordGateVerifyDisposition', () => {
       disposition: 'fail',
     });
 
+    expect(stageIntent).toHaveBeenCalledTimes(2);
     expect(emitted).toHaveLength(2);
   });
 });

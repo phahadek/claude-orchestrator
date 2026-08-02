@@ -7,6 +7,7 @@ import type {
 } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { diffTaskBody, splitSections, type SectionDiff } from './bodyDiff';
+import { CollapsibleField } from './CollapsibleField';
 import styles from './StagedIntentPanel.module.css';
 
 interface Props {
@@ -33,6 +34,13 @@ interface Props {
    * only the per-item action surface is hidden.
    */
   hideActions?: boolean;
+  /**
+   * True while the owning session hasn't signaled its proposal set complete
+   * for the turn — the backend refuses apply/approve/reject too, so every
+   * disposition control is disabled rather than left to fail. The headline,
+   * registers, and proposal are still rendered read-only.
+   */
+  disabled?: boolean;
 }
 
 function isNotFoundError(err: unknown): boolean {
@@ -138,6 +146,10 @@ function BodySectionDiff({ intent }: { intent: StagedIntent }) {
 
   return (
     <div data-testid="staged-intent-body-diff" className={styles.bodyDiff}>
+      <p className={styles.text} data-testid="staged-intent-body-diff-count">
+        {changedSections.length} section
+        {changedSections.length === 1 ? '' : 's'} changed
+      </p>
       {changedSections.map((section) => (
         <div key={section.name} className={styles.diffSection}>
           <div className={styles.diffSectionHeading}>## {section.name}</div>
@@ -229,6 +241,9 @@ function PatchBodySectionDiff({ intent }: { intent: StagedIntent }) {
       data-testid="staged-intent-patch-body-section"
       className={styles.bodyDiff}
     >
+      <p className={styles.text} data-testid="staged-intent-body-diff-count">
+        1 section changed
+      </p>
       <div className={styles.diffSection}>
         <div className={styles.diffSectionHeading}>## {payload.section}</div>
         {payload.operation === 'replace' && (
@@ -272,9 +287,103 @@ function PatchBodySectionDiff({ intent }: { intent: StagedIntent }) {
   );
 }
 
+interface GroomingGateConstraintDisposition {
+  disposition: 'complies' | 'n/a' | 'conflict_route';
+  why?: string;
+  citedDesignTaskId?: string;
+  routedTaskId?: string;
+}
+
+interface GroomingGateFilesPathsEntry {
+  raw: string;
+  isNew: boolean;
+  existsInRepo: boolean;
+}
+
+interface GroomingGateRegions {
+  packages?: string[];
+  files?: string[];
+}
+
+/** Mirrors groomGate.ts's GroomingGateEntry — the client only renders these fields, never re-judges them. */
+interface GroomingGate {
+  size_check?: { decision?: string } | null;
+  type_check?: { decision?: string; disposition?: string } | null;
+  type?: string;
+  regions?: GroomingGateRegions;
+  constraintsDispositioned?: Record<string, GroomingGateConstraintDisposition>;
+  filesPathsEntries?: GroomingGateFilesPathsEntry[];
+  dependsOnTasks?: { id: string; type?: string; status?: string }[];
+}
+
 interface SetStatusPayload {
   taskId: string;
   status: string;
+  groomingGate?: GroomingGate;
+}
+
+function GroomingGateSummary({ gate }: { gate: GroomingGate }) {
+  const regionCount =
+    (gate.regions?.packages?.length ?? 0) + (gate.regions?.files?.length ?? 0);
+  const constraintCount = Object.keys(
+    gate.constraintsDispositioned ?? {},
+  ).length;
+  const filesPathsEntries = gate.filesPathsEntries ?? [];
+  const constraintsDispositioned = gate.constraintsDispositioned ?? {};
+
+  return (
+    <div
+      className={styles.text}
+      data-testid="staged-intent-grooming-gate-summary"
+    >
+      <p>
+        Size: {gate.size_check?.decision ?? '—'} · Type check:{' '}
+        {gate.type_check?.decision ?? '—'} · Task type: {gate.type ?? '—'} ·{' '}
+        {regionCount} region{regionCount === 1 ? '' : 's'} · {constraintCount}{' '}
+        constraint{constraintCount === 1 ? '' : 's'} dispositioned
+      </p>
+      {(constraintCount > 0 || filesPathsEntries.length > 0) && (
+        <details className={styles.expandDetail}>
+          <summary className={styles.expandSummary}>
+            Show grooming detail
+          </summary>
+          {constraintCount > 0 && (
+            <div>
+              <strong>Constraints</strong>
+              <ul>
+                {Object.entries(constraintsDispositioned).map(([id, d]) => (
+                  <li key={id}>
+                    {id}: {d.disposition}
+                    {d.why ? ` — ${d.why}` : ''}
+                    {d.citedDesignTaskId
+                      ? ` (cites ${d.citedDesignTaskId})`
+                      : ''}
+                    {d.routedTaskId ? ` (routed to ${d.routedTaskId})` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {filesPathsEntries.length > 0 && (
+            <div>
+              <strong>Files / paths</strong>
+              <ul>
+                {filesPathsEntries.map((entry, idx) => (
+                  <li key={idx}>
+                    {entry.raw}
+                    {entry.isNew ? ' (new)' : ''}
+                    {!entry.isNew && !entry.existsInRepo
+                      ? ' (not found in repo)'
+                      : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </details>
+      )}
+    </div>
+  );
 }
 
 function ViolationsRegister({
@@ -357,15 +466,25 @@ function GroomProposalSummary({ proposal }: { proposal: GroomProposalFields }) {
       data-testid="staged-intent-groom-proposal"
     >
       <dt>Achieves</dt>
-      <dd>{proposal.achieves}</dd>
+      <dd>
+        <CollapsibleField text={proposal.achieves} />
+      </dd>
       <dt>Open questions</dt>
-      <dd>{proposal.openQuestions}</dd>
+      <dd>
+        <CollapsibleField text={proposal.openQuestions} />
+      </dd>
       <dt>Automated tests</dt>
-      <dd>{proposal.automatedTests}</dd>
+      <dd>
+        <CollapsibleField text={proposal.automatedTests} />
+      </dd>
       <dt>Manual verification</dt>
-      <dd>{proposal.manualVerification}</dd>
+      <dd>
+        <CollapsibleField text={proposal.manualVerification} />
+      </dd>
       <dt>Operational seed</dt>
-      <dd>{proposal.operationalSeed}</dd>
+      <dd>
+        <CollapsibleField text={proposal.operationalSeed} />
+      </dd>
     </dl>
   );
 }
@@ -374,10 +493,13 @@ function SetStatusHeadline({ intent }: { intent: StagedIntent }) {
   const payload = intent.payload as SetStatusPayload;
   if (payload.status === 'Ready') {
     return (
-      <div className={styles.text}>
+      <div className={styles.text} data-testid="staged-intent-promote-ready">
         <p>
           <strong>Promote to Ready</strong> — {payload.taskId}
         </p>
+        {payload.groomingGate && (
+          <GroomingGateSummary gate={payload.groomingGate} />
+        )}
       </div>
     );
   }
@@ -446,7 +568,7 @@ function CreateHeadline({ intent }: { intent: StagedIntent }) {
         <p>Depends on: {payload.dependsOn.join(', ')}</p>
       )}
       {payload.body ? (
-        <pre className={styles.payload}>{payload.body}</pre>
+        <pre className={styles.bodyProse}>{payload.body}</pre>
       ) : (
         <p>No body supplied.</p>
       )}
@@ -504,6 +626,16 @@ function CapabilityRequestHeadline({ intent }: { intent: StagedIntent }) {
       <p>
         Requests capability: <code>{payload.capability}</code>
       </p>
+      {intent.confersFileMutation && (
+        <p
+          className={styles.fileMutationWarning}
+          data-testid="staged-intent-capability-file-mutation-warning"
+        >
+          This grants file-write capability — it can create, overwrite, or
+          delete any file this session can reach, the same ground a structured
+          Edit/Write request covers.
+        </p>
+      )}
       <p>Plan: {payload.plan}</p>
       <p>Evidence: {payload.evidence}</p>
     </div>
@@ -560,9 +692,17 @@ function JournalSetStateHeadline({ intent }: { intent: StagedIntent }) {
   );
 }
 
+type NamedCompletenessDisposition =
+  | 'resolved'
+  | 'out-of-scope'
+  | 'not-a-decision'
+  | 'fold'
+  | 'file-sibling'
+  | 'sibling-owned';
+
 interface CompletenessDispositionQuestionPayload {
   question: string;
-  disposition: 'accepted' | 'dismissed';
+  disposition: NamedCompletenessDisposition;
   reason: string;
   approvalStatus?: 'proposed' | 'approved' | 'rejected';
 }
@@ -572,6 +712,7 @@ interface CompletenessDispositionPayload {
   rowId: number;
   project: string | null;
   milestone: string | null;
+  probed: string[];
   questions: CompletenessDispositionQuestionPayload[];
   runAt: string;
 }
@@ -588,21 +729,388 @@ function CompletenessDispositionHeadline({ intent }: { intent: StagedIntent }) {
         Completeness critic run for <strong>{payload.taskId}</strong>
         {payload.milestone ? ` (${payload.milestone})` : ''} — {payload.runAt}
       </p>
+      <p>Probed: {(payload.probed ?? []).join(', ') || 'none recorded'}</p>
       {payload.questions.length === 0 ? (
         <p>No gaps raised — pass run, clean.</p>
       ) : (
         <ul>
           {payload.questions.map((q, idx) => (
             <li key={idx}>
-              <strong>
-                {q.disposition === 'accepted' ? 'Accepted' : 'Dismissed'}:
-              </strong>{' '}
-              {q.question} — {q.reason}
+              <strong>{q.disposition}:</strong> {q.question} — {q.reason}
             </li>
           ))}
         </ul>
       )}
     </div>
+  );
+}
+
+interface NoOpPayload {
+  taskId: string;
+  reason: string;
+  /**
+   * The staged-intent kind this pass produced nothing of — present only for
+   * the "skipped deliverable" variant (see the backend's NoOpPayload doc
+   * comment). Absent = the whole-turn no-op this component originally
+   * rendered, unchanged.
+   */
+  skippedKind?: string;
+}
+
+/**
+ * The deliberate-no-op terminal path: a dispatched planning session's
+ * declaration that it reached terminal with nothing to change. Purely
+ * informational/auditable — no operator disposition is required or offered
+ * for this kind (see the panel's isNoOp guard below), so the operator's only
+ * action is reading the reason.
+ *
+ * Branches on `skippedKind`: a whole-turn no-op renders the original
+ * headline; a skipped-deliverable marker (this pass produced other
+ * artifacts, just none of this one kind) renders as a single, visually
+ * distinct line naming the skipped kind and its reason — it would read as
+ * flatly wrong sitting beside real artifacts if rendered with the
+ * whole-turn-emptiness copy above.
+ */
+function NoOpHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as NoOpPayload;
+  if (payload.skippedKind) {
+    return (
+      <p
+        className={styles.skippedKindLine}
+        data-testid="staged-intent-no-op-skipped-kind"
+      >
+        <span className={styles.skippedKindLabel}>Skipped</span>
+        <strong>{payload.skippedKind}</strong> — {payload.reason}
+      </p>
+    );
+  }
+  return (
+    <div className={styles.text} data-testid="staged-intent-no-op">
+      <p>
+        No-op: nothing staged for <strong>{payload.taskId}</strong>
+      </p>
+      <p>Reason: {payload.reason}</p>
+    </div>
+  );
+}
+
+interface GateContributionItemPayload {
+  text: string;
+  classification?: string;
+}
+
+interface GateAccretePayload {
+  sourceTask: { id: string; title: string };
+  items: GateContributionItemPayload[];
+  classification: string;
+  reason?: string;
+}
+
+/** The grooming gate contribution kind — the source task's runtime-observable items minted onto the milestone gate, or a bare classification with no items. */
+function GateAccreteHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as GateAccretePayload;
+  const count = payload.items?.length ?? 0;
+  return (
+    <div className={styles.text} data-testid="staged-intent-gate-accrete">
+      <p>
+        {count} item{count === 1 ? '' : 's'} added to gate (
+        {payload.classification})
+      </p>
+      {count > 0 && (
+        <details className={styles.expandDetail}>
+          <summary className={styles.expandSummary}>Show items</summary>
+          <ul>
+            {payload.items.map((item, idx) => (
+              <li key={idx}>
+                {item.text}
+                {item.classification ? ` (${item.classification})` : ''}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {payload.reason && <p>Reason: {payload.reason}</p>}
+    </div>
+  );
+}
+
+interface GateVerifyPayload {
+  gateItemId: string;
+  disposition: 'pass' | 'fail' | 'needs-setup';
+  evidence?: unknown;
+  reclassify?: { to: string; reason: string };
+}
+
+interface GateVerifyEvidence {
+  expected?: unknown;
+  found?: unknown;
+  query?: unknown;
+  source?: unknown;
+  basis?: unknown;
+  summary?: unknown;
+  trace?: unknown;
+  note?: unknown;
+  [key: string]: unknown;
+}
+
+const GATE_VERIFY_EVIDENCE_KNOWN_KEYS = new Set([
+  'expected',
+  'found',
+  'query',
+  'source',
+  'basis',
+  'summary',
+  'trace',
+  'note',
+]);
+
+/**
+ * Evidence on a gate.verify intent is model-authored and its shape isn't
+ * guaranteed (see gateItemVerifier.ts's evidence.basis prompting and
+ * AgentSession.recordGateVerifyDisposition) — it may arrive as a JSON
+ * string, a plain object, a bare string, or malformed text. Returns null on
+ * anything that can't be read as a structured record, so the caller falls
+ * back to the raw display rather than throwing.
+ */
+function parseGateVerifyEvidence(evidence: unknown): GateVerifyEvidence | null {
+  if (evidence == null) return null;
+  if (typeof evidence === 'object' && !Array.isArray(evidence)) {
+    return evidence as GateVerifyEvidence;
+  }
+  if (typeof evidence === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(evidence);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as GateVerifyEvidence;
+      }
+      return { summary: parsed };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** The gate-verify report kind — a gate-verify session's pass/fail/needs-setup finding, staged for operator disposition. */
+function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as GateVerifyPayload;
+  const evidence = parseGateVerifyEvidence(payload.evidence);
+  const trace =
+    evidence && Array.isArray(evidence.trace) ? evidence.trace : null;
+  const extraEntries = evidence
+    ? Object.entries(evidence).filter(
+        ([key]) => !GATE_VERIFY_EVIDENCE_KNOWN_KEYS.has(key),
+      )
+    : [];
+  // A string-valued off-contract key is a session's explanation under an
+  // invented name — render it inline like the known prose fields so it
+  // isn't lost behind a collapsed block. Only non-string/structural values
+  // (objects, arrays, numbers, booleans) still collapse: they aren't prose
+  // an operator reads at a glance.
+  const extraStringEntries = extraEntries.filter(
+    (entry): entry is [string, string] => typeof entry[1] === 'string',
+  );
+  const extraStructuralEntries = extraEntries.filter(
+    ([, value]) => typeof value !== 'string',
+  );
+
+  return (
+    <div className={styles.text} data-testid="staged-intent-gate-verify">
+      <p>
+        Gate item <strong>{payload.gateItemId}</strong>:{' '}
+        <strong>{payload.disposition}</strong>
+      </p>
+      {evidence == null && payload.evidence != null ? (
+        renderFallback(payload.evidence)
+      ) : (
+        <>
+          {typeof evidence?.expected === 'string' && (
+            <p>Expected: {evidence.expected}</p>
+          )}
+          {typeof evidence?.found === 'string' && (
+            <p>Found: {evidence.found}</p>
+          )}
+          {typeof evidence?.query === 'string' && (
+            <p>Query: {evidence.query}</p>
+          )}
+          {typeof evidence?.source === 'string' && (
+            <p>Source: {evidence.source}</p>
+          )}
+          {typeof evidence?.basis === 'string' && (
+            <p>Basis: {evidence.basis}</p>
+          )}
+          {typeof evidence?.summary === 'string' && <p>{evidence.summary}</p>}
+          {trace && trace.length > 0 && (
+            <>
+              <p>Trace ({trace.length}):</p>
+              <ul className={styles.traceList}>
+                {trace.map((line, idx) => (
+                  <li key={idx}>{String(line)}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {typeof evidence?.note === 'string' && <p>Note: {evidence.note}</p>}
+          {extraStringEntries.map(([key, value]) => (
+            <p
+              key={key}
+              data-testid={`staged-intent-gate-verify-evidence-${key}`}
+            >
+              {key}: {value}
+            </p>
+          ))}
+          {extraStructuralEntries.length > 0 && (
+            <details className={styles.expandDetail}>
+              <summary className={styles.expandSummary}>Other evidence</summary>
+              <pre className={styles.payload}>
+                {JSON.stringify(
+                  Object.fromEntries(extraStructuralEntries),
+                  null,
+                  2,
+                )}
+              </pre>
+            </details>
+          )}
+        </>
+      )}
+      {payload.reclassify && (
+        <p>
+          Reclassify to <strong>{payload.reclassify.to}</strong>:{' '}
+          {payload.reclassify.reason}
+        </p>
+      )}
+    </div>
+  );
+}
+
+interface SeedContributionItemPayload {
+  spec: string;
+}
+
+interface SeedStagePayload {
+  sourceTask: { id: string; title: string };
+  seeds: SeedContributionItemPayload[];
+  decision: string;
+}
+
+/** The grooming seed contribution kind — the source task's config-change seeds minted onto the milestone seed store. */
+function SeedStageHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as SeedStagePayload;
+  const count = payload.seeds?.length ?? 0;
+  return (
+    <div className={styles.text} data-testid="staged-intent-seed-stage">
+      <p>
+        {count} seed{count === 1 ? '' : 's'} staged ({payload.decision})
+      </p>
+      {count > 0 && (
+        <details className={styles.expandDetail}>
+          <summary className={styles.expandSummary}>Show specs</summary>
+          <ul>
+            {payload.seeds.map((seed, idx) => (
+              <li key={idx}>{seed.spec}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+interface ArchUnitMetadataPayload {
+  kind: string;
+  topic?: string;
+  regions?: string[];
+  status?: string;
+}
+
+interface ArchCreateUnitPayload {
+  title: string;
+  metadata: ArchUnitMetadataPayload;
+  body: string;
+}
+
+interface ArchUpdateUnitPayload {
+  unitId: string;
+  baseVersion: number;
+  title?: string;
+  metadata?: Partial<ArchUnitMetadataPayload>;
+  body?: string;
+}
+
+interface ArchSupersedeUnitPayload {
+  unitId: string;
+  baseVersion: number;
+  replacement: ArchCreateUnitPayload;
+}
+
+/** The architecture-unit creation kind — a new titled architecture statement (subsystem/invariant/decision/contract/reference). */
+function ArchCreateUnitHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as ArchCreateUnitPayload;
+  return (
+    <div className={styles.text} data-testid="staged-intent-arch-create-unit">
+      <p>
+        <strong>{payload.title}</strong> ({payload.metadata.kind})
+      </p>
+      <details className={styles.expandDetail}>
+        <summary className={styles.expandSummary}>Show body</summary>
+        <pre className={styles.payload}>{payload.body}</pre>
+      </details>
+    </div>
+  );
+}
+
+/** The architecture-unit edit kind — an in-place edit against baseVersion (optimistic concurrency). */
+function ArchUpdateUnitHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as ArchUpdateUnitPayload;
+  const label = payload.title ?? payload.unitId;
+  const kind = payload.metadata?.kind ?? 'update';
+  return (
+    <div className={styles.text} data-testid="staged-intent-arch-update-unit">
+      <p>
+        <strong>{label}</strong> ({kind})
+      </p>
+      {payload.body && (
+        <details className={styles.expandDetail}>
+          <summary className={styles.expandSummary}>Show body</summary>
+          <pre className={styles.payload}>{payload.body}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** The architecture-unit supersede kind — retires unitId at baseVersion and lands a replacement unit in its place. */
+function ArchSupersedeUnitHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as ArchSupersedeUnitPayload;
+  return (
+    <div
+      className={styles.text}
+      data-testid="staged-intent-arch-supersede-unit"
+    >
+      <p>
+        <strong>{payload.replacement.title}</strong> (
+        {payload.replacement.metadata.kind}) — supersedes {payload.unitId}
+      </p>
+      <details className={styles.expandDetail}>
+        <summary className={styles.expandSummary}>Show body</summary>
+        <pre className={styles.payload}>{payload.replacement.body}</pre>
+      </details>
+    </div>
+  );
+}
+
+interface IntentWithdrawPayload {
+  intentId: string;
+  reason: string;
+}
+
+/** The self-withdrawal kind — a session cancelling an intent it staged before an operator disposed of it. */
+function IntentWithdrawHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as IntentWithdrawPayload;
+  return (
+    <p className={styles.text} data-testid="staged-intent-withdraw">
+      Withdraw <strong>{payload.intentId}</strong>: {payload.reason}
+    </p>
   );
 }
 
@@ -636,6 +1144,22 @@ function renderHeadline(intent: StagedIntent): ReactNode {
       return <CapabilityRequestHeadline intent={intent} />;
     case 'journal.setState':
       return <JournalSetStateHeadline intent={intent} />;
+    case 'planning.noOp':
+      return <NoOpHeadline intent={intent} />;
+    case 'gate.accrete':
+      return <GateAccreteHeadline intent={intent} />;
+    case 'gate.verify':
+      return <GateVerifyHeadline intent={intent} />;
+    case 'seed.stage':
+      return <SeedStageHeadline intent={intent} />;
+    case 'arch.createUnit':
+      return <ArchCreateUnitHeadline intent={intent} />;
+    case 'arch.updateUnit':
+      return <ArchUpdateUnitHeadline intent={intent} />;
+    case 'arch.supersedeUnit':
+      return <ArchSupersedeUnitHeadline intent={intent} />;
+    case 'intent.withdraw':
+      return <IntentWithdrawHeadline intent={intent} />;
     default:
       return renderFallback(intent.payload);
   }
@@ -669,18 +1193,33 @@ export function StagedIntentPanel({
   onDismiss,
   onApproved,
   hideActions,
+  disabled = false,
 }: Props) {
+  // A member stuck off the active surface (needs_revision |
+  // pending_verification) — its only operator-usable exit is decline
+  // (needs_revision -> needs_revision isn't a legal transition, so a
+  // pushback here would just fail server-side); see
+  // routes/stagedIntents.ts's `/:id/reject` handling.
+  const isBlockedState =
+    intent.state === 'needs_revision' ||
+    intent.state === 'pending_verification';
+
   const [inFlight, setInFlight] = useState<
-    'apply' | 'reject' | 'approve' | 'override' | null
+    'apply' | 'reject' | 'approve' | 'override' | 'acknowledge' | null
   >(null);
   const [error, setError] = useState<string | null>(null);
-  const [rejectOutcome, setRejectOutcome] =
-    useState<StagedIntentRejectOutcome>('pushback');
+  const [rejectOutcome, setRejectOutcome] = useState<StagedIntentRejectOutcome>(
+    isBlockedState ? 'decline' : 'pushback',
+  );
   const [rejectReason, setRejectReason] = useState('');
   const [showOverride, setShowOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
 
-  const blocked = intent.annotation?.blocked === true;
+  const blocked = Boolean(
+    intent.annotation &&
+    'blocked' in intent.annotation &&
+    intent.annotation.blocked,
+  );
   // The grant-approval kind: never applied — dispositioned only through
   // approve / reject / pushback, the existing consent vocabulary.
   const isCapabilityRequest = intent.kind === 'session.requestCapability';
@@ -690,6 +1229,9 @@ export function StagedIntentPanel({
   // writes; there is no separate apply/commit step.
   const isCompletenessDisposition = intent.kind === 'completeness.disposition';
   const skipsApply = isCapabilityRequest || isCompletenessDisposition;
+  // planning.noOp is purely informational/auditable — no operator
+  // disposition (commit/approve/reject) is ever offered for it.
+  const isNoOp = intent.kind === 'planning.noOp';
   const isGrouped = !!intent.groupId;
 
   const handleApply = async (override?: { reason: string }) => {
@@ -736,6 +1278,25 @@ export function StagedIntentPanel({
     }
   };
 
+  const handleAcknowledge = async () => {
+    setInFlight('acknowledge');
+    setError(null);
+    try {
+      const updated = await stagedIntentsApi.acknowledge(intent.id);
+      onApplied?.(intent, updated);
+    } catch (err) {
+      if (isNotFoundError(err)) {
+        onDismiss?.(intent);
+        return;
+      }
+      setError(
+        err instanceof Error ? err.message : 'Failed to acknowledge intent',
+      );
+    } finally {
+      setInFlight(null);
+    }
+  };
+
   const handleReject = async () => {
     const reason = rejectReason.trim();
     if (!reason) return;
@@ -774,6 +1335,14 @@ export function StagedIntentPanel({
             <span className={styles.stateBadge}>{intent.state}</span>
           )
         )}
+        {disabled && (
+          <span
+            className={styles.stateBadge}
+            data-testid="staged-intent-still-filing"
+          >
+            Still filing…
+          </span>
+        )}
       </div>
 
       {intent.state === 'withdrawn' && intent.dispositionReason && (
@@ -786,8 +1355,19 @@ export function StagedIntentPanel({
         <GroomProposalSummary proposal={intent.groomProposal} />
       ) : (
         intent.decisionProposal && (
-          <p className={styles.rationale}>{intent.decisionProposal}</p>
+          <p className={styles.rationale}>
+            <CollapsibleField text={intent.decisionProposal} />
+          </p>
         )
+      )}
+
+      {intent.investigation && (
+        <p
+          className={styles.rationale}
+          data-testid="staged-intent-investigation"
+        >
+          <CollapsibleField text={intent.investigation} />
+        </p>
       )}
 
       <div className={styles.body}>{renderHeadline(intent)}</div>
@@ -802,7 +1382,19 @@ export function StagedIntentPanel({
 
       {error && <div className={styles.error}>{error}</div>}
 
-      {hideActions ? null : (
+      {hideActions ? null : isNoOp ? (
+        <div className={styles.rejectForm}>
+          <button
+            type="button"
+            className={styles.approveButton}
+            disabled={inFlight !== null || disabled}
+            data-testid="staged-intent-acknowledge"
+            onClick={() => void handleAcknowledge()}
+          >
+            {inFlight === 'acknowledge' ? 'Acknowledging…' : 'Acknowledge'}
+          </button>
+        </div>
+      ) : (
         <>
           {showOverride && (
             <div className={styles.overrideBox}>
@@ -815,7 +1407,9 @@ export function StagedIntentPanel({
               <button
                 type="button"
                 className={styles.approveButton}
-                disabled={inFlight !== null || !overrideReason.trim()}
+                disabled={
+                  inFlight !== null || disabled || !overrideReason.trim()
+                }
                 onClick={() => void handleApply({ reason: overrideReason })}
               >
                 {inFlight === 'override' ? 'Applying…' : 'Apply with override'}
@@ -829,19 +1423,21 @@ export function StagedIntentPanel({
               role="radiogroup"
               aria-label="Reject outcome"
             >
-              <button
-                type="button"
-                role="radio"
-                aria-checked={rejectOutcome === 'pushback'}
-                className={
-                  rejectOutcome === 'pushback'
-                    ? styles.outcomeOptionActive
-                    : styles.outcomeOption
-                }
-                onClick={() => setRejectOutcome('pushback')}
-              >
-                Pushback
-              </button>
+              {!isBlockedState && (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={rejectOutcome === 'pushback'}
+                  className={
+                    rejectOutcome === 'pushback'
+                      ? styles.outcomeOptionActive
+                      : styles.outcomeOption
+                  }
+                  onClick={() => setRejectOutcome('pushback')}
+                >
+                  Pushback
+                </button>
+              )}
               <button
                 type="button"
                 role="radio"
@@ -873,7 +1469,7 @@ export function StagedIntentPanel({
               <button
                 type="button"
                 className={styles.approveButton}
-                disabled={inFlight !== null}
+                disabled={inFlight !== null || disabled}
                 onClick={() => void handleApply()}
               >
                 {inFlight === 'apply' ? 'Committing...' : '✓ Commit'}
@@ -883,30 +1479,32 @@ export function StagedIntentPanel({
               <button
                 type="button"
                 className={styles.approveButton}
-                disabled={inFlight !== null}
+                disabled={inFlight !== null || disabled}
                 onClick={() => setShowOverride(true)}
               >
                 Override block…
               </button>
             )}
-            {(isGrouped || skipsApply) && intent.state !== 'approved' && (
-              <button
-                type="button"
-                className={styles.approveButton}
-                disabled={inFlight !== null}
-                onClick={() => void handleApprove()}
-              >
-                {inFlight === 'approve'
-                  ? 'Approving...'
-                  : isCapabilityRequest
-                    ? '✓ Grant'
-                    : 'Approve'}
-              </button>
-            )}
+            {(isGrouped || skipsApply) &&
+              intent.state !== 'approved' &&
+              !isBlockedState && (
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={inFlight !== null || disabled}
+                  onClick={() => void handleApprove()}
+                >
+                  {inFlight === 'approve'
+                    ? 'Approving...'
+                    : isCapabilityRequest
+                      ? '✓ Grant'
+                      : 'Approve'}
+                </button>
+              )}
             <button
               type="button"
               className={styles.denyButton}
-              disabled={inFlight !== null || !rejectReason.trim()}
+              disabled={inFlight !== null || disabled || !rejectReason.trim()}
               onClick={() => void handleReject()}
             >
               {inFlight === 'reject'

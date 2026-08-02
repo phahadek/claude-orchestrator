@@ -32,6 +32,34 @@ vi.mock('../../tasks/TaskBackend', () => ({
   })),
 }));
 
+/**
+ * groomPrecheckTool.ts now passes ctx.projectId through to
+ * checkGroomingPromotionGate for server-derived Files/paths existsInRepo
+ * re-derivation — give 'proj-1' (this suite's PROJECT_ID, hardcoded here to
+ * dodge vi.mock's hoist-above-imports ordering) a resolvable repo root, and
+ * stub the tracked-file set so existing tests that only rely on `isNew` /
+ * a hedge-token / a non-repo-path shape (never on git-validated existence)
+ * are unaffected by the recompute.
+ */
+vi.mock('../../projects/ProjectService', () => ({
+  ProjectService: {
+    getById: (id: string) => {
+      if (id !== 'proj-1') return undefined;
+      return { id, projectDir: 'FAKE_REPO_ROOT', milestones: [] };
+    },
+  },
+}));
+
+vi.mock('../../groom/groomLoad', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../groom/groomLoad')>();
+  return {
+    ...actual,
+    resolveTrackedFileSet: vi.fn(async () => {
+      return new Set<string>(['packages/backend/src/foo.ts']);
+    }),
+  };
+});
+
 import { db } from '../../db/db';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -155,6 +183,7 @@ describe('groom.precheck — parity with the stage-time check', () => {
         name: 'task.setStatus',
         arguments: {
           payload: { ...MULTI_FAILURE_PAYLOAD, status: 'Ready' },
+          groupId: 'group-1',
         },
       })) as { content: Array<{ type: string; text?: string }> },
     );
@@ -177,12 +206,132 @@ describe('groom.precheck — parity with the stage-time check', () => {
     await precheckClient.close();
 
     expect(precheck.allowed).toBe(false);
-    expect(precheck.gateReasons).toEqual(annotation.reasons);
+    // A grouped Ready-flip defers gate/seed contribution enforcement to
+    // commit time (runStageTimeReadyChecks skips it unconditionally for any
+    // grouped task.setStatus->Ready — see stagedIntents.ts), so the real
+    // staged annotation's reasons are a subset of the read-only precheck's
+    // full potential-violation set rather than an exact match now that a
+    // Ready-path task.setStatus must always carry a groupId to stage at all.
+    const gateReasons = precheck.gateReasons as string[];
+    expect(annotation.reasons.every((r) => gateReasons.includes(r))).toBe(true);
 
-    const reasons = precheck.gateReasons as string[];
+    const reasons = gateReasons;
     expect(reasons.some((r) => r.includes('Files / paths'))).toBe(true);
     expect(reasons.some((r) => r.includes('type_check'))).toBe(true);
     expect(reasons.some((r) => r.includes('binding constraint'))).toBe(true);
+  });
+});
+
+describe('groom.precheck — server-derived existsInRepo parity (task 3ae22f91)', () => {
+  it('blocks a fabricated existsInRepo:true claim the same way the stage-time gate does, and promotes a truthful existsInRepo:false for a real tracked file', async () => {
+    const fabricatedPayload = {
+      taskId: 'notion:fabricated-exists',
+      groomingGate: {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        type: '💻 Code',
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/definitely-not-tracked.ts',
+            isNew: false,
+            existsInRepo: true,
+          },
+        ],
+        regions: { packages: [], files: [] },
+      },
+    };
+
+    const precheckClient = await connectedPrecheckClient('groom');
+    const precheck = resultOf(
+      (await precheckClient.client.callTool({
+        name: 'groom.precheck',
+        arguments: fabricatedPayload,
+      })) as { content: Array<{ type: string; text?: string }> },
+    );
+    await precheckClient.close();
+
+    expect(precheck.allowed).toBe(false);
+    expect(
+      (precheck.gateReasons as string[]).some((r) =>
+        r.includes('does not resolve'),
+      ),
+    ).toBe(true);
+
+    const stageClient = await connectedStageClient();
+    const staged = resultOf(
+      (await stageClient.client.callTool({
+        name: 'task.setStatus',
+        arguments: {
+          payload: { ...fabricatedPayload, status: 'Ready' },
+          groupId: 'group-fabricated',
+        },
+      })) as { content: Array<{ type: string; text?: string }> },
+    );
+    await stageClient.close();
+
+    expect(staged.state).toBe('needs_revision');
+    const annotation = staged.annotation as {
+      blocked: true;
+      reasons: string[];
+    };
+    // A grouped Ready-flip defers gate/seed contribution enforcement to
+    // commit time (runStageTimeReadyChecks skips it unconditionally for any
+    // grouped task.setStatus->Ready — see stagedIntents.ts), so the real
+    // staged annotation's reasons are a subset of the read-only precheck's
+    // full potential-violation set rather than an exact match now that a
+    // Ready-path task.setStatus must always carry a groupId to stage at all.
+    expect(
+      annotation.reasons.every((r) =>
+        (precheck.gateReasons as string[]).includes(r),
+      ),
+    ).toBe(true);
+    expect(annotation.reasons.some((r) => r.includes('does not resolve'))).toBe(
+      true,
+    );
+
+    const truthfulPayload = {
+      taskId: 'notion:understated-exists',
+      groomingGate: {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        type: '💻 Code',
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/foo.ts',
+            isNew: false,
+            existsInRepo: false,
+          },
+        ],
+        regions: { packages: [], files: [] },
+      },
+    };
+    recordGateMarker({
+      sourceTaskId: 'notion:understated-exists',
+      project: PROJECT_ID,
+      milestone: 'M1',
+      decision: 'none',
+      reason: 'no runtime-observable behaviour change',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedMarker({
+      sourceTaskId: 'notion:understated-exists',
+      project: PROJECT_ID,
+      milestone: 'M1',
+      decision: 'none',
+      accretedAt: new Date(0).toISOString(),
+    });
+
+    const precheckClient2 = await connectedPrecheckClient('groom');
+    const precheck2 = resultOf(
+      (await precheckClient2.client.callTool({
+        name: 'groom.precheck',
+        arguments: truthfulPayload,
+      })) as { content: Array<{ type: string; text?: string }> },
+    );
+    await precheckClient2.close();
+
+    expect(precheck2.allowed).toBe(true);
+    expect(precheck2.gateReasons).toEqual([]);
   });
 });
 
@@ -314,6 +463,7 @@ describe('groom.precheck — a clean payload then stages without needs_revision'
         name: 'task.setStatus',
         arguments: {
           payload: { taskId, status: 'Ready', groomingGate: cleanGroomingGate },
+          groupId: 'group-1',
         },
       })) as { content: Array<{ type: string; text?: string }> },
     );

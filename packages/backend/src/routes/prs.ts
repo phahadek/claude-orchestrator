@@ -214,8 +214,8 @@ export function createPrsRouter(
       sessionId: pr.session_id ?? null,
       reviewSessionId: pr.review_session_id ?? null,
       repo: pr.repo,
-      reviewResult: pr.review_result
-        ? (JSON.parse(pr.review_result) as PRReviewResult)
+      reviewVerdict: pr.review_result
+        ? (JSON.parse(pr.review_result) as PRReviewResult).verdict
         : null,
       reviewedAt: pr.review_at,
       createdAt: pr.created_at,
@@ -328,6 +328,29 @@ export function createPrsRouter(
       res.status(500).json({ error: (err as Error).message });
     }
   });
+
+  // ── GET /api/prs/:owner/:repoName/:prNumber/review-result ────────────────────
+  // Detail-view read: the list endpoint only carries a lightweight
+  // `reviewVerdict`; this returns the full reviewResult (dimensions, summary,
+  // errorDetail) for the "Review details" expander.
+  router.get(
+    '/prs/:owner/:repoName/:prNumber/review-result',
+    (req: Request, res: Response) => {
+      const repo = `${req.params.owner}/${req.params.repoName}`;
+      const prNumber = parseInt(String(req.params.prNumber), 10);
+      const prRow = getPRByNumber(prNumber, repo);
+      if (!prRow) {
+        res.status(404).json({ error: `PR #${prNumber} not found` });
+        return;
+      }
+      res.json({
+        reviewResult: prRow.review_result
+          ? (JSON.parse(prRow.review_result) as PRReviewResult)
+          : null,
+        reviewedAt: prRow.review_at,
+      });
+    },
+  );
 
   // ── GET /api/prs/:owner/:repoName/:prNumber/mergeability ─────────────────────
   // Fresh mergeability check used by the frontend right before opening a merge.

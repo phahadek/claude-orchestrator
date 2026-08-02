@@ -11,6 +11,7 @@ import type { SessionManager } from '../../src/session/SessionManager';
 import type { ServerMessage } from '../../src/ws/types';
 import { runtimeSettings } from '../../src/config';
 import { db } from '../../src/db/db.js';
+import { parsePauseReason } from '../../src/db/pauseReason';
 
 interface MockSessionManager extends SessionManager {
   send: ReturnType<typeof vi.fn>;
@@ -117,13 +118,13 @@ describe('StuckSessionMonitor', () => {
     expect(monitor.isTracking(SESSION_ID)).toBe(true);
   });
 
-  it('does not track review sessions', () => {
+  it('tracks review sessions too (sessionType guard removed)', () => {
     const sm = makeMockSessionManager();
     const broadcast = vi.fn();
     const monitor = new StuckSessionMonitor(sm, broadcast);
 
     fireMessage(sm, sessionStarted(SESSION_ID, TASK_NAME, 'review'));
-    expect(monitor.isTracking(SESSION_ID)).toBe(false);
+    expect(monitor.isTracking(SESSION_ID)).toBe(true);
   });
 
   it('fires stuck_session_notified at the notify threshold', () => {
@@ -197,7 +198,7 @@ describe('StuckSessionMonitor', () => {
         'SELECT pause_reason FROM pull_requests WHERE pr_number = ? AND repo = ?',
       )
       .get(PR_NUMBER, REPO) as { pause_reason: string | null };
-    expect(row.pause_reason).toBe('stuck_timeout');
+    expect(parsePauseReason(row.pause_reason)?.reason).toBe('stuck_timeout');
   });
 
   it('hard-stops when a tool_use arrives within the hard-stop window', () => {
@@ -466,7 +467,7 @@ describe('StuckSessionMonitor', () => {
     fireMessage(sm, {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: JSON.stringify({
         type: 'rate_limit_event',
         rate_limit_info: { status: 'rate_limited' },
@@ -486,7 +487,7 @@ describe('StuckSessionMonitor', () => {
     fireMessage(sm, {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: JSON.stringify({
         type: 'rate_limit_event',
         rate_limit_info: { status: 'resumed' },
@@ -522,7 +523,7 @@ describe('StuckSessionMonitor', () => {
     fireMessage(sm, {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: JSON.stringify({
         type: 'rate_limit_event',
         rate_limit_info: { status: 'rate_limited' },
@@ -533,7 +534,7 @@ describe('StuckSessionMonitor', () => {
     fireMessage(sm, {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: JSON.stringify({
         type: 'rate_limit_event',
         rate_limit_info: { status: 'resumed' },
@@ -560,13 +561,13 @@ describe('StuckSessionMonitor', () => {
     fireMessage(sm, {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: 'not-json',
     });
     fireMessage(sm, {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: JSON.stringify({ type: 'something_else' }),
     });
 
@@ -625,7 +626,7 @@ describe('StuckSessionMonitor — persistence', () => {
     fireMessage(sm, {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: JSON.stringify({
         type: 'rate_limit_event',
         rate_limit_info: { status: 'rate_limited' },
@@ -650,7 +651,7 @@ describe('StuckSessionMonitor — persistence', () => {
     fireMessage(sm, {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: JSON.stringify({
         type: 'rate_limit_event',
         rate_limit_info: { status: 'rate_limited' },
@@ -662,7 +663,7 @@ describe('StuckSessionMonitor — persistence', () => {
     fireMessage(sm, {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: JSON.stringify({
         type: 'rate_limit_event',
         rate_limit_info: { status: 'resumed' },

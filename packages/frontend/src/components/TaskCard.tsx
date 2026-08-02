@@ -95,6 +95,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'No repo assigned — assign a target repository before this task can launch.',
   autofix_git_infra_failure:
     'Git infrastructure failure (exit 128) during autofix — likely a corrupted .git/config. The orchestrator attempted a repair; manual inspection may be needed.',
+  autofix_tool_infra_failure:
+    'Autofix tool could not execute — a host/environment issue (config load abort, toolchain incompatibility), not a code defect. Fix the host tooling, then rerun.',
   workflow_scope_denied:
     'Push rejected: the auto-dispatch PAT lacks the `workflow` scope and cannot modify .github/workflows/. Re-type this task as 🛠️ Tooling and land it interactively with a workflow-scoped credential.',
   resume_failed:
@@ -105,6 +107,16 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Planning session crashed repeatedly — review the session and redispatch planning when ready.',
   planning_first_turn_empty:
     'Planning session finished its first turn without staging anything — review the transcript and redispatch or close.',
+  planning_terminal_no_decision:
+    'Planning session reached a terminal state without ever staging a decision — review and redispatch planning when ready.',
+  planning_terminal_blocked_members:
+    'Planning session reached a terminal state with staged intents still blocked in verification — the group can no longer be superseded by that session; review and disposition the blocked members manually.',
+  ops_terminal_group_incomplete:
+    'Ops session reached a terminal state with its closing group missing the journal.setState -> "resolved" transition — the investigation journal is stuck and the task will not close; stage the missing transition manually.',
+  usage_limit_deferred:
+    'Plan usage limit exhausted — launch deferred until the window resets. Will resume automatically.',
+  api_overloaded_exhausted:
+    'API overloaded (529) — automatic retries were exhausted. Review and resume manually.',
 };
 
 function verdictLabel(verdict: string): string {
@@ -112,6 +124,12 @@ function verdictLabel(verdict: string): string {
   if (verdict === 'needs_changes') return '🔁 Needs changes';
   if (verdict === 'incomplete') return '❌ Incomplete';
   return verdict;
+}
+
+function planningSessionTypeLabel(sessionType: string): string {
+  if (sessionType === 'groom') return 'Grooming';
+  if (sessionType === 'design') return 'Design';
+  return 'Ops';
 }
 
 export function TaskCard({
@@ -122,7 +140,7 @@ export function TaskCard({
   boardId = null,
   onMoveStaged,
 }: Props) {
-  const { codeSession, pr, review } = task;
+  const { codeSession, planningSession, pr, review } = task;
   const isMultiRepo = getProjectRepos(project).length > 1;
   const needsRepo = isMultiRepo && task.assignedRepo === null;
   const [recoveryInFlight, setRecoveryInFlight] = useState(false);
@@ -192,6 +210,18 @@ export function TaskCard({
       </div>
 
       {task.priority && <div className={styles.priority}>{task.priority}</div>}
+
+      {planningSession && (
+        <div className={styles.sessionRow}>
+          <span
+            className={`${styles.sessionStatus} ${styles.planningSessionBadge} ${styles[`session-${planningSession.status}`] ?? ''}`}
+            title={`Held by ${planningSessionTypeLabel(planningSession.sessionType)} session (${planningSession.status})`}
+          >
+            🧭 {planningSessionTypeLabel(planningSession.sessionType)}:{' '}
+            {planningSession.status}
+          </span>
+        </div>
+      )}
 
       {!isNonCode && (
         <>

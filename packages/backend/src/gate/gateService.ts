@@ -7,6 +7,7 @@ import { getTaskCache, getVerifySessionsForGateItems } from '../db/queries';
 import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
 import { normalizeTaskId } from '../tasks/taskId';
+import { getCachedType, getCachedStatus } from '../tasks/TaskWriteCommands';
 
 /**
  * Recomputes whether a deploy contains a given commit. This is the git-ancestry
@@ -115,6 +116,8 @@ interface GateBlockingItem {
   state: string;
   /** Flagged loudly rather than auto-rewritten — steer it to `discarded` (or its intended disposition) by hand. */
   bespoke?: boolean;
+  /** True when the item's latest event carries a non-resolving disposition (needs-setup/noted) — attempted but inconclusive, distinct from an item that was never dispatched at all. */
+  nonResolving?: boolean;
 }
 
 export interface GateReadiness {
@@ -122,13 +125,24 @@ export interface GateReadiness {
   blocking: GateBlockingItem[];
   /** Subset of `blocking` sitting in a state outside the closed vocabulary — needs human re-disposition, not indefinite blocking. */
   bespokeStates: GateBlockingItem[];
+  /** Subset of `blocking` whose latest disposition is non-resolving (needs-setup/noted) — attempted but inconclusive, not simply untouched. */
+  nonResolvingItems: GateBlockingItem[];
   /** The milestone's full per-state item totals, independent of any table filter; sums to the milestone's item total. */
   counts: Record<string, number>;
 }
 
-/** Headline output: green once every item in the milestone is pass/deferred/discarded. */
-export function getGateReadiness(milestone: string): GateReadiness {
-  const items = gateStore.listByMilestoneAllProjects(milestone);
+/**
+ * Headline output: green once every item in the milestone is
+ * pass/deferred/discarded. Scoped to one project — milestone display names
+ * are not unique across projects (e.g. two projects can each have an "M13"),
+ * so an unscoped lookup would merge unrelated projects' items into one
+ * rollup.
+ */
+export function getGateReadiness(
+  project: string,
+  milestone: string,
+): GateReadiness {
+  const items = gateStore.listByMilestone(project, milestone);
   const blocking = items
     .filter((item) => !RESOLVED_STATES.has(item.state))
     .map((item) => ({
@@ -139,6 +153,11 @@ export function getGateReadiness(milestone: string): GateReadiness {
       classification: item.classification,
       state: item.state,
       bespoke: isBespokeGateState(item.state),
+      nonResolving:
+        item.latestDisposition !== undefined &&
+        NON_TERMINAL_DISPOSITIONS.has(
+          item.latestDisposition as GateDisposition,
+        ),
     }));
   const counts: Record<string, number> = {};
   for (const item of items) {
@@ -148,6 +167,7 @@ export function getGateReadiness(milestone: string): GateReadiness {
     status: blocking.length === 0 ? 'green' : 'blocked',
     blocking,
     bespokeStates: blocking.filter((item) => item.bespoke),
+    nonResolvingItems: blocking.filter((item) => item.nonResolving),
     counts,
   };
 }
@@ -165,23 +185,19 @@ export interface ReconcileOptions {
 
 /**
  * The min_deployed_commit value in effect when the item's most recent `fail`
- * was recorded — stashed in that event's evidence by the reconciler
- * (processItem) at fail time. Distinguishes "already covered before it
- * failed" from "a follow-up source has since merged and pushed
- * min_deployed_commit forward" — the auto-reopen trigger below must only
- * fire on the latter.
+ * was recorded — stamped server-side onto that event by gateStore.appendEvent
+ * at write time (never trusted from client-supplied evidence, which the
+ * /gate skill documents as a free-text string). Distinguishes "already
+ * covered before it failed" from "a follow-up source has since merged and
+ * pushed min_deployed_commit forward" — the auto-reopen trigger below must
+ * only fire on the latter.
  */
 function minDeployedCommitAtLastFail(item: GateItem): string | null {
   const lastFail = [...item.events]
     .reverse()
     .find((e) => e.disposition === 'fail');
   if (!lastFail) return null;
-  const evidence = lastFail.evidence;
-  if (evidence && typeof evidence === 'object' && !Array.isArray(evidence)) {
-    const v = (evidence as Record<string, unknown>).minDeployedCommitAtFail;
-    if (typeof v === 'string') return v;
-  }
-  return null;
+  return lastFail.minDeployedCommitAtFail ?? null;
 }
 
 /**
@@ -199,6 +215,28 @@ function minDeployedCommitAtLastFail(item: GateItem): string | null {
  * distinct from the operator-gated reopenGateItem: no operator involved,
  * gated purely on a fix actually landing.
  */
+/**
+ * Whether a single gate-item source is covered — i.e. its change is live.
+ * A 💻 Code source (or one whose Type can't be resolved from cache, which
+ * falls back to the strict test deliberately) requires a merged commit that
+ * has actually deployed. Any other Type — 📐 Design, 📋 Planning, 📝 Docs,
+ * 🎨 Assets, 🔧 Operational — produces no branch/PR, so "live" instead means
+ * the source task itself has reached ✅ Done.
+ */
+function isSourceCovered(
+  source: GateItem['sources'][number],
+  deploySha: string,
+  ancestry: DeployAncestrySource,
+): boolean {
+  const type = getCachedType(source.sourceTaskId);
+  if (type !== null && type !== '💻 Code') {
+    return getCachedStatus(source.sourceTaskId) === 'Done';
+  }
+  return (
+    !!source.mergeCommit && ancestry.isAncestor(source.mergeCommit, deploySha)
+  );
+}
+
 export function reconcileGateRunnability(
   deploySha: string,
   options: ReconcileOptions = {},
@@ -213,16 +251,13 @@ export function reconcileGateRunnability(
     : gateStore.listAll();
 
   for (const item of items) {
-    // Covered only once every source has merged AND its merge commit has
-    // deployed — a null merge_commit (source not merged yet) or an
-    // undeployed merge commit both keep the item open. An item with no
-    // sources at all has no code dependency, so it's trivially covered.
+    // Covered only once every source is live — see isSourceCovered for the
+    // per-source, Type-dependent test. An item with no sources at all has no
+    // dependency, so it's trivially covered.
     const covered =
       item.sources.length === 0 ||
-      item.sources.every(
-        (source) =>
-          source.mergeCommit &&
-          ancestry.isAncestor(source.mergeCommit, deploySha),
+      item.sources.every((source) =>
+        isSourceCovered(source, deploySha, ancestry),
       );
 
     if (item.state === 'pass') {
@@ -231,6 +266,7 @@ export function reconcileGateRunnability(
     }
 
     let state = item.state;
+    let currentDisposition = item.currentDisposition;
 
     if (state === 'fail') {
       const failedAtCommit = minDeployedCommitAtLastFail(item);
@@ -245,17 +281,18 @@ export function reconcileGateRunnability(
         gateStore.advanceState(item.id, 'open', 'reopened', now);
         reopened.push(item.id);
         state = 'open';
+        currentDisposition = 'reopened';
       }
     }
 
     if (state === 'open' && covered) {
-      gateStore.advanceState(item.id, 'runnable', item.currentDisposition, now);
+      gateStore.advanceState(item.id, 'runnable', currentDisposition, now);
       markedRunnable.push(item.id);
       continue;
     }
 
     if (state === 'runnable' && !covered) {
-      gateStore.advanceState(item.id, 'open', item.currentDisposition, now);
+      gateStore.advanceState(item.id, 'open', currentDisposition, now);
     }
   }
 
@@ -284,20 +321,29 @@ export interface NextRunnableGateItemsOptions {
  * True once an item's latest event carries the `needs-setup` abstain — the
  * dispatcher skips it until a later event (reclassify/reopen/a new fail)
  * supersedes it as the item's latest, per GateVerificationResult's
- * needs-setup contract.
+ * needs-setup contract. Reads the denormalized latest_disposition column
+ * rather than replaying the event log — appendGateItemEvent keeps it in
+ * sync with every event's disposition, terminal or not.
  */
 function isAwaitingSetup(item: GateItem): boolean {
-  return item.events.at(-1)?.disposition === 'needs-setup';
+  return item.latestDisposition === 'needs-setup';
 }
 
-/** Pulls one tier's worth of runnable items at a time — never the full runnable set. */
+/**
+ * Pulls one tier's worth of runnable items at a time — never the full
+ * runnable set. Scoped to one project (see getGateReadiness) — an unscoped
+ * pull could hand one project's /gate session another project's items to
+ * disposition, writing pass/fail/deferred events against the wrong
+ * project's verification record.
+ */
 export function nextRunnableGateItems(
+  project: string,
   milestone: string,
   options: NextRunnableGateItemsOptions = {},
 ): GateItem[] {
   const limit = options.limit ?? DEFAULT_BATCH_LIMIT;
   const runnable = gateStore
-    .listByMilestoneAllProjects(milestone)
+    .listByMilestone(project, milestone)
     .filter((item) => item.state === 'runnable')
     .filter((item) => !isAwaitingSetup(item));
 
@@ -338,6 +384,8 @@ export interface ListGateItemsOptions {
   state?: string;
   classification?: GateItemClassification;
   runnable?: boolean;
+  /** True: only items whose latest event is the needs-setup abstain — "attempted, inconclusive" rather than never dispatched. */
+  awaitingSetup?: boolean;
   page?: number;
   limit?: number;
   /** 'not-done-first' surfaces unresolved (non pass/deferred) items ahead of resolved ones — the run-worklist default. */
@@ -372,6 +420,7 @@ export function listGateItems(
       state: options.state,
       classification: options.classification,
       runnable: options.runnable,
+      awaitingSetup: options.awaitingSetup,
     },
     limit,
     offset,
@@ -448,6 +497,8 @@ export interface AppendGateItemEventInput {
   filedFollowon?: string;
   deploySha?: string;
   operator?: string;
+  /** true = a fully-unattended reconciler auto-launch verified this event; false = a manual dispatch; omit for a non-verifier-originated event. */
+  unattended?: boolean;
 }
 
 /** Prod-Mutating passes stop short of resolving — they wait for approveGateItem. */
@@ -485,9 +536,13 @@ function isVerifierBlockedFromPassing(
 /**
  * Appends an event and, when disposition is present and terminal, advances
  * the item's denormalized (state, current_disposition). A dispositionless
- * event, or one carrying the non-terminal `noted` disposition, is a pure log
- * entry — evidence is recorded but state is left unchanged. `discarded`
- * requires an evidence/reason, since it permanently voids the item.
+ * event, or one carrying a non-terminal disposition (`noted`/`needs-setup`),
+ * is a pure log entry as far as state goes — state is left unchanged — but
+ * every disposition-bearing event, terminal or not, is still mirrored onto
+ * the item's latest_disposition column (see gateStore.appendEvent), so a
+ * non-resolving abstain is queryable rather than indistinguishable from an
+ * item that was never attempted. `discarded` requires an evidence/reason,
+ * since it permanently voids the item.
  */
 export function appendGateItemEvent(
   gateItemId: string,
@@ -647,16 +702,23 @@ export function reclassifyGateItem(
 
 /**
  * Reclassification targets a gate-verify session is permitted to propose
- * (see gateItemVerifier's `reclassify` report field) — both route the item
- * *out* of auto-run rather than into it, so gateService auto-applies them
- * with provenance instead of staging for operator approval (locked at
- * grooming: low-risk, reversible, "more oversight" moves are auto-applied;
- * a move that would add auto-run, e.g. -> Read-Only, would need staging,
- * but a verifier is never allowed to propose one).
+ * (see gateItemVerifier's `reclassify` report field). Human-Observation and
+ * needs-triage route the item *out* of auto-run, so they're applied here
+ * with provenance regardless of how the verdict reached this function.
+ * Opportunistic routes the item *into* auto-run, but that's no longer a
+ * bare self-application: a gate.verify report is staged as a normal intent
+ * and an operator disposes it before proposeGateItemReclassification ever
+ * runs for it (see GateVerificationResult.awaitingDisposition), so an
+ * Opportunistic proposal is already operator-approved by the time it lands
+ * here — the "would need staging" bar this set otherwise enforces.
+ * MAX_VERIFIER_RECLASSIFY_ATTEMPTS independently caps repeat proposals per
+ * item. Read-Only and Prod-Mutating remain excluded — a verifier is never
+ * allowed to propose either.
  */
 const VERIFIER_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Human-Observation',
   'needs-triage',
+  'Opportunistic',
 ]);
 
 /** Ping-pong guard: caps how many times a verifier may reclassify the same item before a human has to step in via /gate. */

@@ -56,6 +56,7 @@ export interface SessionState {
   project_id?: string | null;
   note?: string | null;
   tags?: string[];
+  grantedCapabilities?: string[];
   /** True when the latest event indicates an API rate-limit interruption */
   isRateLimited?: boolean;
   totalInputTokens?: number;
@@ -83,6 +84,12 @@ export interface SessionState {
    * notionTaskUrl/etc. instead of being skipped as a stale hydration replay.
    */
   uninitialized?: boolean;
+  /**
+   * True while a disposition enqueued to this session's inbox is being
+   * delivered via sendOrResume — which, for a parked session, means a full
+   * CLI --resume spawn. Transient and self-clearing; never a fault signal.
+   */
+  feedbackPending?: boolean;
 }
 
 export interface IncompleteReview {
@@ -250,6 +257,7 @@ export function useSessionStore() {
             project_id: msg.project_id,
             note: msg.note,
             tags: msg.tags,
+            grantedCapabilities: msg.grantedCapabilities,
             totalInputTokens: msg.totalInputTokens ?? 0,
             totalOutputTokens: msg.totalOutputTokens ?? 0,
             compaction_count: msg.compaction_count ?? 0,
@@ -383,6 +391,12 @@ export function useSessionStore() {
               ...(Object.prototype.hasOwnProperty.call(msg, 'tags') && {
                 tags: msg.tags,
               }),
+              ...(Object.prototype.hasOwnProperty.call(
+                msg,
+                'grantedCapabilities',
+              ) && {
+                grantedCapabilities: msg.grantedCapabilities,
+              }),
               ...(msg.totalInputTokens != null && {
                 totalInputTokens: msg.totalInputTokens,
               }),
@@ -403,6 +417,13 @@ export function useSessionStore() {
         case 'pr_created': {
           const s = next.get(msg.sessionId);
           if (s) next.set(msg.sessionId, { ...s, prUrl: msg.prUrl });
+          break;
+        }
+        case 'session_feedback_pending': {
+          const s = next.get(msg.sessionId);
+          if (s) {
+            next.set(msg.sessionId, { ...s, feedbackPending: msg.pending });
+          }
           break;
         }
         case 'session_archived': {

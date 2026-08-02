@@ -97,50 +97,76 @@ describe('getTotalPausedMs', () => {
     expect(getTotalPausedMs('sess-6')).toBe(0);
   });
 
-  it('sums completed pause durations for a rate_limit pause/resume cycle', async () => {
-    insertSession('sess-7');
-    const before = Date.now();
-    insertPauseInterval('sess-7', 'rate_limit');
-    await new Promise((r) => setTimeout(r, 20));
-    closePauseInterval('sess-7');
-    const total = getTotalPausedMs('sess-7');
-    expect(total).toBeGreaterThanOrEqual(20);
-    expect(total).toBeLessThan(Date.now() - before + 100);
+  it('sums completed pause durations for a rate_limit pause/resume cycle', () => {
+    // Real setTimeout delays race the wall clock (observed to read back
+    // short of the requested delay); fake timers make elapsed time exact.
+    vi.useFakeTimers();
+    try {
+      insertSession('sess-7');
+      const before = Date.now();
+      insertPauseInterval('sess-7', 'rate_limit');
+      vi.advanceTimersByTime(20);
+      closePauseInterval('sess-7');
+      const total = getTotalPausedMs('sess-7');
+      expect(total).toBeGreaterThanOrEqual(20);
+      expect(total).toBeLessThan(Date.now() - before + 100);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('sums multiple completed pause/resume cycles', async () => {
-    insertSession('sess-8');
-    // First cycle
-    insertPauseInterval('sess-8', 'rate_limit');
-    await new Promise((r) => setTimeout(r, 20));
-    closePauseInterval('sess-8');
-    // Second cycle
-    insertPauseInterval('sess-8', 'stuck_timeout');
-    await new Promise((r) => setTimeout(r, 20));
-    closePauseInterval('sess-8');
-    const total = getTotalPausedMs('sess-8');
-    expect(total).toBeGreaterThanOrEqual(40);
+  it('sums multiple completed pause/resume cycles', () => {
+    vi.useFakeTimers();
+    try {
+      insertSession('sess-8');
+      // First cycle
+      insertPauseInterval('sess-8', 'rate_limit');
+      vi.advanceTimersByTime(20);
+      closePauseInterval('sess-8');
+      // Second cycle
+      insertPauseInterval('sess-8', 'stuck_timeout');
+      vi.advanceTimersByTime(20);
+      closePauseInterval('sess-8');
+      const total = getTotalPausedMs('sess-8');
+      expect(total).toBeGreaterThanOrEqual(40);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('uses endedAt as implicit resume for open intervals (session ending while paused)', async () => {
-    const startedAt = Date.now();
-    insertSession('sess-9');
-    insertPauseInterval('sess-9', 'api_overloaded');
-    await new Promise((r) => setTimeout(r, 30));
-    const endedAt = Date.now();
-    // Session ended while paused — pass endedAt as implicit resume
-    const total = getTotalPausedMs('sess-9', endedAt);
-    expect(total).toBeGreaterThanOrEqual(30);
-    expect(total).toBeLessThanOrEqual(endedAt - startedAt + 100);
+  it('uses endedAt as implicit resume for open intervals (session ending while paused)', () => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = Date.now();
+      insertSession('sess-9');
+      insertPauseInterval('sess-9', 'api_overloaded');
+      vi.advanceTimersByTime(30);
+      const endedAt = Date.now();
+      // Session ended while paused — pass endedAt as implicit resume
+      const total = getTotalPausedMs('sess-9', endedAt);
+      expect(total).toBeGreaterThanOrEqual(30);
+      expect(total).toBeLessThanOrEqual(endedAt - startedAt + 100);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('ignores open intervals when no endedAt is passed (uses now)', async () => {
-    insertSession('sess-10');
-    insertPauseInterval('sess-10', 'rate_limit');
-    await new Promise((r) => setTimeout(r, 10));
-    const total = getTotalPausedMs('sess-10');
-    // With implicit now, open intervals contribute their current elapsed time
-    expect(total).toBeGreaterThanOrEqual(10);
+  it('ignores open intervals when no endedAt is passed (uses now)', () => {
+    // insertPauseInterval/getTotalPausedMs both read Date.now() directly, so
+    // fake timers make the elapsed interval exact instead of racing the
+    // real wall clock (which was observed to occasionally read back 1ms
+    // short of the real setTimeout delay).
+    vi.useFakeTimers();
+    try {
+      insertSession('sess-10');
+      insertPauseInterval('sess-10', 'rate_limit');
+      vi.advanceTimersByTime(10);
+      const total = getTotalPausedMs('sess-10');
+      // With implicit now, open intervals contribute their current elapsed time
+      expect(total).toBeGreaterThanOrEqual(10);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -168,21 +194,26 @@ describe('legacy bare-string fixture regression', () => {
 });
 
 describe('rate_limit pause/resume full cycle', () => {
-  it('active_wall_clock_ms subtracts paused time from wall_clock', async () => {
-    const startedAt = Date.now();
-    insertSession('sess-11', null);
-    insertPauseInterval('sess-11', 'rate_limit');
-    await new Promise((r) => setTimeout(r, 30));
-    closePauseInterval('sess-11');
-    await new Promise((r) => setTimeout(r, 10));
-    const endedAt = Date.now();
+  it('active_wall_clock_ms subtracts paused time from wall_clock', () => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = Date.now();
+      insertSession('sess-11', null);
+      insertPauseInterval('sess-11', 'rate_limit');
+      vi.advanceTimersByTime(30);
+      closePauseInterval('sess-11');
+      vi.advanceTimersByTime(10);
+      const endedAt = Date.now();
 
-    const wall_clock_ms = endedAt - startedAt;
-    const total_paused_ms = getTotalPausedMs('sess-11', endedAt);
-    const active_wall_clock_ms = Math.max(0, wall_clock_ms - total_paused_ms);
+      const wall_clock_ms = endedAt - startedAt;
+      const total_paused_ms = getTotalPausedMs('sess-11', endedAt);
+      const active_wall_clock_ms = Math.max(0, wall_clock_ms - total_paused_ms);
 
-    expect(total_paused_ms).toBeGreaterThanOrEqual(30);
-    expect(active_wall_clock_ms).toBeLessThan(wall_clock_ms);
-    expect(active_wall_clock_ms).toBeGreaterThan(0);
+      expect(total_paused_ms).toBeGreaterThanOrEqual(30);
+      expect(active_wall_clock_ms).toBeLessThan(wall_clock_ms);
+      expect(active_wall_clock_ms).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

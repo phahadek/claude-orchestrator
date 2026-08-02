@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { logger } from '../logger';
 import { getAllProjects, runtimeSettings } from '../config';
 import type { ProjectConfig } from '../config';
@@ -5,6 +6,7 @@ import type { ServerMessage } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { JiraApiError } from '../tasks/JiraClient';
+import { MilestoneNotFoundError } from '../tasks/LocalTaskBackend';
 import { ProjectService } from '../projects/ProjectService';
 import { runWithConcurrency } from '../utils/concurrency';
 import type { Scheduler } from './Scheduler';
@@ -18,6 +20,18 @@ const CACHEABLE_TASK_SOURCES = new Set<string>([
   'jira',
   'yaml',
 ]);
+/**
+ * Consecutive milestone-not-found failures required before a milestone is
+ * classified as unresolvable and its warning is stopped. Requiring repeats
+ * (rather than acting on the first miss) keeps a file being rewritten as the
+ * poll fires from permanently condemning an otherwise-resolvable milestone.
+ */
+const UNRESOLVABLE_AFTER_CONSECUTIVE_FAILURES = 3;
+
+interface CondemnedMilestone {
+  filePath: string;
+  fileMtimeMs: number | null;
+}
 
 /**
  * Background service that refreshes the per-project board cache on a fixed interval
@@ -26,7 +40,18 @@ const CACHEABLE_TASK_SOURCES = new Set<string>([
  */
 export class TaskCacheRefresher {
   private readonly jiraNextAllowed = new Map<string, number>();
+  private readonly milestoneFailureCounts = new Map<string, number>();
+  private readonly condemnedMilestones = new Map<string, CondemnedMilestone>();
   private _refreshingOnce = false;
+
+  /** Best-effort mtime read; returns null if the file can't be stat'd. */
+  private statMtimeMs(filePath: string): number | null {
+    try {
+      return fs.statSync(filePath).mtimeMs;
+    } catch {
+      return null;
+    }
+  }
 
   constructor(
     private readonly broadcast?: (msg: ServerMessage) => void,
@@ -115,6 +140,24 @@ export class TaskCacheRefresher {
       const fetchId = isLocalSource
         ? (milestone.sourceId as string)
         : milestone.id;
+      const condemnedKey = `${project.id}::${fetchId}`;
+
+      const condemned = this.condemnedMilestones.get(condemnedKey);
+      if (condemned) {
+        const currentMtimeMs = this.statMtimeMs(condemned.filePath);
+        const fileChanged =
+          currentMtimeMs !== null && currentMtimeMs !== condemned.fileMtimeMs;
+        if (!fileChanged) {
+          // Still unresolvable and the source file hasn't changed since we
+          // gave up on it — skip silently rather than re-warning every cycle.
+          continue;
+        }
+        // The project's task file changed since condemnation — the
+        // registration may resolve now, so give it another chance.
+        this.condemnedMilestones.delete(condemnedKey);
+        this.milestoneFailureCounts.delete(condemnedKey);
+      }
+
       try {
         const tasks = skipCache
           ? await backend.fetchReadyTasks(fetchId, true)
@@ -130,6 +173,7 @@ export class TaskCacheRefresher {
           taskCount: tasks.length,
           refreshedAt: Date.now(),
         });
+        this.milestoneFailureCounts.delete(condemnedKey);
       } catch (err) {
         if (err instanceof JiraApiError && err.statusCode === 429) {
           const backoffMs = Math.max(
@@ -141,6 +185,26 @@ export class TaskCacheRefresher {
             `[TaskCacheRefresher] Jira 429 project=${project.id} milestone=${fetchId}, backing off ${backoffMs}ms`,
           );
           return;
+        }
+        if (err instanceof MilestoneNotFoundError) {
+          const failureCount =
+            (this.milestoneFailureCounts.get(condemnedKey) ?? 0) + 1;
+          this.milestoneFailureCounts.set(condemnedKey, failureCount);
+          if (failureCount >= UNRESOLVABLE_AFTER_CONSECUTIVE_FAILURES) {
+            logger.error(
+              `[TaskCacheRefresher] milestone registration unresolvable — project=${project.id} (${project.name}) milestone=${fetchId} is missing from ${err.filePath}; giving up until the file changes`,
+            );
+            this.condemnedMilestones.set(condemnedKey, {
+              filePath: err.filePath,
+              fileMtimeMs: this.statMtimeMs(err.filePath),
+            });
+            this.milestoneFailureCounts.delete(condemnedKey);
+          } else {
+            logger.warn(
+              `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${fetchId}: ${String(err)} (attempt ${failureCount}/${UNRESOLVABLE_AFTER_CONSECUTIVE_FAILURES})`,
+            );
+          }
+          continue;
         }
         logger.warn(
           `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${fetchId}: ${String(err)}`,

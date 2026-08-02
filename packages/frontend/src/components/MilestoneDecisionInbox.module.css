@@ -1,0 +1,70 @@
+.inbox {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+.heading {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.cardTitleGroup {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.cardTitle {
+  color: var(--text-primary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardTitleDetail {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  margin-left: 4px;
+}
+
+/* Provenance: which session/flow originated this card — an annotation for
+   correlation/filtering, never the axis the flat ranked list is ordered by. */
+.provenanceBadge {
+  background: rgba(137, 180, 250, 0.12);
+  border: 1px solid rgba(137, 180, 250, 0.35);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  margin-left: 6px;
+}
+
+/* The middle-stack -> right drill-down selection highlight. */
+.selectedCard {
+  outline: 2px solid #89b4fa;
+  outline-offset: -1px;
+}
+
+/* Routes to the session that staged this card — the same jump GateReadinessPanel uses. */
+.sessionJumpButton {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  margin-left: 6px;
+  cursor: pointer;
+}
+
+.sessionJumpButton:hover {
+  border-color: #89b4fa;
+  color: var(--text-primary);
+}

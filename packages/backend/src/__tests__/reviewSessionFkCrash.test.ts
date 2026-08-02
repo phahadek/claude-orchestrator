@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
 
@@ -39,7 +40,12 @@ let mockProc: ReturnType<typeof createMockProc>;
 vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
   execSync: vi.fn(() => 'dev'),
-  execFile: vi.fn(),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
   exec: vi
     .fn()
     .mockImplementation(
@@ -65,11 +71,13 @@ vi.mock('fs', async () => {
       readFileSync: vi.fn(() => ''),
       writeFileSync: vi.fn(),
       statSync: vi.fn(() => ({ isFile: () => true })),
+      mkdirSync: vi.fn(),
     },
     existsSync: vi.fn(() => true),
     readFileSync: vi.fn(() => ''),
     writeFileSync: vi.fn(),
     statSync: vi.fn(() => ({ isFile: () => true })),
+    mkdirSync: vi.fn(),
   };
 });
 
@@ -87,15 +95,17 @@ const projectFixture = {
 vi.mock('../config', () => ({
   AUTO_REVIEW_ENABLED: false,
   ALLOWED_TOOLS: [],
+  BASH_MAX_OUTPUT_LENGTH: 30000,
+  BASH_DEFAULT_TIMEOUT_MS: 300000,
   config: {
     claudePath: '/fake/claude',
-    maxConcurrentCodeSessions: 20,
     projectDir: '/fake/project',
   },
   getProjectById: vi.fn((id: string) =>
     id === 'test-project' ? projectFixture : undefined,
   ),
   getAllProjects: vi.fn(() => [projectFixture]),
+  getSessionAllowedTools: vi.fn(() => []),
   normalizePath: (p: string) => p,
   runtimeSettings: {
     session_mode: 'cli',
@@ -108,11 +118,18 @@ vi.mock('../config', () => ({
 
 vi.mock('../session/orchestrator-config', () => ({
   loadOrchestratorConfig: vi.fn(() => ({
-    allowedTools: [],
+    allowed_tools: [],
     prGate: { typeCheck: '', build: '' },
-    bootstrapScript: '',
-    bashRules: [],
+    bootstrap_script: '',
+    bash_rules: [],
+    required_env: [],
+    required_files: [],
+    review_rules: [],
+    session_rules: [],
+    verify: [],
+    mcp_servers: [],
   })),
+  getSessionAllowedTools: vi.fn(() => []),
 }));
 
 vi.mock('../session/orchestrator-claudemd', () => ({
@@ -137,28 +154,30 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
   deriveDisplayStatusFromDb: vi.fn(() => 'Running'),
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  getSessionsByStatus: vi.fn(() => []),
-  getSession: vi.fn(() => undefined),
-  getEventsBySession: vi.fn(() => []),
-  getPRByNotionTaskId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  updateSessionStatus: vi.fn(),
-  insertSession: vi.fn(),
-  insertEvent: vi.fn(),
-  upsertSessionEvent: vi.fn(() => 1),
-  upsertPullRequest: vi.fn(),
-  insertPermissionDenial: vi.fn(),
-  incrementTokens: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  insertSessionAudit: vi.fn(),
-  setSessionModel: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-  hasActiveSessionForTask: vi.fn(() => false),
-  getSetting: vi.fn().mockReturnValue(null),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    getSessionsByStatus: vi.fn(() => []),
+    getSession: vi.fn(() => undefined),
+    getEventsBySession: vi.fn(() => []),
+    getPRByNotionTaskId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    updateSessionStatus: vi.fn(),
+    insertSession: vi.fn(),
+    insertEvent: vi.fn(),
+    upsertSessionEvent: vi.fn(() => 1),
+    upsertPullRequest: vi.fn(),
+    insertPermissionDenial: vi.fn(),
+    incrementTokens: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    insertSessionAudit: vi.fn(),
+    setSessionModel: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    setHeadSha: vi.fn(),
+    hasActiveSessionForTask: vi.fn(() => false),
+    getSetting: vi.fn().mockReturnValue(null),
+  }),
+);
 
 vi.mock('../audit/AuditLog', () => ({
   recordEvent: vi.fn(),
@@ -369,7 +388,7 @@ describe('upsertSessionEvent — defensive guard (source-level)', () => {
     );
     const upsertIdx = source.indexOf('export function upsertSessionEvent');
     const block = source.slice(upsertIdx, upsertIdx + 900);
-    expect(block).toMatch(/console\.error/);
+    expect(block).toMatch(/logger\.error/);
     expect(block).toMatch(/no sessions row/);
     expect(block).toMatch(/return -1/);
   });

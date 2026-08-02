@@ -35,10 +35,15 @@ export interface SeedReadiness {
 /**
  * Headline output: green once every seed_item in the milestone is confirmed.
  * The orchestrator's milestone-completion predicate is a thin AND of this
- * and getGateReadiness(m) — surfaced here for display, not composed here.
+ * and getGateReadiness(p, m) — surfaced here for display, not composed here.
+ * Scoped to one project — milestone display names are not unique across
+ * projects, so an unscoped lookup would merge unrelated projects' items.
  */
-export function getSeedReadiness(milestone: string): SeedReadiness {
-  const items = seedStore.listByMilestoneAllProjects(milestone);
+export function getSeedReadiness(
+  project: string,
+  milestone: string,
+): SeedReadiness {
+  const items = seedStore.listByMilestone(project, milestone);
   const blocking = items
     .filter((item) => item.state !== RESOLVED_STATE)
     .map((item) => ({
@@ -73,8 +78,11 @@ export interface NextApplyableSeedItemsOptions {
  * Surfaces one bounded batch at a time — never the full applyable set,
  * since the orchestrator cannot write another project's config and only
  * hands these to an operator (or, later, an apply session) one at a time.
+ * Scoped to one project (see getSeedReadiness) for the same reason as the
+ * gate's nextRunnableGateItems.
  */
 export function nextApplyableSeedItems(
+  project: string,
   milestone: string,
   deploySha: string,
   options: NextApplyableSeedItemsOptions = {},
@@ -88,7 +96,7 @@ export function nextApplyableSeedItems(
   );
 
   const applyable = seedStore
-    .listByMilestoneAllProjects(milestone)
+    .listByMilestone(project, milestone)
     .filter(
       (item) =>
         item.state !== RESOLVED_STATE &&

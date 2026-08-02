@@ -10,7 +10,7 @@ export type { PauseReason };
 
 // ─── sessions ──────────────────────────────────────────────────────────────
 
-type SessionStatus =
+export type SessionStatus =
   | 'starting'
   | 'running'
   | 'needs_permission'
@@ -50,6 +50,7 @@ export interface Session {
   pending_done_ended_at: number | null; // deferred done-transition, applied once the in-flight turn completes
   pending_done_pr_url: string | null;
   pending_done_call_site: string | null;
+  terminal_completion_reason: string | null; // reason string markTerminal passed to markSessionDone, persisted for lookup after the session has ended
 }
 
 export type NewSession = Omit<
@@ -77,6 +78,7 @@ export type NewSession = Omit<
   | 'pending_done_ended_at'
   | 'pending_done_pr_url'
   | 'pending_done_call_site'
+  | 'terminal_completion_reason'
 > & {
   ended_at?: number | null;
   pr_url?: string | null;
@@ -111,37 +113,6 @@ export interface SessionEvent {
 }
 
 export type NewSessionEvent = Omit<SessionEvent, 'id'>;
-
-// ─── permission_events ─────────────────────────────────────────────────────
-
-type PermissionDecision = 'auto_allow' | 'auto_deny' | 'approved' | 'denied';
-
-export interface PermissionEvent {
-  id: number;
-  session_id: string;
-  tool_name: string;
-  proposed_action: string | null;
-  decision: PermissionDecision;
-  rule_matched: string | null;
-  decided_at: number;
-}
-
-export type NewPermissionEvent = Omit<PermissionEvent, 'id'>;
-
-// ─── permission_rules ──────────────────────────────────────────────────────
-
-type MatchType = 'glob' | 'regex';
-type RuleDecision = 'allow' | 'deny';
-
-export interface PermissionRule {
-  id: number;
-  order_index: number;
-  pattern: string;
-  match_type: MatchType;
-  decision: RuleDecision;
-  label: string | null;
-  enabled: number; // 0 | 1 (SQLite boolean)
-}
 
 // ─── permission_denials ─────────────────────────────────────────────────────
 
@@ -230,18 +201,30 @@ export interface MilestoneRow {
   source_id: string | null;
   canonical_short_id: string | null;
   display_order: number;
+  /** Set once /milestone-wrap closes out this milestone. Null = active or in-planning. */
+  wrapped_at: number | null;
   created_at: number;
   updated_at: number;
 }
 
 export type NewMilestoneRow = Omit<
   MilestoneRow,
-  'created_at' | 'updated_at' | 'display_order'
+  'created_at' | 'updated_at' | 'display_order' | 'wrapped_at'
 > & {
   display_order?: number;
+  wrapped_at?: number | null;
   created_at?: number;
   updated_at?: number;
 };
+
+// ─── flow_arm ──────────────────────────────────────────────────────────────
+
+export interface FlowArmRow {
+  milestone_id: string;
+  flow: string;
+  armed: number;
+  updated_at: number;
+}
 
 // ─── local_branches ────────────────────────────────────────────────────────
 
@@ -359,6 +342,12 @@ export interface PullRequestRow {
   /** Count of verified-flaky same-SHA gate re-runs attempted for the current
    *  ci_failing pause; resets to 0 when the pause clears or head_sha advances. */
   flake_recovery_attempts: number;
+  /** 0 | 1 — the docs execution flow's never-auto-merged output gate: set at
+   *  PR-open for repo-file docs PRs. Excluded from getApprovedOpenPRs and
+   *  independently refused at AutoMerger's merge-attempt choke point; never
+   *  classified stalled/orphaned by the sweepers. Waits indefinitely for a
+   *  human to merge. */
+  human_merge_only: number;
 }
 
 // ─── task_repo_assignments ──────────────────────────────────────────────────
@@ -399,6 +388,30 @@ export interface OpsJournalRow {
   updated_at: string;
 }
 
+// ─── convergence_snapshot ───────────────────────────────────────────────────
+
+/** A point-in-time sample of a milestone's live convergence, written by ConvergenceSnapshotJob only when it changes. */
+export interface ConvergenceSnapshotRow {
+  id: string;
+  project: string;
+  milestone: string;
+  /** ISO-8601 UTC, consistent with scheduler_audit. */
+  ts: string;
+  tasks_open: number;
+  tasks_closed: number;
+  gate_open: number;
+  gate_closed: number;
+  seed_open: number;
+  seed_closed: number;
+  ops_open: number;
+  ops_closed: number;
+  total_scope: number;
+  distance_to_green: number;
+  status: string;
+}
+
+export type NewConvergenceSnapshotRow = Omit<ConvergenceSnapshotRow, 'id'>;
+
 // ─── gate_item ────────────────────────────────────────────────────────────
 
 export type GateItemClassification =
@@ -417,6 +430,8 @@ export interface GateItemRow {
   min_deployed_commit: string | null;
   state: string;
   current_disposition: string | null;
+  /** The disposition carried by the item's most recent event, regardless of whether it advanced state — distinct from current_disposition, which only moves on a terminal (state-advancing) disposition. */
+  latest_disposition: string | null;
   updated_at: string;
 }
 
@@ -439,6 +454,10 @@ export interface GateItemEventRow {
   filed_followon: string | null;
   deploy_sha: string | null;
   operator: string | null;
+  /** 1 = a fully-unattended reconciler auto-launch verified this event; 0 = a manual dispatch; NULL = not verifier-originated. */
+  unattended: number | null;
+  /** min_deployed_commit stamped server-side at write time when disposition is `fail` — see gateStore.appendEvent. NULL for any other disposition. */
+  min_deployed_commit_at_fail: string | null;
   at: string;
 }
 
@@ -562,6 +581,7 @@ export type StagedIntentState =
 
 export interface StagedIntentRow {
   id: string;
+  /** Free-form intent-kind vocabulary — see stagedIntents.ts's KNOWN_INTENT_KINDS (e.g. "task.setStatus", "notion.pageEdit"). */
   kind: string;
   payload: string;
   payload_hash: string;
@@ -569,11 +589,21 @@ export interface StagedIntentRow {
   project_id: string;
   session_id: string | null;
   group_id: string | null;
+  /** The milestone (canonical_short_id) this intent's target task belongs to. Null = unattributed (legacy row or unresolvable task). */
+  milestone: string | null;
   state: StagedIntentState;
   supersedes: string | null;
   annotation: string | null;
   /** Human-facing rationale/summary the decision surface renders beside the payload. */
   decision_proposal: string | null;
+  /**
+   * The file:line / arch-page-section / API-result evidence a decision.pickOne
+   * intent's `decision_proposal` recommendation rests on — kept separate so
+   * `decision_proposal` stays at design altitude. Rendered collapsed by
+   * default. Null for kinds that don't carry one, and for rows created
+   * before this column existed.
+   */
+  investigation: string | null;
   /**
    * The /groom skill's structured proposal fields (JSON-encoded
    * `GroomProposalFields`), carried by a dispatched groom session's
@@ -620,6 +650,21 @@ export interface StagedIntentAnswer {
 }
 
 /**
+ * Payload for the review.dispute staged-intent kind — a code session's route
+ * out of a `needs_changes`/`incomplete` PR review verdict it concludes is
+ * wrong, carrying the evidence for an operator to judge instead of leaving
+ * the session waiting on a re-review that a disputed-but-unchanged head SHA
+ * will never trigger. Approval clears the blocking verdict without a new
+ * commit; pushback resumes the authoring session for a revision turn.
+ */
+export interface ReviewDisputePayload {
+  taskId: string;
+  prNumber: number;
+  repo: string;
+  rationale: string;
+}
+
+/**
  * The /groom skill's per-task proposal shape (`presentation.md`'s 4/5-point
  * summary: what it achieves, open questions, automated tests, manual
  * verification, and operational seed) — the structured contract a dispatched
@@ -649,36 +694,84 @@ export type NewSeedItemEventRow = Omit<SeedItemEventRow, 'id'>;
 
 // ─── completeness_disposition ───────────────────────────────────────────────
 
+/**
+ * The Design skill's six-value disposition vocabulary (design skill,
+ * presentation.md) for a completeness-critic candidate question. Five of
+ * the six collapse to "the question is closed, no follow-on"; `fold` and the
+ * two sibling variants each mean something materially different (folded back
+ * into an open question vs. owned by a sibling task), which a binary
+ * accepted/dismissed column could not distinguish — see task
+ * …3012260f. Stored verbatim, never collapsed.
+ */
+type NamedCompletenessDisposition =
+  | 'resolved'
+  | 'out-of-scope'
+  | 'not-a-decision'
+  | 'fold'
+  | 'file-sibling'
+  | 'sibling-owned';
+
 /** A single candidate question the /design completeness critic considered and dispositioned. */
 export interface CompletenessDispositionQuestion {
   question: string;
-  disposition: 'accepted' | 'dismissed';
+  disposition: NamedCompletenessDisposition;
   reason: string;
   /**
    * Recorded (`proposed`, the default at critic-run time) is not approved —
    * the same disposition is carried into a `completeness.disposition` staged
    * intent for operator sign-off, and only flips to `approved` once that
-   * intent is approved (or `rejected` once it is rejected) — see
-   * routes/stagedIntents.ts's completeness-disposition approve/reject
-   * handling, which is what actually advances this field on the stored row.
-   * A rejected run leaves the session free to re-run the critic and stage a
-   * revised `completeness.disposition` intent, which writes a fresh row
-   * rather than editing this one in place.
+   * intent is approved — see routes/stagedIntents.ts's completeness-
+   * disposition approve handling, which is what actually advances this field
+   * on the stored row. A rejected run deletes the row entirely (see
+   * deleteCompletenessDisposition) and leaves the session free to re-run the
+   * critic and stage a revised `completeness.disposition` intent.
    */
   approvalStatus?: 'proposed' | 'approved' | 'rejected';
 }
 
 /**
+ * The named gap classes the design skill's completeness critic is required
+ * to probe (task …3012260f, defect 2). Recording which of these were
+ * actually probed on a run turns a clean pass into an affirmative statement
+ * ("these classes were checked, none produced a gap") instead of an
+ * indistinguishable-from-skipped empty `questions` array.
+ */
+export const COMPLETENESS_PROBED_GAP_CLASSES = [
+  'durability-failure-modes',
+  'dual-read-consumer-set',
+  'interaction-bugs',
+  'missing-scaffolding',
+  'state-mutation-granularity',
+  'unstated-premises',
+] as const;
+
+export type CompletenessProbedGapClass =
+  (typeof COMPLETENESS_PROBED_GAP_CLASSES)[number];
+
+/**
+ * The shape stored (as JSON) in `completeness_disposition.questions` — a
+ * pre-existing JSON TEXT column, so widening it from a bare array to this
+ * object is a TypeScript/zod type change only, no SQL migration. `probed`
+ * is never empty: a clean pass still names every gap class the critic
+ * checked, so the record can never be confused with a skipped run.
+ */
+export interface CompletenessDispositionRecord {
+  probed: CompletenessProbedGapClass[];
+  questions: CompletenessDispositionQuestion[];
+}
+
+/**
  * Durable analog of gate_accretion for the /design completeness safeguard —
- * one row per critic run, recording the source design task, the candidate
- * questions it considered, and why each was accepted or dismissed. Advisory
- * audit trail only; never read by a promotion gate.
+ * one row per critic run, recording the source design task, the gap classes
+ * probed, and the candidate questions considered with their named
+ * disposition. Advisory audit trail only; never read by a promotion gate.
  */
 export interface CompletenessDispositionRow {
   id: number;
   source_task_id: string;
   project: string | null;
   milestone: string | null;
+  /** JSON-serialized CompletenessDispositionRecord. */
   questions: string;
   run_at: string;
 }

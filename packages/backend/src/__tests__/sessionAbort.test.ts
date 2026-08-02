@@ -13,12 +13,14 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ServerMessage } from '../ws/types';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
 vi.mock('child_process', () => ({
   execSync: vi.fn().mockReturnValue('dev\n'),
   execFile: vi.fn(),
+  exec: vi.fn(),
   spawn: vi.fn(),
 }));
 
@@ -41,8 +43,8 @@ vi.mock('fs', async () => {
 });
 
 vi.mock('../config', () => ({
-  config: { maxConcurrentCodeSessions: 10 },
-  runtimeSettings: { session_mode: 'cli' },
+  config: {},
+  runtimeSettings: { session_mode: 'cli', max_concurrent_code_sessions: 10 },
   getProjectById: vi.fn().mockReturnValue({
     id: 'test-proj',
     name: 'Test Project',
@@ -59,23 +61,25 @@ vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn(),
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  insertSession: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  getSession: vi.fn(),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  insertEvent: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getSetting: vi.fn().mockReturnValue(null),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-  getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
-  getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    insertSession: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    getSession: vi.fn(),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    insertEvent: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getSetting: vi.fn().mockReturnValue(null),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+    getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
+    getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
+  }),
+);
 
 vi.mock('../audit/AuditLog', () => ({
   recordEvent: vi.fn(),

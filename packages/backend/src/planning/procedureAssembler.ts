@@ -41,8 +41,10 @@
  */
 
 import {
+  SIZE_TYPE_CHECK,
   SKILL_LABELS,
   principlesFor,
+  renderCheckoutPathStatement,
   renderPrinciple,
   stepsFor,
   stepSummaryFor,
@@ -62,8 +64,10 @@ import type { ReadinessViolation } from '../tasks/readinessGate';
 import { normalizeBoardId } from '../tasks/taskId';
 import type { TypeCheckResult } from '../groom/typeCheck';
 import type { DesignLoadResult } from '../design/designLoad';
+import type { DocsLoadResult } from '../docs/docsLoad';
 import type { OpsLoadResult, OpsTaskEntry } from '../ops/opsLoad';
 import type { OpsJournalEntry } from '../ops/opsJournal';
+import { GATE_ITEM_TIER_SELECTION_GUIDANCE } from '../gate/gateItemClassificationGuidance';
 import {
   PLANNING_INTENT_KINDS,
   type PlanningWorkflow,
@@ -82,6 +86,7 @@ export const WORKFLOW_LOADERS: Record<PlanningWorkflow, string> = {
   design: 'design/designLoad.ts#loadDesignContext',
   ops: 'ops/opsLoad.ts#loadOpsContext',
   split: 'groom/groomLoad.ts#loadGroomContext',
+  docs: 'docs/docsLoad.ts#loadDocsContext',
 };
 
 // ─── per-type digest slices (Q3: a constrained section set, not the loader's
@@ -156,9 +161,37 @@ export interface DesignDigestSlice {
   hasCodeMapGrounding: boolean;
 }
 
+/**
+ * A docs session's deliverable is a never-auto-merge PR (repo-file Target
+ * surface) or a staged `notion.pageEdit` intent (Notion-page Target
+ * surface) — never a design decision — so this carries the Docs
+ * task-body-convention fields (`targetSurface` / `sourceDomains`) a
+ * dispatched session has no other channel for, rather than reusing
+ * `DesignDigestSlice`'s open-question/arch-unit shape.
+ */
+export interface DocsDigestSlice {
+  task: {
+    id: string;
+    title: string;
+    status: string;
+    type: string;
+    url: string;
+  };
+  /** The declared Target surface — a repo path or a Notion page id. Empty when undeclared. */
+  targetSurface: string;
+  /** The declared Source domain(s) this session's WebFetch allowlist is scoped to. Empty when undeclared. */
+  sourceDomains: string[];
+  /** The task's full markdown body, verbatim. */
+  markdown: string;
+}
+
 export interface OpsDigestSlice {
   task: OpsTaskEntry;
   journalEntry: OpsJournalEntry | null;
+  /** Which dual-read branch produced `archUnits` — see `OpsTaskEntry.archSource`. */
+  archSource: OpsTaskEntry['archSource'];
+  /** Active-invariant units (an ops task has no file scope/topic) once adopted, else the fixed Notion context pages. Titles/ids only — never inlined (see `renderOpsDigest`). */
+  archUnits: OpsTaskEntry['archUnits'];
 }
 
 /**
@@ -176,7 +209,8 @@ export type PlanningDigest =
   | { workflow: 'groom'; data: GroomDigestSlice }
   | { workflow: 'design'; data: DesignDigestSlice }
   | { workflow: 'ops'; data: OpsDigestSlice }
-  | { workflow: 'split'; data: SplitDigestSlice };
+  | { workflow: 'split'; data: SplitDigestSlice }
+  | { workflow: 'docs'; data: DocsDigestSlice };
 
 const normId = normalizeBoardId;
 
@@ -266,6 +300,16 @@ export function deriveDesignDigestSlice(
   };
 }
 
+/** `loadDocsContext` already resolves a single target task — just narrow the fields carried forward. */
+export function deriveDocsDigestSlice(result: DocsLoadResult): DocsDigestSlice {
+  return {
+    task: result.task,
+    targetSurface: result.targetSurface,
+    sourceDomains: result.sourceDomains,
+    markdown: result.markdown,
+  };
+}
+
 /** Narrow a full `loadOpsContext` result to the one target task's journal slice. */
 export function deriveOpsDigestSlice(
   result: OpsLoadResult,
@@ -284,7 +328,12 @@ export function deriveOpsDigestSlice(
       `procedureAssembler: task ${taskId} not found in ops worklist`,
     );
   }
-  return { task, journalEntry };
+  return {
+    task,
+    journalEntry,
+    archSource: task.archSource,
+    archUnits: task.archUnits,
+  };
 }
 
 // ─── skeleton (written once) ───────────────────────────────────────────────
@@ -335,6 +384,9 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
   'intent.withdraw':
     '{"intentId":"<staged-intent-id this session staged>",' +
     '"reason":"<one-line reason this intent should not be applied>"}',
+  'planning.noOp':
+    '{"taskId":"<task-id>",' +
+    '"reason":"<one-line why nothing needs to change right now>"}',
 };
 
 /** Render one `mcp__orchestrator__<kind>` (CLI-sanitized) tool-call example per allowed kind. */
@@ -400,11 +452,15 @@ export function renderOpsCapabilities(): string[] {
       'data directory, but it holds no allow-listed client for the live SQLite ' +
       "file and no device auth for the orchestrator's API — so session_events/" +
       'audit_log for a specific session stay reachable only through the brokered ' +
-      'read, not a direct file or DB path. On approval, read the result with ' +
-      '`node ~/.claude/scripts/read-session-record.mjs <target-session-id>` — it ' +
-      "returns that session's session_events and audit_log, brokered by the " +
-      'orchestrator itself since this session holds no device auth. Read-only: ' +
-      'there is no write form of this capability.',
+      'read, not a direct file or DB path. On approval, read the result by calling the ' +
+      `\`${orchestratorMcpToolName('session.getRecord')}\` tool with ` +
+      '`{"targetSessionId":"<target-session-id>"}` — it returns that ' +
+      "session's session_events and audit_log, brokered by the orchestrator itself " +
+      'since this session holds no device auth. Read-only: there is no write form of ' +
+      'this capability. The same pattern applies to `read:audit-log:<projectId>`: once ' +
+      `granted, call the \`${orchestratorMcpToolName('auditLog.query')}\` tool with ` +
+      '`{"projectId":"<project-id>"}` (optionally narrowed by `taskId` / `eventType` / ' +
+      "`since` / `until`) to read this project's audit_log rows.",
     '',
     'Some things are never grantable this way, no matter what an operator approves: ' +
       'anything that reaches the resolved / ✅ Done / task-intent-apply transition ' +
@@ -656,12 +712,32 @@ function reportMissingProjectRecordAccessGuide(
   }
 }
 
+/**
+ * Resolve the registry projectId to the project's checkout directory, for
+ * `renderCheckoutPathStatement`. Mirrors
+ * `resolveProjectRecordAccessGuidePath`'s never-throw, log-and-degrade
+ * fallback: an unresolvable project id (an unregistered project, or a test
+ * fixture with no backing project row) drops the statement rather than
+ * rendering a placeholder — the real dispatch path always resolves a
+ * project (`OpsSessionLauncher.buildInjectedProcedure` validates the
+ * project row before ever calling `assemblePlanningProcedure`), so this
+ * branch is a defensive fallback, not the expected path.
+ */
+function resolveProjectCheckoutDir(projectId: string): string | null {
+  try {
+    return getProjectById(projectId)?.projectDir ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function renderSkeleton(
   workflow: PlanningWorkflow,
   taskName: string,
   taskUrl: string,
   milestoneId: string,
   projectId: string,
+  checkoutDir: string | null,
 ): string {
   const label = SKILL_LABELS[workflow];
   const kinds = PLANNING_INTENT_KINDS[workflow];
@@ -692,6 +768,7 @@ function renderSkeleton(
     '',
     lifecycle,
     '',
+    ...(checkoutDir ? [renderCheckoutPathStatement(checkoutDir), ''] : []),
     ...renderProjectRecordAccess(workflow, projectId),
     ...(workflow === 'ops' ? renderOpsCapabilities() : []),
     '## Transport',
@@ -785,7 +862,10 @@ function renderSkeleton(
           'flip at commit time on anything missing, and the block is surfaced back to ' +
           'you at stage time, not silently dropped): `size_check` ' +
           '(`{"decision": "no_split"|"split_now"|"unsplittable"|"n/a"}` — Code/Tooling ' +
-          'tasks default to "no_split" under the 500-LoC-estimated threshold, "n/a" is ' +
+          `tasks default to "no_split" under both the ${SIZE_TYPE_CHECK.locSplitThreshold}` +
+          `-LoC-estimated threshold and the ${SIZE_TYPE_CHECK.fileSplitThreshold}-file ` +
+          'threshold; exceeding either nominates a split (nominates, not forces — ' +
+          '"unsplittable" with a recorded reason remains valid above either one), "n/a" is ' +
           'for Design/Planning types only), `type_check` (`{"decision": "none"|' +
           '"flagged"|"n/a"}`, plus `signals` naming the matched phrases when ' +
           '"flagged"), `type` (the task\'s display-format Type, e.g. `"💻 Code"`), ' +
@@ -795,9 +875,12 @@ function renderSkeleton(
           '`{"disposition": "complies"}` | `{"disposition": "n/a", "why": "..."}` | ' +
           '`{"disposition": "conflict_route", "routedTaskId": "<design-task-id>"}` — ' +
           "one entry per id in the digest's Binding constraints list), " +
-          '`filesPathsEntries` (one `{"raw": "<list item text>", "isNew": false, ' +
-          '"existsInRepo": true}` per `## Files / paths affected` line — `isNew: ' +
-          'true` for a `*(new)*`-marked not-yet-created path), and `dependsOnTasks` ' +
+          '`filesPathsEntries` (one `{"raw": "<list item text>", "isNew": false}` ' +
+          'per `## Files / paths affected` line — `isNew: true` for a ' +
+          '`*(new)*`-marked not-yet-created path; do NOT include `existsInRepo` — ' +
+          'whether the entry resolves to a tracked file is derived server-side ' +
+          'from the repo itself at promotion time, never taken from this payload), ' +
+          'and `dependsOnTasks` ' +
           '(one `{"id": "<task-id>", "type": "<type>", "status": "<status>"}` per ' +
           'declared Depends On edge — `[]` when there are none). A worked, ' +
           'field-complete example for a 💻 Code task with one binding constraint, ' +
@@ -809,7 +892,7 @@ function renderSkeleton(
           '"type":"💻 Code",' +
           '"regions":{"packages":["packages/backend"],"files":["packages/backend/src/foo.ts"]},' +
           '"constraintsDispositioned":{"constraint-a":{"disposition":"complies"}},' +
-          '"filesPathsEntries":[{"raw":"packages/backend/src/foo.ts","isNew":false,"existsInRepo":true}],' +
+          '"filesPathsEntries":[{"raw":"packages/backend/src/foo.ts","isNew":false}],' +
           '"dependsOnTasks":[]}}}` — omitting any one of these six `groomingGate` ' +
           'fields (even as an empty array/object where genuinely empty) is what ' +
           'blocks the Ready flip; fill every field from the digest above rather ' +
@@ -829,6 +912,10 @@ function renderSkeleton(
           '`gate.accrete` / `seed.stage` above. When the pre-groom body carries ' +
           'no such section, stage no strip intent at all — there is nothing to ' +
           'remove.\n\n' +
+          `${GATE_ITEM_TIER_SELECTION_GUIDANCE} A \`gate.accrete\` batch is not ` +
+          'forced to one tier: the top-level `classification` is the batch ' +
+          'default, and any item that needs a different tier carries its own ' +
+          '`classification` field overriding it for that item alone.\n\n' +
           'A finding that turns on an operator judgment this session cannot ' +
           "make on its own authority — the task's scope is wrong, a " +
           'dependency cannot be confirmed, the spec contradicts the code — ' +
@@ -1020,6 +1107,17 @@ function renderExplorationDirective(orientation: GroomOrientation): string[] {
   return lines;
 }
 
+/**
+ * Above this many region-intersected units, `renderGroomDigest` stops
+ * inlining full bodies and falls back to titles/ids + an on-demand fetch
+ * directive (mirroring `renderDesignDigest` / `renderOpsDigest`) — a broad
+ * task's scope can otherwise pull in dozens of units and balloon the
+ * injected prompt (see task evidence: 86-unit selections inlined to ~135KB,
+ * pushing organic session context occupancy to 74-83%). Tune against real
+ * digest sizes if that evidence shifts.
+ */
+const ARCH_UNIT_INLINE_CAP = 25;
+
 function renderGroomDigest(
   data: GroomDigestSlice,
   heading = '## Grooming Validation Slice',
@@ -1028,9 +1126,10 @@ function renderGroomDigest(
     heading,
     '',
     `- Task: ${data.task.title} (${data.task.type}, ${data.task.status}) — ${data.task.url}`,
+    `- Task id: \`${data.task.id}\``,
     `- size_check seed: ${data.sizeCheckSeed.files} files affected (${data.sizeCheckSeed.loc_method})`,
     `- type_check: ${data.typeCheck.decision}${data.typeCheck.signals?.length ? ` — ${data.typeCheck.signals.join('; ')}` : ''}`,
-    `- Binding constraints: ${data.bindingConstraints.length ? data.bindingConstraints.join(', ') : '(none)'}`,
+    `- Binding constraints (constraint ids — a separate id space from arch_unit; not dereferenceable via ${orchestratorMcpToolName('architecture.getUnit')}): ${data.bindingConstraints.length ? data.bindingConstraints.join(', ') : '(none)'}`,
   ];
   // Store-sourced architecture is task-scoped (region-intersected + active
   // invariants) — small enough to inline the full unit bodies, the only
@@ -1042,9 +1141,18 @@ function renderGroomDigest(
   // inlined it here either, so leave the digest unchanged on that branch.
   if (data.archSource === 'store') {
     lines.push(
-      `- Arch-store-selected units (${data.archUnits.length}): ${data.archUnits.length ? data.archUnits.map((u) => u.title).join(', ') : '(none)'}`,
+      `- Arch-store-selected units (${data.archUnits.length}) — parenthesised value is the arch_unit id to pass to ${orchestratorMcpToolName('architecture.getUnit')}: ${data.archUnits.length ? data.archUnits.map((u) => `${u.title} (${u.id})`).join(', ') : '(none)'}`,
     );
-    if (data.archUnits.length) {
+    if (data.archUnits.length > ARCH_UNIT_INLINE_CAP) {
+      lines.push(
+        '',
+        '### Architecture unit bodies (titles only — fetch on demand)',
+        '',
+        `Selection exceeds the inline cap (${ARCH_UNIT_INLINE_CAP}).`,
+        archUnitDereferenceHint(),
+        '',
+      );
+    } else if (data.archUnits.length) {
       lines.push('', '### Architecture unit bodies', '');
       for (const u of data.archUnits) {
         lines.push(`#### ${u.title} (${u.id})`, '', u.body || '(empty)', '');
@@ -1089,11 +1197,29 @@ function renderGroomDigest(
   return lines.join('\n');
 }
 
+/**
+ * The arch-unit dereference hint — shared verbatim by `renderDesignDigest`
+ * and `renderOpsDigest` so the two can't drift (same drift-guard rationale as
+ * `PLANNING_INTENT_KINDS`). Both digests render only titles/ids for a
+ * store-sourced selection (too large to inline wholesale, unlike groom's
+ * region-intersected selection — see `renderGroomDigest`); this is the
+ * pointer to the two MCP tools a session uses to fetch a unit's full body.
+ */
+function archUnitDereferenceHint(): string {
+  return (
+    `_This selection is titles/ids only — too large to inline wholesale. The parenthesised value after ` +
+    `each title is the arch_unit id: fetch that unit's full body with ` +
+    `${orchestratorMcpToolName('architecture.getUnit')} ({ id }), or run a broader query with ` +
+    `${orchestratorMcpToolName('architecture.queryUnits')} ({ topic / kind / region })._`
+  );
+}
+
 function renderDesignDigest(data: DesignDigestSlice): string {
   const lines: string[] = [
     '## Design Investigation Slice',
     '',
     `- Task: ${data.task.title} (${data.task.type}, ${data.task.status}) — ${data.task.url}`,
+    `- Task id: \`${data.task.id}\``,
     `- Open questions (${data.openQuestions.source}): ${data.openQuestions.items.length ? data.openQuestions.items.length : 0}`,
   ];
   for (const q of data.openQuestions.items) {
@@ -1108,12 +1234,7 @@ function renderDesignDigest(data: DesignDigestSlice): string {
     ...data.archUnits.map((u) => `- ${u.title} (${u.id})`),
   );
   if (data.archSource === 'store' && data.archUnits.length) {
-    lines.push(
-      '',
-      `_This selection is titles/ids only — too large to inline wholesale. Fetch a unit's full body with ` +
-        `${orchestratorMcpToolName('architecture.getUnit')} ({ id }), or run a broader query with ` +
-        `${orchestratorMcpToolName('architecture.queryUnits')} ({ topic / kind / region })._`,
-    );
+    lines.push('', archUnitDereferenceHint());
   }
   if (data.unresolvedPageRefs.length) {
     lines.push(
@@ -1137,9 +1258,20 @@ function renderOpsDigest(data: OpsDigestSlice): string {
     '## Ops Journal Slice',
     '',
     `- Task: ${data.task.title} (${data.task.type}, ${data.task.mode}) — ${data.task.url}`,
+    `- Task id: \`${data.task.id}\``,
     `- Depends On: ${data.task.dependsOn.length ? data.task.dependsOn.join(', ') : '(none)'}`,
     `- Dep status: ${data.task.depStatus}`,
   ];
+  if (data.archSource === 'store' && data.archUnits.length) {
+    lines.push(
+      '',
+      `### Arch-store-selected units (${data.archUnits.length})`,
+      '',
+      ...data.archUnits.map((u) => `- ${u.title} (${u.id})`),
+      '',
+      archUnitDereferenceHint(),
+    );
+  }
   lines.push(
     '',
     '### Existing ops_journal entry',
@@ -1156,6 +1288,29 @@ function renderSplitDigest(data: SplitDigestSlice): string {
   return renderGroomDigest(data, '## Split Candidate Slice');
 }
 
+/**
+ * Renders the Target surface / Source domains this dispatched docs session
+ * has no other channel for — see the Docs task-body convention
+ * (`skills/docs/SKILL.md`). Either field renders as an explicit "not
+ * declared" call-out rather than a bare empty string, since the skill's own
+ * hard rule is to stop and ask rather than guess when either is missing.
+ */
+function renderDocsDigest(data: DocsDigestSlice): string {
+  const lines: string[] = [
+    '## Docs Authoring Slice',
+    '',
+    `- Task: ${data.task.title} (${data.task.type}, ${data.task.status}) — ${data.task.url}`,
+    `- Task id: \`${data.task.id}\``,
+    `- Target surface: ${data.targetSurface || '(not declared — stop and ask; do not guess a target surface)'}`,
+    `- Source domains: ${data.sourceDomains.length ? data.sourceDomains.join(', ') : '(not declared — stop and ask; do not widen by inference)'}`,
+    '',
+    '### Task body',
+    '',
+    data.markdown || '(empty)',
+  ];
+  return lines.join('\n');
+}
+
 function renderDigest(digest: PlanningDigest): string {
   switch (digest.workflow) {
     case 'groom':
@@ -1166,6 +1321,8 @@ function renderDigest(digest: PlanningDigest): string {
       return renderOpsDigest(digest.data);
     case 'split':
       return renderSplitDigest(digest.data);
+    case 'docs':
+      return renderDocsDigest(digest.data);
   }
 }
 
@@ -1193,8 +1350,23 @@ export function assemblePlanningProcedure(
   params: AssemblePlanningProcedureParams,
 ): string {
   const { taskName, taskUrl, digest, milestoneId, projectId } = params;
+  const checkoutDir = resolveProjectCheckoutDir(projectId);
+  if (!checkoutDir) {
+    logger.warn(
+      `[procedureAssembler] cannot resolve a checkout directory for ` +
+        `projectId=${projectId} — omitting the checkout-path statement ` +
+        'from the injected procedure',
+    );
+  }
   const sections = [
-    renderSkeleton(digest.workflow, taskName, taskUrl, milestoneId, projectId),
+    renderSkeleton(
+      digest.workflow,
+      taskName,
+      taskUrl,
+      milestoneId,
+      projectId,
+      checkoutDir,
+    ),
     renderProcedureCore(digest.workflow),
     renderDigest(digest),
   ];

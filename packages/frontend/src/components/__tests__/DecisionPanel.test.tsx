@@ -57,6 +57,34 @@ describe('DecisionPanel', () => {
     expect(screen.getByText('Stand up off-box backups')).toBeTruthy();
   });
 
+  it('disables disposition controls and shows a still-filing indicator while the owning session is incomplete', async () => {
+    const incompleteDecision: StagedIntent = {
+      id: 'intent-incomplete',
+      kind: 'journal.setState',
+      payload: { taskId: 'notion:abc', state: 'staged-proposal' },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'ops-session-3',
+      state: 'staged',
+      decisionProposal: 'Still being filed',
+      sessionComplete: false,
+    };
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([
+      incompleteDecision,
+    ]);
+
+    render(<DecisionPanel sessionId="ops-session-3" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('decision-panel')).toBeTruthy();
+    });
+    expect(screen.getByTestId('session-still-filing')).toBeTruthy();
+    expect(screen.getByTestId('staged-intent-still-filing')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: '✓ Commit' }).hasAttribute('disabled'),
+    ).toBe(true);
+  });
+
   it('renders nothing when the session has no staged decision', async () => {
     vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
 
@@ -80,6 +108,7 @@ describe('DecisionPanel', () => {
         createdAt: 0,
         sessionId: 'groom-session-1',
         groupId,
+        groupKind: 'groom',
         state: 'staged',
       },
       {
@@ -90,6 +119,7 @@ describe('DecisionPanel', () => {
         createdAt: 1,
         sessionId: 'groom-session-1',
         groupId,
+        groupKind: 'groom',
         state: 'staged',
       },
     ];
@@ -162,6 +192,102 @@ describe('DecisionPanel', () => {
     );
   });
 
+  it('leaves the group reject submit disabled until an outcome is chosen, even with a reason typed', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
+      groomGroupIntents('group-5', 't-5'),
+    );
+
+    render(<DecisionPanel sessionId="groom-session-1" />);
+    await waitFor(() => screen.getByTestId('decision-panel'));
+
+    fireEvent.change(
+      screen.getByPlaceholderText(/choose pushback or decline/i),
+      { target: { value: 'No need' } },
+    );
+
+    expect(
+      screen
+        .getByRole('button', { name: /reject groom/i })
+        .hasAttribute('disabled'),
+    ).toBe(true);
+  });
+
+  it('issues an explicit pushback (never inferred) when Pushback is chosen on the group reject toggle', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
+      groomGroupIntents('group-6', 't-6'),
+    );
+    const rejectGroup = vi
+      .spyOn(stagedIntentsApi, 'rejectGroup')
+      .mockResolvedValue({
+        ok: true,
+        rejected: ['group-6-dep', 'group-6-status'],
+      });
+
+    render(<DecisionPanel sessionId="groom-session-1" />);
+    await waitFor(() => screen.getByTestId('decision-panel'));
+
+    fireEvent.click(screen.getByRole('radio', { name: /pushback/i }));
+    fireEvent.change(
+      screen.getByPlaceholderText(/what should the session revise/i),
+      { target: { value: 'please add tests' } },
+    );
+    fireEvent.click(screen.getByRole('button', { name: /pushback groom/i }));
+
+    await waitFor(() =>
+      expect(rejectGroup).toHaveBeenCalledWith('group-6', {
+        outcome: 'pushback',
+        reason: 'please add tests',
+      }),
+    );
+  });
+
+  it('renders no recovery control for a group with no blocked members', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
+      groomGroupIntents('group-7', 't-7'),
+    );
+
+    render(<DecisionPanel sessionId="groom-session-1" />);
+    await waitFor(() => screen.getByTestId('decision-panel'));
+
+    expect(screen.queryByTestId('recover-group-group-7')).toBeNull();
+  });
+
+  it('shows a recovery control naming the blocked member count when a group has a needs_revision/pending_verification member', async () => {
+    const members = groomGroupIntents('group-8', 't-8');
+    members[1] = { ...members[1], state: 'needs_revision' };
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(members);
+
+    render(<DecisionPanel sessionId="groom-session-1" />);
+    await waitFor(() => screen.getByTestId('decision-panel'));
+
+    expect(screen.getByTestId('recovery-banner-group-8').textContent).toMatch(
+      /1 blocked member/,
+    );
+    expect(screen.getByTestId('recover-group-group-8')).toBeTruthy();
+  });
+
+  it('invoking the recovery control calls recoverGroup with the group id and re-renders from the response', async () => {
+    const members = groomGroupIntents('group-9', 't-9');
+    members[1] = { ...members[1], state: 'pending_verification' };
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(members);
+    const recoverGroup = vi
+      .spyOn(stagedIntentsApi, 'recoverGroup')
+      .mockResolvedValue({
+        ok: true,
+        recovered: [{ ...members[1], state: 'staged' }],
+      });
+
+    render(<DecisionPanel sessionId="groom-session-1" />);
+    await waitFor(() => screen.getByTestId('decision-panel'));
+
+    fireEvent.click(screen.getByTestId('recover-group-group-9'));
+
+    await waitFor(() => expect(recoverGroup).toHaveBeenCalledWith('group-9'));
+    await waitFor(() =>
+      expect(screen.queryByTestId('recovery-banner-group-9')).toBeNull(),
+    );
+  });
+
   it('exposes a reachable dismiss control at mobile viewport widths, which collapses the panel to a reopenable badge', async () => {
     mockMobileViewport();
     vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
@@ -208,6 +334,7 @@ describe('DecisionPanel', () => {
         createdAt: 0,
         sessionId: 'groom-session-2',
         groupId,
+        groupKind: 'groom',
         state: 'staged',
       },
       {
@@ -228,6 +355,7 @@ describe('DecisionPanel', () => {
         createdAt: 1,
         sessionId: 'groom-session-2',
         groupId,
+        groupKind: 'groom',
         state: 'staged',
         groomProposal: {
           achieves: `Stand up ${taskId} cleanly`,
@@ -267,11 +395,16 @@ describe('DecisionPanel', () => {
       expect(screen.getByRole('radio', { name: /pushback/i })).toBeTruthy();
       expect(screen.getByRole('radio', { name: /decline/i })).toBeTruthy();
       expect(
+        screen.getByPlaceholderText(/choose pushback or decline/i),
+      ).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('radio', { name: /pushback/i }));
+      expect(
         screen.getByPlaceholderText(/what should the session revise/i),
       ).toBeTruthy();
     });
 
-    it("exposes a clean group's per-intent detail without a bespoke expand container", async () => {
+    it("exposes a clean group's per-intent detail via its own member toggle, not a bespoke triage-expand container", async () => {
       vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
         cleanTriageGroupIntents('group-clean-3', 't-clean-3'),
       );
@@ -279,8 +412,14 @@ describe('DecisionPanel', () => {
       render(<DecisionPanel sessionId="groom-session-2" />);
       await waitFor(() => screen.getByTestId('decision-panel'));
 
-      expect(screen.getByText(/depends on for/i)).toBeTruthy();
+      expect(screen.queryByText(/depends on for/i)).toBeNull();
       expect(screen.queryByTestId('triage-expand-group-clean-3')).toBeNull();
+
+      fireEvent.click(
+        screen.getByTestId('group-member-toggle-group-clean-3-dep'),
+      );
+
+      expect(screen.getByText(/depends on for/i)).toBeTruthy();
     });
 
     it('lets a clean group whose commit is refused server-side still be pushed back or declined', async () => {

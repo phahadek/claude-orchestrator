@@ -12,6 +12,7 @@ import type {
 import { seedApi } from '../api/seed';
 import type {
   SeedItem,
+  SeedItemEventOutcome,
   SeedReadiness,
   SeedMilestoneReadiness,
 } from '../api/seed';
@@ -60,6 +61,13 @@ const REOPEN_BLOCKED_STATES = new Set(['open', 'runnable', 'pending-approval']);
 
 const SEED_STATE_ORDER = ['pending', 'applied', 'confirmed', 'blocked'];
 const SEED_DONE_STATES = ['confirmed'];
+
+/** Mirrors the outcomes the POST /seed/items/:id/events route accepts (seedService.ts). */
+const SEED_EVENT_OUTCOMES: SeedItemEventOutcome[] = [
+  'applied',
+  'confirmed',
+  'blocked',
+];
 
 /**
  * Extracts the leading milestone short-token (e.g. "M12") from a board name
@@ -332,6 +340,13 @@ export function GateReadinessPanel({
   const [seedItemsLoading, setSeedItemsLoading] = useState(false);
   const [seedItemsError, setSeedItemsError] = useState<string | null>(null);
 
+  const [seedDispositionMutatingIds, setSeedDispositionMutatingIds] = useState<
+    Set<string>
+  >(new Set());
+  const [seedDispositionError, setSeedDispositionError] = useState<
+    string | null
+  >(null);
+
   const [deployLaunching, setDeployLaunching] = useState(false);
   const [deployLaunchError, setDeployLaunchError] = useState<string | null>(
     null,
@@ -423,7 +438,7 @@ export function GateReadinessPanel({
 
   // Load readiness (green/blocked + per-state counts) for the selected milestone.
   useEffect(() => {
-    if (!selectedMilestone) {
+    if (!selectedMilestone || !activeProjectId) {
       setReadiness(null);
       return;
     }
@@ -431,7 +446,7 @@ export function GateReadinessPanel({
     setReadinessLoading(true);
     setReadinessError(null);
     gateApi
-      .getGateReadiness(selectedMilestone)
+      .getGateReadiness(activeProjectId, selectedMilestone)
       .then((result) => {
         if (cancelled) return;
         setReadiness(result);
@@ -447,11 +462,11 @@ export function GateReadinessPanel({
     return () => {
       cancelled = true;
     };
-  }, [selectedMilestone]);
+  }, [activeProjectId, selectedMilestone]);
 
   // Load config-seed readiness (green/blocked + per-state counts) for the selected milestone.
   useEffect(() => {
-    if (!selectedMilestone) {
+    if (!selectedMilestone || !activeProjectId) {
       setSeedReadiness(null);
       return;
     }
@@ -459,7 +474,7 @@ export function GateReadinessPanel({
     setSeedReadinessLoading(true);
     setSeedReadinessError(null);
     seedApi
-      .getSeedReadiness(selectedMilestone)
+      .getSeedReadiness(activeProjectId, selectedMilestone)
       .then((result) => {
         if (cancelled) return;
         setSeedReadiness(result);
@@ -475,7 +490,7 @@ export function GateReadinessPanel({
     return () => {
       cancelled = true;
     };
-  }, [selectedMilestone]);
+  }, [activeProjectId, selectedMilestone]);
 
   // Reset to page 1 whenever the milestone or filters change.
   useEffect(() => {
@@ -696,7 +711,7 @@ export function GateReadinessPanel({
       setVerifyBaseline((prev) => {
         const next = { ...prev };
         for (const id of ids) {
-          next[id] = items.find((i) => i.id === id)?.currentDisposition;
+          next[id] = items.find((i) => i.id === id)?.latestDisposition;
         }
         return next;
       });
@@ -724,9 +739,12 @@ export function GateReadinessPanel({
     [items],
   );
 
-  // Polls each in-flight verification's item detail until its disposition
-  // moves away from the dispatch-time baseline, reflecting the resulting
-  // disposition back into the table without a full-page refresh.
+  // Polls each in-flight verification's item detail until its latest
+  // disposition moves away from the dispatch-time baseline, reflecting the
+  // resulting disposition back into the table without a full-page refresh.
+  // latestDisposition (not currentDisposition) is the baseline/compare field
+  // so a non-resolving needs-setup verdict — which never advances
+  // currentDisposition — still settles the poll.
   useEffect(() => {
     if (verifyingIds.size === 0) return;
     const ids = Array.from(verifyingIds);
@@ -739,31 +757,39 @@ export function GateReadinessPanel({
             .catch(() => null),
         ),
       ).then((results) => {
-        const settled: string[] = [];
+        // Computed up front from `results` (not mutated from inside the
+        // setItems updater below and read back synchronously afterward) —
+        // a functional setState updater runs on React's own schedule, not
+        // necessarily before the next line of this callback, so relying on
+        // a side effect inside it to communicate back was a race that could
+        // leave verifyingIds never cleared despite the table already
+        // reflecting the settled disposition.
+        const settled = results
+          .filter(
+            (r): r is { id: string; detail: GateItemDetail } =>
+              r !== null &&
+              r.detail.item.latestDisposition !== verifyBaseline[r.id],
+          )
+          .map((r) => r.id);
+        if (settled.length === 0) return;
         setItems((prevItems) =>
           prevItems.map((item) => {
             const found = results.find((r) => r && r.id === item.id);
-            if (!found) return item;
-            const newDisposition = found.detail.item.currentDisposition;
-            if (newDisposition !== verifyBaseline[item.id]) {
-              settled.push(item.id);
-              return {
-                ...item,
-                currentDisposition: newDisposition,
-                state: found.detail.item.state,
-                updatedAt: found.detail.item.updatedAt,
-              };
-            }
-            return item;
+            if (!found || !settled.includes(item.id)) return item;
+            return {
+              ...item,
+              currentDisposition: found.detail.item.currentDisposition,
+              latestDisposition: found.detail.item.latestDisposition,
+              state: found.detail.item.state,
+              updatedAt: found.detail.item.updatedAt,
+            };
           }),
         );
-        if (settled.length > 0) {
-          setVerifyingIds((prev) => {
-            const next = new Set(prev);
-            settled.forEach((id) => next.delete(id));
-            return next;
-          });
-        }
+        setVerifyingIds((prev) => {
+          const next = new Set(prev);
+          settled.forEach((id) => next.delete(id));
+          return next;
+        });
       });
     }, 5000);
     return () => clearInterval(interval);
@@ -786,14 +812,14 @@ export function GateReadinessPanel({
           .then((result) => setDetail(result))
           .catch(() => {});
       }
-      if (selectedMilestone) {
+      if (selectedMilestone && activeProjectId) {
         gateApi
-          .getGateReadiness(selectedMilestone)
+          .getGateReadiness(activeProjectId, selectedMilestone)
           .then((result) => setReadiness(result))
           .catch(() => {});
       }
     },
-    [expandedId, selectedMilestone],
+    [expandedId, selectedMilestone, activeProjectId],
   );
 
   const withDispositionMutation = useCallback(
@@ -816,6 +842,76 @@ export function GateReadinessPanel({
         });
     },
     [applyItemMutation],
+  );
+
+  // Reflects a mutated seed item back into the table and re-reads the
+  // milestone's seed readiness rollup — mirrors applyItemMutation above, but
+  // for the seed axis, whose state machine lives in seedService.ts.
+  const applySeedItemMutation = useCallback(
+    (updated: SeedItem) => {
+      setSeedItems((prev) =>
+        prev.map((item) =>
+          item.id === updated.id ? { ...item, ...updated } : item,
+        ),
+      );
+      if (selectedMilestone && activeProjectId) {
+        seedApi
+          .getSeedReadiness(activeProjectId, selectedMilestone)
+          .then((result) => setSeedReadiness(result))
+          .catch(() => {});
+      }
+    },
+    [selectedMilestone, activeProjectId],
+  );
+
+  const withSeedDispositionMutation = useCallback(
+    (id: string, run: () => Promise<SeedItem>) => {
+      setSeedDispositionError(null);
+      setSeedDispositionMutatingIds((prev) => new Set(prev).add(id));
+      return run()
+        .then((updated) => {
+          applySeedItemMutation(updated);
+        })
+        .catch((err) => {
+          setSeedDispositionError(
+            err instanceof Error ? err.message : String(err),
+          );
+        })
+        .finally(() => {
+          setSeedDispositionMutatingIds((prev) => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+        });
+    },
+    [applySeedItemMutation],
+  );
+
+  const recordSeedDisposition = useCallback(
+    (id: string, outcome: SeedItemEventOutcome, filedFollowon?: string) => {
+      withSeedDispositionMutation(id, () =>
+        seedApi.recordSeedItemEvent(id, {
+          outcome,
+          filedFollowon,
+          operator: operatorName || undefined,
+        }),
+      );
+    },
+    [withSeedDispositionMutation, operatorName],
+  );
+
+  // The `blocked` outcome requires a filedFollowon (appendSeedItemEvent's
+  // guard) — prompt for it up front rather than letting the POST 400.
+  const blockSeedItemHandler = useCallback(
+    (item: SeedItem) => {
+      const filedFollowon = window.prompt(
+        `Record "${item.spec}" as blocked — enter the follow-on task ID:`,
+      );
+      if (!filedFollowon) return;
+      recordSeedDisposition(item.id, 'blocked', filedFollowon);
+    },
+    [recordSeedDisposition],
   );
 
   const recordDisposition = useCallback(
@@ -851,6 +947,18 @@ export function GateReadinessPanel({
     (id: string) => {
       withDispositionMutation(id, () =>
         gateApi.approveItem(id, { operator: operatorName || undefined }),
+      );
+    },
+    [withDispositionMutation, operatorName],
+  );
+
+  const reclassifyItemHandler = useCallback(
+    (id: string, classification: GateItemClassification) => {
+      withDispositionMutation(id, () =>
+        gateApi.reclassifyItem(id, {
+          classification,
+          operator: operatorName || undefined,
+        }),
       );
     },
     [withDispositionMutation, operatorName],
@@ -1139,14 +1247,32 @@ export function GateReadinessPanel({
                         <td onClick={() => toggleExpanded(item.id)}>
                           {item.text}
                         </td>
-                        <td onClick={() => toggleExpanded(item.id)}>
-                          {item.classification}
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <select
+                            value={item.classification}
+                            onChange={(e) =>
+                              reclassifyItemHandler(
+                                item.id,
+                                e.target.value as GateItemClassification,
+                              )
+                            }
+                            disabled={dispositionMutatingIds.has(item.id)}
+                            aria-label={`Reclassify ${item.text}`}
+                            data-testid={`gate-item-reclassify-${item.id}`}
+                            className={styles.reclassifySelect}
+                          >
+                            {CLASSIFICATION_OPTIONS.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
                           {item.state}
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
-                          {item.currentDisposition ?? '—'}
+                          {item.latestDisposition ?? '—'}
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
                           {new Date(item.updatedAt).toLocaleString()}
@@ -1407,6 +1533,11 @@ export function GateReadinessPanel({
 
           {seedItemsLoading && <p className={styles.muted}>Loading items…</p>}
           {seedItemsError && <p className={styles.error}>{seedItemsError}</p>}
+          {seedDispositionError && (
+            <p className={styles.error} data-testid="seed-disposition-error">
+              {seedDispositionError}
+            </p>
+          )}
 
           {!seedItemsLoading && !seedItemsError && (
             <>
@@ -1419,6 +1550,7 @@ export function GateReadinessPanel({
                     <th>Item</th>
                     <th>State</th>
                     <th>Updated</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1427,11 +1559,38 @@ export function GateReadinessPanel({
                       <td>{item.spec}</td>
                       <td>{item.state}</td>
                       <td>{new Date(item.updatedAt).toLocaleString()}</td>
+                      <td className={styles.itemActions}>
+                        {SEED_EVENT_OUTCOMES.map((outcome) =>
+                          outcome === 'blocked' ? (
+                            <button
+                              key={outcome}
+                              type="button"
+                              onClick={() => blockSeedItemHandler(item)}
+                              disabled={seedDispositionMutatingIds.has(item.id)}
+                              data-testid={`seed-item-blocked-${item.id}`}
+                            >
+                              Blocked
+                            </button>
+                          ) : (
+                            <button
+                              key={outcome}
+                              type="button"
+                              onClick={() =>
+                                recordSeedDisposition(item.id, outcome)
+                              }
+                              disabled={seedDispositionMutatingIds.has(item.id)}
+                              data-testid={`seed-item-${outcome}-${item.id}`}
+                            >
+                              {outcome === 'applied' ? 'Applied' : 'Confirmed'}
+                            </button>
+                          ),
+                        )}
+                      </td>
                     </tr>
                   ))}
                   {seedItems.length === 0 && (
                     <tr>
-                      <td colSpan={3} className={styles.muted}>
+                      <td colSpan={4} className={styles.muted}>
                         No config-seed items match these filters.
                       </td>
                     </tr>

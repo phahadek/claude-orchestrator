@@ -17,7 +17,13 @@ import {
   stepTitleFor,
   type SkillId,
 } from '../procedureCore';
-import { ALLOWED_TRANSITIONS } from '../../ops/opsJournal';
+import {
+  ALLOWED_TRANSITIONS,
+  isValidOpsTransition,
+} from '../../ops/opsJournal';
+import { passesGroomDepGate } from '../../orchestration/planningCandidates';
+import { normalizeBoardId } from '../../tasks/taskId';
+import type { NotionTask } from '../../notion/types';
 
 const repoRoot = join(__dirname, '..', '..', '..', '..', '..');
 const sharedHardRulesPath = join(
@@ -48,12 +54,52 @@ function readSkillMd(skill: SkillId): string {
   return readFileSync(path, 'utf8');
 }
 
+describe('SKILL_LABELS', () => {
+  it('carries a label for every SkillId, including docs', () => {
+    const skills: SkillId[] = ['groom', 'design', 'ops', 'split', 'docs'];
+    for (const skill of skills) {
+      expect(typeof SKILL_LABELS[skill]).toBe('string');
+      expect(SKILL_LABELS[skill].length).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('procedureCore', () => {
   it('has at least one principle and one ordered step applicable to every skill', () => {
-    const skills: SkillId[] = ['groom', 'design', 'ops', 'split'];
+    const skills: SkillId[] = ['groom', 'design', 'ops', 'split', 'docs'];
     for (const skill of skills) {
       expect(principlesFor(skill).length).toBeGreaterThan(0);
       expect(stepsFor(skill).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('guards every member of the SkillId union against shipping with zero principles — the class of defect a skill registered into the SkillId union/SKILL_LABELS but into no appliesTo list produces', () => {
+    const allSkills: SkillId[] = ['groom', 'design', 'ops', 'split', 'docs'];
+    for (const skill of allSkills) {
+      expect(
+        principlesFor(skill).length,
+        `principlesFor('${skill}') must be non-empty`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps non-docs skills at their pre-existing principlesFor/stepsFor counts — a regression guard against this docs fix leaking into unrelated skills', () => {
+    const expected: Record<
+      'groom' | 'design' | 'ops' | 'split',
+      { principles: number; steps: number }
+    > = {
+      groom: { principles: 12, steps: 8 },
+      design: { principles: 22, steps: 7 },
+      ops: { principles: 15, steps: 5 },
+      split: { principles: 5, steps: 4 },
+    };
+    for (const skill of Object.keys(expected) as Array<keyof typeof expected>) {
+      expect(principlesFor(skill).length, `${skill} principlesFor`).toBe(
+        expected[skill].principles,
+      );
+      expect(stepsFor(skill).length, `${skill} stepsFor`).toBe(
+        expected[skill].steps,
+      );
     }
   });
 
@@ -188,7 +234,16 @@ describe('procedureCore', () => {
       'packages/backend/src/tasks/readinessGate.ts',
     );
     expect(SIZE_TYPE_CHECK.locSplitThreshold).toBe(500);
+    expect(SIZE_TYPE_CHECK.fileSplitThreshold).toBe(20);
     expect(SIZE_TYPE_CHECK.implementedBy.length).toBeGreaterThan(0);
+  });
+
+  it('states both size thresholds and the exceeding-either-nominates rule in the size_check description', () => {
+    expect(SIZE_TYPE_CHECK.description).toContain('500 LoC');
+    expect(SIZE_TYPE_CHECK.description).toContain('20 files');
+    expect(SIZE_TYPE_CHECK.description).toMatch(/exceeding either/i);
+    expect(SIZE_TYPE_CHECK.description).toMatch(/nominates/i);
+    expect(SIZE_TYPE_CHECK.description).toMatch(/unsplittable/i);
   });
 
   it('states the staging-as-terminal mandate as an explicit imperative DO/DO NOT directive for groom, design, and ops', () => {
@@ -206,6 +261,41 @@ describe('procedureCore', () => {
     }
   });
 
+  it('teaches supersede-on-stage-time-block: a needs_revision correction must carry supersedes naming the blocked id', () => {
+    const skills: SkillId[] = ['groom', 'design', 'ops', 'split'];
+    for (const skill of skills) {
+      const principle = principlesFor(skill).find(
+        (p) => p.id === 'supersede-on-stage-time-block',
+      );
+      expect(principle, `${skill}`).toBeDefined();
+      const rendered = renderPrinciple(principle!, skill);
+      expect(rendered).toMatch(/needs_revision/);
+      expect(rendered).toContain('supersedes');
+      expect(rendered).toMatch(/DO NOT withdraw/);
+    }
+  });
+
+  it('keeps the self-caught-mistake withdraw directive rendering, and distinguishes it from the needs_revision supersede case rather than contradicting it', () => {
+    const withdraw = CORE_PRINCIPLES.find(
+      (p) => p.id === 'withdraw-self-caught-mistake',
+    )!;
+    const rendered = renderPrinciple(withdraw, 'groom');
+    expect(rendered).toMatch(/^DO withdraw/);
+    expect(rendered).toContain(
+      'DO NOT re-stage a corrected version under the same intent id',
+    );
+    // The self-caught directive now points at the needs_revision case instead
+    // of silently overlapping with it — both directives must agree on which
+    // path governs a needs_revision intent.
+    expect(rendered).toMatch(/needs_revision case below/);
+
+    const supersede = CORE_PRINCIPLES.find(
+      (p) => p.id === 'supersede-on-stage-time-block',
+    )!;
+    const supersedeRendered = renderPrinciple(supersede, 'groom');
+    expect(supersedeRendered).toMatch(/self-caught-mistake path/);
+  });
+
   it('states the ops capability-request path as a concrete imperative directive, not just the grant model', () => {
     const principle = CORE_PRINCIPLES.find(
       (p) => p.id === 'ask-permission-not-speculative',
@@ -215,6 +305,18 @@ describe('procedureCore', () => {
     expect(rendered).toContain('mcp__orchestrator__session_requestCapability');
     expect(rendered).toMatch(/DO NOT abstain/);
     expect(rendered).toMatch(/DO NOT fabricate/);
+  });
+
+  it('directs an ops session to consult architecture units before diagnosing or staging a proposal', () => {
+    const principle = CORE_PRINCIPLES.find(
+      (p) => p.id === 'ops-consult-architecture-before-diagnosing',
+    )!;
+    expect(principle.appliesTo).toEqual(['ops']);
+    const rendered = renderPrinciple(principle, 'ops');
+    expect(rendered).toContain('mcp__orchestrator__architecture_getUnit');
+    expect(rendered).toContain('mcp__orchestrator__architecture_queryUnits');
+    expect(rendered).toMatch(/^DO call/);
+    expect(rendered).toMatch(/DO NOT stage a diagnosis/);
   });
 
   it('states that a dispatched groom session only stages on apply-on-signoff, never applies', () => {
@@ -231,6 +333,135 @@ describe('procedureCore', () => {
     expect(text).not.toContain(
       'task.setDependsOn` (when dependencies were found)',
     );
+  });
+
+  it('names splitting-by-narrowing as an outcome of the groom Ready path, not the Deferred path', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toMatch(/still the\s+Ready path, not Deferred/);
+    expect(text).toContain(
+      'narrows the original in place to exactly the retained scope',
+    );
+    expect(text).toMatch(/one `task\.create` per\s+excised piece/);
+    expect(text).toMatch(/never for "I split this up"/);
+    expect(text).toMatch(/`size_check\.decision` as `no_split`/);
+    expect(text).toMatch(/never `split_now`/);
+    expect(text).toMatch(
+      /short one-line note \(e\.g\. in Context\) naming the siblings/,
+    );
+  });
+
+  it('states the groom dependency-promotion rule, distinguished from dispatch satisfaction, and matching passesGroomDepGate', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+    const text = stepSummaryFor(step, 'groom');
+
+    // A decision-producing Type dependency blocks promotion until Done.
+    expect(text).toMatch(
+      /📐 Design \/ 📋 Planning \/ 🔎 Investigation[\s\S]{0,120}blocks promotion to Ready for as long as it is not ✅ Done/,
+    );
+    // A Code (or any other-Type) dependency never blocks at Backlog, only at Deferred.
+    expect(text).toMatch(
+      /including 💻 Code, never blocks\s+promotion while it sits at 🔲 Backlog/,
+    );
+    expect(text).toMatch(/It still blocks while ⏭️ Deferred/);
+    // Promotion is not dispatch: the auto-dispatcher independently gates on Done.
+    expect(text).toMatch(/Promotion is not dispatch/);
+    expect(text).toMatch(
+      /auto-dispatcher independently holds every Ready task until\s+all of its dependencies reach ✅ Done/,
+    );
+    // The rule is asserted against the real predicate, not restated as an
+    // independent — and driftable — source of truth.
+    expect(text).toContain('passesGroomDepGate');
+
+    // Distinguished from the existing Deferred/dispatch-satisfaction sentence
+    // below it, which must remain present and unmodified.
+    expect(text).toMatch(
+      /separate from the Deferred-path warning below,\s+which is about what a split leaves for a task's own dependents to\s+satisfy — not about what blocks this task's own promotion/,
+    );
+    expect(text).toMatch(
+      /a split that ends\s+on Deferred silently blocks the original's dependents, since only\s+✅ Done satisfies a Depends On/,
+    );
+  });
+
+  it('matches passesGroomDepGate: a 💻 Code dependency in flight (In Progress) or at Backlog does not block promotion, but a Deferred one does', () => {
+    const inFlightDep: NotionTask = {
+      id: 'dep-in-progress',
+      title: 'Code dep in progress',
+      status: '🔄 In Progress',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const backlogDep: NotionTask = {
+      ...inFlightDep,
+      id: 'dep-backlog',
+      status: '🔲 Backlog',
+    };
+    const deferredDep: NotionTask = {
+      ...inFlightDep,
+      id: 'dep-deferred',
+      status: '⏭️ Deferred',
+    };
+    const taskWithInFlightDep: NotionTask = {
+      id: 'task-1',
+      title: 'Task',
+      status: '🔲 Backlog',
+      type: '💻 Code',
+      dependsOn: ['dep-in-progress'],
+      notionUrl: '',
+    };
+    const taskWithBacklogDep: NotionTask = {
+      ...taskWithInFlightDep,
+      id: 'task-2',
+      dependsOn: ['dep-backlog'],
+    };
+    const taskWithDeferredDep: NotionTask = {
+      ...taskWithInFlightDep,
+      id: 'task-3',
+      dependsOn: ['dep-deferred'],
+    };
+    const tasksById = new Map(
+      [
+        inFlightDep,
+        backlogDep,
+        deferredDep,
+        taskWithInFlightDep,
+        taskWithBacklogDep,
+        taskWithDeferredDep,
+      ].map((t) => [normalizeBoardId(t.id), t]),
+    );
+
+    expect(passesGroomDepGate(taskWithInFlightDep, tasksById)).toBe(true);
+    expect(passesGroomDepGate(taskWithBacklogDep, tasksById)).toBe(true);
+    expect(passesGroomDepGate(taskWithDeferredDep, tasksById)).toBe(false);
+  });
+
+  it('names task.create among the intents that share the decision groupId when splitting-by-narrowing produces one', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toMatch(
+      /one `task\.create` per\s+excised piece[\s\S]*?under the\s+same shared `groupId` as the narrowing decision/,
+    );
+    expect(text).toMatch(/never staged ungrouped/);
+  });
+
+  it('names the Arch-store-selected units digest section and sanctions dereferencing it via the architecture read tools', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'investigate')!;
+    for (const skill of ['groom', 'design', 'ops', 'split'] as SkillId[]) {
+      const text = stepSummaryFor(step, skill);
+      expect(text, `${skill} investigate summary`).toContain(
+        'Arch-store-selected units',
+      );
+      expect(text, `${skill} investigate summary`).toContain(
+        'mcp__orchestrator__architecture_getUnit',
+      );
+      expect(text, `${skill} investigate summary`).toContain(
+        'mcp__orchestrator__architecture_queryUnits',
+      );
+      expect(text, `${skill} investigate summary`).toMatch(
+        /sanctioned way to consult it/,
+      );
+    }
   });
 
   it('instructs surfacing a digest-contradicting spot-check as a blocker, not resolving around it', () => {
@@ -504,6 +735,27 @@ describe('procedureCore', () => {
       );
     });
 
+    it('requires the post-approval terminal artifacts to share one groupId, in the same register as the groom grouping rules', () => {
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /staged together under the same shared `groupId`/,
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /never individually or ungrouped/,
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /disposes the design's closing set as a single group-level/,
+      );
+    });
+
+    it('keeps completeness.disposition and decision.pickOne out of the terminal-artifact group', () => {
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /`completeness\.disposition` intent itself stays outside that group/,
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /each `decision\.pickOne` stays\s+individually staged and ungrouped, one per turn/,
+      );
+    });
+
     it('leaves the groom and ops procedures unchanged by the ordering rule', () => {
       for (const skill of ['groom', 'ops'] as SkillId[]) {
         const principleText = principlesFor(skill)
@@ -599,16 +851,16 @@ describe('procedureCore', () => {
       ).toMatch(/claims to re-derive, never\s+givens to resolve against/);
     });
 
-    it('states that evidence belongs in decisionProposal, never in an option description, and requires a rejected/accepted contrast pair', () => {
+    it('states that evidence belongs in the investigation field, never in an option description or decisionProposal, and requires a rejected/accepted contrast pair', () => {
       const optionFraming = renderPrinciple(
         CORE_PRINCIPLES.find((p) => p.id === 'design-option-framing')!,
         'design',
       );
       expect(optionFraming).toMatch(
-        /DO NOT put evidence.*inside an option `description`/,
+        /DO NOT put evidence.*inside an option `description` or\s+`decisionProposal`/,
       );
       expect(optionFraming).toMatch(
-        /that\s+evidence belongs in `decisionProposal`.s investigation summary, and only\s+there/,
+        /that\s+evidence belongs in the `investigation` field, and\s+only\s+there/,
       );
       expect(optionFraming).toMatch(
         /explicit rejected\/accepted contrast pair among the\s+staged options/,
@@ -693,6 +945,191 @@ describe('procedureCore', () => {
       const text = stepSummaryFor(step, 'ops');
       expect(text).not.toMatch(/journal\.setState.*→ staged-proposal/);
       expect(text).toMatch(/next legal ops_journal transition/);
+    });
+  });
+
+  describe('the ops-terminal closing set is mandated under one shared groupId', () => {
+    it('names every member kind of the ops-terminal closing set and the grouping mandate itself', () => {
+      const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+      const text = stepSummaryFor(step, 'ops');
+      expect(text).toMatch(/one shared/);
+      expect(text).toMatch(/groupId/);
+      expect(text).toContain('journal.setState');
+      expect(text).toContain('resolved');
+      expect(text).toContain('task.updateBody');
+      expect(text).toContain('task.patchBodySection');
+      expect(text).toContain('task.create');
+      expect(text).toMatch(/enforced at stage time/);
+    });
+
+    it('states the incidental-mid-run carve-out — a journal.setState that never targets resolved remains standalone', () => {
+      const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+      const text = stepSummaryFor(step, 'ops');
+      expect(text).toMatch(/incidental gap/);
+      expect(text).toMatch(/remains a standalone write/);
+    });
+
+    it('does not appear for groom or design (an ops-only mandate)', () => {
+      const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+      expect(stepSummaryFor(step, 'groom')).not.toMatch(
+        /journal\.setState transition to `resolved`/,
+      );
+      expect(stepSummaryFor(step, 'design')).not.toMatch(
+        /journal\.setState transition to `resolved`/,
+      );
+    });
+  });
+
+  describe('a dispatched ops run is write-capable and must drive to applied-pending-confirm', () => {
+    it('states the write-capable doctrine, scoped to ops only', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      expect(principle).toBeDefined();
+      expect(principle.appliesTo).toEqual(['ops']);
+
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/IS write-capable/);
+      expect(rendered).toContain('applied-pending-confirm');
+    });
+
+    it('names a parked staged proposal as not the acceptable terminal for work the session can perform or become equipped to perform', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(
+        /parked for someone else to execute|parking it for someone else to execute/,
+      );
+      expect(rendered).toMatch(/not the target terminal/);
+      expect(rendered).toMatch(/could earn by request/);
+    });
+
+    it('names the request → grant → apply → reconcile loop and instructs requesting a missing tool rather than declaring blocked', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/request → grant → apply → reconcile loop/);
+      expect(rendered).toContain('session_requestCapability');
+      expect(rendered).toMatch(
+        /DO NOT record the missing tool as `blocked` or `needs-setup`/,
+      );
+    });
+
+    it('still permits a genuine external blocker to terminate as blocked/needs-setup with the blocker named', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/genuine external blocker/);
+      expect(rendered).toMatch(
+        /terminates as `blocked` \/ `needs-setup`, naming the blocker explicitly/,
+      );
+    });
+
+    it('does not appear for groom or design', () => {
+      expect(
+        principlesFor('groom').find(
+          (p) => p.id === 'dispatched-ops-write-capable',
+        ),
+      ).toBeUndefined();
+      expect(
+        principlesFor('design').find(
+          (p) => p.id === 'dispatched-ops-write-capable',
+        ),
+      ).toBeUndefined();
+    });
+
+    it('is included in the assembled dispatched ops procedure', () => {
+      const assembled = principlesFor('ops', { dispatched: true })
+        .map((p) => renderPrinciple(p, 'ops'))
+        .join('\n');
+      expect(assembled).toMatch(/IS write-capable/);
+      expect(assembled).toMatch(/request → grant → apply → reconcile loop/);
+    });
+  });
+
+  describe('the no-change terminal for a decided-no-change Investigation', () => {
+    it('names an explicit no-change terminal in the rendered directive, distinct from applied-pending-confirm', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/NO-CHANGE TERMINAL/);
+      expect(rendered).toMatch(
+        /has no legal meaning for an Investigation whose conclusion is that no change is needed/,
+      );
+    });
+
+    it('no longer forbids parking at staged-proposal unconditionally — the title and body both carve out the no-change terminal', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      expect(principle.title).not.toMatch(/never park a staged proposal$/);
+      expect(principle.title).toMatch(/stage the no-change terminal/);
+
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(
+        /staging it is not the parking this rule forbids/,
+      );
+    });
+
+    it('instructs staging journal.setState to resolved, alone, as the no-change terminal, staged never applied by the session — and never task.setStatus to Done alongside it', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/journal\.setState.*→.*`resolved`/);
+      expect(rendered).toMatch(
+        /DO NOT stage `task\.setStatus` → ✅ Done alongside it, or\s+ever/,
+      );
+      expect(rendered).toMatch(/refused at stage time/);
+      expect(rendered).toMatch(/DO NOT apply it yourself/);
+    });
+
+    it('the transition the no-change terminal requires — staged-proposal to resolved — is legal per isValidOpsTransition', () => {
+      expect(isValidOpsTransition('staged-proposal', 'resolved')).toBe(true);
+    });
+
+    it('the blocked terminal for a genuine external blocker still renders and is still legal from staged-proposal', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/genuine external blocker/);
+      expect(rendered).toMatch(
+        /terminates as `blocked` \/ `needs-setup`, naming the blocker explicitly/,
+      );
+      expect(isValidOpsTransition('staged-proposal', 'blocked')).toBe(true);
+    });
+
+    it("never presents staging task.setStatus -> Done as part of any closing set anywhere in the rendered ops procedure — Done is the orchestrator's to set, not a session's to propose", () => {
+      const rendered = principlesFor('ops', { dispatched: true })
+        .map((p) => renderPrinciple(p, 'ops'))
+        .concat(ORDERED_STEPS.map((s) => stepSummaryFor(s, 'ops')))
+        .join('\n');
+      // No instruction ever tells the session to DO stage a Done transition.
+      expect(rendered).not.toMatch(/DO stage[^.]*`task\.setStatus`[^.]*Done/);
+      expect(rendered).not.toMatch(
+        /`task\.setStatus`[^.]*→[^.]*✅ Done[^.]*,[^.]*under/,
+      );
+      // The explicit prohibition is present instead.
+      expect(rendered).toMatch(
+        /DO NOT stage `task\.setStatus` → ✅ Done alongside it, or\s+ever/,
+      );
+    });
+
+    it('the granted-writes-idempotent-resumable principle reconciles staging the no-change terminal with never reaching resolved itself', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'granted-writes-idempotent-resumable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/never reaches resolved/);
+      expect(rendered).toMatch(/no-change terminal/);
+      expect(rendered).toMatch(
+        /the session stages the `journal\.setState` → `resolved` transition, it never applies it/,
+      );
     });
   });
 });

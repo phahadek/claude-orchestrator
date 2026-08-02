@@ -74,22 +74,32 @@ describe('markSessionIdle terminal guard', () => {
     const doneAt = Date.now() - 60_000;
     insertSession('sess-done', 'done', { endedAt: doneAt });
 
-    markSessionIdle('sess-done', Date.now(), null);
+    const result = markSessionIdle('sess-done', Date.now(), null);
 
     const row = getRow('sess-done');
     expect(row?.status).toBe('done');
     expect(row?.ended_at).toBe(doneAt);
+    expect(result).toBe('done');
   });
 
   it('still transitions a running session to idle (StuckSessionMonitor path unregressed)', () => {
     insertSession('sess-running', 'running');
 
     const endedAt = Date.now();
-    markSessionIdle('sess-running', endedAt, null);
+    const result = markSessionIdle('sess-running', endedAt, null);
 
     const row = getRow('sess-running');
     expect(row?.status).toBe('idle');
     expect(row?.ended_at).toBe(endedAt);
+    expect(result).toBe('idle');
+  });
+
+  it('reports the pre-existing status for each terminal value (error, killed)', () => {
+    insertSession('sess-err', 'error');
+    insertSession('sess-killed-2', 'killed');
+
+    expect(markSessionIdle('sess-err', Date.now(), null)).toBe('error');
+    expect(markSessionIdle('sess-killed-2', Date.now(), null)).toBe('killed');
   });
 
   it('records a session_idle_write_skipped_terminal audit event carrying status_before', () => {

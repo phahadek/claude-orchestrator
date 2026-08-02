@@ -84,13 +84,72 @@ describe('stage-time task reference validation', () => {
       kind: 'task.setDependsOn',
       payload: { taskId: 't-1', dependsOn: ['known-task-1'] },
       projectId: 'proj-1',
+      groupId: 'group-1',
     });
 
     expect(res.status).toBe(201);
     expect(res.body.payload).toEqual({
-      taskId: 't-1',
+      taskId: 'notion:t-1',
       dependsOn: ['notion:known-task-1'],
     });
+  });
+
+  it('converges a hyphenless, a hyphenated, and a notion:-prefixed form of the same taskId subject on one canonical stored value', async () => {
+    const hyphenated = '3aa22f91-52f3-81a7-a58b-db94fe13e649';
+    const hyphenless = '3aa22f9152f381a7a58bdb94fe13e649';
+    const canonical = `notion:${hyphenated}`;
+    upsertTaskCache(canonical, JSON.stringify({ status: 'In Progress' }));
+
+    for (const raw of [hyphenless, hyphenated, canonical]) {
+      const res = await stagePost(app(), {
+        kind: 'task.setStatus',
+        payload: { taskId: raw, status: 'In Progress' },
+        projectId: 'proj-1',
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.payload.taskId).toBe(canonical);
+    }
+  });
+
+  it('preserves a non-Notion source prefix — a jira-backed taskId is not coerced to a notion-shaped id', async () => {
+    upsertTaskCache('jira:PROJ-123', JSON.stringify({ status: 'In Progress' }));
+
+    const res = await stagePost(app(), {
+      kind: 'task.setStatus',
+      payload: { taskId: 'jira:PROJ-123', status: 'In Progress' },
+      projectId: 'proj-1',
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.payload.taskId).toBe('jira:PROJ-123');
+  });
+
+  it('normalizes a gate.accrete sourceTask.id on the same rule as a taskId subject', async () => {
+    upsertTaskCache(
+      'notion:3aa22f91-52f3-81a7-a58b-db94fe13e649',
+      JSON.stringify({ type: '💻 Code' }),
+    );
+
+    const res = await stagePost(app(), {
+      kind: 'gate.accrete',
+      payload: {
+        sourceTask: {
+          id: '3aa22f9152f381a7a58bdb94fe13e649',
+          title: 'Some Code task',
+          project: 'proj-1',
+          milestone: 'M1',
+        },
+        items: [{ text: 'Launch-and-observe the new endpoint' }],
+        classification: 'Human-Observation',
+      },
+      projectId: 'proj-1',
+      groupId: 'group-1',
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.payload.sourceTask.id).toBe(
+      'notion:3aa22f91-52f3-81a7-a58b-db94fe13e649',
+    );
   });
 
   it('rejects an unparseable id, naming the offending value and the expected shape', async () => {
@@ -241,6 +300,7 @@ describe('Investigation accretion rejection', () => {
         classification: 'Human-Observation',
       },
       projectId: 'proj-1',
+      groupId: 'group-1',
     });
 
     expect(res.status).toBe(201);
@@ -262,6 +322,7 @@ describe('Investigation accretion rejection', () => {
         classification: 'Human-Observation',
       },
       projectId: 'proj-1',
+      groupId: 'group-1',
     });
 
     expect(res.status).toBe(201);

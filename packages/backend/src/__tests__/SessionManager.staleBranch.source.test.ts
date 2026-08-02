@@ -57,14 +57,14 @@ describe('SessionManager stale-branch abandonment — source structure', () => {
 
   it('retry catch throws WorktreeSetupError with isBranchAlreadyExists: false', () => {
     expect(completeStartBlock).toMatch(
-      /WorktreeSetupError[\s\S]{1,200}isBranchAlreadyExists:\s*false/,
+      /buildWorktreeSetupError\(retryErr, retryMsg, false\)/,
     );
   });
 
   it('no-predecessor else branch throws WorktreeSetupError with isBranchAlreadyExists variable', () => {
     // The "else" path (no terminal predecessor) must preserve the original error
     expect(completeStartBlock).toMatch(
-      /WorktreeSetupError[\s\S]{1,200}isBranchAlreadyExists\s*\}/,
+      /buildWorktreeSetupError\(\s*err,\s*fullMsg,\s*isBranchAlreadyExists,?\s*\)/,
     );
   });
 

@@ -2,12 +2,17 @@
  * Tests for DeployOrchestrator (packages/backend/src/deploy/DeployOrchestrator.ts).
  *
  * AC: a run executes steps in order by kind; changed_paths skip works; an
- * agentic step gates on its verdict; a step failure halts + surfaces + runs
- * rollback_ref; a simulated restart resumes at current_step; companion-diff
- * flags on a trigger-path match.
+ * agentic step gates on its verdict; a step failure always halts + surfaces
+ * the matching failure_diagnosis; a declared rollback_ref only runs its
+ * compensating step behind a confirm-gate, with no recursion on its own
+ * failure; a simulated restart resumes at current_step; companion-diff flags
+ * on a trigger-path match.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -18,16 +23,21 @@ import { db } from '../../db/db.js';
 import {
   DeployOrchestrator,
   buildDeployStepEnv,
+  buildShellInvocation,
   spawnShell,
+  validateBindingReferences,
   RESTART_STEP_ID,
+  IDENTITY_CAPTURE_INVALID,
   type DeployOrchestratorDeps,
   type ShellResult,
 } from '../DeployOrchestrator';
 import {
   getDeployRun,
+  getActiveDeployRun,
   listDeployRunEvents,
   getProjectDeployedSha,
 } from '../deployService';
+import { loadDeployBindings } from '../loadDeployBindings';
 import type { DeployPlaybook, StepDescriptor } from '../playbookSchema';
 import type { LoadPlaybookResult } from '../loadPlaybook';
 
@@ -248,48 +258,23 @@ describe('DeployOrchestrator: agentic step gating', () => {
   });
 });
 
-describe('DeployOrchestrator: step failure halts + rollback', () => {
-  it('runs rollback_ref, halts, and surfaces on step failure', async () => {
+describe('DeployOrchestrator: step failure halts + compensating step', () => {
+  it('surfaces the matching failure_diagnosis and halts without running anything when there is no rollback_ref', async () => {
     const playbook = playbookWith([
-      step({ id: 'deploy', kind: 'shell', rollback_ref: 'rollback' }),
-      step({ id: 'rollback', kind: 'shell' }),
+      step({ id: 'bookkeeping', kind: 'shell', is_prod_mutating: true }),
       step({ id: 'never-reached', kind: 'shell' }),
     ]);
-    const shellCommands: string[] = [];
+    playbook.failure_diagnoses = [
+      {
+        symptom: 'bookkeeping fails',
+        cause: 'marker write failed',
+        action: 're-write the marker',
+        step: 'bookkeeping',
+      },
+    ];
     const onNeedsAttention = vi.fn();
     const deps = makeDeps(playbook, {
       sink: { onNeedsAttention },
-      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
-        shellCommands.push(command);
-        if (command === 'run deploy')
-          return { ok: false, output: 'deploy exploded', exitCode: 1 };
-        return { ok: true, output: '', exitCode: 0 };
-      }),
-    });
-    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
-    const run = await orchestrator.startDeploy('sha-target');
-    await flush();
-
-    expect(shellCommands).toEqual(['run deploy', 'run rollback']);
-    expect(getDeployRun(run.run_id)?.status).toBe('failed');
-    expect(onNeedsAttention).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: run.run_id,
-        stepId: 'deploy',
-        reason: 'deploy exploded',
-      }),
-    );
-    const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
-    expect(events).toContain('step_failed');
-    expect(events).toContain('rollback_succeeded');
-  });
-
-  it('halts to a terminal failed state with no rollback event when the failed step has no rollback_ref', async () => {
-    const playbook = playbookWith([
-      step({ id: 'bookkeeping', kind: 'shell' }),
-      step({ id: 'never-reached', kind: 'shell' }),
-    ]);
-    const deps = makeDeps(playbook, {
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         if (command === 'run bookkeeping')
           return { ok: false, output: 'bookkeeping exploded', exitCode: 1 };
@@ -310,10 +295,127 @@ describe('DeployOrchestrator: step failure halts + rollback', () => {
     expect(events.find((e) => e.event_type === 'step_failed')?.detail).toBe(
       'bookkeeping exploded',
     );
+    expect(events.some((e) => e.event_type === 'confirm_gate')).toBe(false);
     expect(events.some((e) => e.event_type === 'rollback_succeeded')).toBe(
       false,
     );
     expect(events.some((e) => e.event_type === 'rollback_failed')).toBe(false);
+    expect(onNeedsAttention).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.run_id,
+        stepId: 'bookkeeping',
+        reason: expect.stringContaining('marker write failed'),
+      }),
+    );
+  });
+
+  it('confirm-gates a declared compensating step and runs it only on approval', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'deploy',
+        kind: 'shell',
+        is_prod_mutating: true,
+        rollback_ref: 'compensate',
+      }),
+      step({ id: 'compensate', kind: 'shell' }),
+      step({ id: 'never-reached', kind: 'shell' }),
+    ]);
+    const shellCommands: string[] = [];
+    const onNeedsAttention = vi.fn();
+    const waitForConfirmGate = vi.fn(async () => true);
+    const deps = makeDeps(playbook, {
+      sink: { onNeedsAttention },
+      waitForConfirmGate,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        if (command === 'run deploy')
+          return { ok: false, output: 'deploy exploded', exitCode: 1 };
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(waitForConfirmGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.run_id,
+        step: expect.objectContaining({ id: 'compensate' }),
+      }),
+    );
+    expect(shellCommands).toEqual(['run deploy', 'run compensate']);
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+    expect(onNeedsAttention).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.run_id,
+        stepId: 'deploy',
+        reason: expect.stringContaining('deploy exploded'),
+      }),
+    );
+    const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
+    expect(events).toContain('step_failed');
+    expect(events).toContain('confirm_gate');
+    expect(events).toContain('rollback_succeeded');
+  });
+
+  it('does not run the compensating step when the operator rejects the confirm-gate', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'deploy',
+        kind: 'shell',
+        is_prod_mutating: true,
+        rollback_ref: 'compensate',
+      }),
+      step({ id: 'compensate', kind: 'shell' }),
+    ]);
+    const shellCommands: string[] = [];
+    const deps = makeDeps(playbook, {
+      waitForConfirmGate: vi.fn(async () => false),
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        if (command === 'run deploy')
+          return { ok: false, output: 'deploy exploded', exitCode: 1 };
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(shellCommands).toEqual(['run deploy']);
+    const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
+    expect(events).toContain('confirm_gate');
+    expect(events.some((e) => e === 'rollback_succeeded')).toBe(false);
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+  });
+
+  it('records rollback_failed with no recursion when the compensating step itself fails', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'deploy',
+        kind: 'shell',
+        is_prod_mutating: true,
+        rollback_ref: 'compensate',
+      }),
+      step({ id: 'compensate', kind: 'shell' }),
+    ]);
+    const shellCommands: string[] = [];
+    const deps = makeDeps(playbook, {
+      waitForConfirmGate: vi.fn(async () => true),
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        return { ok: false, output: `${command} exploded`, exitCode: 1 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(shellCommands).toEqual(['run deploy', 'run compensate']);
+    const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
+    expect(events).toContain('rollback_failed');
+    expect(events.filter((e) => e === 'confirm_gate')).toHaveLength(1);
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
   });
 
   it('reaches a terminal failed state (not stuck running) when the final step fails with no rollback_ref', async () => {
@@ -589,6 +691,120 @@ describe('DeployOrchestrator: verify gates on a differing pre/post-restart ident
     expect(captureEvent?.detail).toBe('pid-111');
   });
 
+  it('persists only the stdout value when identity_capture also writes to stderr', async () => {
+    const { logger } = await import('../../logger');
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 1,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === IDENTITY_CMD) {
+          return {
+            ok: true,
+            output: '/etc/bash.bashrc: line 1: PS1: unbound variable\npid-111',
+            exitCode: 0,
+            stdout: 'pid-111',
+            stderr: '/etc/bash.bashrc: line 1: PS1: unbound variable',
+          };
+        }
+        return { ok: true, output: '', exitCode: 0, stdout: '', stderr: '' };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const captureEvent = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'pre_restart_identity_captured',
+    );
+    expect(captureEvent?.detail).toBe('pid-111');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('PS1: unbound variable'),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('trims surrounding whitespace/newlines from the captured identity value', async () => {
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 1,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === IDENTITY_CMD) {
+          return {
+            ok: true,
+            output: '  pid-111  \n',
+            exitCode: 0,
+            stdout: '  pid-111  \n',
+            stderr: '',
+          };
+        }
+        return { ok: true, output: '', exitCode: 0, stdout: '', stderr: '' };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const captureEvent = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'pre_restart_identity_captured',
+    );
+    expect(captureEvent?.detail).toBe('pid-111');
+  });
+
+  it('records an explicit invalid marker when the stdout-only capture is malformed', async () => {
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 1,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === IDENTITY_CMD) {
+          return {
+            ok: true,
+            output: '',
+            exitCode: 0,
+            stdout: '',
+            stderr: 'some warning',
+          };
+        }
+        return { ok: true, output: '', exitCode: 0, stdout: '', stderr: '' };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const captureEvent = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'pre_restart_identity_captured',
+    );
+    expect(captureEvent?.detail).toBe(IDENTITY_CAPTURE_INVALID);
+  });
+
+  it("compares the cleaned stdout-only value on verify's post-restart re-read", async () => {
+    let identityCalls = 0;
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 5,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === IDENTITY_CMD) {
+          identityCalls += 1;
+          const stdout = identityCalls === 1 ? 'pid-old' : 'pid-new';
+          return {
+            ok: true,
+            output: `/etc/bash.bashrc: line 1: PS1: unbound variable\n${stdout}`,
+            exitCode: 0,
+            stdout,
+            stderr: '/etc/bash.bashrc: line 1: PS1: unbound variable',
+          };
+        }
+        if (command === HEALTH_CMD) {
+          return { ok: true, output: '', exitCode: 0, stdout: '', stderr: '' };
+        }
+        return { ok: true, output: '', exitCode: 0, stdout: '', stderr: '' };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+    expect(identityCalls).toBeGreaterThanOrEqual(2);
+  });
+
   it('fails verify when the observed post-restart identity equals the pre-restart one', async () => {
     const deps = makeDeps(identityPlaybook(), {
       pollMaxAttempts: 3,
@@ -742,6 +958,409 @@ describe('DeployOrchestrator: companion-diff flags', () => {
     expect(info.companions.map((c: { name: string }) => c.name)).toEqual([
       'worker',
     ]);
+  });
+});
+
+describe('DeployOrchestrator + real spawnShell: host-binding substitution', () => {
+  it('rejects at preflight, before any step runs, when a shell step references an undefined binding', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'use-binding',
+        kind: 'shell',
+        command_or_prompt: 'echo "${UNDEFINED_BINDING}"',
+      }),
+    ]);
+    const loadResult: LoadPlaybookResult = { ok: true, playbook };
+    const orchestrator = new DeployOrchestrator('proj', process.cwd(), {
+      loadPlaybook: () => loadResult,
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: {},
+        bindingsPath: null,
+      }),
+      spawnAgenticStep: vi.fn(),
+      waitForConfirmGate: vi.fn(async () => true),
+      getDiffPaths: vi.fn(async () => []),
+      now,
+      pollDelayMs: 0,
+    });
+
+    await expect(orchestrator.startDeploy('sha-target')).rejects.toThrow(
+      /UNDEFINED_BINDING/,
+    );
+  });
+
+  it('makes a declared binding available to a shell step via env expansion', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'use-binding',
+        kind: 'shell',
+        command_or_prompt: 'test "$MY_BINDING" = "hello"',
+      }),
+    ]);
+    const loadResult: LoadPlaybookResult = { ok: true, playbook };
+    const orchestrator = new DeployOrchestrator('proj', process.cwd(), {
+      loadPlaybook: () => loadResult,
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: { MY_BINDING: 'hello' },
+        bindingsPath: null,
+      }),
+      spawnAgenticStep: vi.fn(),
+      waitForConfirmGate: vi.fn(async () => true),
+      getDiffPaths: vi.fn(async () => []),
+      now,
+      pollDelayMs: 0,
+    });
+
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+  });
+});
+
+describe('buildShellInvocation: run_as binding threading', () => {
+  it('threads bindings through as NAME=value argv tokens ahead of bash -uc, since sudo resets the environment', () => {
+    const { cmd, args } = buildShellInvocation('echo "$MY_BINDING"', {
+      runAs: 'deploy',
+      bindings: { MY_BINDING: 'hello', OTHER: 'x' },
+    });
+    expect(cmd).toBe('sudo');
+    expect(args).toEqual([
+      '-u',
+      'deploy',
+      'NODE_ENV=development',
+      'MY_BINDING=hello',
+      'OTHER=x',
+      'bash',
+      '-uc',
+      'echo "$MY_BINDING"',
+    ]);
+  });
+
+  it('omits sudo entirely (and any binding tokens) when no run_as is given', () => {
+    const { cmd, args } = buildShellInvocation('echo hi', {
+      bindings: { MY_BINDING: 'hello' },
+    });
+    expect(cmd).toBe('bash');
+    expect(args).toEqual(['-uc', 'echo hi']);
+  });
+});
+
+describe('DeployOrchestrator: binding substitution for confirm-gate/agentic step text', () => {
+  it('resolves a binding reference in a confirm-gate step before handing it to waitForConfirmGate', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'confirm',
+        kind: 'confirm-gate',
+        command_or_prompt: 'restart ${SERVICE_NAME}?',
+      }),
+    ]);
+    let seenText: string | undefined;
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: { SERVICE_NAME: 'orchestrator' },
+        bindingsPath: null,
+      }),
+      waitForConfirmGate: vi.fn(async ({ step: s }) => {
+        seenText = s.command_or_prompt;
+        return true;
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(seenText).toBe('restart orchestrator?');
+  });
+
+  it('rejects at preflight, never waiting for a disposition, when a confirm-gate step references an undefined binding', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'confirm',
+        kind: 'confirm-gate',
+        command_or_prompt: 'restart ${UNDEFINED}?',
+      }),
+    ]);
+    const waitForConfirmGate = vi.fn(async () => true);
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: {},
+        bindingsPath: null,
+      }),
+      waitForConfirmGate,
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+
+    await expect(orchestrator.startDeploy('sha-target')).rejects.toThrow(
+      /UNDEFINED/,
+    );
+    expect(waitForConfirmGate).not.toHaveBeenCalled();
+  });
+
+  it('resolves a binding reference in an agentic step prompt before spawning it', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'check',
+        kind: 'agentic',
+        command_or_prompt: 'inspect ${TARGET}',
+      }),
+    ]);
+    let seenPrompt: string | undefined;
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: { TARGET: 'db' },
+        bindingsPath: null,
+      }),
+      spawnAgenticStep: vi.fn(),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    deps.spawnAgenticStep = vi.fn(({ runId, step: s }) => {
+      seenPrompt = s.command_or_prompt;
+      orchestrator.reportAgenticVerdict(runId, s.id, 'approved');
+    });
+    await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(seenPrompt).toBe('inspect db');
+  });
+
+  it('rejects at preflight and never spawns the agentic step when its prompt references an undefined binding', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'check',
+        kind: 'agentic',
+        command_or_prompt: 'inspect ${UNDEFINED}',
+      }),
+    ]);
+    const spawnAgenticStep = vi.fn();
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: {},
+        bindingsPath: null,
+      }),
+      spawnAgenticStep,
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+
+    await expect(orchestrator.startDeploy('sha-target')).rejects.toThrow(
+      /UNDEFINED/,
+    );
+    expect(spawnAgenticStep).not.toHaveBeenCalled();
+  });
+});
+
+describe('DeployOrchestrator: bindings loaded once per run', () => {
+  it('loads bindings once per drive() call, not re-read between steps', async () => {
+    const playbook = playbookWith([
+      step({ id: 'one', kind: 'shell' }),
+      step({ id: 'two', kind: 'shell' }),
+      step({ id: 'three', kind: 'shell' }),
+    ]);
+    const loadDeployBindingsMock = vi.fn(() => ({
+      ok: true,
+      bindings: {},
+      bindingsPath: null,
+    }));
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: loadDeployBindingsMock,
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(loadDeployBindingsMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('validateBindingReferences: preflight message content', () => {
+  it('names the missing binding(s) and the resolved deploy-bindings.yml path', () => {
+    const playbook = playbookWith([
+      step({
+        id: 'record-deployed-sha',
+        kind: 'shell',
+        command_or_prompt: 'git rev-parse HEAD > "$DEPLOYED_SHA_PATH"',
+      }),
+    ]);
+    const result = validateBindingReferences(playbook, {
+      ok: true,
+      bindings: {},
+      bindingsPath:
+        '/srv/orchestrator/projects/config/projects/proj/deploy-bindings.yml',
+    });
+    expect(result).toEqual({
+      ok: false,
+      reason: expect.stringContaining('DEPLOYED_SHA_PATH'),
+    });
+    if (!result.ok) {
+      expect(result.reason).toContain(
+        '/srv/orchestrator/projects/config/projects/proj/deploy-bindings.yml',
+      );
+    }
+  });
+
+  it('names an unresolvable config tree when no bindingsPath exists', () => {
+    const playbook = playbookWith([
+      step({
+        id: 'use-binding',
+        kind: 'shell',
+        command_or_prompt: 'echo "$SOME_BINDING"',
+      }),
+    ]);
+    const result = validateBindingReferences(playbook, {
+      ok: true,
+      bindings: {},
+      bindingsPath: null,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/SOME_BINDING/);
+      expect(result.reason).toMatch(/no resolvable central config tree/);
+    }
+  });
+
+  it('passes when every referenced binding is present', () => {
+    const playbook = playbookWith([
+      step({
+        id: 'use-binding',
+        kind: 'shell',
+        command_or_prompt: 'echo "$SOME_BINDING"',
+      }),
+    ]);
+    const result = validateBindingReferences(playbook, {
+      ok: true,
+      bindings: { SOME_BINDING: 'value' },
+      bindingsPath: null,
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('passes a playbook that references no bindings even with an empty bindings map', () => {
+    const playbook = playbookWith([step({ id: 'build', kind: 'shell' })]);
+    const result = validateBindingReferences(playbook, {
+      ok: true,
+      bindings: {},
+      bindingsPath: null,
+    });
+    expect(result).toEqual({ ok: true });
+  });
+});
+
+describe('DeployOrchestrator: preflight binding validation (real loadDeployBindings + fs)', () => {
+  let tmpRoot: string;
+  let projectDir: string;
+  let configDir: string;
+  let originalConfigDirEnv: string | undefined;
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deploy-orch-bindings-'));
+    projectDir = path.join(tmpRoot, 'checkout', 'my-project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    configDir = path.join(tmpRoot, 'config');
+    fs.mkdirSync(path.join(configDir, 'projects', 'my-project'), {
+      recursive: true,
+    });
+    originalConfigDirEnv = process.env.ORCHESTRATOR_CONFIG_DIR;
+    process.env.ORCHESTRATOR_CONFIG_DIR = configDir;
+  });
+
+  afterEach(() => {
+    if (originalConfigDirEnv === undefined) {
+      delete process.env.ORCHESTRATOR_CONFIG_DIR;
+    } else {
+      process.env.ORCHESTRATOR_CONFIG_DIR = originalConfigDirEnv;
+    }
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('rejects at preflight, before any step runs, when deploy-bindings.yml is absent but the playbook references a binding', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'record-deployed-sha',
+        kind: 'shell',
+        command_or_prompt: 'git rev-parse HEAD > "$DEPLOYED_SHA_PATH"',
+      }),
+    ]);
+    const runShell = vi.fn(
+      async (): Promise<ShellResult> => ({ ok: true, output: '', exitCode: 0 }),
+    );
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: (dir: string) => loadDeployBindings(dir),
+      runShell,
+    });
+    const orchestrator = new DeployOrchestrator('proj', projectDir, deps);
+
+    const expectedPath = path.join(
+      configDir,
+      'projects',
+      'my-project',
+      'deploy-bindings.yml',
+    );
+    await expect(orchestrator.startDeploy('sha-target')).rejects.toThrow(
+      new RegExp(
+        `DEPLOYED_SHA_PATH.*${expectedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+      ),
+    );
+    expect(runShell).not.toHaveBeenCalled();
+    expect(getActiveDeployRun('proj')).toBeUndefined();
+  });
+
+  it('still deploys when deploy-bindings.yml is absent and the playbook references no bindings', async () => {
+    const playbook = playbookWith([step({ id: 'build', kind: 'shell' })]);
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: (dir: string) => loadDeployBindings(dir),
+    });
+    const orchestrator = new DeployOrchestrator('proj', projectDir, deps);
+
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+  });
+
+  it('still deploys when no config tree resolves at all and the playbook references no bindings', async () => {
+    delete process.env.ORCHESTRATOR_CONFIG_DIR;
+    const unresolvableProjectDir = path.join(
+      tmpRoot,
+      'no-config-here',
+      'my-project',
+    );
+    fs.mkdirSync(unresolvableProjectDir, { recursive: true });
+    const playbook = playbookWith([step({ id: 'build', kind: 'shell' })]);
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: (dir: string) => loadDeployBindings(dir),
+    });
+    const orchestrator = new DeployOrchestrator(
+      'proj',
+      unresolvableProjectDir,
+      deps,
+    );
+
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+  });
+
+  it('still fails closed on a malformed present deploy-bindings.yml', async () => {
+    fs.writeFileSync(
+      path.join(configDir, 'projects', 'my-project', 'deploy-bindings.yml'),
+      'PORT: 5432\n',
+    );
+    const playbook = playbookWith([step({ id: 'build', kind: 'shell' })]);
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: (dir: string) => loadDeployBindings(dir),
+    });
+    const orchestrator = new DeployOrchestrator('proj', projectDir, deps);
+
+    await expect(orchestrator.startDeploy('sha-target')).rejects.toThrow(
+      /must be a string value/,
+    );
   });
 });
 

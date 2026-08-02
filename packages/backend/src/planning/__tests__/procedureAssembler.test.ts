@@ -1,20 +1,54 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+
+// Project-record fixtures used by the mocked `getProjectById` below —
+// `projectDir` intentionally does not match the registry id key for either
+// entry, mirroring the real registry (see procedureCore.ts's
+// `renderCheckoutPathStatement`). Declared via `vi.hoisted` so the same
+// object is usable both inside the mock factory (which vitest hoists above
+// this file's imports) and in assertions further down, keeping the expected
+// value derived from one place rather than re-typed as a literal string.
+const { PROJECT_FIXTURES } = vi.hoisted(() => ({
+  PROJECT_FIXTURES: {
+    p1: {
+      id: 'p1',
+      projectDir: '/srv/orchestrator/projects/claude-orchestrator',
+    },
+    'other-project': {
+      id: 'other-project',
+      projectDir: '/srv/orchestrator/projects/totally-different-dirname',
+    },
+  } as Record<string, { id: string; projectDir: string }>,
+}));
+
+vi.mock('../../config', async () => {
+  const actual =
+    await vi.importActual<typeof import('../../config')>('../../config');
+  return {
+    ...actual,
+    getProjectById: (id: string) => PROJECT_FIXTURES[id],
+  };
+});
+
 import {
   assemblePlanningProcedure,
   deriveGroomDigestSlice,
   deriveDesignDigestSlice,
+  deriveDocsDigestSlice,
   deriveOpsDigestSlice,
   GroomWorklistTaskNotFoundError,
   WORKFLOW_LOADERS,
   type PlanningDigest,
 } from '../procedureAssembler';
+import { SIZE_TYPE_CHECK } from '../procedureCore';
 import type { GroomLoadResult } from '../../groom/groomLoad';
 import type { DesignLoadResult } from '../../design/designLoad';
+import type { DocsLoadResult } from '../../docs/docsLoad';
 import type { OpsLoadResult } from '../../ops/opsLoad';
 import { KNOWN_INTENT_KINDS } from '../../routes/stagedIntents';
 import { orchestratorMcpToolName } from '../../mcp/toolNaming';
+import { normalizeTaskId } from '../../tasks/taskId';
 
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
@@ -97,8 +131,11 @@ function fixtureOpsLoadResult(): OpsLoadResult {
     dependsOn: ['dep-2'],
     blockingDepIds: [],
     depStatus: 'ready' as const,
+    archSource: 'notion' as const,
+    archUnits: [],
   };
   return {
+    archSource: 'notion',
     contextPages: [
       { id: 'ctx-2', title: 'Ops Master Context', markdown: '...' },
     ],
@@ -116,6 +153,23 @@ function fixtureOpsLoadResult(): OpsLoadResult {
       newly_unblocked: [],
     },
   } as unknown as OpsLoadResult;
+}
+
+function fixtureDocsLoadResult(opts: { blank?: boolean } = {}): DocsLoadResult {
+  return {
+    task: {
+      id: 'task-4',
+      title: 'Document the webhooks API',
+      status: '🔄 In Progress',
+      type: '📝 Docs',
+      url: 'https://notion.so/task-4',
+    },
+    markdown: '# Document the webhooks API\n\nSome body.',
+    targetSurface: opts.blank ? '' : 'docs/api/webhooks.md',
+    sourceDomains: opts.blank
+      ? []
+      : ['docs.stripe.com', 'developer.github.com'],
+  };
 }
 
 // ─── derive* ────────────────────────────────────────────────────────────────
@@ -250,6 +304,99 @@ describe('deriveOpsDigestSlice', () => {
   });
 });
 
+describe('deriveDocsDigestSlice', () => {
+  it('narrows the loader result, carrying the declared Target surface and Source domains', () => {
+    const slice = deriveDocsDigestSlice(fixtureDocsLoadResult());
+    expect(slice.task.id).toBe('task-4');
+    expect(slice.targetSurface).toBe('docs/api/webhooks.md');
+    expect(slice.sourceDomains).toEqual([
+      'docs.stripe.com',
+      'developer.github.com',
+    ]);
+    expect(slice.markdown).toContain('Document the webhooks API');
+  });
+});
+
+// ─── PlanningDigest 'docs' variant + renderDigest ──────────────────────────
+
+describe('docs digest rendering', () => {
+  it('assemblePlanningProcedure renders non-empty content carrying the declared Target surface and Source domains', () => {
+    const digest: PlanningDigest = {
+      workflow: 'docs',
+      data: deriveDocsDigestSlice(fixtureDocsLoadResult()),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Document the webhooks API',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output.length).toBeGreaterThan(0);
+    expect(output).toContain('## Session Lifecycle');
+    expect(output).toContain('## Transport');
+    expect(output).toContain('docs/api/webhooks.md');
+    expect(output).toContain('docs.stripe.com');
+    expect(output).toContain('developer.github.com');
+    expect(output).toContain(orchestratorMcpToolName('notion.pageEdit'));
+  });
+
+  it('renders an explicit stop-and-ask call-out, never a silent blank, when Target surface / Source domains are undeclared', () => {
+    const digest: PlanningDigest = {
+      workflow: 'docs',
+      data: deriveDocsDigestSlice(fixtureDocsLoadResult({ blank: true })),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Undeclared docs task',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output).toMatch(/not declared.*stop and ask/i);
+  });
+
+  it('renders the Task id line immediately after the Task line, equal to the slice task id verbatim', () => {
+    const data = deriveDocsDigestSlice(fixtureDocsLoadResult());
+    const digest: PlanningDigest = { workflow: 'docs', data };
+    const output = assemblePlanningProcedure({
+      taskName: 'Document the webhooks API',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    const lines = output.split('\n');
+    const taskLineIndex = lines.findIndex((l) => l.startsWith('- Task: '));
+    expect(taskLineIndex).toBeGreaterThan(-1);
+    expect(lines[taskLineIndex + 1]).toBe(`- Task id: \`${data.task.id}\``);
+  });
+
+  it('renders a non-empty ### Hard rules section for a dispatched docs session — regression guard for docs having zero principlesFor/stepsFor entries', () => {
+    const digest: PlanningDigest = {
+      workflow: 'docs',
+      data: deriveDocsDigestSlice(fixtureDocsLoadResult()),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Document the webhooks API',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+
+    // At least one numbered step above the Hard rules heading.
+    expect(output).toMatch(/## Docs Authoring Procedure/);
+    expect(output).toMatch(/### .+\n\n.+\n\n### Hard rules/s);
+
+    const hardRulesIndex = output.indexOf('### Hard rules');
+    expect(hardRulesIndex).toBeGreaterThan(-1);
+    const afterHeading = output.slice(hardRulesIndex + '### Hard rules'.length);
+    expect(afterHeading).toMatch(/\n- \*\*.+\*\*:/);
+    expect(output).toContain('The human is the gate');
+  });
+});
+
 // ─── assemblePlanningProcedure ──────────────────────────────────────────────
 
 describe('assemblePlanningProcedure', () => {
@@ -309,6 +456,17 @@ describe('assemblePlanningProcedure', () => {
       expect(output).toContain('session.requestCapability');
       expect(output).toContain('it never narrows whether one may be requested');
 
+      // States the checkout path literally (resolved from the project
+      // record, not a placeholder), that the session's working directory
+      // is that checkout, and that the registry id must not be used as a
+      // path search term — for every workflow (groom/design/ops).
+      expect(output).toContain(PROJECT_FIXTURES.p1.projectDir);
+      expect(output).toMatch(
+        /working directory is already the project checkout/,
+      );
+      expect(output).toMatch(/NOT named after this project's registry id/);
+      expect(output).toMatch(/do not `find` \/ `ls` \/ grep the filesystem/);
+
       // Per-type digest section.
       const digestTitles: Record<PlanningDigest['workflow'], string> = {
         groom: '## Grooming Validation Slice',
@@ -316,6 +474,21 @@ describe('assemblePlanningProcedure', () => {
         ops: '## Ops Journal Slice',
       };
       expect(output).toContain(digestTitles[workflow]);
+
+      // The task id is rendered as a discrete, copy-pasteable field
+      // alongside the existing title/type/status/url line — not only
+      // recoverable by parsing the trailing hex of the Notion URL.
+      expect(output).toContain(`\`${digest.data.task.id}\``);
+      expect(output).toMatch(/- Task id: `.+`/);
+
+      // The existing Task line — title, type, status, url — is unchanged.
+      const taskStatus =
+        workflow === 'ops'
+          ? (digest.data.task as { mode: string }).mode
+          : (digest.data.task as { status: string }).status;
+      expect(output).toContain(
+        `- Task: ${digest.data.task.title} (${digest.data.task.type}, ${taskStatus}) — ${digest.data.task.url}`,
+      );
 
       // Concrete Transport block — the milestone/project ids, the allowed
       // intent kinds, and at least one concrete client invocation.
@@ -358,6 +531,99 @@ describe('assemblePlanningProcedure', () => {
       }
     });
   }
+
+  it('a split session (same slice as groom, `## Split Candidate Slice` heading) also gets the Task id field', () => {
+    const data = deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1');
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: { workflow: 'split', data },
+    });
+    expect(output).toContain('## Split Candidate Slice');
+    expect(output).toContain(`- Task id: \`${data.task.id}\``);
+  });
+
+  it('pairs every `- Task:` line with a `- Task id:` line, across all four render sites (groom, design, ops, docs) plus split', () => {
+    const allDigests: PlanningDigest[] = [
+      ...cases.map((c) => c.digest),
+      {
+        workflow: 'docs',
+        data: deriveDocsDigestSlice(fixtureDocsLoadResult()),
+      },
+      {
+        workflow: 'split',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    ];
+    for (const digest of allDigests) {
+      const output = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
+        digest,
+      });
+      const lines = output.split('\n');
+      const taskLines = lines.filter((l) => l.startsWith('- Task: '));
+      const taskIdLines = lines.filter((l) => l.startsWith('- Task id: '));
+      expect(taskLines.length).toBeGreaterThan(0);
+      expect(taskIdLines.length).toBe(taskLines.length);
+    }
+  });
+
+  it('renders the task id in the exact form the staging tools accept — copyable verbatim into a task.setStatus payload with no transformation', () => {
+    const canonicalId = 'notion:3b022f91-52f3-810e-846b-ded6111a6bb3';
+    const loadResult = fixtureGroomLoadResult();
+    loadResult.targetTasks[0].id = canonicalId;
+    const data = deriveGroomDigestSlice(loadResult, canonicalId);
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: { workflow: 'groom', data },
+    });
+    const match = output.match(/- Task id: `([^`]+)`/);
+    expect(match).not.toBeNull();
+    const renderedTaskId = match![1];
+    expect(renderedTaskId).toBe(data.task.id);
+
+    const payload = { taskId: renderedTaskId, status: 'Ready' };
+    // Round-trips through the staging tools' own id canonicalization
+    // unchanged — proof the rendered id needs no re-hyphenation or
+    // re-prefixing before it's usable in a task.setStatus payload.
+    expect(normalizeTaskId(payload.taskId)).toBe(payload.taskId);
+  });
+
+  it("renders the real directory for a project whose checkout dir name differs from its registry id — not the p1 fixture's path", () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'other-project',
+      digest: cases[0].digest,
+    });
+    expect(output).toContain(PROJECT_FIXTURES['other-project'].projectDir);
+    expect(output).not.toContain(PROJECT_FIXTURES.p1.projectDir);
+  });
+
+  it('omits the checkout-path statement (rather than a placeholder) when the project record cannot be resolved', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'no-such-project',
+      digest: cases[0].digest,
+    });
+    expect(output).not.toMatch(
+      /working directory is already the project checkout/,
+    );
+    // The rest of the skeleton still assembles normally.
+    expect(output).toContain('## Session Lifecycle');
+    expect(output).toContain('## Transport');
+  });
 
   it('never carries the interactive-only chat-confirmation directive in the injected rendering, for groom, design, or ops', () => {
     for (const { workflow, digest } of cases) {
@@ -458,7 +724,11 @@ describe('assemblePlanningProcedure', () => {
     }
 
     // design/ops share the generic decisionProposal contract — the
-    // structured groomProposal requirement is groom-specific.
+    // structured groomProposal requirement (its JSON field shape) is
+    // groom-specific. A shared hard-rules principle incidentally mentions
+    // "groomProposal.openQuestions" prose (the Investigation/Testing
+    // exemption rationale) even under the design variant, so assert
+    // against the structured field marker rather than the bare substring.
     const designOutput = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
@@ -469,7 +739,8 @@ describe('assemblePlanningProcedure', () => {
         data: deriveDesignDigestSlice(fixtureDesignLoadResult()),
       },
     });
-    expect(designOutput).not.toContain('groomProposal');
+    expect(designOutput).not.toContain('"groomProposal"');
+    expect(designOutput).not.toContain('presentation.md');
   });
 
   it("carries the completeness critic (gap-class probing + disposition-don't-drop) and split-don't-trim / one-question-at-a-time guidance for design, and never for groom/ops", () => {
@@ -871,6 +1142,23 @@ describe('assemblePlanningProcedure', () => {
     expect(example).toContain('"dependsOnTasks"');
   });
 
+  it('states both the LoC and file-count size_check thresholds, and that exceeding either nominates a split', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    expect(output).toContain(`${SIZE_TYPE_CHECK.locSplitThreshold}-LoC`);
+    expect(output).toContain(`${SIZE_TYPE_CHECK.fileSplitThreshold}-file`);
+    expect(output).toMatch(/exceeding either nominates a split/);
+  });
+
   it('offers the groom procedure a discard/defer proposal as an alternative to promoting to Ready', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
@@ -990,6 +1278,53 @@ describe('assemblePlanningProcedure', () => {
     expect(output).toContain('Do the thing body.');
   });
 
+  it('labels the Binding constraints line as a separate, non-dereferenceable id space', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+    const bindingLine = output
+      .split('\n')
+      .find((line) => line.startsWith('- Binding constraints'));
+    expect(bindingLine).toBeDefined();
+    expect(bindingLine).toContain('constraint-a');
+    expect(bindingLine).toMatch(/not dereferenceable/i);
+    expect(bindingLine).toMatch(/architecture_getUnit/);
+  });
+
+  it('states on the Arch-store-selected units line that the parenthesised value is the arch_unit id for architecture.getUnit', () => {
+    const result = fixtureGroomLoadResult();
+    result.archSource = 'store';
+    result.targetTasks[0].archSource = 'store';
+    result.targetTasks[0].archUnits = [
+      { id: 'unit-1', title: 'Selective injection contract', body: 'Body.' },
+    ];
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(result, 'task-1'),
+      },
+    });
+    const archUnitsLine = output
+      .split('\n')
+      .find((line) => line.startsWith('- Arch-store-selected units'));
+    expect(archUnitsLine).toBeDefined();
+    expect(archUnitsLine).toContain('Selective injection contract (unit-1)');
+    expect(archUnitsLine).toMatch(/arch_unit id/i);
+    expect(archUnitsLine).toMatch(/architecture_getUnit/);
+  });
+
   it('inlines the full body of each store-sourced arch unit in the groom digest, not just its title', () => {
     const result = fixtureGroomLoadResult();
     result.archSource = 'store';
@@ -1017,6 +1352,87 @@ describe('assemblePlanningProcedure', () => {
     expect(output).toContain(
       'The full architecture unit body content, verbatim.',
     );
+  });
+
+  it('falls back to titles-only when the store-sourced selection exceeds the inline cap', () => {
+    const result = fixtureGroomLoadResult();
+    result.archSource = 'store';
+    result.targetTasks[0].archSource = 'store';
+    result.targetTasks[0].archUnits = Array.from({ length: 26 }, (_, i) => ({
+      id: `unit-${i}`,
+      title: `Unit ${i}`,
+      body: `Full body content for unit ${i}, verbatim.`,
+    }));
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(result, 'task-1'),
+      },
+    });
+
+    expect(output).toContain(
+      '### Architecture unit bodies (titles only — fetch on demand)',
+    );
+    expect(output).not.toContain('### Architecture unit bodies\n');
+    expect(output).not.toContain('Full body content for unit 0, verbatim.');
+  });
+
+  it('emits the arch_unit id alongside the title for every store-sourced unit, over the inline cap', () => {
+    const result = fixtureGroomLoadResult();
+    result.archSource = 'store';
+    result.targetTasks[0].archSource = 'store';
+    result.targetTasks[0].archUnits = Array.from({ length: 26 }, (_, i) => ({
+      id: `unit-${i}`,
+      title: `Unit ${i}`,
+      body: `Full body content for unit ${i}, verbatim.`,
+    }));
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(result, 'task-1'),
+      },
+    });
+
+    for (let i = 0; i < 26; i++) {
+      expect(output).toContain(`Unit ${i} (unit-${i})`);
+    }
+  });
+
+  it('keeps inlining full bodies when the store-sourced selection is at the inline cap', () => {
+    const result = fixtureGroomLoadResult();
+    result.archSource = 'store';
+    result.targetTasks[0].archSource = 'store';
+    result.targetTasks[0].archUnits = Array.from({ length: 25 }, (_, i) => ({
+      id: `unit-${i}`,
+      title: `Unit ${i}`,
+      body: `Full body content for unit ${i}, verbatim.`,
+    }));
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(result, 'task-1'),
+      },
+    });
+
+    expect(output).toContain('### Architecture unit bodies\n');
+    expect(output).not.toContain('titles only');
+    expect(output).toContain('Full body content for unit 0, verbatim.');
+    expect(output).toContain('Full body content for unit 24, verbatim.');
   });
 
   it('replaces the bare (none) with a bounded-exploration directive + orientation graft when regions resolve empty', () => {
@@ -1139,6 +1555,7 @@ describe('assemblePlanningProcedure', () => {
     expect(output).toContain(
       orchestratorMcpToolName('architecture.queryUnits'),
     );
+    expect(output).toMatch(/arch_unit id/i);
   });
 
   it('the ops digest section carries the journal entry and task classification only', () => {
@@ -1154,6 +1571,134 @@ describe('assemblePlanningProcedure', () => {
     });
     expect(output).toContain('No prior entry');
     expect(output).not.toContain('Ops Master Context');
+  });
+
+  it('points a store-sourced ops digest at the architecture read tools, rendering only titles/ids never a unit body', () => {
+    const result = fixtureOpsLoadResult();
+    result.worklist.executable[0].archSource = 'store';
+    result.worklist.executable[0].archUnits = [
+      {
+        id: 'unit-1',
+        title: 'Selective injection contract',
+      },
+    ];
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(result, 'task-3', null),
+      },
+    });
+
+    expect(output).toContain('Selective injection contract');
+    expect(output).toContain(orchestratorMcpToolName('architecture.getUnit'));
+    expect(output).toContain(
+      orchestratorMcpToolName('architecture.queryUnits'),
+    );
+  });
+
+  it('carries no hint and no arch-unit section in the ops digest when archSource is notion', () => {
+    const result = fixtureOpsLoadResult();
+    result.worklist.executable[0].archSource = 'notion';
+    result.worklist.executable[0].archUnits = [
+      { id: 'ctx-2', title: 'Ops Master Context' },
+    ];
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(result, 'task-3', null),
+      },
+    });
+
+    // architecture.getUnit legitimately appears elsewhere in the assembled
+    // output — the ops-consult-architecture-before-diagnosing procedure-core
+    // principle names it for every ops session regardless of digest content
+    // (procedureCore.ts:215). Scope the assertion to the ops digest section
+    // itself, whose store-gated unit list + dereference hint stay absent.
+    const opsDigestSection = output.slice(
+      output.indexOf('## Ops Journal Slice'),
+    );
+    expect(opsDigestSection).not.toContain('### Arch-store-selected units');
+    expect(opsDigestSection).not.toContain('This selection is titles/ids only');
+    expect(opsDigestSection).not.toContain(
+      orchestratorMcpToolName('architecture.getUnit'),
+    );
+  });
+
+  it('carries no hint and no arch-unit section in the ops digest when the store selection is empty', () => {
+    const result = fixtureOpsLoadResult();
+    result.worklist.executable[0].archSource = 'store';
+    result.worklist.executable[0].archUnits = [];
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(result, 'task-3', null),
+      },
+    });
+
+    // Same scoping rationale as the notion-archSource case above: the
+    // procedure-core principle names architecture.getUnit unconditionally,
+    // so only the ops digest section itself can prove the store-gated
+    // section stayed absent.
+    const opsDigestSection = output.slice(
+      output.indexOf('## Ops Journal Slice'),
+    );
+    expect(opsDigestSection).not.toContain('### Arch-store-selected units');
+    expect(opsDigestSection).not.toContain('This selection is titles/ids only');
+    expect(opsDigestSection).not.toContain(
+      orchestratorMcpToolName('architecture.getUnit'),
+    );
+  });
+
+  it('sources the arch-unit dereference hint from the same shared text for the design and ops digests', () => {
+    const design = fixtureDesignLoadResult();
+    design.archSource = 'store';
+    design.archUnits = [{ id: 'unit-1', title: 'Shared unit' }];
+    const designOutput = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'design',
+        data: deriveDesignDigestSlice(design),
+      },
+    });
+
+    const ops = fixtureOpsLoadResult();
+    ops.worklist.executable[0].archSource = 'store';
+    ops.worklist.executable[0].archUnits = [
+      { id: 'unit-1', title: 'Shared unit' },
+    ];
+    const opsOutput = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(ops, 'task-3', null),
+      },
+    });
+
+    const hintSentence =
+      'This selection is titles/ids only — too large to inline wholesale.';
+    expect(designOutput).toContain(hintSentence);
+    expect(opsOutput).toContain(hintSentence);
   });
 
   it('composes sections in skeleton → procedure core → digest order', () => {
@@ -1333,6 +1878,7 @@ describe('WORKFLOW_LOADERS', () => {
     expect(WORKFLOW_LOADERS.groom).toMatch(/groomLoad/);
     expect(WORKFLOW_LOADERS.design).toMatch(/designLoad/);
     expect(WORKFLOW_LOADERS.ops).toMatch(/opsLoad/);
+    expect(WORKFLOW_LOADERS.docs).toMatch(/docsLoad/);
   });
 });
 
