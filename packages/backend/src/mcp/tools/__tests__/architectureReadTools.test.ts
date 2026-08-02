@@ -8,9 +8,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../../../db/db.js', async () => {
-  const { setupTestDb } = await import(
-    '../../../../test/helpers/setupTestDb.js'
-  );
+  const { setupTestDb } =
+    await import('../../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
 });
 
@@ -61,7 +60,10 @@ describe('architecture.getUnit', () => {
     const result = (await client.callTool({
       name: 'architecture.getUnit',
       arguments: { id: unit.id },
-    })) as { content: Array<{ type: string; text?: string }>; isError?: boolean };
+    })) as {
+      content: Array<{ type: string; text?: string }>;
+      isError?: boolean;
+    };
     await close();
 
     expect(result.isError).toBeFalsy();
@@ -78,7 +80,10 @@ describe('architecture.getUnit', () => {
     const result = (await client.callTool({
       name: 'architecture.getUnit',
       arguments: { id: 'session-credential-scope' },
-    })) as { content: Array<{ type: string; text?: string }>; isError?: boolean };
+    })) as {
+      content: Array<{ type: string; text?: string }>;
+      isError?: boolean;
+    };
     await close();
 
     expect(result.isError).toBe(true);
