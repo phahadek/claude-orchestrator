@@ -32,6 +32,7 @@ import {
   getMergeCommitFromLocalBranches,
 } from '../db/queries';
 import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
+import { logger } from '../logger';
 import {
   selectArchitectureContext,
   selectUnitsFromStore,
@@ -122,6 +123,7 @@ export interface OpsDepBlockInfo {
  * given list are treated as external/unresolved and never block.
  */
 async function blockingDepsFor(
+  taskId: string,
   dependsOn: string[],
   depMap: Map<string, { status: string; title: string }>,
   project: string,
@@ -131,7 +133,12 @@ async function blockingDepsFor(
   const blockingDepTitles: string[] = [];
   for (const depId of dependsOn) {
     const dep = depMap.get(normId(depId));
-    if (dep === undefined) continue;
+    if (dep === undefined) {
+      logger.debug(
+        `[blockingDepsFor] task ${taskId} depends on ${depId}, which is not present in the loaded depMap — treating as non-blocking (fail-open, matches isDepDeployed's unknown-state precedent)`,
+      );
+      continue;
+    }
     const doneNotDeployed =
       dep.status === STATUS.done &&
       !(await isDepDeployed(depId, project, getMergeCommit));
@@ -167,7 +174,13 @@ export async function computeOpsBlockingDeps(
   for (const task of targetTasks) {
     result.set(
       task.id,
-      await blockingDepsFor(task.dependsOn, depMap, project, getMergeCommit),
+      await blockingDepsFor(
+        task.id,
+        task.dependsOn,
+        depMap,
+        project,
+        getMergeCommit,
+      ),
     );
   }
   return result;
@@ -448,6 +461,7 @@ export async function loadOpsContext(
     // ops task runs against live state, so a merged-but-undeployed dep still
     // blocks it (see isDepDeployed above).
     const { blockingDepIds, blockingDepTitles } = await blockingDepsFor(
+      row.id,
       row.dependsOn,
       depMap,
       project,
