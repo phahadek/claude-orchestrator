@@ -69,12 +69,15 @@ import {
   getAllOpenPRs,
   getPRByNumber,
   updatePRState,
+  updateMergeState,
+  setPauseReason,
   clearTerminalPRFlags,
   markSessionDone,
 } from '../../db/queries';
 import { getProjectByGithubRepo } from '../../config';
 import type { GitHubClient } from '../GitHubClient';
 import type { SessionManager } from '../../session/SessionManager';
+import type { AutoMerger } from '../AutoMerger';
 import type { PullRequestRow } from '../../db/types';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -139,6 +142,13 @@ function makeGithubClient(
     listOpenPRs: vi.fn(),
     getMergeCommitSha: vi.fn().mockResolvedValue('merge-sha'),
     deleteBranch: vi.fn().mockResolvedValue(undefined),
+    categorizeMergeability: vi.fn().mockResolvedValue({
+      category: 'unknown',
+      mergeState: 'unknown',
+      rawMergeableState: null,
+      failingChecks: [],
+      headSha: null,
+    }),
     ...overrides,
   } as unknown as GitHubClient;
 }
@@ -151,6 +161,13 @@ function makeSessionManager(): SessionManager {
     markSessionErrored: vi.fn(),
     markForBranchDeletion: vi.fn(),
   } as unknown as SessionManager;
+}
+
+function makeAutoMerger(): AutoMerger {
+  return {
+    attempt: vi.fn(),
+    clearStalePauses: vi.fn(),
+  } as unknown as AutoMerger;
 }
 
 beforeEach(() => {
@@ -343,5 +360,97 @@ describe('PRMergeWatcher — escalated stale-open sweep', () => {
     // ...but the sweep continued on to the next row.
     expect(updatePRState).toHaveBeenCalledWith(600, REPO, 'closed');
     expect(clearTerminalPRFlags).toHaveBeenCalledWith(600, REPO, 'closed');
+  });
+
+  it('re-categorizes mergeability for a row still open on GitHub, since poll() skips it forever via isTerminalStalePR', async () => {
+    const pr = makePRRow({ merge_state: 'unknown', mergeable: 0 });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    const github = makeGithubClient({
+      getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha: null }),
+      categorizeMergeability: vi.fn().mockResolvedValue({
+        category: 'clean',
+        mergeState: 'clean',
+        rawMergeableState: 'clean',
+        failingChecks: [],
+        headSha: 'old-sha',
+      }),
+    });
+    const watcher = new PRMergeWatcher(
+      github,
+      makeSessionManager(),
+      undefined,
+      vi.fn(),
+    );
+
+    await watcher.sweepEscalatedStalePRs();
+
+    expect(github.categorizeMergeability).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      [],
+    );
+    expect(updateMergeState).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      1,
+      'clean',
+      null,
+    );
+  });
+
+  it('re-drives AutoMerger when a still-open escalated row becomes clean, without clearing stalled_reconcile_cap (#1449)', async () => {
+    // The becomes-clean transition hook must fire so #1449-shaped rows are
+    // "considered", but stalled_reconcile_cap is a non-CI pause — it must
+    // not be cleared by this path. AutoMerger's own pause_reason guard is
+    // what actually blocks the merge until a trusted channel clears it.
+    const pr = makePRRow({ merge_state: 'unknown', mergeable: 0 });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    const github = makeGithubClient({
+      getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha: null }),
+      categorizeMergeability: vi.fn().mockResolvedValue({
+        category: 'clean',
+        mergeState: 'clean',
+        rawMergeableState: 'clean',
+        failingChecks: [],
+        headSha: 'old-sha',
+      }),
+    });
+    const autoMerger = makeAutoMerger();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeSessionManager(),
+      undefined,
+      vi.fn(),
+    );
+    watcher.setAutoMerger(autoMerger);
+
+    await watcher.sweepEscalatedStalePRs();
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(PR_NUMBER, REPO);
+  });
+
+  it('does not attempt mergeability re-categorization for a row that transitioned to merged/closed this sweep', async () => {
+    const pr = makePRRow({ task_id: null });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    const github = makeGithubClient({
+      getPRState: vi.fn().mockResolvedValue({ state: 'merged', headSha: null }),
+    });
+    const watcher = new PRMergeWatcher(
+      github,
+      makeSessionManager(),
+      undefined,
+      vi.fn(),
+    );
+
+    await watcher.sweepEscalatedStalePRs();
+
+    expect(github.categorizeMergeability).not.toHaveBeenCalled();
   });
 });

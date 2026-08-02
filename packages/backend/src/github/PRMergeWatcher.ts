@@ -226,6 +226,15 @@ export class PRMergeWatcher extends EventEmitter {
    * PRs), which would paginate thousands of unrelated PRs on a busy repo).
    * A row still open on GitHub (e.g. a PR that's genuinely stuck) is left
    * untouched by reconcileTerminalState.
+   *
+   * A row still open is also run through runMergeabilityCheck: this is the
+   * only place anything ever re-categorizes mergeability for an escalated
+   * row (poll() skips it via isTerminalStalePR), so without this a PR that
+   * became mergeable while escalated (e.g. #1449) would sit at a stale
+   * merge_state/mergeable forever. runMergeabilityCheck's own terminalPause
+   * handling still refreshes the observability columns without clearing the
+   * pause; the becomes-clean transition hook re-drives AutoMerger.attempt()
+   * to "consider" the row without clearing stalled_reconcile_cap itself.
    */
   async sweepEscalatedStalePRs(): Promise<number> {
     const escalated = getAllOpenPRs().filter(
@@ -240,7 +249,10 @@ export class PRMergeWatcher extends EventEmitter {
         );
         continue;
       }
-      await this.reconcileTerminalState(pr);
+      const state = await this.reconcileTerminalState(pr);
+      if (state === 'open') {
+        await this.runMergeabilityCheck(pr);
+      }
       items_processed++;
     }
     return items_processed;
@@ -736,6 +748,23 @@ export class PRMergeWatcher extends EventEmitter {
     }
 
     if (!terminalPause) this.tryCIFailingRecovery(pr, category);
+
+    // Becomes-clean re-drive: the only other consumer of a clean transition
+    // (tryCIFailingRecovery) fires solely for CI-sourced pauses, so an
+    // approval that lands while CI is still in flight (pause_reason === null,
+    // category was 'unknown') never gets re-driven once GitHub settles to
+    // clean. Fire unconditionally on the transition — including for PRs
+    // carrying a non-CI pause — so those rows are considered too. This never
+    // clears pause_reason itself; run()'s pause_reason !== null guard still
+    // blocks the merge until an already-trusted channel clears the pause.
+    // Keyed off the transition (merge_state changing into 'clean'), not the
+    // level, so an already-clean PR isn't re-driven on every poll.
+    if (category.category === 'clean' && pr.merge_state !== 'clean') {
+      logger.info(
+        `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} became mergeable (clean) — re-driving AutoMerger`,
+      );
+      this.autoMerger?.attempt(pr.pr_number, pr.repo);
+    }
 
     if (stateChanged && category.category === 'blocked') {
       logger.info(
