@@ -326,8 +326,14 @@ function assertOpsTerminalGrouped(
  * not it also carries the journal.setState -> "resolved" transition that
  * closes it. Checked against the durable store (GROUP_COMPLETENESS_ACTIVE),
  * the same shape as hasGroupDependsOn.
+ *
+ * Exported for PlanningOrchestrator's completeOpsTask/closeDeferredOpsTask,
+ * which use it to scope their rejected/needs_revision guard to a session's
+ * closing group instead of every intent the session ever staged — see those
+ * functions for why an orthogonal decline outside the closing group must not
+ * block the task's closure.
  */
-function groupHasOpsTerminalMember(groupId: string): boolean {
+export function groupHasOpsTerminalMember(groupId: string): boolean {
   return listStagedIntentsByGroup(groupId).some((row) => {
     if (!GROUP_COMPLETENESS_ACTIVE.includes(row.state)) return false;
     return isOpsTerminalKind(row.kind, JSON.parse(row.payload), row.session_id);

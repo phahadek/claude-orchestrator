@@ -29,6 +29,7 @@ import {
   verifyDispatchedGroupsForSession,
   sessionOwesGatedDesignArtifacts,
   findIncompleteOpsTerminalGroupsForSession,
+  groupHasOpsTerminalMember,
 } from '../routes/stagedIntents';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { emitTaskUpdated, broadcastTaskStatusChanged } from '../routes/tasks';
@@ -47,6 +48,30 @@ const DESIGN_COMPLETING_REASONS = new Set([
   'planning_approved',
   'planning_no_pending_dispositions',
 ]);
+
+/**
+ * Shared closure guard for completeOpsTask and closeDeferredOpsTask: true
+ * when this session holds a rejected or needs_revision staged intent that is
+ * a member of one of its ops-terminal closing groups (see
+ * groupHasOpsTerminalMember / OPS_TERMINAL_KINDS in routes/stagedIntents.ts).
+ *
+ * Scoped to the closing group rather than every intent the session ever
+ * staged: a declined intent that has nothing to do with the closing decision
+ * (e.g. an unrelated gate-verify proposal the operator correctly rejected,
+ * with the session accounting for that reasoning in its own closing note)
+ * must not permanently strand the task at In Progress. A rejected or
+ * needs_revision member *inside* the closing group still blocks — it means
+ * the closing decision itself was refused, or is still revisable and the
+ * session may yet supersede it.
+ */
+function opsSessionHasBlockedClosingGroupMember(sessionId: string): boolean {
+  return listStagedIntentsBySession(sessionId).some(
+    (i) =>
+      (i.state === 'rejected' || i.state === 'needs_revision') &&
+      Boolean(i.group_id) &&
+      groupHasOpsTerminalMember(i.group_id as string),
+  );
+}
 
 /**
  * The bounded self-correct re-turn nudge sent exactly once (per session) when
@@ -575,8 +600,7 @@ export class PlanningOrchestrator {
     const journalEntry = getEntry(taskId);
     if (!journalEntry || journalEntry.state !== 'resolved') return;
 
-    const intents = listStagedIntentsBySession(sessionId);
-    if (intents.some((i) => i.state === 'rejected')) return;
+    if (opsSessionHasBlockedClosingGroupMember(sessionId)) return;
 
     getTaskBackend(projectId)
       .updateStatus(taskId, DESIGN_DONE_STATUS, {
@@ -928,9 +952,12 @@ function formatDispositionMessage(
  *
  * Guards mirror completeOpsTask's: excludes gate-verify sessions (no Notion
  * task to close), requires the session's durable terminal_completion_reason
- * to be one of DESIGN_COMPLETING_REASONS, and bails if any staged intent for
- * the session is rejected. Additionally checks the task's current status
- * before writing, so it no-ops if completeOpsTask's synchronous path (the
+ * to be one of DESIGN_COMPLETING_REASONS, and bails via
+ * opsSessionHasBlockedClosingGroupMember if a rejected/needs_revision intent
+ * sits inside one of the session's ops-terminal closing groups — an
+ * unrelated decline elsewhere in the session's history does not block.
+ * Additionally checks the task's current status before writing, so it no-ops
+ * if completeOpsTask's synchronous path (the
  * decided-no-change Investigation, where journal.setState -> resolved
  * commits atomically alongside the session's terminal) already closed the
  * task — this route-driven path must never double-apply that close.
@@ -947,8 +974,7 @@ export async function closeDeferredOpsTask(session: Session): Promise<void> {
     return;
   }
 
-  const intents = listStagedIntentsBySession(session.session_id);
-  if (intents.some((i) => i.state === 'rejected')) return;
+  if (opsSessionHasBlockedClosingGroupMember(session.session_id)) return;
 
   const backend = getTaskBackend(projectId);
   const summary = await backend.fetchTaskSummary(taskId);
