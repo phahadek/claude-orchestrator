@@ -69,17 +69,37 @@ const SIZE_DIMENSION_NAME = 'Size proportionality';
  */
 const BASELINE_ESCALATION_FLOOR_PATTERNS: Array<{
   category: string;
-  regex: RegExp;
+  test: (path: string) => boolean;
 }> = [
-  { category: 'CI/workflow config', regex: /(^|\/)\.github\/workflows\// },
+  {
+    category: 'CI/workflow config',
+    test: (path) => /(^|\/)\.github\/workflows\//.test(path),
+  },
   {
     category: 'database migration',
-    regex: /(^|\/)(db\/)?migrations?\//i,
+    test: (path) => /(^|\/)(db\/)?migrations?\//i.test(path),
   },
-  { category: 'auth', regex: /(^|\/)auth[a-z0-9_-]*\.[a-z]+$/i },
-  { category: 'auth', regex: /(^|\/)auth(\/|$)/i },
-  { category: 'secrets', regex: /secret|credential/i },
-  { category: 'secrets', regex: /(^|\/)\.env(\.[a-z0-9_-]+)?$/i },
+  {
+    category: 'auth',
+    test: (path) => /(^|\/)auth[a-z0-9_-]*\.[a-z]+$/i.test(path),
+  },
+  {
+    category: 'auth',
+    test: (path) => /(^|\/)auth(\/|$)/i.test(path),
+  },
+  {
+    category: 'secrets',
+    test: (path) => /secret|credential/i.test(path),
+  },
+  {
+    category: 'secrets',
+    // basename check instead of a single regex to avoid a false-positive
+    // ReDoS flag on the optional-suffix + anchor combination.
+    test: (path) => {
+      const basename = path.slice(path.lastIndexOf('/') + 1).toLowerCase();
+      return basename === '.env' || basename.startsWith('.env.');
+    },
+  },
 ];
 
 interface BaselineEscalationMatch {
@@ -92,8 +112,8 @@ function matchBaselineEscalationFloor(
 ): BaselineEscalationMatch[] {
   const matches: BaselineEscalationMatch[] = [];
   for (const path of filePaths) {
-    for (const { category, regex } of BASELINE_ESCALATION_FLOOR_PATTERNS) {
-      if (regex.test(path)) {
+    for (const { category, test } of BASELINE_ESCALATION_FLOOR_PATTERNS) {
+      if (test(path)) {
         matches.push({ category, path });
         break; // one match per file is enough to explain the escalation
       }
