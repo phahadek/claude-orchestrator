@@ -24,9 +24,18 @@ const HASH_SUFFIX_LEN = 8;
  * chars (the part after the prefix slash) for Windows MAX_PATH safety.
  * When the slug exceeds the cap, a deterministic 8-char SHA1 suffix is appended
  * so retries for the same task always reproduce the same branch name.
+ *
+ * The suffix is derived from the full `taskId` (never truncated), not the
+ * title — two tasks sharing a title must not collide on the disambiguating
+ * suffix, since the suffix exists to disambiguate the very thing that
+ * collides. When `taskId` is omitted, the suffix falls back to hashing the
+ * title alone — this reproduces the pre-task-id derivation exactly, which is
+ * what lets a branch created under the previous scheme still be located (see
+ * `resolveResumeBranchSlug` below).
  */
 export function deriveBranchSlug(
   taskTitle: string,
+  taskId?: string | null,
   prefix = 'feature',
 ): string {
   const fullSlug = slugify(taskTitle);
@@ -42,10 +51,53 @@ export function deriveBranchSlug(
   }
   const hash = crypto
     .createHash('sha1')
-    .update(fullSlug)
+    .update(taskId || fullSlug)
     .digest('hex')
     .slice(0, HASH_SUFFIX_LEN);
   return `${prefix}/${truncated}-${hash}`;
+}
+
+/** True when `branch` exists as a local ref in `projectDir`. */
+function branchExistsLocally(branch: string, projectDir: string): boolean {
+  try {
+    execSync(`git rev-parse --verify refs/heads/${branch}`, {
+      cwd: projectDir,
+      stdio: 'pipe',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolves the branch to use for resuming an existing session's worktree.
+ *
+ * Branches created before the task-id-based suffix landed were named from
+ * the title-only derivation (`deriveBranchSlug(taskTitle)`). For short
+ * titles (no hash suffix) the two derivations are identical, so there is
+ * nothing to resolve. For long titles, if the id-based branch doesn't exist
+ * locally but the legacy title-only branch does, resume against the legacy
+ * branch — preferring the id-based name would silently create a *new*,
+ * empty branch and orphan the session's prior commits.
+ */
+export function resolveResumeBranchSlug(
+  taskTitle: string,
+  taskId: string | null | undefined,
+  projectDir: string,
+  prefix = 'feature',
+): string {
+  const current = deriveBranchSlug(taskTitle, taskId, prefix);
+  if (!taskId) return current;
+  const legacy = deriveBranchSlug(taskTitle, null, prefix);
+  if (legacy === current) return current;
+  if (
+    !branchExistsLocally(current, projectDir) &&
+    branchExistsLocally(legacy, projectDir)
+  ) {
+    return legacy;
+  }
+  return current;
 }
 
 /**
