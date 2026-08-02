@@ -13,8 +13,8 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 36 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(36);
+  it('contains exactly 37 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(37);
   });
 
   it('includes usage_limit_deferred as a recoverable, automatically-retried reason', () => {

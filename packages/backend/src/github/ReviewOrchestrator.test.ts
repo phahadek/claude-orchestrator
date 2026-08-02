@@ -437,6 +437,42 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     ).toBe(true);
   });
 
+  it('routes to baseline_escalation_floor (not review_rules_escalation) when the code-level floor forced escalate', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'Touches CI workflow config.',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason:
+        'Baseline escalation floor: diff touches CI/workflow config path(s): .github/workflows/ci.yml',
+      baselineEscalationFloor: true,
+    });
+
+    const messages: unknown[] = [];
+    sm.on('message', (m: unknown) => messages.push(m));
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'baseline_escalation_floor',
+    );
+    expect(
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
+    ).toBe(true);
+  });
+
   it('does not send feedback when verdict is approved', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 

@@ -19,6 +19,7 @@ import { GitHubDiffSource } from './DiffSource';
 import {
   computeSizeSignal,
   isOversized,
+  parseDiffFiles,
   SIZE_ABSOLUTE_FLOOR,
   SIZE_FILE_RATIO_LIMIT,
   type SizeSignal,
@@ -60,6 +61,67 @@ function isTransientFetchError(e: unknown): boolean {
 
 const SIZE_DIMENSION_NAME = 'Size proportionality';
 
+/**
+ * Code-enforced baseline escalation floor: high-blast-radius path categories that
+ * always force escalate:true, independent of whether the project has any
+ * review_rules configured. Conservative, broadly-applicable path conventions —
+ * not project-tunable by design (see task: baseline escalation floor).
+ */
+const BASELINE_ESCALATION_FLOOR_PATTERNS: Array<{
+  category: string;
+  test: (path: string) => boolean;
+}> = [
+  {
+    category: 'CI/workflow config',
+    test: (path) => /(^|\/)\.github\/workflows\//.test(path),
+  },
+  {
+    category: 'database migration',
+    test: (path) => /(^|\/)(db\/)?migrations?\//i.test(path),
+  },
+  {
+    category: 'auth',
+    test: (path) => /(^|\/)auth[a-z0-9_-]*\.[a-z]+$/i.test(path),
+  },
+  {
+    category: 'auth',
+    test: (path) => /(^|\/)auth(\/|$)/i.test(path),
+  },
+  {
+    category: 'secrets',
+    test: (path) => /secret|credential/i.test(path),
+  },
+  {
+    category: 'secrets',
+    // basename check instead of a single regex to avoid a false-positive
+    // ReDoS flag on the optional-suffix + anchor combination.
+    test: (path) => {
+      const basename = path.slice(path.lastIndexOf('/') + 1).toLowerCase();
+      return basename === '.env' || basename.startsWith('.env.');
+    },
+  },
+];
+
+interface BaselineEscalationMatch {
+  category: string;
+  path: string;
+}
+
+function matchBaselineEscalationFloor(
+  filePaths: string[],
+): BaselineEscalationMatch[] {
+  const matches: BaselineEscalationMatch[] = [];
+  for (const path of filePaths) {
+    for (const { category, test } of BASELINE_ESCALATION_FLOOR_PATTERNS) {
+      if (test(path)) {
+        matches.push({ category, path });
+        break; // one match per file is enough to explain the escalation
+      }
+    }
+  }
+  return matches;
+}
+
 export interface ReviewDimension {
   name: string;
   passed: boolean;
@@ -85,6 +147,14 @@ export interface PRReviewResult {
   escalate?: boolean;
   /** Why the reviewer escalated. Present when escalate is true. */
   escalationReason?: string;
+  /**
+   * True when `escalate` was force-set by the code-level baseline escalation
+   * floor (CI/config, migrations, auth, or secrets paths touched) rather than
+   * by the project's review_rules or the LLM's own judgment. Distinguishes the
+   * unconditional floor from the project-configured trigger downstream so the
+   * two record different pause_reasons.
+   */
+  baselineEscalationFloor?: boolean;
 }
 
 export type WorkItem =
@@ -296,9 +366,9 @@ export class PRReviewService {
         ].join('\n');
         this.sessionManager.send(existingReviewSessionId, followUp);
         const aiResult = await verdictPromise;
-        const finalResult = this.appendSizeProportionalityDimension(
-          aiResult,
-          sizeSignal,
+        const finalResult = this.applyBaselineEscalationFloor(
+          this.appendSizeProportionalityDimension(aiResult, sizeSignal),
+          diff,
         );
         // Persist immediately after parse — before any side effects (GitHub/Notion).
         setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
@@ -374,9 +444,9 @@ export class PRReviewService {
             prNumber,
             repo,
           );
-          const finalResult = this.appendSizeProportionalityDimension(
-            aiResult,
-            sizeSignal,
+          const finalResult = this.applyBaselineEscalationFloor(
+            this.appendSizeProportionalityDimension(aiResult, sizeSignal),
+            diff,
           );
           // Persist immediately after parse — before any side effects (GitHub/Notion).
           setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
@@ -442,9 +512,9 @@ export class PRReviewService {
       });
 
       const aiResult = await verdictPromise;
-      const finalResult = this.appendSizeProportionalityDimension(
-        aiResult,
-        sizeSignal,
+      const finalResult = this.applyBaselineEscalationFloor(
+        this.appendSizeProportionalityDimension(aiResult, sizeSignal),
+        diff,
       );
       // Persist immediately after parse — before any side effects (GitHub/Notion).
       // setLastReviewedSha was already called above the verdictPromise await for
@@ -533,9 +603,9 @@ export class PRReviewService {
     });
 
     const aiResult = await verdictPromise;
-    const sizedResult = this.appendSizeProportionalityDimension(
-      aiResult,
-      sizeSignal,
+    const sizedResult = this.applyBaselineEscalationFloor(
+      this.appendSizeProportionalityDimension(aiResult, sizeSignal),
+      diff,
     );
 
     setLocalBranchReviewResult(localBranchId, JSON.stringify(sizedResult));
@@ -786,9 +856,9 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       prNumber,
       repo,
     );
-    const finalResult = this.appendSizeProportionalityDimension(
-      aiResult,
-      sizeSignal,
+    const finalResult = this.applyBaselineEscalationFloor(
+      this.appendSizeProportionalityDimension(aiResult, sizeSignal),
+      diffData.diff,
     );
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
@@ -1174,6 +1244,36 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     }
 
     return { ...result, dimensions, verdict };
+  }
+
+  /**
+   * Code-level escalation floor: force escalate:true when the diff touches a
+   * high-blast-radius path category (CI/workflow config, migrations, auth,
+   * secrets), regardless of the project's review_rules or the LLM's own
+   * "escalate" claim. Mirrors appendSizeProportionalityDimension's
+   * code-overrides-LLM pattern — this cannot be silently omitted by the
+   * reviewing model. Unconditional: does not affect verdict/dimensions, only
+   * the escalate/escalationReason fields.
+   */
+  private applyBaselineEscalationFloor(
+    result: PRReviewResult,
+    diffText: string,
+  ): PRReviewResult {
+    const matches = matchBaselineEscalationFloor(parseDiffFiles(diffText));
+    if (matches.length === 0) return result;
+
+    const byCategory = [...new Set(matches.map((m) => m.category))];
+    const paths = [...new Set(matches.map((m) => m.path))];
+    const floorReason = `Baseline escalation floor: diff touches ${byCategory.join(', ')} path(s): ${paths.join(', ')}`;
+
+    return {
+      ...result,
+      escalate: true,
+      escalationReason: result.escalationReason
+        ? `${result.escalationReason} | ${floorReason}`
+        : floorReason,
+      baselineEscalationFloor: true,
+    };
   }
 
   buildPrompt(pr: PullRequest, diff: PRDiff, taskBody: string): string {
