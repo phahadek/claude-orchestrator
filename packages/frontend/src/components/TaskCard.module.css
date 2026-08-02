@@ -314,6 +314,51 @@
   background: rgba(137, 180, 250, 0.1);
 }
 
+/* Manual verification hold */
+.manualVerification {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid rgba(249, 226, 175, 0.4);
+  border-radius: var(--radius-sm, 4px);
+  background: rgba(249, 226, 175, 0.08);
+}
+
+.manualVerificationList {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.verifyManualButton {
+  align-self: flex-start;
+  background: none;
+  border: 1px solid rgba(166, 227, 161, 0.5);
+  border-radius: var(--radius-sm, 4px);
+  padding: 2px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #a6e3a1;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    opacity 0.15s;
+  line-height: 1;
+}
+
+.verifyManualButton:hover:not(:disabled) {
+  border-color: #a6e3a1;
+  background: rgba(166, 227, 161, 0.1);
+}
+
+.verifyManualButton:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 /* Needs-repo badge */
 .needsRepoBadge {
   font-size: 11px;

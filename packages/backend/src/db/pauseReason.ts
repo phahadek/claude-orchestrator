@@ -51,7 +51,8 @@ export type CanonicalPauseReason =
   | 'planning_terminal_blocked_members'
   | 'ops_terminal_group_incomplete'
   | 'usage_limit_deferred'
-  | 'api_overloaded_exhausted';
+  | 'api_overloaded_exhausted'
+  | 'manual_verification_pending';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -275,6 +276,15 @@ export const PAUSE_REASON_REGISTRY: Record<
   },
   api_overloaded_exhausted: {
     source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // Holds auto-merge on an AI-approved PR whose task's cached Type is not
+  // 💻 Code, until an operator signs off on the manual-verification items.
+  // No entry in RECOVERY_ACTION_MAP — cleared only via the dedicated
+  // verify-manual-items route, matching awaiting_human_approval/max_reviews.
+  manual_verification_pending: {
+    source: 'review',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },

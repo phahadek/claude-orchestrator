@@ -17,10 +17,15 @@ vi.mock('../db/queries.js', () => ({
   getLocalBranchById: vi.fn(),
   getSession: vi.fn().mockReturnValue(null),
   getPRIntentForPR: vi.fn().mockReturnValue(null),
+  setPauseReason: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
+}));
+
+vi.mock('../tasks/TaskWriteCommands.js', () => ({
+  getCachedType: vi.fn().mockReturnValue('💻 Code'),
 }));
 
 import { PRReviewService, FetchRetryExhaustedError } from './PRReviewService';
@@ -36,8 +41,10 @@ import {
   getLocalBranchById,
   setLastReviewedSha,
   getSession,
+  setPauseReason,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
+import { getCachedType } from '../tasks/TaskWriteCommands';
 import type { GitHubClient } from './GitHubClient';
 import { GitHubApiError } from './types';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
@@ -1023,6 +1030,73 @@ describe('PRReviewService.handleApprovedVerdict()', () => {
 
     expect(vi.mocked(mockNotion.updateStatus)).not.toHaveBeenCalled();
   });
+
+  it('does NOT set manual_verification_pending when the cached task Type is 💻 Code', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getCachedType).mockReturnValue('💻 Code');
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+  });
+
+  it('sets manual_verification_pending when the cached task Type is not 💻 Code', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getCachedType).mockReturnValue('🔧 Operational');
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.handleApprovedVerdict(
+      42,
+      'owner/repo',
+      'task-abc123',
+      'proj-1',
+      ['Manually verify the migration ran cleanly.'],
+    );
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'manual_verification_pending',
+      JSON.stringify(['Manually verify the migration ran cleanly.']),
+    );
+  });
+
+  it('fails closed (sets manual_verification_pending) when getCachedType misses (returns null)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getCachedType).mockReturnValue(null);
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'manual_verification_pending',
+      undefined,
+    );
+  });
 });
 
 // ── reviewPR() — approved verdict triggers handleApprovedVerdict ──────────────
@@ -1233,6 +1307,7 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
       'owner/repo',
       'notion:task-abc123',
       'specific-project-id',
+      undefined,
     );
     expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith(
       'notion:task-abc123',
@@ -1764,6 +1839,47 @@ describe('PRReviewService.reReviewPR()', () => {
       'owner/repo',
       'notion:task-abc123',
       'proj-re-review',
+      undefined,
+    );
+  });
+
+  it('re-arms manual_verification_pending on a re-review that approves again, even if a prior round was cleared', async () => {
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'review-session-rearm',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getCachedType).mockReturnValue('🔧 Operational');
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.reReviewPR(42, 'owner/repo');
+
+    expect(result.verdict).toBe('approved');
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'manual_verification_pending',
+      undefined,
     );
   });
 
@@ -3181,6 +3297,43 @@ describe('PRReviewService — manual verification items excluded from verdict', 
     expect(result.manualItemsForHuman).toEqual([
       'Run integration test suite against staging',
     ]);
+  });
+
+  it('filters the "Covered by the Manual Verification Gate task." sentinel out of manualItemsForHuman', () => {
+    const service = makeService();
+
+    const payload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'All good.',
+      manualItemsForHuman: [
+        'Covered by the Manual Verification Gate task.',
+        'Verify live credentials work end-to-end',
+      ],
+    };
+
+    const events = [makeAssistantEvent(JSON.stringify(payload))];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(result.manualItemsForHuman).toEqual([
+      'Verify live credentials work end-to-end',
+    ]);
+  });
+
+  it('omits manualItemsForHuman entirely when only the sentinel was present', () => {
+    const service = makeService();
+
+    const payload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'All good.',
+      manualItemsForHuman: ['Covered by the Manual Verification Gate task.'],
+    };
+
+    const events = [makeAssistantEvent(JSON.stringify(payload))];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(result.manualItemsForHuman).toBeUndefined();
   });
 
   it('manualItemsForHuman is omitted when the reviewer does not include it', () => {

@@ -108,7 +108,8 @@ type EventType =
   | 'capability_disposition_investigation_filed'
   | 'stuck_session_notify_checked'
   | 'session_map_entry_dropped'
-  | 'staged_intent_group_committed';
+  | 'staged_intent_group_committed'
+  | 'manual_verification_cleared';
 
 type ActorType = 'ai' | 'human' | 'system';
 
