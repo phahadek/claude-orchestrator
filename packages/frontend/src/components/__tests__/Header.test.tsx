@@ -94,18 +94,20 @@ describe('Header', () => {
 
   it('renders nav buttons in order: Milestone, Tasks, Sessions, PRs, Gate Readiness, Architecture, Analytics, Settings', () => {
     render(<Header {...defaultProps} />);
-    const nav = screen.getAllByRole('button').filter((btn) =>
-      [
-        'Milestone',
-        'Tasks',
-        'Sessions',
-        'PRs',
-        'Gate Readiness',
-        'Architecture',
-        'Analytics',
-        'Settings',
-      ].includes(btn.getAttribute('aria-label') ?? ''),
-    );
+    const nav = screen
+      .getAllByRole('button')
+      .filter((btn) =>
+        [
+          'Milestone',
+          'Tasks',
+          'Sessions',
+          'PRs',
+          'Gate Readiness',
+          'Architecture',
+          'Analytics',
+          'Settings',
+        ].includes(btn.getAttribute('aria-label') ?? ''),
+      );
     expect(nav.map((btn) => btn.getAttribute('aria-label'))).toEqual([
       'Milestone',
       'Tasks',
@@ -144,10 +146,18 @@ describe('Header', () => {
 
   it('renders shortcut-bearing nav items (Tasks, Sessions, PRs, Analytics, Settings) in the order the 1-5 keyboard shortcuts assume', () => {
     render(<Header {...defaultProps} />);
-    const shortcutLabels = ['Tasks', 'Sessions', 'PRs', 'Analytics', 'Settings'];
+    const shortcutLabels = [
+      'Tasks',
+      'Sessions',
+      'PRs',
+      'Analytics',
+      'Settings',
+    ];
     const nav = screen
       .getAllByRole('button')
-      .filter((btn) => shortcutLabels.includes(btn.getAttribute('aria-label') ?? ''));
+      .filter((btn) =>
+        shortcutLabels.includes(btn.getAttribute('aria-label') ?? ''),
+      );
     expect(nav.map((btn) => btn.getAttribute('aria-label'))).toEqual(
       shortcutLabels,
     );
