@@ -135,7 +135,9 @@ export function MilestoneDecisionStack({
       }
 
       const container = scrollContainerRef?.current;
-      const containerTop = container ? container.getBoundingClientRect().top : 0;
+      const containerTop = container
+        ? container.getBoundingClientRect().top
+        : 0;
       let chosen = targets[0];
       for (const target of targets) {
         const relativeTop =

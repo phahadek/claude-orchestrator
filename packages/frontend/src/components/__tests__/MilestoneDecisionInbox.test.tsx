@@ -946,6 +946,8 @@ describe('MilestoneDecisionInbox', () => {
     const card = await screen.findByTestId('milestone-decision-card-intent-1');
     fireEvent.click(within(card).getByText('✓ Commit'));
 
-    await waitFor(() => expect(onCardsRemoved).toHaveBeenCalledWith(['intent-1']));
+    await waitFor(() =>
+      expect(onCardsRemoved).toHaveBeenCalledWith(['intent-1']),
+    );
   });
 });
