@@ -77,7 +77,7 @@ beforeEach(() => {
 });
 
 describe('stage-proposal MCP tools — registration', () => {
-  it('registers exactly the 17 stage-proposal tool names', async () => {
+  it('registers exactly the 18 stage-proposal tool names', async () => {
     const { client, close } = await connectedClient();
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -92,6 +92,7 @@ describe('stage-proposal MCP tools — registration', () => {
         'journal.setState',
         'notion.pageEdit',
         'planning.noOp',
+        'review.dispute',
         'seed.stage',
         'session.requestCapability',
         'task.create',

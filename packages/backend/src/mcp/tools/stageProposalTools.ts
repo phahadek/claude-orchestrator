@@ -376,6 +376,22 @@ export function registerStageProposalTools(
     async (args) => stage('notion.pageEdit', args.payload, ctx, args),
   );
 
+  registerTool(
+    'review.dispute',
+    {
+      title: 'Dispute an outstanding PR review verdict',
+      description:
+        'Stages a review.dispute intent — the route out of a needs_changes/incomplete review verdict this session concludes is wrong, for an operator to decide instead of waiting on a re-review no new commit will trigger. Requires a substantive decisionProposal and a payload.rationale carrying the evidence. Refused when the PR has no outstanding blocking verdict. Cannot belong to a group. Approval clears the verdict and lets the PR proceed with no new commit required; pushback resumes this session for a normal revision turn.',
+      inputSchema: envelope({
+        taskId: z.string(),
+        prNumber: z.number(),
+        repo: z.string(),
+        rationale: z.string(),
+      }),
+    },
+    async (args) => stage('review.dispute', args.payload, ctx, args),
+  );
+
   // Not routed through `stage()`: unlike every other tool here, this acts
   // immediately on an existing staged intent rather than creating a new one
   // — see withdrawIntent's doc comment in stagedIntents.ts for why this is

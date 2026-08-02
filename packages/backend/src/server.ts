@@ -306,7 +306,11 @@ app.use('/api/diagnostics', createDiagnosticsRouter());
 app.use('/api', createPlanUsageRouter());
 app.use(
   '/api',
-  createStagedIntentsRouter(planningOrchestrator, sessionManager),
+  createStagedIntentsRouter(
+    planningOrchestrator,
+    sessionManager,
+    prReviewService,
+  ),
 );
 app.use('/api', createGateStateRouter());
 app.use('/api', createDeployRouter());
