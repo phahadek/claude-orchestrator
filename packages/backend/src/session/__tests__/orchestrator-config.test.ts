@@ -568,14 +568,8 @@ describe('getSessionAddDirs', () => {
         ]),
       );
 
-      for (const forbidden of [
-        'remote-control.env',
-        'hooks',
-        'systemd',
-      ]) {
-        expect(
-          dirs.some((d) => d.includes(forbidden)),
-        ).toBe(false);
+      for (const forbidden of ['remote-control.env', 'hooks', 'systemd']) {
+        expect(dirs.some((d) => d.includes(forbidden))).toBe(false);
       }
     },
   );

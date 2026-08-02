@@ -51,11 +51,18 @@ describe('ApiSessionRunner planning-session envelope guard', () => {
       // fires for a non-planning session type.
       let caught: unknown;
       try {
-        await runner.run('hello', undefined, makeOptions(sessionType), () => {});
+        await runner.run(
+          'hello',
+          undefined,
+          makeOptions(sessionType),
+          () => {},
+        );
       } catch (err) {
         caught = err;
       }
-      expect(String(caught)).not.toMatch(/does not implement the per-session-type/);
+      expect(String(caught)).not.toMatch(
+        /does not implement the per-session-type/,
+      );
     },
   );
 });

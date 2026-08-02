@@ -78,7 +78,8 @@ const CONFIG_BASELINE = [
 function sessionContainerRunCommand(): string {
   const calls = vi.mocked(execSync).mock.calls;
   const call = calls.find(
-    (c) => typeof c[0] === 'string' && (c[0] as string).includes('sleep infinity'),
+    (c) =>
+      typeof c[0] === 'string' && (c[0] as string).includes('sleep infinity'),
   );
   if (!call) throw new Error('session container docker run command not found');
   return call[0] as string;
