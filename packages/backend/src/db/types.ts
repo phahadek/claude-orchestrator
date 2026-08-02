@@ -570,7 +570,10 @@ export type SeedItemState = 'pending' | 'applied' | 'confirmed' | 'blocked';
  * the line was mislabeled and should not accrete; 'needs-triage' is unclear,
  * deferred.
  */
-export type SeedItemClassification = 'operational-seed' | 'in-pr' | 'needs-triage';
+export type SeedItemClassification =
+  | 'operational-seed'
+  | 'in-pr'
+  | 'needs-triage';
 
 export interface SeedItemRow {
   id: string;

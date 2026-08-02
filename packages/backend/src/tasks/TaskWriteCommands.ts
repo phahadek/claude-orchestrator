@@ -35,7 +35,10 @@ import {
   type SeedAccretionMarker,
 } from '../seed/seedStore';
 import type { GroomingGateEntry } from '../groom/groomGate';
-import type { GateItemClassification, SeedItemClassification } from '../db/types';
+import type {
+  GateItemClassification,
+  SeedItemClassification,
+} from '../db/types';
 import { recordEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
 import { planMove, type MoveGraphTask } from '../orchestration/moveTask';

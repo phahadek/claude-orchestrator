@@ -369,8 +369,7 @@ export function GateReadinessPanel({
   );
 
   const [seedStateFilter, setSeedStateFilter] = useState('');
-  const [seedClassificationFilter, setSeedClassificationFilter] =
-    useState('');
+  const [seedClassificationFilter, setSeedClassificationFilter] = useState('');
   const [seedPage, setSeedPage] = useState(1);
 
   const [seedItems, setSeedItems] = useState<SeedItem[]>([]);
