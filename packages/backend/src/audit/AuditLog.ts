@@ -1,5 +1,6 @@
 import { db } from '../db/db';
 import type { AuditEvent } from './types';
+import { normalizeBoardId } from '../tasks/taskId';
 
 export interface AuditRow {
   id: number;
@@ -350,19 +351,27 @@ export function getLatestEventByType(eventType: string): AuditRow | undefined {
  * AuditingTaskBackend for every orchestrator-authored body/deps edit; a raw
  * break-glass Notion edit doesn't itself retire the suppression, only the
  * next orchestrator-authored write does.
+ *
+ * `taskId` and `audit_log.task_id` are compared via normalizeBoardId rather
+ * than literal equality — callers pass the bare board-cache id while
+ * audit_log rows for edit events are written with a `source:`-prefixed id
+ * (see TaskBackend.updateBody/updateBodyRaw/patchBodySection), so a literal
+ * match silently misses every edit.
  */
 export function hasTaskEditSinceTimestamp(
   taskId: string,
   sinceTs: number,
 ): boolean {
-  const row = db
-    .prepare<[string, number], { one: number }>(
-      `SELECT 1 AS one FROM audit_log
-       WHERE task_id = ? AND event_type IN ('task_body_updated', 'task_deps_updated') AND ts > ?
-       LIMIT 1`,
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare<[number], { task_id: string | null }>(
+      `SELECT task_id FROM audit_log
+       WHERE event_type IN ('task_body_updated', 'task_deps_updated') AND ts > ?`,
     )
-    .get(taskId, sinceTs);
-  return row !== undefined;
+    .all(sinceTs);
+  return rows.some(
+    (r) => r.task_id !== null && normalizeBoardId(r.task_id) === norm,
+  );
 }
 
 /**
