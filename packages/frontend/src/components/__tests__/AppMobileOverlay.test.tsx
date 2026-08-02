@@ -470,6 +470,7 @@ describe('App — keyboard dismiss', () => {
     let capturedDismiss: ((fromInputField: boolean) => void) | undefined;
     mockImpl.mockImplementation(({ onDismiss }) => {
       capturedDismiss = onDismiss;
+      return { highlightedItemId: null };
     });
 
     render(<App />);
