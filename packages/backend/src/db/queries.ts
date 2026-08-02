@@ -1186,6 +1186,47 @@ export function setDerivedTitle(sessionId: string, title: string): void {
   setSessionMetadata(sessionId, { derivedTitle: title });
 }
 
+/**
+ * Durable per-session capture of a task's declared-writes set (see
+ * readinessGate.ts's DeclaredWriteEntry), written exactly once at
+ * SessionManager.start() spawn time and read at capability-request time
+ * (routes/stagedIntents.ts's maybeAutoApproveCapabilityRequest, via
+ * getSessionDeclaredWrites below) — never re-derived from a live task-body
+ * fetch, so a mid-session task-body edit cannot retroactively widen an
+ * already-dispatched session's auto-approve eligibility. Backed by the
+ * existing `sessions.metadata` JSON column (mirrors setDerivedTitle above)
+ * rather than a dedicated column.
+ */
+export function setSessionDeclaredWrites(
+  sessionId: string,
+  declaredWrites: { capability: string; prodMutating: boolean }[],
+): void {
+  setSessionMetadata(sessionId, { declaredWrites });
+}
+
+/** Reads back the declared-writes set captured by setSessionDeclaredWrites. Empty when never captured (session dispatched before this feature, or a non-ops session). */
+export function getSessionDeclaredWrites(
+  sessionId: string,
+): { capability: string; prodMutating: boolean }[] {
+  const row = db
+    .prepare('SELECT metadata FROM sessions WHERE session_id = ?')
+    .get(sessionId) as { metadata: string | null } | undefined;
+  if (!row?.metadata) return [];
+  try {
+    const parsed = JSON.parse(row.metadata) as {
+      declaredWrites?: unknown;
+    };
+    return Array.isArray(parsed.declaredWrites)
+      ? (parsed.declaredWrites as {
+          capability: string;
+          prodMutating: boolean;
+        }[])
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export function setSessionMetadata(
   sessionId: string,
   fields: Record<string, unknown>,

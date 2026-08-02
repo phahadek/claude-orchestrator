@@ -154,6 +154,155 @@ function checkDeferralPhrases(body: string): ReadinessViolation[] {
   return violations;
 }
 
+/**
+ * A single write capability a task declares — at grooming/Ready time — that
+ * a dispatched ops session is pre-authorized to auto-approve at request time
+ * (see the architecture unit "A task-settled write auto-approves a
+ * capability request only when declared, exact-matched, and not
+ * Prod-Mutating"). `capability` is the exact capability string a matching
+ * `session.requestCapability` must equal (never a prefix/pattern match).
+ * `prodMutating` mirrors the gate/deploy Prod-Mutating classification
+ * convention (see gateService.ts / playbookSchema.ts's `is_prod_mutating`):
+ * true means this write can still only be manually approved; false means it
+ * is eligible for auto-approval. An entry with no discernible tag, or a tag
+ * that doesn't unambiguously say "non-prod-mutating", defaults to
+ * `prodMutating: true` — fail-closed, never fail-open.
+ */
+export interface DeclaredWriteEntry {
+  capability: string;
+  prodMutating: boolean;
+}
+
+/**
+ * Normalizes a raw tag fragment (e.g. "Non-Prod-Mutating", "prod mutating")
+ * down to a bare lowercase letter run so punctuation/casing/whitespace
+ * variance doesn't defeat the match.
+ */
+function normalizeTagText(tag: string): string {
+  return tag.replace(/[^a-z]/gi, '').toLowerCase();
+}
+
+/**
+ * Classifies a declared-write's tag text as Prod-Mutating or not. Only an
+ * unambiguous "non-prod-mutating"/"not-prod-mutating" tag clears the write
+ * for auto-approval; a bare "prod-mutating" tag, an empty tag, or any other
+ * text defaults to Prod-Mutating (fail-closed) — see DeclaredWriteEntry.
+ */
+function classifyProdMutatingTag(tag: string): boolean {
+  const normalized = normalizeTagText(tag);
+  if (!normalized) return true;
+  if (
+    normalized.includes('nonprodmutating') ||
+    normalized.includes('notprodmutating')
+  ) {
+    return false;
+  }
+  return true;
+}
+
+const DECLARED_WRITE_LINE_RE = /^[-*]\s+(.*)$|^\d+[.)]\s+(.*)$/;
+
+/**
+ * Splits a single "## Declared writes" bullet into its capability string and
+ * classification tag. The capability is preferentially the first
+ * backtick-quoted span (`` `Bash(npm ci:*)` `` — Docs task-body convention
+ * mirrors backticking a literal value); absent one, it's the text before the
+ * first " — "/" - "/"|" separator. Returns a null capability when nothing
+ * usable could be parsed (a genuinely malformed entry, e.g. an empty bullet
+ * or one that is only a tag with no capability), which the readiness-gate
+ * check below treats as a violation.
+ */
+function parseDeclaredWriteLine(rawLine: string): DeclaredWriteEntry {
+  const m = DECLARED_WRITE_LINE_RE.exec(rawLine.trim());
+  const content = (m ? (m[1] ?? m[2] ?? '') : rawLine).trim();
+
+  const backtickMatch = content.match(/`([^`]+)`/);
+  let capability: string;
+  let rest: string;
+  if (backtickMatch && backtickMatch.index !== undefined) {
+    capability = backtickMatch[1].trim();
+    rest = content.slice(backtickMatch.index + backtickMatch[0].length);
+  } else {
+    const sepMatch = content.match(/\s[—|]\s|\s-{1,2}\s/);
+    if (sepMatch && sepMatch.index !== undefined) {
+      capability = content.slice(0, sepMatch.index).trim();
+      rest = content.slice(sepMatch.index + sepMatch[0].length);
+    } else {
+      capability = content;
+      rest = '';
+    }
+  }
+  capability = capability.replace(/^[`\s]+|[`\s]+$/g, '').trim();
+  const tag = rest.replace(/^[\s—|:-]+/, '').trim();
+
+  return { capability, prodMutating: classifyProdMutatingTag(tag) };
+}
+
+/**
+ * Extracts every declared write from a task body's "## Declared writes"
+ * section (any heading level, emoji-tolerant via normalizeHeadingText — same
+ * convention as Open Questions/Manual Verification). Lines that don't parse
+ * to a capability are silently dropped here — checkDeclaredWritesSection is
+ * the enforcement point that rejects those before Ready; this extractor is
+ * also called post-Ready (dispatch-time capture), where a malformed line
+ * must never crash the loader. Empty/absent section returns [].
+ */
+export function extractDeclaredWrites(body: string): DeclaredWriteEntry[] {
+  const entries: DeclaredWriteEntry[] = [];
+  const lines = body.split('\n');
+  let inSection = false;
+  for (const line of lines) {
+    const heading = line.match(/^#{1,6}\s*(.+)$/);
+    if (heading) {
+      inSection = normalizeHeadingText(heading[1]) === 'declared writes';
+      continue;
+    }
+    if (!inSection) continue;
+    const trimmed = line.trim();
+    if (!trimmed || /^none$/i.test(trimmed)) continue;
+    if (!/^[-*]\s+/.test(trimmed) && !/^\d+[.)]\s+/.test(trimmed)) continue;
+    const entry = parseDeclaredWriteLine(trimmed);
+    if (entry.capability) entries.push(entry);
+  }
+  return entries;
+}
+
+/**
+ * Ready-transition validator for the Declared writes section: a bullet under
+ * "## Declared writes" that carries no discernible capability (an empty
+ * entry, or one that is only a tag) is malformed and blocks Ready — the
+ * declaration must be durable and well-formed before any session carrying it
+ * is ever spawned. A bullet with a capability but no/ambiguous
+ * Prod-Mutating tag is NOT a violation: classifyProdMutatingTag already
+ * defaults it to Prod-Mutating (fail-closed), so it is safe to let through,
+ * just never auto-approvable.
+ */
+function checkDeclaredWritesSection(body: string): ReadinessViolation[] {
+  const violations: ReadinessViolation[] = [];
+  const lines = body.split('\n');
+  let inSection = false;
+  for (let i = 0; i < lines.length; i++) {
+    const heading = lines[i].match(/^#{1,6}\s*(.+)$/);
+    if (heading) {
+      inSection = normalizeHeadingText(heading[1]) === 'declared writes';
+      continue;
+    }
+    if (!inSection) continue;
+    const trimmed = lines[i].trim();
+    if (!trimmed || /^none$/i.test(trimmed)) continue;
+    if (!/^[-*]\s+/.test(trimmed) && !/^\d+[.)]\s+/.test(trimmed)) continue;
+    const entry = parseDeclaredWriteLine(trimmed);
+    if (!entry.capability) {
+      violations.push({
+        tier: 'structural',
+        detail: `Declared writes entry is malformed — no capability could be parsed ("${trimmed}")`,
+        location: `line ${i + 1}`,
+      });
+    }
+  }
+  return violations;
+}
+
 /** Tier 2 — leftover grooming-instruction residue found in prose. */
 function checkGroomingResidue(body: string): ReadinessViolation[] {
   const violations: ReadinessViolation[] = [];
@@ -209,6 +358,7 @@ export function checkReadiness(
     ...(exempt ? [] : checkOpenQuestionsSection(text)),
     ...(exempt ? [] : checkDeferralPhrases(text)),
     ...checkGroomingResidue(text),
+    ...checkDeclaredWritesSection(text),
   ];
 }
 

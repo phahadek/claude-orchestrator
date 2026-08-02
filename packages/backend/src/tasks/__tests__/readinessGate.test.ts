@@ -3,6 +3,7 @@ import {
   checkReadiness,
   parseManualVerificationItems,
   checkAccretionContentMatch,
+  extractDeclaredWrites,
 } from '../readinessGate';
 
 describe('checkReadiness — Tier 1 (structural)', () => {
@@ -236,5 +237,65 @@ describe('checkAccretionContentMatch', () => {
   it('is a no-op when nothing was stripped', () => {
     const result = checkAccretionContentMatch('gate_contribution', [], []);
     expect(result.ok).toBe(true);
+  });
+});
+
+describe('checkReadiness — Declared writes section', () => {
+  it('does not flag a well-formed, fully-tagged Declared writes section', () => {
+    const body =
+      '## Declared writes\n' +
+      '- `Bash(npm ci:*)` — Non-Prod-Mutating\n' +
+      '- `Bash(git push origin HEAD:*)` — Prod-Mutating\n';
+    const violations = checkReadiness(body);
+    expect(violations).toHaveLength(0);
+  });
+
+  it('does not block Ready on an entry missing its Prod-Mutating tag — it defaults to Prod-Mutating instead of failing open', () => {
+    const body = '## Declared writes\n- `mcp__github__merge_pull_request`\n';
+    const violations = checkReadiness(body);
+    expect(violations).toHaveLength(0);
+
+    const entries = extractDeclaredWrites(body);
+    expect(entries).toEqual([
+      { capability: 'mcp__github__merge_pull_request', prodMutating: true },
+    ]);
+  });
+
+  it('defaults an ambiguously-tagged entry to Prod-Mutating rather than failing open', () => {
+    const body = '## Declared writes\n- `Bash(npm ci:*)` — TBD\n';
+    const entries = extractDeclaredWrites(body);
+    expect(entries).toEqual([
+      { capability: 'Bash(npm ci:*)', prodMutating: true },
+    ]);
+  });
+
+  it('recognizes an unambiguous Non-Prod-Mutating tag as eligible for auto-approval', () => {
+    const body = '## Declared writes\n- `Bash(npm ci:*)` — Non-Prod-Mutating\n';
+    const entries = extractDeclaredWrites(body);
+    expect(entries).toEqual([
+      { capability: 'Bash(npm ci:*)', prodMutating: false },
+    ]);
+  });
+
+  it('blocks Ready on a malformed entry with no discernible capability', () => {
+    const body = '## Declared writes\n- ``\n';
+    const violations = checkReadiness(body);
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('malformed'),
+      ),
+    ).toBe(true);
+    expect(extractDeclaredWrites(body)).toEqual([]);
+  });
+
+  it('is empty for a task body with no Declared writes section', () => {
+    expect(extractDeclaredWrites('## Some other section\ncontent')).toEqual([]);
+    expect(checkReadiness('## Some other section\ncontent')).toHaveLength(0);
+  });
+
+  it('treats a "None" Declared writes section as empty, not malformed', () => {
+    const body = '## Declared writes\nNone\n';
+    expect(extractDeclaredWrites(body)).toEqual([]);
+    expect(checkReadiness(body)).toHaveLength(0);
   });
 });

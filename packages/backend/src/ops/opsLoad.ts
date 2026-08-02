@@ -41,6 +41,10 @@ import type { NotionTask } from '../notion/types';
 import { reconcileJournal, type OpsBoardTaskRow } from './opsJournal';
 import { formatTaskId } from '../tasks/taskId';
 import { isTestAuthoring } from '../tasks/testAuthoring';
+import {
+  extractDeclaredWrites,
+  type DeclaredWriteEntry,
+} from '../tasks/readinessGate';
 import { getProjectDeployedSha } from '../deploy/deployService';
 import { createLocalGitAncestrySource } from '../gate/gateService';
 import {
@@ -229,6 +233,16 @@ export interface OpsTaskEntry extends TaskRef {
    * value for every task entry in a given loadOpsContext run.
    */
   archUnits: OpsArchUnitRef[];
+  /**
+   * Write capabilities this task declared (and got approved for) at
+   * grooming/Ready time, parsed from its "## Declared writes" body section
+   * (see readinessGate.ts's extractDeclaredWrites/checkDeclaredWritesSection).
+   * Threaded by OpsSessionLauncher into the dispatched session's
+   * declared-writes capture (SessionManager.start's declaredWrites option) —
+   * captured once at spawn, never re-read live during the session's run.
+   * Empty when the task declares no writes.
+   */
+  declaredWrites: DeclaredWriteEntry[];
 }
 
 interface OpsBoardSummary {
@@ -481,6 +495,7 @@ export async function loadOpsContext(
       depStatus,
       archSource,
       archUnits,
+      declaredWrites: extractDeclaredWrites(page.rawMarkdown),
     };
 
     if (isExecutable) {
