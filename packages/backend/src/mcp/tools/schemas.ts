@@ -368,3 +368,16 @@ export const gateVerifyPayloadSchema = z
       });
     }
   });
+
+/**
+ * gate.verify's success response — echoes the staged intent's id and its
+ * recorded milestone, the same shape journal.setState already echoes, so a
+ * caller can see how its write was actually recorded (which gate_item it
+ * resolved to, and whether it landed attributed to a milestone) instead of
+ * a bare acknowledgement.
+ */
+export const gateVerifyResultSchema = z.object({
+  status: z.literal('ok'),
+  id: z.string(),
+  milestone: z.string().nullable(),
+});

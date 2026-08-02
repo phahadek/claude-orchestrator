@@ -337,8 +337,26 @@ describe('AgentSession.recordVerifiedFlakyDisposition', () => {
 
 // ── recordGateVerifyDisposition ──────────────────────────────────────────────
 
+function mockFoundGateItem(overrides?: {
+  id?: string;
+  milestone?: string | null;
+}) {
+  vi.mocked(getGateItem).mockReturnValue({
+    id: overrides?.id ?? 'item-1',
+    project: 'proj-1',
+    milestone: overrides?.milestone ?? 'milestone-1',
+    text: 'does the thing',
+    classification: 'Read-Only',
+    state: 'runnable',
+    updatedAt: new Date().toISOString(),
+    sources: [],
+    events: [],
+  } as never);
+}
+
 describe('AgentSession.recordGateVerifyDisposition', () => {
   it('stages a gate.verify intent — never a direct gate_item_event write — and emits gate_verify_disposition unconditionally, with no PR needed', () => {
+    mockFoundGateItem();
     const session = makeSession();
     const emitted: unknown[] = [];
     session.on('gate_verify_disposition', (p) => emitted.push(p));
@@ -360,7 +378,7 @@ describe('AgentSession.recordGateVerifyDisposition', () => {
       expect.any(String),
       null,
       null,
-      null,
+      'milestone-1',
       null,
     );
     expect(emitted).toEqual([
@@ -376,17 +394,7 @@ describe('AgentSession.recordGateVerifyDisposition', () => {
   });
 
   it("carries the gate item's milestone through to the staged intent when it resolves", () => {
-    vi.mocked(getGateItem).mockReturnValue({
-      id: 'item-1',
-      project: 'proj-1',
-      milestone: 'milestone-1',
-      text: 'does the thing',
-      classification: 'Read-Only',
-      state: 'runnable',
-      updatedAt: new Date().toISOString(),
-      sources: [],
-      events: [],
-    } as never);
+    mockFoundGateItem({ milestone: 'milestone-1' });
     const session = makeSession();
 
     session.recordGateVerifyDisposition({
@@ -408,7 +416,37 @@ describe('AgentSession.recordGateVerifyDisposition', () => {
     );
   });
 
+  it('returns the staged intent so the gate.verify MCP tool can echo id + milestone', () => {
+    mockFoundGateItem({ milestone: 'milestone-1' });
+    vi.mocked(stageIntent).mockReturnValue({
+      id: 'staged-42',
+      milestone: 'milestone-1',
+    } as never);
+    const session = makeSession();
+
+    const staged = session.recordGateVerifyDisposition({
+      gateItemId: 'item-1',
+      disposition: 'pass',
+    });
+
+    expect(staged).toEqual({ id: 'staged-42', milestone: 'milestone-1' });
+  });
+
+  it('throws rather than staging when gateItemId does not exact-match an existing gate_item (e.g. a short/truncated form)', () => {
+    vi.mocked(getGateItem).mockReturnValue(undefined);
+    const session = makeSession();
+
+    expect(() =>
+      session.recordGateVerifyDisposition({
+        gateItemId: 'short-id',
+        disposition: 'pass',
+      }),
+    ).toThrow(/short-id/);
+    expect(stageIntent).not.toHaveBeenCalled();
+  });
+
   it("is not deduplicated at the session level: a repeat call — e.g. re-reporting after an operator pushback — re-stages every time (staging's own content-hash dedup governs, not this method)", () => {
+    mockFoundGateItem();
     const session = makeSession();
     const emitted: unknown[] = [];
     session.on('gate_verify_disposition', (p) => emitted.push(p));
@@ -427,6 +465,7 @@ describe('AgentSession.recordGateVerifyDisposition', () => {
   });
 
   it('a changed disposition re-stages and re-emits', () => {
+    mockFoundGateItem();
     const session = makeSession();
     const emitted: unknown[] = [];
     session.on('gate_verify_disposition', (p) => emitted.push(p));
