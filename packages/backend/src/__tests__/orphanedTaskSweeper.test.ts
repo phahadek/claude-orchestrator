@@ -160,7 +160,9 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(upsertPullRequest).mockClear();
     vi.mocked(getOpsJournalEntry).mockReset().mockReturnValue(undefined);
-    vi.mocked(getLatestOpsSessionByTaskId).mockReset().mockReturnValue(undefined);
+    vi.mocked(getLatestOpsSessionByTaskId)
+      .mockReset()
+      .mockReturnValue(undefined);
     vi.mocked(getSession).mockReset().mockReturnValue(undefined);
     vi.mocked(listStagedIntentsBySession).mockReset().mockReturnValue([]);
     broadcast.mockClear();

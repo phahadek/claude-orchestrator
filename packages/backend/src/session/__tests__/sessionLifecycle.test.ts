@@ -76,25 +76,33 @@ describe('sessionDidWork', () => {
 
   describe('standard (PR-opening) sessions', () => {
     it('returns true for a merged PR', () => {
-      vi.mocked(getSession).mockReturnValue(session({ session_type: 'standard' }));
+      vi.mocked(getSession).mockReturnValue(
+        session({ session_type: 'standard' }),
+      );
       vi.mocked(getPRBySessionId).mockReturnValue({ state: 'merged' } as never);
       expect(sessionDidWork('sess-1')).toBe(true);
     });
 
     it('returns true for a closed PR', () => {
-      vi.mocked(getSession).mockReturnValue(session({ session_type: 'standard' }));
+      vi.mocked(getSession).mockReturnValue(
+        session({ session_type: 'standard' }),
+      );
       vi.mocked(getPRBySessionId).mockReturnValue({ state: 'closed' } as never);
       expect(sessionDidWork('sess-1')).toBe(true);
     });
 
     it('returns false for a still-open PR', () => {
-      vi.mocked(getSession).mockReturnValue(session({ session_type: 'standard' }));
+      vi.mocked(getSession).mockReturnValue(
+        session({ session_type: 'standard' }),
+      );
       vi.mocked(getPRBySessionId).mockReturnValue({ state: 'open' } as never);
       expect(sessionDidWork('sess-1')).toBe(false);
     });
 
     it('returns true for a merged local branch (local-only mode)', () => {
-      vi.mocked(getSession).mockReturnValue(session({ session_type: 'standard' }));
+      vi.mocked(getSession).mockReturnValue(
+        session({ session_type: 'standard' }),
+      );
       vi.mocked(getLocalBranchBySession).mockReturnValue({
         status: 'merged',
       } as never);
@@ -102,7 +110,9 @@ describe('sessionDidWork', () => {
     });
 
     it('returns false when nothing was ever opened', () => {
-      vi.mocked(getSession).mockReturnValue(session({ session_type: 'standard' }));
+      vi.mocked(getSession).mockReturnValue(
+        session({ session_type: 'standard' }),
+      );
       expect(sessionDidWork('sess-1')).toBe(false);
     });
   });
@@ -110,7 +120,9 @@ describe('sessionDidWork', () => {
   describe('stage-only sessions (groom/design/split)', () => {
     for (const sessionType of ['groom', 'design', 'split']) {
       it(`${sessionType}: returns true once >=1 staged_intent row exists, in any state`, () => {
-        vi.mocked(getSession).mockReturnValue(session({ session_type: sessionType }));
+        vi.mocked(getSession).mockReturnValue(
+          session({ session_type: sessionType }),
+        );
         vi.mocked(listStagedIntentsBySession).mockReturnValue([
           { id: 'i1', state: 'rejected' },
         ] as never);
@@ -118,7 +130,9 @@ describe('sessionDidWork', () => {
       });
 
       it(`${sessionType}: returns false with no staged_intent rows`, () => {
-        vi.mocked(getSession).mockReturnValue(session({ session_type: sessionType }));
+        vi.mocked(getSession).mockReturnValue(
+          session({ session_type: sessionType }),
+        );
         expect(sessionDidWork('sess-1')).toBe(false);
       });
     }
@@ -132,7 +146,9 @@ describe('sessionDidWork', () => {
       vi.mocked(listStagedIntentsBySession).mockReturnValue([
         { id: 'i1', state: 'staged' },
       ] as never);
-      vi.mocked(getOpsJournalEntry).mockReturnValue({ state: 'pending' } as never);
+      vi.mocked(getOpsJournalEntry).mockReturnValue({
+        state: 'pending',
+      } as never);
       expect(sessionDidWork('sess-1')).toBe(true);
     });
 
@@ -153,7 +169,9 @@ describe('sessionDidWork', () => {
       vi.mocked(getOpsJournalEntry).mockReturnValue(undefined);
       expect(sessionDidWork('sess-1')).toBe(false);
 
-      vi.mocked(getOpsJournalEntry).mockReturnValue({ state: 'pending' } as never);
+      vi.mocked(getOpsJournalEntry).mockReturnValue({
+        state: 'pending',
+      } as never);
       expect(sessionDidWork('sess-1')).toBe(false);
     });
   });
@@ -212,7 +230,9 @@ describe('sessionDidWork', () => {
 
   describe('review sessions', () => {
     it('is explicitly not applicable — returns false via its own branch', () => {
-      vi.mocked(getSession).mockReturnValue(session({ session_type: 'review' }));
+      vi.mocked(getSession).mockReturnValue(
+        session({ session_type: 'review' }),
+      );
       // Even with artifacts present that would satisfy other branches, review
       // must take its own explicit branch rather than fall through to one.
       vi.mocked(getPRBySessionId).mockReturnValue({ state: 'merged' } as never);
