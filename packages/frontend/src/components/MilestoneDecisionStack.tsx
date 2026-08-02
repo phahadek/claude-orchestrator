@@ -65,7 +65,11 @@ export function MilestoneDecisionStack({
     .filter((t) => matchesPhase(t, phaseFilter))
     .filter((t) => !flaggedOnly || t.blocked);
   const notLaunched = filteredTasks.filter(
-    (t) => t.displayStatus !== 'done' && !t.codeSession,
+    (t) => t.displayStatus !== 'done' && !t.codeSession && !t.planningSession,
+  );
+  const inFlight = filteredTasks.filter(
+    (t) =>
+      t.displayStatus !== 'done' && (!!t.codeSession || !!t.planningSession),
   );
   const done = filteredTasks.filter((t) => t.displayStatus === 'done');
 
@@ -240,6 +244,14 @@ export function MilestoneDecisionStack({
       <TaskSection
         title="Not yet launched"
         tasks={notLaunched}
+        selectedTaskId={selectedTaskId}
+        onSelectTask={(task) => handleSelect({ type: 'task', task })}
+        onRowRef={registerTaskTarget}
+      />
+
+      <TaskSection
+        title="In flight"
+        tasks={inFlight}
         selectedTaskId={selectedTaskId}
         onSelectTask={(task) => handleSelect({ type: 'task', task })}
         onRowRef={registerTaskTarget}
