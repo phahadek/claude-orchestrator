@@ -6548,9 +6548,8 @@ export interface FlowRejectionRateResult {
  *  - groom/design/ops: the rate at which a staged intent from that flow's
  *    sessions was rejected by the operator — pushback (-> needs_revision) or
  *    decline (-> rejected) — rather than approved (-> approved/committed).
- *    staged_intent carries no milestone column, so these three flows are
- *    scoped by project only; `milestone` is accepted for a uniform signature
- *    across all four flows but not filterable here.
+ *    Scoped to project+milestone via staged_intent.milestone (the canonical
+ *    short id, e.g. "M13" — same key space as gate_item.milestone).
  *  - gate-verify: auto-disposes on pass, so there is no operator
  *    "rejection" — the signal instead is the abstain rate, needs-setup
  *    dispositions read off gate_item_event, scoped to the given
@@ -6606,7 +6605,7 @@ export function getFlowRejectionRate(
         COUNT(*) AS total
       FROM staged_intent si
       JOIN sessions s ON s.session_id = si.session_id
-      WHERE s.project_id = ? AND s.session_type = ?
+      WHERE s.project_id = ? AND s.session_type = ? AND si.milestone = ?
         AND si.state IN (${dispositionedPlaceholders})
     `,
     )
@@ -6614,6 +6613,7 @@ export function getFlowRejectionRate(
       ...STAGED_INTENT_REJECTED_STATES,
       project,
       flow,
+      milestone,
       ...STAGED_INTENT_DISPOSITIONED_STATES,
     ) as { rejected: number | null; total: number | null };
   const total = row.total ?? 0;
