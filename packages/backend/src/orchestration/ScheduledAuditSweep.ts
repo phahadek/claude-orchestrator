@@ -5,7 +5,10 @@ import { promisify } from 'node:util';
 import { logger } from '../logger';
 import { getAllProjects } from '../config';
 import type { ProjectConfig } from '../config';
-import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  type AnalyzeCommand,
+} from '../session/orchestrator-config';
 import {
   runTestCommands,
   type TestCommandResult,
@@ -126,6 +129,16 @@ export async function ensureAuditWorktree(
       project.projectDir,
     );
   }
+}
+
+/**
+ * The command string for one `analyze` entry. `trigger_paths` (the diff-scope
+ * gate's path-trigger glob) is ignored here — this sweep has no PR diff to
+ * scope against, so it always runs the base branch's entire configured
+ * `analyze` list, the same list a PR-triggered run would execute.
+ */
+function analyzeCommandText(entry: AnalyzeCommand): string {
+  return typeof entry === 'string' ? entry : entry.command;
 }
 
 // ── Analyze-command execution with bounded transient-failure retry ─────────
@@ -524,7 +537,8 @@ export async function runAuditSweepForProject(
 
   const config = loadOrchestratorConfig(worktreePath);
 
-  for (const command of config.analyze) {
+  for (const entry of config.analyze) {
+    const command = analyzeCommandText(entry);
     const outcome = await runAnalyzeCommandWithRetry(
       project,
       worktreePath,
