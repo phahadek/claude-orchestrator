@@ -435,7 +435,9 @@ describe('DispatchTriggerEvaluator — dispatch provenance audit rows', () => {
     db.prepare('DELETE FROM flow_arm').run();
     db.prepare('DELETE FROM milestones').run();
     db.prepare('DELETE FROM projects').run();
-    db.prepare("DELETE FROM audit_log WHERE event_type = 'planning_dispatch_launched'").run();
+    db.prepare(
+      "DELETE FROM audit_log WHERE event_type = 'planning_dispatch_launched'",
+    ).run();
 
     insertProject({
       id: PROJECT,
@@ -465,7 +467,10 @@ describe('DispatchTriggerEvaluator — dispatch provenance audit rows', () => {
         failed: [],
       }),
     };
-    const evaluator = new DispatchTriggerEvaluator({} as never, launcher as never);
+    const evaluator = new DispatchTriggerEvaluator(
+      {} as never,
+      launcher as never,
+    );
     const candidate = {
       projectId: PROJECT,
       milestone: { id: MILESTONE } as never,
@@ -513,7 +518,10 @@ describe('DispatchTriggerEvaluator — dispatch provenance audit rows', () => {
         failed: [],
       }),
     };
-    const evaluator = new DispatchTriggerEvaluator({} as never, launcher as never);
+    const evaluator = new DispatchTriggerEvaluator(
+      {} as never,
+      launcher as never,
+    );
     const candidate = {
       projectId: PROJECT,
       milestone: { id: MILESTONE } as never,

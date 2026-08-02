@@ -206,11 +206,13 @@ describe('POST /api/planning/launch', () => {
   it('the operator path and the evaluator path record different trigger_source values (no silent default that collapses them)', async () => {
     const { recordEvent } = await import('../../audit/AuditLog');
 
-    await request(app).post('/api/planning/launch').send({
-      workflow: 'groom',
-      milestone: 'm1',
-      taskIds: ['task-1'],
-    });
+    await request(app)
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'groom',
+        milestone: 'm1',
+        taskIds: ['task-1'],
+      });
 
     // The evaluator path (DispatchTriggerEvaluator.dispatchPlanningCandidate)
     // writes the same event_type with trigger_source: 'evaluator' — asserted
