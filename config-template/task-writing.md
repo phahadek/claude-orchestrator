@@ -353,20 +353,26 @@ Verification Gate.
   ID**, grouped by source task; **each contributing Code task points back at the config-seed task**
   (a one-line "operational seed: applied via the milestone config-seed task `<task-id>`" in its body,
   in place of a free-floating inline note).
-- **Accretion is mandatory and promotion-gated — not best-effort.** Because the seed is deliberately
-  kept out of the Code task's PR, the config-seed task is the **only** place it survives. So
-  **before** any 💻 Code task carrying an operational seed is marked `🗂️ Ready`, the groomer MUST
-  either (a) append that seed to the milestone's config-seed task body (grouped by source task,
-  creating the config-seed task if absent) **and** add the back-reference to the Code task, or
-  (b) confirm the task has **no** operational seed — recording the outcome as a `seed_contribution`
-  artifact in `grooming-state.json`: `{ "seed_task_id": "…", "seeds": [...], "appended_at": "…" }`
-  or `{ "decision": "none" }`. Symmetric with `gate_contribution` — same shape, same load-bearing
-  weight. Dropping a seed into an inline note without accreting it is the same silent-coverage-leak
-  class as stripping a manual item without accreting it to the Gate. *(Mechanical enforcement —
-  `seed_contribution` seeding + a `milestone_seed_task_id` field in `groom-load.mjs`, plus a
-  promotion-gate hook check in `groom-gate.mjs`, mirroring the Gate's — is tracked by the Backlog
-  task **Enforce milestone config-seed accretion in /groom** on the milestone board (mirroring the
-  Gate's enforcement task); until it ships, groomers apply this by hand.)*
+- **Accretion is mandatory and promotion-gated — mechanically enforced, not best-effort.** Because
+  the seed is deliberately kept out of the Code task's PR, the config-seed task is the **only**
+  place it survives. So **before** any 💻 Code task carrying an operational seed is marked
+  `🗂️ Ready`, the groomer MUST either (a) append that seed to the milestone's config-seed task
+  body (grouped by source task, creating the config-seed task if absent) **and** add the
+  back-reference to the Code task, or (b) confirm the task has **no** operational seed — recording
+  the outcome as a `seed_contribution` artifact via the `seed.stage` intent's `decision`/`seeds`
+  fields (`"seeds"` + the accreted `seed_item` rows, or `"decision": "none"`). Symmetric with
+  `gate_contribution` — same shape, same load-bearing weight. Dropping a seed into an inline note
+  without accreting it is the same silent-coverage-leak class as stripping a manual item without
+  accreting it to the Gate.
+  The Code task's own body carries the mechanical, server-verified half of this: every task body
+  renders a `## Operational seed` section (`None.` by default — see `bodyRender.ts`'s
+  `operationalSeedItems`), and before the Ready-flip the groomer writes the same seed spec(s) into
+  that section via a `task.patchBodySection` replace. At Ready-flip stage time,
+  `checkGroupArmingIntentCompleteness` (`stagedIntents.ts`) re-derives the section from the real
+  stored body (`readinessGate.ts`'s `parseOperationalSeedItems`) and cross-checks it against the
+  `seed.stage` intent's accreted `seeds` — the same strip⇔accrete content-match posture
+  `gate_contribution` enforces against the real body — so a groomer can no longer self-declare a
+  contribution the store doesn't actually carry.
 - **Acceptance criteria:** two-subsection format — `### 🤖 Automated tests` reads `*N/A —
   operational task; verification is by reconcile + capture.*`; `### 👁️ Manual verification` lists,
   per seed, "applied via audited CRUD + change signal; worker hot-reloaded (or runner restarted); the

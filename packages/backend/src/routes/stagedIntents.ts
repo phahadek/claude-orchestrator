@@ -24,6 +24,7 @@ import {
   composeProposedBody,
   ReadinessGateError,
   parseManualVerificationItems,
+  parseOperationalSeedItems,
   checkAccretionContentMatch,
   type ReadinessViolation,
 } from '../tasks/readinessGate';
@@ -4667,9 +4668,9 @@ async function checkGroupArmingIntentCompleteness(
       ? (JSON.parse(seedRow.payload) as SeedStagePayload)
       : undefined;
     if (seedRow && seedPayload && seedPayload.decision === 'seeds') {
-      const strippedItems = payload.groomingGate.seedContributionCandidates.map(
-        (c) => c.spec,
-      );
+      const backend = getTaskBackend(row.project_id);
+      const storedBody = (await backend.fetchTaskPage(payload.taskId)) ?? '';
+      const strippedItems = parseOperationalSeedItems(storedBody);
       const accretedItems = seedPayload.seeds.map((s) => s.spec);
       const match = checkAccretionContentMatch(
         'seed_contribution',

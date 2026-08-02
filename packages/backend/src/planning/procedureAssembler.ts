@@ -928,6 +928,28 @@ function renderSkeleton(
           '`gate.accrete` / `seed.stage` above. When the pre-groom body carries ' +
           'no such section, stage no strip intent at all — there is nothing to ' +
           'remove.\n\n' +
+          "seed.stage's content-match check runs the opposite direction: the " +
+          'task body starts with a "## Operational seed" section already present ' +
+          '(every task body carries one, `None.` by default), and after a ' +
+          '`seed.stage` accretion this session fills it in with the same seed ' +
+          'spec(s), never leaves it at `None.`, and never packs it into the same ' +
+          '`groupId` as the arming `task.setStatus` — commit the fill-in as its ' +
+          `own \`${orchestratorMcpToolName('task.patchBodySection')}\` call ` +
+          '(`operation: "replace"`, `section: "Operational seed"`) FIRST, in its ' +
+          'own group, and confirm it lands before staging `task.setStatus` → ' +
+          "`Ready`. Staged in the same group instead, the arming intent's " +
+          'stage-time check re-derives the section from the still-unapplied ' +
+          '(still `None.`) stored body and finds nothing to cross-check — the ' +
+          'exact self-verifying gap this content-match exists to close. A ' +
+          'worked example: call the ' +
+          `\`${orchestratorMcpToolName('task.patchBodySection')}\` tool with ` +
+          '`{"payload":{"taskId":"<task-id>","section":"Operational seed",' +
+          '"operation":"replace","find":"None.","replaceWith":"- <seed 1>\\n' +
+          '- <seed 2>"}}` — no `groupId` field — then, once it has applied, ' +
+          'stage `seed.stage` and ' +
+          '`task.setStatus` under their own shared `groupId` as usual. When the ' +
+          'groomer\'s decision is "no operational seed", leave the section at ' +
+          'its `None.` default and stage no patch at all.\n\n' +
           `${GATE_ITEM_TIER_SELECTION_GUIDANCE} A \`gate.accrete\` batch is not ` +
           'forced to one tier: the top-level `classification` is the batch ' +
           'default, and any item that needs a different tier carries its own ' +
