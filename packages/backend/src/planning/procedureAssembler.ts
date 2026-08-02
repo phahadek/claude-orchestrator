@@ -928,6 +928,16 @@ function renderSkeleton(
           '`gate.accrete` / `seed.stage` above. When the pre-groom body carries ' +
           'no such section, stage no strip intent at all — there is nothing to ' +
           'remove.\n\n' +
+          'Before accreting, classify each candidate line the pre-groom body\'s ' +
+          '"## Operational seed" section carries as `operational-seed` (a ' +
+          "genuine data/config value kept out of this task's own PR), `in-pr` " +
+          '(mislabeled — it actually ships in the PR and does not accrete), or ' +
+          '`needs-triage` (unclear, deferred) — recorded as ' +
+          '`seedContributionCandidates` (`[{"spec":"<line text>",' +
+          '"classification":"operational-seed"|"in-pr"|"needs-triage"}]`) on ' +
+          'the same `groomingGate` object as `size_check`/`type_check` above; ' +
+          'accrete only the `operational-seed`-classified candidates via ' +
+          '`seed.stage`, never the `in-pr`/`needs-triage` ones.\n\n' +
           "seed.stage's content-match check runs the opposite direction: the " +
           'task body starts with a "## Operational seed" section already present ' +
           '(every task body carries one, `None.` by default), and after a ' +

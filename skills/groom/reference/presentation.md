@@ -218,16 +218,20 @@ Then the five points:
    store.
 5. **Operational seed** — the operational data/config seed this task contributes to the
    milestone config-seed run: a prod-data row/flag/default deliberately kept out of its
-   auto-dispatched PR (e.g. an `analyzer_configs` row, config defaults, alias/cohort flags).
-   Write _None._ if it has none. The groomer **writes the same seed spec(s) into the task
-   body's own `## Operational seed` section** (via `task.patchBodySection`, replacing the
-   `None.` placeholder every task body already carries there) *and* accretes the seed(s)
-   onto the milestone seed store via the seed-accretion route before the Ready-flip (see
-   Step 4 — Seed accretion) — both sides are required: the stage-time content-match check
-   re-derives the body's `## Operational seed` section server-side and cross-checks it
-   against what was accreted, the same posture point 4's Manual verification strip⇔accrete
-   check enforces. The array field is `seeds`, not the gate's `items`. Omitting either side
-   loses the seed permanently: the code sits dark after merge until someone hand-seeds it.
+   auto-dispatched PR (e.g. an `analyzer_configs` row, config defaults, alias/cohort flags),
+   read from the task body's pre-groom `## Operational seed` section when present. Classify
+   each candidate line `operational-seed` (accretes), `in-pr` (mislabeled — ships in the PR,
+   does not accrete), or `needs-triage` (unclear, deferred). Write _None._ if it has none, or
+   every candidate classifies `in-pr`/`needs-triage`. The groomer **writes the accreted
+   `operational-seed` spec(s) into the task body's own `## Operational seed` section** (via
+   `task.patchBodySection`, replacing the `None.` placeholder every task body already carries
+   there) *and* accretes the same seed(s) onto the milestone seed store via the
+   seed-accretion route before the Ready-flip (see Step 4 — Seed accretion) — both sides are
+   required: the stage-time content-match check re-derives the body's `## Operational seed`
+   section server-side and cross-checks it against what was accreted, the same posture
+   point 4's Manual verification strip⇔accrete check enforces. The array field is `seeds`,
+   not the gate's `items`. Omitting either side loses the seed permanently: the code sits
+   dark after merge until someone hand-seeds it.
 
 Then, at the end of the batch, under a **Context (no action needed)** heading, list
 the non-Backlog tasks by name + type + status — same Type-first convention as the
