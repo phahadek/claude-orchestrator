@@ -308,7 +308,7 @@ export const reviewDispositionSchema = z.enum([
 ]);
 
 /** VerifiedFlakyDisposition's gate vocabulary — see AgentSession.ts's recordVerifiedFlakyDisposition. */
-export const flakyGateSchema = z.enum(['ci', 'f2']);
+export const flakyGateSchema = z.enum(['ci', 'f2', 'analyze']);
 
 /** GateVerifyDisposition's disposition vocabulary — see AgentSession.ts's recordGateVerifyDisposition. */
 export const gateVerifyDispositionSchema = z.enum([

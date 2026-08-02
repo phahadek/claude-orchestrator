@@ -158,7 +158,7 @@ export interface DispositionsParsedPayload {
  * unrelated to its diff. Parsed the same way as review-thread dispositions.
  */
 export interface VerifiedFlakyDisposition {
-  gate: 'ci' | 'f2';
+  gate: 'ci' | 'f2' | 'analyze';
   reason: string;
 }
 

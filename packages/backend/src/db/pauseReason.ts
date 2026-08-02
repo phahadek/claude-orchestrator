@@ -173,8 +173,12 @@ export const PAUSE_REASON_REGISTRY: Record<
   },
   analyze_failing: {
     source: 'analyze',
+    // Recovery is session-driven: a verified-flaky disposition from the
+    // session actuates a same-commit analyze-stage re-run via the
+    // orchestrator (rerunFlakyAnalyze) without human input, mirroring
+    // ci_failing's automatic recovery path.
     severity: 'needs_attention',
-    retry_strategy: 'manual_action',
+    retry_strategy: 'automatic',
   },
   rate_limit: {
     source: 'session',

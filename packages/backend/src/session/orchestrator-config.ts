@@ -44,10 +44,17 @@ function resolveConfigDir(projectDir: string): string | null {
  * none of those globs (minimatch, matched against `git diff --name-only`
  * paths — see pathDiffPredicate.ts's matchesPathDiff). Omitted/empty
  * `trigger_paths` means "always run", matching plain-string entries.
+ *
+ * `transient_output_patterns` is a list of regexes (tested against a failed
+ * command's combined stdout/stderr) identifying diff-orthogonal infra noise
+ * — network blips, registry 5xxs, DNS failures — that should mark the
+ * failure as transient (`is_transient`) alongside the existing timeout/OOM
+ * detection, even though the command itself didn't time out or get killed.
  */
 interface AnalyzeCommandEntry {
   command: string;
   trigger_paths?: string[];
+  transient_output_patterns?: string[];
 }
 
 /** Backward-compatible: a bare string is a command with no path trigger (always runs, no content-hash caching). */
@@ -141,11 +148,25 @@ function isValidAnalyzeEntry(v: unknown): v is AnalyzeCommand {
   if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
     const obj = v as Record<string, unknown>;
     if (typeof obj.command !== 'string') return false;
-    if (obj.trigger_paths === undefined) return true;
-    return (
-      Array.isArray(obj.trigger_paths) &&
-      obj.trigger_paths.every((p) => typeof p === 'string')
-    );
+    if (
+      obj.trigger_paths !== undefined &&
+      !(
+        Array.isArray(obj.trigger_paths) &&
+        obj.trigger_paths.every((p) => typeof p === 'string')
+      )
+    ) {
+      return false;
+    }
+    if (
+      obj.transient_output_patterns !== undefined &&
+      !(
+        Array.isArray(obj.transient_output_patterns) &&
+        obj.transient_output_patterns.every((p) => typeof p === 'string')
+      )
+    ) {
+      return false;
+    }
+    return true;
   }
   return false;
 }

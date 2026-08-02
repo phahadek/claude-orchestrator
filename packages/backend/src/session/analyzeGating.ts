@@ -9,6 +9,7 @@ import type { AnalyzeCommand } from './orchestrator-config';
 export interface NormalizedAnalyzeCommand {
   command: string;
   trigger_paths?: string[];
+  transient_output_patterns?: string[];
 }
 
 export function normalizeAnalyzeCommand(
@@ -24,6 +25,27 @@ export function isAnalyzeCommandTriggered(
 ): boolean {
   if (!entry.trigger_paths || entry.trigger_paths.length === 0) return true;
   return matchesPathDiff(entry.trigger_paths, diffPaths);
+}
+
+/**
+ * Tests a failed analyze command's output against its config-supplied
+ * `transient_output_patterns` (network/registry-failure regexes) — the
+ * output-pattern counterpart to the timeout/OOM signals runTestCommands
+ * already reports. Invalid regex patterns are skipped rather than throwing,
+ * since a config typo shouldn't crash the analyze gate.
+ */
+export function matchesTransientOutputPattern(
+  entry: NormalizedAnalyzeCommand,
+  output: string,
+): boolean {
+  if (!entry.transient_output_patterns?.length) return false;
+  return entry.transient_output_patterns.some((pattern) => {
+    try {
+      return new RegExp(pattern).test(output);
+    } catch {
+      return false;
+    }
+  });
 }
 
 function listWorktreeFiles(worktreePath: string): Promise<string[]> {

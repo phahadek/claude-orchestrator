@@ -106,6 +106,7 @@ function makePR(overrides: Record<string, unknown> = {}) {
     pre_review_stage: null,
     conflict_nudge_sha: null,
     stalled_pr_retry_count: 0,
+    flake_recovery_attempts: 0,
     ...overrides,
   };
 }
@@ -626,17 +627,48 @@ describe('StalledPRReconciler', () => {
     expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
   });
 
-  it('re-drives an analyze_failing PR, deletes analyze cache, and clears pause_reason', async () => {
+  it('defers an analyze_failing PR to the bounded flake-recovery mechanism while its retry budget remains', async () => {
+    // typedGetSetting is mocked to return 5 by default (flake_recovery_max_retries).
     const pr = makePR({
       pause_reason: JSON.stringify({
         reason: 'analyze_failing',
-        source: 'review',
+        source: 'analyze',
         severity: 'needs_attention',
-        retry_strategy: 'manual_action',
+        retry_strategy: 'automatic',
       }),
       head_sha: 'sha1',
       review_result: JSON.stringify({ verdict: 'analyze_failed' }),
       pending_push: 0,
+      flake_recovery_attempts: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(deleteAnalyzeResult).not.toHaveBeenCalled();
+    expect(setPauseReason).not.toHaveBeenCalled();
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+  });
+
+  it('re-drives an analyze_failing PR once its flake-recovery budget is exhausted, deletes analyze cache, and clears pause_reason', async () => {
+    // typedGetSetting is mocked to return 5 by default (flake_recovery_max_retries).
+    const pr = makePR({
+      pause_reason: JSON.stringify({
+        reason: 'analyze_failing',
+        source: 'analyze',
+        severity: 'needs_attention',
+        retry_strategy: 'automatic',
+      }),
+      head_sha: 'sha1',
+      review_result: JSON.stringify({ verdict: 'analyze_failed' }),
+      pending_push: 0,
+      flake_recovery_attempts: 5,
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 
