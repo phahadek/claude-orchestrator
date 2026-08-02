@@ -111,6 +111,7 @@ vi.mock('../session/orchestrator-config', () => ({
     bashRules: [],
   })),
   getSessionAllowedTools: vi.fn(() => []),
+  getSessionAddDirs: vi.fn(() => []),
 }));
 
 vi.mock('../session/orchestrator-claudemd', () => ({

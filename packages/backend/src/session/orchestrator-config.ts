@@ -12,6 +12,30 @@ import {
   NOTION_READ_MCP_TOOLS,
   runtimeSettings,
 } from '../config';
+import { isPlanningSession } from './sessionPredicates';
+
+/**
+ * Locates the central config tree (the sibling `config/` checkout holding
+ * `procedures.md`, `task-writing.md`, and `projects/<key>/` per-project
+ * docs). Mirrors groom/groomLoad.ts#resolveConfigDir's exact resolution
+ * order (env var, then `../config`/`../../config` relative to the project
+ * checkout) but is kept as its own copy here rather than importing
+ * groomLoad.ts directly: that module pulls in NotionClient, ProjectService,
+ * and a promisified `execFile` at import time, which is unwanted weight on
+ * every dispatched session's spawn path (this function runs on every
+ * CliSessionRunner/DockerSessionRunner spawn, not just groom sessions).
+ */
+function resolveConfigDir(projectDir: string): string | null {
+  const explicit = process.env.ORCHESTRATOR_CONFIG_DIR;
+  if (explicit) return path.resolve(explicit);
+  for (const c of [
+    path.resolve(projectDir, '..', 'config'),
+    path.resolve(projectDir, '..', '..', 'config'),
+  ]) {
+    if (fs.existsSync(path.join(c, 'projects'))) return c;
+  }
+  return null;
+}
 
 export interface OrchestratorConfig {
   /**
@@ -227,7 +251,23 @@ const GRANT_DENYLIST_PATTERNS = [
   /^MultiEdit$/i,
 ];
 
+/**
+ * Prefix for the grantable single-path filesystem-read capability: widens a
+ * dispatched planning/ops session's read envelope (the `--add-dir` list
+ * passed to the CLI, or the matching read-only bind mount in Docker mode —
+ * see DockerSessionRunner) by exactly one absolute host path beyond its
+ * per-session-type baseline (getSessionAddDirs below). Parameterized by the
+ * literal path, like SESSION_RECORD_READ_PREFIX/AUDIT_LOG_READ_PREFIX below —
+ * but unlike those id-parameterized prefixes, a granted path can legitimately
+ * contain a denylisted substring (e.g. a directory named `.../apply-svc` or
+ * `.../resolve-cache`), so `isGrantable` special-cases this prefix below
+ * rather than scanning the whole capability string against
+ * GRANT_DENYLIST_PATTERNS. Read-only: there is no write counterpart.
+ */
+const PATH_READ_PREFIX = 'read:path:';
+
 export function isGrantable(capability: string): boolean {
+  if (capability.startsWith(PATH_READ_PREFIX)) return true;
   return !GRANT_DENYLIST_PATTERNS.some((re) => re.test(capability));
 }
 
@@ -322,6 +362,18 @@ export function parseSessionEventsReadCapability(
 ): string | null {
   return capability.startsWith(SESSION_EVENTS_READ_PREFIX)
     ? capability.slice(SESSION_EVENTS_READ_PREFIX.length)
+    : null;
+}
+
+/** Builds the exact capability string for reading one additional absolute host path. */
+export function pathReadCapability(absPath: string): string {
+  return `${PATH_READ_PREFIX}${absPath}`;
+}
+
+/** Extracts the granted absolute path from a `read:path:` capability, or null if it isn't one. */
+export function parsePathReadCapability(capability: string): string | null {
+  return capability.startsWith(PATH_READ_PREFIX)
+    ? capability.slice(PATH_READ_PREFIX.length)
     : null;
 }
 
@@ -527,4 +579,62 @@ export function getSessionAllowedTools(
               ]
             : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
   return [...new Set([...base, ...grantable])];
+}
+
+/**
+ * Per-session-type baseline for the filesystem read envelope beyond a
+ * dispatched session's own worktree — the `--add-dir` list passed to the CLI
+ * (Docker mode: the matching set of read-only bind mounts on the `docker
+ * run` invocation, since `--add-dir` inside the container only reaches
+ * already-mounted paths — see DockerSessionRunner), unioned with any granted
+ * `read:path:` capability (see PATH_READ_PREFIX above). Replaces the former
+ * unconditional `--add-dir /` lift for every `isPlanningSession` type
+ * (groom/design/ops/split/docs — and gate-verify, which dispatches as
+ * sessionType 'ops'): every dispatched session ran as the same OS user, so
+ * that blanket lift gave direct OS-level read access to every other
+ * colocated project's secrets and to other sessions' scoped `.mcp.json`
+ * credential files.
+ *
+ * The baseline is the central config tree's shared doc subpaths only — never
+ * the config directory wholesale, since `remote-control.env`, `hooks/`, and
+ * `systemd/` are credential-shaped siblings of `procedures.md`/
+ * `task-writing.md` in that same tree. `projectDir` is the project checkout
+ * root (== SessionRunnerOptions.worktreePath for a planning session, which
+ * has no worktree of its own) — used both to resolve the central config tree
+ * (resolveConfigDir) and, via its basename, as the per-project key under
+ * `config/projects/<key>/`. A non-planning session type (standard/review)
+ * gets no baseline at all — it stays confined to its worktree, same as
+ * before this function existed.
+ */
+export function getSessionAddDirs(
+  sessionType: string,
+  granted: string[],
+  projectDir: string,
+): string[] {
+  const baseline: string[] = [];
+  if (isPlanningSession(sessionType)) {
+    const configDir = resolveConfigDir(projectDir);
+    if (configDir) {
+      baseline.push(
+        path.join(configDir, 'procedures.md'),
+        path.join(configDir, 'task-writing.md'),
+        path.join(configDir, 'README.md'),
+        path.join(configDir, 'guidelines-baseline.json'),
+      );
+      const projectConfigDir = path.join(
+        configDir,
+        'projects',
+        path.basename(projectDir),
+      );
+      baseline.push(
+        path.join(projectConfigDir, 'context.md'),
+        path.join(projectConfigDir, 'investigation-guide.md'),
+        path.join(projectConfigDir, 'grooming.json'),
+      );
+    }
+  }
+  const grantedPaths = granted
+    .map(parsePathReadCapability)
+    .filter((p): p is string => p !== null);
+  return [...new Set([...baseline, ...grantedPaths])];
 }

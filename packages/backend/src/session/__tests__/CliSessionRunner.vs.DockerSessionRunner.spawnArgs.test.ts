@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
 
@@ -84,7 +84,15 @@ const defaultOptions = {
 beforeEach(() => {
   lastCliArgs = [];
   lastDockerExecArgs = [];
+  // getSessionAddDirs (orchestrator-config.ts) resolves the central config
+  // tree via $ORCHESTRATOR_CONFIG_DIR — set it to a fixed path so both
+  // runners resolve the same deterministic baseline.
+  process.env.ORCHESTRATOR_CONFIG_DIR = '/fake/config';
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  delete process.env.ORCHESTRATOR_CONFIG_DIR;
 });
 
 function extractFlagList(args: string[], flag: string): string[] {
@@ -93,6 +101,14 @@ function extractFlagList(args: string[], flag: string): string[] {
   const rest = args.slice(idx + 1);
   const nextFlagIdx = rest.findIndex((a) => a.startsWith('--'));
   return nextFlagIdx === -1 ? rest : rest.slice(0, nextFlagIdx);
+}
+
+/** --add-dir is a repeated `--add-dir <path>` flag pair, not one flag with a value list. */
+function addDirValues(args: string[]): string[] {
+  return args.reduce<string[]>((acc, arg, i) => {
+    if (arg === '--add-dir') acc.push(args[i + 1]);
+    return acc;
+  }, []);
 }
 
 describe('CliSessionRunner vs DockerSessionRunner — planning session CLI parity', () => {
@@ -130,6 +146,9 @@ describe('CliSessionRunner vs DockerSessionRunner — planning session CLI parit
 
       expect(dockerArgs.includes('--add-dir')).toBe(
         cliArgs.includes('--add-dir'),
+      );
+      expect(addDirValues(dockerArgs).sort()).toEqual(
+        addDirValues(cliArgs).sort(),
       );
     },
   );

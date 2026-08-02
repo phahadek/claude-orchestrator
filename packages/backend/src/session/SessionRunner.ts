@@ -23,6 +23,14 @@ export interface SessionRunnerOptions {
    */
   sessionType?: string;
   /**
+   * The session's durable, operator-approved capability set (see
+   * getGrantedCapabilities in db/queries.ts) — the raw grant strings, not
+   * yet filtered to tool-shaped entries. CLI/Docker mode runners pass this
+   * to `getSessionAddDirs` (orchestrator-config.ts) to widen the filesystem
+   * read envelope by any granted `read:path:<abs-path>` capability.
+   */
+  granted?: string[];
+  /**
    * System prompt content to inject (API mode only).
    * In CLI mode the content is delivered via --append-system-prompt-file instead.
    * In API mode this is passed as the `systemPrompt` option to the Agent SDK.
