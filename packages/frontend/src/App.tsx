@@ -1231,10 +1231,10 @@ export default function App() {
 
   useKeyboardShortcuts({
     onOpenDispatch: () => setShowModal(true),
-    onDismiss: () => {
+    onDismiss: (fromInputField) => {
       if (showModal) {
         setShowModal(false);
-      } else if (selectedTaskId || selectedId) {
+      } else if (!fromInputField && (selectedTaskId || selectedId)) {
         window.history.back();
       } else if (filtersActive) {
         clearFilters();

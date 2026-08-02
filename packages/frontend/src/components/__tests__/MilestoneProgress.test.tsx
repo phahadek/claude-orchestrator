@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MilestoneProgress } from '../MilestoneProgress';
 import type { TaskView } from '../../types/taskView';
 
@@ -107,6 +107,22 @@ describe('MilestoneProgress', () => {
 
       fireEvent.keyDown(document, { key: 'Escape' });
       expect(screen.queryByTestId('milestone-popover')).toBeNull();
+    });
+
+    it('Escape while the popover is open closes it and does not propagate to a global window listener', () => {
+      render(<MilestoneProgress tasks={mixedTasks} compact />);
+      fireEvent.click(screen.getByTestId('compact-milestone-progress'));
+      expect(screen.getByTestId('milestone-popover')).toBeDefined();
+
+      const globalListener = vi.fn();
+      window.addEventListener('keydown', globalListener);
+      try {
+        fireEvent.keyDown(document, { key: 'Escape', bubbles: true });
+        expect(screen.queryByTestId('milestone-popover')).toBeNull();
+        expect(globalListener).not.toHaveBeenCalled();
+      } finally {
+        window.removeEventListener('keydown', globalListener);
+      }
     });
 
     it('closes popover on click outside', () => {
