@@ -1,9 +1,42 @@
 import type { StagedIntent } from '../api/stagedIntents';
 
-/** Best-effort task ref carried by most staged-intent kinds — absent for task.create/decision.pickOne, which don't resolve to an existing task on the payload itself. */
+/**
+ * Best-effort task ref carried by most staged-intent kinds — read from
+ * payload.taskId, or payload.sourceTask.id for gate.accrete/seed.stage
+ * (mirrors the backend's extractTaskId in routes/stagedIntents.ts). Absent
+ * for task.create/decision.pickOne, which don't resolve to an existing task
+ * on the payload itself.
+ */
 export function taskIdFromIntent(intent: StagedIntent): string | null {
-  const payload = intent.payload as { taskId?: unknown } | null;
-  return typeof payload?.taskId === 'string' ? payload.taskId : null;
+  const payload = intent.payload as {
+    taskId?: unknown;
+    sourceTask?: { id?: unknown };
+  } | null;
+  if (typeof payload?.taskId === 'string') return payload.taskId;
+  const sourceTaskId = payload?.sourceTask?.id;
+  return typeof sourceTaskId === 'string' ? sourceTaskId : null;
+}
+
+/** Minimal session shape this module needs — matches useSessionStore's SessionState without importing it (avoids a hooks -> utils dependency). */
+export interface SessionTaskNameLookup {
+  sessionId: string;
+  taskName: string;
+}
+
+/**
+ * Task name to show for a staged intent's originating session, for a card
+ * whose intent carries no resolvable task ref of its own (e.g.
+ * decision.pickOne). Looked up against the live session list MilestoneView
+ * already holds — no extra fetch. A placeholder session's empty taskName
+ * counts as unresolved.
+ */
+export function taskNameFromSession(
+  sessionId: string | null | undefined,
+  sessions: SessionTaskNameLookup[],
+): string | null {
+  if (!sessionId) return null;
+  const taskName = sessions.find((s) => s.sessionId === sessionId)?.taskName;
+  return taskName || null;
 }
 
 /**

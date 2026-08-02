@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import type { StagedIntent } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import type { TaskView } from '../types/taskView';
+import type { SessionTaskNameLookup } from '../utils/milestoneStack';
 import { phaseForTask } from '../utils/phaseBurndown';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { DecisionPickOnePanel } from './DecisionPickOnePanel';
 import { TriageBatchPanel } from './TriageBatchPanel';
 import { GroupCard } from './GroupCard';
 import { taskIdFor } from './triageVerdict';
-import { taskIdFromIntent } from '../utils/milestoneStack';
+import { taskIdFromIntent, taskNameFromSession } from '../utils/milestoneStack';
 import { useDecisionQueue } from '../hooks/useDecisionQueue';
 import panelStyles from './DecisionPanel.module.css';
 import styles from './MilestoneDecisionInbox.module.css';
@@ -24,6 +25,8 @@ interface Props {
   milestone: string;
   /** The milestone's tasks — resolved against each card's intent(s) to label the card by its target task's name + Type instead of an internal id. */
   tasks?: TaskView[];
+  /** The live session list — resolved by intent.sessionId to label a taskId-less card (e.g. decision.pickOne) by its originating session's task name instead of the raw intent kind. No extra fetch: MilestoneView already holds this. */
+  sessions?: SessionTaskNameLookup[];
   /** The currently drill-down-selected intent/group card id, if any — highlights that card. */
   selectedCardId?: string | null;
   /** Drives the middle-stack selection -> right drill-down wiring. Omit to render read-only (no selection affordance). */
@@ -39,9 +42,12 @@ interface Props {
 }
 
 interface TaskLabel {
-  icon: string;
+  icon: string | null;
   name: string;
 }
+
+/** Shown when a card's task identity can't be resolved from either its own task ref or its originating session (e.g. a human-staged intent, which has no session at all). */
+const UNRESOLVED_TASK_LABEL = 'Untitled decision';
 
 /** Resolves a card's target task name + type icon from the milestone's task list — null when the intent carries no task ref (e.g. decision.pickOne) or the ref doesn't resolve, so the caller can fall back to a defined label. */
 function taskLabelFor(
@@ -52,6 +58,25 @@ function taskLabelFor(
   const task = taskById.get(taskId);
   if (!task) return null;
   return { icon: task.taskType.split(' ')[0], name: task.taskName };
+}
+
+/**
+ * A card's display-only title: its own resolved task, falling back to its
+ * originating session's task name, falling back to a defined label — never
+ * an empty header and never the raw intent.kind, which stays visible
+ * separately as secondary detail (see UNRESOLVED_TASK_LABEL).
+ */
+function cardLabelFor(
+  taskId: string | null,
+  taskById: Map<string, TaskView>,
+  sessionId: string | null | undefined,
+  sessions: SessionTaskNameLookup[],
+): TaskLabel {
+  const resolved = taskLabelFor(taskId, taskById);
+  if (resolved) return resolved;
+  const sessionTaskName = taskNameFromSession(sessionId, sessions);
+  if (sessionTaskName) return { icon: null, name: sessionTaskName };
+  return { icon: null, name: UNRESOLVED_TASK_LABEL };
 }
 
 type Card =
@@ -126,6 +151,7 @@ export function MilestoneDecisionInbox({
   projectId,
   milestone,
   tasks = [],
+  sessions = [],
   selectedCardId = null,
   onSelectIntent,
   onViewSession,
@@ -231,7 +257,12 @@ export function MilestoneDecisionInbox({
         if (card.type === 'intent') {
           const { intent } = card;
           const provenance = provenanceOf([intent]);
-          const label = taskLabelFor(taskIdFromIntent(intent), taskById);
+          const label = cardLabelFor(
+            taskIdFromIntent(intent),
+            taskById,
+            intent.sessionId,
+            sessions,
+          );
           return (
             <div
               key={intent.id}
@@ -254,20 +285,16 @@ export function MilestoneDecisionInbox({
               <div className={panelStyles.groupHeader}>
                 <span className={styles.cardTitleGroup}>
                   <span className={styles.cardTitle}>
-                    {label ? (
+                    {label.icon ? (
                       <>
                         <span aria-hidden="true">{label.icon}</span>{' '}
                         {label.name}
                       </>
                     ) : (
-                      intent.kind
+                      label.name
                     )}
                   </span>
-                  {label && (
-                    <span className={styles.cardTitleDetail}>
-                      {intent.kind}
-                    </span>
-                  )}
+                  <span className={styles.cardTitleDetail}>{intent.kind}</span>
                 </span>
                 <span
                   className={styles.provenanceBadge}
@@ -314,7 +341,12 @@ export function MilestoneDecisionInbox({
         const inFlight = groupInFlight === groupId;
         const isClean = cleanGroupIds.includes(groupId);
         const provenance = provenanceOf(groupIntents);
-        const groupLabel = taskLabelFor(taskIdFor(groupIntents), taskById);
+        const groupLabel = cardLabelFor(
+          taskIdFor(groupIntents),
+          taskById,
+          groupIntents[0]?.sessionId,
+          sessions,
+        );
         const members = [
           ...(committedByGroup[groupId] ?? []).map((intent) => ({
             intent,
@@ -362,12 +394,14 @@ export function MilestoneDecisionInbox({
                   : (groupErrors[groupId] ?? null)
               }
               title={
-                groupLabel ? (
+                groupLabel.icon ? (
                   <>
                     <span aria-hidden="true">{groupLabel.icon}</span>{' '}
                     {groupLabel.name}
                   </>
-                ) : undefined
+                ) : (
+                  groupLabel.name
+                )
               }
               inFlight={inFlight}
               draft={draft}

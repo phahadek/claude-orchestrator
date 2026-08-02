@@ -229,6 +229,7 @@ export function MilestoneView({
       projectId={activeProjectId}
       milestone={milestoneKey}
       tasks={tasks}
+      sessions={sessions}
       phaseFilter={phaseFilter}
       flaggedOnly={flaggedOnly}
       selection={selection}
