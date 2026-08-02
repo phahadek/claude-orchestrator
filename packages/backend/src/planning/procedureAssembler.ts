@@ -1140,7 +1140,7 @@ function renderGroomDigest(
   // inlined it here either, so leave the digest unchanged on that branch.
   if (data.archSource === 'store') {
     lines.push(
-      `- Arch-store-selected units (${data.archUnits.length}): ${data.archUnits.length ? data.archUnits.map((u) => u.title).join(', ') : '(none)'}`,
+      `- Arch-store-selected units (${data.archUnits.length}): ${data.archUnits.length ? data.archUnits.map((u) => `${u.title} (${u.id})`).join(', ') : '(none)'}`,
     );
     if (data.archUnits.length > ARCH_UNIT_INLINE_CAP) {
       lines.push(
