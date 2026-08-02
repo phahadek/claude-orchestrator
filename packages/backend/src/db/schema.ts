@@ -207,6 +207,20 @@ export function runMigrations(target: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_ops_journal_project_milestone ON ops_journal(project, milestone);
 
+    CREATE TABLE IF NOT EXISTS capability_disqualification (
+      id                     TEXT    PRIMARY KEY,
+      project_id             TEXT    NOT NULL,
+      capability             TEXT    NOT NULL,
+      investigation_task_id  TEXT    NOT NULL,
+      state                  TEXT    NOT NULL,
+      created_at             TEXT    NOT NULL,
+      resolved_at            TEXT,
+      lifted_at              TEXT,
+      updated_at             TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_capability_disqualification_project ON capability_disqualification(project_id);
+    CREATE INDEX IF NOT EXISTS idx_capability_disqualification_investigation_task ON capability_disqualification(investigation_task_id);
+
     CREATE TABLE IF NOT EXISTS gate_item (
       id                     TEXT    PRIMARY KEY,
       project                TEXT    NOT NULL,

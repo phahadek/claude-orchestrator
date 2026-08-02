@@ -388,6 +388,41 @@ export interface OpsJournalRow {
   updated_at: string;
 }
 
+// ─── capability_disqualification ────────────────────────────────────────────
+
+/**
+ * 'open': an Investigation task is filed and unresolved — the key is
+ * excluded from new denial-pattern mining while it's pending.
+ * 'hardened': the Investigation resolved confirming genuine capability-level
+ * risk — permanently excluded, no passive/time-based expiry.
+ * 'lifted': the Investigation resolved concluding the pattern was a
+ * task-quality defect, not a capability risk — the key is eligible again,
+ * with `lifted_at` marking the point after which denial evidence resumes
+ * accumulating (denials at or before it are never recounted).
+ */
+export type CapabilityDisqualificationState = 'open' | 'hardened' | 'lifted';
+
+/** One row per (project_id, capability) key ever disqualified by the capability-disposition-trail miner. */
+export interface CapabilityDisqualificationRow {
+  id: string;
+  project_id: string;
+  capability: string;
+  investigation_task_id: string;
+  state: CapabilityDisqualificationState;
+  created_at: string;
+  resolved_at: string | null;
+  lifted_at: string | null;
+  updated_at: string;
+}
+
+export type NewCapabilityDisqualificationRow = Omit<
+  CapabilityDisqualificationRow,
+  'id' | 'resolved_at' | 'lifted_at'
+> & {
+  resolved_at?: string | null;
+  lifted_at?: string | null;
+};
+
 // ─── convergence_snapshot ───────────────────────────────────────────────────
 
 /** A point-in-time sample of a milestone's live convergence, written by ConvergenceSnapshotJob only when it changes. */

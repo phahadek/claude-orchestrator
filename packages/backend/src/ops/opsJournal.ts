@@ -1,4 +1,5 @@
 import { recordEvent } from '../audit/AuditLog';
+import { resolveCapabilityDisqualification } from '../audit/capabilityDispositionMining';
 import {
   getOpsJournalEntry,
   listOpsJournalEntries,
@@ -181,6 +182,19 @@ export function setEntryState(
     updatedAt: new Date().toISOString(),
   };
   upsertOpsJournalEntry(entryToRow(updated));
+  // The sole hook that lifts or hardens a capability-disposition-trail
+  // disqualification (see audit/capabilityDispositionMining.ts) — a no-op
+  // for every ops_journal entry not tied to one. Runs for both the
+  // interactive route (routes/opsJournal.ts) and the staged journal.setState
+  // -> "resolved" commit path (routes/stagedIntents.ts), since both funnel
+  // through this function.
+  if (state === 'resolved') {
+    resolveCapabilityDisqualification(
+      taskId,
+      updated.resolution,
+      updated.updatedAt,
+    );
+  }
   recordEvent({
     event_type: 'ops_journal_state_changed',
     actor_type: 'system',

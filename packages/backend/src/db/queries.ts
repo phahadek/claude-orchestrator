@@ -39,6 +39,8 @@ import type {
   TaskRepoAssignmentRow,
   FeedbackInboxRow,
   OpsJournalRow,
+  CapabilityDisqualificationRow,
+  NewCapabilityDisqualificationRow,
   GateItemRow,
   GateItemSourceRow,
   NewGateItemSourceRow,
@@ -4707,6 +4709,78 @@ export function deleteOpsJournalEntry(taskId: string): void {
     `DELETE FROM ops_journal WHERE task_id = @task_id`,
   );
   _stmtDeleteOpsJournalEntry.run({ task_id: toBareOpsJournalTaskId(taskId) });
+}
+
+// ─── capability_disqualification ────────────────────────────────────────────
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle.
+
+let _stmtGetCapabilityDisqualification: Database.Statement | null = null;
+let _stmtGetCapabilityDisqualificationByInvestigationTask: Database.Statement | null =
+  null;
+let _stmtUpsertCapabilityDisqualification: Database.Statement | null = null;
+
+function capabilityDisqualificationId(
+  projectId: string,
+  capability: string,
+): string {
+  return `${projectId}::${capability}`;
+}
+
+/** The current disqualification row for one (project, capability) key, or undefined if the key was never disqualified. */
+export function getCapabilityDisqualification(
+  projectId: string,
+  capability: string,
+): CapabilityDisqualificationRow | undefined {
+  _stmtGetCapabilityDisqualification ??= db.prepare<{ id: string }>(
+    `SELECT * FROM capability_disqualification WHERE id = @id`,
+  );
+  return _stmtGetCapabilityDisqualification.get({
+    id: capabilityDisqualificationId(projectId, capability),
+  }) as CapabilityDisqualificationRow | undefined;
+}
+
+/** The disqualification row a resolving Investigation task's id is attached to, or undefined. */
+export function getCapabilityDisqualificationByInvestigationTask(
+  investigationTaskId: string,
+): CapabilityDisqualificationRow | undefined {
+  _stmtGetCapabilityDisqualificationByInvestigationTask ??= db.prepare<{
+    investigation_task_id: string;
+  }>(
+    `SELECT * FROM capability_disqualification WHERE investigation_task_id = @investigation_task_id`,
+  );
+  return _stmtGetCapabilityDisqualificationByInvestigationTask.get({
+    investigation_task_id: investigationTaskId,
+  }) as CapabilityDisqualificationRow | undefined;
+}
+
+/** Insert-or-replace of one (project, capability) key's disqualification row, keyed on its deterministic id. */
+export function upsertCapabilityDisqualification(
+  row: NewCapabilityDisqualificationRow,
+): void {
+  _stmtUpsertCapabilityDisqualification ??= db.prepare(`
+    INSERT INTO capability_disqualification
+      (id, project_id, capability, investigation_task_id, state, created_at, resolved_at, lifted_at, updated_at)
+    VALUES
+      (@id, @project_id, @capability, @investigation_task_id, @state, @created_at, @resolved_at, @lifted_at, @updated_at)
+    ON CONFLICT(id) DO UPDATE SET
+      investigation_task_id = @investigation_task_id,
+      state = @state,
+      resolved_at = @resolved_at,
+      lifted_at = @lifted_at,
+      updated_at = @updated_at
+  `);
+  _stmtUpsertCapabilityDisqualification.run({
+    id: capabilityDisqualificationId(row.project_id, row.capability),
+    project_id: row.project_id,
+    capability: row.capability,
+    investigation_task_id: row.investigation_task_id,
+    state: row.state,
+    created_at: row.created_at,
+    resolved_at: row.resolved_at ?? null,
+    lifted_at: row.lifted_at ?? null,
+    updated_at: row.updated_at,
+  });
 }
 
 // ─── gate_item ────────────────────────────────────────────────────────────

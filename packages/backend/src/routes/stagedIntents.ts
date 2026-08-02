@@ -3609,7 +3609,13 @@ async function resumeCapabilityRequester(
     actor_type: provenance === 'auto' ? 'system' : 'human',
     actor_id: intent.sessionId,
     project_id: intent.projectId,
-    task_id: null,
+    // The requesting session's own task, when it has one — the
+    // capability-disposition-trail miner (audit/capabilityDispositionMining.ts)
+    // reads this column to count distinct originating tasks behind a
+    // repeated-denial pattern, ruling out a single malformed task inflating
+    // the count. A groom/design/ops session with no bound task leaves this
+    // null, same as before.
+    task_id: getSession(intent.sessionId)?.task_id ?? null,
     payload: {
       intentId: intent.id,
       capability: payload.capability,

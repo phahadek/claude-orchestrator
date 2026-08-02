@@ -104,7 +104,8 @@ type EventType =
   | 'mcp_session_credential_revoked'
   | 'memory_admission_deferred'
   | 'task_aborted'
-  | 'planning_dispatch_launched';
+  | 'planning_dispatch_launched'
+  | 'capability_disposition_investigation_filed';
 
 type ActorType = 'ai' | 'human' | 'system';
 
