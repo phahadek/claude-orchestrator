@@ -177,11 +177,22 @@ describe('DispatchTriggerEvaluator — kill suppression', () => {
     expect(candidates.map((c: any) => c.task.id)).toEqual([TASK_ID]);
   });
 
-  it('re-surfaces the task once a task edit lands after the kill — suppression retires', async () => {
+  it('re-surfaces the task once a task edit lands after the kill — suppression retires, even when the killed session and the edit event record the task id in different forms', async () => {
+    // TASK_ID is the bare-hyphenated form the board cache and the killed
+    // session's task_id carry. Production edit events (task_body_updated /
+    // task_deps_updated) are written with a notion:-prefixed task_id by
+    // TaskBackend — recording the edit in that mismatched form here proves
+    // suppression retires via id-space-agnostic comparison, not just when
+    // both sides happen to already agree on id form.
+    const PREFIXED_TASK_ID = `notion:${TASK_ID}`;
     upsertTaskCache(`board:${MILESTONE}`, JSON.stringify([makeTask(TASK_ID)]));
     killSession('groom', 'user_kill');
 
     const evaluator = makeEvaluator();
+    expect(
+      (await (evaluator as any).scanProjectGroomCandidates(PROJECT)).length,
+    ).toBe(0);
+    // A second poll before any edit lands must still be suppressed.
     expect(
       (await (evaluator as any).scanProjectGroomCandidates(PROJECT)).length,
     ).toBe(0);
@@ -191,7 +202,7 @@ describe('DispatchTriggerEvaluator — kill suppression', () => {
       actor_type: 'system',
       actor_id: null,
       project_id: PROJECT,
-      task_id: TASK_ID,
+      task_id: PREFIXED_TASK_ID,
       payload: {},
     });
 
