@@ -261,6 +261,29 @@ describe('loadOpsContext — classification', () => {
     expect(deferredBlocked?.blockingDepIds).toEqual(['task-deferred']);
   });
 
+  it('treats a Depends-On id absent from every loaded row as non-blocking (fail-open)', async () => {
+    rows = [
+      {
+        id: 'task-op-out-of-window-dep',
+        name: 'Op with dep off every loaded board',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+        dependsOn: 'task-not-on-any-board',
+      },
+    ];
+
+    const result = await loadOpsContext(MILESTONE);
+
+    expect(result.worklist.executable.map((t) => t.id)).toEqual([
+      'task-op-out-of-window-dep',
+    ]);
+    expect(result.worklist.dep_blocked.map((t) => t.id)).toEqual([]);
+    const task = result.worklist.executable.find(
+      (t) => t.id === 'task-op-out-of-window-dep',
+    );
+    expect(task?.blockingDepIds).toEqual([]);
+  });
+
   it('excludes test-authoring 🧪 Testing tasks and folds observational Testing in as executable', async () => {
     rows = [
       {
