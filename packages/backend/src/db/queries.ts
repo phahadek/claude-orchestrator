@@ -2722,7 +2722,7 @@ export function getApprovedOpenPRs(): PullRequestRow[] {
       `
     SELECT * FROM pull_requests
     WHERE state = 'open'
-      AND review_result LIKE '%approved%'
+      AND json_extract(review_result, '$.verdict') = 'approved'
       AND pause_reason IS NULL
       AND (human_merge_only IS NULL OR human_merge_only = 0)
   `,
@@ -3473,7 +3473,7 @@ export function getApprovedLocalBranches(): LocalBranchRow[] {
     SELECT lb.* FROM local_branches lb
     JOIN projects p ON lb.project_id = p.id
     WHERE lb.status = 'open'
-      AND lb.review_result LIKE '%approved%'
+      AND json_extract(lb.review_result, '$.verdict') = 'approved'
       AND lb.pause_reason IS NULL
       AND p.auto_merge_enabled = 1
   `,
