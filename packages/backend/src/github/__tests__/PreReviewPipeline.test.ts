@@ -16,6 +16,8 @@ const mockHasAnalyzeResultForSha = vi.fn().mockReturnValue(false);
 const mockUpsertAnalyzeResult = vi.fn();
 const mockGetAnalyzeResult = vi.fn().mockReturnValue(null);
 const mockAddAutofixSha = vi.fn();
+const mockGetAnalyzeContentCacheResult = vi.fn().mockReturnValue(undefined);
+const mockInsertAnalyzeContentCacheResult = vi.fn();
 
 vi.mock('../../db/queries', () => ({
   getPRByNumber: (...args: unknown[]) => mockGetPRByNumber(...args),
@@ -31,8 +33,23 @@ vi.mock('../../db/queries', () => ({
     mockHasAnalyzeResultForSha(...args),
   upsertAnalyzeResult: (...args: unknown[]) => mockUpsertAnalyzeResult(...args),
   getAnalyzeResult: (...args: unknown[]) => mockGetAnalyzeResult(...args),
+  getAnalyzeContentCacheResult: (...args: unknown[]) =>
+    mockGetAnalyzeContentCacheResult(...args),
+  insertAnalyzeContentCacheResult: (...args: unknown[]) =>
+    mockInsertAnalyzeContentCacheResult(...args),
   addAutofixSha: (...args: unknown[]) => mockAddAutofixSha(...args),
 }));
+
+const mockComputeTriggerContentHash = vi.fn().mockResolvedValue(null);
+vi.mock('../../session/analyzeGating', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../session/analyzeGating')>();
+  return {
+    ...actual,
+    computeTriggerContentHash: (...args: unknown[]) =>
+      mockComputeTriggerContentHash(...args),
+  };
+});
 
 const mockRunVerifyAsGate = vi.fn().mockResolvedValue({ passed: true });
 vi.mock('../../orchestration/verifyRunner', () => ({
@@ -51,9 +68,11 @@ const mockLoadAutofixCommands = vi.fn().mockReturnValue([]);
 const mockRunAutofix = vi
   .fn()
   .mockResolvedValue({ success: true, summary: 'ok', commitSha: null });
+const mockGetChangedFiles = vi.fn().mockResolvedValue([]);
 vi.mock('../../session/autofix-runner', () => ({
   loadAutofixCommands: (...args: unknown[]) => mockLoadAutofixCommands(...args),
   runAutofix: (...args: unknown[]) => mockRunAutofix(...args),
+  getChangedFiles: (...args: unknown[]) => mockGetChangedFiles(...args),
 }));
 
 const mockRunTestCommands = vi
@@ -171,6 +190,9 @@ beforeEach(() => {
   mockRunTestCommands.mockResolvedValue({ passed: true, output: '' });
   mockHasTestResultForSha.mockReturnValue(false);
   mockHasAnalyzeResultForSha.mockReturnValue(false);
+  mockGetAnalyzeContentCacheResult.mockReturnValue(undefined);
+  mockComputeTriggerContentHash.mockResolvedValue(null);
+  mockGetChangedFiles.mockResolvedValue([]);
   mockLoadAutofixCommands.mockReturnValue([]);
   mockLoadOrchestratorConfig.mockReturnValue({
     verify: [],
@@ -815,6 +837,191 @@ describe('PreReviewPipeline — analyze gate (parity with autofix/verify)', () =
 
     expect(result.passed).toBe(true);
     expect(mockRunTestCommands).not.toHaveBeenCalled();
+  });
+});
+
+describe('PreReviewPipeline — analyze gate path-trigger + content-hash cache', () => {
+  it('skips a command with configured trigger_paths when no diff file matches', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      verify: [],
+      autofix: [],
+      analyze: [
+        {
+          command: 'npm audit',
+          trigger_paths: ['package.json', 'package-lock.json'],
+        },
+      ],
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    mockGetChangedFiles.mockResolvedValue(['src/index.ts']);
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    expect(mockUpsertAnalyzeResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      true,
+      expect.stringContaining('skipped'),
+      expect.anything(),
+    );
+  });
+
+  it('runs a command with configured trigger_paths when a diff file matches', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      verify: [],
+      autofix: [],
+      analyze: [
+        {
+          command: 'npm audit',
+          trigger_paths: ['package.json', 'package-lock.json'],
+        },
+      ],
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    mockGetChangedFiles.mockResolvedValue(['package.json']);
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(mockRunTestCommands).toHaveBeenCalledWith(
+      WORKTREE,
+      ['npm audit'],
+      300,
+      expect.any(Function),
+      expect.objectContaining({ maxRssMb: 0, failFast: true }),
+    );
+  });
+
+  it('runs a command with no trigger_paths on every diff (default behavior unchanged)', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      verify: [],
+      autofix: [],
+      analyze: ['secret-scan .'],
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    mockGetChangedFiles.mockResolvedValue(['docs/readme.md']);
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    // No trigger_paths configured -> no content-hash caching applied.
+    expect(mockComputeTriggerContentHash).not.toHaveBeenCalled();
+    expect(mockInsertAnalyzeContentCacheResult).not.toHaveBeenCalled();
+  });
+
+  it('reuses a content-cache hit across PRs with byte-identical trigger-path state — invokes the command at most once', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      verify: [],
+      autofix: [],
+      analyze: [{ command: 'npm audit', trigger_paths: ['package.json'] }],
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    mockGetChangedFiles.mockResolvedValue(['package.json']);
+    mockComputeTriggerContentHash.mockResolvedValue('same-hash');
+    mockGetAnalyzeContentCacheResult.mockReturnValue({
+      command: 'npm audit',
+      content_hash: 'same-hash',
+      passed: 1,
+      output: 'no vulnerabilities found',
+      ran_at: '2026-01-01T00:00:00.000Z',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    // Cache hit: the underlying command is never invoked.
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+  });
+
+  it('runs the command independently when trigger-path content differs (no false cache hit)', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      verify: [],
+      autofix: [],
+      analyze: [{ command: 'npm audit', trigger_paths: ['package.json'] }],
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    mockGetChangedFiles.mockResolvedValue(['package.json']);
+    mockComputeTriggerContentHash.mockResolvedValue('different-hash');
+    mockGetAnalyzeContentCacheResult.mockReturnValue(undefined);
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(mockInsertAnalyzeContentCacheResult).toHaveBeenCalledWith(
+      'npm audit',
+      'different-hash',
+      true,
+      'ok',
+    );
   });
 });
 

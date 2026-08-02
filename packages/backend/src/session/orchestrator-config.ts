@@ -37,6 +37,21 @@ function resolveConfigDir(projectDir: string): string | null {
   return null;
 }
 
+/**
+ * A single analyze-gate command with an optional path-trigger glob list. When
+ * `trigger_paths` is set, the command is skipped for a PR whose diff touches
+ * none of those globs (minimatch, matched against `git diff --name-only`
+ * paths — see pathDiffPredicate.ts's matchesPathDiff). Omitted/empty
+ * `trigger_paths` means "always run", matching plain-string entries.
+ */
+interface AnalyzeCommandEntry {
+  command: string;
+  trigger_paths?: string[];
+}
+
+/** Backward-compatible: a bare string is a command with no path trigger (always runs, no content-hash caching). */
+export type AnalyzeCommand = string | AnalyzeCommandEntry;
+
 export interface OrchestratorConfig {
   /**
    * Commands run in the worktree before opening the PR (mechanical fixes only).
@@ -81,7 +96,7 @@ export interface OrchestratorConfig {
   /** Stop running subsequent test commands after the first failure. Default true. */
   test_fail_fast: boolean;
   /** Commands the orchestrator runs as static analysis gate, between verify and test. Empty = gate skipped. */
-  analyze: string[];
+  analyze: AnalyzeCommand[];
   /** Per-command timeout in seconds for analyze commands. Default 300. */
   analyze_timeout_sec: number;
   /** Max RSS in MB for any single analyze command subprocess. 0 = disabled. Default 0. */
@@ -119,6 +134,20 @@ const DEFAULTS: OrchestratorConfig = {
   analyze_fail_fast: true,
   autofix_skip_ci: false,
 };
+
+function isValidAnalyzeEntry(v: unknown): v is AnalyzeCommand {
+  if (typeof v === 'string') return true;
+  if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+    const obj = v as Record<string, unknown>;
+    if (typeof obj.command !== 'string') return false;
+    if (obj.trigger_paths === undefined) return true;
+    return (
+      Array.isArray(obj.trigger_paths) &&
+      obj.trigger_paths.every((p) => typeof p === 'string')
+    );
+  }
+  return false;
+}
 
 /**
  * Load per-project orchestrator configuration from `<projectDir>/.claude-orchestrator.yml`.
@@ -188,7 +217,7 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
           ? parsed.test_fail_fast
           : DEFAULTS.test_fail_fast,
       analyze: Array.isArray(parsed.analyze)
-        ? parsed.analyze
+        ? (parsed.analyze as unknown[]).filter(isValidAnalyzeEntry)
         : DEFAULTS.analyze,
       analyze_timeout_sec:
         typeof parsed.analyze_timeout_sec === 'number' &&

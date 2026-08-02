@@ -152,7 +152,7 @@ async function getHeadSha(cwd: string): Promise<string> {
   return stdout.trim();
 }
 
-async function getChangedFiles(
+export async function getChangedFiles(
   worktreePath: string,
   baseBranch: string,
 ): Promise<string[]> {

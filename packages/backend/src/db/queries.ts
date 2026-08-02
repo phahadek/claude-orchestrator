@@ -4458,6 +4458,69 @@ export function getAnalyzeResult(
     .get({ pr_number: prNumber, repo, sha }) as AnalyzeResultRow | undefined;
 }
 
+// ─── orchestrator_analyze_content_cache ─────────────────────────────────────
+
+export interface AnalyzeContentCacheRow {
+  command: string;
+  content_hash: string;
+  passed: number;
+  output: string;
+  ran_at: string;
+}
+
+/**
+ * Narrower cache layer under orchestrator_analyze_results, keyed by command +
+ * content-hash of that command's trigger-path files rather than by
+ * (pr_number, repo, sha) — lets a byte-identical dependency state (e.g. the
+ * same package.json/lockfile bump) reuse one audit result across different
+ * PRs/SHAs.
+ */
+export function getAnalyzeContentCacheResult(
+  command: string,
+  contentHash: string,
+): AnalyzeContentCacheRow | undefined {
+  return db
+    .prepare<{
+      command: string;
+      content_hash: string;
+    }>(
+      `SELECT * FROM orchestrator_analyze_content_cache WHERE command = @command AND content_hash = @content_hash`,
+    )
+    .get({ command, content_hash: contentHash }) as
+    | AnalyzeContentCacheRow
+    | undefined;
+}
+
+/**
+ * INSERT OR IGNORE against the (command, content_hash) primary key — two
+ * concurrently-admitted PRs racing to populate the same cache entry is
+ * benign (one redundant audit run, not corruption), so this relies on the
+ * unique constraint instead of adding new locking.
+ */
+export function insertAnalyzeContentCacheResult(
+  command: string,
+  contentHash: string,
+  passed: boolean,
+  output: string,
+): void {
+  db.prepare<{
+    command: string;
+    content_hash: string;
+    passed: number;
+    output: string;
+    ran_at: string;
+  }>(
+    `INSERT OR IGNORE INTO orchestrator_analyze_content_cache (command, content_hash, passed, output, ran_at)
+     VALUES (@command, @content_hash, @passed, @output, @ran_at)`,
+  ).run({
+    command,
+    content_hash: contentHash,
+    passed: passed ? 1 : 0,
+    output,
+    ran_at: new Date().toISOString(),
+  });
+}
+
 // ─── session_events pruner ──────────────────────────────────────────────────
 
 export interface PruneEligibleSession {
