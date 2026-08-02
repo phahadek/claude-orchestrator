@@ -1868,7 +1868,10 @@ describe('endSession — refuses to escalate against a non-terminal (idle) sessi
 
   it('does not call session.endSession() when the row is running (mid-turn, not idle either)', async () => {
     const session = await registerLiveSession(sm);
-    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'running' });
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'running',
+    });
 
     sm.endSession(SESSION_ID);
 

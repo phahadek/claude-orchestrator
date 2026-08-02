@@ -7,7 +7,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../db/queries', async () => {
-  const { mockDbQueries } = await import('../../__tests__/helpers/mockDbQueries');
+  const { mockDbQueries } =
+    await import('../../__tests__/helpers/mockDbQueries');
   return mockDbQueries({});
 });
 
