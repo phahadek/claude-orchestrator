@@ -1830,4 +1830,19 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // pull_requests.pr_intent_id: the approved ops.prIntent (staged_intent.id)
+  // this PR was opened for — the Ops rubric's pointer to the operator-approved
+  // "here's the diff scope and why" declaration PRReviewService resolves at
+  // review time in place of a task-body Files/paths section. Set once, at
+  // PR-open time, via db/queries.ts's linkPRToPRIntent, which enforces that
+  // one approved PR-intent authorizes exactly one PR (fire-once) — a second
+  // PR row claiming the same intent id is rejected there rather than at the
+  // schema level, since SQLite has no partial-unique-except-null shorthand
+  // that also produces an actionable error message.
+  try {
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN pr_intent_id TEXT`);
+  } catch {
+    /* already exists */
+  }
 }

@@ -14,6 +14,7 @@ vi.mock('../../db/queries', () => ({
   setLocalBranchReviewResult: vi.fn(),
   getLocalBranchById: vi.fn(),
   getSession: vi.fn(),
+  getPRIntentForPR: vi.fn().mockReturnValue(null),
 }));
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../../tasks/TaskBackend', () => ({ getTaskBackend: vi.fn() }));

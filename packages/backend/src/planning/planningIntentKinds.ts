@@ -55,6 +55,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.patchBodySection',
     'intent.withdraw',
     'gate.verify',
+    'ops.prIntent',
   ],
   split: [
     'task.updateBody',

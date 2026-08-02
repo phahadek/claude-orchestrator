@@ -42,6 +42,7 @@ import type {
   CompletenessDispositionQuestion,
   CompletenessProbedGapClass,
   ReviewDisputePayload,
+  OpsPrIntentPayload,
 } from '../db/types';
 import {
   hashIntentPayload,
@@ -1710,6 +1711,57 @@ function validateGateVerifyPayload(
 }
 
 /**
+ * Thrown at stage time when an ops.prIntent payload doesn't carry a
+ * substantive taskId/title/scope/reason — deliberately not shaped like
+ * isToolShapedCapability (session.requestCapability's Bash-prefix/MCP-verb
+ * validation): this is a free-form change-and-reason declaration, not a
+ * tool/command grant (see OpsPrIntentPayload in db/types.ts, and the
+ * Design task's locked OQ2 answer rejecting requestCapability as this
+ * mechanism's vehicle).
+ */
+class OpsPrIntentValidationError extends Error {
+  constructor(reason: string) {
+    super(`[stagedIntents] ops.prIntent rejected: ${reason}`);
+    this.name = 'OpsPrIntentValidationError';
+  }
+}
+
+/**
+ * A session.requestCapability twin of validateCapabilityRequestDoesNotCarryGroup:
+ * ops.prIntent applies via a direct approve-terminal transition (see the
+ * approve route's ops.prIntent branch below), never via applyIntent/a group
+ * commit, so it must not belong to a group either.
+ */
+function validateOpsPrIntentPayload(
+  payload: unknown,
+  groupId: string | null | undefined,
+): asserts payload is OpsPrIntentPayload {
+  if (groupId) {
+    throw new OpsPrIntentValidationError(
+      'an ops.prIntent cannot belong to a group — it applies via a direct ' +
+        'operator approval, not a group commit',
+    );
+  }
+  const p = payload as Partial<OpsPrIntentPayload> | null;
+  if (!p || typeof p.taskId !== 'string' || !p.taskId.trim()) {
+    throw new OpsPrIntentValidationError('payload.taskId is required');
+  }
+  if (typeof p.title !== 'string' || !p.title.trim()) {
+    throw new OpsPrIntentValidationError('payload.title is required');
+  }
+  if (typeof p.scope !== 'string' || !p.scope.trim()) {
+    throw new OpsPrIntentValidationError(
+      'payload.scope (the declared diff scope — files/areas expected to change, and why) is required',
+    );
+  }
+  if (typeof p.reason !== 'string' || !p.reason.trim()) {
+    throw new OpsPrIntentValidationError(
+      'payload.reason (why this PR is being opened now) is required',
+    );
+  }
+}
+
+/**
  * A session.requestCapability twin of DecisionPickOneValidationError: a
  * capability request applies via SessionManager.grantCapability + a
  * session respawn (see resumeCapabilityRequester), never via applyIntent —
@@ -2257,6 +2309,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'notion.pageEdit',
   'gate.verify',
   'review.dispute',
+  'ops.prIntent',
 ]);
 
 /**
@@ -2926,6 +2979,9 @@ export function stageIntent(
   }
   if (kind === 'gate.verify') {
     validateGateVerifyPayload(payload);
+  }
+  if (kind === 'ops.prIntent') {
+    validateOpsPrIntentPayload(payload, groupId);
   }
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
@@ -5512,6 +5568,24 @@ export function createStagedIntentsRouter(
           payload.taskId,
           intent.projectId,
         );
+        res.json(committedIntent);
+        return;
+      }
+
+      // An ops.prIntent has no separate apply step either — approval is
+      // terminal: it is the operator's sanctioned go-ahead for the staging
+      // Ops session to open the one PR this declaration authorizes (see
+      // OpsPrIntentPayload in db/types.ts and linkPRToPRIntent in
+      // db/queries.ts, which enforces the fire-once 1:1 at PR-open time).
+      // Nothing is written to the task backend or GitHub here — committing
+      // only records the operator's sign-off on the declared scope/reason
+      // for PRReviewService's Ops rubric to resolve later.
+      if (intent.kind === 'ops.prIntent') {
+        const committed = transitionStagedIntent(intent.id, 'committed', {
+          annotation: null,
+        });
+        const committedIntent = rowToApi(committed);
+        broadcastIntentChange(committedIntent);
         res.json(committedIntent);
         return;
       }

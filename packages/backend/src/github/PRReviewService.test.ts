@@ -16,6 +16,7 @@ vi.mock('../db/queries.js', () => ({
   setLocalBranchReviewResult: vi.fn(),
   getLocalBranchById: vi.fn(),
   getSession: vi.fn().mockReturnValue(null),
+  getPRIntentForPR: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -35,6 +36,7 @@ import {
   getLocalBranchById,
   setLastReviewedSha,
   getSession,
+  getPRIntentForPR,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
@@ -370,6 +372,54 @@ describe('PRReviewService.buildPrompt()', () => {
 
     expect(prompt).toContain('A'.repeat(13000));
     expect(prompt).not.toContain('[diff truncated');
+  });
+
+  it('Ops rubric: resolves the "changed files" dimension against the approved PR-intent, not the task-body Files section', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const prIntent = {
+      taskId: 'task-1',
+      title: 'add retry to the poller',
+      scope: 'src/ops/poller.ts and its test — add exponential backoff retry',
+      reason: 'poller drops events under transient network errors',
+    };
+
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody, prIntent);
+
+    // The Ops-approved declaration is rendered in the prompt...
+    expect(prompt).toContain('## Approved PR Intent');
+    expect(prompt).toContain(prIntent.scope);
+    expect(prompt).toContain(prIntent.reason);
+    // ...and the "changed files" dimension's guidance points at it instead
+    // of the task-body Files/paths section.
+    expect(prompt).toContain(
+      'compare the changed files against that declaration\'s scope',
+    );
+    expect(prompt).not.toContain(
+      'necessary downstream updates caused by the listed changes',
+    );
+  });
+
+  it('without a prIntent, keeps the default Files/paths rubric unchanged', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+
+    expect(prompt).not.toContain('## Approved PR Intent');
+    expect(prompt).toContain(
+      'necessary downstream updates caused by the listed changes',
+    );
   });
 });
 

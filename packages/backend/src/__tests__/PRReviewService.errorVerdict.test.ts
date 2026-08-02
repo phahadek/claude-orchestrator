@@ -26,6 +26,7 @@ vi.mock('../db/queries.js', () => ({
   setLocalBranchReviewResult: vi.fn(),
   getLocalBranchById: vi.fn(),
   getSession: vi.fn().mockReturnValue(undefined),
+  getPRIntentForPR: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
