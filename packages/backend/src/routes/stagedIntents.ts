@@ -335,6 +335,41 @@ function groupHasOpsTerminalMember(groupId: string): boolean {
 }
 
 /**
+ * True when this staged-intent row is itself a member of an ops-terminal
+ * closing set — either its own (kind, payload) pair is a live ops-terminal
+ * member (isOpsTerminalKind), or it shares a groupId with a sibling that is.
+ * Unlike groupHasOpsTerminalMember (which only scans
+ * GROUP_COMPLETENESS_ACTIVE siblings, since it exists to answer "does this
+ * group still need its closing transition staged"), this also evaluates the
+ * row's own kind directly and considers inactive siblings — so a
+ * rejected/needs_revision row that *is* the closing transition itself (or
+ * the sole staged member of what would be its closing group) is still
+ * recognized as a closing-set member, not silently treated as an orthogonal,
+ * non-blocking decline.
+ *
+ * Exported for PlanningOrchestrator's completeOpsTask/closeDeferredOpsTask,
+ * which use it to scope their rejected/needs_revision guard to a session's
+ * closing set instead of every intent the session ever staged — see those
+ * functions for why a decline that is orthogonal to the closing set must not
+ * block the task's closure.
+ */
+export function isOpsTerminalClosingSetMember(row: StagedIntentRow): boolean {
+  if (isOpsTerminalKind(row.kind, JSON.parse(row.payload), row.session_id)) {
+    return true;
+  }
+  if (!row.group_id) return false;
+  return listStagedIntentsByGroup(row.group_id).some(
+    (sibling) =>
+      sibling.id !== row.id &&
+      isOpsTerminalKind(
+        sibling.kind,
+        JSON.parse(sibling.payload),
+        sibling.session_id,
+      ),
+  );
+}
+
+/**
  * True when this group already carries a live journal.setState -> "resolved"
  * transition — the one member of the ops-terminal closing set that actually
  * closes the investigation (completeOpsTask's synchronous check). Checked

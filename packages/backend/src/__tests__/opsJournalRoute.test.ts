@@ -284,13 +284,13 @@ describe('POST /api/ops-journal/:taskId/state', () => {
       expect(mockUpdateStatus).not.toHaveBeenCalled();
     });
 
-    it('does not close the task when a staged intent for the session was rejected', async () => {
+    it('does not close the task when the closing journal.setState -> resolved intent for the session was rejected', async () => {
       seedEntry('task-1', 'M12', { state: 'applied-pending-confirm' });
       seedOpsSession('session-1', 'task-1', 'planning_no_pending_dispositions');
       insertStagedIntent({
         id: 'intent-1',
         kind: 'journal.setState',
-        payload: '{}',
+        payload: '{"state":"resolved"}',
         payload_hash: 'hash-1',
         task_id: 'task-1',
         project_id: 'polimarket-analyser',
