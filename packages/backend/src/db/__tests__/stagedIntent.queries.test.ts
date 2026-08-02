@@ -236,7 +236,11 @@ describe('hasActiveCapabilityRequestForSession', () => {
 describe('isSessionComplete — blocked-member leg', () => {
   it('reads false for a session with a needs_revision member, even with a staged sibling and no turn in flight', () => {
     insertStagedIntent(
-      makeRow({ id: 'blocked-1', session_id: 'sess-b', state: 'needs_revision' }),
+      makeRow({
+        id: 'blocked-1',
+        session_id: 'sess-b',
+        state: 'needs_revision',
+      }),
     );
     insertStagedIntent(
       makeRow({ id: 'sibling-1', session_id: 'sess-b', task_id: 't-2' }),
@@ -257,7 +261,11 @@ describe('isSessionComplete — blocked-member leg', () => {
 
   it('is derived purely from persisted rows — no live session handle is consulted', () => {
     insertStagedIntent(
-      makeRow({ id: 'blocked-3', session_id: 'sess-d', state: 'needs_revision' }),
+      makeRow({
+        id: 'blocked-3',
+        session_id: 'sess-d',
+        state: 'needs_revision',
+      }),
     );
     // No SessionManager/live handle exists anywhere in this test — the
     // false verdict comes entirely from the persisted staged_intent row.
