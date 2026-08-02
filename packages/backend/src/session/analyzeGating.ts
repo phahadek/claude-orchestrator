@@ -41,6 +41,7 @@ export function matchesTransientOutputPattern(
   if (!entry.transient_output_patterns?.length) return false;
   return entry.transient_output_patterns.some((pattern) => {
     try {
+      // eslint-disable-next-line security/detect-non-literal-regexp -- pattern comes from the project's own .claude-orchestrator.yml config, never external/user input.
       return new RegExp(pattern).test(output);
     } catch {
       return false;
