@@ -5,6 +5,7 @@ import type {
 } from './SessionRunner';
 import { getSecret } from '../security/secrets';
 import { logger } from '../logger';
+import { isPlanningSession } from './sessionPredicates';
 
 /**
  * A push-based async iterable used to stream follow-up messages into the Agent SDK's
@@ -79,6 +80,28 @@ export class ApiSessionRunner implements ISessionRunner {
     if (!apiKey) {
       this._hasSpawnError = true;
       throw new Error('ANTHROPIC_API_KEY is required for API session mode');
+    }
+
+    // ApiSessionRunner has no directory-sandbox-equivalent mechanism: unlike
+    // CliSessionRunner/DockerSessionRunner, it never widens the Agent SDK's
+    // filesystem reach beyond `cwd` via a per-type baseline + granted
+    // `read:path:` capability (see orchestrator-config.ts#getSessionAddDirs).
+    // A planning/ops session dispatched in API mode needs that baseline to
+    // read the central config tree (procedures.md, task-writing.md, its
+    // project's grooming.json, ...) — silently running it unconfined-to-cwd
+    // would fail those reads rather than exposing a wider surface, but it is
+    // still an unimplemented envelope, not a verified-safe one. Fail loudly
+    // here instead of leaving that gap silent; `session_mode: 'api'` is a
+    // global runtime setting (see runtimeSettings.session_mode), so nothing
+    // upstream of this constructor gates it away from planning session types.
+    if (options.sessionType && isPlanningSession(options.sessionType)) {
+      this._hasSpawnError = true;
+      throw new Error(
+        `ApiSessionRunner does not implement the per-session-type filesystem ` +
+          `read envelope (see getSessionAddDirs) required for planning/ops ` +
+          `session types. Refusing to run session type '${options.sessionType}' ` +
+          `under session_mode: 'api'.`,
+      );
     }
 
     // Lazy import so the package is only required when actually used in API mode.

@@ -734,6 +734,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             resolveProjectTaskSource(this.projectId),
           ),
           sessionType: this.sessionType,
+          granted: getGrantedCapabilities(this.sessionId),
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
           systemPromptFilePath: this.systemPromptFilePath,

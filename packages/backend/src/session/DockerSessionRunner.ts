@@ -8,6 +8,7 @@ import type {
 } from './SessionRunner';
 import { logger } from '../logger';
 import { isPlanningSession } from './sessionPredicates';
+import { getSessionAddDirs } from './orchestrator-config';
 import { createScratchDir, removeScratchDir } from './planningScratchDir';
 
 function log(sessionId: string, ...args: unknown[]) {
@@ -78,9 +79,22 @@ export class DockerSessionRunner implements ISessionRunner {
       mcpConfigPath,
       systemPromptFilePath,
       sessionType,
+      granted,
     } = options;
     const isPlanning = Boolean(sessionType && isPlanningSession(sessionType));
     this._isPlanning = isPlanning;
+
+    // Per-session-type filesystem read envelope baseline plus any granted
+    // `read:path:` capability — see orchestrator-config.ts#getSessionAddDirs.
+    // `--add-dir` inside the container only reaches paths already bind-
+    // mounted into it, so each entry here must also be added as a read-only
+    // `-v <path>:<path>:ro` mount on the `docker run` invocation below, not
+    // just appended to the `claude` exec's `--add-dir` list.
+    const addDirs = getSessionAddDirs(
+      sessionType ?? '',
+      granted ?? [],
+      worktreePath,
+    );
 
     // Planning sessions share `cwd` === the project checkout (worktreePath
     // here) across concurrent sessions. Give them a writable per-session
@@ -145,6 +159,9 @@ export class DockerSessionRunner implements ISessionRunner {
           `-v "${claudeBin}:${claudeBin}:ro"`,
           // Mount claude credentials and config (read-only)
           `-v "${claudeConfigDir}:/root/.claude:ro"`,
+          // Per-type read envelope baseline + granted read:path: roots
+          // (read-only) — matches the --add-dir list on the claude exec below.
+          ...addDirs.map((dir) => `-v "${dir}:${dir}:ro"`),
           // Egress proxy env vars
           `-e HTTPS_PROXY=${proxyAddr}`,
           `-e HTTP_PROXY=${proxyAddr}`,
@@ -194,7 +211,7 @@ export class DockerSessionRunner implements ISessionRunner {
       ...(isPlanning
         ? ['--disallowed-tools', ...PLANNING_DISALLOWED_TOOLS]
         : []),
-      ...(isPlanning ? ['--add-dir', '/'] : []),
+      ...addDirs.flatMap((dir) => ['--add-dir', dir]),
     ];
 
     log(this.sessionId, `exec claude in container: ${claudeArgs.join(' ')}`);

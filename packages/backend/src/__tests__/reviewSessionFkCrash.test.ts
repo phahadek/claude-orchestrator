@@ -130,6 +130,7 @@ vi.mock('../session/orchestrator-config', () => ({
     mcp_servers: [],
   })),
   getSessionAllowedTools: vi.fn(() => []),
+  getSessionAddDirs: vi.fn(() => []),
 }));
 
 vi.mock('../session/orchestrator-claudemd', () => ({

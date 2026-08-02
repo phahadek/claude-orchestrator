@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
 
@@ -64,10 +64,21 @@ vi.mock('../planningScratchDir', () => ({
   getScratchDir: vi.fn(() => '/fake/worktree/.claude/scratch/fake'),
 }));
 
+import path from 'path';
 import { CliSessionRunner } from '../CliSessionRunner';
 
 const SESSION_ID = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff';
 const RESUME_ID = 'bbbbcccc-dddd-eeee-ffff-aaaaaaaaaaaa';
+
+const CONFIG_BASELINE = [
+  path.join('/fake/config', 'procedures.md'),
+  path.join('/fake/config', 'task-writing.md'),
+  path.join('/fake/config', 'README.md'),
+  path.join('/fake/config', 'guidelines-baseline.json'),
+  path.join('/fake/config', 'projects', 'worktree', 'context.md'),
+  path.join('/fake/config', 'projects', 'worktree', 'investigation-guide.md'),
+  path.join('/fake/config', 'projects', 'worktree', 'grooming.json'),
+];
 
 const defaultOptions = {
   worktreePath: '/fake/worktree',
@@ -78,7 +89,16 @@ const defaultOptions = {
 beforeEach(() => {
   capturedSpawnArgs = [];
   capturedSpawnOptions = {};
+  // getSessionAddDirs (orchestrator-config.ts) resolves the central config
+  // tree via $ORCHESTRATOR_CONFIG_DIR — set it to a fixed path so the
+  // baseline is deterministic and doesn't depend on real fs layout relative
+  // to the fake worktree path.
+  process.env.ORCHESTRATOR_CONFIG_DIR = '/fake/config';
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  delete process.env.ORCHESTRATOR_CONFIG_DIR;
 });
 
 describe('CliSessionRunner spawn args', () => {
@@ -294,9 +314,16 @@ describe('CliSessionRunner --disallowed-tools', () => {
   });
 });
 
-describe('CliSessionRunner --add-dir (directory sandbox lift)', () => {
-  it.each(['groom', 'design', 'ops'] as const)(
-    'includes --add-dir / for a %s (planning) session — no project-dir confinement',
+describe('CliSessionRunner --add-dir (filesystem read envelope)', () => {
+  function addDirValues(args: string[]): string[] {
+    return args.reduce<string[]>((acc, arg, i) => {
+      if (arg === '--add-dir') acc.push(args[i + 1]);
+      return acc;
+    }, []);
+  }
+
+  it.each(['groom', 'design', 'ops', 'docs', 'split'] as const)(
+    'includes the per-type baseline --add-dir entries for a %s (planning) session — no more unconditional "/"',
     async (sessionType) => {
       const runner = new CliSessionRunner(SESSION_ID);
       await runner.run(
@@ -306,13 +333,14 @@ describe('CliSessionRunner --add-dir (directory sandbox lift)', () => {
         () => {},
       );
 
-      const idx = capturedSpawnArgs.indexOf('--add-dir');
-      expect(idx).not.toBe(-1);
-      expect(capturedSpawnArgs[idx + 1]).toBe('/');
+      expect(addDirValues(capturedSpawnArgs).sort()).toEqual(
+        [...CONFIG_BASELINE].sort(),
+      );
+      expect(capturedSpawnArgs).not.toContain('/');
     },
   );
 
-  it('gate-verify sessions (dispatched with sessionType "ops") get the same lift', async () => {
+  it('gate-verify sessions (dispatched with sessionType "ops") get the same baseline', async () => {
     const runner = new CliSessionRunner(SESSION_ID);
     await runner.run(
       'hello',
@@ -321,7 +349,9 @@ describe('CliSessionRunner --add-dir (directory sandbox lift)', () => {
       () => {},
     );
 
-    expect(capturedSpawnArgs).toContain('--add-dir');
+    expect(addDirValues(capturedSpawnArgs).sort()).toEqual(
+      [...CONFIG_BASELINE].sort(),
+    );
   });
 
   it.each(['standard', 'review'] as const)(
@@ -346,7 +376,7 @@ describe('CliSessionRunner --add-dir (directory sandbox lift)', () => {
     expect(capturedSpawnArgs).not.toContain('--add-dir');
   });
 
-  it('a granted capability naming an out-of-tree host path is executable for an ops session (allowlisted + not dir-confined)', async () => {
+  it('a granted capability naming an out-of-tree host path is executable for an ops session (allowlisted, not baseline-confined)', async () => {
     const runner = new CliSessionRunner(SESSION_ID);
     const grantedTool = 'Bash(find /srv/orchestrator/data:*)';
     await runner.run(
@@ -363,9 +393,27 @@ describe('CliSessionRunner --add-dir (directory sandbox lift)', () => {
     const allowedIdx = capturedSpawnArgs.indexOf('--allowed-tools');
     expect(allowedIdx).not.toBe(-1);
     expect(capturedSpawnArgs).toContain(grantedTool);
-    expect(capturedSpawnArgs).toContain('--add-dir');
-    expect(capturedSpawnArgs[capturedSpawnArgs.indexOf('--add-dir') + 1]).toBe(
-      '/',
+    expect(addDirValues(capturedSpawnArgs).sort()).toEqual(
+      [...CONFIG_BASELINE].sort(),
+    );
+  });
+
+  it('adds exactly one granted read:path: root to --add-dir on top of the baseline', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const grantedPath = '/srv/orchestrator/data/some-project';
+    await runner.run(
+      'hello',
+      undefined,
+      {
+        ...defaultOptions,
+        sessionType: 'ops',
+        granted: [`read:path:${grantedPath}`],
+      },
+      () => {},
+    );
+
+    expect(addDirValues(capturedSpawnArgs).sort()).toEqual(
+      [...CONFIG_BASELINE, grantedPath].sort(),
     );
   });
 });

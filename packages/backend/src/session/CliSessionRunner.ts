@@ -14,6 +14,7 @@ import type {
 import { logger } from '../logger';
 import { placeSessionPid } from './sessionCgroup';
 import { isPlanningSession } from './sessionPredicates';
+import { getSessionAddDirs } from './orchestrator-config';
 import {
   createScratchDir,
   removeScratchDir,
@@ -56,6 +57,7 @@ export class CliSessionRunner implements ISessionRunner {
       disableAutoCompact,
       extraEnv,
       sessionType,
+      granted,
     } = options;
 
     // Planning/ops sessions must never silently auto-accept a tool call
@@ -92,9 +94,20 @@ export class CliSessionRunner implements ISessionRunner {
     // execute granted commands against out-of-tree host paths. The
     // capability-grant allowlist (--allowed-tools) plus the Write/Edit/Skill
     // denylist above are the write-safety boundary for these session
-    // types — not the CLI's directory sandbox — so it's lifted here via
-    // `--add-dir /`. Coding/review sessions keep the default worktree-only
-    // sandbox.
+    // types — not the CLI's directory sandbox. Rather than lifting the
+    // sandbox wholesale (`--add-dir /` gave every dispatched planning
+    // session direct OS-level read access to every other colocated
+    // project's secrets and to other sessions' scoped `.mcp.json`
+    // credential files, since all sessions run as one OS user), the
+    // envelope is a small per-session-type baseline plus any
+    // `read:path:` capability granted on re-dispatch — see
+    // getSessionAddDirs. Coding/review sessions keep the default
+    // worktree-only sandbox (empty add-dir list).
+    const addDirs = getSessionAddDirs(
+      sessionType ?? '',
+      granted ?? [],
+      worktreePath,
+    );
     const spawnArgs = [
       ...(resumeSessionId
         ? ['--resume', resumeSessionId]
@@ -123,7 +136,7 @@ export class CliSessionRunner implements ISessionRunner {
       ...(isPlanning
         ? ['--disallowed-tools', ...PLANNING_DISALLOWED_TOOLS]
         : []),
-      ...(isPlanning ? ['--add-dir', '/'] : []),
+      ...addDirs.flatMap((dir) => ['--add-dir', dir]),
     ];
 
     const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR'] as const;

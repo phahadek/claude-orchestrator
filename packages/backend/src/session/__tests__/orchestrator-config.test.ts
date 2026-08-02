@@ -5,6 +5,7 @@ import path from 'path';
 import {
   loadOrchestratorConfig,
   getSessionAllowedTools,
+  getSessionAddDirs,
   isGrantable,
   sessionRecordReadCapability,
   parseSessionRecordReadCapability,
@@ -12,6 +13,8 @@ import {
   parseAuditLogReadCapability,
   sessionEventsReadCapability,
   parseSessionEventsReadCapability,
+  pathReadCapability,
+  parsePathReadCapability,
   isSanctionedAutoApproveCapability,
   bashCapabilityConfersFileMutation,
   isDeclaredWriteAutoApprove,
@@ -494,6 +497,117 @@ describe('isGrantable', () => {
 
   it('returns true for the own-record read capability — the never-grantable set stays unchanged', () => {
     expect(isGrantable(sessionRecordReadCapability('session-abc'))).toBe(true);
+  });
+
+  it('is not denied by GRANT_DENYLIST_PATTERNS for a read:path: capability whose path embeds "apply" or "resolve"', () => {
+    expect(
+      isGrantable(pathReadCapability('/some/dir/containing/apply/or/resolve')),
+    ).toBe(true);
+  });
+});
+
+describe('pathReadCapability / parsePathReadCapability', () => {
+  it('round-trips the granted absolute path through the capability string', () => {
+    const capability = pathReadCapability('/srv/config/projects/foo');
+    expect(capability).toBe('read:path:/srv/config/projects/foo');
+    expect(parsePathReadCapability(capability)).toBe(
+      '/srv/config/projects/foo',
+    );
+  });
+
+  it('returns null for a capability that is not a read:path: grant', () => {
+    expect(parsePathReadCapability('Bash(psql:*)')).toBeNull();
+  });
+});
+
+describe('getSessionAddDirs', () => {
+  let tmpDir: string;
+  let configDir: string;
+  let projectDir: string;
+  const originalEnv = process.env.ORCHESTRATOR_CONFIG_DIR;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-add-dirs-'));
+    configDir = path.join(tmpDir, 'config');
+    projectDir = path.join(tmpDir, 'my-project');
+    fs.mkdirSync(path.join(configDir, 'projects', 'my-project'), {
+      recursive: true,
+    });
+    fs.mkdirSync(projectDir, { recursive: true });
+    process.env.ORCHESTRATOR_CONFIG_DIR = configDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env.ORCHESTRATOR_CONFIG_DIR;
+    } else {
+      process.env.ORCHESTRATOR_CONFIG_DIR = originalEnv;
+    }
+  });
+
+  it.each(['groom', 'design', 'ops', 'docs', 'split'] as const)(
+    'returns the shared central-config-tree baseline for a %s session, excluding credential-shaped siblings',
+    (sessionType) => {
+      const dirs = getSessionAddDirs(sessionType, [], projectDir);
+
+      expect(dirs).toEqual(
+        expect.arrayContaining([
+          path.join(configDir, 'procedures.md'),
+          path.join(configDir, 'task-writing.md'),
+          path.join(configDir, 'README.md'),
+          path.join(configDir, 'guidelines-baseline.json'),
+          path.join(configDir, 'projects', 'my-project', 'context.md'),
+          path.join(
+            configDir,
+            'projects',
+            'my-project',
+            'investigation-guide.md',
+          ),
+          path.join(configDir, 'projects', 'my-project', 'grooming.json'),
+        ]),
+      );
+
+      for (const forbidden of ['remote-control.env', 'hooks', 'systemd']) {
+        expect(dirs.some((d) => d.includes(forbidden))).toBe(false);
+      }
+    },
+  );
+
+  it.each(['standard', 'review'] as const)(
+    'returns no baseline for a %s (non-planning) session',
+    (sessionType) => {
+      expect(getSessionAddDirs(sessionType, [], projectDir)).toEqual([]);
+    },
+  );
+
+  it('adds exactly the granted read:path: root on top of the baseline', () => {
+    const grantedPath = '/srv/orchestrator/data/some-project';
+    const dirs = getSessionAddDirs(
+      'ops',
+      [pathReadCapability(grantedPath)],
+      projectDir,
+    );
+
+    expect(dirs).toContain(grantedPath);
+    expect(dirs).toEqual(
+      expect.arrayContaining([path.join(configDir, 'procedures.md')]),
+    );
+  });
+
+  it('ignores a granted capability that is not a read:path: grant', () => {
+    const dirs = getSessionAddDirs('ops', ['Bash(psql:*)'], projectDir);
+    expect(dirs).not.toContain('Bash(psql:*)');
+  });
+
+  it('adds only the granted path for a non-planning session, which has no baseline', () => {
+    const grantedPath = '/srv/orchestrator/data/some-project';
+    const dirs = getSessionAddDirs(
+      'standard',
+      [pathReadCapability(grantedPath)],
+      projectDir,
+    );
+    expect(dirs).toEqual([grantedPath]);
   });
 });
 
