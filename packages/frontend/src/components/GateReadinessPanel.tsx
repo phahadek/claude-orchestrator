@@ -18,7 +18,7 @@ import type {
   SeedMilestoneReadiness,
 } from '../api/seed';
 import { deployApi } from '../api/deploy';
-import type { DeployRun, DeployRunEvent } from '../api/deploy';
+import type { DeployRun, DeployRunEvent, BehindItem } from '../api/deploy';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { SessionState } from '../hooks/useSessionStore';
@@ -393,6 +393,14 @@ export function GateReadinessPanel({
   const [dismissedDeployRunId, setDismissedDeployRunId] = useState<
     string | null
   >(null);
+  const [deployedSha, setDeployedSha] = useState<string | null>(null);
+  const [deployBehind, setDeployBehind] = useState<{
+    count: number;
+    items: BehindItem[];
+  }>({ count: 0, items: [] });
+  // Plain ephemeral React state — no persistence. A reload must reset the
+  // gate back to requiring a fresh review rather than resuming pre-armed.
+  const [deployConfirmArmed, setDeployConfirmArmed] = useState(false);
 
   // Tracks the top-bar milestone selection without forcing a milestone-list
   // refetch whenever it changes (see the resync effect below).
@@ -650,6 +658,8 @@ export function GateReadinessPanel({
       .then((result) => {
         setDeployRun(result.run);
         setDeployEvents(result.events);
+        setDeployedSha(result.deployedSha ?? null);
+        setDeployBehind(result.behind ?? { count: 0, items: [] });
       })
       .catch(() => {
         /* transient poll failures don't clear the last-known run state */
@@ -661,6 +671,9 @@ export function GateReadinessPanel({
     if (!activeProjectId) {
       setDeployRun(null);
       setDeployEvents([]);
+      setDeployedSha(null);
+      setDeployBehind({ count: 0, items: [] });
+      setDeployConfirmArmed(false);
       return;
     }
     refreshDeployStatus();
@@ -672,6 +685,7 @@ export function GateReadinessPanel({
 
   const launchDeploy = useCallback(() => {
     if (!activeProjectId) return;
+    setDeployConfirmArmed(false);
     setDeployLaunching(true);
     setDeployLaunchError(null);
     deployApi
@@ -1098,14 +1112,40 @@ export function GateReadinessPanel({
           data-testid="deploy-launch-section"
         >
           <div className={styles.deployRow}>
-            <button
-              className={styles.deployButton}
-              onClick={launchDeploy}
-              disabled={deployLaunching || deployRun?.status === 'running'}
-              data-testid="deploy-launch-button"
-            >
-              {deployRun?.status === 'running' ? 'Deploying…' : 'Launch Deploy'}
-            </button>
+            {deployConfirmArmed ? (
+              <>
+                <button
+                  className={styles.deployButton}
+                  onClick={launchDeploy}
+                  disabled={deployLaunching || deployRun?.status === 'running'}
+                  data-testid="deploy-launch-button"
+                >
+                  {deployRun?.status === 'running'
+                    ? 'Deploying…'
+                    : `Confirm & Deploy (${deployBehind.count} behind)`}
+                </button>
+                <button
+                  type="button"
+                  className={styles.deployButton}
+                  onClick={() => setDeployConfirmArmed(false)}
+                  disabled={deployLaunching || deployRun?.status === 'running'}
+                  data-testid="deploy-cancel-confirm-button"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                className={styles.deployButton}
+                onClick={() => setDeployConfirmArmed(true)}
+                disabled={deployLaunching || deployRun?.status === 'running'}
+                data-testid="deploy-review-button"
+              >
+                {deployRun?.status === 'running'
+                  ? 'Deploying…'
+                  : `Review Deploy (${deployBehind.count} behind)`}
+              </button>
+            )}
             {deployRun && deployRun.run_id !== dismissedDeployRunId && (
               <span
                 className={styles.deployRunStatus}
@@ -1128,6 +1168,32 @@ export function GateReadinessPanel({
                 </button>
               )}
           </div>
+          <p className={styles.muted} data-testid="deploy-behind-summary">
+            {deployedSha
+              ? `Deployed ${deployedSha.slice(0, 8)} — ${deployBehind.count} merged since`
+              : `Never deployed through this system — ${deployBehind.count} merged`}
+          </p>
+          {deployConfirmArmed && deployBehind.items.length > 0 && (
+            <ul
+              className={styles.deployEventList}
+              data-testid="deploy-behind-list"
+            >
+              {deployBehind.items.map((item, index) => (
+                <li key={`${item.kind}-${index}`}>
+                  {item.kind === 'pr' ? (
+                    <a href={item.prUrl} target="_blank" rel="noreferrer">
+                      #{item.prNumber} {item.title ?? item.prUrl}
+                    </a>
+                  ) : (
+                    <span>
+                      {item.branchName}
+                      {item.title ? ` — ${item.title}` : ''}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
           {deployLaunchError && (
             <p className={styles.error}>{deployLaunchError}</p>
           )}

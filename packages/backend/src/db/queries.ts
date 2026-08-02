@@ -3887,6 +3887,125 @@ export function getProjectDeployedShaRow(
   return row ?? null;
 }
 
+// ─── behind-deploy preview ──────────────────────────────────────────────────
+
+export interface BehindItem {
+  kind: 'pr' | 'local-branch';
+  taskId: string | null;
+  title: string | null;
+  mergedAt: string; // the row's updated_at
+  prUrl?: string;
+  prNumber?: number;
+  branchName?: string;
+}
+
+/** Same repo-resolution as upsertPullRequest's repoConfigured check — github_repo may be a bare string or a JSON array of repos. */
+function resolveProjectRepos(projectId: string): string[] {
+  const project = listProjectRows().find((row) => row.id === projectId);
+  const raw = project?.github_repo;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as string[];
+  } catch {
+    // bare string
+  }
+  return [raw];
+}
+
+/**
+ * Merged pull_requests + merged local_branches rows since `sinceIso` (the
+ * project's last recorded deployed-SHA timestamp) — the DB-derived "behind"
+ * preview. `sinceIso` null means the project has no project_deployed_sha row
+ * (never deployed through this system): returns everything merged rather
+ * than erroring.
+ */
+export function listMergedSince(
+  projectId: string,
+  sinceIso: string | null,
+): BehindItem[] {
+  const items: BehindItem[] = [];
+  const repos = resolveProjectRepos(projectId);
+
+  if (repos.length > 0) {
+    const placeholders = repos.map(() => '?').join(', ');
+    const prRows = (
+      sinceIso
+        ? db
+            .prepare(
+              `SELECT pr_number, pr_url, task_id, title, updated_at
+               FROM pull_requests
+               WHERE repo IN (${placeholders}) AND state = 'merged' AND updated_at > ?
+               ORDER BY updated_at ASC`,
+            )
+            .all(...repos, sinceIso)
+        : db
+            .prepare(
+              `SELECT pr_number, pr_url, task_id, title, updated_at
+               FROM pull_requests
+               WHERE repo IN (${placeholders}) AND state = 'merged'
+               ORDER BY updated_at ASC`,
+            )
+            .all(...repos)
+    ) as Array<{
+      pr_number: number;
+      pr_url: string;
+      task_id: string | null;
+      title: string | null;
+      updated_at: string | null;
+    }>;
+    for (const row of prRows) {
+      items.push({
+        kind: 'pr',
+        taskId: row.task_id,
+        title: row.title,
+        mergedAt: row.updated_at ?? '',
+        prUrl: row.pr_url,
+        prNumber: row.pr_number,
+      });
+    }
+  }
+
+  const branchRows = (
+    sinceIso
+      ? db
+          .prepare(
+            `SELECT lb.branch_name, lb.updated_at, s.task_id, s.task_name
+             FROM local_branches lb
+             LEFT JOIN sessions s ON s.session_id = lb.session_id
+             WHERE lb.project_id = ? AND lb.status = 'merged' AND lb.updated_at > ?
+             ORDER BY lb.updated_at ASC`,
+          )
+          .all(projectId, sinceIso)
+      : db
+          .prepare(
+            `SELECT lb.branch_name, lb.updated_at, s.task_id, s.task_name
+             FROM local_branches lb
+             LEFT JOIN sessions s ON s.session_id = lb.session_id
+             WHERE lb.project_id = ? AND lb.status = 'merged'
+             ORDER BY lb.updated_at ASC`,
+          )
+          .all(projectId)
+  ) as Array<{
+    branch_name: string;
+    updated_at: string;
+    task_id: string | null;
+    task_name: string | null;
+  }>;
+  for (const row of branchRows) {
+    items.push({
+      kind: 'local-branch',
+      taskId: row.task_id,
+      title: row.task_name,
+      mergedAt: row.updated_at,
+      branchName: row.branch_name,
+    });
+  }
+
+  items.sort((a, b) => a.mergedAt.localeCompare(b.mergedAt));
+  return items;
+}
+
 // ─── deploy_run ───────────────────────────────────────────────────────────
 // Statements are cached lazily (prepared on first use, not at module load) so
 // importing this module doesn't fail on a not-yet-migrated db handle.

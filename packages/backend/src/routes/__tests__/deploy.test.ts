@@ -30,6 +30,8 @@ vi.mock('../../deploy/DeployOrchestrator.js', () => ({
 
 const queriesMock = vi.hoisted(() => ({
   getProjectRowById: vi.fn(),
+  getProjectDeployedShaRow: vi.fn(),
+  listMergedSince: vi.fn(),
 }));
 
 vi.mock('../../db/queries.js', () => queriesMock);
@@ -47,6 +49,8 @@ function makeApp() {
 beforeEach(() => {
   vi.clearAllMocks();
   setDeployScheduler(null as never);
+  queriesMock.getProjectDeployedShaRow.mockReturnValue(undefined);
+  queriesMock.listMergedSince.mockReturnValue([]);
 });
 
 describe('POST /api/deploy/report-in', () => {
@@ -186,7 +190,13 @@ describe('GET /api/deploy/status', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ run, events });
+    expect(res.body).toEqual({
+      run,
+      events,
+      deployedSha: null,
+      deployedShaRecordedAt: null,
+      behind: { count: 0, items: [] },
+    });
   });
 
   it('returns a null run and empty events when the project has none active', async () => {
@@ -197,7 +207,46 @@ describe('GET /api/deploy/status', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ run: null, events: [] });
+    expect(res.body).toEqual({
+      run: null,
+      events: [],
+      deployedSha: null,
+      deployedShaRecordedAt: null,
+      behind: { count: 0, items: [] },
+    });
+  });
+
+  it('includes deployedSha, deployedShaRecordedAt, and the behind preview from listMergedSince', async () => {
+    deployServiceMock.getLatestDeployRun.mockReturnValue(undefined);
+    deployServiceMock.listDeployRunEvents.mockReturnValue([]);
+    queriesMock.getProjectDeployedShaRow.mockReturnValue({
+      sha: 'deployed-sha',
+      recordedAt: '2026-07-20T00:00:00.000Z',
+    });
+    const behindItems = [
+      {
+        kind: 'pr',
+        taskId: 'task-1',
+        title: 'Some PR',
+        mergedAt: '2026-07-21T00:00:00.000Z',
+        prUrl: 'https://github.com/org/repo/pull/1',
+        prNumber: 1,
+      },
+    ];
+    queriesMock.listMergedSince.mockReturnValue(behindItems);
+
+    const res = await request(makeApp()).get(
+      '/api/deploy/status?projectId=claude-orchestrator',
+    );
+
+    expect(queriesMock.listMergedSince).toHaveBeenCalledWith(
+      'claude-orchestrator',
+      '2026-07-20T00:00:00.000Z',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.deployedSha).toBe('deployed-sha');
+    expect(res.body.deployedShaRecordedAt).toBe('2026-07-20T00:00:00.000Z');
+    expect(res.body.behind).toEqual({ count: 1, items: behindItems });
   });
 
   it('returns the latest terminal run with its failure-detail events when no run is active', async () => {
@@ -229,7 +278,13 @@ describe('GET /api/deploy/status', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ run, events });
+    expect(res.body).toEqual({
+      run,
+      events,
+      deployedSha: null,
+      deployedShaRecordedAt: null,
+      behind: { count: 0, items: [] },
+    });
   });
 
   it('400s when projectId is missing', async () => {

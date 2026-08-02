@@ -22,9 +22,22 @@ export interface DeployRunEvent {
   at: string;
 }
 
+export interface BehindItem {
+  kind: 'pr' | 'local-branch';
+  taskId: string | null;
+  title: string | null;
+  mergedAt: string;
+  prUrl?: string;
+  prNumber?: number;
+  branchName?: string;
+}
+
 export interface DeployStatus {
   run: DeployRun | null;
   events: DeployRunEvent[];
+  deployedSha: string | null;
+  deployedShaRecordedAt: string | null;
+  behind: { count: number; items: BehindItem[] };
 }
 
 export const deployApi = {
