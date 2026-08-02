@@ -106,7 +106,9 @@ describe('deriveBranchSlug', () => {
   it('the same task (title + id) produces the same branch name across repeated derivations', () => {
     const title = 'word '.repeat(40).trim();
     const taskId = 'notion:3b022f91-52f3-8163-9f24-ebecd56c4b97';
-    expect(deriveBranchSlug(title, taskId)).toBe(deriveBranchSlug(title, taskId));
+    expect(deriveBranchSlug(title, taskId)).toBe(
+      deriveBranchSlug(title, taskId),
+    );
   });
 
   it('hashes the full task id, not a truncated form', () => {
