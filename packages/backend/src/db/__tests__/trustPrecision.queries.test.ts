@@ -57,6 +57,7 @@ let seq = 0;
 function seedStagedIntent(
   sessionId: string | null,
   state: StagedIntentRow['state'],
+  milestone: string | null = 'M12',
 ): void {
   seq += 1;
   const payload = JSON.stringify({ n: seq });
@@ -69,7 +70,7 @@ function seedStagedIntent(
     project_id: 'proj-1',
     session_id: sessionId,
     group_id: null,
-    milestone: null,
+    milestone,
     state,
     supersedes: null,
     annotation: null,
@@ -117,6 +118,61 @@ describe('getFlowRejectionRate — staging flows (groom/design/ops)', () => {
   it('returns a null rate when there is no denominator yet', () => {
     const result = getFlowRejectionRate('proj-1', 'M12', 'ops');
     expect(result).toMatchObject({ total: 0, rejected: 0, rate: null });
+  });
+
+  it('scopes by milestone — returns different totals for two milestones with staged intents', () => {
+    seedSession('s-groom-1', 'groom');
+    seedStagedIntent('s-groom-1', 'approved', 'M12');
+    seedStagedIntent('s-groom-1', 'rejected', 'M12');
+    seedStagedIntent('s-groom-1', 'approved', 'M13');
+    seedStagedIntent('s-groom-1', 'approved', 'M13');
+    seedStagedIntent('s-groom-1', 'approved', 'M13');
+
+    const m12 = getFlowRejectionRate('proj-1', 'M12', 'groom');
+    expect(m12).toMatchObject({ total: 2, rejected: 1, rate: 0.5 });
+
+    const m13 = getFlowRejectionRate('proj-1', 'M13', 'groom');
+    expect(m13).toMatchObject({ total: 3, rejected: 0, rate: 0 });
+  });
+
+  it('excludes a staged intent seeded under a different milestone from the queried milestone', () => {
+    seedSession('s-groom-1', 'groom');
+    seedStagedIntent('s-groom-1', 'rejected', 'M-A');
+
+    const milestoneB = getFlowRejectionRate('proj-1', 'M-B', 'groom');
+    expect(milestoneB).toMatchObject({ total: 0, rejected: 0, rate: null });
+
+    const milestoneA = getFlowRejectionRate('proj-1', 'M-A', 'groom');
+    expect(milestoneA).toMatchObject({ total: 1, rejected: 1, rate: 1 });
+  });
+});
+
+describe('getFlowRejectionRate — milestone key-space parity across branches', () => {
+  it('scopes the staged-intent branch and the gate-verify branch on the identical canonicalMilestone value for the same request', () => {
+    const canonicalMilestone = 'M13';
+
+    seedSession('s-groom-1', 'groom');
+    seedStagedIntent('s-groom-1', 'rejected', canonicalMilestone);
+    seedStagedIntent('s-groom-1', 'rejected', 'M13-other-would-not-match');
+
+    insertItem({
+      project: 'proj-1',
+      milestone: canonicalMilestone,
+      text: 'Verify the thing',
+      classification: 'Read-Only',
+      sources: [{ sourceTaskId: 'notion:abc', sourceTaskTitle: 'thing' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    const groom = getFlowRejectionRate('proj-1', canonicalMilestone, 'groom');
+    expect(groom).toMatchObject({ total: 1, rejected: 1 });
+
+    const gateVerify = getFlowRejectionRate(
+      'proj-1',
+      canonicalMilestone,
+      'gate-verify',
+    );
+    expect(gateVerify).toMatchObject({ total: 0, rejected: 0, rate: null });
   });
 });
 
