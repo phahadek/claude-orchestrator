@@ -316,8 +316,18 @@ describe('gateStore.addSource — pending auto-reopen', () => {
       sources: [{ sourceTaskId: 'notion:p1', sourceTaskTitle: 'Add report' }],
       updatedAt: new Date(0).toISOString(),
     });
-    advanceState(created.id, 'pending', 'not-yet-triggerable', new Date(1).toISOString());
-    schedulePendingAttempt(created.id, new Date(2).toISOString(), 1, new Date(1).toISOString());
+    advanceState(
+      created.id,
+      'pending',
+      'not-yet-triggerable',
+      new Date(1).toISOString(),
+    );
+    schedulePendingAttempt(
+      created.id,
+      new Date(2).toISOString(),
+      1,
+      new Date(1).toISOString(),
+    );
     expect(getItem(created.id)?.state).toBe('pending');
 
     addSource(

@@ -810,9 +810,8 @@ describe('appendGateItemEvent — not-yet-triggerable pending lifecycle', () => 
     const detail = getGateItemDetail(item.id)!;
     const nextAttemptAt = (detail.item as { nextAttemptAt?: string })
       .nextAttemptAt;
-    const pendingAttemptCount = (
-      detail.item as { pendingAttemptCount: number }
-    ).pendingAttemptCount;
+    const pendingAttemptCount = (detail.item as { pendingAttemptCount: number })
+      .pendingAttemptCount;
     expect(pendingAttemptCount).toBe(1);
     expect(nextAttemptAt).toBeDefined();
     const deltaHours =
@@ -883,9 +882,7 @@ describe('nextPendingGateItems', () => {
     appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
     expect(getGateItem(item.id)?.state).toBe('pending');
 
-    expect(nextPendingGateItems(item.project, item.milestone)).toHaveLength(
-      0,
-    );
+    expect(nextPendingGateItems(item.project, item.milestone)).toHaveLength(0);
 
     schedulePendingAttempt(
       item.id,
@@ -900,9 +897,7 @@ describe('nextPendingGateItems', () => {
 
   it('never returns a non-pending item', () => {
     const item = makeItem({ classification: 'Opportunistic' });
-    expect(nextPendingGateItems(item.project, item.milestone)).toHaveLength(
-      0,
-    );
+    expect(nextPendingGateItems(item.project, item.milestone)).toHaveLength(0);
   });
 });
 
