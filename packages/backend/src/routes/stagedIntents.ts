@@ -3413,7 +3413,7 @@ interface GateVerifyMirrorDisposition {
  * see StagedIntentRow.applied_task_id's doc comment for the full mechanics.
  * `state` alone would miss that target entirely; `applied_task_id` doesn't.
  */
-export class AlreadyAppliedCreateSupersedeError extends Error {
+class AlreadyAppliedCreateSupersedeError extends Error {
   constructor(
     public readonly supersedingIntentId: string,
     public readonly supersededIntentId: string,
