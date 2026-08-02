@@ -8,7 +8,7 @@ import type { TaskBackend } from '../tasks/TaskBackend';
 import { JiraApiError } from '../tasks/JiraClient';
 import { MilestoneNotFoundError } from '../tasks/LocalTaskBackend';
 import { ProjectService } from '../projects/ProjectService';
-import { runWithConcurrency } from '../utils/concurrency';
+import { runWithConcurrency, yieldToEventLoop } from '../utils/concurrency';
 import type { Scheduler } from './Scheduler';
 
 const MIN_REFRESH_INTERVAL_MS = 10_000;
@@ -136,6 +136,8 @@ export class TaskCacheRefresher {
     );
 
     for (const milestone of milestones) {
+      await yieldToEventLoop();
+
       // yaml projects: fetch by source_id (yaml milestone id) so LocalTaskBackend matches correctly
       const fetchId = isLocalSource
         ? (milestone.sourceId as string)

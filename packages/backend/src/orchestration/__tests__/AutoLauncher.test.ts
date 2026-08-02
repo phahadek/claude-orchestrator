@@ -653,7 +653,19 @@ describe('AutoLauncher — project-driven polling', () => {
 
 describe('AutoLauncher — fetch timeouts', () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    // Exclude setImmediate/queueMicrotask from faking — AutoLauncher now
+    // yields via setImmediate between per-task iterations (see
+    // yieldToEventLoop), and leaving it real lets that resolve on its own
+    // instead of hanging until timers are explicitly advanced.
+    vi.useFakeTimers({
+      toFake: [
+        'Date',
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+      ],
+    });
     vi.clearAllMocks();
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
@@ -944,7 +956,19 @@ describe('AutoLauncher — Notion Done-update backoff', () => {
   }
 
   beforeEach(() => {
-    vi.useFakeTimers();
+    // Exclude setImmediate/queueMicrotask from faking — AutoLauncher now
+    // yields via setImmediate between per-task iterations (see
+    // yieldToEventLoop), and leaving it real lets that resolve on its own
+    // instead of hanging until timers are explicitly advanced.
+    vi.useFakeTimers({
+      toFake: [
+        'Date',
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+      ],
+    });
     vi.clearAllMocks();
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
@@ -1130,7 +1154,19 @@ describe('AutoLauncher — Notion Done-update backoff', () => {
 
 describe('AutoLauncher — launch failure tracking', () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    // Exclude setImmediate/queueMicrotask from faking — AutoLauncher now
+    // yields via setImmediate between per-task iterations (see
+    // yieldToEventLoop), and leaving it real lets that resolve on its own
+    // instead of hanging until timers are explicitly advanced.
+    vi.useFakeTimers({
+      toFake: [
+        'Date',
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+      ],
+    });
     vi.clearAllMocks();
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
@@ -1843,6 +1879,96 @@ describe('AutoLauncher — ready-transition pause clearing', () => {
 
     expect(clearPausedPrReasonForTask).toHaveBeenCalledWith('task-pr-pause');
     expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+});
+
+describe('AutoLauncher — event loop yielding', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+  });
+
+  it('yields to the event loop between ready-transition checks across tasks', async () => {
+    const taskA = makeResolvedTask({ id: 'task-a' });
+    const taskB = makeResolvedTask({ id: 'task-b' });
+
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([taskA, taskB]),
+    };
+    const sessionManager = makeSessionManager(0);
+
+    let sentinelRan = false;
+    let calls = 0;
+    vi.mocked(getTaskPauseReason).mockImplementation(() => {
+      calls++;
+      if (calls === 1) {
+        // Scheduled while checking task-a — should fire before task-b is
+        // checked if the poll yields in between.
+        setImmediate(() => {
+          sentinelRan = true;
+        });
+      } else if (calls === 2) {
+        expect(sentinelRan).toBe(true);
+      }
+      return null;
+    });
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => notionBackend as never,
+      pollOnStart: false,
+    });
+    // Non-null, empty — every task looks like a fresh Ready transition.
+    (
+      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
+    ).lastPollReadyTaskIds = new Set();
+
+    await launcher.pollOnce();
+
+    // isLaunchCandidate also reads getTaskPauseReason after the
+    // transition-clearing loop, so calls can exceed 2 — the assertions
+    // inside the mock above (fired on the 1st/2nd calls) are what actually
+    // proves the yield; this just confirms the loop reached both tasks.
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(sentinelRan).toBe(true);
+  });
+
+  it('does not hold the loop for a full multi-task pass', async () => {
+    const tasks = Array.from({ length: 5 }, (_, i) =>
+      makeResolvedTask({ id: `task-${i}` }),
+    );
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue(tasks),
+    };
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => notionBackend as never,
+      pollOnStart: false,
+    });
+    (
+      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
+    ).lastPollReadyTaskIds = new Set();
+
+    const events: string[] = [];
+    setImmediate(() => {
+      events.push('sentinel');
+    });
+
+    const poll = launcher.pollOnce().then(() => {
+      events.push('poll-complete');
+    });
+    await poll;
+
+    expect(events).toEqual(['sentinel', 'poll-complete']);
   });
 });
 

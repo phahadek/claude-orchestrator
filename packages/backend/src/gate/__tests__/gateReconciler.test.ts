@@ -1062,6 +1062,106 @@ describe('runGateReconcilerTick', () => {
   });
 });
 
+describe('runGateReconcilerTick — event loop yielding', () => {
+  it('yields to the event loop between item iterations within a tier', async () => {
+    const item1 = makeRunnableItem({
+      classification: 'Read-Only',
+      text: 'item one',
+    });
+    const item2 = makeRunnableItem({
+      classification: 'Read-Only',
+      text: 'item two',
+    });
+
+    let sentinelRan = false;
+    const verify = vi.fn(async (item: { id: string }) => {
+      if (item.id === item1.id) {
+        // Scheduled during item1's processing — should fire before item2
+        // is processed if the tick yields in between.
+        setImmediate(() => {
+          sentinelRan = true;
+        });
+      } else if (item.id === item2.id) {
+        expect(sentinelRan).toBe(true);
+      }
+      return { disposition: 'pass' as const };
+    });
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(2);
+    expect(sentinelRan).toBe(true);
+  });
+
+  it('yields to the event loop between milestone iterations', async () => {
+    const m13Id = ProjectService.createMilestone({
+      id: 'ms-uuid-m13',
+      projectId: 'polimarket-analyser',
+      name: 'M13',
+      canonicalShortId: 'M13',
+    }).id;
+    upsertArm(m13Id, 'gate-verify', true, 1);
+
+    const item1 = makeRunnableItem({
+      milestone: 'M12',
+      classification: 'Read-Only',
+      text: 'm12 item',
+    });
+    const item2 = makeItem({
+      milestone: 'M13',
+      classification: 'Read-Only',
+      text: 'm13 item',
+    });
+    mergeSource(item2.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1');
+
+    let sentinelRan = false;
+    const verify = vi.fn(async (item: { id: string }) => {
+      if (item.id === item1.id) {
+        setImmediate(() => {
+          sentinelRan = true;
+        });
+      } else if (item.id === item2.id) {
+        expect(sentinelRan).toBe(true);
+      }
+      return { disposition: 'pass' as const };
+    });
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(2);
+    expect(sentinelRan).toBe(true);
+  });
+
+  it('does not hold the loop for a full multi-item pass', async () => {
+    makeRunnableItem({ classification: 'Read-Only', text: 'item a' });
+    makeRunnableItem({ classification: 'Read-Only', text: 'item b' });
+    makeRunnableItem({ classification: 'Read-Only', text: 'item c' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+
+    const events: string[] = [];
+    setImmediate(() => {
+      events.push('sentinel');
+    });
+
+    const tick = runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    }).then(() => {
+      events.push('tick-complete');
+    });
+    await tick;
+
+    expect(events).toEqual(['sentinel', 'tick-complete']);
+  });
+});
+
 describe('runGateReconcilerTick — verify concurrency budgeting', () => {
   /** Seeds a live (non-terminal) session row directly — bypasses SessionManager, for exercising the DB-backed count the reconciler budgets against. */
   function insertLiveSession(opts: {

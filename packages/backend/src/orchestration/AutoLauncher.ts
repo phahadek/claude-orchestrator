@@ -21,7 +21,7 @@ import {
   getTaskRepoAssignment,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
-import { runWithConcurrency } from '../utils/concurrency';
+import { runWithConcurrency, yieldToEventLoop } from '../utils/concurrency';
 import { getProjectRepos } from '../projects/ProjectService';
 import { hasMemoryHeadroom } from './memoryAdmission';
 import { CrashBudget } from './crashBudget';
@@ -386,6 +386,7 @@ export class AutoLauncher {
     // startup. Steady-state Ready tasks (already in the set) are intentionally
     // skipped to avoid wiping launch_failed escalations → relaunch loop.
     for (const resolved of allTasks) {
+      await yieldToEventLoop();
       this.maybeClearStaleReadyTransitionPauses(resolved.task.id);
     }
 

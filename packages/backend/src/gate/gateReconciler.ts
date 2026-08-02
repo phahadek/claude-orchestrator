@@ -4,6 +4,7 @@ import { getProjectById, runtimeSettings } from '../config';
 import { typedGetSetting } from '../config/settings';
 import { computeAvailableCapacity } from '../orchestration/DispatchTriggerEvaluator';
 import { getTaskBackend } from '../tasks/TaskBackend';
+import { yieldToEventLoop } from '../utils/concurrency';
 import { getProjectDeployedSha } from '../deploy/deployService';
 import {
   countLivePlanningSessions,
@@ -818,6 +819,8 @@ export async function runGateReconcilerTick(
     }
 
     for (const { project, milestone } of projectMilestones.values()) {
+      await yieldToEventLoop();
+
       let milestoneRow;
       try {
         milestoneRow = resolveMilestoneRowForProject(project, milestone);
@@ -837,6 +840,8 @@ export async function runGateReconcilerTick(
           limit,
         });
         for (const item of batch) {
+          await yieldToEventLoop();
+
           if (dispatchBudget <= 0) {
             skippedForBudget++;
             continue;
