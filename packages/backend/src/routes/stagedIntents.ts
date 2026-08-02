@@ -71,6 +71,7 @@ import {
   TERMINAL_SESSION_STATUSES,
   getPRByNumber,
   setPRReviewResult,
+  getSessionDeclaredWrites,
 } from '../db/queries';
 import { parseTaskId, normalizeTaskId } from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
@@ -128,6 +129,7 @@ import {
   parseSessionEventsReadCapability,
   isSanctionedAutoApproveCapability,
   isGrantable,
+  isDeclaredWriteAutoApprove,
   bashCapabilityConfersFileMutation,
 } from '../session/orchestrator-config';
 import { runtimeSettings } from '../config';
@@ -3728,6 +3730,23 @@ async function resumeReviewDisputeAuthor(
  * stage time, by `routeStageTimeBlock` — the sole path a dispatched
  * session's `session.requestCapability` MCP call reaches (see
  * mcp/tools/stageProposalTools.ts's `stage`).
+ *
+ * A second, additive auto-approve path sits alongside the sanctioned
+ * read-only allowlist above: a write-shaped request from an ops session
+ * auto-approves when it exact-matches a capability the task declared (and
+ * got approved for) at grooming/Ready time, and that declared entry is not
+ * tagged Prod-Mutating (see the architecture unit "A task-settled write
+ * auto-approves a capability request only when declared, exact-matched, and
+ * not Prod-Mutating" and orchestrator-config.ts#isDeclaredWriteAutoApprove).
+ * The declared-writes set was captured once onto the session's row at spawn
+ * (SessionManager.start), never re-read live from the task body here — a
+ * mid-session task-body edit cannot retroactively widen an already-dispatched
+ * session's eligibility. `isGrantable(capability)` is checked first and
+ * strictly gates this path: the hard denylist (GRANT_DENYLIST_PATTERNS)
+ * always wins, even for a capability that (malformed or otherwise) appears
+ * in the task's declared-writes section — declaration only ever narrows an
+ * already-grantable request down to auto-approved, it never widens what's
+ * grantable.
  */
 async function maybeAutoApproveCapabilityRequest(
   intent: StagedIntent,
@@ -3743,14 +3762,24 @@ async function maybeAutoApproveCapabilityRequest(
 
   const payload = intent.payload as CapabilityRequestPayload;
   const requestingSession = getSession(intent.sessionId);
-  if (
-    !isSanctionedAutoApproveCapability(
+
+  const sanctioned = isSanctionedAutoApproveCapability(
+    payload.capability,
+    intent.sessionId,
+    intent.projectId,
+    requestingSession?.session_type,
+  );
+
+  const declaredWriteEligible =
+    !sanctioned &&
+    requestingSession?.session_type === 'ops' &&
+    isGrantable(payload.capability) &&
+    isDeclaredWriteAutoApprove(
       payload.capability,
-      intent.sessionId,
-      intent.projectId,
-      requestingSession?.session_type,
-    )
-  ) {
+      getSessionDeclaredWrites(intent.sessionId),
+    );
+
+  if (!sanctioned && !declaredWriteEligible) {
     return intent;
   }
 

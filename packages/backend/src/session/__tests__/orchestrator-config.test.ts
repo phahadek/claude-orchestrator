@@ -14,6 +14,7 @@ import {
   parseSessionEventsReadCapability,
   isSanctionedAutoApproveCapability,
   bashCapabilityConfersFileMutation,
+  isDeclaredWriteAutoApprove,
 } from '../orchestrator-config';
 import { NOTION_READ_MCP_TOOLS } from '../../config';
 import {
@@ -731,5 +732,43 @@ describe('isSanctionedAutoApproveCapability', () => {
         'groom',
       ),
     ).toBe(true);
+  });
+});
+
+describe('isDeclaredWriteAutoApprove', () => {
+  it('is true for a capability that exact-matches a non-Prod-Mutating declared entry', () => {
+    expect(
+      isDeclaredWriteAutoApprove('Bash(npm ci:*)', [
+        { capability: 'Bash(npm ci:*)', prodMutating: false },
+      ]),
+    ).toBe(true);
+  });
+
+  it('is false for a capability that matches a Prod-Mutating declared entry', () => {
+    expect(
+      isDeclaredWriteAutoApprove('Bash(git push:*)', [
+        { capability: 'Bash(git push:*)', prodMutating: true },
+      ]),
+    ).toBe(false);
+  });
+
+  it('is false for a capability with no declared match at all', () => {
+    expect(
+      isDeclaredWriteAutoApprove('Bash(npm publish:*)', [
+        { capability: 'Bash(npm ci:*)', prodMutating: false },
+      ]),
+    ).toBe(false);
+  });
+
+  it('never matches by prefix/pattern — only an exact string match counts', () => {
+    expect(
+      isDeclaredWriteAutoApprove('Bash(npm ci --production:*)', [
+        { capability: 'Bash(npm ci:*)', prodMutating: false },
+      ]),
+    ).toBe(false);
+  });
+
+  it('is false for an empty declared-writes set', () => {
+    expect(isDeclaredWriteAutoApprove('Bash(npm ci:*)', [])).toBe(false);
   });
 });

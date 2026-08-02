@@ -87,6 +87,7 @@ import {
   addGrantedCapability,
   removeGrantedCapability,
   getGrantedCapabilities,
+  setSessionDeclaredWrites,
   expireStagedIntentsForSession,
   hasStagedIntentForTask,
   sweepStagedIntentsForTerminalSessions,
@@ -112,6 +113,7 @@ import { deriveDisplayStatusFromDb } from '../tasks/TaskStatusEngine';
 import type { DisplayStatus } from '../tasks/TaskStatusEngine';
 import { emitTaskUpdated } from '../routes/tasks';
 import { parseSection } from '../notion/NotionClient';
+import type { DeclaredWriteEntry } from '../tasks/readinessGate';
 import {
   formatReviewFeedback,
   formatApprovedVerdictMessage,
@@ -419,6 +421,17 @@ export interface StartOptions {
    */
   model?: string;
   effort?: string;
+  /**
+   * Write capabilities the dispatched task declared (and got approved for)
+   * at grooming/Ready time — see readinessGate.ts's DeclaredWriteEntry /
+   * extractDeclaredWrites and opsLoad.ts's OpsTaskEntry.declaredWrites.
+   * Captured once onto the session's durable row (sessions.metadata) at
+   * spawn time only (see `start()` below) — never re-read live during the
+   * session's run, so a mid-session task-body edit can't retroactively
+   * widen an already-dispatched session's auto-approve eligibility. Ops
+   * sessions only; every other sessionType ignores it.
+   */
+  declaredWrites?: DeclaredWriteEntry[];
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -1414,6 +1427,17 @@ export class SessionManager extends EventEmitter {
       session_type: sessionType,
       task_name: taskName ?? null,
     });
+
+    // Captured once, here at spawn — never re-derived from a live task-body
+    // fetch during the session's run (see StartOptions.declaredWrites doc
+    // comment). respawnSession never calls this: it reconstructs an
+    // in-memory AgentSession from the existing DB row, and the row's
+    // metadata (set here, at original spawn) is left untouched across every
+    // resume/restart, so a mid-session task-body edit can never widen an
+    // already-dispatched session's auto-approve eligibility.
+    if (options?.declaredWrites) {
+      setSessionDeclaredWrites(sessionId, options.declaredWrites);
+    }
 
     recordEvent({
       event_type: 'session_launched',

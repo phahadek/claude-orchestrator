@@ -455,6 +455,7 @@ export class OpsSessionLauncher {
               opsContext,
               task as OpsTaskEntry,
             ),
+            declaredWrites: (task as OpsTaskEntry).declaredWrites,
           }),
           ...(injectedProcedureContent && { injectedProcedureContent }),
           ...(model && { model }),

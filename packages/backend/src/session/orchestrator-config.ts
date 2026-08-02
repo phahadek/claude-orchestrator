@@ -373,6 +373,29 @@ export function isSanctionedAutoApproveCapability(
 }
 
 /**
+ * Stage-time auto-approve eligibility for a write-shaped
+ * `session.requestCapability` request against the requesting ops session's
+ * captured declared-writes set (see readinessGate.ts's DeclaredWriteEntry,
+ * SessionManager.start's declaredWrites capture, and
+ * db/queries.ts#getSessionDeclaredWrites). True iff `capability` exact-matches
+ * a declared entry AND that entry is not tagged Prod-Mutating — never a
+ * prefix/pattern match, and a Prod-Mutating-tagged entry (including one that
+ * defaulted there for lack of an unambiguous tag — see
+ * classifyProdMutatingTag) never auto-approves regardless of how confidently
+ * it matches. This is purely additive: it narrows which already-`isGrantable`
+ * requests skip manual approval, it never widens what's grantable — callers
+ * must check `isGrantable(capability)` first (see
+ * stagedIntents.ts#maybeAutoApproveCapabilityRequest).
+ */
+export function isDeclaredWriteAutoApprove(
+  capability: string,
+  declaredWrites: readonly { capability: string; prodMutating: boolean }[],
+): boolean {
+  const match = declaredWrites.find((e) => e.capability === capability);
+  return match != null && !match.prodMutating;
+}
+
+/**
  * A granted capability shaped like an actual CLI tool permission — a Bash
  * command prefix or a named MCP verb. Only these widen `--allowed-tools` at
  * spawn (see `getSessionAllowedTools` below); the own-record-read,
