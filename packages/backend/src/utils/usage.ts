@@ -72,9 +72,9 @@ export type SessionTypeCategory = keyof typeof SESSION_TYPE_CATEGORIES;
 export function categoryForSessionType(
   sessionType: string,
 ): SessionTypeCategory {
-  return (
-    SESSION_TYPE_CATEGORIES.planning as readonly string[]
-  ).includes(sessionType)
+  return (SESSION_TYPE_CATEGORIES.planning as readonly string[]).includes(
+    sessionType,
+  )
     ? 'planning'
     : 'execution';
 }

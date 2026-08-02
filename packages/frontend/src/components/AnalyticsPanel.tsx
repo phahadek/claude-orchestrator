@@ -290,9 +290,7 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
               {/* Cost breakdown by session type pie */}
               {pieData.length > 0 && (
                 <div className={styles.chartSection}>
-                  <h3 className={styles.sectionTitle}>
-                    Cost by session type
-                  </h3>
+                  <h3 className={styles.sectionTitle}>Cost by session type</h3>
                   <div
                     className={`${styles.chartContainer} ${styles.pieContainer}`}
                   >
@@ -342,9 +340,7 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
               {/* ── Top task rollups table ── */}
               {topRollups.length > 0 && (
                 <div className={styles.tableSection}>
-                  <h3 className={styles.sectionTitle}>
-                    Top tasks by cost
-                  </h3>
+                  <h3 className={styles.sectionTitle}>Top tasks by cost</h3>
                   <table className={styles.table}>
                     <thead>
                       <tr>

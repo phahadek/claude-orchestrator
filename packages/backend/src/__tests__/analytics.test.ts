@@ -73,7 +73,13 @@ vi.mock('../db/db.js', async () => {
     INSERT INTO sessions (session_id, project_id, task_id, status, started_at, session_type, total_input_tokens, total_output_tokens, task_name)
     VALUES (?, ?, ?, 'done', ?, 'groom', 0, 0, ?)
   `,
-  ).run('s4', 'proj-a', 'notion:task-ZERO', NOW - 1 * DAY_MS, 'Zero-token task');
+  ).run(
+    's4',
+    'proj-a',
+    'notion:task-ZERO',
+    NOW - 1 * DAY_MS,
+    'Zero-token task',
+  );
 
   // Archived session — must still appear (analytics is historical).
   db.prepare(
