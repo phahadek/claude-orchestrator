@@ -72,10 +72,7 @@ export function ShortcutHint({ activePanel }: ShortcutHintProps) {
         ?
       </button>
       {open && (
-        <div
-          className={styles['modal-overlay']}
-          onClick={() => setOpen(false)}
-        >
+        <div className={styles['modal-overlay']} onClick={() => setOpen(false)}>
           <div
             className={styles.modal}
             role="dialog"
