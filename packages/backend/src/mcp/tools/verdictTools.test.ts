@@ -77,6 +77,15 @@ describe('verdict-delivery MCP tools — registration', () => {
     expect(tools.map((t) => t.name).sort()).toEqual(['gate.verify']);
     await close();
   });
+
+  it("gate.verify's description states the full-uuid gateItemId requirement", async () => {
+    const { client, close } = await connectedClient(() => fakeSession(), 'ops');
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'gate.verify');
+    expect(tool?.description).toMatch(/full gate item uuid/i);
+    expect(tool?.description).toMatch(/8-character short form/i);
+    await close();
+  });
 });
 
 describe('review.disposition', () => {
