@@ -323,6 +323,181 @@ function checkGroomingResidue(body: string): ReadinessViolation[] {
 }
 
 /**
+ * Structural check: the named heading exists and is non-empty. A per-type
+ * floor fact — replaces the generic "## Open Questions" Tier-1 check for a
+ * type whose own authoring convention (config-template/task-writing.md
+ * § 🔧 Operational & 🔎 Investigation tasks) substitutes a different
+ * required section in place of Open Questions / Files-paths-affected.
+ */
+function checkRequiredHeadingSection(
+  body: string,
+  headingLabel: string,
+): ReadinessViolation[] {
+  const target = normalizeHeadingText(headingLabel);
+  const lines = body.split('\n');
+  let found = false;
+  let inSection = false;
+  let hasContent = false;
+  for (const line of lines) {
+    const heading = line.match(/^#{1,6}\s*(.+)$/);
+    if (heading) {
+      const normalized = normalizeHeadingText(heading[1]);
+      inSection = normalized === target;
+      if (inSection) found = true;
+      continue;
+    }
+    if (!inSection) continue;
+    const trimmed = line.trim();
+    if (!trimmed || /^none$/i.test(trimmed)) continue;
+    hasContent = true;
+  }
+  if (!found) {
+    return [
+      {
+        tier: 'structural',
+        detail: `required "${headingLabel}" section is missing`,
+        location: 'body',
+      },
+    ];
+  }
+  if (!hasContent) {
+    return [
+      {
+        tier: 'structural',
+        detail: `"${headingLabel}" section is empty`,
+        location: 'body',
+      },
+    ];
+  }
+  return [];
+}
+
+/**
+ * Extracts the prose (fenced/quoted content blanked, per stripNonProse) of
+ * the first heading (any level) matching `normalizedTarget`, up to the next
+ * heading. Returns `found: false` when no such heading exists.
+ */
+function extractSectionProse(
+  body: string,
+  normalizedTarget: string,
+): { found: boolean; text: string; hasList: boolean } {
+  const rawLines = body.split('\n');
+  const proseLines = stripNonProse(body);
+  let inSection = false;
+  let found = false;
+  let hasList = false;
+  let text = '';
+  for (let i = 0; i < rawLines.length; i++) {
+    const heading = rawLines[i].match(/^#{1,6}\s*(.+)$/);
+    if (heading) {
+      inSection = normalizeHeadingText(heading[1]) === normalizedTarget;
+      if (inSection) found = true;
+      continue;
+    }
+    if (!inSection) continue;
+    const trimmed = rawLines[i].trim();
+    if (/^[-*]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed)) hasList = true;
+    text += proseLines[i] + '\n';
+  }
+  return { found, text, hasList };
+}
+
+/**
+ * 🔧 Operational floor fact — a lexical scan for reconcile-and-capture
+ * language within "### 👁️ Manual verification" (config-template/
+ * task-writing.md: "the reconcile + capture check that proves the worker
+ * heard the change and a record landed"). Requires both stems present
+ * anywhere in the section's prose; order-agnostic, leniently matched.
+ */
+function checkOperationalReconcileCapture(body: string): ReadinessViolation[] {
+  const { found, text } = extractSectionProse(body, 'manual verification');
+  const hasReconcileAndCapture =
+    found && /reconcil/i.test(text) && /captur/i.test(text);
+  if (hasReconcileAndCapture) return [];
+  return [
+    {
+      tier: 'lexical',
+      detail:
+        'Manual verification section is missing reconcile-and-capture language',
+      location: '### 👁️ Manual verification',
+    },
+  ];
+}
+
+/**
+ * 🔎 Investigation floor fact — a structural scan for an enumerated
+ * decision-branch structure within Context (config-template/task-writing.md:
+ * "the decision space / branches (a/b/c → what each implies and what gets
+ * filed)"). Detected leniently: any list under Context, or clear if/then- or
+ * if/when-implies-style branch-to-consequence phrasing — not literal
+ * `(a)/(b)/(c)` lettering.
+ */
+function checkInvestigationDecisionBranchStructure(
+  body: string,
+): ReadinessViolation[] {
+  const { found, text, hasList } = extractSectionProse(body, 'context');
+  const branchPhrasing =
+    /\bif\b[^\n]{0,120}\bthen\b/i.test(text) ||
+    /\b(if|when)\b[^\n]{0,120}\b(implies|files|leads to|means)\b/i.test(text);
+  if (found && (hasList || branchPhrasing)) return [];
+  return [
+    {
+      tier: 'structural',
+      detail:
+        'Context section lacks an enumerated decision-branch structure (no list and no if/then branch phrasing)',
+      location: 'Context',
+    },
+  ];
+}
+
+/**
+ * Per-type clean-verdict floor facts (locked by the design task "Articulate
+ * the clean-verdict standard for 🔧 Operational and 🔎 Investigation
+ * promotion" — see its "Per-type clean-verdict standard and TriageVerdict
+ * eligibility registry" architecture unit). Deliberately decoupled from
+ * INTERACTIVE_TASK_TYPES (planning/triage.ts) — that set gates promotion
+ * eligibility, this registry gates what checkReadiness enforces structurally
+ * per type. `requiredHeading` replaces the generic Open Questions Tier-1
+ * check for that type (see checkReadiness); `scans` are additional per-type
+ * floor checks; `judgmentItems` mirrors the type's authoring-convention
+ * Manual verification checklist (documentation, not enforced here);
+ * `hardBlockGateEligible` mirrors whether the type's runtime/launch-and-
+ * observe items can legitimately accrete to the Manual Verification Gate
+ * (Operational: yes; Investigation: no — its Manual verification section
+ * self-verifies in-session and is never stripped).
+ */
+interface TypeFloorFacts {
+  requiredHeading: string;
+  scans: readonly ((body: string) => ReadinessViolation[])[];
+  judgmentItems: readonly string[];
+  hardBlockGateEligible: boolean;
+}
+
+const TYPE_FLOOR_FACTS: Readonly<Record<string, TypeFloorFacts>> = {
+  '🔧 Operational': {
+    requiredHeading: 'Targets / surfaces affected',
+    scans: [checkOperationalReconcileCapture],
+    judgmentItems: [
+      'seed present on prod',
+      'worker reconciled',
+      'correct breadth authored',
+      'Done ≠ deployed ≠ seeded ≠ working',
+    ],
+    hardBlockGateEligible: true,
+  },
+  '🔎 Investigation': {
+    requiredHeading: 'Deliverables',
+    scans: [checkInvestigationDecisionBranchStructure],
+    judgmentItems: [
+      'decision reached is defensible (falsification run)',
+      'evidence recorded with provenance',
+      'follow-on tasks filed with accurate priority',
+    ],
+    hardBlockGateEligible: false,
+  },
+};
+
+/**
  * Task types whose readiness is about their own scope/method being clear,
  * not about the questions they exist to answer being pre-resolved (see
  * config/task-writing.md § Readiness gate carve-out #4). For these types,
@@ -344,9 +519,17 @@ const OPEN_QUESTIONS_EXEMPT_TYPES: ReadonlySet<string> = new Set([
 /**
  * Run the deterministic tiers against a task page body. `type` is the
  * task's display-format Type (e.g. '💻 Code'); when it is 📐 Design,
- * 📋 Planning, 🔎 Investigation, or 🧪 Testing, the Open Questions and
- * deferral-phrase checks are skipped — see OPEN_QUESTIONS_EXEMPT_TYPES.
+ * 📋 Planning, 🔎 Investigation, or 🧪 Testing, the generic Open Questions
+ * and deferral-phrase checks are skipped — see OPEN_QUESTIONS_EXEMPT_TYPES.
  * checkGroomingResidue is type-agnostic.
+ *
+ * When `type` has an entry in TYPE_FLOOR_FACTS (🔧 Operational,
+ * 🔎 Investigation), the generic Open Questions structural check is replaced
+ * by that type's own required-heading check, and its additional per-type
+ * scans run too — independent of OPEN_QUESTIONS_EXEMPT_TYPES, which only
+ * governs the generic Open Questions / deferral-phrase pair. Notably,
+ * 🔧 Operational is not in OPEN_QUESTIONS_EXEMPT_TYPES, so it keeps the
+ * deferral-phrase check even though its Open Questions check is replaced.
  */
 export function checkReadiness(
   body: string | null | undefined,
@@ -354,11 +537,24 @@ export function checkReadiness(
 ): ReadinessViolation[] {
   const text = body ?? '';
   const exempt = type != null && OPEN_QUESTIONS_EXEMPT_TYPES.has(type);
+  const floorFacts = type != null ? TYPE_FLOOR_FACTS[type] : undefined;
+
+  const structuralViolations = floorFacts
+    ? checkRequiredHeadingSection(text, floorFacts.requiredHeading)
+    : exempt
+      ? []
+      : checkOpenQuestionsSection(text);
+
+  const floorFactScanViolations = floorFacts
+    ? floorFacts.scans.flatMap((scan) => scan(text))
+    : [];
+
   return [
-    ...(exempt ? [] : checkOpenQuestionsSection(text)),
+    ...structuralViolations,
     ...(exempt ? [] : checkDeferralPhrases(text)),
     ...checkGroomingResidue(text),
     ...checkDeclaredWritesSection(text),
+    ...floorFactScanViolations,
   ];
 }
 
