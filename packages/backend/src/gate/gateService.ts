@@ -135,6 +135,13 @@ interface GateBlockingItem {
 export interface GateReadiness {
   status: 'green' | 'blocked';
   blocking: GateBlockingItem[];
+  /**
+   * Opportunistic items parked at `pending` (backoff-scheduled for a later
+   * not-yet-triggerable re-check) — a sibling bucket to `blocking`, never a
+   * subset of it. Visible to every reader but never counted toward
+   * `blocking.length` or the green/blocked status.
+   */
+  parked: GateBlockingItem[];
   /** Subset of `blocking` sitting in a state outside the closed vocabulary — needs human re-disposition, not indefinite blocking. */
   bespokeStates: GateBlockingItem[];
   /** Subset of `blocking` whose latest disposition is non-resolving (needs-setup/noted) — attempted but inconclusive, not simply untouched. */
@@ -164,22 +171,26 @@ export function getGateReadiness(
   milestone: string,
 ): GateReadiness {
   const items = gateStore.listByMilestone(project, milestone);
+  const toBlockingItem = (item: GateItem): GateBlockingItem => ({
+    id: item.id,
+    project: item.project,
+    milestone: item.milestone,
+    text: item.text,
+    classification: item.classification,
+    state: item.state,
+    bespoke: isBespokeGateState(item.state),
+    nonResolving:
+      item.latestDisposition !== undefined &&
+      NON_TERMINAL_DISPOSITIONS.has(item.latestDisposition as GateDisposition),
+  });
   const blocking = items
-    .filter((item) => !RESOLVED_STATES.has(item.state))
-    .map((item) => ({
-      id: item.id,
-      project: item.project,
-      milestone: item.milestone,
-      text: item.text,
-      classification: item.classification,
-      state: item.state,
-      bespoke: isBespokeGateState(item.state),
-      nonResolving:
-        item.latestDisposition !== undefined &&
-        NON_TERMINAL_DISPOSITIONS.has(
-          item.latestDisposition as GateDisposition,
-        ),
-    }));
+    .filter(
+      (item) => !RESOLVED_STATES.has(item.state) && item.state !== 'pending',
+    )
+    .map(toBlockingItem);
+  const parked = items
+    .filter((item) => item.state === 'pending')
+    .map(toBlockingItem);
   const counts: Record<string, number> = {};
   for (const item of items) {
     counts[item.state] = (counts[item.state] ?? 0) + 1;
@@ -190,6 +201,7 @@ export function getGateReadiness(
   return {
     status: blocking.length === 0 ? 'green' : 'blocked',
     blocking,
+    parked,
     bespokeStates: blocking.filter((item) => item.bespoke),
     nonResolvingItems: blocking.filter((item) => item.nonResolving),
     counts,
@@ -498,6 +510,8 @@ export interface MilestoneReadiness {
   milestone: string;
   status: 'green' | 'blocked';
   blockingCount: number;
+  /** Opportunistic items parked at `pending` — never counted toward blockingCount or the green/blocked status. */
+  parkedCount: number;
 }
 
 export interface ListMilestoneReadinessOptions {
@@ -536,7 +550,10 @@ export function listMilestoneReadiness(
   return Array.from(groups.values())
     .map((group) => {
       const blockingCount = group.items.filter(
-        (item) => !RESOLVED_STATES.has(item.state),
+        (item) => !RESOLVED_STATES.has(item.state) && item.state !== 'pending',
+      ).length;
+      const parkedCount = group.items.filter(
+        (item) => item.state === 'pending',
       ).length;
       const status: 'green' | 'blocked' =
         blockingCount === 0 ? 'green' : 'blocked';
@@ -545,6 +562,7 @@ export function listMilestoneReadiness(
         milestone: group.milestone,
         status,
         blockingCount,
+        parkedCount,
       };
     })
     .sort(

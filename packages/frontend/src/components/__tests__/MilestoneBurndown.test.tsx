@@ -55,6 +55,7 @@ function makeConvergence(
       gate: {
         status: 'blocked',
         blockingCount: 2,
+        parkedCount: 0,
         bespokeCount: 1,
         counts: { open: 1, runnable: 1, pass: 3 },
         blocking: [],
@@ -355,6 +356,7 @@ describe('MilestoneBurndown convergence header', () => {
             gate: {
               status: 'green',
               blockingCount: 0,
+              parkedCount: 0,
               bespokeCount: 0,
               counts: {},
               blocking: [],

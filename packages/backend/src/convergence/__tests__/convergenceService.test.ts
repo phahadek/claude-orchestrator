@@ -58,6 +58,7 @@ function boardRow(tasks: { id: string; title: string; status: string }[]) {
 const GREEN_GATE = {
   status: 'green' as const,
   blocking: [],
+  parked: [],
   bespokeStates: [],
   counts: {},
 };
@@ -110,6 +111,7 @@ describe('getMilestoneConvergence', () => {
           state: 'open',
         },
       ],
+      parked: [],
       bespokeStates: [],
       counts: {},
     });
@@ -225,6 +227,7 @@ describe('getMilestoneConvergence', () => {
           state: 'open',
         },
       ],
+      parked: [],
       bespokeStates: [],
       counts: {},
     });

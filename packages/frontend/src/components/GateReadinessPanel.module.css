@@ -180,6 +180,27 @@
   background: rgba(249, 226, 175, 0.06);
 }
 
+.parkedBadge {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 0.8125rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  width: fit-content;
+  border: none;
+  background: rgba(203, 166, 247, 0.15);
+  color: var(--mauve, #cba6f7);
+  cursor: pointer;
+}
+
+.parkedBadge:hover {
+  background: rgba(203, 166, 247, 0.25);
+}
+
+.parkedRow td {
+  background: rgba(203, 166, 247, 0.06);
+}
+
 .filters {
   display: flex;
   align-items: center;

@@ -77,6 +77,7 @@ beforeEach(() => {
   gateServiceMock.getGateReadiness.mockReturnValue({
     status: 'blocked',
     blocking: [{ id: 'g1' }],
+    parked: [],
     bespokeStates: [],
     counts: { open: 1, pass: 0 },
   });

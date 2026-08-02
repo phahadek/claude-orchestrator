@@ -4836,15 +4836,16 @@ export function insertConvergenceSnapshot(
 ): void {
   _stmtInsertConvergenceSnapshot ??= db.prepare<ConvergenceSnapshotRow>(`
     INSERT INTO convergence_snapshot
-      (id, project, milestone, ts, tasks_open, tasks_closed, gate_open, gate_closed,
+      (id, project, milestone, ts, tasks_open, tasks_closed, gate_open, gate_closed, gate_parked,
        seed_open, seed_closed, ops_open, ops_closed, total_scope, distance_to_green, status)
     VALUES
-      (@id, @project, @milestone, @ts, @tasks_open, @tasks_closed, @gate_open, @gate_closed,
+      (@id, @project, @milestone, @ts, @tasks_open, @tasks_closed, @gate_open, @gate_closed, @gate_parked,
        @seed_open, @seed_closed, @ops_open, @ops_closed, @total_scope, @distance_to_green, @status)
   `);
   _stmtInsertConvergenceSnapshot.run({
     id: randomUUID(),
     ...row,
+    gate_parked: row.gate_parked ?? 0,
   });
 }
 

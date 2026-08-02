@@ -448,6 +448,8 @@ export interface ConvergenceSnapshotRow {
   tasks_closed: number;
   gate_open: number;
   gate_closed: number;
+  /** Non-blocking `pending` gate items — never subtracted from gate_open/gate_closed. */
+  gate_parked: number;
   seed_open: number;
   seed_closed: number;
   ops_open: number;
