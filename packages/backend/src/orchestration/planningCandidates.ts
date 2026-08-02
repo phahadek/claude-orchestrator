@@ -26,10 +26,14 @@ const DOCS_TOKEN = 'Docs';
  * Groom dep-gate: a Depends-On that is a decision-producing Type (📐 Design /
  * 📋 Planning / 🔎 Investigation) must be ✅ Done — grooming against an
  * unresolved decision means grooming against an unanswered question. Any
- * other-Type Depends-On must be groomed past 🔲 Backlog (at 🗂️ Ready or
- * beyond) and must not be ⏭️ Deferred, which blocks regardless of Type. A
- * dependency absent from `tasksById` can't be verified as cleared, so it
- * fails the gate closed rather than assuming clearance.
+ * other-Type Depends-On (e.g. 💻 Code) never blocks grooming while at 🔲
+ * Backlog — grooming is not dispatch, and the auto-dispatcher independently
+ * holds every Ready Code task until its deps reach ✅ Done, so promoting a
+ * task whose Code blocker is still Backlog skips nothing. ⏭️ Deferred is the
+ * one exception: it's a terminal, distinct state (scope superseded, or will
+ * never be done) rather than "not yet groomed," so it still blocks
+ * regardless of Type. A dependency absent from `tasksById` can't be verified
+ * as cleared, so it fails the gate closed rather than assuming clearance.
  */
 export function passesGroomDepGate(
   task: NotionTask,
@@ -49,10 +53,7 @@ export function passesGroomDepGate(
       dep.type.includes(INVESTIGATION_TOKEN);
     if (isDecisionType) {
       if (!dep.status.includes(DONE_TOKEN)) return false;
-    } else if (
-      dep.status.includes(BACKLOG_TOKEN) ||
-      dep.status.includes(DEFERRED_TOKEN)
-    ) {
+    } else if (dep.status.includes(DEFERRED_TOKEN)) {
       return false;
     }
   }
@@ -83,10 +84,7 @@ export function groomBlockingDepTitles(
       dep.type.includes(INVESTIGATION_TOKEN);
     if (isDecisionType) {
       if (!dep.status.includes(DONE_TOKEN)) titles.push(dep.title);
-    } else if (
-      dep.status.includes(BACKLOG_TOKEN) ||
-      dep.status.includes(DEFERRED_TOKEN)
-    ) {
+    } else if (dep.status.includes(DEFERRED_TOKEN)) {
       titles.push(dep.title);
     }
   }
