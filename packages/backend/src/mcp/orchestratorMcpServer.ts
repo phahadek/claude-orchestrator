@@ -69,7 +69,10 @@ function extractTaskId(args: unknown): unknown {
  * other than the session's own is never rejected or rewritten — staging
  * against another task is sometimes legitimate; only shape is checked here.
  */
-function guardTaskIdArguments(server: McpServer, boundTaskId: string | null): void {
+function guardTaskIdArguments(
+  server: McpServer,
+  boundTaskId: string | null,
+): void {
   const originalRegisterTool = server.registerTool.bind(server);
   server.registerTool = ((name: unknown, config: unknown, handler: unknown) => {
     if (typeof handler !== 'function') {

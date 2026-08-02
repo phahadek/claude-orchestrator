@@ -33,7 +33,11 @@ vi.mock('../tasks/TaskBackend', () => ({
     fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nok'),
     fetchTaskSummary: vi
       .fn()
-      .mockResolvedValue({ title: 'Some other task', type: '💻 Code', status: '🔲 Backlog' }),
+      .mockResolvedValue({
+        title: 'Some other task',
+        type: '💻 Code',
+        status: '🔲 Backlog',
+      }),
   })),
 }));
 
@@ -422,9 +426,7 @@ describe('taskId argument guard', () => {
     expect(getTaskBackend).toHaveBeenCalled();
     const fetchTaskSummary = vi.mocked(getTaskBackend).mock.results[0]
       .value as { fetchTaskSummary: ReturnType<typeof vi.fn> };
-    expect(fetchTaskSummary.fetchTaskSummary).toHaveBeenCalledWith(
-      otherTaskId,
-    );
+    expect(fetchTaskSummary.fetchTaskSummary).toHaveBeenCalledWith(otherTaskId);
 
     await client.close();
     await server.close();
