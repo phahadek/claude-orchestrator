@@ -308,6 +308,109 @@ function assertOpsTerminalGrouped(
 }
 
 /**
+ * True when this group carries at least one live ops-terminal member (any of
+ * OPS_TERMINAL_KINDS, subject to isOpsTerminalKind's conditional membership)
+ * — i.e. this is a closing group for an ops/investigation session, whether or
+ * not it also carries the journal.setState -> "resolved" transition that
+ * closes it. Checked against the durable store (GROUP_COMPLETENESS_ACTIVE),
+ * the same shape as hasGroupDependsOn.
+ */
+function groupHasOpsTerminalMember(groupId: string): boolean {
+  return listStagedIntentsByGroup(groupId).some((row) => {
+    if (!GROUP_COMPLETENESS_ACTIVE.includes(row.state)) return false;
+    return isOpsTerminalKind(row.kind, JSON.parse(row.payload), row.session_id);
+  });
+}
+
+/**
+ * True when this group already carries a live journal.setState -> "resolved"
+ * transition — the one member of the ops-terminal closing set that actually
+ * closes the investigation (completeOpsTask's synchronous check). Checked
+ * against the durable store so a sibling committed in an earlier apply of
+ * the same group still satisfies the invariant for a later apply, the same
+ * tolerance hasGroupDependsOn gives task.setDependsOn.
+ */
+function hasGroupOpsTerminalResolvedJournal(groupId: string): boolean {
+  return listStagedIntentsByGroup(groupId).some((row) => {
+    if (
+      row.kind !== 'journal.setState' ||
+      !GROUP_COMPLETENESS_ACTIVE.includes(row.state)
+    ) {
+      return false;
+    }
+    const payload = JSON.parse(row.payload) as JournalSetStatePayload;
+    return payload.state === 'resolved';
+  });
+}
+
+/**
+ * Group-completeness twin of DependsOnCompletenessError, for the ops-terminal
+ * closing set: a group that carries any ops-terminal member (a task-body
+ * write recording the finding, or a follow-on task.create) but never carries
+ * the journal.setState -> "resolved" transition that actually closes the
+ * investigation is a group that can go terminal without ever producing that
+ * transition — see the worked instance this guards against, where a
+ * closing group contained only a task.create and the investigation's journal
+ * was left stuck at `candidate` forever. Enforced at group-commit time
+ * (checkOpsTerminalGroupCompleteness / precheckGroupCommit), not stage time —
+ * an ops-terminal group is legitimately incomplete while the session is
+ * still assembling it.
+ */
+class OpsTerminalGroupIncompleteError extends Error {
+  constructor(groupId: string) {
+    super(
+      `[stagedIntents] group "${groupId}" is an ops-terminal closing group but has no live ` +
+        'journal.setState transitioning to "resolved" — an ops/investigation session\'s closing ' +
+        'group must carry that transition, alongside any task-body write recording the finding and ' +
+        'any follow-on task.create, before it can commit. Stage the journal.setState -> "resolved" ' +
+        'transition in the same group before committing.',
+    );
+    this.name = 'OpsTerminalGroupIncompleteError';
+  }
+}
+
+/**
+ * Commit-time enforcement of the ops-terminal group-completeness invariant
+ * (see OpsTerminalGroupIncompleteError): null when the group is not an
+ * ops-terminal closing group at all, or when it already carries its
+ * journal.setState -> "resolved" member.
+ */
+function checkOpsTerminalGroupCompleteness(
+  groupId: string,
+): OpsTerminalGroupIncompleteError | null {
+  if (!groupHasOpsTerminalMember(groupId)) return null;
+  if (hasGroupOpsTerminalResolvedJournal(groupId)) return null;
+  return new OpsTerminalGroupIncompleteError(groupId);
+}
+
+/**
+ * Session-terminal twin of checkOpsTerminalGroupCompleteness: every group
+ * this session has staged into that is an ops-terminal closing group missing
+ * its journal.setState -> "resolved" member — used by
+ * PlanningOrchestrator.markTerminal to surface a session that reaches clean
+ * exit with its closing group never completed, rather than letting it
+ * complete (or fail to complete) silently. group-commit's own precheck
+ * refuses this at commit time when both members are staged together in one
+ * apply, but a session can still legitimately commit a partial group across
+ * turns and then go terminal before ever staging the rest — this is the
+ * backstop for that case.
+ */
+export function findIncompleteOpsTerminalGroupsForSession(
+  sessionId: string,
+): string[] {
+  const groupIds = [
+    ...new Set(
+      listStagedIntentsBySession(sessionId)
+        .map((row) => row.group_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  return groupIds.filter((groupId) =>
+    checkOpsTerminalGroupCompleteness(groupId),
+  );
+}
+
+/**
  * The durable replacement for groom-gate.mjs's self-reported hard_block_deps
  * array field: a task.setStatus->Ready apply is only allowed when its intent
  * group also carries a task.setDependsOn for the same task, forcing an
@@ -4039,6 +4142,14 @@ async function precheckGroupCommit(
   ordered: StagedIntentRow[],
   opts: GroupCommitOptions,
 ): Promise<GroupCommitResult | null> {
+  const opsTerminalFailure = checkOpsTerminalGroupCompleteness(groupId);
+  if (opsTerminalFailure) {
+    return {
+      status: 409,
+      body: { error: opsTerminalFailure.message, precheck: true },
+    };
+  }
+
   for (const row of ordered) {
     if (!isArmingReadyIntent(row)) continue;
     const payload = JSON.parse(row.payload) as SetStatusPayload;
