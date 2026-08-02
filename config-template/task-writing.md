@@ -454,6 +454,27 @@ root-cause bar), and declares **`Mode: 🧪 Testing · observational`** (or `· 
   testing task.*`; `### 👁️ Manual verification` states the **disposition** (`pass` shown *by value*,
   not a green-looking zero; or `blocked-pending-fix` with the filed fix + `Depends On`).
 
+### 📝 Docs — a written doc change, executed interactively, gated like Code
+The deliverable is a **written doc change**. A `📝 Docs` task flows through the **`docs`**
+session type — per `procedures.md`'s Task types table, executed **interactively, not
+auto-dispatched**.
+
+- **The readiness gate applies to Docs exactly as it does to `💻 Code` — no carve-out.** The
+  live `## Open Questions` heading and the deferral-phrase tiers both apply at promotion time,
+  and Docs is (correctly) **absent** from `readinessGate.ts`'s `OPEN_QUESTIONS_EXEMPT_TYPES`.
+  Unlike `📐 Design` / `📋 Planning`, a Docs task also does **not** join
+  `planning/triage.ts`'s `INTERACTIVE_TASK_TYPES` batched clean-verdict path — it keeps the
+  full per-item Backlog → Ready promotion gate. This is deliberate: for Design/Planning, open
+  questions *are* the deliverable (the decision space being locked); for Docs, an unresolved
+  Open Question (which doc, which audience, what source material) is a genuine pre-Ready
+  defect, not something the doc-writing session should be left to resolve.
+- **Every Docs PR is forced `human_merge_only` at PR-open time**, regardless of how clean the
+  task's grooming was. This is deliberately **not redundant** with the promotion-time gate
+  above — the two checks verify two different objects: promotion judges the **task's scope**
+  (is it well-specified enough to hand to a session), while the forced human merge judges the
+  **produced content** (is the actual doc change correct). A well-groomed task can still
+  produce a doc edit that needs a human read before it lands.
+
 ### Classifying at authoring time
 Classify by the **primary deliverable**: a verified prod change ⇒ Operational; a decision ⇒
 Investigation. Watch the two smuggling shapes: an "Operational" task whose *what* can only be
