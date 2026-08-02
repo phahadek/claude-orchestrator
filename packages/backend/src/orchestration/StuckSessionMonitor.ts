@@ -463,7 +463,8 @@ export class StuckSessionMonitor {
     // after the fact rather than being indistinguishable from no signal at
     // all.
     if (state.notifyTimer) {
-      const thresholdMs = runtimeSettings.session_notify_threshold_seconds * 1000;
+      const thresholdMs =
+        runtimeSettings.session_notify_threshold_seconds * 1000;
       recordEvent({
         event_type: 'stuck_session_notify_checked',
         actor_type: 'system',

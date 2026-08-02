@@ -37,7 +37,11 @@ function auditRowsFor(sessionId: string): Array<{
     .prepare(
       `SELECT ts, event_type, payload FROM audit_log WHERE actor_id = ? AND event_type = 'session_map_entry_dropped'`,
     )
-    .all(sessionId) as Array<{ ts: number; event_type: string; payload: string }>;
+    .all(sessionId) as Array<{
+    ts: number;
+    event_type: string;
+    payload: string;
+  }>;
 }
 
 function setSessionEntry(sm: SessionManager, sessionId: string): void {
