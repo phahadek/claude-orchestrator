@@ -52,7 +52,12 @@ export function checkUsageAdmission(usage: PlanUsage): UsageAdmissionResult {
   for (const window of WINDOW_ORDER) {
     const deferredUntil = getUsageDeferral(window);
     if (deferredUntil != null && deferredUntil > now) {
-      return { allowed: false, deferredUntil, window, reason: 'usage_deferral' };
+      return {
+        allowed: false,
+        deferredUntil,
+        window,
+        reason: 'usage_deferral',
+      };
     }
   }
 
@@ -70,7 +75,12 @@ export function checkUsageAdmission(usage: PlanUsage): UsageAdmissionResult {
         ? fallbackDeferralMs()
         : parsed;
       setUsageDeferral(window, deferredUntil);
-      return { allowed: false, deferredUntil, window, reason: 'usage_deferral' };
+      return {
+        allowed: false,
+        deferredUntil,
+        window,
+        reason: 'usage_deferral',
+      };
     }
   }
 

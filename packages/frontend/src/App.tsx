@@ -243,8 +243,7 @@ export default function App() {
     reason: AdmissionBlockReason;
     eligibleCount: number;
   } | null>(null);
-  const [admissionStallDismissed, setAdmissionStallDismissed] =
-    useState(false);
+  const [admissionStallDismissed, setAdmissionStallDismissed] = useState(false);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
