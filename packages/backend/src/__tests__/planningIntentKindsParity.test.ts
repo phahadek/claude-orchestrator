@@ -27,6 +27,11 @@ const HEALTH_TOOL = orchestratorMcpToolName('health');
 // kind, so it isn't in PLANNING_INTENT_KINDS.ops (see config.ts's
 // OPS_MCP_TOOLS comment).
 const GATESEED_GETSTATE_TOOL = orchestratorMcpToolName('gateSeed.getState');
+// deploy.verdict is the deploy-agentic-step spawner's verdict-reporting
+// tool — a direct call straight to DeployOrchestrator.reportAgenticVerdict(),
+// never a staged intent, so it isn't in PLANNING_INTENT_KINDS.ops (see
+// config.ts's OPS_MCP_TOOLS comment).
+const DEPLOY_VERDICT_TOOL = orchestratorMcpToolName('deploy.verdict');
 // pullRequest.getByTaskId is the read-only PR lookup registered
 // unconditionally for any session resolving to a project — also a direct
 // read, not a staged-intent kind, so it isn't in PLANNING_INTENT_KINDS (see
@@ -115,6 +120,7 @@ const WORKFLOWS: {
     allowedTools: OPS_ALLOWED_TOOLS,
     extraNonStagedTools: [
       GATESEED_GETSTATE_TOOL,
+      DEPLOY_VERDICT_TOOL,
       PULLREQUEST_GETBYTASKID_TOOL,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,

@@ -24,10 +24,12 @@ function fakeSession() {
     recordGateVerifyDisposition: vi
       .fn()
       .mockReturnValue({ id: 'staged-1', milestone: 'M1' }),
+    recordDeployAgenticVerdict: vi.fn(),
   } as unknown as AgentSession & {
     recordReviewDisposition: ReturnType<typeof vi.fn>;
     recordVerifiedFlakyDisposition: ReturnType<typeof vi.fn>;
     recordGateVerifyDisposition: ReturnType<typeof vi.fn>;
+    recordDeployAgenticVerdict: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -73,10 +75,13 @@ describe('verdict-delivery MCP tools — registration', () => {
     await close();
   });
 
-  it('registers only gate.verify for an ops session', async () => {
+  it('registers gate.verify and deploy.verdict for an ops session', async () => {
     const { client, close } = await connectedClient(() => fakeSession(), 'ops');
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['gate.verify']);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'deploy.verdict',
+      'gate.verify',
+    ]);
     await close();
   });
 
@@ -400,5 +405,46 @@ describe('gate.verify', () => {
     expect(new Set(gateVerifyReclassifyToSchema.options)).toEqual(
       VERIFIER_RECLASSIFY_TARGETS,
     );
+  });
+});
+
+describe('deploy.verdict', () => {
+  it('delegates to session.recordDeployAgenticVerdict', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'deploy.verdict',
+      arguments: { verdict: 'approved', detail: 'looks healthy' },
+    });
+    expect(resultOf(result as never)).toEqual({ status: 'ok' });
+    expect(session.recordDeployAgenticVerdict).toHaveBeenCalledWith({
+      verdict: 'approved',
+      detail: 'looks healthy',
+    });
+    await close();
+  });
+
+  it('surfaces a non-deploy-agentic session (e.g. task_id mismatch) as an error, not a bare ok', async () => {
+    const session = fakeSession();
+    session.recordDeployAgenticVerdict.mockImplementation(() => {
+      throw new Error(
+        'recordDeployAgenticVerdict: session task_id "gate-item:x" is not a deploy-agentic task',
+      );
+    });
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'deploy.verdict',
+      arguments: { verdict: 'inconclusive' },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultOf(result as never).error).toMatch(/not a deploy-agentic task/);
+    await close();
+  });
+
+  it('is not registered for a non-planning (null workflow) session', async () => {
+    const { client, close } = await connectedClient(() => fakeSession(), null);
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).not.toContain('deploy.verdict');
+    await close();
   });
 });

@@ -256,6 +256,56 @@ describe('DeployOrchestrator: agentic step gating', () => {
     expect(getDeployRun(run.run_id)?.status).toBe('failed');
     expect(deps.runShell).not.toHaveBeenCalled();
   });
+
+  it('halts on an inconclusive verdict with a detail distinct from rejected', async () => {
+    const playbook = playbookWith([
+      step({ id: 'investigate', kind: 'agentic' }),
+      step({ id: 'finalize', kind: 'shell' }),
+    ]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    orchestrator.reportAgenticVerdict(
+      run.run_id,
+      'investigate',
+      'inconclusive',
+      'could not settle',
+    );
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+    expect(deps.runShell).not.toHaveBeenCalled();
+    const failedEvent = listDeployRunEvents(run.run_id).find(
+      (e) => e.step === 'investigate' && e.event_type === 'step_failed',
+    );
+    expect(failedEvent?.detail).toBe('agentic step verdict: inconclusive');
+  });
+
+  it('a late/duplicate reportAgenticVerdict call after the step already settled does not append a second agentic_verdict event', async () => {
+    const playbook = playbookWith([
+      step({ id: 'investigate', kind: 'agentic' }),
+      step({ id: 'finalize', kind: 'shell' }),
+    ]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    orchestrator.reportAgenticVerdict(run.run_id, 'investigate', 'approved');
+    await flush();
+    // A late duplicate — e.g. a tool call arriving just after a timeout already settled the step.
+    orchestrator.reportAgenticVerdict(run.run_id, 'investigate', 'rejected');
+    await flush();
+
+    const verdictEvents = listDeployRunEvents(run.run_id).filter(
+      (e) => e.step === 'investigate' && e.event_type === 'agentic_verdict',
+    );
+    expect(verdictEvents).toHaveLength(1);
+    expect(verdictEvents[0].disposition).toBe('approved');
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+  });
 });
 
 describe('DeployOrchestrator: step failure halts + compensating step', () => {

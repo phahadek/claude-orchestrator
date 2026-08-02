@@ -159,6 +159,13 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   ) {
     return `steps[${index}].command_or_prompt for a ${step.kind} step must be an executable command, not prose`;
   }
+  if (
+    step.kind === 'agentic' &&
+    isString(step.command_or_prompt) &&
+    looksExecutable(step.command_or_prompt)
+  ) {
+    return `steps[${index}].command_or_prompt for an agentic step must be a prose prompt, not an executable command`;
+  }
   if (typeof step.is_prod_mutating !== 'boolean') {
     return `steps[${index}].is_prod_mutating must be a boolean`;
   }
@@ -352,6 +359,11 @@ export function validatePlaybook(
       errors.push(
         `steps[${i}].rollback_ref "${s.rollback_ref}" does not match any step id`,
       );
+    }
+  });
+  steps.forEach((s, i) => {
+    if (s.kind === 'agentic' && s.is_prod_mutating) {
+      errors.push(`steps[${i}].is_prod_mutating must not be true for an agentic step`);
     }
   });
   failureDiagnoses.forEach((d, i) => {

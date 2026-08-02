@@ -60,7 +60,32 @@ const PRE_RESTART_IDENTITY_EVENT = 'pre_restart_identity_captured';
  */
 export const IDENTITY_CAPTURE_INVALID = '<identity-capture-invalid>';
 
-export type AgenticVerdict = 'approved' | 'rejected';
+export type AgenticVerdict = 'approved' | 'rejected' | 'inconclusive';
+
+/**
+ * The `task_id` convention a dispatched agentic-step session is started
+ * under — `deploy-agentic:<runId>:<stepId>` — mirroring the gate-verifier's
+ * `gate-item:<id>` sentinel prefix (see sessionPredicates.ts's
+ * isGateVerifySession). Lets a spawner recognize an already-dispatched,
+ * still-live session for a given run/step (reattach on resume) without a
+ * separate mapping table.
+ */
+export const DEPLOY_AGENTIC_TASK_PREFIX = 'deploy-agentic:';
+
+export function buildDeployAgenticTaskId(runId: string, stepId: string): string {
+  return `${DEPLOY_AGENTIC_TASK_PREFIX}${runId}:${stepId}`;
+}
+
+/** Inverse of buildDeployAgenticTaskId; null when `taskId` isn't a deploy-agentic task. */
+export function parseDeployAgenticTaskId(
+  taskId: string | null | undefined,
+): { runId: string; stepId: string } | null {
+  if (!taskId || !taskId.startsWith(DEPLOY_AGENTIC_TASK_PREFIX)) return null;
+  const rest = taskId.slice(DEPLOY_AGENTIC_TASK_PREFIX.length);
+  const sep = rest.indexOf(':');
+  if (sep < 0) return null;
+  return { runId: rest.slice(0, sep), stepId: rest.slice(sep + 1) };
+}
 
 export interface ShellResult {
   ok: boolean;
@@ -577,6 +602,14 @@ export class DeployOrchestrator {
     verdict: AgenticVerdict,
     detail?: string,
   ): void {
+    const key = `${runId}:${stepId}`;
+    const resolve = this.pendingAgenticVerdicts.get(key);
+    if (!resolve) {
+      // The step already settled (e.g. a timeout fired first) — a late or
+      // duplicate report arriving after that must not append a second
+      // agentic_verdict event for the same step.
+      return;
+    }
     appendDeployRunEvent({
       runId,
       step: stepId,
@@ -585,12 +618,8 @@ export class DeployOrchestrator {
       detail: detail ?? null,
       at: this.now(),
     });
-    const key = `${runId}:${stepId}`;
-    const resolve = this.pendingAgenticVerdicts.get(key);
-    if (resolve) {
-      this.pendingAgenticVerdicts.delete(key);
-      resolve(verdict);
-    }
+    this.pendingAgenticVerdicts.delete(key);
+    resolve(verdict);
   }
 
   private async drive(
@@ -895,7 +924,9 @@ export class DeployOrchestrator {
           detail:
             verdict === 'approved'
               ? undefined
-              : 'agentic step verdict: rejected',
+              : verdict === 'rejected'
+                ? 'agentic step verdict: rejected'
+                : 'agentic step verdict: inconclusive',
         };
       }
 

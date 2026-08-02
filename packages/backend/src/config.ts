@@ -316,10 +316,18 @@ const DESIGN_MCP_TOOLS = [
 // require an explicit capability grant instead of living in this always-on
 // set. Not a staged-intent kind, so it isn't in PLANNING_INTENT_KINDS.ops —
 // added here explicitly.
+//
+// Plus deploy.verdict — the deploy-agentic-step spawner's verdict-reporting
+// tool (mcp/tools/verdictTools.ts), delivering an agentic deploy-playbook
+// step's approved/rejected/inconclusive finding straight to
+// DeployOrchestrator.reportAgenticVerdict(), never a staged intent an
+// operator disposes on. Added here explicitly for the same reason as
+// gateSeed.getState above: it isn't in PLANNING_INTENT_KINDS.ops.
 const OPS_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
   ...PLANNING_INTENT_KINDS.ops.map(orchestratorMcpToolName),
   orchestratorMcpToolName('gateSeed.getState'),
+  orchestratorMcpToolName('deploy.verdict'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
   ...TASK_READ_MCP_TOOLS,
   ...PROJECT_READ_MCP_TOOLS,

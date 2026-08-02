@@ -483,3 +483,58 @@ describe('AgentSession.recordGateVerifyDisposition', () => {
     expect(emitted).toHaveLength(2);
   });
 });
+
+// ── recordDeployAgenticVerdict ────────────────────────────────────────────────
+
+function makeDeployAgenticSession(taskId: string) {
+  const taskBackend = {
+    attachPR: vi.fn().mockResolvedValue(undefined),
+    getTask: vi.fn().mockResolvedValue(null),
+  };
+  return new AgentSession(
+    'deploy-sess-1',
+    'https://notion.so/task',
+    'https://notion.so/project',
+    taskBackend as never,
+    '/tmp/worktree',
+    taskId,
+    undefined,
+    undefined,
+    'ops',
+    undefined,
+    undefined,
+  );
+}
+
+describe('AgentSession.recordDeployAgenticVerdict', () => {
+  it('recovers runId/stepId from the session task_id and emits deploy_agentic_verdict — never a staged intent', () => {
+    const session = makeDeployAgenticSession('deploy-agentic:run-1:investigate');
+    const emitted: unknown[] = [];
+    session.on('deploy_agentic_verdict', (p) => emitted.push(p));
+
+    session.recordDeployAgenticVerdict({
+      verdict: 'approved',
+      detail: 'health check passed',
+    });
+
+    expect(stageIntent).not.toHaveBeenCalled();
+    expect(emitted).toEqual([
+      {
+        sessionId: 'deploy-sess-1',
+        projectId: '',
+        runId: 'run-1',
+        stepId: 'investigate',
+        verdict: 'approved',
+        detail: 'health check passed',
+      },
+    ]);
+  });
+
+  it('throws rather than emitting when the session was not dispatched for a deploy-agentic task', () => {
+    const session = makeDeployAgenticSession('gate-item:some-id');
+
+    expect(() =>
+      session.recordDeployAgenticVerdict({ verdict: 'rejected' }),
+    ).toThrow(/not a deploy-agentic task/);
+  });
+});
