@@ -597,7 +597,10 @@ export class PreReviewPipeline {
           logger.info(
             `[PreReviewPipeline] flaky-rerun analyze PR #${prNumber}: ${msg}`,
           ),
-        { maxRssMb: config.analyze_max_rss_mb, failFast: config.analyze_fail_fast },
+        {
+          maxRssMb: config.analyze_max_rss_mb,
+          failFast: config.analyze_fail_fast,
+        },
       );
 
       outputParts.push(result.output);

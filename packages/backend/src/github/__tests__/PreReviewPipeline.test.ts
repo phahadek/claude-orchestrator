@@ -1511,7 +1511,10 @@ describe('PreReviewPipeline.rerunFlakyAnalyze', () => {
       analyze: [
         {
           command: 'npm audit',
-          transient_output_patterns: ['ECONNRESET', 'registry\\.npmjs\\.org.*503'],
+          transient_output_patterns: [
+            'ECONNRESET',
+            'registry\\.npmjs\\.org.*503',
+          ],
         },
       ],
       analyze_timeout_sec: 300,

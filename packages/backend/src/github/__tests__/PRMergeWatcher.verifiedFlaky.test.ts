@@ -279,7 +279,9 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — same-SHA re-run actu
     vi.mocked(getPRByNumber).mockReturnValue(pr);
 
     await watcher.handleVerifiedFlakyDisposition(
-      makePayload({ disposition: { gate: 'analyze', reason: 'npm registry 503' } }),
+      makePayload({
+        disposition: { gate: 'analyze', reason: 'npm registry 503' },
+      }),
     );
 
     expect(
@@ -301,7 +303,9 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — same-SHA re-run actu
     vi.mocked(getPRByNumber).mockReturnValue(pr);
 
     await watcher.handleVerifiedFlakyDisposition(
-      makePayload({ disposition: { gate: 'analyze', reason: 'npm registry 503' } }),
+      makePayload({
+        disposition: { gate: 'analyze', reason: 'npm registry 503' },
+      }),
     );
 
     expect(
