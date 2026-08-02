@@ -30,7 +30,10 @@ import {
   configureGateItemMirrorSink,
   reconcileHumanObservationMirrors,
 } from '../gateReconciler.js';
-import { stageIntent, withdrawGateVerifyMirror } from '../../routes/stagedIntents.js';
+import {
+  stageIntent,
+  withdrawGateVerifyMirror,
+} from '../../routes/stagedIntents.js';
 
 beforeAll(() => {
   ProjectService.create({
@@ -175,7 +178,9 @@ describe('reconcileHumanObservationMirrors', () => {
     expect(liveMirrorRows()).toHaveLength(0);
 
     const row = db
-      .prepare('SELECT state, disposition_reason FROM staged_intent WHERE id = ?')
+      .prepare(
+        'SELECT state, disposition_reason FROM staged_intent WHERE id = ?',
+      )
       .get(result.retired[0]) as {
       state: string;
       disposition_reason: string | null;

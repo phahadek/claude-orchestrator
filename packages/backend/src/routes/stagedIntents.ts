@@ -3088,7 +3088,10 @@ export function withdrawIntent(
  * A no-op if the intent already left the withdrawable staged/approved
  * window (e.g. the operator applied it in the same tick this ran).
  */
-export function withdrawGateVerifyMirror(intentId: string, reason: string): void {
+export function withdrawGateVerifyMirror(
+  intentId: string,
+  reason: string,
+): void {
   const row = getStagedIntentRow(intentId);
   if (!row || !WITHDRAWABLE_STATES.includes(row.state)) return;
 
@@ -3308,7 +3311,9 @@ async function applyIntent(
         );
       }
       const evidence =
-        payload.origin === 'mirror' ? mirrorDisposition?.evidence : payload.evidence;
+        payload.origin === 'mirror'
+          ? mirrorDisposition?.evidence
+          : payload.evidence;
       const result: GateVerificationResult = {
         disposition,
         evidence,
@@ -4986,7 +4991,12 @@ export function createStagedIntentsRouter(
       const actorType: ApplyActorType =
         body?.actorType === 'session' ? 'session' : 'human';
 
-      const MIRROR_DISPOSITIONS = new Set(['pass', 'fail', 'needs-setup', 'deferred']);
+      const MIRROR_DISPOSITIONS = new Set([
+        'pass',
+        'fail',
+        'needs-setup',
+        'deferred',
+      ]);
       const mirrorDisposition =
         typeof body?.mirrorDisposition === 'string' &&
         MIRROR_DISPOSITIONS.has(body.mirrorDisposition)
