@@ -505,6 +505,83 @@ describe('reconcileGateRunnability', () => {
     expect(result.markedRunnable).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('open');
   });
+
+  it('stamps min_deployed_commit_at_fail server-side even when the caller passes a plain string evidence, matching the documented /gate skill contract', () => {
+    const item = makeItem();
+    mergeSource(item.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      evidence: 'the deploy script never wrote the new env var',
+    });
+
+    expect(getGateItem(item.id)?.state).toBe('fail');
+    const events = getGateItemDetail(item.id)?.events ?? [];
+    expect(events.at(-1)).toMatchObject({
+      disposition: 'fail',
+      evidence: 'the deploy script never wrote the new env var',
+      minDeployedCommitAtFail: getGateItem(item.id)?.minDeployedCommit,
+    });
+    expect(events.at(-1)?.minDeployedCommitAtFail).toBe('sha1');
+  });
+
+  it('does not auto-reopen a string-evidence fail on the very next tick when min_deployed_commit is unchanged', () => {
+    const item = makeItem();
+    mergeSource(item.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      evidence: 'observed broken behaviour',
+    });
+    expect(getGateItem(item.id)?.state).toBe('fail');
+
+    const result = reconcileGateRunnability('sha1', {
+      ancestrySource: orderedAncestry,
+    });
+
+    expect(result.reopened).toEqual([]);
+    expect(getGateItem(item.id)?.state).toBe('fail');
+    const events = getGateItemDetail(item.id)?.events ?? [];
+    expect(events.filter((e) => e.disposition === 'reopened')).toEqual([]);
+  });
+
+  it('reopens a string-evidence fail exactly once, fail -> open -> runnable, once min_deployed_commit genuinely advances', () => {
+    const item = makeItem();
+    mergeSource(item.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      evidence: 'observed broken behaviour',
+    });
+
+    setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
+    const result = reconcileGateRunnability('sha2', {
+      ancestrySource: orderedAncestry,
+    });
+
+    expect(result.reopened).toEqual([item.id]);
+    expect(getGateItem(item.id)?.state).toBe('runnable');
+    const events = getGateItemDetail(item.id)?.events ?? [];
+    expect(events.filter((e) => e.disposition === 'reopened')).toHaveLength(1);
+  });
+
+  it('does not auto-reopen a fail item whose min_deployed_commit is null', () => {
+    const item = makeItem({ sources: [] });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      evidence: 'observed broken behaviour',
+    });
+    expect(getGateItem(item.id)?.minDeployedCommit).toBeUndefined();
+    expect(getGateItem(item.id)?.state).toBe('fail');
+
+    const result = reconcileGateRunnability('sha1', {
+      ancestrySource: orderedAncestry,
+    });
+
+    expect(result.reopened).toEqual([]);
+    expect(getGateItem(item.id)?.state).toBe('fail');
+  });
 });
 
 describe('nextRunnableGateItems', () => {

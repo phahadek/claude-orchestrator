@@ -241,6 +241,7 @@ export function runMigrations(target: Database.Database): void {
       deploy_sha     TEXT,
       operator       TEXT,
       unattended     INTEGER,
+      min_deployed_commit_at_fail TEXT,
       at             TEXT    NOT NULL,
       FOREIGN KEY (gate_item_id) REFERENCES gate_item(id) ON DELETE CASCADE
     );
@@ -1715,4 +1716,20 @@ export function runMigrations(target: Database.Database): void {
         WHERE task_repo_assignments.task_id = audit_log.task_id
       );
   `);
+
+  // gate_item_event.min_deployed_commit_at_fail: stamped server-side (in
+  // gateStore.appendEvent) at write time for a `fail` disposition, from the
+  // item's own min_deployed_commit — never trusted from client-supplied
+  // evidence, which the /gate skill documents as a plain string and can't be
+  // relied on to carry this. reconcileGateRunnability's auto-reopen reads
+  // this column (via minDeployedCommitAtLastFail) instead of parsing
+  // evidence, so a fail only auto-reopens once min_deployed_commit has
+  // genuinely advanced past its value at fail-time.
+  try {
+    target.exec(
+      `ALTER TABLE gate_item_event ADD COLUMN min_deployed_commit_at_fail TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
 }

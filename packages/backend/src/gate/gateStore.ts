@@ -46,6 +46,12 @@ export interface GateItemEvent {
   operator?: string;
   /** true = a fully-unattended reconciler auto-launch verified this event; false = a manual dispatch; absent = not verifier-originated. */
   unattended?: boolean;
+  /**
+   * Stamped server-side by appendEvent (never trusted from the caller) when
+   * disposition is `fail`, from the item's own min_deployed_commit at write
+   * time. Absent for any other disposition.
+   */
+  minDeployedCommitAtFail?: string;
   at: string;
 }
 
@@ -106,6 +112,7 @@ export function getItem(id: string): GateItem | undefined {
       deploySha: e.deploy_sha ?? undefined,
       operator: e.operator ?? undefined,
       unattended: e.unattended === null ? undefined : e.unattended === 1,
+      minDeployedCommitAtFail: e.min_deployed_commit_at_fail ?? undefined,
       at: e.at,
     })),
   };
@@ -220,7 +227,14 @@ export function insertItem(input: NewGateItemInput): GateItem {
   return item;
 }
 
-/** Appends an immutable event (evidence carried by value, with provenance) to an item's history. */
+/**
+ * Appends an immutable event (evidence carried by value, with provenance) to
+ * an item's history. For a `fail` disposition, stamps
+ * min_deployed_commit_at_fail from the item's own min_deployed_commit at
+ * write time — server-side, regardless of what the caller's `evidence`
+ * contains, since the /gate skill's documented contract is a free-text
+ * string that can't be trusted to carry this.
+ */
 export function appendEvent(gateItemId: string, event: GateItemEvent): void {
   const row = getGateItem(gateItemId);
   if (!row) {
@@ -235,6 +249,8 @@ export function appendEvent(gateItemId: string, event: GateItemEvent): void {
     operator: event.operator ?? null,
     unattended:
       event.unattended === undefined ? null : event.unattended ? 1 : 0,
+    min_deployed_commit_at_fail:
+      event.disposition === 'fail' ? (row.min_deployed_commit ?? null) : null,
     at: event.at,
   });
   if (event.disposition !== undefined) {
@@ -328,6 +344,7 @@ export function setClassification(
     deploy_sha: null,
     operator: operator ?? null,
     unattended: null,
+    min_deployed_commit_at_fail: null,
     at: updatedAt,
   });
   recordEvent({

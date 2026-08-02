@@ -185,23 +185,19 @@ export interface ReconcileOptions {
 
 /**
  * The min_deployed_commit value in effect when the item's most recent `fail`
- * was recorded — stashed in that event's evidence by the reconciler
- * (processItem) at fail time. Distinguishes "already covered before it
- * failed" from "a follow-up source has since merged and pushed
- * min_deployed_commit forward" — the auto-reopen trigger below must only
- * fire on the latter.
+ * was recorded — stamped server-side onto that event by gateStore.appendEvent
+ * at write time (never trusted from client-supplied evidence, which the
+ * /gate skill documents as a free-text string). Distinguishes "already
+ * covered before it failed" from "a follow-up source has since merged and
+ * pushed min_deployed_commit forward" — the auto-reopen trigger below must
+ * only fire on the latter.
  */
 function minDeployedCommitAtLastFail(item: GateItem): string | null {
   const lastFail = [...item.events]
     .reverse()
     .find((e) => e.disposition === 'fail');
   if (!lastFail) return null;
-  const evidence = lastFail.evidence;
-  if (evidence && typeof evidence === 'object' && !Array.isArray(evidence)) {
-    const v = (evidence as Record<string, unknown>).minDeployedCommitAtFail;
-    if (typeof v === 'string') return v;
-  }
-  return null;
+  return lastFail.minDeployedCommitAtFail ?? null;
 }
 
 /**

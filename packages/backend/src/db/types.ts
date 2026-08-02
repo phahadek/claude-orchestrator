@@ -456,6 +456,8 @@ export interface GateItemEventRow {
   operator: string | null;
   /** 1 = a fully-unattended reconciler auto-launch verified this event; 0 = a manual dispatch; NULL = not verifier-originated. */
   unattended: number | null;
+  /** min_deployed_commit stamped server-side at write time when disposition is `fail` — see gateStore.appendEvent. NULL for any other disposition. */
+  min_deployed_commit_at_fail: string | null;
   at: string;
 }
 
