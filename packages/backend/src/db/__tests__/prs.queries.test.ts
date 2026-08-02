@@ -14,7 +14,11 @@ vi.mock('../db.js', async () => {
 });
 
 import { db } from '../db.js';
-import { getPRs, getApprovedOpenPRs, getApprovedLocalBranches } from '../queries.js';
+import {
+  getPRs,
+  getApprovedOpenPRs,
+  getApprovedLocalBranches,
+} from '../queries.js';
 
 const REPO = 'owner/repo';
 
@@ -261,7 +265,10 @@ describe('getApprovedLocalBranches', () => {
   it('does not treat "approved": false as approved', () => {
     insertLocalBranch({
       id: 3,
-      review_result: JSON.stringify({ verdict: 'needs_changes', approved: false }),
+      review_result: JSON.stringify({
+        verdict: 'needs_changes',
+        approved: false,
+      }),
     });
     expect(getApprovedLocalBranches()).toHaveLength(0);
   });
