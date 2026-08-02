@@ -2197,7 +2197,6 @@ describe('PRReviewService — verdict survives GitHub side-effect failure (#627)
   });
 });
 
-
 // ── Baseline escalation floor ────────────────────────────────────────────────
 
 describe('PRReviewService — baseline escalation floor', () => {

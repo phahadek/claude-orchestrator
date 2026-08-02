@@ -398,10 +398,7 @@ export class PRReviewService {
             prNumber,
             repo,
           );
-          const finalResult = this.applyBaselineEscalationFloor(
-            aiResult,
-            diff,
-          );
+          const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
           // Persist immediately after parse — before any side effects (GitHub/Notion).
           setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
           setLastReviewedSha(prNumber, repo, prData.headSha ?? null);

@@ -132,9 +132,7 @@ export class DepthReviewService {
       let taskBody = '';
       if (taskId) {
         try {
-          taskBody = await this.resolveBackend(projectId).fetchTaskPage(
-            taskId,
-          );
+          taskBody = await this.resolveBackend(projectId).fetchTaskPage(taskId);
         } catch (e) {
           logger.warn(
             `[DepthReviewService] fetchTaskPage failed for PR #${prNumber} (task ${taskId}): ${e}`,
@@ -254,9 +252,7 @@ ${DEPTH_REVIEW_JSON_SCHEMA_BLOCK}`;
    * PRReviewService.waitForVerdict but tolerant of a missing/unparseable
    * verdict — resolves null (never throws) so the caller can fail open.
    */
-  private waitForVerdict(
-    sessionId: string,
-  ): Promise<{
+  private waitForVerdict(sessionId: string): Promise<{
     verdict: string;
     dimensions: DepthReviewDimension[];
     summary: string;
@@ -349,7 +345,9 @@ ${DEPTH_REVIEW_JSON_SCHEMA_BLOCK}`;
     const candidate = this.extractJsonCandidate(text.trim());
     if (!candidate) return null;
     const repaired = candidate.replace(/,(\s*[}\]])/g, '$1');
-    return this.parseVerdictObject(candidate) ?? this.parseVerdictObject(repaired);
+    return (
+      this.parseVerdictObject(candidate) ?? this.parseVerdictObject(repaired)
+    );
   }
 
   private parseVerdictObject(json: string): {
