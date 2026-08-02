@@ -4743,10 +4743,7 @@ export function createStagedIntentsRouter(
       let canonicalMilestone = milestone;
       if (milestone !== UNATTRIBUTED_MILESTONE_BUCKET) {
         try {
-          canonicalMilestone = resolveMilestoneForProject(
-            projectId,
-            milestone,
-          );
+          canonicalMilestone = resolveMilestoneForProject(projectId, milestone);
         } catch (err) {
           if (err instanceof UnknownMilestoneError) {
             res.status(400).json({ error: err.message });

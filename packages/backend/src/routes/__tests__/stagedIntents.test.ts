@@ -23,7 +23,10 @@ import {
   UNATTRIBUTED_MILESTONE_BUCKET,
 } from '../../db/queries';
 import type { StagedIntentRow } from '../../db/types';
-import { createStagedIntentsRouter, setStagedIntentBroadcast } from '../stagedIntents';
+import {
+  createStagedIntentsRouter,
+  setStagedIntentBroadcast,
+} from '../stagedIntents';
 
 const M13 = {
   id: 'ms-uuid-13',

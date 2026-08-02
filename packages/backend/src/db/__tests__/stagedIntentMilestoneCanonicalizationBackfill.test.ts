@@ -97,7 +97,13 @@ describe('staged_intent.milestone canonicalization backfill', () => {
     // canonical_short_id equal to its own name, exercising this migration's
     // COALESCE(canonical_short_id, name) fallback with the same value on
     // both sides.
-    seedProjectAndMilestone(db, 'proj-1', 'ms-uuid-14', 'Sprint Fourteen', null);
+    seedProjectAndMilestone(
+      db,
+      'proj-1',
+      'ms-uuid-14',
+      'Sprint Fourteen',
+      null,
+    );
     seedStagedIntent(db, 'intent-3', 'proj-1', 'ms-uuid-14');
 
     runMigrations(db);
@@ -134,7 +140,7 @@ describe('staged_intent.milestone canonicalization backfill', () => {
     expect(row.milestone).toBeNull();
   });
 
-  it('leaves a value that matches no known milestone in the row\'s project untouched', () => {
+  it("leaves a value that matches no known milestone in the row's project untouched", () => {
     const db = freshDb();
     seedProjectAndMilestone(db, 'proj-1', 'ms-uuid-13', 'M13 full name', 'M13');
     seedStagedIntent(db, 'intent-6', 'proj-1', 'some-other-projects-milestone');
