@@ -1234,6 +1234,53 @@ describe('assemblePlanningProcedure', () => {
     expect(output).toContain('Do the thing body.');
   });
 
+  it('labels the Binding constraints line as a separate, non-dereferenceable id space', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+    const bindingLine = output
+      .split('\n')
+      .find((line) => line.startsWith('- Binding constraints'));
+    expect(bindingLine).toBeDefined();
+    expect(bindingLine).toContain('constraint-a');
+    expect(bindingLine).toMatch(/not dereferenceable/i);
+    expect(bindingLine).toMatch(/architecture_getUnit/);
+  });
+
+  it('states on the Arch-store-selected units line that the parenthesised value is the arch_unit id for architecture.getUnit', () => {
+    const result = fixtureGroomLoadResult();
+    result.archSource = 'store';
+    result.targetTasks[0].archSource = 'store';
+    result.targetTasks[0].archUnits = [
+      { id: 'unit-1', title: 'Selective injection contract', body: 'Body.' },
+    ];
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(result, 'task-1'),
+      },
+    });
+    const archUnitsLine = output
+      .split('\n')
+      .find((line) => line.startsWith('- Arch-store-selected units'));
+    expect(archUnitsLine).toBeDefined();
+    expect(archUnitsLine).toContain('Selective injection contract (unit-1)');
+    expect(archUnitsLine).toMatch(/arch_unit id/i);
+    expect(archUnitsLine).toMatch(/architecture_getUnit/);
+  });
+
   it('inlines the full body of each store-sourced arch unit in the groom digest, not just its title', () => {
     const result = fixtureGroomLoadResult();
     result.archSource = 'store';
@@ -1464,6 +1511,7 @@ describe('assemblePlanningProcedure', () => {
     expect(output).toContain(
       orchestratorMcpToolName('architecture.queryUnits'),
     );
+    expect(output).toMatch(/arch_unit id/i);
   });
 
   it('the ops digest section carries the journal entry and task classification only', () => {
