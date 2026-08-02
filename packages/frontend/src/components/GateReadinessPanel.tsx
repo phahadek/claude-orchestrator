@@ -557,7 +557,9 @@ export function GateReadinessPanel({
           (classificationFilter as GateItemClassification) || undefined,
         runnable: runnableFilter === '' ? undefined : runnableFilter === 'true',
         awaitingSetup:
-          awaitingSetupFilter === '' ? undefined : awaitingSetupFilter === 'true',
+          awaitingSetupFilter === ''
+            ? undefined
+            : awaitingSetupFilter === 'true',
         order: stateFilter === '' ? 'not-done-first' : undefined,
         page,
         limit: PAGE_SIZE,
