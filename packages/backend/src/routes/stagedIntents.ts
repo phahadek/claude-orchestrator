@@ -575,18 +575,20 @@ function hasGroupAccretionIntent(
 }
 
 /**
- * The group's live gate.accrete payload for this task, when one is staged —
- * used by the strip⇔accrete content-match precheck to read the actual
- * accreted item texts (visible in the staged payload before the real
- * accretion has necessarily landed), the same "both sides visible in the
- * proposed group" read hasGroupAccretionIntent's ACTIVE-state lookup already
- * relies on.
+ * The group's live gate.accrete row for this task, when one is staged — used
+ * by the strip⇔accrete content-match precheck to read the actual accreted
+ * item texts (visible in the staged payload before the real accretion has
+ * necessarily landed), the same "both sides visible in the proposed group"
+ * read hasGroupAccretionIntent's ACTIVE-state lookup already relies on.
+ * Returns the row itself (not just its payload) so a clean match can also
+ * drive the mechanical-intent auto-grant (see autoApproveAccretionRow),
+ * which needs the row's id/state to transition it.
  */
-function getGroupGateAccretePayload(
+function getGroupGateAccreteRow(
   groupId: string,
   taskId: string,
-): GateAccretePayload | undefined {
-  const row = listStagedIntentsByGroup(groupId).find((r) => {
+): StagedIntentRow | undefined {
+  return listStagedIntentsByGroup(groupId).find((r) => {
     if (
       r.kind !== 'gate.accrete' ||
       !GROUP_COMPLETENESS_ACTIVE.includes(r.state)
@@ -595,19 +597,18 @@ function getGroupGateAccretePayload(
     }
     return extractTaskId('gate.accrete', JSON.parse(r.payload)) === taskId;
   });
-  return row ? (JSON.parse(row.payload) as GateAccretePayload) : undefined;
 }
 
 /**
- * The seed.stage twin of getGroupGateAccretePayload — the group's live
- * seed.stage payload for this task, when one is staged, used by the
+ * The seed.stage twin of getGroupGateAccreteRow — the group's live
+ * seed.stage row for this task, when one is staged, used by the
  * seed_contribution content-match precheck.
  */
-function getGroupSeedStagePayload(
+function getGroupSeedStageRow(
   groupId: string,
   taskId: string,
-): SeedStagePayload | undefined {
-  const row = listStagedIntentsByGroup(groupId).find((r) => {
+): StagedIntentRow | undefined {
+  return listStagedIntentsByGroup(groupId).find((r) => {
     if (
       r.kind !== 'seed.stage' ||
       !GROUP_COMPLETENESS_ACTIVE.includes(r.state)
@@ -616,7 +617,6 @@ function getGroupSeedStagePayload(
     }
     return extractTaskId('seed.stage', JSON.parse(r.payload)) === taskId;
   });
-  return row ? (JSON.parse(row.payload) as SeedStagePayload) : undefined;
 }
 
 /** The exact heading text bodyRender.ts writes for the section (see bodyRender.ts:298,463). */
@@ -930,6 +930,7 @@ export interface StagedIntent {
     | { blocked: true; violations: ReadinessViolation[] }
     | { blocked: true; reasons: string[] }
     | { autoRejected: true }
+    | { autoApproved: true }
     | null;
   /**
    * Correlates multiple intents that form one structural-change unit (e.g. a
@@ -1949,7 +1950,7 @@ export async function validateAndNormalizeTaskReferences(
   // below so it converges with a sibling task.setStatus's now-normalized
   // taskId in the same group (the strip<->accrete content-match precheck
   // correlates the two by exact string equality — see
-  // getGroupGateAccretePayload/getGroupSeedStagePayload).
+  // getGroupGateAccreteRow/getGroupSeedStageRow).
   if (
     (kind === 'gate.accrete' || kind === 'seed.stage') &&
     payload &&
@@ -4053,6 +4054,7 @@ async function verifyGroup(
   }
 
   const errors: string[] = [];
+  const matchedAccretionRowIds: string[] = [];
   for (const row of members) {
     const checked = await runStageTimeReadyChecks(rowToApi(row));
     const detail = describeBlockedAnnotation(checked.annotation);
@@ -4062,15 +4064,14 @@ async function verifyGroup(
 
     if (isArmingReadyIntent(row)) {
       const payload = JSON.parse(row.payload) as SetStatusPayload;
-      const failure = await checkGroupArmingIntentCompleteness(
-        groupId,
-        row,
-        payload,
-      );
+      const { failure, matchedAccretionRowIds: matched } =
+        await checkGroupArmingIntentCompleteness(groupId, row, payload);
       if (failure) {
         errors.push(
           `${row.kind} (${row.task_id ?? row.id}): ${describeGroupCompletenessFailure(failure)}`,
         );
+      } else {
+        matchedAccretionRowIds.push(...matched);
       }
     }
   }
@@ -4078,6 +4079,16 @@ async function verifyGroup(
   if (errors.length === 0) {
     for (const row of members) {
       broadcastIntentChange(rowToApi(transitionStagedIntent(row.id, 'staged')));
+    }
+    // Auto-grant: a gate.accrete/seed.stage sibling whose content-match just
+    // verified clean is approved now, before the group is ever surfaced to
+    // the operator — see autoApproveAccretionRow. Run only once the whole
+    // group is known clean (errors.length === 0) and after every member has
+    // already landed back in `staged`, so a group that fails elsewhere never
+    // leaves one member auto-approved ahead of its still-blocked siblings.
+    for (const rowId of matchedAccretionRowIds) {
+      const accretionRow = getStagedIntentRow(rowId);
+      if (accretionRow) autoApproveAccretionRow(accretionRow);
     }
     groupRevisionRounds.delete(groupId);
     // Advisory-only: never awaited into the gate. classifyReadyProposal
@@ -4211,6 +4222,21 @@ function describeGroupCompletenessFailure(
 }
 
 /**
+ * Result of checkGroupArmingIntentCompleteness: `failure` is unchanged (null
+ * on a complete group), `matchedAccretionRowIds` additionally names every
+ * gate.accrete/seed.stage sibling row whose strip⇔accrete content-match
+ * verified clean this pass — architecture unit "Mechanical intent kinds may
+ * auto-grant on a verified content-match, never on kind name alone" — for
+ * the caller to auto-grant once it knows the whole group is otherwise clean
+ * (see autoApproveAccretionRow). Always empty when `failure` is non-null:
+ * a match is only ever recorded once its own check has already passed.
+ */
+interface GroupArmingCompletenessResult {
+  failure: GroupCompletenessFailure | null;
+  matchedAccretionRowIds: string[];
+}
+
+/**
  * Per-arming-intent group-completeness check: re-derives, for a single
  * task.setStatus -> Ready intent in a group, whether every mandatory sibling
  * member it depends on has actually been staged — the setDependsOn write
@@ -4219,28 +4245,39 @@ function describeGroupCompletenessFailure(
  * requires it), and finally the grooming promotion gate itself. Shared by
  * precheckGroupCommit (commit time, the final authority) and verifyGroup
  * (turn-end, so an incomplete group is caught before it ever surfaces to the
- * operator) — a pure read with no side effects, so each caller controls its
- * own annotation/broadcast/response shape.
+ * operator). Otherwise a pure read — the one side effect is reporting a
+ * verified content-match via `matchedAccretionRowIds`; actually transitioning
+ * those rows is left to the caller (see GroupArmingCompletenessResult), which
+ * controls its own annotation/broadcast/response shape.
  */
 async function checkGroupArmingIntentCompleteness(
   groupId: string,
   row: StagedIntentRow,
   payload: SetStatusPayload,
-): Promise<GroupCompletenessFailure | null> {
+): Promise<GroupArmingCompletenessResult> {
+  const matchedAccretionRowIds: string[] = [];
+  const fail = (
+    failure: GroupCompletenessFailure,
+  ): GroupArmingCompletenessResult => ({ failure, matchedAccretionRowIds });
+
   if (!hasGroupDependsOn(groupId, payload.taskId)) {
-    return { kind: 'dependsOn', taskId: payload.taskId };
+    return fail({ kind: 'dependsOn', taskId: payload.taskId });
   }
 
   if (
     payload.groomingGate?.hasManualVerificationSection &&
     !hasGroupManualVerificationStrip(groupId, payload.taskId)
   ) {
-    return { kind: 'manualVerificationStrip', taskId: payload.taskId };
+    return fail({ kind: 'manualVerificationStrip', taskId: payload.taskId });
   }
 
   if (payload.groomingGate?.hasManualVerificationSection) {
-    const gatePayload = getGroupGateAccretePayload(groupId, payload.taskId);
+    const gateRow = getGroupGateAccreteRow(groupId, payload.taskId);
+    const gatePayload = gateRow
+      ? (JSON.parse(gateRow.payload) as GateAccretePayload)
+      : undefined;
     if (
+      gateRow &&
       gatePayload &&
       gatePayload.classification !== 'none' &&
       gatePayload.classification !== 'n/a'
@@ -4255,18 +4292,22 @@ async function checkGroupArmingIntentCompleteness(
         accretedItems,
       );
       if (!match.ok) {
-        return {
+        return fail({
           kind: 'gateContribution',
           taskId: payload.taskId,
           reasons: match.reasons,
-        };
+        });
       }
+      matchedAccretionRowIds.push(gateRow.id);
     }
   }
 
   if (payload.groomingGate?.seedContributionCandidates?.length) {
-    const seedPayload = getGroupSeedStagePayload(groupId, payload.taskId);
-    if (seedPayload && seedPayload.decision === 'seeds') {
+    const seedRow = getGroupSeedStageRow(groupId, payload.taskId);
+    const seedPayload = seedRow
+      ? (JSON.parse(seedRow.payload) as SeedStagePayload)
+      : undefined;
+    if (seedRow && seedPayload && seedPayload.decision === 'seeds') {
       const strippedItems = payload.groomingGate.seedContributionCandidates.map(
         (c) => c.spec,
       );
@@ -4277,12 +4318,13 @@ async function checkGroupArmingIntentCompleteness(
         accretedItems,
       );
       if (!match.ok) {
-        return {
+        return fail({
           kind: 'seedContribution',
           taskId: payload.taskId,
           reasons: match.reasons,
-        };
+        });
       }
+      matchedAccretionRowIds.push(seedRow.id);
     }
   }
 
@@ -4305,14 +4347,56 @@ async function checkGroupArmingIntentCompleteness(
     row.project_id,
   );
   if (!gateResult.allowed) {
-    return {
+    return fail({
       kind: 'groomingGate',
       taskId: payload.taskId,
       reasons: gateResult.reasons,
-    };
+    });
   }
 
-  return null;
+  return { failure: null, matchedAccretionRowIds };
+}
+
+/**
+ * Grants a gate.accrete/seed.stage row the "Mechanical intent kinds may
+ * auto-grant on a verified content-match, never on kind name alone"
+ * transition — staged/pending_verification -> approved — the moment
+ * checkGroupArmingIntentCompleteness has verified its content-match clean.
+ * Tags the row `annotation: {autoApproved: true}` (mirroring the existing
+ * `{autoRejected: true}` reject-path shape — see transitionRejectedIntent)
+ * and records a staged_intent_disposition audit event with the same
+ * `provenance: 'auto'` vocabulary capabilityRequestDisposition already
+ * defines for the session.requestCapability auto-approve path. Idempotent —
+ * a row already `approved` (or anywhere else) is left untouched, so a caller
+ * can call this defensively without checking state first. Never bypasses
+ * group commit: the row lands in the same `approved` state an operator's
+ * approve leaves it in, still waiting on the rest of its group to commit
+ * atomically.
+ */
+function autoApproveAccretionRow(row: StagedIntentRow): void {
+  let current = row;
+  if (current.state === 'pending_verification') {
+    current = transitionStagedIntent(current.id, 'staged');
+  }
+  if (current.state !== 'staged') return;
+
+  const approved = transitionStagedIntent(current.id, 'approved', {
+    annotation: JSON.stringify({ autoApproved: true }),
+  });
+  broadcastIntentChange(rowToApi(approved));
+
+  recordEvent({
+    event_type: 'staged_intent_disposition',
+    actor_type: 'system',
+    actor_id: null,
+    project_id: approved.project_id,
+    task_id: approved.task_id,
+    payload: {
+      intentId: approved.id,
+      disposition: 'auto_approved',
+      provenance: 'auto',
+    },
+  });
 }
 
 /**
@@ -4344,11 +4428,8 @@ async function precheckGroupCommit(
     if (!isArmingReadyIntent(row)) continue;
     const payload = JSON.parse(row.payload) as SetStatusPayload;
 
-    const failure = await checkGroupArmingIntentCompleteness(
-      groupId,
-      row,
-      payload,
-    );
+    const { failure, matchedAccretionRowIds } =
+      await checkGroupArmingIntentCompleteness(groupId, row, payload);
     if (failure) {
       if (
         failure.kind === 'dependsOn' ||
@@ -4375,6 +4456,14 @@ async function precheckGroupCommit(
           precheck: true,
         },
       };
+    }
+    // Defense-in-depth twin of verifyGroup's own auto-grant: covers the
+    // opts.autoApprove (approve-by-standard) commit path, which never routes
+    // through verifyGroup at all, so a gate.accrete/seed.stage sibling
+    // reaching this precheck still `staged` gets the same auto-grant here.
+    for (const rowId of matchedAccretionRowIds) {
+      const accretionRow = getStagedIntentRow(rowId);
+      if (accretionRow) autoApproveAccretionRow(accretionRow);
     }
 
     if (!readinessOverrideWouldApply(payload, opts)) {
