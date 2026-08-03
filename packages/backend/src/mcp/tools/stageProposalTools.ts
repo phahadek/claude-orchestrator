@@ -210,7 +210,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a cosmetic task property change',
       description:
-        'Stages a task.setProperties intent — Priority and Task Name only; Status/Type/Depends On have their own tools.',
+        'Stages a task.setProperties intent — Priority and Task Name only; Status/Depends On/Type have their own tools.',
       inputSchema: envelope({
         taskId: z.string(),
         patch: z.object({
@@ -220,6 +220,20 @@ export function registerStageProposalTools(
       }),
     },
     async (args) => stage('task.setProperties', args.payload, ctx, args),
+  );
+
+  registerTool(
+    'task.setType',
+    {
+      title: 'Stage a task Type change',
+      description:
+        'Stages a task.setType intent — a retype to another Type in the closed vocabulary (Code/Design/Operational/Investigation). HUMAN_APPLY_ONLY: staged for operator disposition, never applied by a session.',
+      inputSchema: envelope({
+        taskId: z.string(),
+        type: taskTypeSchema,
+      }),
+    },
+    async (args) => stage('task.setType', args.payload, ctx, args),
   );
 
   registerTool(

@@ -165,6 +165,15 @@ describe('planning workflow --allowed-tools parity with PLANNING_INTENT_KINDS', 
     expect(OPS_ALLOWED_TOOLS).toContain(tool);
   });
 
+  it('groom session allow-list grants the CLI-sanitized task_setType tool, and only groom', () => {
+    const tool = orchestratorMcpToolName('task.setType');
+    expect(tool).toBe('mcp__orchestrator__task_setType');
+    expect(PLANNING_INTENT_KINDS.groom).toContain('task.setType');
+    expect(GROOM_ALLOWED_TOOLS).toContain(tool);
+    expect(DESIGN_ALLOWED_TOOLS).not.toContain(tool);
+    expect(OPS_ALLOWED_TOOLS).not.toContain(tool);
+  });
+
   it('groom/design/ops session allow-lists grant the CLI-sanitized task_patchBodySection tool', () => {
     const tool = orchestratorMcpToolName('task.patchBodySection');
     expect(GROOM_ALLOWED_TOOLS).toContain(tool);
