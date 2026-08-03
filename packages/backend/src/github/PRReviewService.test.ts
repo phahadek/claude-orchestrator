@@ -1369,6 +1369,50 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     expect(result.verdict).toBe('approved');
   });
 
+  it('surfaces an unconfirmed follow-up delivery to a live review session instead of dropping it silently', async () => {
+    const prRowWithLiveSession = {
+      ...mockPRRow,
+      review_session_id: 'existing-review-session-id',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const sendMock = mockSM.send as ReturnType<typeof vi.fn>;
+    sendMock.mockImplementationOnce(() => {
+      setImmediate(() =>
+        mockSM.emit(
+          'message',
+          makeSessionEventMessage(
+            'existing-review-session-id',
+            JSON.stringify(claudePayload),
+          ),
+        ),
+      );
+      return false;
+    });
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_nudge_delivery_failed',
+        actor_id: 'existing-review-session-id',
+      }),
+    );
+  });
+
   it('resumes a dead-but-resumable review session via sendOrResume (Case 2)', async () => {
     const prRowWithDeadSession = {
       ...mockPRRow,

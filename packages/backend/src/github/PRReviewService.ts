@@ -336,7 +336,26 @@ export class PRReviewService {
           '```',
           REVIEW_JSON_SCHEMA_BLOCK,
         ].join('\n');
-        this.sessionManager.send(existingReviewSessionId, followUp);
+        const delivered = this.sessionManager.send(
+          existingReviewSessionId,
+          followUp,
+        );
+        if (!delivered) {
+          logger.warn(
+            `[PRReviewService] follow-up not confirmed delivered to review session ${existingReviewSessionId} for PR #${prNumber}`,
+          );
+          recordEvent({
+            event_type: 'session_nudge_delivery_failed',
+            actor_type: 'system',
+            actor_id: existingReviewSessionId,
+            payload: {
+              session_id: existingReviewSessionId,
+              pr_number: prNumber,
+              repo,
+              reason: 'pr_review_followup',
+            },
+          });
+        }
         const aiResult = await verdictPromise;
         const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
         // Persist immediately after parse — before any side effects (GitHub/Notion).

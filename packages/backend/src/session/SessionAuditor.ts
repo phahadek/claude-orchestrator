@@ -28,7 +28,8 @@ export interface SessionAudit {
 
 /** Minimal interface used to route audit failures back to a live session. */
 export interface ISessionManager {
-  send(sessionId: string, message: string): void;
+  /** Returns true if the write was confirmed to reach the session's underlying process. */
+  send(sessionId: string, message: string): boolean;
   /** Returns true when a live process is running for the given session id. */
   isAlive(sessionId: string): boolean;
   /** Register a Promise that resolves when the post-revert worktree sync completes.

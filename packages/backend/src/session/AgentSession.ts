@@ -1176,7 +1176,24 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       'for manual attention.';
     if (this.sessionManager) {
       try {
-        this.sessionManager.send(this.sessionId, pauseMessage);
+        const delivered = this.sessionManager.send(
+          this.sessionId,
+          pauseMessage,
+        );
+        if (!delivered) {
+          logger.warn(
+            `[AgentSession] pause nudge not confirmed delivered for ${this.sessionId}`,
+          );
+          recordEvent({
+            event_type: 'session_nudge_delivery_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            payload: {
+              session_id: this.sessionId,
+              reason: 'api_overloaded_exhausted',
+            },
+          });
+        }
       } catch (err) {
         logger.warn(
           `[AgentSession] send failed for ${this.sessionId}: ${(err as Error).message}`,
@@ -1206,7 +1223,21 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     if (this.sessionManager) {
       try {
-        this.sessionManager.send(this.sessionId, pauseMessage);
+        const delivered = this.sessionManager.send(
+          this.sessionId,
+          pauseMessage,
+        );
+        if (!delivered) {
+          logger.warn(
+            `[AgentSession] pause nudge not confirmed delivered for ${this.sessionId}`,
+          );
+          recordEvent({
+            event_type: 'session_nudge_delivery_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            payload: { session_id: this.sessionId, reason: 'api_overloaded' },
+          });
+        }
       } catch (err) {
         logger.warn(
           `[AgentSession] send failed for ${this.sessionId}: ${(err as Error).message}`,

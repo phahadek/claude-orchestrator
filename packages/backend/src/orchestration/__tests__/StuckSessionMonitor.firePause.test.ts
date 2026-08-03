@@ -23,25 +23,30 @@ vi.mock('../../db/queries.js', () => ({
   getSessionLastActivityMs: vi.fn().mockReturnValue(null),
 }));
 
+vi.mock('../../audit/AuditLog', () => ({
+  recordEvent: vi.fn(),
+}));
+
 import {
   getPRBySessionId,
   insertPauseInterval,
   getSession,
 } from '../../db/queries.js';
+import { recordEvent } from '../../audit/AuditLog';
 import { StuckSessionMonitor } from '../StuckSessionMonitor.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function makeSessionManager() {
+function makeSessionManager(sendResult = true) {
   return {
     on: vi.fn(),
-    send: vi.fn(),
+    send: vi.fn().mockReturnValue(sendResult),
   } as unknown as import('../../session/SessionManager').SessionManager;
 }
 
-function makeMonitor() {
+function makeMonitor(sendResult = true) {
   const broadcast = vi.fn();
-  const sessionManager = makeSessionManager();
+  const sessionManager = makeSessionManager(sendResult);
   const monitor = new StuckSessionMonitor(sessionManager, broadcast);
   return { monitor, broadcast, sessionManager };
 }
@@ -118,6 +123,33 @@ describe('StuckSessionMonitor.firePause', () => {
       expect.objectContaining({
         type: 'stuck_session_paused',
         sessionId: 'sess-live',
+      }),
+    );
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'stuck_session_pause_delivery_failed',
+      }),
+    );
+  });
+
+  it('surfaces an unconfirmed delivery instead of silently dropping the pause nudge', () => {
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'sess-unconfirmed',
+    } as never);
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    const { monitor, sessionManager } = makeMonitor(false);
+    seedTimerState(monitor, 'sess-unconfirmed');
+
+    expect(() => callFirePause(monitor, 'sess-unconfirmed')).not.toThrow();
+
+    expect(sessionManager.send).toHaveBeenCalledWith(
+      'sess-unconfirmed',
+      expect.any(String),
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'stuck_session_pause_delivery_failed',
+        actor_id: 'sess-unconfirmed',
       }),
     );
   });
