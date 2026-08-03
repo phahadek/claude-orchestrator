@@ -9,42 +9,43 @@ A local web dashboard for browsing, managing, and orchestrating [Claude Code](ht
 - Browse, search, and filter Claude Code session history with full message timelines
 - Switch between multiple repos, each with its own task board and session lifecycle
 - Watch sessions in real time with live token usage and per-model cost estimates
-- Dispatch coding tasks from Notion (or local YAML), with automated PR review and lifecycle management
+- Dispatch coding tasks from Notion, GitHub Issues, Jira, or local YAML, with automated PR review and lifecycle management
 - Monitor pull requests — verdicts, merge state, conflict detection — without leaving the dashboard
+- Run dispatched planning sessions (grooming, design, ops, docs) that propose task and architecture changes as staged intents for a human to approve, rather than writing directly
 
 ## Design highlights
 
-- **Four-tier permission engine** — every tool call passes through hard-deny patterns, hard-allow patterns, user rules stored in SQLite, and finally escalation to the UI. Stateless, ~140 lines, glob or regex match per rule.
+- **Deny-by-default tool permissions** — every tool call is checked against a spawn-time `--allowed-tools` allowlist assembled per session (a base set plus per-project `.claude-orchestrator.yml` overrides). A call that isn't on the list is denied and logged, not escalated to a UI prompt — there is no runtime permission-rule store or approval queue.
 - **Persistent review sessions** — each PR gets one review session that stays alive for the PR's lifetime. Re-reviews are follow-up messages on the same session, not respawns, so the reviewer accumulates context across iterations.
-- **Backend owns the lifecycle** — task status (`In Progress` → `In Review` → `Done`), session start/stop, and PR-to-task linkage are managed server-side. Sessions are explicitly told not to update Notion themselves; the orchestrator does it.
+- **Backend owns the lifecycle; sessions write through staged intents** — task status (`In Progress` → `In Review` → `Done`), session start/stop, and PR-to-task linkage are managed server-side. A dispatched planning session originates task and architecture writes as staged intents through the orchestrator's own MCP tool surface; a human (or, for a narrow set of kinds, another session) dispositions each one before it's applied.
 - **Event-driven review-merge loop** — push detection from `git push` tool calls, verdict parsed from the review session's event stream. No GitHub API polling except a single 5-minute fallback for PRs merged directly on GitHub.
 - **Per-model token and cost tracking** — Opus, Sonnet, and Haiku pricing baked in (input + output per-million rates). Live cost estimates per session and aggregated per project.
-- **Bootstrapped** — built using itself across ~500 commits and three shipped milestones (read-only session browser → multi-project orchestration → automated review and lifecycle), then used to ship three other projects.
+- **Milestone convergence and the Manual Verification Gate** — a per-milestone readiness rollup combines gate, config-seed, and ops signals into one "converged" view; the gate itself tracks each milestone-end verification item through its own runnable/disposition lifecycle, run interactively via the `/gate` skill.
+- **Bootstrapped** — built using itself across 1,700+ commits and thirteen shipped milestones (read-only session browser → multi-project orchestration → automated review and lifecycle → enterprise adoption and GitHub/Jira task sources → architectural debt paydown → orchestrator-owned planning and the staged-intent decision surface → milestone convergence and auto-dispatch), then used to ship three other projects.
 
 ## Quick taste
 
-A real excerpt from `packages/backend/src/permissions/PermissionEngine.ts`:
+The permission model, real excerpts from `packages/backend/src/config.ts` and `ApiSessionRunner.ts`:
 
 ```ts
-const HARD_DENY = [
-  'Bash *rm -rf*',
-  'Bash *git push --force*main*',
-  'Bash *chmod -R 777*',
+// A base allowlist, extended per project by .claude-orchestrator.yml:
+export const ALLOWED_TOOLS = [
+  'Bash(git:*)', 'Bash(npm:*)', 'Bash(npx:*)', 'Bash(node:*)', 'Bash(tsc:*)',
+  'Bash(find:*)', 'Bash(grep:*)', /* … */
 ];
-const HARD_ALLOW = [
-  'Read *',
-  'Bash *git status*',
-  'Bash *npx tsc*',
-  'Bash *npm run *',
-];
-// 1. hard-deny → 2. hard-allow → 3. user rules from SQLite → 4. escalate to UI
+
+// canUseTool only fires for calls NOT already covered by allowedTools — deny them.
+canUseTool: async (toolName, input) => ({
+  behavior: 'deny',
+  message: `Tool '${toolName}' is not in the allowed tools list`,
+});
 ```
 
-User rules live in the `permission_rules` SQLite table, ordered by `order_index`, glob or regex, allow or deny. The first match wins.
+There is no user-editable rule store and no escalate-to-UI tier: a call is either pre-approved by the spawn-time allowlist, or it's denied and logged to `permission_denials`.
 
 ## How it works
 
-When you click **Dispatch**, the backend spawns one Claude CLI subprocess per selected task — each in its own git worktree under `.claude/worktrees/<sessionId>` — and streams the JSONL event output back over WebSocket. The Notion task is moved to `In Progress` server-side. Every tool call the session attempts is intercepted by the permission engine; matched calls run, unmatched calls suspend the session and surface in the attention queue. When the session opens a PR, a paired persistent review session is spawned, parses a verdict from its own event stream, and either approves the PR or sends findings back to the originating session as a follow-up message — and the loop continues until the PR is merged.
+When you click **Dispatch**, the backend spawns one Claude session per selected task — CLI subprocess, Agent SDK (API mode), or a sandboxed Docker container, three interchangeable `ISessionRunner` implementations (`CliSessionRunner`, `ApiSessionRunner`, `DockerSessionRunner`) — each in its own git worktree under `.claude/worktrees/<sessionId>`, and streams the event output back over WebSocket. The task is moved to `In Progress` server-side. Every tool call the session attempts is checked against its spawn-time allowlist; unmatched calls are denied and logged, not escalated. When the session opens a PR, a paired persistent review session is spawned, parses a verdict from its own event stream, and either approves the PR or sends findings back to the originating session as a follow-up message — and the loop continues until the PR is merged.
 
 ```mermaid
 sequenceDiagram
@@ -56,8 +57,8 @@ sequenceDiagram
 
     U->>D: Dispatch task
     D->>C: Spawn (worktree + CLAUDE.md injected)
-    D->>D: Notion task → In Progress
-    C-->>D: tool calls (via permission engine)
+    D->>D: Task → In Progress
+    C-->>D: tool calls (checked against allowlist)
     C->>G: Open PR
     D->>R: Spawn paired review session
     R-->>D: Verdict (event stream)
@@ -72,14 +73,24 @@ sequenceDiagram
     end
 ```
 
-| Layer             | Tech                                          | Path                                            |
-| ----------------- | --------------------------------------------- | ----------------------------------------------- |
-| Frontend          | React 19 + Vite (TypeScript)                  | `packages/frontend/`                            |
-| Backend           | Node.js + Express (TypeScript)                | `packages/backend/`                             |
-| Transport         | WebSocket (`ws`)                              | real-time session events                        |
-| Database          | SQLite (`better-sqlite3`)                     | session metadata, PR tracking, permission rules |
-| Task source       | Notion REST API, GitHub Issues, or local YAML | configured per project                          |
-| Session execution | `claude` CLI subprocess                       | one process per session, JSONL on stdout        |
+| Layer              | Tech                                          | Path                                                            |
+| ------------------- | --------------------------------------------- | ----------------------------------------------------------------- |
+| Frontend            | React 19 + Vite (TypeScript)                  | `packages/frontend/`                                               |
+| Backend             | Node.js + Express (TypeScript)                | `packages/backend/`                                                |
+| Transport           | WebSocket (`ws`)                              | real-time session events                                           |
+| Database            | SQLite (`better-sqlite3`)                     | session metadata, PR tracking, staged intents, gate/seed items     |
+| Task source         | Notion REST API, GitHub Issues, Jira, or local YAML | configured per project                                       |
+| Session execution   | `claude` CLI subprocess, Agent SDK, or Docker  | one of three `ISessionRunner` implementations per session          |
+| Orchestrator MCP    | in-process MCP server                          | `packages/backend/src/mcp/` — the tool surface (`task.create`, `gate.verify`, `journal.setState`, …) dispatched sessions use to stage writes |
+
+## Planning, dispatch & the decision surface
+
+Beyond spawning coding sessions, the orchestrator runs its own planning work as **dispatched sessions** — `groom` (backlog grooming), `design` (design execution), `ops` (operational/investigation tasks), and `docs` (documentation authoring) each run as their own session type against a project's task board, either launched by a human or, where a milestone has auto-dispatch armed, launched automatically.
+
+- **Staged-intent decision surface** — a dispatched session never writes a task or architecture change directly. It calls an orchestrator MCP tool (`task.setStatus`, `arch.createUnit`, `gate.accrete`, …), which stages a `staged_intent` row instead of applying it. A human (or, for select kinds, another session) approves, rejects, or group-commits the intent before it takes effect.
+- **Per-flow auto-dispatch arm toggles** — each milestone independently arms or disarms each flow (`groom`, `design`, `ops`, `gate-verify`, …) via a `flow_arm` row; an armed flow's dispatch trigger evaluator picks up eligible work unattended, a disarmed one waits for a human to launch it.
+- **The architecture unit store** — an orchestrator-owned record of architecture decisions (`ArchUnitStore`), each unit a titled statement with a kind/topic/region envelope, a markdown body, and an append-only event log. Like task writes, units are only ever changed through the staged-apply command path, never a raw session write.
+- **Milestone convergence and the Manual Verification Gate** — the convergence view rolls up gate, config-seed, and ops readiness into one per-milestone signal; the gate itself is a `gate_item` store of milestone-end verification items, each carrying its own classification (Read-Only, Prod-Mutating, Opportunistic, Human-Observation) and disposition history, verified via the `/gate` skill.
 
 ## Quickstart
 
@@ -98,13 +109,10 @@ git clone https://github.com/phahadek/claude-orchestrator.git && cd claude-orche
 npm install
 git config blame.ignoreRevsFile .git-blame-ignore-revs      # once per clone — hides mass-format commits from blame
 cp packages/backend/.env.example packages/backend/.env       # then edit
-cp .claude/local-context.md.example .claude/local-context.md # gitignored — add your Notion URLs
 npm run dev    # → http://localhost:5173 (dev; Vite proxies API/WS to backend on :3000)
 ```
 
-`.claude/local-context.md` is gitignored and holds host-local references (Notion URLs, board IDs). Sessions read it as their first action. See [`docs/install.md`](docs/install.md) for details and an optional pre-commit hook that blocks workspace-ID leaks.
-
-For Docker, production builds, the full env var reference, and Notion/local task source setup, see [`docs/install.md`](docs/install.md).
+See [`docs/install.md`](docs/install.md) for Docker, production builds, the full env var reference, and Notion/GitHub/Jira/YAML task-source setup.
 
 ### Configure your first project
 
@@ -121,21 +129,38 @@ Projects and milestones are managed entirely from the dashboard UI — there is 
 
 ![Token & cost analytics](docs/screenshots/analytics.png)
 
+*(Screenshots above predate the gate, architecture, and milestone views — kept for now rather than fabricated.)*
+
 The Analytics tab tracks per-session token usage and per-model cost across the project's history.
+
+## Deployment
+
+Development runs with `npm run dev`. For production:
+
+- **`npm start`** runs the compiled backend (`node packages/backend/dist/server.js`), which serves the built frontend from the same process and port — no separate dev server.
+- **A structured deploy playbook** — `<projectDir>/.claude-deploy-playbook.yml` — drives the `/deploy` skill's confirm-gated, step-by-step production rollout (preconditions, ordered steps, verification, rollback, hazards). This repo ships its own playbook at the repo root for its self-hosted deployment.
+- **`installers/linux/`** ships a systemd unit (`orchestrator.service`) plus `.deb`/`.AppImage` build scripts for running from source on a dedicated host; `installers/macos/` and `installers/windows/` build a `.dmg` and an Inno Setup installer respectively, each bundling Node 20 LTS.
+- **The auto-updater** polls the GitHub Releases API and surfaces a new version to users within 24 hours of a release being cut; see [`RELEASE.md`](RELEASE.md) for the `dev` → `main` release process it depends on.
 
 ## Documentation
 
 - [Product Design](docs/design.md) — user goals, workflows, UI layout, and resolved design decisions
 - [Technical Architecture](docs/architecture.md) — stack, project structure, key systems, data flow, SQLite schema
 - [Coding Guidelines](docs/coding-guidelines.md) — architectural rules, naming, patterns, git etiquette
+- [ESLint Conventions](docs/eslint-conventions.md) — when to fix vs. disable a lint rule
 - [Task Writing Guidelines](docs/task-writing.md) — how to scope and write Notion tasks for this orchestrator
 - [Install guide](docs/install.md) — production setup and full env var reference
+- [`.claude-orchestrator.yml` reference](docs/orchestrator-config.md) — per-project session config: pre-PR gate commands, the `analyze:` gate, allowed-tools extensions, bash rules
+- [Docker mode — operator setup](docs/docker-mode/operator-setup.md) — sandboxed per-session containers with a restricted egress proxy, for corporate mode
 - [Notion template](docs/notion-template.md) — set up a Notion workspace compatible with this orchestrator
 - [GitHub template](docs/github-template.md) — label vocabulary, issue body structure, and repo bootstrap for GitHub-backed projects
 - [Jira template](docs/jira-template.md) — issue type mapping, workflow statuses, Epic milestone semantics, and project bootstrap for Jira-backed projects
 - [Jira Task Writing Guidelines](docs/jira-task-writing.md) — how to scope and write Jira issues as orchestrator tasks
 - [YAML template](docs/yaml-template.md) — schema reference and conventions for YAML-backed projects
 - [Orchestrator project setup](docs/orchestrator-project-setup.md) — point the orchestrator at an external project (C#, Rust, Godot, …) via `.claude/orchestrator.json` and a bootstrap script
+- [`RELEASE.md`](RELEASE.md) — the `dev` → `main` release process and the auto-updater's version contract
+- [`CHANGELOG.md`](CHANGELOG.md) — notable changes per release
+- [`installers/`](installers/) — per-OS build guides (Linux `.deb`/`.AppImage` + systemd unit, macOS `.dmg`, Windows Inno Setup)
 
 ## Grooming & design skills
 

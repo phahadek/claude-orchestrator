@@ -37,9 +37,6 @@ claude-orchestrator/
           JsonlReader.ts           ← reads historical sessions from ~/.claude/projects/*.jsonl
           orchestrator-claudemd.ts ← merges orchestrator rules + project CLAUDE.md
           orchestrator-config.ts   ← orchestrator runtime configuration
-        permissions/
-          PermissionEngine.ts      ← deny list → allow list → pattern rules → escalate
-          types.ts                 ← PermissionRule, RuleMatch, Decision types
         notion/
           NotionClient.ts          ← REST API wrapper: fetch tasks, update status
           DependencyResolver.ts    ← depth-first traversal of Depends On relations
@@ -60,7 +57,7 @@ claude-orchestrator/
           sessions.ts              ← /api/sessions REST endpoints
           tasks.ts                 ← /api/tasks endpoints + WS task_updated bridge
           prs.ts                   ← /api/prs endpoints (review, merge, sync)
-          rules.ts                 ← permission events / denials / rules CRUD
+          rules.ts                 ← permission-denials list/clear (GET, DELETE /api/permission-denials)
           settings.ts              ← runtime settings get/set
           analytics.ts             ← per-project token & cost aggregations
           config.ts                ← /api/config (project list for the frontend)
@@ -125,18 +122,14 @@ Wraps a single `claude` CLI subprocess. Streams all events to registered WebSock
 - **Git worktree isolation:** Each session runs in its own worktree (`<projectDir>/.claude/worktrees/<sessionId>`). Worktree cleaned up on session end; branch kept if PR was opened.
 - **Orchestrator `CLAUDE.md` injection:** After worktree creation, writes a merged `CLAUDE.md`: orchestrator process rules first (lifecycle, status ownership, PR format, forbidden actions, git isolation), then the project's original `CLAUDE.md` appended below. Template built by `orchestrator-claudemd.ts`. Original project file never modified.
 
-### PermissionEngine
+### Tool permissions
 
-Stateless evaluator. Called per tool invocation with `(toolName, toolArgs)`. Returns `allow | deny | escalate`.
-
-Evaluation order:
-
-1. Always-deny list — hard-coded dangerous patterns (e.g. `rm -rf /`, `git push --force main`)
-2. Always-allow list — safe patterns auto-approved without logging (e.g. all `Read` calls, `git status/log/diff`, `npx tsc`, `npx vitest`)
-3. Pattern rules — ordered list from SQLite `permission_rules` table; glob/regex on `toolName + " " + toolArgs`; first match wins
-4. Escalate — no rule matched; suspend session, surface to attention queue
-
-All decisions (except always-allow) written to `permission_events` table.
+No standalone permission engine or user-editable rule store. Each session is spawned with a
+`--allowed-tools` list — a base set (`ALLOWED_TOOLS` in `config.ts`) merged with any per-project
+extensions from `.claude-orchestrator.yml` — and the SDK's `canUseTool` callback only fires for a
+call **not** already covered by that list, at which point it is unconditionally denied. A denial is
+logged to the `permission_denials` table; there is no pattern-rule tier and no escalation to a UI
+approval queue.
 
 ### NotionClient
 
@@ -247,11 +240,9 @@ User clicks Launch
     → AgentSession: spawns `claude` CLI subprocess in projectDir
     → claude CLI: fetches Notion pages, begins task, streams JSONL to stdout
     → Events stream → session_events table + WS → UI cards update live
-    → claude emits permission event → PermissionEngine evaluates
-      → allow: write {"type":"approve"} to stdin, session continues
-      → escalate: WS permission_request → attention badge increments
-        → User approves → WS approve → write {"type":"approve"} to stdin
-        → Session resumes
+    → claude requests a tool call → checked against the session's spawn-time --allowed-tools list
+      → covered by the allowlist: call proceeds, session continues
+      → not covered: canUseTool denies it, logged to permission_denials, session continues
     → Session completes → PR URL parsed → Notion status updated
     → WS session_ended → card shows green Done badge + PR link
 ```
@@ -291,24 +282,13 @@ CREATE TABLE session_events (
   timestamp INTEGER
 );
 
-CREATE TABLE permission_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT,
-  tool_name TEXT,
-  proposed_action TEXT,
-  decision TEXT,  -- allow | deny | escalate
-  rule_matched TEXT,
-  decided_at INTEGER
-);
-
-CREATE TABLE permission_rules (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  order_index INTEGER,
-  pattern TEXT,  -- glob or regex string
-  match_type TEXT,  -- glob | regex
-  decision TEXT,  -- allow | deny
-  label TEXT,
-  enabled INTEGER DEFAULT 1
+CREATE TABLE permission_denials (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id  TEXT    NOT NULL,
+  tool_name   TEXT    NOT NULL,
+  tool_use_id TEXT    NOT NULL,
+  tool_input  TEXT    NOT NULL,
+  timestamp   INTEGER NOT NULL
 );
 
 CREATE TABLE task_cache (
