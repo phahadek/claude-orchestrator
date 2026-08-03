@@ -56,6 +56,10 @@ vi.mock('../config.js', () => ({
   },
 }));
 
+vi.mock('../orchestration/usageAdmission.js', () => ({
+  isUsageAdmitted: vi.fn(() => ({ allowed: true })),
+}));
+
 import fs from 'node:fs';
 import {
   getLatestCodeSessionByNotionTaskId,
@@ -78,6 +82,7 @@ import {
   getLatestNudgeTimestamp,
 } from '../audit/AuditLog.js';
 import { getAllProjects } from '../config.js';
+import { isUsageAdmitted } from '../orchestration/usageAdmission.js';
 import { OrphanedTaskSweeper } from '../orchestration/OrphanedTaskSweeper.js';
 import type { ServerMessage } from '../ws/types.js';
 
@@ -165,6 +170,9 @@ describe('OrphanedTaskSweeper', () => {
       .mockReturnValue(undefined);
     vi.mocked(getSession).mockReset().mockReturnValue(undefined);
     vi.mocked(listStagedIntentsBySession).mockReset().mockReturnValue([]);
+    vi.mocked(isUsageAdmitted)
+      .mockReset()
+      .mockReturnValue({ allowed: true });
     broadcast.mockClear();
   });
 
@@ -559,6 +567,75 @@ describe('OrphanedTaskSweeper', () => {
         event_type: 'task_orphan_nudged',
         task_id: 'notion:abc',
       }),
+    );
+  });
+
+  it('withholds a nudge while plan usage is exhausted — no delivery, no budget spend, no operator escalation', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000; // ended 10 min ago (past grace)
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(isUsageAdmitted).mockReturnValue({
+      allowed: false,
+      window: 'five_hour',
+      reason: 'usage_deferral',
+    });
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    // Withheld entirely — the item stays outstanding for the next sweep tick
+    // rather than being sent (and failing) and burning a nudge slot.
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_nudged' }),
+    );
+    expect(setSessionPauseReason).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('delivers the withheld nudge once plan usage is admitted again', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    vi.mocked(isUsageAdmitted).mockReturnValue({
+      allowed: false,
+      window: 'five_hour',
+      reason: 'usage_deferral',
+    });
+    await sweeper.sweepOnce();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+
+    vi.mocked(isUsageAdmitted).mockReturnValue({ allowed: true });
+    await sweeper.sweepOnce();
+    expect(enqueueFeedback).toHaveBeenCalledWith(
+      'sess-1',
+      'system:nudge',
+      expect.stringContaining('no PR was opened'),
     );
   });
 

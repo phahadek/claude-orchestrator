@@ -20,6 +20,7 @@ import {
   upsertPullRequest,
 } from '../db/queries';
 import { sessionDidWork } from '../session/sessionLifecycle';
+import { isUsageAdmitted } from './usageAdmission';
 import {
   recordEvent,
   countNudgeEvents,
@@ -333,6 +334,16 @@ export class OrphanedTaskSweeper {
     nudgeMessage: string,
   ): Promise<void> {
     const { session_id, worktree_path } = session;
+
+    // Plan usage is exhausted account-wide: a nudge sent now would only
+    // deliver a limit response, not real work, yet would still burn a slot
+    // of the finite nudge budget and eventually escalate the session to the
+    // operator as "stalled" for the wrong reason. Skip entirely — leave the
+    // nudge count and pause_reason untouched — so the next sweep tick (after
+    // the persisted usage_deferral expires) retries with a clean slate.
+    if (!isUsageAdmitted().allowed) {
+      return;
+    }
 
     // Unrecoverable: worktree is gone — surface to operator, no nudge possible.
     if (!worktree_path || !fs.existsSync(worktree_path)) {
