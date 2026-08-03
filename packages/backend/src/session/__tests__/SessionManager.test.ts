@@ -598,6 +598,42 @@ describe('enqueueFeedback — terminal session behavior', () => {
   });
 });
 
+// ── enqueueFeedback — usage admission gate ───────────────────────────────────
+
+describe('enqueueFeedback — usage admission gate', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      { id: 'item-1', source: 'system:nudge', payload: 'nudge text' },
+    ] as any);
+  });
+
+  it('a nudge withheld by a usage deferral (sendOrResume returns null) is not marked delivered', async () => {
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValue(null);
+
+    await sm.enqueueFeedback(SESSION_ID, 'system:nudge', 'nudge text');
+
+    expect(vi.mocked(markInboxItemsDelivered)).not.toHaveBeenCalled();
+  });
+
+  it('the same withheld item is delivered once the deferral clears (sendOrResume succeeds)', async () => {
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValueOnce(null);
+    await sm.enqueueFeedback(SESSION_ID, 'system:nudge', 'nudge text');
+    expect(vi.mocked(markInboxItemsDelivered)).not.toHaveBeenCalled();
+
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValueOnce(SESSION_ID);
+    await sm.enqueueFeedback(SESSION_ID, 'system:nudge', 'nudge text');
+
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
+  });
+});
+
 // ── sendOrResume — live session fast path ────────────────────────────────────
 
 describe('sendOrResume — live session fast path', () => {
