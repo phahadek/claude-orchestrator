@@ -93,6 +93,7 @@ vi.mock('../../config/corporateMode.js', () => ({
 }));
 
 import { AutoMerger } from '../AutoMerger';
+import { recordEvent } from '../../audit/AuditLog';
 import {
   getPRByNumber,
   getSession,
@@ -296,6 +297,48 @@ describe('AutoMerger — scheduled conflict-nudge sweep', () => {
       'sha-abc',
     );
     expect(sessions.relaunchFixerForPR).not.toHaveBeenCalled();
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'conflict_nudge_sent',
+        payload: expect.objectContaining({ pr_number: 42 }),
+      }),
+    );
+  });
+
+  it('leaves a durable delivery-failed record instead of a false conflict_nudge_sent when sendOrResume could not deliver the nudge', async () => {
+    const sessions = makeMockSessions();
+    sessions.sendOrResume.mockResolvedValue(null);
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue([
+      { pr_number: 42, repo: 'owner/repo' },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+
+    const github = makeMockGitHub();
+    vi.mocked(github.categorizeMergeability).mockResolvedValue(
+      makeMergeability('conflict'),
+    );
+
+    const merger = new AutoMerger(
+      github,
+      makeMockWatcher(),
+      () => {},
+      sessions as unknown as import('../../session/SessionManager').SessionManager,
+    );
+    vi.mocked(recordEvent).mockClear();
+
+    const job = getRegisteredJob(merger, 'auto_merger_conflict_nudge_sweep');
+    await job.run();
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'conflict_nudge_delivery_failed',
+        payload: expect.objectContaining({ pr_number: 42 }),
+      }),
+    );
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'conflict_nudge_sent' }),
+    );
   });
 
   it('routes a dead implementing session to the fixer-relaunch path, unchanged from current behavior', async () => {

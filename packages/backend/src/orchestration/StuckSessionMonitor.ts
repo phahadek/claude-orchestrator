@@ -684,7 +684,18 @@ export class StuckSessionMonitor {
     insertPauseInterval(sessionId, 'stuck_timeout');
 
     try {
-      this.sessionManager.send(sessionId, PAUSE_MESSAGE);
+      const delivered = this.sessionManager.send(sessionId, PAUSE_MESSAGE);
+      if (!delivered) {
+        logger.warn(
+          `[StuckSessionMonitor] pause nudge not confirmed delivered for ${sessionId}`,
+        );
+        recordEvent({
+          event_type: 'stuck_session_pause_delivery_failed',
+          actor_type: 'system',
+          actor_id: sessionId,
+          payload: { session_id: sessionId },
+        });
+      }
     } catch (err) {
       logger.warn(
         `[StuckSessionMonitor] send failed for ${sessionId}: ${(err as Error).message}`,
