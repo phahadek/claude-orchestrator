@@ -357,7 +357,12 @@ describe('FlowArmToggle', () => {
           });
         }
         return Promise.resolve(
-          makeTrustRate({ flow: flow as never, rate: null, total: 0, rejected: 0 }),
+          makeTrustRate({
+            flow: flow as never,
+            rate: null,
+            total: 0,
+            rejected: 0,
+          }),
         );
       },
     );

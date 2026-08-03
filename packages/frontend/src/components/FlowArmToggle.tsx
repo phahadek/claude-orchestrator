@@ -160,7 +160,9 @@ export function FlowArmToggle({
           const isPending = pending[flow] === true;
           const metricFlow = hasTrustMetric(flow);
           const trustResult = metricFlow ? trustRates[flow] : undefined;
-          const trustFetchInFlight = Boolean(metricFlow && projectId && milestoneId);
+          const trustFetchInFlight = Boolean(
+            metricFlow && projectId && milestoneId,
+          );
           const trustLoading = trustFetchInFlight && trustResult === undefined;
 
           let toggleClassName = `${styles.toggle} ${armed ? styles.toggleArmed : ''}`;
