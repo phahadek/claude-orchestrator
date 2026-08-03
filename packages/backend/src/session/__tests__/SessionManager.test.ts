@@ -26,7 +26,10 @@ function makeMockSession(): MockSession {
   ee.hasEnded = false;
   ee.sessionType = 'standard';
   ee.run = vi.fn().mockReturnValue(new Promise(() => {}));
-  ee.sendMessage = vi.fn();
+  // Default: confirmed delivery (mirrors AgentSession.sendMessage's success
+  // return) — tests that want to exercise the failed-write fallback path
+  // override this per-test with .mockReturnValue(false).
+  ee.sendMessage = vi.fn().mockReturnValue(true);
   ee.kill = vi.fn().mockResolvedValue(undefined);
   ee.endSession = vi.fn();
   ee.gracefulPause = vi.fn().mockResolvedValue(undefined);

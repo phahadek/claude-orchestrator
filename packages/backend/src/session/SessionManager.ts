@@ -3615,11 +3615,22 @@ export class SessionManager extends EventEmitter {
     }
   }
 
-  /** Send a follow-up user message to a running session via stdin. */
-  send(sessionId: string, message: string): void {
+  /**
+   * Send a follow-up user message to a running session via stdin.
+   *
+   * @returns true if the write was confirmed to reach the session's
+   * underlying process. The session_events row and WS broadcast are only
+   * recorded on a confirmed send — otherwise the frontend transcript and
+   * inbox delivered-flag would show a message as delivered when the
+   * subprocess never actually received it (see sendOrResume/
+   * deliverUndeliveredInboxItems, which fall back to a --resume respawn on
+   * a false return instead of treating this as success).
+   */
+  send(sessionId: string, message: string): boolean {
     const session = this.sessions.get(sessionId);
-    if (!session) return;
-    session.sendMessage(message);
+    if (!session) return false;
+    const delivered = session.sendMessage(message);
+    if (!delivered) return false;
     const ts = Date.now();
     insertEvent({
       session_id: sessionId,
@@ -3633,6 +3644,7 @@ export class SessionManager extends EventEmitter {
       eventType: 'user_message',
       content: message,
     } satisfies ServerMessage);
+    return true;
   }
 
   /**
@@ -3741,11 +3753,19 @@ export class SessionManager extends EventEmitter {
       return;
     }
 
+    let delivered: string | null = null;
     try {
-      await this.sendOrResume(sessionId, combined);
+      delivered = await this.sendOrResume(sessionId, combined);
     } catch (err) {
       logger.warn(
         `[SessionManager] ${logContext}: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
+      );
+      this.emitFeedbackPending(sessionId, false);
+      return;
+    }
+    if (!delivered) {
+      logger.warn(
+        `[SessionManager] ${logContext}: sendOrResume could not deliver to ${sessionId.slice(0, 8)} — leaving item(s) undelivered`,
       );
       this.emitFeedbackPending(sessionId, false);
       return;
@@ -3789,44 +3809,51 @@ export class SessionManager extends EventEmitter {
     // process has already exited (session_ended broadcast) but whose map
     // entry hasn't been reaped yet by cleanupWorktree (run().then() only
     // fires after this synchronous session_ended handling returns) — writing
-    // to that session's stdin lands on a closed pipe and is silently
-    // dropped (CliSessionRunner.sendMessage's writable guard), losing the
-    // message with no error and no respawn. Falling through to the respawn
-    // path below instead delivers it via a fresh --resume process.
+    // to that session's stdin lands on a closed pipe. That case, and any
+    // other direct-send failure (e.g. a synchronous stdin.write() throw on
+    // an already-exited process during the transient-failure backoff
+    // window), is now detected via this.send()'s boolean return rather than
+    // silently dropped — falling through to the respawn path below instead
+    // delivers it via a fresh --resume process.
     const liveSession = this.sessions.get(sessionId);
     if (liveSession && !liveSession.hasEnded) {
-      this.send(sessionId, text);
-      // Mirror the respawn path: ensure status reflects the resumed activity
-      // so the UI doesn't keep rendering this session as idle. Terminal is
-      // sticky — a done/error/killed row is never silently overwritten with
-      // 'running' here; only an explicit allowTerminal caller may reopen it,
-      // and that reopen is audited rather than folded into this status write.
-      const row = getSession(sessionId);
-      if (row && row.status !== 'running') {
-        const isTerminal = TERMINAL_SESSION_STATUSES.has(row.status);
-        if (isTerminal && !opts.allowTerminal) {
-          logger.warn(
-            `[SessionManager] sendOrResume: session ${sessionId.slice(0, 8)} is live but DB status is terminal (${row.status}) — not overwriting with running`,
-          );
-        } else {
-          if (isTerminal) {
-            recordEvent({
-              event_type: 'session_terminal_reopened',
-              actor_type: 'system',
-              actor_id: sessionId,
-              task_id: row.task_id ?? null,
-              payload: { status_before: row.status },
-            });
+      const delivered = this.send(sessionId, text);
+      if (delivered) {
+        // Mirror the respawn path: ensure status reflects the resumed activity
+        // so the UI doesn't keep rendering this session as idle. Terminal is
+        // sticky — a done/error/killed row is never silently overwritten with
+        // 'running' here; only an explicit allowTerminal caller may reopen it,
+        // and that reopen is audited rather than folded into this status write.
+        const row = getSession(sessionId);
+        if (row && row.status !== 'running') {
+          const isTerminal = TERMINAL_SESSION_STATUSES.has(row.status);
+          if (isTerminal && !opts.allowTerminal) {
+            logger.warn(
+              `[SessionManager] sendOrResume: session ${sessionId.slice(0, 8)} is live but DB status is terminal (${row.status}) — not overwriting with running`,
+            );
+          } else {
+            if (isTerminal) {
+              recordEvent({
+                event_type: 'session_terminal_reopened',
+                actor_type: 'system',
+                actor_id: sessionId,
+                task_id: row.task_id ?? null,
+                payload: { status_before: row.status },
+              });
+            }
+            updateSessionStatus(sessionId, 'running');
+            this.emit('message', {
+              type: 'session_status',
+              sessionId,
+              status: 'running',
+            } satisfies ServerMessage);
           }
-          updateSessionStatus(sessionId, 'running');
-          this.emit('message', {
-            type: 'session_status',
-            sessionId,
-            status: 'running',
-          } satisfies ServerMessage);
         }
+        return sessionId;
       }
-      return sessionId;
+      logger.warn(
+        `[SessionManager] sendOrResume: direct send to live session ${sessionId.slice(0, 8)} failed — falling back to --resume respawn`,
+      );
     }
 
     // Concurrency guard: if a respawn for this session is already in flight,

@@ -301,8 +301,8 @@ export class DockerSessionRunner implements ISessionRunner {
     return exitCode;
   }
 
-  sendMessage(message: string): void {
-    if (!this.execProc?.stdin?.writable) return;
+  sendMessage(message: string): boolean {
+    if (!this.execProc?.stdin?.writable) return false;
     try {
       this.execProc.stdin.write(
         JSON.stringify({
@@ -310,11 +310,13 @@ export class DockerSessionRunner implements ISessionRunner {
           message: { role: 'user', content: message },
         }) + '\n',
       );
+      return true;
     } catch (err) {
       log(
         this.sessionId,
-        `sendMessage stdin.write failed (ignored): ${(err as Error).message}`,
+        `sendMessage stdin.write failed: ${(err as Error).message}`,
       );
+      return false;
     }
   }
 
