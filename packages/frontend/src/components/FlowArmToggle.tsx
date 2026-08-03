@@ -33,9 +33,14 @@ function ratedBackground(rate: number, armed: boolean): string {
   return armed ? `hsl(${hue}, 65%, 42%)` : `hsl(${hue}, 16%, 28%)`;
 }
 
-/** A neutral, non-ramp tint for "no data yet" — distinct from both a good (green) score and the achromatic disarmed grey. */
+/** A neutral, non-ramp tint for "no data" (the fetch resolved and there is genuinely nothing) — distinct from both a good (green) score and the achromatic disarmed grey. */
 function noDataBackground(armed: boolean): string {
   return armed ? 'hsl(228, 24%, 42%)' : 'hsl(228, 12%, 26%)';
+}
+
+/** A distinct tint for "the rate hasn't resolved yet" — must not collide with rated, no-data, or the disarmed no-metric grey. */
+function loadingBackground(armed: boolean): string {
+  return armed ? 'hsl(268, 24%, 42%)' : 'hsl(268, 12%, 26%)';
 }
 
 function formatRate(result: FlowRejectionRateResult): string {
@@ -82,21 +87,25 @@ export function FlowArmToggle({
     if (!projectId || !milestoneId) return;
 
     let cancelled = false;
-    Promise.all(
-      TRUST_PRECISION_FLOWS.map((flow) =>
-        gateApi
-          .getFlowRejectionRate(projectId, milestoneId, flow)
-          .then((result) => [flow, result] as const)
-          .catch(() => null),
-      ),
-    ).then((results) => {
-      if (cancelled) return;
-      const next: Partial<Record<TrustPrecisionFlow, FlowRejectionRateResult>> =
-        {};
-      for (const entry of results) {
-        if (entry) next[entry[0]] = entry[1];
-      }
-      setTrustRates(next);
+    // Each flow's fetch resolves independently so a flow with data renders as
+    // soon as it's ready, instead of every row waiting on the slowest fetch.
+    TRUST_PRECISION_FLOWS.forEach((flow) => {
+      gateApi
+        .getFlowRejectionRate(projectId, milestoneId, flow)
+        .catch(
+          (): FlowRejectionRateResult => ({
+            flow,
+            project: projectId,
+            milestone: milestoneId,
+            total: 0,
+            rejected: 0,
+            rate: null,
+          }),
+        )
+        .then((result) => {
+          if (cancelled) return;
+          setTrustRates((prev) => ({ ...prev, [flow]: result }));
+        });
     });
 
     return () => {
@@ -151,6 +160,8 @@ export function FlowArmToggle({
           const isPending = pending[flow] === true;
           const metricFlow = hasTrustMetric(flow);
           const trustResult = metricFlow ? trustRates[flow] : undefined;
+          const trustFetchInFlight = Boolean(metricFlow && projectId && milestoneId);
+          const trustLoading = trustFetchInFlight && trustResult === undefined;
 
           let toggleClassName = `${styles.toggle} ${armed ? styles.toggleArmed : ''}`;
           let toggleStyle: CSSProperties | undefined;
@@ -158,7 +169,12 @@ export function FlowArmToggle({
           let rateAccessibleLabel = '';
 
           if (metricFlow) {
-            if (trustResult && trustResult.rate !== null) {
+            if (trustLoading) {
+              toggleClassName += ` ${styles.toggleLoading}`;
+              toggleStyle = { backgroundColor: loadingBackground(armed) };
+              rateLabel = null;
+              rateAccessibleLabel = ', trust rate loading';
+            } else if (trustResult && trustResult.rate !== null) {
               toggleClassName += ` ${styles.toggleRated}`;
               toggleStyle = {
                 backgroundColor: ratedBackground(trustResult.rate, armed),

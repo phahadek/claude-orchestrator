@@ -85,8 +85,9 @@
   opacity: 0.9;
 }
 
-/* Coloured by ratedBackground()/noDataBackground() inline style; text stays legible on both the bright (armed) and desaturated (disarmed) ends of the ramp. */
+/* Coloured by ratedBackground()/noDataBackground()/loadingBackground() inline style; text stays legible on both the bright (armed) and desaturated (disarmed) ends of the ramp. */
 .toggleRated,
-.toggleNoData {
+.toggleNoData,
+.toggleLoading {
   color: var(--text-primary, #cdd6f4);
 }

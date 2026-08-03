@@ -317,9 +317,15 @@ describe('FlowArmToggle', () => {
 
     render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
 
+    // Await every rate this test compares against, not just ops — a flow whose
+    // fetch hasn't resolved yet is "loading", not "no data", so comparing
+    // against an unawaited flow would race its own fetch resolution.
     await waitFor(() => {
       expect(screen.getByTestId('flow-arm-rate-ops').textContent).toContain(
         'no data',
+      );
+      expect(screen.getByTestId('flow-arm-rate-groom').textContent).toContain(
+        '10%',
       );
     });
 
@@ -333,6 +339,66 @@ describe('FlowArmToggle', () => {
     expect(noDataButton.style.backgroundColor).not.toEqual(
       disarmedNoMetric.style.backgroundColor,
     );
+  });
+
+  it('renders a loading state distinct from genuinely-null, a rated score, and the disarmed no-metric tint, and never issues a docs request', async () => {
+    vi.spyOn(flowArmApi, 'get').mockResolvedValue(
+      makeState({
+        groom: { armed: false, source: 'default' },
+        docs: { armed: false, source: 'default' },
+      }),
+    );
+    let resolveGroom: (result: FlowRejectionRateResult) => void = () => {};
+    getFlowRejectionRateMock.mockImplementation(
+      (_project: string, _milestone: string, flow: string) => {
+        if (flow === 'groom') {
+          return new Promise<FlowRejectionRateResult>((resolve) => {
+            resolveGroom = resolve;
+          });
+        }
+        return Promise.resolve(
+          makeTrustRate({ flow: flow as never, rate: null, total: 0, rejected: 0 }),
+        );
+      },
+    );
+
+    render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('flow-arm-rate-ops').textContent).toContain(
+        'no data',
+      );
+    });
+
+    // groom's fetch is still pending — it must not read as "no data" yet.
+    const loadingButton = screen.getByTestId('flow-arm-switch-groom');
+    expect(screen.queryByTestId('flow-arm-rate-groom')).toBeNull();
+    expect(loadingButton.getAttribute('aria-label')).not.toContain('no data');
+
+    const noDataButton = screen.getByTestId('flow-arm-switch-ops');
+    const disarmedNoMetric = screen.getByTestId('flow-arm-switch-docs');
+    const loadingColor = loadingButton.style.backgroundColor;
+
+    expect(loadingColor).not.toEqual(noDataButton.style.backgroundColor);
+    expect(loadingColor).not.toEqual(disarmedNoMetric.style.backgroundColor);
+
+    await act(async () => {
+      resolveGroom(makeTrustRate({ flow: 'groom', rate: 0.1 }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('flow-arm-rate-groom').textContent).toContain(
+        '10%',
+      );
+    });
+
+    const ratedButton = screen.getByTestId('flow-arm-switch-groom');
+    expect(ratedButton.style.backgroundColor).not.toEqual(loadingColor);
+
+    for (const call of getFlowRejectionRateMock.mock.calls) {
+      expect(call[2]).not.toBe('docs');
+    }
   });
 
   it('keeps the rate available as text alongside the unchanged Armed/Disarmed label and aria-checked', async () => {
