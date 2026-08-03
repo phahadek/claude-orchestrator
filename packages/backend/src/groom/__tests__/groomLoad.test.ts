@@ -17,6 +17,8 @@ import {
   NotionReadClient,
   NotionTaskLike,
   isSizeCheckSeedOverThreshold,
+  extractPathToken,
+  filesPathsEntryExistsInRepo,
 } from '../groomLoad';
 import { toExternalId } from '../../tasks/taskId';
 import { bindingConstraintIdsForRegions } from '../constraintCatalog';
@@ -711,6 +713,91 @@ describe('isSizeCheckSeedOverThreshold', () => {
       isSizeCheckSeedOverThreshold({
         files: SIZE_TYPE_CHECK.fileSplitThreshold - 1,
       }),
+    ).toBe(false);
+  });
+});
+
+describe('extractPathToken — repo-root-level files', () => {
+  it.each(['README.md', '.gitignore', 'package.json'])(
+    'resolves a bare %s entry with no marker or description',
+    (name) => {
+      expect(extractPathToken(name)).toBe(name);
+    },
+  );
+
+  it.each(['README.md', '.gitignore', 'package.json'])(
+    'resolves a bare %s entry with an update marker and trailing prose',
+    (name) => {
+      expect(extractPathToken(`${name} (update) — the rewrite`)).toBe(name);
+    },
+  );
+
+  it.each(['README.md', '.gitignore', 'package.json'])(
+    'resolves a bare %s entry with a *(new)* marker',
+    (name) => {
+      expect(extractPathToken(`${name} *(new)*`)).toBe(name);
+    },
+  );
+
+  it('continues to resolve the backticked form unchanged', () => {
+    expect(extractPathToken('`README.md` (update) — the rewrite')).toBe(
+      'README.md',
+    );
+  });
+
+  it('resolves a nested backticked path unchanged', () => {
+    expect(
+      extractPathToken('`packages/backend/src/groom/groomLoad.ts` (update)'),
+    ).toBe('packages/backend/src/groom/groomLoad.ts');
+  });
+
+  it('returns no token for a hedged, non-path entry', () => {
+    expect(extractPathToken('confirm the exact path at grooming')).toBeNull();
+  });
+
+  it('does not mistake a leading-dot dotfile for a relative-path prefix', () => {
+    expect(extractPathToken('.gitignore (update) — ignore build output')).toBe(
+      '.gitignore',
+    );
+  });
+
+  it('does not match a trailing sentence period as a bare-file extension', () => {
+    expect(extractPathToken('see the task description.')).toBeNull();
+  });
+});
+
+describe('filesPathsEntryExistsInRepo — repo-root-level files', () => {
+  const trackedFiles = new Set([
+    'README.md',
+    '.gitignore',
+    'package.json',
+    'packages/backend/src/groom/groomLoad.ts',
+  ]);
+
+  it.each(['README.md', '.gitignore', 'package.json'])(
+    'resolves a genuinely tracked bare %s entry',
+    (name) => {
+      expect(
+        filesPathsEntryExistsInRepo(
+          `${name} (update) — the rewrite`,
+          trackedFiles,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it('still fails to resolve an entry genuinely absent from the tracked set', () => {
+    expect(filesPathsEntryExistsInRepo('NOPE.md (update)', trackedFiles)).toBe(
+      false,
+    );
+  });
+
+  it('still fails to resolve a hedged entry', () => {
+    expect(
+      filesPathsEntryExistsInRepo(
+        'confirm the exact path at grooming',
+        trackedFiles,
+      ),
     ).toBe(false);
   });
 });

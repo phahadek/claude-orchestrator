@@ -521,19 +521,18 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
     if (status === 'Ready') {
+      const body = (await this.backend.fetchTaskPage(taskId)) ?? '';
       const gateResult = await checkGroomingPromotionGate(
         options?.groomingGate ?? {},
         taskId,
         getCachedType(taskId) ?? undefined,
         undefined,
         this.projectId,
+        body,
       );
       if (!gateResult.allowed) {
         throw new GroomingGateError(gateResult.reasons);
       }
-    }
-    if (status === 'Ready') {
-      const body = (await this.backend.fetchTaskPage(taskId)) ?? '';
       const violations = checkReadiness(body, getCachedType(taskId));
       if (violations.length > 0) {
         const readinessOverride = resolveReadinessOverride(taskId, options);
