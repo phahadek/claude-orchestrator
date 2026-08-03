@@ -3753,7 +3753,7 @@ export class SessionManager extends EventEmitter {
       return;
     }
 
-    let delivered: string | null = null;
+    let delivered: string | null;
     try {
       delivered = await this.sendOrResume(sessionId, combined);
     } catch (err) {
