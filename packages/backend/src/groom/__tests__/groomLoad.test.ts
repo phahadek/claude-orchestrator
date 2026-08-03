@@ -762,9 +762,7 @@ describe('extractPathToken — repo-root-level files', () => {
   });
 
   it('does not match a trailing sentence period as a bare-file extension', () => {
-    expect(
-      extractPathToken('see the task description.'),
-    ).toBeNull();
+    expect(extractPathToken('see the task description.')).toBeNull();
   });
 });
 
@@ -780,20 +778,26 @@ describe('filesPathsEntryExistsInRepo — repo-root-level files', () => {
     'resolves a genuinely tracked bare %s entry',
     (name) => {
       expect(
-        filesPathsEntryExistsInRepo(`${name} (update) — the rewrite`, trackedFiles),
+        filesPathsEntryExistsInRepo(
+          `${name} (update) — the rewrite`,
+          trackedFiles,
+        ),
       ).toBe(true);
     },
   );
 
   it('still fails to resolve an entry genuinely absent from the tracked set', () => {
-    expect(
-      filesPathsEntryExistsInRepo('NOPE.md (update)', trackedFiles),
-    ).toBe(false);
+    expect(filesPathsEntryExistsInRepo('NOPE.md (update)', trackedFiles)).toBe(
+      false,
+    );
   });
 
   it('still fails to resolve a hedged entry', () => {
     expect(
-      filesPathsEntryExistsInRepo('confirm the exact path at grooming', trackedFiles),
+      filesPathsEntryExistsInRepo(
+        'confirm the exact path at grooming',
+        trackedFiles,
+      ),
     ).toBe(false);
   });
 });

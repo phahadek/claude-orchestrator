@@ -494,13 +494,14 @@ function entryNeedsTrackedFileResolution(entry: FilesPathsEntry): boolean {
  */
 /** Whether `markdown` carries a top-level `## Files / paths affected`-style heading at all, independent of whether that section has any content. */
 function hasFilesPathsHeading(markdown: string): boolean {
-  return markdown
-    .split('\n')
-    .some(
-      (line) =>
-        /^#{1,3}\s/.test(line) &&
-        line.replace(/^#+\s*/, '').toLowerCase().includes('files'),
-    );
+  return markdown.split('\n').some(
+    (line) =>
+      /^#{1,3}\s/.test(line) &&
+      line
+        .replace(/^#+\s*/, '')
+        .toLowerCase()
+        .includes('files'),
+  );
 }
 
 async function resolveFilesPathsEntriesServerSide(
@@ -561,8 +562,11 @@ async function resolveFilesPathsEntriesServerSide(
         `project "${projectId ?? 'unknown'}"; the tracked-file set this check requires is unavailable.`,
     };
   }
-  const { resolveTrackedFileSet, filesPathsEntryExistsInRepo, parseFilesPathsEntries } =
-    await import('./groomLoad');
+  const {
+    resolveTrackedFileSet,
+    filesPathsEntryExistsInRepo,
+    parseFilesPathsEntries,
+  } = await import('./groomLoad');
   let trackedFiles: Set<string>;
   try {
     trackedFiles = await resolveTrackedFileSet(repoRoot);
