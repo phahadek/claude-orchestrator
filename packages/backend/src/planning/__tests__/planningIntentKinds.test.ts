@@ -59,8 +59,7 @@ describe('PLANNING_INTENT_KINDS', () => {
     ] as const) {
       for (const kind of PLANNING_INTENT_KINDS[workflow]) {
         const hasTool =
-          registered.has(kind) ||
-          KINDS_REGISTERED_BY_A_BESPOKE_TOOL.has(kind);
+          registered.has(kind) || KINDS_REGISTERED_BY_A_BESPOKE_TOOL.has(kind);
         expect(
           hasTool,
           `PLANNING_INTENT_KINDS.${workflow} lists "${kind}" but no ` +

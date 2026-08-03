@@ -417,7 +417,9 @@ describe('stage-proposal MCP tools — schema validation', () => {
   it('the task.setProperties tool description no longer claims Type has its own registered tool while none exists — it does now', async () => {
     const { client, close } = await connectedClient();
     const { tools } = await client.listTools();
-    const setPropertiesTool = tools.find((t) => t.name === 'task.setProperties');
+    const setPropertiesTool = tools.find(
+      (t) => t.name === 'task.setProperties',
+    );
     const setTypeTool = tools.find((t) => t.name === 'task.setType');
     expect(setPropertiesTool?.description).toBeDefined();
     expect(setTypeTool).toBeDefined();
