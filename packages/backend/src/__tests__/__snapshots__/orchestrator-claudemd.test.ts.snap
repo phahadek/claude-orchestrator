@@ -29,6 +29,16 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > github backend > ma
 
 ---
 
+## Nudges
+
+A nudge is an unsolicited orchestrator message about your open PR — a merge-conflict, "base branch moved", or stalled-merge notice. Act on what it names, ahead of the "stop and wait" default above, which covers the gap between review passes, not a flagged change. Compliance isn't checked; act because it's true.
+
+Keep your PR mergeable against \`dev\` for its whole life, not just through the Pre-PR Gate — rebase and push once you learn it's needed.
+
+The supervisor's "Pause your work" message isn't a nudge in this sense: stopping is what it asks, so stopping is full compliance.
+
+---
+
 ## Flaky / Transient CI or F2 Gate Failures
 
 When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
@@ -231,6 +241,16 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > jira backend > matc
 5. Open a draft PR targeting \`dev\` using the required body template.
 6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
    Address findings by pushing additional commits, then wait again.
+
+---
+
+## Nudges
+
+A nudge is an unsolicited orchestrator message about your open PR — a merge-conflict, "base branch moved", or stalled-merge notice. Act on what it names, ahead of the "stop and wait" default above, which covers the gap between review passes, not a flagged change. Compliance isn't checked; act because it's true.
+
+Keep your PR mergeable against \`dev\` for its whole life, not just through the Pre-PR Gate — rebase and push once you learn it's needed.
+
+The supervisor's "Pause your work" message isn't a nudge in this sense: stopping is what it asks, so stopping is full compliance.
 
 ---
 
@@ -441,6 +461,16 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > local backend > mat
 
 ---
 
+## Nudges
+
+A nudge is an unsolicited orchestrator message about your open PR — a merge-conflict, "base branch moved", or stalled-merge notice. Act on what it names, ahead of the "stop and wait" default above, which covers the gap between review passes, not a flagged change. Compliance isn't checked; act because it's true.
+
+Keep your PR mergeable against \`dev\` for its whole life, not just through the Pre-PR Gate — rebase and push once you learn it's needed.
+
+The supervisor's "Pause your work" message isn't a nudge in this sense: stopping is what it asks, so stopping is full compliance.
+
+---
+
 ## Flaky / Transient CI or F2 Gate Failures
 
 When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
@@ -643,6 +673,16 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > notion backend (def
 5. Open a draft PR targeting \`dev\` using the required body template.
 6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
    Address findings by pushing additional commits, then wait again.
+
+---
+
+## Nudges
+
+A nudge is an unsolicited orchestrator message about your open PR — a merge-conflict, "base branch moved", or stalled-merge notice. Act on what it names, ahead of the "stop and wait" default above, which covers the gap between review passes, not a flagged change. Compliance isn't checked; act because it's true.
+
+Keep your PR mergeable against \`dev\` for its whole life, not just through the Pre-PR Gate — rebase and push once you learn it's needed.
+
+The supervisor's "Pause your work" message isn't a nudge in this sense: stopping is what it asks, so stopping is full compliance.
 
 ---
 
