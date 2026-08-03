@@ -47,6 +47,9 @@ vi.mock('../groomLoad', async (importOriginal) => {
           'packages/backend/src/deploy/DeployOrchestrator.ts',
           'packages/backend/src/deploy/playbookSchema.ts',
           'packages/backend/src/orchestration/flowArm.ts',
+          'README.md',
+          '.gitignore',
+          'package.json',
         ]);
       }
       return new Set<string>();
@@ -1021,6 +1024,168 @@ describe('checkGroomingPromotionGate — server-derived existsInRepo (task 3ae22
     );
     expect(result.allowed).toBe(false);
     expect(result.reasons.some((r) => r.includes('Files / paths'))).toBe(true);
+  });
+});
+
+describe('checkGroomingPromotionGate — Files/paths derived from the task body, not the session payload', () => {
+  const BASE = {
+    size_check: { decision: 'n/a' },
+    type_check: { decision: 'none' },
+    type: '💻 Code',
+  };
+
+  beforeEach(() => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:body-derived-task',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:body-derived-task',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+  });
+
+  it('produces the same verdict whether the session retyped the entry with or without backticks, once taskBody is supplied', async () => {
+    const taskBody = [
+      '## Files / paths affected',
+      '- `packages/backend/src/checkout.ts` (update) — small tweak',
+    ].join('\n');
+
+    const withBackticksPayload: GroomingGateEntry = {
+      ...BASE,
+      filesPathsEntries: [
+        {
+          raw: '`packages/backend/src/checkout.ts` (update) — small tweak',
+          isNew: false,
+          existsInRepo: true,
+        },
+      ],
+    };
+    const retypedWithoutBackticksPayload: GroomingGateEntry = {
+      ...BASE,
+      // Same section, retyped by the session without the backticks — a
+      // cosmetic difference that must not change the verdict once the gate
+      // consults the body directly.
+      filesPathsEntries: [
+        {
+          raw: 'packages/backend/src/checkout.ts (update) — small tweak',
+          isNew: false,
+          existsInRepo: true,
+        },
+      ],
+    };
+
+    const resultA = await checkGroomingPromotionGate(
+      withBackticksPayload,
+      'notion:body-derived-task',
+      undefined,
+      undefined,
+      'polimarket-analyser',
+      taskBody,
+    );
+    const resultB = await checkGroomingPromotionGate(
+      retypedWithoutBackticksPayload,
+      'notion:body-derived-task',
+      undefined,
+      undefined,
+      'polimarket-analyser',
+      taskBody,
+    );
+
+    expect(resultA.allowed).toBe(true);
+    expect(resultB.allowed).toBe(true);
+    expect(resultA.reasons).toEqual(resultB.reasons);
+  });
+
+  it('blocks even a self-reported-clean payload once the body itself names an untracked file', async () => {
+    const taskBody = [
+      '## Files / paths affected',
+      '- packages/backend/src/totally-fake-file.ts (update)',
+    ].join('\n');
+    const result = await checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/checkout.ts',
+            isNew: false,
+            existsInRepo: true,
+          },
+        ],
+      },
+      'notion:body-derived-task',
+      undefined,
+      undefined,
+      'polimarket-analyser',
+      taskBody,
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('does not resolve'))).toBe(
+      true,
+    );
+  });
+
+  it('admits a Ready flip whose Files/paths section lists only bare repo-root-level files (no backticks, no directory separator)', async () => {
+    const taskBody = [
+      '## Files / paths affected',
+      '- README.md (update) — the rewrite',
+      '- .gitignore (update) — ignore build output',
+      '- package.json (update) — bump version',
+    ].join('\n');
+    const result = await checkGroomingPromotionGate(
+      {
+        ...BASE,
+        // Whatever the session staged is irrelevant now — only the body is
+        // consulted.
+        filesPathsEntries: [],
+      },
+      'notion:body-derived-task',
+      undefined,
+      undefined,
+      'polimarket-analyser',
+      taskBody,
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('still blocks rather than failing open when the tracked-file set is unavailable, even with taskBody supplied', async () => {
+    const taskBody = [
+      '## Files / paths affected',
+      '- packages/backend/src/checkout.ts',
+    ].join('\n');
+    const result = await checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/checkout.ts',
+            isNew: false,
+            existsInRepo: true,
+          },
+        ],
+      },
+      'notion:body-derived-task-unresolvable',
+      undefined,
+      undefined,
+      'unresolvable-project',
+      taskBody,
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some(
+        (r) =>
+          r.includes('Files / paths') &&
+          (r.includes('could not be validated') ||
+            r.includes('tracked-file set')),
+      ),
+    ).toBe(true);
   });
 });
 

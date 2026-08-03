@@ -458,16 +458,24 @@ function entryNeedsTrackedFileResolution(entry: FilesPathsEntry): boolean {
 }
 
 /**
- * Re-derives every Files/paths entry's `existsInRepo` from the project's own
- * tracked-file set instead of trusting the session-supplied field — the
- * fix for the incident this module's docstring (:25-31) and the
+ * Re-derives the Files/paths entry list from the task body itself — the fix
+ * for the incident this module's docstring (:25-31) and the
  * isFilesPathsDeclaringRepoWork docstring below describe: a session that
- * mislabels `existsInRepo` bypasses both Files/paths checks the same way a
- * mislabeled `isNew` used to. Only resolves for 💻 Code tasks with a
- * non-empty entry list whose verdict actually depends on the recomputed
- * value (`entryNeedsTrackedFileResolution`) — the two checks that consume
- * this both fail-open for other types/empty/unaffected entries before this
- * would matter.
+ * hand-retypes its `groomingGate.filesPathsEntries` payload (dropping
+ * backticks, reflowing text) can change the verdict without changing the
+ * artifact. When `taskBody` is supplied, the `## Files / paths affected`
+ * section is parsed and git-validated straight from that body
+ * (groomLoad.ts's own `parseFilesPathsEntries`) and the session-supplied
+ * `entries` are not consulted at all for existence. Only resolves for
+ * 💻 Code tasks — the two checks that consume this both fail-open for other
+ * types. When `taskBody` is absent (a caller that hasn't been updated, or a
+ * unit test exercising the other gate mechanics directly), this falls back
+ * to re-deriving `existsInRepo` on the session-supplied `entries`. Either
+ * way, the tracked-file lookup itself is skipped whenever the verdict can't
+ * change (`entryNeedsTrackedFileResolution`) — cheaply pre-checked against
+ * the body's raw list items (`parseFilesPathsRawItems`, no git access) when
+ * `taskBody` is supplied, so a Ready-flip whose entries are all hedge-blocked
+ * / `*(new)*` / well-formed never pays for a repo resolution it doesn't need.
  *
  * Deliberately does NOT fail open when the tracked-file set can't be
  * resolved (no project, no repoRoot, git failure): an unavailable oracle
@@ -484,19 +492,64 @@ function entryNeedsTrackedFileResolution(entry: FilesPathsEntry): boolean {
  * groomLoad.ts is, and a static import would put that whole surface area on
  * every one of those callers' module graphs.
  */
+/** Whether `markdown` carries a top-level `## Files / paths affected`-style heading at all, independent of whether that section has any content. */
+function hasFilesPathsHeading(markdown: string): boolean {
+  return markdown
+    .split('\n')
+    .some(
+      (line) =>
+        /^#{1,3}\s/.test(line) &&
+        line.replace(/^#+\s*/, '').toLowerCase().includes('files'),
+    );
+}
+
 async function resolveFilesPathsEntriesServerSide(
   type: string | undefined,
   entries: FilesPathsEntry[] | undefined,
   projectId: string | undefined,
+  taskBody: string | undefined,
 ): Promise<{ entries: FilesPathsEntry[] | undefined; blockedReason?: string }> {
-  if (
-    type !== '💻 Code' ||
-    !entries ||
-    entries.length === 0 ||
-    !entries.some(entryNeedsTrackedFileResolution)
-  ) {
+  if (type !== '💻 Code') {
     return { entries };
   }
+
+  // The candidate list a tracked-file lookup would actually be resolved
+  // against: the body's own parsed raw items once `taskBody` is supplied and
+  // actually carries a `## Files / paths affected` heading — defect 2's fix,
+  // never the session's retyped payload — falling back to the
+  // session-supplied `entries` when no body was supplied, or a supplied body
+  // has no such heading at all (a task-writing.md violation on its own,
+  // already blocked upstream by the readiness gate for a real Ready flip;
+  // never a live path this loses precision on).
+  const bodyHasFilesHeading = !!taskBody && hasFilesPathsHeading(taskBody);
+  let bodySection: string | undefined;
+  let candidates: { raw: string; isNew: boolean }[];
+  if (bodyHasFilesHeading) {
+    const { parseSection } = await import('../notion/NotionClient');
+    const { parseFilesPathsRawItems } = await import('./groomLoad');
+    bodySection = parseSection(taskBody as string, 'files');
+    candidates = parseFilesPathsRawItems(bodySection);
+  } else {
+    candidates = entries ?? [];
+  }
+
+  if (
+    candidates.length === 0 ||
+    !candidates.some((e) =>
+      entryNeedsTrackedFileResolution({
+        raw: e.raw,
+        isNew: e.isNew,
+        existsInRepo: false,
+      }),
+    )
+  ) {
+    return {
+      entries: bodyHasFilesHeading
+        ? candidates.map((e) => ({ ...e, existsInRepo: false }))
+        : entries,
+    };
+  }
+
   const repoRoot = projectId
     ? ProjectService.getById(projectId)?.projectDir
     : undefined;
@@ -508,7 +561,7 @@ async function resolveFilesPathsEntriesServerSide(
         `project "${projectId ?? 'unknown'}"; the tracked-file set this check requires is unavailable.`,
     };
   }
-  const { resolveTrackedFileSet, filesPathsEntryExistsInRepo } =
+  const { resolveTrackedFileSet, filesPathsEntryExistsInRepo, parseFilesPathsEntries } =
     await import('./groomLoad');
   let trackedFiles: Set<string>;
   try {
@@ -521,8 +574,13 @@ async function resolveFilesPathsEntriesServerSide(
         `resolved for project "${projectId}": ${(err as Error).message}`,
     };
   }
+  if (bodyHasFilesHeading) {
+    return {
+      entries: parseFilesPathsEntries(bodySection ?? '', trackedFiles),
+    };
+  }
   return {
-    entries: entries.map((e) => ({
+    entries: (entries ?? []).map((e) => ({
       ...e,
       existsInRepo: filesPathsEntryExistsInRepo(e.raw, trackedFiles),
     })),
@@ -807,6 +865,14 @@ function isInteractiveTriageClean(
  * checks run — a session's own `existsInRepo` claim on its staged payload is
  * never trusted as the deciding value. Async because that re-derivation
  * shells out to git.
+ *
+ * `taskBody`, when supplied, is the task's current raw markdown — the
+ * Files/paths entry list the two Files/paths checks evaluate is then parsed
+ * straight out of its `## Files / paths affected` section, not out of
+ * `entry.filesPathsEntries` (the session's own retyped transcription of that
+ * section into its groomingGate payload). Every caller that already has the
+ * task body in hand (or fetches it anyway for `checkReadiness`) should pass
+ * it through so the verdict tracks the artifact, not the paraphrase.
  */
 export async function checkGroomingPromotionGate(
   entry: GroomingGateEntry,
@@ -814,6 +880,7 @@ export async function checkGroomingPromotionGate(
   authoritativeType?: string,
   accretionOpts?: AccretionCheckOptions,
   projectId?: string,
+  taskBody?: string,
 ): Promise<GroomingGateResult> {
   const reasons: string[] = [];
   const resolvedType = authoritativeType ?? entry.type;
@@ -852,6 +919,7 @@ export async function checkGroomingPromotionGate(
       resolvedType,
       entry.filesPathsEntries,
       projectId,
+      taskBody,
     );
   if (blockedReason) {
     reasons.push(blockedReason);

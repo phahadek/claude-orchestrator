@@ -4484,6 +4484,19 @@ export async function runStageTimeReadyChecks(
   const resolvedType =
     getCachedType(payload.taskId) ?? payload.groomingGate?.type;
 
+  // A missing/unresolvable project surfaces as its own dedicated block
+  // reason inside checkGroomingPromotionGate (via resolveFilesPathsEntriesServerSide)
+  // rather than here — fall back to an empty body so a payload that would
+  // fail the gate for other reasons anyway (e.g. missing size_check) isn't
+  // instead masked by an unrelated crash fetching the body.
+  let body = '';
+  try {
+    const backend = getTaskBackend(intent.projectId);
+    body = await computeProposedBody(backend, intent.groupId, payload.taskId);
+  } catch {
+    // handled by the empty-body fallback above
+  }
+
   const gateResult = await checkGroomingPromotionGate(
     payload.groomingGate ?? {},
     payload.taskId,
@@ -4499,6 +4512,7 @@ export async function runStageTimeReadyChecks(
       ? { skipGateContributionCheck: true, skipSeedContributionCheck: true }
       : undefined,
     intent.projectId,
+    body,
   );
   if (!gateResult.allowed) {
     setStagedIntentAnnotation(
@@ -4509,12 +4523,6 @@ export async function runStageTimeReadyChecks(
     return annotated ? rowToApi(annotated) : intent;
   }
 
-  const backend = getTaskBackend(intent.projectId);
-  const body = await computeProposedBody(
-    backend,
-    intent.groupId,
-    payload.taskId,
-  );
   const violations = checkReadiness(body, resolvedType);
   if (violations.length > 0) {
     setStagedIntentAnnotation(
@@ -4931,6 +4939,20 @@ async function checkGroupArmingIntentCompleteness(
     }
   }
 
+  // See runStageTimeReadyChecks's identical fallback: an unresolvable
+  // project surfaces its own dedicated block reason inside
+  // checkGroomingPromotionGate rather than crashing this check outright.
+  let groomingGateBody = '';
+  try {
+    const groomingGateBackend = getTaskBackend(row.project_id);
+    groomingGateBody = await computeProposedBody(
+      groomingGateBackend,
+      groupId,
+      payload.taskId,
+    );
+  } catch {
+    // handled by the empty-body fallback above
+  }
   const gateResult = await checkGroomingPromotionGate(
     payload.groomingGate ?? {},
     payload.taskId,
@@ -4948,6 +4970,7 @@ async function checkGroupArmingIntentCompleteness(
       ),
     },
     row.project_id,
+    groomingGateBody,
   );
   if (!gateResult.allowed) {
     return fail({

@@ -51,16 +51,18 @@ export function registerGroomPrecheckTool(
       const entry = (args.groomingGate ?? {}) as GroomingGateEntry;
       const authoritativeType = getCachedType(args.taskId) ?? entry.type;
 
+      const backend = getTaskBackend(ctx.projectId);
+      const body = (await backend.fetchTaskPage(args.taskId)) ?? '';
+
       const gateResult = await checkGroomingPromotionGate(
         entry,
         args.taskId,
         authoritativeType,
         undefined,
         ctx.projectId,
+        body,
       );
 
-      const backend = getTaskBackend(ctx.projectId);
-      const body = (await backend.fetchTaskPage(args.taskId)) ?? '';
       const readinessViolations = checkReadiness(body, authoritativeType);
 
       const bindingConstraintIds = bindingConstraintIdsForRegions(

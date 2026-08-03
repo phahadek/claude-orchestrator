@@ -630,7 +630,8 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
         fetchTaskPage: vi
           .fn()
           .mockResolvedValue(
-            '## Open Questions\n- What supplies the credential?\n',
+            '## Open Questions\n- What supplies the credential?\n\n' +
+              '## Files / paths affected\n- packages/backend/src/abc.ts *(new)*\n',
           ),
       });
       const commands = new BackendTaskWriteCommands(backend);
@@ -902,7 +903,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
     mockGetAccretionMarker.mockReturnValue({ decision: 'items' });
     mockGetSeedAccretionMarker.mockReturnValue({ decision: 'none' });
     const backend = makeBackend({
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Summary\nAll good.\n\n' +
+            '## Files / paths affected\n- packages/backend/src/abc.ts *(new)*\n',
+        ),
     });
     const commands = new BackendTaskWriteCommands(backend);
 
