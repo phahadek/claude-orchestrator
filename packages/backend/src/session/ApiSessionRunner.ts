@@ -195,14 +195,15 @@ export class ApiSessionRunner implements ISessionRunner {
     }
   }
 
-  sendMessage(message: string): void {
-    if (!this.messageQueue) return;
+  sendMessage(message: string): boolean {
+    if (!this.messageQueue) return false;
     this.messageQueue.push({
       type: 'user',
       message: { role: 'user', content: message },
       parent_tool_use_id: null,
       session_id: '',
     });
+    return true;
   }
 
   async endSession(): Promise<boolean> {

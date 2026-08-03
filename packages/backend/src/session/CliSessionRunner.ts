@@ -258,8 +258,8 @@ export class CliSessionRunner implements ISessionRunner {
     return exitCode;
   }
 
-  sendMessage(message: string): void {
-    if (!this.proc?.stdin?.writable) return;
+  sendMessage(message: string): boolean {
+    if (!this.proc?.stdin?.writable) return false;
     try {
       this.proc.stdin.write(
         JSON.stringify({
@@ -267,11 +267,13 @@ export class CliSessionRunner implements ISessionRunner {
           message: { role: 'user', content: message },
         }) + '\n',
       );
+      return true;
     } catch (err) {
       log(
         this.sessionId,
-        `sendMessage stdin.write failed (ignored): ${(err as Error).message}`,
+        `sendMessage stdin.write failed: ${(err as Error).message}`,
       );
+      return false;
     }
   }
 

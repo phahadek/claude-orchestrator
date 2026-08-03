@@ -3039,10 +3039,20 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   /**
    * Send a follow-up user message to the session.
    * Delegates to the underlying runner (stdin for CLI, message queue for API).
+   *
+   * @returns true if the runner confirmed the message reached the process
+   * (or was queued). _turnInFlight is only set on a confirmed send — a
+   * failed write (e.g. closed stdin on an already-exited process) must not
+   * leave hasActiveTurn() stuck true, or every downstream consumer that
+   * gates on it (enqueueFeedback, pendingApproveTerminal, the attention
+   * signal) would believe a turn is running forever.
    */
-  sendMessage(message: string): void {
-    this._turnInFlight = true;
-    this.runner.sendMessage(message);
+  sendMessage(message: string): boolean {
+    const delivered = this.runner.sendMessage(message);
+    if (delivered) {
+      this._turnInFlight = true;
+    }
+    return delivered;
   }
 
   /**

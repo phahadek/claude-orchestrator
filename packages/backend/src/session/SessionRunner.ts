@@ -104,8 +104,13 @@ export interface ISessionRunner {
   /**
    * Deliver a follow-up user message to the running session.
    * No-op if the session is not running.
+   *
+   * @returns true if the message was actually handed to the underlying
+   * transport (stdin write succeeded / queued), false if delivery could not
+   * be confirmed (e.g. a closed stdin pipe or a synchronous write failure).
+   * Callers must not treat a false return as delivered.
    */
-  sendMessage(message: string): void;
+  sendMessage(message: string): boolean;
 
   /**
    * Signal a clean session end (close stdin / end the input stream), then
