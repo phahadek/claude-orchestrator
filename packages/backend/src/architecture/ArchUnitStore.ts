@@ -7,6 +7,8 @@ import {
   listArchUnitEvents,
   insertArchUnitEvent,
   queryArchUnits,
+  listArchUnitTopics,
+  listArchUnitRegions,
 } from '../db/queries';
 import type {
   ArchUnitKind,
@@ -264,4 +266,14 @@ export function supersedeUnit(
  */
 export function queryUnits(query: ArchUnitQuery = {}): ArchUnit[] {
   return queryArchUnits(query).map(toArchUnit);
+}
+
+/** Live distinct topic vocabulary, across all statuses — see queries.listArchUnitTopics. */
+export function listTopics(): string[] {
+  return listArchUnitTopics();
+}
+
+/** Live distinct region vocabulary, across all statuses — see queries.listArchUnitRegions. */
+export function listRegions(): string[] {
+  return listArchUnitRegions();
 }

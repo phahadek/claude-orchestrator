@@ -14,7 +14,10 @@ vi.mock('../../../db/db.js', async () => {
 });
 
 import { db } from '../../../db/db.js';
-import { createUnit } from '../../../architecture/ArchUnitStore.js';
+import {
+  createUnit,
+  supersedeUnit,
+} from '../../../architecture/ArchUnitStore.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -121,5 +124,120 @@ describe('architecture.getUnit', () => {
     expect(result.content[0]?.text).not.toBe('null');
     expect(result.content[0]?.text).toMatch(/not found/i);
     expect(result.content[0]?.text).not.toMatch(/binding-constraint/i);
+  });
+});
+
+describe('architecture.queryUnits', () => {
+  async function callQueryUnits(args: Record<string, unknown>) {
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'architecture.queryUnits',
+      arguments: args,
+    })) as { content: Array<{ type: string; text?: string }> };
+    await close();
+    return JSON.parse(result.content[0]?.text ?? 'null');
+  }
+
+  it('returns a bare array for a successful topic query', async () => {
+    createUnit({
+      title: 'Session credential scope',
+      kind: 'invariant',
+      topic: 'session-auth',
+      regions: ['packages/backend'],
+      body: 'body',
+      at: '2024-01-01T00:00:00Z',
+    });
+
+    const parsed = await callQueryUnits({ topic: 'session-auth' });
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({ topic: 'session-auth' });
+  });
+
+  it('names the available topics for a topic not in the vocabulary at all', async () => {
+    createUnit({
+      title: 'Session credential scope',
+      kind: 'invariant',
+      topic: 'session-auth',
+      regions: ['packages/backend'],
+      body: 'body',
+      at: '2024-01-01T00:00:00Z',
+    });
+
+    const parsed = await callQueryUnits({ topic: 'docs' });
+    expect(parsed.units).toEqual([]);
+    expect(parsed.topic).toMatchObject({ value: 'docs', recognized: false });
+    expect(parsed.topic.availableTopics).toEqual(['session-auth']);
+  });
+
+  it('distinguishes a topic that exists but has no active units from one that is not recognized', async () => {
+    const unit = createUnit({
+      title: 'Deferred design note',
+      kind: 'reference',
+      topic: 'deferred-topic',
+      regions: ['packages/backend'],
+      body: 'body',
+      at: '2024-01-01T00:00:00Z',
+    });
+    supersedeUnit(
+      unit.id,
+      {
+        title: 'Replacement note',
+        kind: unit.kind,
+        topic: 'other-topic',
+        regions: unit.regions,
+        body: unit.body,
+        at: '2024-01-02T00:00:00Z',
+      },
+      '2024-01-02T00:00:00Z',
+    );
+
+    const parsed = await callQueryUnits({ topic: 'deferred-topic' });
+    expect(parsed.units).toEqual([]);
+    expect(parsed.topic).toEqual({ value: 'deferred-topic', recognized: true });
+    expect(parsed.topic.availableTopics).toBeUndefined();
+  });
+
+  it('names the available regions for a region that substring-matches nothing stored', async () => {
+    createUnit({
+      title: 'Session credential scope',
+      kind: 'invariant',
+      topic: 'session-auth',
+      regions: ['packages/backend/src/auth'],
+      body: 'body',
+      at: '2024-01-01T00:00:00Z',
+    });
+
+    const parsed = await callQueryUnits({ region: 'packages/frontend' });
+    expect(parsed.units).toEqual([]);
+    expect(parsed.region).toMatchObject({
+      value: 'packages/frontend',
+      recognized: false,
+    });
+    expect(parsed.region.availableRegions).toEqual([
+      'packages/backend/src/auth',
+    ]);
+  });
+
+  it('distinguishes a region that substring-matches something from one that matches nothing, when other filters still yield zero', async () => {
+    createUnit({
+      title: 'Session credential scope',
+      kind: 'invariant',
+      topic: 'session-auth',
+      regions: ['packages/backend/src/auth'],
+      body: 'body',
+      at: '2024-01-01T00:00:00Z',
+    });
+
+    const parsed = await callQueryUnits({
+      region: 'packages/backend/src/auth',
+      kind: 'decision',
+    });
+    expect(parsed.units).toEqual([]);
+    expect(parsed.region).toEqual({
+      value: 'packages/backend/src/auth',
+      recognized: true,
+    });
+    expect(parsed.region.availableRegions).toBeUndefined();
   });
 });
