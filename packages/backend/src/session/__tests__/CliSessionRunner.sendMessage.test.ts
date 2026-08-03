@@ -68,9 +68,7 @@ describe('CliSessionRunner.sendMessage — reports whether the write actually re
     const delivered = runner.sendMessage('follow-up');
 
     expect(delivered).toBe(true);
-    expect(writeSpy).toHaveBeenCalledWith(
-      expect.stringContaining('follow-up'),
-    );
+    expect(writeSpy).toHaveBeenCalledWith(expect.stringContaining('follow-up'));
   });
 
   it('returns false without attempting a write when stdin is not writable (closed pipe)', async () => {
