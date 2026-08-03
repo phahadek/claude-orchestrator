@@ -77,7 +77,7 @@ beforeEach(() => {
 });
 
 describe('stage-proposal MCP tools — registration', () => {
-  it('registers exactly the 19 stage-proposal tool names', async () => {
+  it('registers exactly the 20 stage-proposal tool names', async () => {
     const { client, close } = await connectedClient();
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -101,6 +101,7 @@ describe('stage-proposal MCP tools — registration', () => {
         'task.setDependsOn',
         'task.setProperties',
         'task.setStatus',
+        'task.setType',
         'task.updateBody',
       ].sort(),
     );
@@ -389,6 +390,43 @@ describe('stage-proposal MCP tools — schema validation', () => {
     await close();
   });
 
+  it('task.setType stages a task.setType intent carrying taskId/type', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'task.setType',
+      arguments: { payload: { taskId: 't-1', type: '📐 Design' } },
+    });
+    const intent = parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(intent.kind).toBe('task.setType');
+    expect(getStagedIntent(intent.id as string)).toBeTruthy();
+    await close();
+  });
+
+  it('task.setType rejects a Type outside the closed vocabulary task.create validates against', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'task.setType',
+      arguments: { payload: { taskId: 't-1', type: 'Not-A-Type' } },
+    });
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    await close();
+  });
+
+  it('the task.setProperties tool description no longer claims Type has its own registered tool while none exists — it does now', async () => {
+    const { client, close } = await connectedClient();
+    const { tools } = await client.listTools();
+    const setPropertiesTool = tools.find(
+      (t) => t.name === 'task.setProperties',
+    );
+    const setTypeTool = tools.find((t) => t.name === 'task.setType');
+    expect(setPropertiesTool?.description).toBeDefined();
+    expect(setTypeTool).toBeDefined();
+    expect(setPropertiesTool!.description).toMatch(/Type have their own tools/);
+    await close();
+  });
+
   it('gate.accrete rejects an invalid classification enum value', async () => {
     const { client, close } = await connectedClient();
     const result = await client.callTool({
@@ -603,6 +641,7 @@ describe('stage-proposal MCP tools — envelope fields misplaced inside payload'
         },
       },
       'task.setProperties': { taskId: 't-1', patch: {} },
+      'task.setType': { taskId: 't-1', type: '📐 Design' },
       'gate.accrete': {
         sourceTask: { id: 't-1', title: 'Task', project: 'p', milestone: 'm' },
         items: [{ text: 'an item' }],

@@ -25,6 +25,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'task.setDependsOn',
   'task.updateBody',
   'task.setProperties',
+  'task.setType',
   'task.patchBodySection',
   'intent.withdraw',
   'gate.accrete',

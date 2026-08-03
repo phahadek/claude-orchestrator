@@ -349,6 +349,7 @@ export function deriveOpsDigestSlice(
 const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
   'task.setStatus': '{"taskId":"<task-id>","status":"Ready"}',
   'task.setProperties': '{"taskId":"<task-id>","properties":{"priority":"P1"}}',
+  'task.setType': '{"taskId":"<task-id>","type":"💻 Code"}',
   'task.setDependsOn': '{"taskId":"<task-id>","dependsOn":["<other-task-id>"]}',
   'gate.accrete':
     '{"project":"<project-id>","taskId":"<task-id>","title":"<title>",' +

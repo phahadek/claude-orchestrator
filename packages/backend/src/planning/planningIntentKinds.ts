@@ -20,6 +20,7 @@ export const PLANNING_INTENT_KINDS: Record<
   groom: [
     'task.setStatus',
     'task.setProperties',
+    'task.setType',
     'task.setDependsOn',
     'gate.accrete',
     'seed.stage',
