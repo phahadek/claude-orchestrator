@@ -97,7 +97,7 @@ export function registerArchitectureReadTools(
         'Read-only: lists arch_unit store records (including body) matching the given filters. ' +
         'Defaults to the active set; pass status to widen it. topic is an exact-match filter; ' +
         "region is a substring/prefix-match filter over each unit's regions array. If a zero-result " +
-        'query is caused by topic or region, the response names the store\'s live topic/region ' +
+        "query is caused by topic or region, the response names the store's live topic/region " +
         'vocabulary instead of a bare empty array, so an unrecognized value is distinguishable from ' +
         'one that matches but currently has no units.',
       inputSchema: {
@@ -117,11 +117,22 @@ export function registerArchitectureReadTools(
         includeSuperseded: args.includeSuperseded,
       });
 
-      if (units.length === 0 && (args.topic !== undefined || args.region !== undefined)) {
+      if (
+        units.length === 0 &&
+        (args.topic !== undefined || args.region !== undefined)
+      ) {
         const result: {
           units: never[];
-          topic?: { value: string; recognized: boolean; availableTopics?: string[] };
-          region?: { value: string; recognized: boolean; availableRegions?: string[] };
+          topic?: {
+            value: string;
+            recognized: boolean;
+            availableTopics?: string[];
+          };
+          region?: {
+            value: string;
+            recognized: boolean;
+            availableRegions?: string[];
+          };
         } = { units: [] };
 
         if (args.topic !== undefined) {
@@ -134,7 +145,9 @@ export function registerArchitectureReadTools(
 
         if (args.region !== undefined) {
           const availableRegions = listRegions();
-          const recognized = availableRegions.some((r) => r.includes(args.region!));
+          const recognized = availableRegions.some((r) =>
+            r.includes(args.region!),
+          );
           result.region = recognized
             ? { value: args.region, recognized: true }
             : { value: args.region, recognized: false, availableRegions };
