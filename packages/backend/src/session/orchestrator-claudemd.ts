@@ -243,7 +243,17 @@ ${
 ${
   gitMode === 'local-only'
     ? ''
-    : `## Flaky / Transient CI or F2 Gate Failures
+    : `## Nudges
+
+A nudge is an unsolicited orchestrator message about your open PR — a merge-conflict, "base branch moved", or stalled-merge notice. Act on what it names, ahead of the "stop and wait" default above, which covers the gap between review passes, not a flagged change. Compliance isn't checked; act because it's true.
+
+Keep your PR mergeable against \`${targetBranch}\` for its whole life, not just through the Pre-PR Gate — rebase and push once you learn it's needed.
+
+The supervisor's "Pause your work" message isn't a nudge in this sense: stopping is what it asks, so stopping is full compliance.
+
+---
+
+## Flaky / Transient CI or F2 Gate Failures
 
 When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
 

@@ -167,6 +167,24 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       '{skillLabel} proposes; it never self-authorizes the commit.',
   },
   {
+    id: 'nudges',
+    title: 'Nudges',
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
+    text:
+      'A nudge is an unsolicited message the orchestrator injects into a session ' +
+      'outside the turn it is waiting on, sent when it detects a condition that ' +
+      'needs a response. IS: obliges action — read it, and if it names one, take ' +
+      'it, ahead of any standing wait-for-instructions rule elsewhere in this ' +
+      'procedure. IS NOT observed — whether {skillLabel} acts on a nudge is never ' +
+      'checked, so act on it because it is true, not because it is scored. The ' +
+      'nudge a dispatched {skillLabel} session actually receives is the ' +
+      'supervisor\'s stuck-session pause ("Pause your work — supervisor flagged ' +
+      'this task as exceeding expected duration. Stop running tools and wait for ' +
+      'further instructions."). That one is EXEMPT from "take the named action" ' +
+      'above: stopping tool use and ending the turn the moment it arrives already ' +
+      'IS full compliance — there is no further action to weigh.',
+  },
+  {
     id: 'no-silent-writes',
     title: 'No silent writes',
     appliesTo: ['groom', 'design', 'ops', 'split'],
