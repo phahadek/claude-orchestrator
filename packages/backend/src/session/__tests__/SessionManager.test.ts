@@ -630,9 +630,7 @@ describe('enqueueFeedback — usage admission gate', () => {
     vi.spyOn(sm, 'sendOrResume').mockResolvedValueOnce(SESSION_ID);
     await sm.enqueueFeedback(SESSION_ID, 'system:nudge', 'nudge text');
 
-    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
-      'item-1',
-    ]);
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
   });
 });
 

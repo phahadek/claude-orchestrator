@@ -170,9 +170,7 @@ describe('OrphanedTaskSweeper', () => {
       .mockReturnValue(undefined);
     vi.mocked(getSession).mockReset().mockReturnValue(undefined);
     vi.mocked(listStagedIntentsBySession).mockReset().mockReturnValue([]);
-    vi.mocked(isUsageAdmitted)
-      .mockReset()
-      .mockReturnValue({ allowed: true });
+    vi.mocked(isUsageAdmitted).mockReset().mockReturnValue({ allowed: true });
     broadcast.mockClear();
   });
 
