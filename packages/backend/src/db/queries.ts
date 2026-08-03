@@ -7629,6 +7629,35 @@ export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
     .all(params) as ArchUnitRow[];
 }
 
+/**
+ * Distinct topic values across the whole arch_unit table (all statuses) —
+ * the live topic vocabulary, used to tell "topic not recognized" apart from
+ * "topic recognized but currently empty" when a queryArchUnits call by
+ * topic returns zero rows.
+ */
+export function listArchUnitTopics(): string[] {
+  const rows = db
+    .prepare(`SELECT DISTINCT topic FROM arch_unit ORDER BY topic`)
+    .all() as { topic: string }[];
+  return rows.map((r) => r.topic);
+}
+
+/**
+ * Distinct region values across the whole arch_unit table (all statuses),
+ * flattened out of each row's JSON regions array — the live region
+ * vocabulary a region substring filter is checked against.
+ */
+export function listArchUnitRegions(): string[] {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT r.value AS region
+       FROM arch_unit, json_each(arch_unit.regions) AS r
+       ORDER BY region`,
+    )
+    .all() as { region: string }[];
+  return rows.map((r) => r.region);
+}
+
 // ─── flow_arm ──────────────────────────────────────────────────────────────
 
 let _stmtGetFlowArm: Database.Statement | undefined;
