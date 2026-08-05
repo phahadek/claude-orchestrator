@@ -23,9 +23,6 @@ npm install
 cp packages/backend/.env.example packages/backend/.env
 # Edit packages/backend/.env — see the env var reference below
 
-cp .claude/local-context.md.example .claude/local-context.md
-# Edit .claude/local-context.md with your project's Notion URLs
-
 # Optional: Notion context page URL and board ID for the frontend
 cp packages/frontend/.env.example packages/frontend/.env
 
@@ -36,9 +33,9 @@ In dev mode, open `http://localhost:5173` in your browser — that's Vite's fron
 
 **LAN access (opt-in):** By default the backend and Vite dev server bind to `127.0.0.1` (localhost only). To expose the dashboard on your local network, set `ORCHESTRATOR_BIND_HOST=0.0.0.0` (or a specific LAN IP) in `packages/backend/.env` before starting. Corporate mode always ignores this override and forces `127.0.0.1`.
 
-### Local context (`.claude/local-context.md`)
+### Project context lives in the dashboard, not a tracked file
 
-`.claude/local-context.md` is **gitignored** and holds host-local references — Notion Project Context URL, board IDs, design-doc links — that should never be committed. Claude Code sessions opened directly in the repo read it as their first action; orchestrator-launched sessions get the same content auto-appended to their injected `CLAUDE.md` at session start.
+Notion Project Context URLs, board IDs, and other per-project references are entered once via **Settings → Projects → Add project** in the dashboard UI and persisted to its SQLite database — there is no host-local context file to create or gitignore. Orchestrator-launched sessions get this content injected into their session context at spawn time; nothing needs to live in the checkout.
 
 As an optional defense-in-depth, you can install a local pre-commit hook that rejects any commit containing a Notion workspace ID:
 
@@ -50,7 +47,7 @@ cat > .git/hooks/pre-commit <<'EOF'
 # all Notion page/database IDs but will also match unrelated UUIDs.
 if git diff --cached -p | grep -qE "[0-9a-f]{32}"; then
   echo "ERROR: commit contains what looks like a Notion ID." >&2
-  echo "Move it to .claude/local-context.md (gitignored), or use --no-verify if intentional." >&2
+  echo "Configure it via the dashboard's Settings UI instead of committing it, or use --no-verify if intentional." >&2
   exit 1
 fi
 EOF

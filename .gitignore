@@ -12,9 +12,8 @@ packages/frontend/.env
 *.db-wal
 *.db-journal
 
-# Claude Code / tool-generated directories — but keep tracked templates (.example)
+# Claude Code / tool-generated directories
 .claude/*
-!.claude/local-context.md.example
 .claire/
 
 # Skill caches (e.g. /groom loader output) — host-specific, never committed

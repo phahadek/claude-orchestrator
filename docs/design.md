@@ -180,18 +180,16 @@ Shown when user clicks a session card. Right-side panel, ~40% width.
 
 ---
 
-## Permission rule engine
+## Tool permissions
 
-All tool calls from Agent SDK sessions pass through a `canUseTool` hook before execution. The hook evaluates rules in order:
+Every session — CLI subprocess or Agent SDK — is spawned with an explicit `--allowed-tools` /
+`allowedTools` list: a base set (`ALLOWED_TOOLS` in `config.ts`) merged with any per-project
+extensions declared in that project's `.claude-orchestrator.yml`. There is no user-editable rule
+store and no settings screen for it. For API-mode sessions, the SDK's `canUseTool` hook only fires
+for a call **not** already covered by that list, and unconditionally denies it — logged to the
+`permission_denials` table, not escalated to a dashboard approval queue.
 
-1. **Always-deny list** — matched calls are rejected immediately, session is notified. Example: `rm -rf /`, `git push --force main`.
-2. **Always-allow list** — matched calls are approved immediately, no user interaction. Example: all `Read` calls; `Bash` commands that only read from `.claude/**`; `git status/log/diff`; `npm run *`, `npx tsc`, `npx vitest`.
-3. **Pattern rules** — glob or regex match on tool name + argument string. Each rule carries an allow/deny decision. Evaluated in order; first match wins.
-4. **Escalate** — no rule matched. Session is paused, attention badge increments, permission request surfaces in the dashboard UI.
-
-A **Permission Rules** settings screen in the dashboard lets you manage the rule list: add/remove/reorder rules, toggle allow vs deny, and view a recent log of which rule fired for each tool call.
-
-This is implemented entirely at the SDK layer in the backend. It does not depend on Claude Code's own permission configuration.
+This is implemented entirely at session-spawn time in the backend. It does not depend on Claude Code's own interactive permission prompts.
 
 ## Dependency modelling
 
@@ -240,8 +238,7 @@ A local SQLite database (file-based, zero setup) stores everything Notion doesn'
 | ------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `sessions`          | session_id, notion_task_id, notion_task_url, project_context_url, status, started_at, ended_at, pr_url      |
 | `session_events`    | session_id, event_type, payload, timestamp — raw event log from Agent SDK                                   |
-| `permission_events` | session_id, tool_name, proposed_action, decision, decided_at                                                |
-| `permission_rules`  | ordered list of glob/regex patterns with allow/deny decisions, managed via the Permission Rules settings UI |
+| `permission_denials`| session_id, tool_name, tool_use_id, tool_input, timestamp — one row per denied tool call                    |
 | `pull_requests`     | PR metadata, review state, paired review session, merge state                                               |
 | `session_audits`    | post-session compliance check results                                                                       |
 | `settings`          | runtime settings key/value store                                                                            |
