@@ -856,9 +856,7 @@ describe('checkGroomingPromotionGate — Files/paths non-repo-path declaration',
 
 describe('looksLikeRepoPath', () => {
   it('accepts a backticked, untracked, well-formed new-file entry', () => {
-    expect(
-      looksLikeRepoPath('`src/a/b/new_module.py` (new)'),
-    ).toBe(true);
+    expect(looksLikeRepoPath('`src/a/b/new_module.py` (new)')).toBe(true);
   });
 
   it('accepts the same entry unbackticked', () => {
@@ -870,9 +868,9 @@ describe('looksLikeRepoPath', () => {
   });
 
   it('rejects an external-prefixed entry', () => {
-    expect(
-      looksLikeRepoPath('Notion: Design the per-flow arm model'),
-    ).toBe(false);
+    expect(looksLikeRepoPath('Notion: Design the per-flow arm model')).toBe(
+      false,
+    );
   });
 
   it('derives the same path token as filesPathsEntryExistsInRepo across backticked, bold, and trailing-punctuation variants', () => {

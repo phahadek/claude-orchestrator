@@ -805,9 +805,7 @@ describe('filesPathsEntryExistsInRepo — repo-root-level files', () => {
 
 describe('parseFilesPathsRawItems — (new) marker', () => {
   it('marks a bare (new) entry as new', () => {
-    const [item] = parseFilesPathsRawItems(
-      '- src/a/b/new_module.py (new)',
-    );
+    const [item] = parseFilesPathsRawItems('- src/a/b/new_module.py (new)');
     expect(item.isNew).toBe(true);
   });
 
