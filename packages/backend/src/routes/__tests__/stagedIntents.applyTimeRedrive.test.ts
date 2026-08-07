@@ -608,4 +608,109 @@ describe('translateApplyError', () => {
 
     expect(message).toBe('backend write failed');
   });
+
+  function makePatchBodySectionIntent(overrides: {
+    sessionId: string;
+    taskId: string;
+    section: string;
+    find: string;
+    id: string;
+  }) {
+    return {
+      id: overrides.id,
+      kind: 'task.patchBodySection',
+      payload: {
+        taskId: overrides.taskId,
+        section: overrides.section,
+        operation: 'replace' as const,
+        find: overrides.find,
+        replaceWith: 'new text',
+      },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: overrides.sessionId,
+      state: 'approved' as const,
+      supersedes: null,
+      annotation: null,
+      groupId: null,
+      decisionProposal: null,
+      groomProposal: null,
+      advisory: null,
+      dispositionReason: null,
+      answer: null,
+    };
+  }
+
+  it('surfaces a distinctly stronger re-fetch instruction on the 2nd consecutive identical patchBodySection mismatch in one session', () => {
+    const notFoundError = new Error(
+      '[NotionClient] patchBodySection: text to replace not found in section "Context" of task ' +
+        'notion:task-1. Section text was: some text',
+    );
+    const intent = makePatchBodySectionIntent({
+      sessionId: 'session-repeat-1',
+      taskId: 'notion:task-1',
+      section: 'Context',
+      find: 'the exact phrase',
+      id: 'intent-a',
+    });
+
+    const first = translateApplyError(notFoundError, intent);
+    expect(first).not.toMatch(/re-fetch/i);
+
+    const second = translateApplyError(notFoundError, {
+      ...intent,
+      id: 'intent-b',
+    });
+    expect(second).toMatch(/re-fetch/i);
+    expect(second).toContain(
+      'This is the same "text to replace not found" mismatch as the previous attempt',
+    );
+  });
+
+  it('keeps surfacing the same stronger message on a 3rd-plus identical failure — no new escalation beyond the existing rejection', () => {
+    const notFoundError = new Error(
+      '[NotionClient] patchBodySection: text to replace not found in section "Context" of task ' +
+        'notion:task-2. Section text was: some text',
+    );
+    const intent = makePatchBodySectionIntent({
+      sessionId: 'session-repeat-2',
+      taskId: 'notion:task-2',
+      section: 'Context',
+      find: 'another phrase',
+      id: 'intent-c',
+    });
+
+    translateApplyError(notFoundError, intent);
+    const second = translateApplyError(notFoundError, { ...intent, id: 'intent-d' });
+    const third = translateApplyError(notFoundError, { ...intent, id: 'intent-e' });
+
+    expect(second).toBe(third);
+    expect(third).toMatch(/re-fetch/i);
+  });
+
+  it('does not strengthen the message when the session, task, section, or find text differs from the prior failure', () => {
+    const notFoundError = new Error(
+      '[NotionClient] patchBodySection: text to replace not found in section "Context" of task ' +
+        'notion:task-3. Section text was: some text',
+    );
+    const base = makePatchBodySectionIntent({
+      sessionId: 'session-repeat-3',
+      taskId: 'notion:task-3',
+      section: 'Context',
+      find: 'phrase one',
+      id: 'intent-f',
+    });
+    translateApplyError(notFoundError, base);
+
+    const differentFind = makePatchBodySectionIntent({
+      sessionId: 'session-repeat-3',
+      taskId: 'notion:task-3',
+      section: 'Context',
+      find: 'phrase two',
+      id: 'intent-g',
+    });
+    expect(translateApplyError(notFoundError, differentFind)).not.toMatch(
+      /re-fetch/i,
+    );
+  });
 });
