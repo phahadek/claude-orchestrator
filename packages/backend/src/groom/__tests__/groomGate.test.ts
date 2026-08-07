@@ -1181,7 +1181,9 @@ describe('checkGroomingPromotionGate — Files/paths derived from the task body,
       taskBody,
     );
     expect(
-      result.reasons.some((r) => r.includes('does not resolve to an existing repo file')),
+      result.reasons.some((r) =>
+        r.includes('does not resolve to an existing repo file'),
+      ),
     ).toBe(false);
     expect(result.allowed).toBe(true);
   });
