@@ -188,6 +188,31 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
   });
 });
 
+describe('GROOM_ALLOWED_TOOLS — restricted environment/context re-derivation surface', () => {
+  it('excludes unscoped filesystem-search and broad-directory-listing prefixes', () => {
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(find:*)');
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(ls:*)');
+  });
+
+  it('excludes bare git status/branch (no path scoping)', () => {
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(git status:*)');
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(git branch:*)');
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(git branch --list:*)');
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(git:*)');
+  });
+
+  it('still allows scoped git grep/show/log for code-region exploration', () => {
+    expect(GROOM_ALLOWED_TOOLS).toContain('Bash(git grep:*)');
+    expect(GROOM_ALLOWED_TOOLS).toContain('Bash(git show:*)');
+    expect(GROOM_ALLOWED_TOOLS).toContain('Bash(git log:*)');
+  });
+
+  it('a simulated unscoped filesystem search is denied — absent from the allowed-tools list, the same denial mechanism the ALLOWED_TOOLS github-tool exclusion tests above rely on', () => {
+    const simulatedGroomBashCall = 'Bash(find:*)';
+    expect(GROOM_ALLOWED_TOOLS).not.toContain(simulatedGroomBashCall);
+  });
+});
+
 describe('NOTION_READ_MCP_TOOLS', () => {
   it('carries the prefix derived from the registered server key (mcp__notion__), never the unresolvable claude.ai connector namespace', () => {
     for (const tool of NOTION_READ_MCP_TOOLS) {

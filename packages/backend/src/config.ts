@@ -197,6 +197,35 @@ const PLANNING_READONLY_BASH_TOOLS = [
   'Bash(pwd:*)',
 ];
 
+// groom-only Bash subset — narrower than PLANNING_READONLY_BASH_TOOLS above.
+// Grooming's task/context digest is already injected wholesale (see the
+// /groom skill and procedureAssembler.ts), so unlike design/ops it has no
+// legitimate reason to re-derive environment or repo context by hand.
+// Observed waste (session af76fa24, 70 Bash calls against an already-fully-
+// injected prompt) came specifically from an unscoped filesystem search
+// (`find` from repo root), a broad directory listing of the orchestrator
+// root (`ls` above the project root), and bare `git status`/`git branch`/
+// `git log` with no path argument. This list drops `find`/`ls` entirely and
+// adds only path-scoped git inspection (`git grep`, `git log <path>`,
+// `git show <sha>:<path>`) — the exact code-region exploration the /groom
+// skill is designed to do — never a bare git status/branch/log/ls-files.
+const GROOM_READONLY_BASH_TOOLS = [
+  'Bash(cd:*)',
+  'Bash(which:*)',
+  'Bash(where:*)',
+  'Bash(cat:*)',
+  'Bash(echo:*)',
+  'Bash(head:*)',
+  'Bash(tail:*)',
+  'Bash(wc:*)',
+  'Bash(grep:*)',
+  'Bash(sort:*)',
+  'Bash(pwd:*)',
+  'Bash(git grep:*)',
+  'Bash(git log:*)',
+  'Bash(git show:*)',
+];
+
 // Read-only Notion MCP tool names, exactly as the registered `notion` server
 // (mcp/notionMcpServer.ts) exposes them — search/fetch/get/query verbs only,
 // never create/update/move/delete (a Notion integration token grants write;
@@ -354,14 +383,18 @@ export const PLANNING_DISALLOWED_TOOLS = [
 
 /**
  * groom session tool set: deterministic backlog grooming — stage-only/read-only.
- * The orchestrator MCP stage-proposal tools + light read-only code tools.
+ * The orchestrator MCP stage-proposal tools + a narrow read-only code-region
+ * exploration subset (GROOM_READONLY_BASH_TOOLS, above) — deliberately
+ * narrower than PLANNING_READONLY_BASH_TOOLS/design/ops: no `find`, no `ls`,
+ * and no bare git status/branch, since the task/context digest groom needs
+ * is already injected wholesale and must never be re-derived by hand.
  * Excludes Write/Edit, git-mutation, PR/github MCP, and Notion-write MCP.
  * NOTION_READ_MCP_TOOLS is merged in separately, only for Notion-task-source
  * projects (see orchestrator-config.ts#getSessionAllowedTools) — this base
  * constant stays task-source-agnostic.
  */
 export const GROOM_ALLOWED_TOOLS = [
-  ...PLANNING_READONLY_BASH_TOOLS,
+  ...GROOM_READONLY_BASH_TOOLS,
   ...GROOM_MCP_TOOLS,
 ];
 
@@ -381,6 +414,7 @@ export const DESIGN_ALLOWED_TOOLS = [
   'Bash(git ls-files:*)',
   'Bash(git rev-parse:*)',
   'Bash(git branch --list:*)',
+  'Bash(git grep:*)',
 ];
 
 /**
@@ -407,6 +441,7 @@ export const OPS_ALLOWED_TOOLS = [
   'Bash(git ls-files:*)',
   'Bash(git rev-parse:*)',
   'Bash(git branch --list:*)',
+  'Bash(git grep:*)',
 ];
 
 // The orchestrator MCP stage-proposal tools a docs session is allowed to
