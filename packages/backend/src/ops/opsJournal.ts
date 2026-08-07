@@ -198,7 +198,7 @@ export function setEntryState(
   taskId: string,
   state: OpsState,
   fields?: Partial<Omit<OpsJournalEntry, 'taskId' | 'state' | 'updatedAt'>>,
-): void {
+): OpsState {
   const row = getOpsJournalEntry(taskId);
   if (!row) {
     throw new Error(
@@ -239,6 +239,7 @@ export function setEntryState(
     project_id: updated.project,
     payload: { from: current.state, to: state, milestone: updated.milestone },
   });
+  return current.state;
 }
 
 /**

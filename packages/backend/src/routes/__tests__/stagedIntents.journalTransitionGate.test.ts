@@ -396,4 +396,131 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
       expect(rows).toHaveLength(0);
     });
   });
+
+  describe('self-transition mirror suppression', () => {
+    function activeIntentsForTask(taskId: string) {
+      return db
+        .prepare(
+          `SELECT * FROM staged_intent WHERE task_id = ? AND state IN ('staged', 'approved')`,
+        )
+        .all(taskId) as Array<{ id: string }>;
+    }
+
+    it('does not re-stage when committing a staged-proposal -> staged-proposal self-transition', async () => {
+      const app = buildApp();
+      seedEntry('task-self-1', 'staged-proposal');
+
+      const stageRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-self-1', state: 'staged-proposal' },
+          projectId: 'proj-1',
+        });
+      expect(stageRes.status).toBe(201);
+
+      const applyRes = await supertest(app)
+        .post(`/api/staged-intents/${stageRes.body.id}/apply`)
+        .send({});
+      expect(applyRes.status).toBe(200);
+
+      // The commit applies (the journal stays at staged-proposal) but must
+      // not manufacture a fresh, byte-identical replacement intent — that is
+      // the unbounded re-stage loop this suite guards against.
+      expect(activeIntentsForTask('task-self-1')).toHaveLength(0);
+      expect(journalState('task-self-1')).toBe('staged-proposal');
+    });
+
+    it('mirrors exactly once for a genuine forward transition into staged-proposal, with no residual after the mirror itself commits', async () => {
+      const app = buildApp();
+      seedEntry('task-self-2', 'candidate');
+
+      const stageRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-self-2', state: 'staged-proposal' },
+          projectId: 'proj-1',
+        });
+      expect(stageRes.status).toBe(201);
+
+      await supertest(app)
+        .post(`/api/staged-intents/${stageRes.body.id}/apply`)
+        .send({});
+
+      // One mirror was produced by the genuine candidate -> staged-proposal
+      // transition.
+      const mirrors = activeIntentsForTask('task-self-2');
+      expect(mirrors).toHaveLength(1);
+
+      // Committing that mirror is itself a staged-proposal -> staged-proposal
+      // self-transition — it must not spawn another mirror.
+      const mirrorApplyRes = await supertest(app)
+        .post(`/api/staged-intents/${mirrors[0].id}/apply`)
+        .send({});
+      expect(mirrorApplyRes.status).toBe(200);
+
+      expect(activeIntentsForTask('task-self-2')).toHaveLength(0);
+      expect(journalState('task-self-2')).toBe('staged-proposal');
+    });
+
+    it('still mirrors a legitimate later re-entry into staged-proposal after the journal left it', async () => {
+      const app = buildApp();
+      seedEntry('task-self-3', 'candidate');
+
+      // First genuine transition into staged-proposal — mirrors as expected.
+      const firstRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-self-3', state: 'staged-proposal' },
+          projectId: 'proj-1',
+        });
+      await supertest(app)
+        .post(`/api/staged-intents/${firstRes.body.id}/apply`)
+        .send({});
+      const firstMirrors = activeIntentsForTask('task-self-3');
+      expect(firstMirrors).toHaveLength(1);
+
+      // The operator sends the entry back to candidate (e.g. more work
+      // needed), consuming the mirror in the process.
+      const backRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-self-3', state: 'candidate' },
+          projectId: 'proj-1',
+        });
+      expect(backRes.status).toBe(201);
+      await supertest(app)
+        .post(`/api/staged-intents/${backRes.body.id}/apply`)
+        .send({});
+      expect(journalState('task-self-3')).toBe('candidate');
+
+      // A later, independent session stages a fresh, legitimate
+      // candidate -> staged-proposal transition — this must still mirror,
+      // proving the fix only suppresses true self-transitions.
+      const secondRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: {
+            taskId: 'task-self-3',
+            state: 'staged-proposal',
+            fields: { findingOrProposal: { summary: 'second pass' } },
+          },
+          projectId: 'proj-1',
+        });
+      expect(secondRes.status).toBe(201);
+      await supertest(app)
+        .post(`/api/staged-intents/${secondRes.body.id}/apply`)
+        .send({});
+
+      const secondMirrors = activeIntentsForTask('task-self-3');
+      expect(secondMirrors).toHaveLength(1);
+      expect(JSON.parse((secondMirrors[0] as any).payload).fields.findingOrProposal).toEqual(
+        { summary: 'second pass' },
+      );
+    });
+  });
 });

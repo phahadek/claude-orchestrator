@@ -3284,7 +3284,7 @@ export function stageJournalDecision(
 
 /**
  * Mirrors a committed journal.setState intent onto the decision surface when
- * its apply transitioned the entry to staged-proposal — the staged-intent
+ * its apply *transitioned* the entry into staged-proposal — the staged-intent
  * apply path's counterpart to the mirror in routes/opsJournal.ts's POST
  * /api/ops-journal/:taskId/state handler. Must run only after `intent` has
  * already transitioned out of 'staged'/'approved' (i.e. after
@@ -3292,9 +3292,22 @@ export function stageJournalDecision(
  * stageJournalDecision's dedup (findActiveStagedIntentForTask) matches on
  * (project, kind, taskId) among *active* rows only, and this very intent — if
  * still active — would otherwise be the row it collides with.
+ *
+ * `previousState` is the entry's state immediately before this intent's
+ * apply (applyIntent's 'journal.setState' case returns it from
+ * setEntryState). Mirroring only fires when that prior state was NOT already
+ * staged-proposal — otherwise a self-transition (staged-proposal ->
+ * staged-proposal, legal per isValidOpsTransition's from === to case) would
+ * re-stage a byte-identical journal.setState intent on every commit, forever,
+ * since the entry never actually left staged-proposal for this to be a real
+ * decision update.
  */
-function mirrorJournalDecisionIfStagedProposal(intent: StagedIntent): void {
+function mirrorJournalDecisionIfStagedProposal(
+  intent: StagedIntent,
+  previousState: OpsState | undefined,
+): void {
   if (intent.kind !== 'journal.setState') return;
+  if (previousState === STAGED_PROPOSAL_STATE) return;
   const payload = intent.payload as JournalSetStatePayload;
   const updated = getOpsJournalEntry(payload.taskId);
   if (updated && updated.state === STAGED_PROPOSAL_STATE) {
@@ -3717,8 +3730,12 @@ async function applyIntent(
     }
     case 'journal.setState': {
       const payload = intent.payload as JournalSetStatePayload;
-      setEntryState(payload.taskId, payload.state, payload.fields);
-      return { ok: true };
+      const previousState = setEntryState(
+        payload.taskId,
+        payload.state,
+        payload.fields,
+      );
+      return { ok: true, previousState };
     }
     case 'gate.verify': {
       const payload = intent.payload as GateVerifyIntentPayload;
@@ -5502,7 +5519,10 @@ async function commitGroupIntents(
         annotation: readinessAdvisoryAnnotation(intent, result),
       });
       broadcastIntentChange(rowToApi(committedRow));
-      mirrorJournalDecisionIfStagedProposal(intent);
+      mirrorJournalDecisionIfStagedProposal(
+        intent,
+        (result as { previousState?: OpsState } | undefined)?.previousState,
+      );
       await planningOrchestrator?.handleDisposition({
         intent: committedRow,
         disposition: 'approve',
@@ -5909,7 +5929,10 @@ export function createStagedIntentsRouter(
           annotation: readinessAdvisoryAnnotation(intent, result),
         });
         broadcastIntentChange(rowToApi(committed));
-        mirrorJournalDecisionIfStagedProposal(intent);
+        mirrorJournalDecisionIfStagedProposal(
+          intent,
+          (result as { previousState?: OpsState } | undefined)?.previousState,
+        );
         await planningOrchestrator?.handleDisposition({
           intent: committed,
           disposition: 'approve',
