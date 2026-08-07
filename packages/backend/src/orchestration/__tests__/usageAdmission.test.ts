@@ -4,6 +4,9 @@ import {
   registerUsagePoller,
   isUsageAdmitted,
   recordObservedUsageLimit,
+  checkUsageThresholdAdmission,
+  isUsageThresholdAdmitted,
+  parseThresholdPercent,
 } from '../usageAdmission';
 import {
   getUsageDeferral,
@@ -220,5 +223,98 @@ describe('recordObservedUsageLimit', () => {
       "You've hit your session limit · resets 11:59pm (UTC)",
     );
     expect(isUsageAdmitted().allowed).toBe(false);
+  });
+});
+
+describe('parseThresholdPercent', () => {
+  it('returns null for the empty (disabled) string', () => {
+    expect(parseThresholdPercent('')).toBeNull();
+  });
+
+  it('parses a numeric string', () => {
+    expect(parseThresholdPercent('75')).toBe(75);
+  });
+
+  it('returns null for a non-numeric string', () => {
+    expect(parseThresholdPercent('abc')).toBeNull();
+  });
+});
+
+describe('checkUsageThresholdAdmission', () => {
+  it('allows admission when usage is unavailable', () => {
+    expect(checkUsageThresholdAdmission(AVAILABLE, 80, 80).allowed).toBe(true);
+  });
+
+  it('allows admission when both thresholds are disabled (null)', () => {
+    const result = checkUsageThresholdAdmission(
+      usage({
+        fiveHour: { percent: 99, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+        weekly: { percent: 99, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+      }),
+      null,
+      null,
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('soft-pauses when the hourly (five_hour) percent crosses its configured threshold, independent of the weekly threshold', () => {
+    const result = checkUsageThresholdAdmission(
+      usage({
+        fiveHour: { percent: 85, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+        weekly: { percent: 5, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+      }),
+      80,
+      null,
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.window).toBe('five_hour');
+    expect(result.percent).toBe(85);
+    expect(result.thresholdPercent).toBe(80);
+    expect(result.reason).toBe('usage_threshold_paused');
+  });
+
+  it('soft-pauses when the weekly (seven_day) percent crosses its configured threshold, independent of the hourly threshold', () => {
+    const result = checkUsageThresholdAdmission(
+      usage({
+        fiveHour: { percent: 5, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+        weekly: { percent: 90, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+      }),
+      null,
+      85,
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.window).toBe('seven_day');
+    expect(result.percent).toBe(90);
+    expect(result.thresholdPercent).toBe(85);
+    expect(result.reason).toBe('usage_threshold_paused');
+  });
+
+  it('allows admission when both windows are under their configured thresholds', () => {
+    const result = checkUsageThresholdAdmission(
+      usage({
+        fiveHour: { percent: 40, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+        weekly: { percent: 10, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+      }),
+      80,
+      85,
+    );
+    expect(result.allowed).toBe(true);
+  });
+});
+
+describe('isUsageThresholdAdmitted (registered-poller singleton)', () => {
+  it('reflects the registered poller live snapshot against the passed-in thresholds', () => {
+    registerUsagePoller({
+      getCache: () =>
+        usage({
+          fiveHour: {
+            percent: 92,
+            resetsAt: '2099-01-01T00:00:00Z',
+            severity: 'normal',
+          },
+        }),
+    });
+    expect(isUsageThresholdAdmitted(90, null).allowed).toBe(false);
+    expect(isUsageThresholdAdmitted(95, null).allowed).toBe(true);
   });
 });

@@ -703,6 +703,10 @@ export interface RuntimeSettings {
   milestone_attention_aging_threshold_seconds: number;
   /** Milestone view tier-2 attention: seconds of no distanceToGreen improvement before convergence is flagged flat. */
   milestone_attention_flat_convergence_window_seconds: number;
+  /** Soft-pause auto-launch when the polled five-hour usage percent reaches this threshold; '' = disabled. */
+  hourly_usage_pause_threshold_percent: string;
+  /** Soft-pause auto-launch when the polled weekly usage percent reaches this threshold; '' = disabled. */
+  weekly_usage_pause_threshold_percent: string;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -734,6 +738,8 @@ export const runtimeSettings: RuntimeSettings = {
   auto_launch_poll_interval_ms: Number(
     process.env.AUTO_LAUNCH_POLL_INTERVAL_MS ?? 60_000,
   ),
+  hourly_usage_pause_threshold_percent: '',
+  weekly_usage_pause_threshold_percent: '',
   min_host_free_memory_mb: Number(process.env.MIN_HOST_FREE_MEMORY_MB ?? 4096),
   per_session_reserve_mb: Number(process.env.PER_SESSION_RESERVE_MB ?? 3072),
   session_cgroup_prod_reserve_mb: Number(

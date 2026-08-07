@@ -18,6 +18,8 @@ export interface SettingsValues {
   session_mode: string;
   auto_launch_concurrency: string;
   auto_launch_poll_interval_ms: string;
+  hourly_usage_pause_threshold_percent: string;
+  weekly_usage_pause_threshold_percent: string;
   session_notify_threshold_seconds: string;
   session_pause_threshold_seconds: string;
   session_hard_stop_window_seconds: string;
@@ -71,11 +73,23 @@ const NON_NUMERIC_KEYS = new Set<keyof SettingsValues>([
   'auto_archive_enabled',
 ]);
 
+const NULLABLE_PERCENT_KEYS = new Set<keyof SettingsValues>([
+  'hourly_usage_pause_threshold_percent',
+  'weekly_usage_pause_threshold_percent',
+]);
+
 export function validateField(
   key: keyof SettingsValues,
   value: string,
 ): string | null {
   if (NON_NUMERIC_KEYS.has(key)) return null;
+  if (NULLABLE_PERCENT_KEYS.has(key)) {
+    if (value === '') return null;
+    const pct = Number(value);
+    if (!Number.isInteger(pct) || isNaN(pct)) return 'Must be a whole number';
+    if (pct < 1 || pct > 100) return 'Must be between 1 and 100';
+    return null;
+  }
   const num = Number(value);
   if (!Number.isInteger(num) || isNaN(num)) return 'Must be a whole number';
   if (key === 'auto_launch_concurrency' && num < 1) return 'Minimum is 1';

@@ -70,6 +70,7 @@ export interface PlanUsage {
 export type AdmissionBlockReason =
   | 'memory_admission'
   | 'usage_deferral'
+  | 'usage_threshold_paused'
   | 'capacity_exhausted';
 
 /**

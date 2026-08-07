@@ -10,6 +10,16 @@ const zodBoolCoerce = z.union([
   z.literal('false').transform((): false => false),
 ]);
 
+// Nullable percent threshold: '' (or absent) means the soft-pause is
+// disabled — mirrors the empty-string-means-off convention used for the
+// model/effort settings above, rather than introducing a separate null path.
+const usagePauseThresholdPercent = z
+  .string()
+  .refine(
+    (v) => v === '' || (Number.isFinite(Number(v)) && Number(v) >= 1 && Number(v) <= 100),
+    { message: 'Must be empty (disabled) or a number between 1 and 100' },
+  );
+
 const SettingsSchema = z.object({
   // Numeric settings (z.coerce accepts both numbers and parseable strings)
   max_concurrent_code_sessions: z.coerce.number().int().min(1),
@@ -20,6 +30,8 @@ const SettingsSchema = z.object({
   card_preview_lines: z.coerce.number().int().min(1),
   auto_launch_concurrency: z.coerce.number().int().min(1),
   auto_launch_poll_interval_ms: z.coerce.number().int().min(100),
+  hourly_usage_pause_threshold_percent: usagePauseThresholdPercent,
+  weekly_usage_pause_threshold_percent: usagePauseThresholdPercent,
   min_host_free_memory_mb: z.coerce.number().int().min(0),
   per_session_reserve_mb: z.coerce.number().int().min(0),
   session_notify_threshold_seconds: z.coerce.number().int().min(0),
@@ -101,6 +113,8 @@ export const SETTING_DEFAULTS: Settings = {
   card_preview_lines: 3,
   auto_launch_concurrency: 1,
   auto_launch_poll_interval_ms: 60_000,
+  hourly_usage_pause_threshold_percent: '',
+  weekly_usage_pause_threshold_percent: '',
   min_host_free_memory_mb: 4096,
   per_session_reserve_mb: 3072,
   session_notify_threshold_seconds: 3600,
