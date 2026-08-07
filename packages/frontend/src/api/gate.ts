@@ -160,6 +160,11 @@ export interface ApproveGateItemInput {
   operator?: string;
 }
 
+export interface RejectGateItemInput {
+  reason: string;
+  operator?: string;
+}
+
 export interface ReclassifyGateItemInput {
   classification: GateItemClassification;
   operator?: string;
@@ -254,6 +259,18 @@ export const gateApi = {
   approveItem(id: string, input: ApproveGateItemInput = {}): Promise<GateItem> {
     return apiRequest<GateItem>(
       `/api/gate/items/${encodeURIComponent(id)}/approve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
+  /** Rejects a pending-approval (Prod-Mutating) gate item — withheld consent, recorded as a `fail` disposition with a mandatory reason. Leaves the item unresolved in the readiness rollup; reopenItem forms the loop back to re-verification. */
+  rejectItem(id: string, input: RejectGateItemInput): Promise<GateItem> {
+    return apiRequest<GateItem>(
+      `/api/gate/items/${encodeURIComponent(id)}/reject`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

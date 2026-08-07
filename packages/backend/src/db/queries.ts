@@ -6959,52 +6959,70 @@ export function findActiveDecisionPickOneForSession(
   }) as StagedIntentRow | undefined;
 }
 
-let _stmtFindActiveGateVerifyMirrorForItem: Database.Statement | null = null;
+const _stmtFindActiveGateVerifyMirrorForItemByOrigin = new Map<
+  string,
+  Database.Statement
+>();
 
 /**
  * The standing staged/approved `gate.verify` mirror intent (if any) for a
- * given gate_item — the dedup slot for the Human-Observation reconciler
- * mirror step (gateReconciler.ts's mirrorHumanObservationGateItems), which
- * carries no taskId to key on via findActiveStagedIntentForTask (gate.verify
- * intents key on payload.gateItemId, not payload.taskId). Scoped to
- * payload.origin = 'mirror' so a genuine verifier-originated gate.verify
- * report for the same item (staged before a reclassify, e.g.) is never
- * mistaken for a live mirror.
+ * given gate_item — the dedup slot for the reconciler's mirror step
+ * (gateReconciler.ts's reconcileHumanObservationMirrors), which carries no
+ * taskId to key on via findActiveStagedIntentForTask (gate.verify intents
+ * key on payload.gateItemId, not payload.taskId). Scoped to a specific
+ * payload.origin — `'mirror'` for a runnable Human-Observation item,
+ * `'consent'` for a Prod-Mutating item held at pending-approval — so a
+ * genuine verifier-originated gate.verify report, or the other origin's
+ * mirror, for the same item is never mistaken for a live one of this kind.
  */
 export function findActiveGateVerifyMirrorForItem(
   gateItemId: string,
+  origin: 'mirror' | 'consent' = 'mirror',
 ): StagedIntentRow | undefined {
-  _stmtFindActiveGateVerifyMirrorForItem ??= db.prepare<{
-    gate_item_id: string;
-  }>(
-    `SELECT * FROM staged_intent
-     WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
-       AND json_extract(payload, '$.origin') = 'mirror'
-       AND json_extract(payload, '$.gateItemId') = @gate_item_id
-     ORDER BY created_at DESC
-     LIMIT 1`,
-  );
-  return _stmtFindActiveGateVerifyMirrorForItem.get({
+  let stmt = _stmtFindActiveGateVerifyMirrorForItemByOrigin.get(origin);
+  if (!stmt) {
+    stmt = db.prepare<{ gate_item_id: string; origin: string }>(
+      `SELECT * FROM staged_intent
+       WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
+         AND json_extract(payload, '$.origin') = @origin
+         AND json_extract(payload, '$.gateItemId') = @gate_item_id
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    );
+    _stmtFindActiveGateVerifyMirrorForItemByOrigin.set(origin, stmt);
+  }
+  return stmt.get({
     gate_item_id: gateItemId,
+    origin,
   }) as StagedIntentRow | undefined;
 }
 
-let _stmtListActiveGateVerifyMirrors: Database.Statement | null = null;
+const _stmtListActiveGateVerifyMirrorsByOrigin = new Map<
+  string,
+  Database.Statement
+>();
 
 /**
- * Every live (staged/approved) Human-Observation mirror intent, across all
+ * Every live (staged/approved) mirror intent of the given origin, across all
  * projects — the reconciler's level-triggered retirement scan reads this
- * each pass to withdraw mirrors whose gate_item has since resolved (via
- * GateReadinessPanel's direct path) or been reclassified away from
- * Human-Observation, so a stale card never lingers in the Decision Inbox.
+ * each pass to withdraw mirrors whose gate_item has since resolved (via the
+ * direct GateReadinessPanel/consent path) or, for `'mirror'`, been
+ * reclassified away from Human-Observation, so a stale card never lingers
+ * in the Decision Inbox.
  */
-export function listActiveGateVerifyMirrors(): StagedIntentRow[] {
-  _stmtListActiveGateVerifyMirrors ??= db.prepare(
-    `SELECT * FROM staged_intent
-     WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
-       AND json_extract(payload, '$.origin') = 'mirror'`,
-  );
-  return _stmtListActiveGateVerifyMirrors.all() as StagedIntentRow[];
+export function listActiveGateVerifyMirrors(
+  origin: 'mirror' | 'consent' = 'mirror',
+): StagedIntentRow[] {
+  let stmt = _stmtListActiveGateVerifyMirrorsByOrigin.get(origin);
+  if (!stmt) {
+    stmt = db.prepare<{ origin: string }>(
+      `SELECT * FROM staged_intent
+       WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
+         AND json_extract(payload, '$.origin') = @origin`,
+    );
+    _stmtListActiveGateVerifyMirrorsByOrigin.set(origin, stmt);
+  }
+  return stmt.all({ origin }) as StagedIntentRow[];
 }
 
 /**

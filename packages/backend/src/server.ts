@@ -85,6 +85,7 @@ import {
   reattachOutstandingGateVerifications,
 } from './gate/gateReconciler';
 import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
+import { latestDispositionEvidence } from './gate/gateService';
 import { SessionGateItemVerifier } from './gate/gateItemVerifier';
 import {
   deleteGhostSessions,
@@ -609,20 +610,30 @@ const gateVerificationOptions = {
 registerGateReconciler(scheduler, gateVerificationOptions);
 configureGateVerification(gateVerificationOptions);
 
-// Human-Observation mirror sink: surfaces every runnable Human-Observation
-// gate_item as a `gate.verify` staged intent (origin: 'mirror') so it shows
-// up in the Decision Inbox — no headless session can judge rendered UI, so
-// without this it's invisible outside GateReadinessPanel. See
-// gateReconciler.reconcileHumanObservationMirrors, run every reconcile tick.
+// Gate-item mirror sink: surfaces two states that would otherwise be
+// invisible outside GateReadinessPanel as `gate.verify` staged intents in
+// the Decision Inbox — every runnable Human-Observation gate_item
+// (origin: 'mirror', no headless session can judge rendered UI) and every
+// Prod-Mutating gate_item held at pending-approval (origin: 'consent', the
+// operator's consent gate). See gateReconciler.reconcileHumanObservationMirrors,
+// run every reconcile tick.
 configureGateItemMirrorSink({
-  stageMirror(item) {
+  stageMirror(item, origin) {
     stageIntent(
       'gate.verify',
-      { gateItemId: item.id, origin: 'mirror' },
+      origin === 'consent'
+        ? {
+            gateItemId: item.id,
+            origin: 'consent',
+            evidence: latestDispositionEvidence(item),
+          }
+        : { gateItemId: item.id, origin: 'mirror' },
       item.project,
       null,
       null,
-      `Human-Observation: ${item.text}`,
+      origin === 'consent'
+        ? `Prod-Mutating (pending approval): ${item.text}`
+        : `Human-Observation: ${item.text}`,
       null,
       null,
       item.milestone,

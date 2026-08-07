@@ -11,6 +11,7 @@ import {
   listMilestoneReadiness,
   appendGateItemEvent,
   approveGateItem,
+  rejectGateItem,
   reopenGateItem,
   reclassifyGateItem,
   backfillGateTask,
@@ -272,6 +273,28 @@ export function createGateStateRouter(): Router {
     } catch (err) {
       res.status(400).json({
         error: err instanceof Error ? err.message : 'gate item approval failed',
+      });
+    }
+  });
+
+  // POST /api/gate/items/:id/reject  { operator, reason }
+  router.post('/gate/items/:id/reject', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const body = req.body as { operator?: unknown; reason?: unknown };
+    if (typeof body.reason !== 'string' || !body.reason.trim()) {
+      res.status(400).json({ error: 'reason is required to reject a gate item' });
+      return;
+    }
+    try {
+      const updated = rejectGateItem(
+        id,
+        body.reason,
+        typeof body.operator === 'string' ? body.operator : undefined,
+      );
+      res.json(updated);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'gate item rejection failed',
       });
     }
   });

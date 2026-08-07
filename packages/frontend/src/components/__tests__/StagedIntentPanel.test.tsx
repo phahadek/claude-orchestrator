@@ -9,6 +9,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { StagedIntentPanel } from '../StagedIntentPanel';
 import { stagedIntentsApi } from '../../api/stagedIntents';
 import type { StagedIntent } from '../../api/stagedIntents';
+import { gateApi } from '../../api/gate';
 
 function fireKey(key: string, target?: EventTarget) {
   const event = new KeyboardEvent('keydown', { key, bubbles: true });
@@ -929,6 +930,96 @@ describe('StagedIntentPanel', () => {
       );
 
       expect(screen.getByTestId('staged-intent-gate-verify')).toBeTruthy();
+    });
+  });
+
+  describe('gate.verify consent mirror (Prod-Mutating pending-approval)', () => {
+    function makeConsentIntent(overrides: Partial<StagedIntent> = {}) {
+      return makeIntent({
+        kind: 'gate.verify',
+        payload: {
+          gateItemId: 'gate-consent-1',
+          origin: 'consent',
+          evidence: { basis: 'read-only dry run', note: 'no rows would change' },
+        },
+        ...overrides,
+      });
+    }
+
+    it('renders the pending-approval headline and the evidence behind the held pass', () => {
+      render(<StagedIntentPanel intent={makeConsentIntent()} />);
+
+      expect(
+        screen.getByText(/Prod-Mutating — pending approval/),
+      ).toBeTruthy();
+      expect(screen.getByText(/Basis: read-only dry run/)).toBeTruthy();
+      expect(screen.getByText(/no rows would change/)).toBeTruthy();
+    });
+
+    it('renders Approve and Reject controls instead of Commit/Pushback', () => {
+      render(<StagedIntentPanel intent={makeConsentIntent()} />);
+
+      expect(
+        screen.getByTestId('staged-intent-gate-consent-approve'),
+      ).toBeTruthy();
+      expect(
+        screen.getByTestId('staged-intent-gate-consent-reject'),
+      ).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /^✓ Commit$/i })).toBeNull();
+      expect(screen.queryByRole('button', { name: /pushback/i })).toBeNull();
+    });
+
+    it('approving calls gateApi.approveItem for the gate item and removes the card via onApplied', async () => {
+      const approve = vi
+        .spyOn(gateApi, 'approveItem')
+        .mockResolvedValue({ id: 'gate-consent-1', state: 'pass' } as never);
+      const onApplied = vi.fn();
+      const intent = makeConsentIntent();
+
+      render(<StagedIntentPanel intent={intent} onApplied={onApplied} />);
+      fireEvent.click(screen.getByTestId('staged-intent-gate-consent-approve'));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('gate-consent-1'));
+      await waitFor(() =>
+        expect(onApplied).toHaveBeenCalledWith(
+          intent,
+          expect.objectContaining({ state: 'pass' }),
+        ),
+      );
+    });
+
+    it('the Reject button stays disabled until a reason is entered, then calls gateApi.rejectItem with it', async () => {
+      const reject = vi
+        .spyOn(gateApi, 'rejectItem')
+        .mockResolvedValue({ id: 'gate-consent-1', state: 'fail' } as never);
+      const onApplied = vi.fn();
+      const intent = makeConsentIntent();
+
+      render(<StagedIntentPanel intent={intent} onApplied={onApplied} />);
+      const rejectButton = screen.getByTestId(
+        'staged-intent-gate-consent-reject',
+      ) as HTMLButtonElement;
+      expect(rejectButton.disabled).toBe(true);
+
+      fireEvent.change(
+        screen.getByTestId('staged-intent-gate-consent-reject-reason'),
+        { target: { value: 'not comfortable mutating prod yet' } },
+      );
+      expect(rejectButton.disabled).toBe(false);
+
+      fireEvent.click(rejectButton);
+
+      await waitFor(() =>
+        expect(reject).toHaveBeenCalledWith('gate-consent-1', {
+          reason: 'not comfortable mutating prod yet',
+        }),
+      );
+      await waitFor(() =>
+        expect(onApplied).toHaveBeenCalledWith(
+          intent,
+          expect.objectContaining({ state: 'fail' }),
+        ),
+      );
     });
   });
 
