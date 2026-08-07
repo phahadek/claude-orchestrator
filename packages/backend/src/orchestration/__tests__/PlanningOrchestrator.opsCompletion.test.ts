@@ -51,9 +51,10 @@ vi.mock('../../routes/tasks', () => ({
   broadcastTaskStatusChanged: vi.fn(),
 }));
 
-vi.mock('../../ops/opsJournal', () => ({
-  getEntry: vi.fn(),
-}));
+vi.mock('../../ops/opsJournal', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../ops/opsJournal')>();
+  return { ...actual, getEntry: vi.fn() };
+});
 
 import {
   getSession,
