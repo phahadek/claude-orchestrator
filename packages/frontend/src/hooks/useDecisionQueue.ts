@@ -23,6 +23,79 @@ const TERMINAL_STATES = new Set([
   'withdrawn',
 ]);
 
+/**
+ * Client-side mirror of decisionRanking.ts's classifyKindDirection +
+ * hasNeedsAttentionBoost, minus the blocking-axis criterion (that needs the
+ * milestone's convergence read-surface, which isn't available client-side).
+ * Used only to place a live-arriving intent within the right tier of the
+ * already-ranked list — never to re-rank the whole list, since a mismatch
+ * on the blocking axis would put it in the wrong place relative to items
+ * that differ on it.
+ */
+const PROGRESS_KINDS = new Set(['task.setStatus', 'review.dispute']);
+const STRUCTURAL_KINDS = new Set([
+  'task.updateBody',
+  'task.setDependsOn',
+  'task.patchBodySection',
+  'task.setProperties',
+  'task.setType',
+  'task.move',
+  'arch.updateUnit',
+  'arch.supersedeUnit',
+  'journal.setState',
+]);
+const SCOPE_ADD_KINDS = new Set([
+  'task.create',
+  'arch.createUnit',
+  'gate.accrete',
+  'seed.stage',
+]);
+
+function kindDirectionRank(kind: string): number {
+  if (PROGRESS_KINDS.has(kind)) return 3;
+  if (STRUCTURAL_KINDS.has(kind)) return 2;
+  if (SCOPE_ADD_KINDS.has(kind)) return 1;
+  return 0;
+}
+
+function hasNeedsAttentionBoost(intent: StagedIntent): boolean {
+  if (intent.annotation && 'blocked' in intent.annotation && intent.annotation.blocked) {
+    return true;
+  }
+  if (intent.advisory?.status === 'flagged') return true;
+  if (intent.kind === 'decision.pickOne' && !intent.answer) return true;
+  return false;
+}
+
+/** [kindDirection, needsAttention] — the portion of the backend rank key computable client-side. */
+function partialRankTier(intent: StagedIntent): [number, number] {
+  return [kindDirectionRank(intent.kind), hasNeedsAttentionBoost(intent) ? 1 : 0];
+}
+
+/**
+ * Inserts a live-arriving intent at the top of its rank tier within an
+ * already-ranked list, rather than at the array's end — the index of the
+ * first existing item whose tier is no higher than the arrival's tier (i.e.
+ * right before that tier's block begins).
+ */
+function insertAtTopOfTier(
+  list: StagedIntent[],
+  intent: StagedIntent,
+): StagedIntent[] {
+  const tier = partialRankTier(intent);
+  const idx = list.findIndex((existing) => {
+    const existingTier = partialRankTier(existing);
+    return (
+      existingTier[0] < tier[0] ||
+      (existingTier[0] === tier[0] && existingTier[1] <= tier[1])
+    );
+  });
+  if (idx === -1) return [...list, intent];
+  const next = [...list];
+  next.splice(idx, 0, intent);
+  return next;
+}
+
 export interface DecisionQueueGroupDraft {
   outcome: StagedIntentRejectOutcome | null;
   reason: string;
@@ -38,9 +111,10 @@ export interface DecisionQueueOptions {
  * fetch (scoped by session or milestone), live-update via the
  * staged_intent_changed WS bus, partition into groups/ungrouped, compute the
  * approve-by-standard clean-batch signal, and the group-level
- * approve/pushback/decline handlers. Session scope preserves the historical
- * DecisionPanel ordering (created_at ASC); milestone scope trusts the
- * backend's already-ranked ?milestone lens order and never re-sorts it.
+ * approve/pushback/decline handlers. Session scope orders by created_at
+ * DESC (newest first); milestone scope trusts the backend's already-ranked
+ * ?milestone lens order and only adjusts it locally to place a live arrival
+ * at the top of its rank tier (see insertAtTopOfTier).
  */
 export function useDecisionQueue(
   scope: DecisionQueueScope,
@@ -114,13 +188,17 @@ export function useDecisionQueue(
         }
         if (scope.type === 'session') {
           return [...withoutIntent, intent].sort(
-            (a, b) => a.createdAt - b.createdAt,
+            (a, b) => b.createdAt - a.createdAt,
           );
         }
-        // Milestone scope: the backend's convergence-ranking order isn't
-        // recomputable client-side, so a live change is appended rather than
-        // reordered. A refetch (e.g. on next mount) restores the true rank.
-        return [...withoutIntent, intent];
+        // Milestone scope: the backend's full convergence-ranking order
+        // isn't recomputable client-side (the blocking axis needs the
+        // milestone's convergence read-surface), so a live arrival is
+        // placed at the top of its rank tier — computed from the kind/
+        // needs-attention criteria alone — rather than appended at the
+        // array's end. A refetch (e.g. on next mount) restores the exact
+        // rank, including the blocking axis.
+        return insertAtTopOfTier(withoutIntent, intent);
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps

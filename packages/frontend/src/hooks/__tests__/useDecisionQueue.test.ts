@@ -139,6 +139,178 @@ describe('useDecisionQueue', () => {
     );
   });
 
+  it('milestone scope places a live-arriving intent at the top of its rank tier, not at the end', async () => {
+    const older: StagedIntent = {
+      id: 'older',
+      kind: 'gate.verify',
+      payload: {},
+      projectId: 'proj-1',
+      createdAt: 1,
+      sessionId: 'session-a',
+      milestone: 'M1',
+      state: 'staged',
+      sessionComplete: true,
+    };
+    const newer: StagedIntent = {
+      id: 'newer',
+      kind: 'gate.verify',
+      payload: {},
+      projectId: 'proj-1',
+      createdAt: 2,
+      sessionId: 'session-b',
+      milestone: 'M1',
+      state: 'staged',
+      sessionComplete: true,
+    };
+    // Backend now returns ties newest-first.
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      newer,
+      older,
+    ]);
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({
+        type: 'milestone',
+        projectId: 'proj-1',
+        milestone: 'M1',
+      }),
+    );
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    const liveArrival: StagedIntent = {
+      id: 'live-arrival',
+      kind: 'gate.verify',
+      payload: {},
+      projectId: 'proj-1',
+      createdAt: 3,
+      sessionId: 'session-c',
+      milestone: 'M1',
+      state: 'staged',
+      sessionComplete: true,
+    };
+
+    act(() => {
+      publishStagedIntentChange(liveArrival);
+    });
+
+    await waitFor(() =>
+      expect(result.current.intents.map((i) => i.id)).toEqual([
+        'live-arrival',
+        'newer',
+        'older',
+      ]),
+    );
+  });
+
+  it('the order rendered immediately after a live arrival matches the order a refetch would return, for a tied tier', async () => {
+    const a: StagedIntent = {
+      id: 'a',
+      kind: 'gate.verify',
+      payload: {},
+      projectId: 'proj-1',
+      createdAt: 1,
+      milestone: 'M1',
+      state: 'staged',
+      sessionComplete: true,
+    };
+    const b: StagedIntent = {
+      id: 'b',
+      kind: 'gate.verify',
+      payload: {},
+      projectId: 'proj-1',
+      createdAt: 2,
+      milestone: 'M1',
+      state: 'staged',
+      sessionComplete: true,
+    };
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([b, a]);
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({
+        type: 'milestone',
+        projectId: 'proj-1',
+        milestone: 'M1',
+      }),
+    );
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    const c: StagedIntent = {
+      id: 'c',
+      kind: 'gate.verify',
+      payload: {},
+      projectId: 'proj-1',
+      createdAt: 3,
+      milestone: 'M1',
+      state: 'staged',
+      sessionComplete: true,
+    };
+    act(() => {
+      publishStagedIntentChange(c);
+    });
+    await waitFor(() =>
+      expect(result.current.intents.map((i) => i.id)).toEqual([
+        'c',
+        'b',
+        'a',
+      ]),
+    );
+
+    // A refetch (e.g. next mount) with the backend's newest-first tie order
+    // for the same underlying data must render identically to the live path.
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([c, b, a]);
+    const { result: refetched } = renderHook(() =>
+      useDecisionQueue({
+        type: 'milestone',
+        projectId: 'proj-1',
+        milestone: 'M1',
+      }),
+    );
+    await waitFor(() => expect(refetched.current.loaded).toBe(true));
+    expect(refetched.current.intents.map((i) => i.id)).toEqual(
+      result.current.intents.map((i) => i.id),
+    );
+  });
+
+  it('session scope live-updates sort newest-first, consistent with milestone scope', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({ type: 'session', sessionId: 'session-1' }),
+    );
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    const older: StagedIntent = {
+      id: 'older',
+      kind: 'task.updateBody',
+      payload: {},
+      projectId: 'proj-1',
+      createdAt: 1,
+      sessionId: 'session-1',
+      state: 'staged',
+    };
+    const newer: StagedIntent = {
+      id: 'newer',
+      kind: 'task.updateBody',
+      payload: {},
+      projectId: 'proj-1',
+      createdAt: 2,
+      sessionId: 'session-1',
+      state: 'staged',
+    };
+
+    act(() => {
+      publishStagedIntentChange(older);
+      publishStagedIntentChange(newer);
+    });
+
+    await waitFor(() =>
+      expect(result.current.intents.map((i) => i.id)).toEqual([
+        'newer',
+        'older',
+      ]),
+    );
+  });
+
   it('milestone scope suppresses an intent whose owning session turn is still in flight', async () => {
     const intents: StagedIntent[] = [
       {
@@ -208,7 +380,7 @@ describe('useDecisionQueue', () => {
     expect(result.current.intents).toEqual([]);
   });
 
-  it("milestone scope reveals a newly-completed session's intent via a re-broadcast staged_intent_changed, without reordering already-visible cards", async () => {
+  it("milestone scope reveals a newly-completed session's intent via a re-broadcast staged_intent_changed, inserted at the top of its (tied) rank tier", async () => {
     const intents: StagedIntent[] = [
       {
         id: 'already-visible',
@@ -272,8 +444,8 @@ describe('useDecisionQueue', () => {
 
     await waitFor(() =>
       expect(result.current.intents.map((i) => i.id)).toEqual([
-        'already-visible',
         'reveals-later',
+        'already-visible',
       ]),
     );
   });
