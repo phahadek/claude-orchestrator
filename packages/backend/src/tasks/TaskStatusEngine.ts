@@ -4,7 +4,10 @@ import {
   getTaskCache,
   getTaskPauseReason,
 } from '../db/queries';
-import { parsePauseReason, isAutomaticRecoveryPending } from '../db/pauseReason';
+import {
+  parsePauseReason,
+  isAutomaticRecoveryPending,
+} from '../db/pauseReason';
 import { typedGetSetting } from '../config/settings';
 import type { PauseReasonStruct } from '../db/types';
 

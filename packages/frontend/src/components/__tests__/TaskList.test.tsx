@@ -2945,7 +2945,9 @@ describe('TaskList', () => {
       );
       expect(recoveringGroup).toBeDefined();
       expect(needsAttentionGroup).toBeDefined();
-      expect(within(recoveringGroup).getByText(/Auto-Recovering/i)).toBeDefined();
+      expect(
+        within(recoveringGroup).getByText(/Auto-Recovering/i),
+      ).toBeDefined();
       expect(
         within(needsAttentionGroup).getByText(/Needs Attention/i),
       ).toBeDefined();

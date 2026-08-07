@@ -376,7 +376,10 @@ export function serializePauseReason(struct: PauseReasonStruct): string {
  * rate_limit) — those keep surfacing as 'needs_attention' immediately, unchanged.
  */
 export function isAutomaticRecoveryPending(
-  parsed: Pick<PauseReasonStruct, 'severity' | 'retry_strategy'> | null | undefined,
+  parsed:
+    | Pick<PauseReasonStruct, 'severity' | 'retry_strategy'>
+    | null
+    | undefined,
   flakeRecoveryAttempts: number,
   flakeRecoveryMaxRetries: number,
 ): boolean {
