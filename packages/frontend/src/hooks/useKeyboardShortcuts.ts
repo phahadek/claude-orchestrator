@@ -9,7 +9,15 @@ export interface ShortcutHandlers {
   onSelectPrev: () => void;
   onConfirmSelection: () => void;
   onSwitchView: (
-    view: 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings',
+    view:
+      | 'milestone'
+      | 'tasks'
+      | 'sessions'
+      | 'prs'
+      | 'gate'
+      | 'architecture'
+      | 'analytics'
+      | 'settings',
   ) => void;
   onFocusSearch: () => void;
   /**
@@ -91,32 +99,50 @@ export const KEYBOARD_SHORTCUTS: ShortcutDefinition[] = [
   },
   {
     key: '1',
-    desc: 'Tasks view',
+    desc: 'Milestone view',
     matches: (e) => e.key === '1',
-    invoke: (h) => h.onSwitchView('tasks'),
+    invoke: (h) => h.onSwitchView('milestone'),
   },
   {
     key: '2',
-    desc: 'Sessions view',
+    desc: 'Tasks view',
     matches: (e) => e.key === '2',
-    invoke: (h) => h.onSwitchView('sessions'),
+    invoke: (h) => h.onSwitchView('tasks'),
   },
   {
     key: '3',
-    desc: 'PRs view',
+    desc: 'Sessions view',
     matches: (e) => e.key === '3',
-    invoke: (h) => h.onSwitchView('prs'),
+    invoke: (h) => h.onSwitchView('sessions'),
   },
   {
     key: '4',
-    desc: 'Analytics view',
+    desc: 'PRs view',
     matches: (e) => e.key === '4',
-    invoke: (h) => h.onSwitchView('analytics'),
+    invoke: (h) => h.onSwitchView('prs'),
   },
   {
     key: '5',
-    desc: 'Settings view',
+    desc: 'Gate view',
     matches: (e) => e.key === '5',
+    invoke: (h) => h.onSwitchView('gate'),
+  },
+  {
+    key: '6',
+    desc: 'Architecture view',
+    matches: (e) => e.key === '6',
+    invoke: (h) => h.onSwitchView('architecture'),
+  },
+  {
+    key: '7',
+    desc: 'Analytics view',
+    matches: (e) => e.key === '7',
+    invoke: (h) => h.onSwitchView('analytics'),
+  },
+  {
+    key: '8',
+    desc: 'Settings view',
+    matches: (e) => e.key === '8',
     invoke: (h) => h.onSwitchView('settings'),
   },
   {
