@@ -1,8 +1,11 @@
 import { Fragment, useState, useEffect, useCallback } from 'react';
-import { authedFetch } from '../api/projects';
+import { authedFetch, projectsApi } from '../api/projects';
+import type { ProjectMilestone } from '../api/projects';
 import {
   BarChart,
   Bar,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -14,6 +17,7 @@ import {
   formatTokenCount,
   formatCost,
 } from '@claude-orchestrator/backend/src/utils/usage';
+import { costAxisDomain, tokenAxisDomain } from './analyticsChartScales';
 import styles from './AnalyticsPanel.module.css';
 
 // API response types — kept in sync with packages/backend/src/routes/analytics.ts
@@ -71,15 +75,32 @@ interface TokenAnalyticsResponse {
   };
 }
 
+interface TokenBucketRow {
+  bucketStart: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCost: number;
+  sessionCount: number;
+}
+
+interface TokenTimeseriesResponse {
+  range: { from: number; to: number };
+  granularity: 'day' | 'week';
+  buckets: TokenBucketRow[];
+}
+
 interface Props {
   activeProjectId: string | null;
 }
 
-type DateRange = '7d' | '30d' | '90d';
+type DateRangePreset = '7d' | '30d' | '90d' | 'custom';
 
-function dateRangeToMs(range: DateRange): number {
+function presetToMs(preset: '7d' | '30d' | '90d'): number {
   const now = Date.now();
-  switch (range) {
+  switch (preset) {
     case '7d':
       return now - 7 * 24 * 60 * 60 * 1000;
     case '30d':
@@ -87,6 +108,10 @@ function dateRangeToMs(range: DateRange): number {
     case '90d':
       return now - 90 * 24 * 60 * 60 * 1000;
   }
+}
+
+function toDateInputValue(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
 }
 
 // Epoch ms of the commit that added cache_read_tokens/cache_creation_tokens
@@ -169,9 +194,20 @@ function categoryColors(rows: SessionTypeRow[]): Map<string, string> {
 
 export function AnalyticsPanel({ activeProjectId }: Props) {
   const [data, setData] = useState<TokenAnalyticsResponse | null>(null);
+  const [timeseries, setTimeseries] = useState<TokenTimeseriesResponse | null>(
+    null,
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dateRange, setDateRange] = useState<DateRange>('30d');
+  const [rangePreset, setRangePreset] = useState<DateRangePreset>('30d');
+  const [customFrom, setCustomFrom] = useState<string>(() =>
+    toDateInputValue(presetToMs('30d')),
+  );
+  const [customTo, setCustomTo] = useState<string>(() =>
+    toDateInputValue(Date.now()),
+  );
+  const [milestones, setMilestones] = useState<ProjectMilestone[]>([]);
+  const [selectedMilestoneId, setSelectedMilestoneId] = useState<string>('');
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(
     new Set(),
   );
@@ -182,23 +218,65 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
 
+  const getRangeMs = useCallback((): { from: number; to: number } => {
+    if (rangePreset === 'custom') {
+      const from = customFrom
+        ? new Date(`${customFrom}T00:00:00.000Z`).getTime()
+        : presetToMs('30d');
+      const to = customTo
+        ? new Date(`${customTo}T23:59:59.999Z`).getTime()
+        : Date.now();
+      return { from, to };
+    }
+    return { from: presetToMs(rangePreset), to: Date.now() };
+  }, [rangePreset, customFrom, customTo]);
+
+  useEffect(() => {
+    setSelectedMilestoneId('');
+    if (!activeProjectId) {
+      setMilestones([]);
+      return;
+    }
+    let cancelled = false;
+    projectsApi
+      .listMilestones(activeProjectId)
+      .then((list) => {
+        if (!cancelled) setMilestones(list);
+      })
+      .catch(() => {
+        if (!cancelled) setMilestones([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId]);
+
   const fetchData = useCallback(() => {
     setLoading(true);
     setError(null);
     setExpandedTaskIds(new Set());
     setTaskSessions(new Map());
 
+    const { from, to } = getRangeMs();
     const params = new URLSearchParams();
     if (activeProjectId) params.set('projectId', activeProjectId);
-    params.set('from', String(dateRangeToMs(dateRange)));
+    if (selectedMilestoneId) params.set('milestoneId', selectedMilestoneId);
+    params.set('from', String(from));
+    params.set('to', String(to));
 
-    authedFetch(`/api/analytics/tokens?${params}`)
-      .then((r) => {
+    Promise.all([
+      authedFetch(`/api/analytics/tokens?${params}`).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<TokenAnalyticsResponse>;
-      })
-      .then((d) => {
-        setData(d);
+      }),
+      authedFetch(`/api/analytics/tokens/timeseries?${params}`).then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<TokenTimeseriesResponse>;
+      }),
+    ])
+      .then(([tokens, ts]) => {
+        setData(tokens);
+        setTimeseries(ts);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -207,7 +285,7 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
         );
         setLoading(false);
       });
-  }, [activeProjectId, dateRange]);
+  }, [activeProjectId, selectedMilestoneId, getRangeMs]);
 
   useEffect(() => {
     fetchData();
@@ -261,6 +339,18 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
     }))
     .filter((d) => d.value > 0);
 
+  const timeseriesBuckets = timeseries?.buckets ?? [];
+  const tokenDomain = tokenAxisDomain(timeseriesBuckets);
+  const costDomain = costAxisDomain(timeseriesBuckets);
+  const timeseriesChartData = timeseriesBuckets.map((b) => ({
+    label: new Date(b.bucketStart).toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+    }),
+    totalTokens: b.totalTokens,
+    totalCost: b.totalCost,
+  }));
+
   const toggleExpanded = (boardId: string) => {
     const alreadyExpanded = expandedTaskIds.has(boardId);
     setExpandedTaskIds((prev) => {
@@ -271,9 +361,12 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
     });
     if (!alreadyExpanded && !taskSessions.has(boardId)) {
       setTaskSessions((prev) => new Map(prev).set(boardId, 'loading'));
+      const { from, to } = getRangeMs();
       const params = new URLSearchParams();
       if (activeProjectId) params.set('projectId', activeProjectId);
-      params.set('from', String(dateRangeToMs(dateRange)));
+      if (selectedMilestoneId) params.set('milestoneId', selectedMilestoneId);
+      params.set('from', String(from));
+      params.set('to', String(to));
       authedFetch(
         `/api/analytics/tasks/${encodeURIComponent(boardId)}/sessions?${params}`,
       )
@@ -299,16 +392,53 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
         <h2 className={styles.title}>Token & Cost Analytics</h2>
         <div className={styles.filters}>
           <span className={styles.filterLabel}>Date range:</span>
-          {(['7d', '30d', '90d'] as DateRange[]).map((r) => (
+          {(['7d', '30d', '90d', 'custom'] as DateRangePreset[]).map((r) => (
             <button
               key={r}
               type="button"
-              className={`${styles.rangeBtn}${dateRange === r ? ` ${styles.rangeBtnActive}` : ''}`}
-              onClick={() => setDateRange(r)}
+              className={`${styles.rangeBtn}${rangePreset === r ? ` ${styles.rangeBtnActive}` : ''}`}
+              onClick={() => setRangePreset(r)}
             >
-              {r}
+              {r === 'custom' ? 'Custom' : r}
             </button>
           ))}
+          {rangePreset === 'custom' && (
+            <span className={styles.customRange}>
+              <input
+                type="date"
+                aria-label="From date"
+                className={styles.dateInput}
+                value={customFrom}
+                max={customTo}
+                onChange={(e) => setCustomFrom(e.target.value)}
+              />
+              <span>–</span>
+              <input
+                type="date"
+                aria-label="To date"
+                className={styles.dateInput}
+                value={customTo}
+                min={customFrom}
+                onChange={(e) => setCustomTo(e.target.value)}
+              />
+            </span>
+          )}
+        </div>
+        <div className={styles.filters}>
+          <span className={styles.filterLabel}>Milestone:</span>
+          <select
+            aria-label="Milestone"
+            className={styles.milestoneSelect}
+            value={selectedMilestoneId}
+            onChange={(e) => setSelectedMilestoneId(e.target.value)}
+          >
+            <option value="">All milestones</option>
+            {milestones.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
         </div>
         <input
           type="text"
@@ -375,6 +505,94 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
               <div className={styles.summaryLabel}>Est. cost</div>
             </div>
           </div>
+
+          {/* ── Token consumption over time, dual-axis (cost + raw tokens) ── */}
+          {timeseriesBuckets.length > 0 && (
+            <div className={styles.chartSection}>
+              <h3 className={styles.sectionTitle}>
+                Token consumption over time
+              </h3>
+              <div className={styles.legendRow}>
+                <span className={styles.legendItem}>
+                  <span
+                    className={styles.legendSwatch}
+                    style={{ background: '#89b4fa' }}
+                  />
+                  Tokens
+                </span>
+                <span className={styles.legendItem}>
+                  <span
+                    className={styles.legendSwatch}
+                    style={{ background: '#fab387' }}
+                  />
+                  Cost
+                </span>
+              </div>
+              <div className={styles.chartContainer}>
+                <ResponsiveContainer width="100%" minHeight={220}>
+                  <LineChart
+                    data={timeseriesChartData}
+                    margin={{ top: 8, right: 16, left: 0, bottom: 8 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
+                    <XAxis
+                      dataKey="label"
+                      tick={{ fill: '#a6adc8', fontSize: 11 }}
+                    />
+                    <YAxis
+                      yAxisId="tokens"
+                      orientation="left"
+                      domain={tokenDomain}
+                      tickFormatter={(v: number) => formatTokenCount(v)}
+                      tick={{ fill: '#89b4fa', fontSize: 11 }}
+                      width={55}
+                    />
+                    <YAxis
+                      yAxisId="cost"
+                      orientation="right"
+                      domain={costDomain}
+                      tickFormatter={(v: number) => formatCost(v)}
+                      tick={{ fill: '#fab387', fontSize: 11 }}
+                      width={55}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        background: '#1e1e2e',
+                        border: '1px solid #45475a',
+                        borderRadius: 6,
+                      }}
+                      labelStyle={{ color: '#cdd6f4', marginBottom: 4 }}
+                      itemStyle={{ color: '#cdd6f4' }}
+                      formatter={(value: number, name: string) => [
+                        name === 'Cost'
+                          ? formatCost(value)
+                          : formatTokenCount(value),
+                        name,
+                      ]}
+                    />
+                    <Line
+                      yAxisId="tokens"
+                      type="monotone"
+                      dataKey="totalTokens"
+                      name="Tokens"
+                      stroke="#89b4fa"
+                      dot={false}
+                      strokeWidth={2}
+                    />
+                    <Line
+                      yAxisId="cost"
+                      type="monotone"
+                      dataKey="totalCost"
+                      name="Cost"
+                      stroke="#fab387"
+                      dot={false}
+                      strokeWidth={2}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
 
           {taskRollups.length === 0 ? (
             <div className={styles.emptyChart}>

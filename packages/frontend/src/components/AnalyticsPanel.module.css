@@ -57,6 +57,33 @@
   color: var(--accent, #89b4fa);
 }
 
+.customRange {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted, #a6adc8);
+  font-size: 0.8125rem;
+}
+
+.dateInput {
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--text-primary, #cdd6f4);
+  font-size: 0.8125rem;
+  padding: 3px 6px;
+}
+
+.milestoneSelect {
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--text-primary, #cdd6f4);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  padding: 3px 8px;
+}
+
 .status {
   color: var(--text-muted, #a6adc8);
   font-size: 0.875rem;

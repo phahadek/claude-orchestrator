@@ -15,6 +15,39 @@ db.function('normalize_board_id', (taskId: string | null) =>
 
 const DEFAULT_RANGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+/**
+ * Resolves a milestone id to the set of normalized board ids on its board
+ * cache, so callers can scope a sessions-table query by milestone even
+ * though sessions only carry task_id, not a milestone column. Board cache
+ * is keyed on the DB milestone UUID (matching getMergeReadyPRs in
+ * db/queries.ts), and its raw_json is the same Notion-task-id shape that
+ * write path stores. Returns null when the milestone doesn't exist (or
+ * belongs to a different project than the one requested) so callers can
+ * distinguish "no filter" from "filter matched nothing".
+ */
+function resolveMilestoneBoardIds(
+  milestoneId: string,
+  projectId: string | null,
+): string[] | null {
+  const milestone = db
+    .prepare(`SELECT id, project_id FROM milestones WHERE id = ?`)
+    .get(milestoneId) as { id: string; project_id: string } | undefined;
+  if (!milestone) return null;
+  if (projectId && milestone.project_id !== projectId) return null;
+
+  const boardCache = db
+    .prepare(`SELECT raw_json FROM task_cache WHERE task_id = ?`)
+    .get(`board:${milestoneId}`) as { raw_json: string } | undefined;
+  if (!boardCache) return [];
+
+  try {
+    const tasks = JSON.parse(boardCache.raw_json) as { id: string }[];
+    return tasks.map((t) => normalizeBoardId(`notion:${t.id}`));
+  } catch {
+    return [];
+  }
+}
+
 interface TaskRollupRow {
   boardId: string | null;
   taskId: string | null;
@@ -61,6 +94,8 @@ interface TokenAnalyticsResponse {
 analyticsRouter.get('/tokens', (req: Request, res: Response) => {
   const projectId =
     typeof req.query.projectId === 'string' ? req.query.projectId : null;
+  const milestoneId =
+    typeof req.query.milestoneId === 'string' ? req.query.milestoneId : null;
   const toMs =
     typeof req.query.to === 'string' && !isNaN(parseInt(req.query.to, 10))
       ? parseInt(req.query.to, 10)
@@ -75,6 +110,30 @@ analyticsRouter.get('/tokens', (req: Request, res: Response) => {
   if (projectId) {
     whereClauses.push('project_id = ?');
     params.push(projectId);
+  }
+  if (milestoneId) {
+    const boardIds = resolveMilestoneBoardIds(milestoneId, projectId);
+    if (boardIds === null || boardIds.length === 0) {
+      res.json({
+        range: { from: fromMs, to: toMs },
+        taskRollups: [],
+        sessionTypeBreakdown: [],
+        totals: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          totalTokens: 0,
+          totalCost: 0,
+          sessionCount: 0,
+        },
+      });
+      return;
+    }
+    whereClauses.push(
+      `normalize_board_id(task_id) IN (${boardIds.map(() => '?').join(', ')})`,
+    );
+    params.push(...boardIds);
   }
   const whereSql = whereClauses.join(' AND ');
 
@@ -196,6 +255,131 @@ analyticsRouter.get('/tokens', (req: Request, res: Response) => {
     totals,
   };
   res.json(result);
+});
+
+interface TokenBucketRow {
+  bucketStart: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  totalCost: number;
+  sessionCount: number;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
+
+// GET /api/analytics/tokens/timeseries
+// Query params: projectId, milestoneId, from, to, granularity ('day' | 'week',
+// defaults to 'day'). Buckets are aligned to epoch-ms boundaries (integer
+// division in SQL), which happen to be UTC calendar-day boundaries since
+// epoch 0 is UTC midnight. Powers the token-consumption-over-time chart —
+// bucket totals are summed from raw token counts in SQL, independent of
+// cost, so the chart's token axis is never derived from its cost axis.
+analyticsRouter.get('/tokens/timeseries', (req: Request, res: Response) => {
+  const projectId =
+    typeof req.query.projectId === 'string' ? req.query.projectId : null;
+  const milestoneId =
+    typeof req.query.milestoneId === 'string' ? req.query.milestoneId : null;
+  const granularity = req.query.granularity === 'week' ? 'week' : 'day';
+  const bucketMs = granularity === 'week' ? WEEK_MS : DAY_MS;
+  const toMs =
+    typeof req.query.to === 'string' && !isNaN(parseInt(req.query.to, 10))
+      ? parseInt(req.query.to, 10)
+      : Date.now();
+  const fromMs =
+    typeof req.query.from === 'string' && !isNaN(parseInt(req.query.from, 10))
+      ? parseInt(req.query.from, 10)
+      : toMs - DEFAULT_RANGE_MS;
+
+  const whereClauses = ['started_at >= ?', 'started_at <= ?'];
+  const params: (string | number)[] = [fromMs, toMs];
+  if (projectId) {
+    whereClauses.push('project_id = ?');
+    params.push(projectId);
+  }
+  if (milestoneId) {
+    const boardIds = resolveMilestoneBoardIds(milestoneId, projectId);
+    if (boardIds === null || boardIds.length === 0) {
+      res.json({ range: { from: fromMs, to: toMs }, granularity, buckets: [] });
+      return;
+    }
+    whereClauses.push(
+      `normalize_board_id(task_id) IN (${boardIds.map(() => '?').join(', ')})`,
+    );
+    params.push(...boardIds);
+  }
+  const whereSql = whereClauses.join(' AND ');
+
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        (started_at / ?) * ? AS bucket_start,
+        model,
+        SUM(total_input_tokens) AS input_tokens,
+        SUM(total_output_tokens) AS output_tokens,
+        SUM(cache_read_tokens) AS cache_read_tokens,
+        SUM(cache_creation_tokens) AS cache_creation_tokens,
+        COUNT(*) AS session_count
+      FROM sessions
+      WHERE ${whereSql}
+      GROUP BY bucket_start, model
+      ORDER BY bucket_start ASC
+    `,
+    )
+    .all(bucketMs, bucketMs, ...params) as {
+    bucket_start: number;
+    model: string | null;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_creation_tokens: number;
+    session_count: number;
+  }[];
+
+  const buckets = new Map<number, TokenBucketRow>();
+  for (const row of rows) {
+    const cost = calculateCost(
+      row.input_tokens ?? 0,
+      row.output_tokens ?? 0,
+      row.model,
+      row.cache_read_tokens ?? 0,
+      row.cache_creation_tokens ?? 0,
+    );
+    const bucket = buckets.get(row.bucket_start) ?? {
+      bucketStart: row.bucket_start,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalTokens: 0,
+      totalCost: 0,
+      sessionCount: 0,
+    };
+    bucket.inputTokens += row.input_tokens ?? 0;
+    bucket.outputTokens += row.output_tokens ?? 0;
+    bucket.cacheReadTokens += row.cache_read_tokens ?? 0;
+    bucket.cacheCreationTokens += row.cache_creation_tokens ?? 0;
+    bucket.totalCost += cost;
+    bucket.sessionCount += row.session_count;
+    bucket.totalTokens =
+      bucket.inputTokens +
+      bucket.outputTokens +
+      bucket.cacheReadTokens +
+      bucket.cacheCreationTokens;
+    buckets.set(row.bucket_start, bucket);
+  }
+
+  res.json({
+    range: { from: fromMs, to: toMs },
+    granularity,
+    buckets: Array.from(buckets.values()).sort(
+      (a, b) => a.bucketStart - b.bucketStart,
+    ),
+  });
 });
 
 interface TaskSessionRow {

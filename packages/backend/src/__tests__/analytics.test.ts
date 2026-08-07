@@ -178,6 +178,19 @@ vi.mock('../db/db.js', async () => {
     JSON.stringify({ title: 'Typed task', type: '💻 Code' }),
   );
 
+  // Milestone scoping fixture: proj-a's board for milestone m1 contains only
+  // task-ABC123 (the same task s1/s2 roll up onto), so filtering by m1 should
+  // include taskabc123 but exclude the other proj-a tasks inserted above.
+  db.prepare(
+    `INSERT INTO projects (id, name, project_dir, task_source, created_at, updated_at) VALUES (?, ?, ?, 'notion', ?, ?)`,
+  ).run('proj-a', 'Project A', '/tmp/proj-a', NOW, NOW);
+  db.prepare(
+    `INSERT INTO milestones (id, project_id, name, source_id, display_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run('m1', 'proj-a', 'Milestone 1', 'db-1', 1, NOW, NOW);
+  db.prepare(
+    `INSERT INTO task_cache (task_id, fetched_at, raw_json) VALUES (?, ?, ?)`,
+  ).run('board:m1', NOW, JSON.stringify([{ id: 'task-ABC123' }]));
+
   return { db };
 });
 
@@ -327,5 +340,85 @@ describe('GET /api/analytics/tokens', () => {
     expect(res.body.sessions).toBeUndefined();
     expect(typeof res.body.totals.totalCost).toBe('number');
     expect(res.body.totals.sessionCount).toBeGreaterThan(0);
+  });
+
+  it('scopes rows to a milestone when milestoneId is given', async () => {
+    const res = await supertest(buildApp()).get(
+      `/api/analytics/tokens?projectId=proj-a&milestoneId=m1&from=${NOW - 10 * DAY_MS}&to=${NOW}`,
+    );
+    expect(res.status).toBe(200);
+    const boardIds = res.body.taskRollups.map(
+      (r: { boardId: string }) => r.boardId,
+    );
+    expect(boardIds).toEqual(['taskabc123']);
+  });
+
+  it('returns an empty result for a milestone with no matching sessions', async () => {
+    const res = await supertest(buildApp()).get(
+      `/api/analytics/tokens?projectId=proj-a&milestoneId=does-not-exist&from=${NOW - 10 * DAY_MS}&to=${NOW}`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.taskRollups).toEqual([]);
+    expect(res.body.totals.sessionCount).toBe(0);
+  });
+
+  it('respects an arbitrary custom from/to pair, not just fixed presets', async () => {
+    const res = await supertest(buildApp()).get(
+      `/api/analytics/tokens?projectId=proj-a&from=${NOW - 2.5 * DAY_MS}&to=${NOW - 1.5 * DAY_MS}`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.range.from).toBe(NOW - 2.5 * DAY_MS);
+    expect(res.body.range.to).toBe(NOW - 1.5 * DAY_MS);
+    const boardIds = res.body.taskRollups.map(
+      (r: { boardId: string }) => r.boardId,
+    );
+    // Only s2 (taskabc123, review) and s8-post-migration (taskpostmig) land
+    // in this narrow 1-day window 1.5-2.5 days ago.
+    expect(boardIds.sort()).toEqual(['taskabc123', 'taskpostmig']);
+  });
+});
+
+describe('GET /api/analytics/tokens/timeseries', () => {
+  it('returns totals summed per day bucket for a project and range', async () => {
+    const res = await supertest(buildApp()).get(
+      `/api/analytics/tokens/timeseries?projectId=proj-a&from=${NOW - 10 * DAY_MS}&to=${NOW}`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.granularity).toBe('day');
+    expect(Array.isArray(res.body.buckets)).toBe(true);
+    expect(res.body.buckets.length).toBeGreaterThan(0);
+    const totalTokensAcrossBuckets = res.body.buckets.reduce(
+      (sum: number, b: { totalTokens: number }) => sum + b.totalTokens,
+      0,
+    );
+    expect(totalTokensAcrossBuckets).toBeGreaterThan(0);
+    for (const bucket of res.body.buckets) {
+      expect(typeof bucket.bucketStart).toBe('number');
+      expect(bucket.totalTokens).toBe(
+        bucket.inputTokens +
+          bucket.outputTokens +
+          bucket.cacheReadTokens +
+          bucket.cacheCreationTokens,
+      );
+    }
+    // buckets are sorted ascending
+    const starts = res.body.buckets.map(
+      (b: { bucketStart: number }) => b.bucketStart,
+    );
+    expect(starts).toEqual([...starts].sort((a, b) => a - b));
+  });
+
+  it('scopes buckets to a milestone when milestoneId is given', async () => {
+    const res = await supertest(buildApp()).get(
+      `/api/analytics/tokens/timeseries?projectId=proj-a&milestoneId=m1&from=${NOW - 10 * DAY_MS}&to=${NOW}`,
+    );
+    expect(res.status).toBe(200);
+    const totalInputAcrossBuckets = res.body.buckets.reduce(
+      (sum: number, b: { inputTokens: number }) => sum + b.inputTokens,
+      0,
+    );
+    // Only s1 + s2 (both roll up to taskabc123, the sole task on milestone
+    // m1's board) contribute — 1000 + 500.
+    expect(totalInputAcrossBuckets).toBe(1500);
   });
 });
