@@ -1289,9 +1289,12 @@ export default function App() {
       if (keyboardHighlightedId) setSelectedId(keyboardHighlightedId);
     },
     onSwitchView: (view) => {
-      if (view === 'tasks') setTopView('tasks');
+      if (view === 'milestone') setTopView('milestone');
+      else if (view === 'tasks') setTopView('tasks');
       else if (view === 'sessions') setTopView('sessions');
       else if (view === 'prs') setTopView('prs');
+      else if (view === 'gate') setTopView('gate');
+      else if (view === 'architecture') setTopView('architecture');
       else if (view === 'analytics') setTopView('analytics');
       else if (view === 'settings') setTopView('settings');
     },

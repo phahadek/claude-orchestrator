@@ -141,52 +141,82 @@ describe('useKeyboardShortcuts', () => {
     expect(handlers.onConfirmSelection).not.toHaveBeenCalled();
   });
 
-  it('1 calls onSwitchView with "tasks"', () => {
+  it('1 calls onSwitchView with "milestone"', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
     fireKey('1');
-    expect(handlers.onSwitchView).toHaveBeenCalledWith('tasks');
+    expect(handlers.onSwitchView).toHaveBeenCalledWith('milestone');
   });
 
-  it('2 calls onSwitchView with "sessions"', () => {
+  it('2 calls onSwitchView with "tasks"', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
     fireKey('2');
-    expect(handlers.onSwitchView).toHaveBeenCalledWith('sessions');
+    expect(handlers.onSwitchView).toHaveBeenCalledWith('tasks');
   });
 
-  it('3 calls onSwitchView with "prs"', () => {
+  it('3 calls onSwitchView with "sessions"', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
     fireKey('3');
-    expect(handlers.onSwitchView).toHaveBeenCalledWith('prs');
+    expect(handlers.onSwitchView).toHaveBeenCalledWith('sessions');
   });
 
-  it('4 calls onSwitchView with "analytics"', () => {
+  it('4 calls onSwitchView with "prs"', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
     fireKey('4');
-    expect(handlers.onSwitchView).toHaveBeenCalledWith('analytics');
+    expect(handlers.onSwitchView).toHaveBeenCalledWith('prs');
   });
 
-  it('5 calls onSwitchView with "settings"', () => {
+  it('5 calls onSwitchView with "gate"', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
     fireKey('5');
+    expect(handlers.onSwitchView).toHaveBeenCalledWith('gate');
+  });
+
+  it('6 calls onSwitchView with "architecture"', () => {
+    const handlers = makeHandlers();
+    renderHook(() => useKeyboardShortcuts(handlers));
+    fireKey('6');
+    expect(handlers.onSwitchView).toHaveBeenCalledWith('architecture');
+  });
+
+  it('7 calls onSwitchView with "analytics"', () => {
+    const handlers = makeHandlers();
+    renderHook(() => useKeyboardShortcuts(handlers));
+    fireKey('7');
+    expect(handlers.onSwitchView).toHaveBeenCalledWith('analytics');
+  });
+
+  it('8 calls onSwitchView with "settings"', () => {
+    const handlers = makeHandlers();
+    renderHook(() => useKeyboardShortcuts(handlers));
+    fireKey('8');
     expect(handlers.onSwitchView).toHaveBeenCalledWith('settings');
   });
 
-  it('1-5 map to the rendered nav order of shortcut-bearing items (Tasks, Sessions, PRs, Analytics, Settings)', () => {
-    // Keep in sync with Header's nav order test: only these 5 of the 8 nav
-    // items carry number-key shortcuts, matching their left-to-right order.
+  it('1-8 map to the rendered nav order (Milestone, Tasks, Sessions, PRs, Gate, Architecture, Analytics, Settings)', () => {
+    // Keep in sync with Header's nav order — digit position always equals
+    // the nav bar's current left-to-right order.
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
-    ['1', '2', '3', '4', '5'].forEach((key) => fireKey(key));
+    ['1', '2', '3', '4', '5', '6', '7', '8'].forEach((key) => fireKey(key));
     expect(
       (handlers.onSwitchView as ReturnType<typeof vi.fn>).mock.calls.map(
         (call) => call[0],
       ),
-    ).toEqual(['tasks', 'sessions', 'prs', 'analytics', 'settings']);
+    ).toEqual([
+      'milestone',
+      'tasks',
+      'sessions',
+      'prs',
+      'gate',
+      'architecture',
+      'analytics',
+      'settings',
+    ]);
   });
 
   it('/ calls onFocusSearch', () => {
@@ -214,11 +244,17 @@ describe('useKeyboardShortcuts', () => {
       { key: '3', modifier: 'metaKey' },
       { key: '4', modifier: 'metaKey' },
       { key: '5', modifier: 'metaKey' },
+      { key: '6', modifier: 'metaKey' },
+      { key: '7', modifier: 'metaKey' },
+      { key: '8', modifier: 'metaKey' },
       { key: '1', modifier: 'ctrlKey' },
       { key: '2', modifier: 'ctrlKey' },
       { key: '3', modifier: 'ctrlKey' },
       { key: '4', modifier: 'ctrlKey' },
       { key: '5', modifier: 'ctrlKey' },
+      { key: '6', modifier: 'ctrlKey' },
+      { key: '7', modifier: 'ctrlKey' },
+      { key: '8', modifier: 'ctrlKey' },
       { key: 'n', modifier: 'metaKey' },
       { key: 'n', modifier: 'ctrlKey' },
       { key: 'j', modifier: 'ctrlKey' },
@@ -251,19 +287,19 @@ describe('useKeyboardShortcuts', () => {
       });
     }
 
-    it('Cmd+1 through Cmd+5 do not change the active view', () => {
+    it('Cmd+1 through Cmd+8 do not change the active view', () => {
       const handlers = makeHandlers();
       renderHook(() => useKeyboardShortcuts(handlers));
-      for (const key of ['1', '2', '3', '4', '5']) {
+      for (const key of ['1', '2', '3', '4', '5', '6', '7', '8']) {
         fireKey(key, { metaKey: true });
       }
       expect(handlers.onSwitchView).not.toHaveBeenCalled();
     });
 
-    it('Ctrl+1 through Ctrl+5 do not change the active view', () => {
+    it('Ctrl+1 through Ctrl+8 do not change the active view', () => {
       const handlers = makeHandlers();
       renderHook(() => useKeyboardShortcuts(handlers));
-      for (const key of ['1', '2', '3', '4', '5']) {
+      for (const key of ['1', '2', '3', '4', '5', '6', '7', '8']) {
         fireKey(key, { ctrlKey: true });
       }
       expect(handlers.onSwitchView).not.toHaveBeenCalled();
@@ -283,7 +319,7 @@ describe('useKeyboardShortcuts', () => {
       expect(handlers.onOpenDispatch).not.toHaveBeenCalled();
     });
 
-    it('unmodified 1-5, n, j, k, Enter and / still behave as before', () => {
+    it('unmodified 1-8, n, j, k, Enter and / still behave as before', () => {
       const handlers = makeHandlers();
       renderHook(() => useKeyboardShortcuts(handlers));
 
@@ -292,17 +328,23 @@ describe('useKeyboardShortcuts', () => {
       fireKey('3');
       fireKey('4');
       fireKey('5');
+      fireKey('6');
+      fireKey('7');
+      fireKey('8');
       fireKey('n');
       fireKey('j');
       fireKey('k');
       fireKey('Enter');
       fireKey('/');
 
-      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(1, 'tasks');
-      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(2, 'sessions');
-      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(3, 'prs');
-      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(4, 'analytics');
-      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(5, 'settings');
+      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(1, 'milestone');
+      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(2, 'tasks');
+      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(3, 'sessions');
+      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(4, 'prs');
+      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(5, 'gate');
+      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(6, 'architecture');
+      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(7, 'analytics');
+      expect(handlers.onSwitchView).toHaveBeenNthCalledWith(8, 'settings');
       expect(handlers.onOpenDispatch).toHaveBeenCalledTimes(1);
       expect(handlers.onSelectNext).toHaveBeenCalledTimes(1);
       expect(handlers.onSelectPrev).toHaveBeenCalledTimes(1);
