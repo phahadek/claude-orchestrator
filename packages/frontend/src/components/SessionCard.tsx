@@ -170,7 +170,9 @@ export function SessionCard({
         )}
         {session.model && (
           <span className={styles['model-badge']}>
-            {formatModelName(session.model)}
+            {session.effort
+              ? `${formatModelName(session.model)} · ${session.effort}`
+              : formatModelName(session.model)}
           </span>
         )}
         <span className={styles['footer-right']}>

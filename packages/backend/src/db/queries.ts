@@ -996,7 +996,7 @@ export function getActiveSessions(): Session[] {
       s.session_id, s.task_id, s.task_url, s.project_context_url,
       s.project_id, s.status, s.started_at, s.ended_at, s.worktree_path,
       s.archived, s.favorited, s.session_type, s.note, s.tags,
-      s.total_input_tokens, s.total_output_tokens, s.model, s.task_name,
+      s.total_input_tokens, s.total_output_tokens, s.model, s.effort, s.task_name,
       s.granted_capabilities,
       COALESCE(s.pr_url, (
         SELECT p.pr_url FROM pull_requests p WHERE p.session_id = s.session_id LIMIT 1
@@ -1105,6 +1105,13 @@ export function setSessionNote(sessionId: string, note: string | null): void {
 export function setSessionModel(sessionId: string, model: string): void {
   db.prepare('UPDATE sessions SET model = ? WHERE session_id = ?').run(
     model,
+    sessionId,
+  );
+}
+
+export function setSessionEffort(sessionId: string, effort: string): void {
+  db.prepare('UPDATE sessions SET effort = ? WHERE session_id = ?').run(
+    effort,
     sessionId,
   );
 }
