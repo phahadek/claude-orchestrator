@@ -652,6 +652,39 @@ export function getAllSessionIds(): string[] {
   );
 }
 
+/**
+ * Session ids whose raw session_events have NOT been pruned — i.e. still
+ * backfillable from their stored event payloads. Used by the one-off
+ * cache-token backfill (scripts/backfill-cache-tokens.ts) to skip the
+ * sessions it can no longer reconstruct.
+ */
+export function getUnprunedSessionIds(): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT session_id FROM sessions WHERE events_pruned_at IS NULL`,
+      )
+      .all() as { session_id: string }[]
+  ).map((r) => r.session_id);
+}
+
+/**
+ * Absolute (non-additive) overwrite of the session's cache-token totals.
+ * Used only by the one-off cache-token backfill, which reconstructs the
+ * full cumulative total from history in one pass — unlike incrementCacheTokens,
+ * which is for the live per-turn accumulation path and must never be reused
+ * here (re-running the backfill would double-count).
+ */
+export function setCacheTokensAbsolute(
+  sessionId: string,
+  cacheReadTokens: number,
+  cacheCreationTokens: number,
+): void {
+  db.prepare(
+    `UPDATE sessions SET cache_read_tokens = ?, cache_creation_tokens = ? WHERE session_id = ?`,
+  ).run(cacheReadTokens, cacheCreationTokens, sessionId);
+}
+
 export function insertSessionOrIgnore(s: NewSession): void {
   stmtInsertSessionOrIgnore.run({
     ended_at: null,
@@ -1715,18 +1748,22 @@ export function setContextOccupancy(sessionId: string, tokens: number): void {
 }
 
 /**
- * Overwrite (not accumulate) the session's cache-token spend. Mirrors
- * setContextOccupancy: the usage payload's cache_read/cache_creation figures
- * are cumulative-per-turn, not per-turn deltas, so SET is correct and += would
- * double-count.
+ * Additively accumulate the session's cache-token spend. Each result event's
+ * usage.cache_read_input_tokens/cache_creation_input_tokens is already the
+ * cumulative total across every API call *in that turn*, so summing it across
+ * turns (result events) gives the session-wide cumulative total — the same
+ * additive rule incrementTokens applies for input/output tokens.
  */
-export function setCacheTokens(
+export function incrementCacheTokens(
   sessionId: string,
   cacheReadTokens: number,
   cacheCreationTokens: number,
 ): void {
   db.prepare(
-    `UPDATE sessions SET cache_read_tokens = ?, cache_creation_tokens = ? WHERE session_id = ?`,
+    `UPDATE sessions
+     SET cache_read_tokens = cache_read_tokens + ?,
+         cache_creation_tokens = cache_creation_tokens + ?
+     WHERE session_id = ?`,
   ).run(cacheReadTokens, cacheCreationTokens, sessionId);
 }
 

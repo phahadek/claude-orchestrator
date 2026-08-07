@@ -18,7 +18,7 @@ import {
   incrementTokens,
   incrementCompactionCount,
   setContextOccupancy,
-  setCacheTokens,
+  incrementCacheTokens,
   setSessionModel,
   setSessionEffort,
   setSessionMetadata,
@@ -1643,11 +1643,6 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           (usage.cache_creation_input_tokens ?? 0);
         if (occupancy > 0) {
           setContextOccupancy(this.sessionId, occupancy);
-          setCacheTokens(
-            this.sessionId,
-            usage.cache_read_input_tokens ?? 0,
-            usage.cache_creation_input_tokens ?? 0,
-          );
           this.broadcast({
             type: 'session_updated',
             sessionId: this.sessionId,
@@ -1671,7 +1666,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // assistant-event handler above keeps context_occupancy_tokens correct.
     if (rawType === 'result') {
       const usageData = event.usage as
-        | { input_tokens?: number; output_tokens?: number }
+        | {
+            input_tokens?: number;
+            output_tokens?: number;
+            cache_read_input_tokens?: number;
+            cache_creation_input_tokens?: number;
+          }
         | undefined;
       const inputTokens = usageData?.input_tokens ?? 0;
       const outputTokens = usageData?.output_tokens ?? 0;
@@ -1679,6 +1679,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         this.totalInputTokens += inputTokens;
         this.totalOutputTokens += outputTokens;
         incrementTokens(this.sessionId, inputTokens, outputTokens);
+      }
+      const cacheReadTokens = usageData?.cache_read_input_tokens ?? 0;
+      const cacheCreationTokens = usageData?.cache_creation_input_tokens ?? 0;
+      if (cacheReadTokens > 0 || cacheCreationTokens > 0) {
+        incrementCacheTokens(this.sessionId, cacheReadTokens, cacheCreationTokens);
       }
       this.broadcast({
         type: 'session_updated',

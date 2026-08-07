@@ -96,7 +96,7 @@ vi.mock('../db/db.js', async () => {
 });
 
 import { insertSession, getSession } from '../db/queries.js';
-import { incrementTokens } from '../db/queries.js';
+import { incrementTokens, incrementCacheTokens } from '../db/queries.js';
 
 const baseSession = {
   session_id: 'token-test-session',
@@ -122,5 +122,24 @@ describe('incrementTokens', () => {
     const row = getSession('token-test-session');
     expect(row?.total_input_tokens).toBe(300);
     expect(row?.total_output_tokens).toBe(150);
+  });
+});
+
+// ── incrementCacheTokens — SQLite integration ────────────────────────────────
+
+describe('incrementCacheTokens', () => {
+  it('updates cache token columns in SQLite', () => {
+    insertSession({ ...baseSession, session_id: 'cache-token-test-session' });
+    incrementCacheTokens('cache-token-test-session', 1000, 500);
+    const row = getSession('cache-token-test-session');
+    expect(row?.cache_read_tokens).toBe(1000);
+    expect(row?.cache_creation_tokens).toBe(500);
+  });
+
+  it('accumulates cache tokens additively across multiple turns', () => {
+    incrementCacheTokens('cache-token-test-session', 2000, 300);
+    const row = getSession('cache-token-test-session');
+    expect(row?.cache_read_tokens).toBe(3000);
+    expect(row?.cache_creation_tokens).toBe(800);
   });
 });
