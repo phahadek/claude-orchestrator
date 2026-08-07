@@ -41,6 +41,7 @@ interface Props {
 const CODE_GROUP_ORDER: DisplayStatus[] = [
   'needs_attention',
   'ready_to_merge',
+  'auto_recovering',
   'in_progress',
   'in_review',
   'blocked',
@@ -50,6 +51,7 @@ const CODE_GROUP_ORDER: DisplayStatus[] = [
 const GROUP_LABELS: Record<DisplayStatus, string> = {
   needs_attention: '⚠️ Needs Attention',
   ready_to_merge: '✅ Ready to Merge',
+  auto_recovering: '🔁 Auto-Recovering',
   in_progress: '🔄 In Progress',
   in_review: '👀 In Review',
   ready: '🗂️ Ready',

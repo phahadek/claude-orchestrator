@@ -40,6 +40,7 @@ function getProjectRepos(
 
 const STATUS_LABELS: Record<DisplayStatus, string> = {
   needs_attention: '⚠️ Needs Attention',
+  auto_recovering: '🔁 Auto-Recovering',
   ready_to_merge: '✅ Ready to Merge',
   in_progress: '🔄 In Progress',
   in_review: '👀 In Review',

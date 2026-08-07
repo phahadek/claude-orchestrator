@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { deriveDisplayStatus } from './TaskStatusEngine';
 import type { TaskStatusInput } from './TaskStatusEngine';
+import { pauseReasonFromCanonical } from '../db/pauseReason';
 
 function makeInput(overrides: Partial<TaskStatusInput> = {}): TaskStatusInput {
   return {
@@ -392,6 +393,115 @@ describe('deriveDisplayStatus', () => {
           notionStatus: '👀 In Review',
           prState: 'open',
           pauseReason: 'max_reviews',
+        }),
+      ),
+    ).toBe('needs_attention');
+  });
+
+  // ─── auto_recovering ───────────────────────────────────────────────────────
+
+  it("returns 'auto_recovering' (not 'needs_attention') for ci_failing while automatic recovery budget remains", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '👀 In Review',
+          prState: 'open',
+          pauseReason: pauseReasonFromCanonical('ci_failing'),
+          flakeRecoveryAttempts: 0,
+          flakeRecoveryMaxRetries: 2,
+        }),
+      ),
+    ).toBe('auto_recovering');
+  });
+
+  it("returns 'auto_recovering' (not 'needs_attention') for analyze_failing outside In Review while automatic recovery budget remains", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '🔄 In Progress',
+          pauseReason: pauseReasonFromCanonical('analyze_failing'),
+          flakeRecoveryAttempts: 1,
+          flakeRecoveryMaxRetries: 2,
+        }),
+      ),
+    ).toBe('auto_recovering');
+  });
+
+  it("returns 'needs_attention' for ci_failing once flake_recovery_attempts reaches the max — escalation still happens", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '👀 In Review',
+          prState: 'open',
+          pauseReason: pauseReasonFromCanonical('ci_failing'),
+          flakeRecoveryAttempts: 2,
+          flakeRecoveryMaxRetries: 2,
+        }),
+      ),
+    ).toBe('needs_attention');
+  });
+
+  it("returns 'needs_attention' for analyze_failing once flake_recovery_attempts exceeds the max", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '🔄 In Progress',
+          pauseReason: pauseReasonFromCanonical('analyze_failing'),
+          flakeRecoveryAttempts: 5,
+          flakeRecoveryMaxRetries: 2,
+        }),
+      ),
+    ).toBe('needs_attention');
+  });
+
+  it("returns 'needs_attention' immediately for max_reviews (manual_action) regardless of flake_recovery_attempts", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '👀 In Review',
+          prState: 'open',
+          pauseReason: pauseReasonFromCanonical('max_reviews'),
+          flakeRecoveryAttempts: 0,
+          flakeRecoveryMaxRetries: 2,
+        }),
+      ),
+    ).toBe('needs_attention');
+  });
+
+  it("returns 'needs_attention' immediately for merge_conflict (manual_action) regardless of flake_recovery_attempts", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '🔄 In Progress',
+          pauseReason: pauseReasonFromCanonical('merge_conflict'),
+          flakeRecoveryAttempts: 0,
+          flakeRecoveryMaxRetries: 2,
+        }),
+      ),
+    ).toBe('needs_attention');
+  });
+
+  it("returns 'needs_attention' immediately for a terminal-severity reason (pr_closed) regardless of flake_recovery_attempts", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '🔄 In Progress',
+          pauseReason: pauseReasonFromCanonical('pr_closed'),
+          flakeRecoveryAttempts: 0,
+          flakeRecoveryMaxRetries: 2,
+        }),
+      ),
+    ).toBe('needs_attention');
+  });
+
+  it("returns 'needs_attention' immediately for stuck_timeout (recoverable + automatic) regardless of flake_recovery_attempts — unaffected by the auto_recovering gate", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '🔄 In Progress',
+          pauseReason: pauseReasonFromCanonical('stuck_timeout'),
+          flakeRecoveryAttempts: 0,
+          flakeRecoveryMaxRetries: 2,
         }),
       ),
     ).toBe('needs_attention');

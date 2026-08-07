@@ -4,7 +4,10 @@ import {
   getTaskCache,
   getTaskPauseReason,
 } from '../db/queries';
-import { parsePauseReason } from '../db/pauseReason';
+import {
+  parsePauseReason,
+  isAutomaticRecoveryPending,
+} from '../db/pauseReason';
 import { typedGetSetting } from '../config/settings';
 import type { PauseReasonStruct } from '../db/types';
 
@@ -13,6 +16,7 @@ export type DisplayStatus =
   | 'in_progress'
   | 'in_review'
   | 'needs_attention'
+  | 'auto_recovering'
   | 'ready_to_merge'
   | 'done'
   | 'backlog'
@@ -28,6 +32,8 @@ export interface TaskStatusInput {
   reviewIterationCount: number; // how many review cycles
   reviewIterationCap: number; // configurable cap from settings
   pauseReason?: PauseReasonStruct | null; // non-null forces needs_attention (unless terminal/approved)
+  flakeRecoveryAttempts?: number; // pull_requests.flake_recovery_attempts — how many automatic recovery attempts have run
+  flakeRecoveryMaxRetries?: number; // flake_recovery_max_retries setting — budget for automatic recovery
 }
 
 /**
@@ -38,7 +44,24 @@ export interface TaskStatusInput {
  * Exception: a merged or closed PR always results in 'done'.
  */
 export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
-  const { notionStatus, prState, reviewVerdict, pauseReason } = input;
+  const {
+    notionStatus,
+    prState,
+    reviewVerdict,
+    pauseReason,
+    flakeRecoveryAttempts = 0,
+    flakeRecoveryMaxRetries = 0,
+  } = input;
+
+  // A pause whose automatic recovery budget isn't exhausted yet surfaces as a
+  // distinct, lower-weight status instead of escalating to a human — see
+  // isAutomaticRecoveryPending. Once the budget is exhausted it falls through
+  // to the needs_attention checks below, unchanged from today's behavior.
+  const autoRecovering = isAutomaticRecoveryPending(
+    pauseReason,
+    flakeRecoveryAttempts,
+    flakeRecoveryMaxRetries,
+  );
 
   // 1. done — PR merged (terminal override, takes precedence over Notion)
   // Closed-without-merge is NOT terminal: Notion status remains the source of truth
@@ -56,6 +79,7 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
     // promptly even if a stale pause_reason hasn't been cleared yet.
     if (reviewVerdict === 'approved' && prState === 'open')
       return 'ready_to_merge';
+    if (autoRecovering) return 'auto_recovering';
     if (pauseReason) return 'needs_attention';
     return 'in_review';
   }
@@ -66,7 +90,9 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
   if (notionStatus.includes('Blocked')) return 'blocked';
   if (notionStatus.includes('Deferred')) return 'deferred';
 
-  // Any non-null pause_reason marks the task as needing attention.
+  // Any non-null pause_reason marks the task as needing attention — unless it's
+  // still within its automatic recovery budget (see autoRecovering above).
+  if (autoRecovering) return 'auto_recovering';
   if (pauseReason) return 'needs_attention';
 
   if (notionStatus.includes('In Progress')) return 'in_progress';
@@ -83,6 +109,10 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
 
 function getReviewIterationCap(): number {
   return typedGetSetting('max_review_iterations');
+}
+
+function getFlakeRecoveryMaxRetries(): number {
+  return typedGetSetting('flake_recovery_max_retries');
 }
 
 /**
@@ -126,5 +156,7 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
       parsePauseReason(prRow?.pause_reason ?? null) ??
       getTaskPauseReason(notionTaskId) ??
       null,
+    flakeRecoveryAttempts: prRow?.flake_recovery_attempts ?? 0,
+    flakeRecoveryMaxRetries: getFlakeRecoveryMaxRetries(),
   });
 }

@@ -3010,6 +3010,7 @@ export interface TaskAggregateRow {
   pr_merge_state: string | null;
   pr_pause_reason: string | null;
   pr_pre_review_stage: string | null;
+  pr_flake_recovery_attempts: number | null;
   session_pr_creation_failed_pause_reason: string | null;
 }
 
@@ -3104,6 +3105,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.merge_state         AS pr_merge_state,
       pr.pause_reason        AS pr_pause_reason,
       pr.pre_review_stage    AS pr_pre_review_stage,
+      pr.flake_recovery_attempts AS pr_flake_recovery_attempts,
       CASE
         WHEN pr.pr_number IS NULL
           AND cs.pause_reason IN ('pr_creation_failed', 'stalled_idle')

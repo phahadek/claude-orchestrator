@@ -135,6 +135,12 @@
   border-color: rgba(166, 227, 161, 0.3);
 }
 
+.status--auto-recovering {
+  background: rgba(137, 180, 250, 0.12);
+  color: #89b4fa;
+  border-color: rgba(137, 180, 250, 0.3);
+}
+
 .status--done {
   background: rgba(166, 173, 200, 0.1);
   color: var(--text-muted);
