@@ -68,6 +68,7 @@ export function sendInitialStateBurst(
       cache_read_tokens: s.cache_read_tokens ?? 0,
       cache_creation_tokens: s.cache_creation_tokens ?? 0,
       model: s.model ?? null,
+      effort: s.effort ?? null,
       ...(s.pr_url != null && { prUrl: s.pr_url }),
       ...(s.task_id != null && { taskId: s.task_id }),
     });

@@ -66,6 +66,7 @@ export interface SessionState {
   /** Session ID of the code session whose PR this review session is reviewing */
   codeSessionId?: string;
   model?: string | null;
+  effort?: string | null;
   compaction_count?: number;
   context_occupancy_tokens?: number;
   cache_read_tokens?: number;
@@ -269,6 +270,7 @@ export function useSessionStore() {
             prNumber: msg.prNumber,
             codeSessionId: msg.codeSessionId,
             model: msg.model ?? null,
+            effort: msg.effort ?? null,
             prUrl: msg.prUrl,
           });
           break;

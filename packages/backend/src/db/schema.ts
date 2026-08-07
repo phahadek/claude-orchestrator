@@ -26,7 +26,8 @@ export function runMigrations(target: Database.Database): void {
       model                     TEXT,
       task_name                 TEXT,
       review_result             TEXT,
-      compaction_count          INTEGER NOT NULL DEFAULT 0
+      compaction_count          INTEGER NOT NULL DEFAULT 0,
+      effort                    TEXT
     );
 
     CREATE TABLE IF NOT EXISTS session_events (
@@ -1915,6 +1916,14 @@ export function runMigrations(target: Database.Database): void {
     target.exec(
       `ALTER TABLE convergence_snapshot ADD COLUMN gate_parked INTEGER NOT NULL DEFAULT 0`,
     );
+  } catch {
+    /* already exists */
+  }
+
+  // Resolved effort level used at session launch (e.g. "high") — nullable
+  // for historical rows launched before this column existed.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN effort TEXT`);
   } catch {
     /* already exists */
   }

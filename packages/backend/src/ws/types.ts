@@ -40,6 +40,8 @@ interface SessionState {
   cache_read_tokens?: number;
   cache_creation_tokens?: number;
   model?: string | null;
+  /** Resolved effort level used at session launch (e.g. "high") — null for historical rows. */
+  effort?: string | null;
   /** PR URL linked to this session, resolved from the pull_requests join. */
   prUrl?: string;
   /** Notion task ID this session belongs to — enables targeted in-place task updates. */

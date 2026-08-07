@@ -20,6 +20,7 @@ import {
   setContextOccupancy,
   setCacheTokens,
   setSessionModel,
+  setSessionEffort,
   setSessionMetadata,
   getPRBySessionId,
   setHeadSha,
@@ -692,6 +693,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           : isCodeSession(this.sessionType)
             ? runtimeSettings.code_session_effort
             : runtimeSettings.review_session_effort);
+    if (effortSetting) {
+      setSessionEffort(this.sessionId, effortSetting);
+    }
 
     // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
     // Instance fields _escalationModel and _escalationDisableAutoCompact hold these

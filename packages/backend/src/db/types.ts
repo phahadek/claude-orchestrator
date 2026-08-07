@@ -43,6 +43,7 @@ export interface Session {
   cache_read_tokens: number;
   cache_creation_tokens: number;
   model?: string | null;
+  effort?: string | null; // resolved effort level used at session launch, e.g. "high"
   task_name: string | null;
   metadata: string | null; // JSON blob for small session metadata (e.g. aiTitle)
   review_result: string | null; // JSON — verdict stored for local-only review sessions
