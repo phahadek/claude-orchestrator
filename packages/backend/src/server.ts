@@ -552,6 +552,7 @@ stalledPRReconciler.setGitHubClient(githubClient);
 // Concluded-session archiver: registers with Scheduler for cadence management.
 const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);
 concludedSessionArchiver.register(scheduler);
+planningOrchestrator.register(scheduler);
 prMergeWatcher.register(scheduler);
 reviewerCommentsWatcher.register(scheduler);
 updateChecker.register(scheduler);

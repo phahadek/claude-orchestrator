@@ -898,6 +898,35 @@ export function countLivePlanningSessions(): number {
   return rows.filter((r) => isPlanningSession(r.session_type ?? '')).length;
 }
 
+/**
+ * Idle planning-type sessions (groom/design/ops/split/docs — see
+ * isPlanningSession) with ended_at set, unarchived, and older than the
+ * given cutoff — the candidate population for
+ * PlanningOrchestrator.sweepIdleTerminalSessions. Deliberately a separate
+ * query from archiveConcludedSessionsOlderThan, which excludes idle on
+ * purpose (its docstring: "the CLI subprocess is still alive and
+ * resumable") — that guard stays correct and untouched. This query exists
+ * because an idle session's subprocess has, in fact, already exited
+ * (status='idle' with ended_at set is a parked-but-exited session — see
+ * countLivePlanningSessions' docstring for why idle still holds a slot
+ * either way), so it is eligible for a *different* sweep that first checks
+ * whether the session is actually finished before ever archiving it.
+ */
+export function listIdlePlanningSessionsEligibleForTerminalSweep(
+  cutoffMs: number,
+): Session[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM sessions
+       WHERE status = 'idle'
+         AND ended_at IS NOT NULL
+         AND ended_at < @cutoff
+         AND archived = 0`,
+    )
+    .all({ cutoff: cutoffMs }) as Session[];
+  return rows.filter((r) => isPlanningSession(r.session_type ?? ''));
+}
+
 export interface GateItemPendingCapabilitySession {
   itemId: string;
   sessionId: string;
