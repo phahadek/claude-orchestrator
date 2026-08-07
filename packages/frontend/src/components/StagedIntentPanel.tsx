@@ -1314,20 +1314,34 @@ export function StagedIntentPanel({
     }
   };
 
-  // Mirrors the visible approve button's own enable condition (see the
-  // "Approve"/"Grant" button below) — 'a' is a no-op whenever that button
-  // would be hidden or disabled, never bypassing its gate.
-  const canApproveViaKeyboard =
+  // Mirrors the visible primary action button's own enable condition — 'a'
+  // is a no-op whenever that button would be hidden or disabled, never
+  // bypassing its gate. For a grouped/capability-request/completeness-
+  // disposition card the primary action is Approve (see the
+  // "Approve"/"Grant" button below); for an ordinary standalone card it's
+  // Commit (see the "✓ Commit" button below) — matching each card's own
+  // rendered primary control rather than assuming Approve applies to both.
+  const usesApproveAsPrimary = isGrouped || skipsApply;
+  const canUsePrimaryActionViaKeyboard =
     !hideActions &&
-    (isGrouped || skipsApply) &&
-    intent.state !== 'approved' &&
-    !isBlockedState &&
+    !isNoOp &&
     inFlight === null &&
-    !disabled;
+    !disabled &&
+    (usesApproveAsPrimary
+      ? intent.state !== 'approved' && !isBlockedState
+      : !blocked && !isGateVerifyMirror);
+
+  const handlePrimaryAction = () => {
+    if (usesApproveAsPrimary) {
+      void handleApprove();
+    } else {
+      void handleApply();
+    }
+  };
 
   useHighlightedCardKeyboardActions({
     highlighted,
-    onApprove: canApproveViaKeyboard ? () => void handleApprove() : undefined,
+    onApprove: canUsePrimaryActionViaKeyboard ? handlePrimaryAction : undefined,
     onFocusReject: hideActions
       ? undefined
       : () => rejectReasonRef.current?.focus(),
@@ -1375,7 +1389,13 @@ export function StagedIntentPanel({
   };
 
   return (
-    <div className={styles.panel}>
+    <div
+      className={`${styles.panel}${
+        highlighted ? ` ${styles.keyboardHighlighted}` : ''
+      }`}
+      data-testid="staged-intent-panel"
+      data-keyboard-highlighted={highlighted || undefined}
+    >
       <div className={styles.header}>
         <span className={styles.kind}>{intent.kind}</span>
         {intent.groupId && (

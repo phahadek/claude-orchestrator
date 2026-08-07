@@ -6,10 +6,15 @@ import styles from './ShortcutHint.module.css';
 type Binding = { key: string; description: string };
 
 // The fixed bindings that hold across every surface, regardless of which
-// panel (if any) is active — view-switch digits, new-session, search focus,
-// and dismiss. J/K/Enter are deliberately excluded: those are context-
-// sensitive and come from the active panel's own declared hints instead.
-const GLOBAL_KEYS = new Set(['Esc', 'N', '1', '2', '3', '4', '5', '/']);
+// panel (if any) is active — view-switch digits, new-session, and dismiss.
+// J/K/Enter are deliberately excluded: those are context-sensitive and come
+// from the active panel's own declared hints instead. '/' (search focus) is
+// excluded too — it only applies to views that actually mount a search
+// input, so it's appended conditionally below rather than unconditionally
+// advertised everywhere.
+const GLOBAL_KEYS = new Set(['Esc', 'N', '1', '2', '3', '4', '5']);
+
+const FOCUS_SEARCH_SHORTCUT = KEYBOARD_SHORTCUTS.find((s) => s.key === '/');
 
 // Shift+Enter is handled locally by the Composer's textarea (see
 // Composer.tsx), not by useKeyboardShortcuts — documented here by hand since
@@ -25,9 +30,14 @@ const GLOBAL_SHORTCUTS: Binding[] = [
 export interface ShortcutHintProps {
   /** The currently active panel's keyboard declaration, or null/undefined when none is active. */
   activePanel?: PanelKeyboardDeclaration | null;
+  /** True only while the active view actually mounts a search input — see useKeyboardShortcuts' canFocusSearch. Gates whether the Focus Search hint is advertised at all. */
+  canFocusSearch?: boolean;
 }
 
-export function ShortcutHint({ activePanel }: ShortcutHintProps) {
+export function ShortcutHint({
+  activePanel,
+  canFocusSearch,
+}: ShortcutHintProps) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -59,6 +69,14 @@ export function ShortcutHint({ activePanel }: ShortcutHintProps) {
       description: h.description,
     })) ?? []),
     ...GLOBAL_SHORTCUTS,
+    ...(canFocusSearch && FOCUS_SEARCH_SHORTCUT
+      ? [
+          {
+            key: FOCUS_SEARCH_SHORTCUT.key,
+            description: FOCUS_SEARCH_SHORTCUT.desc,
+          },
+        ]
+      : []),
   ];
 
   return (

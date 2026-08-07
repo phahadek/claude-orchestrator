@@ -219,11 +219,18 @@ describe('useKeyboardShortcuts', () => {
     ]);
   });
 
-  it('/ calls onFocusSearch', () => {
-    const handlers = makeHandlers();
+  it('/ calls onFocusSearch when the active view has a search target', () => {
+    const handlers = makeHandlers({ canFocusSearch: true });
     renderHook(() => useKeyboardShortcuts(handlers));
     fireKey('/');
     expect(handlers.onFocusSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('/ is a no-op when the active view has no search target (e.g. Milestones)', () => {
+    const handlers = makeHandlers({ canFocusSearch: false });
+    renderHook(() => useKeyboardShortcuts(handlers));
+    fireKey('/');
+    expect(handlers.onFocusSearch).not.toHaveBeenCalled();
   });
 
   it('removes keydown listener on unmount', () => {
@@ -320,7 +327,7 @@ describe('useKeyboardShortcuts', () => {
     });
 
     it('unmodified 1-8, n, j, k, Enter and / still behave as before', () => {
-      const handlers = makeHandlers();
+      const handlers = makeHandlers({ canFocusSearch: true });
       renderHook(() => useKeyboardShortcuts(handlers));
 
       fireKey('1');

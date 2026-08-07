@@ -176,9 +176,10 @@ export function GroupCard({
     <div
       className={`${panelStyles.group}${className ? ` ${className}` : ''}${
         selected ? ` ${styles.selected}` : ''
-      }`}
+      }${highlighted ? ` ${styles.keyboardHighlighted}` : ''}`}
       onClick={onClick}
       data-testid={dataTestId ?? `group-card-${groupId}`}
+      data-keyboard-highlighted={highlighted || undefined}
     >
       <div className={panelStyles.groupHeader}>
         <span className={styles.cardTitleGroup}>

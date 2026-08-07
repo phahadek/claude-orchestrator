@@ -2,6 +2,11 @@
   border-color: var(--ctp-blue);
 }
 
+.keyboardHighlighted {
+  outline: 2px solid var(--ctp-yellow, #f9e2af);
+  outline-offset: -1px;
+}
+
 .cardTitleGroup {
   display: flex;
   align-items: baseline;

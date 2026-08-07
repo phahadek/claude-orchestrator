@@ -1310,6 +1310,7 @@ export default function App() {
     onFocusSearch: () => {
       searchInputRef.current?.focus();
     },
+    canFocusSearch: topView === 'sessions',
   });
 
   if (bootstrapLoopbackOnly) {
@@ -1764,7 +1765,10 @@ export default function App() {
         notifications={notifications}
         onDismiss={dismissNotification}
       />
-      <ShortcutHint activePanel={activePanel} />
+      <ShortcutHint
+        activePanel={activePanel}
+        canFocusSearch={topView === 'sessions'}
+      />
 
       {hasConnectedOnce && connectionState !== 'connected' && (
         <div className={styles.connectionBanner}>Reconnecting...</div>

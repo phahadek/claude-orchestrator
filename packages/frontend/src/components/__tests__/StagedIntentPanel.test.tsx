@@ -1028,5 +1028,36 @@ describe('StagedIntentPanel', () => {
       // Focusing the field alone must never fire a network call.
       expect(reasonField.value).toBe('');
     });
+
+    it("'a' fires the same Commit handler as clicking the primary button for a standalone (non-grouped) card", async () => {
+      const apply = vi
+        .spyOn(stagedIntentsApi, 'apply')
+        .mockResolvedValue({ ok: true, result: {} });
+
+      render(<StagedIntentPanel intent={makeIntent()} highlighted />);
+
+      act(() => fireKey('a'));
+
+      await waitFor(() =>
+        expect(apply).toHaveBeenCalledWith('intent-1', {
+          override: false,
+          reason: undefined,
+          mirrorDisposition: undefined,
+        }),
+      );
+    });
+
+    it('renders a distinct keyboard-highlight class when highlighted, absent otherwise', () => {
+      const { container, rerender } = render(
+        <StagedIntentPanel intent={makeIntent()} highlighted={false} />,
+      );
+      const panel = container.querySelector(
+        '[data-testid="staged-intent-panel"]',
+      ) as HTMLElement;
+      expect(panel.className).not.toMatch(/keyboardHighlighted/);
+
+      rerender(<StagedIntentPanel intent={makeIntent()} highlighted />);
+      expect(panel.className).toMatch(/keyboardHighlighted/);
+    });
   });
 });

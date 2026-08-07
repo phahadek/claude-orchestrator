@@ -4,6 +4,7 @@ import {
   waitFor,
   fireEvent,
   within,
+  act,
 } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { MilestoneDecisionStack } from '../MilestoneDecisionStack';
@@ -11,6 +12,7 @@ import { stagedIntentsApi } from '../../api/stagedIntents';
 import type { StagedIntent } from '../../api/stagedIntents';
 import type { DisplayStatus, TaskView } from '../../types/taskView';
 import { computePhaseBurndown } from '../../utils/phaseBurndown';
+import type { PanelKeyboardDeclaration } from '../../types/panelKeyboard';
 
 const RUNNING_CODE_SESSION = {
   sessionId: 'sess-1',
@@ -535,6 +537,57 @@ describe('MilestoneDecisionStack', () => {
       type: 'intent',
       intent: intents[0],
     });
+  });
+
+  it("the declared panel's onApprove fires the same primary-action handler the highlighted card's own button uses", async () => {
+    const intent: StagedIntent = {
+      id: 'intent-1',
+      kind: 'task.setStatus',
+      payload: { taskId: 'task-1', status: 'Ready' },
+      projectId: 'proj-1',
+      createdAt: 1,
+      milestone: 'M1',
+      state: 'staged',
+      sessionComplete: true,
+    };
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([intent]);
+    const apply = vi
+      .spyOn(stagedIntentsApi, 'apply')
+      .mockResolvedValue({ ok: true, result: {} });
+
+    let declaration: PanelKeyboardDeclaration | null = null;
+    render(
+      <MilestoneDecisionStack
+        projectId="proj-1"
+        milestone="M1"
+        tasks={[]}
+        phaseFilter={null}
+        selection={null}
+        onSelect={vi.fn()}
+        keyboardHighlightedId="intent-1"
+        onDeclarationChange={(d) => {
+          declaration = d;
+        }}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('milestone-decision-card-intent-1'),
+      ).toBeTruthy(),
+    );
+    expect(declaration).not.toBeNull();
+    expect(declaration!.onApprove).toBeDefined();
+
+    act(() => declaration!.onApprove?.({ id: 'intent-1' }));
+
+    await waitFor(() =>
+      expect(apply).toHaveBeenCalledWith('intent-1', {
+        override: false,
+        reason: undefined,
+        mirrorDisposition: undefined,
+      }),
+    );
   });
 
   describe('re-selecting the topmost card after a disposition', () => {
