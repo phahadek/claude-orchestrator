@@ -579,10 +579,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                     className={styles.select}
                     value={settings?.groom_session_effort ?? ''}
                     onChange={(e) =>
-                      void handleChange(
-                        'groom_session_effort',
-                        e.target.value,
-                      )
+                      void handleChange('groom_session_effort', e.target.value)
                     }
                   >
                     {EFFORT_OPTIONS.map((o) => (
@@ -617,10 +614,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                     className={styles.select}
                     value={settings?.design_session_effort ?? ''}
                     onChange={(e) =>
-                      void handleChange(
-                        'design_session_effort',
-                        e.target.value,
-                      )
+                      void handleChange('design_session_effort', e.target.value)
                     }
                   >
                     {EFFORT_OPTIONS.map((o) => (
@@ -655,10 +649,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                     className={styles.select}
                     value={settings?.docs_session_effort ?? ''}
                     onChange={(e) =>
-                      void handleChange(
-                        'docs_session_effort',
-                        e.target.value,
-                      )
+                      void handleChange('docs_session_effort', e.target.value)
                     }
                   >
                     {EFFORT_OPTIONS.map((o) => (
