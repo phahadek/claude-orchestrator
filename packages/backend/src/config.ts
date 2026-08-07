@@ -684,6 +684,18 @@ export interface RuntimeSettings {
   gate_verify_session_model: string;
   /** Reasoning effort for gate-verify sessions; empty string = fall back to ops_session_effort. */
   gate_verify_session_effort: string;
+  /** Model used for grooming sessions; empty string = fall back to planning_session_model. */
+  groom_session_model: string;
+  /** Reasoning effort for grooming sessions; empty string = fall back to planning_session_effort. */
+  groom_session_effort: string;
+  /** Model used for design sessions; empty string = fall back to planning_session_model. */
+  design_session_model: string;
+  /** Reasoning effort for design sessions; empty string = fall back to planning_session_effort. */
+  design_session_effort: string;
+  /** Model used for docs sessions; empty string = fall back to planning_session_model. */
+  docs_session_model: string;
+  /** Reasoning effort for docs sessions; empty string = fall back to planning_session_effort. */
+  docs_session_effort: string;
   /**
    * Shared concurrency cap across all planning session types (groom/design/ops).
    * One pool, not per-type caps — they compete for the same operator review
@@ -762,6 +774,12 @@ export const runtimeSettings: RuntimeSettings = {
   ops_session_effort: '',
   gate_verify_session_model: '',
   gate_verify_session_effort: '',
+  groom_session_model: '',
+  groom_session_effort: '',
+  design_session_model: '',
+  design_session_effort: '',
+  docs_session_model: '',
+  docs_session_effort: '',
   max_concurrent_planning_sessions: Number(
     process.env.MAX_CONCURRENT_PLANNING_SESSIONS ?? 5,
   ),
