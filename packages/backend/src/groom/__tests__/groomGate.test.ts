@@ -1155,6 +1155,37 @@ describe('checkGroomingPromotionGate — Files/paths derived from the task body,
     expect(result.allowed).toBe(true);
   });
 
+  it('does not absorb a trailing "## Notion pages affected" section into Files/paths (task 3b522f91 repro)', async () => {
+    const taskBody = [
+      '## Summary',
+      '',
+      'Retire Opportunistic classification.',
+      '',
+      '## Files Changed',
+      '',
+      '- packages/backend/src/checkout.ts (update)',
+      '',
+      '## Notion pages affected',
+      '',
+      '- 🏗️ Technical Architecture (already updated by the design task this implements)',
+    ].join('\n');
+    const result = await checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [],
+      },
+      'notion:body-derived-task',
+      undefined,
+      undefined,
+      'polimarket-analyser',
+      taskBody,
+    );
+    expect(
+      result.reasons.some((r) => r.includes('does not resolve to an existing repo file')),
+    ).toBe(false);
+    expect(result.allowed).toBe(true);
+  });
+
   it('still blocks rather than failing open when the tracked-file set is unavailable, even with taskBody supplied', async () => {
     const taskBody = [
       '## Files / paths affected',
