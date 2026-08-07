@@ -4882,6 +4882,8 @@ export interface ConvergenceSnapshotHistoryWindow {
   limit?: number;
   /** Only rows with ts >= this ISO-8601 timestamp. */
   sinceTs?: string;
+  /** Only rows with ts <= this ISO-8601 timestamp. */
+  untilTs?: string;
 }
 
 /**
@@ -4895,7 +4897,7 @@ export function listConvergenceSnapshotHistory(
   milestone: string,
   window?: ConvergenceSnapshotHistoryWindow,
 ): ConvergenceSnapshotRow[] {
-  if (!window?.limit && !window?.sinceTs) {
+  if (!window?.limit && !window?.sinceTs && !window?.untilTs) {
     _stmtListConvergenceSnapshotHistory ??= db.prepare<{
       project: string;
       milestone: string;
@@ -4915,6 +4917,10 @@ export function listConvergenceSnapshotHistory(
   if (window.sinceTs) {
     conditions.push('ts >= @sinceTs');
     params.sinceTs = window.sinceTs;
+  }
+  if (window.untilTs) {
+    conditions.push('ts <= @untilTs');
+    params.untilTs = window.untilTs;
   }
 
   const whereClause = conditions.join(' AND ');

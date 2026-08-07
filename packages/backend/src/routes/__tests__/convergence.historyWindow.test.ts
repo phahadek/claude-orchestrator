@@ -128,7 +128,7 @@ describe('GET /api/milestones/:project/:milestone/convergence/history', () => {
     expect(res.body[1].ts).toBe(TS[4]);
   });
 
-  it('with no query params, returns the full unbounded history unchanged', async () => {
+  it('with no query params, returns the full unbounded history unchanged when the milestone row has no created_at', async () => {
     for (const ts of TS) {
       insertConvergenceSnapshot(snapshot(ts) as any);
     }
@@ -139,5 +139,53 @@ describe('GET /api/milestones/:project/:milestone/convergence/history', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(5);
+  });
+
+  it('with no query params, bounds the range to the milestone lifetime (created_at through now)', async () => {
+    for (const ts of TS) {
+      insertConvergenceSnapshot(snapshot(ts) as any);
+    }
+    milestoneResolverMock.resolveMilestoneRowForProject.mockReturnValue({
+      id: 'ms-1',
+      name: 'M1',
+      canonicalShortId: 'M1',
+      createdAt: new Date(TS[2]).getTime(),
+      wrappedAt: null,
+    });
+
+    const res = await request(makeApp()).get(
+      '/api/milestones/proj-1/M1/convergence/history',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.map((r: { ts: string }) => r.ts)).toEqual([
+      TS[2],
+      TS[3],
+      TS[4],
+    ]);
+  });
+
+  it('with no query params and wrapped_at set, bounds the range to created_at through wrapped_at', async () => {
+    for (const ts of TS) {
+      insertConvergenceSnapshot(snapshot(ts) as any);
+    }
+    milestoneResolverMock.resolveMilestoneRowForProject.mockReturnValue({
+      id: 'ms-1',
+      name: 'M1',
+      canonicalShortId: 'M1',
+      createdAt: new Date(TS[1]).getTime(),
+      wrappedAt: new Date(TS[3]).getTime(),
+    });
+
+    const res = await request(makeApp()).get(
+      '/api/milestones/proj-1/M1/convergence/history',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.map((r: { ts: string }) => r.ts)).toEqual([
+      TS[1],
+      TS[2],
+      TS[3],
+    ]);
   });
 });

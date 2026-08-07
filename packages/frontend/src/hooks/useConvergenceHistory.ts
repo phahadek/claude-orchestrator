@@ -2,9 +2,6 @@ import { useEffect, useState } from 'react';
 import { apiRequest } from '../api/projects';
 import type { ConvergenceSnapshotRow } from '@claude-orchestrator/backend/src/db/types';
 
-/** Recent-enough for the sparkline without dragging in a milestone's entire (never-pruned) history. */
-const DEFAULT_LIMIT = 60;
-
 export interface UseConvergenceHistoryResult {
   history: ConvergenceSnapshotRow[];
   loading: boolean;
@@ -12,14 +9,14 @@ export interface UseConvergenceHistoryResult {
 }
 
 /**
- * Bounded fetch of the convergence_snapshot series for the milestone's
- * sparkline — always passes `limit` so the request stays a bounded window,
- * never the route's unbounded default.
+ * Fetch of the convergence_snapshot series for the milestone's sparkline.
+ * No `limit`/`since` params are sent — the route defaults the window to the
+ * milestone's own lifetime (created_at through wrapped_at, or now), which is
+ * a more meaningful bound than an arbitrary fixed row count.
  */
 export function useConvergenceHistory(
   projectId: string | null,
   milestoneId: string | null,
-  limit: number = DEFAULT_LIMIT,
 ): UseConvergenceHistoryResult {
   const [history, setHistory] = useState<ConvergenceSnapshotRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -35,7 +32,7 @@ export function useConvergenceHistory(
     let cancelled = false;
     setLoading(true);
     apiRequest<ConvergenceSnapshotRow[]>(
-      `/api/milestones/${encodeURIComponent(projectId)}/${encodeURIComponent(milestoneId)}/convergence/history?limit=${limit}`,
+      `/api/milestones/${encodeURIComponent(projectId)}/${encodeURIComponent(milestoneId)}/convergence/history`,
     )
       .then((data) => {
         if (cancelled) return;
@@ -54,7 +51,7 @@ export function useConvergenceHistory(
     return () => {
       cancelled = true;
     };
-  }, [projectId, milestoneId, limit]);
+  }, [projectId, milestoneId]);
 
   return { history, loading, error };
 }
