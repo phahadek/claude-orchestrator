@@ -1683,7 +1683,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       const cacheReadTokens = usageData?.cache_read_input_tokens ?? 0;
       const cacheCreationTokens = usageData?.cache_creation_input_tokens ?? 0;
       if (cacheReadTokens > 0 || cacheCreationTokens > 0) {
-        incrementCacheTokens(this.sessionId, cacheReadTokens, cacheCreationTokens);
+        incrementCacheTokens(
+          this.sessionId,
+          cacheReadTokens,
+          cacheCreationTokens,
+        );
       }
       this.broadcast({
         type: 'session_updated',

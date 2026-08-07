@@ -661,9 +661,7 @@ export function getAllSessionIds(): string[] {
 export function getUnprunedSessionIds(): string[] {
   return (
     db
-      .prepare(
-        `SELECT session_id FROM sessions WHERE events_pruned_at IS NULL`,
-      )
+      .prepare(`SELECT session_id FROM sessions WHERE events_pruned_at IS NULL`)
       .all() as { session_id: string }[]
   ).map((r) => r.session_id);
 }
