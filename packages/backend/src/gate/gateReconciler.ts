@@ -645,7 +645,7 @@ export async function reattachOutstandingGateVerifications(): Promise<void> {
  * import in the other direction would be a cycle.
  */
 /** The two gate-item states this reconciler surfaces into the Decision Inbox — see reconcileHumanObservationMirrors. */
-export type GateItemMirrorOrigin = 'mirror' | 'consent';
+type GateItemMirrorOrigin = 'mirror' | 'consent';
 
 export interface GateItemMirrorSink {
   /**
