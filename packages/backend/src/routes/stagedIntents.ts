@@ -4220,13 +4220,14 @@ export function translateApplyError(
 
   const patchMismatchKey = patchBodySectionMismatchKey(raw, intent);
   if (patchMismatchKey) {
-    const priorFailures = patchBodySectionMismatchStreaks.get(patchMismatchKey) ?? 0;
+    const priorFailures =
+      patchBodySectionMismatchStreaks.get(patchMismatchKey) ?? 0;
     patchBodySectionMismatchStreaks.set(patchMismatchKey, priorFailures + 1);
     if (priorFailures >= 1) {
       return (
         `${raw} This is the same "text to replace not found" mismatch as the previous attempt — ` +
-        'do not retry the identical find text again. Re-fetch the section\'s current content from ' +
-        'Notion first: its stored text rarely matches Notion\'s own serialization verbatim ' +
+        "do not retry the identical find text again. Re-fetch the section's current content from " +
+        "Notion first: its stored text rarely matches Notion's own serialization verbatim " +
         '(auto-linkified URLs, curly quotes, table formatting). Anchor the edit on stable plain ' +
         'prose or a heading instead of a table row, using text copied from the fresh fetch.'
       );

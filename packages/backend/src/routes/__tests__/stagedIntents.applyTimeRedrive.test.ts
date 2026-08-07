@@ -681,8 +681,14 @@ describe('translateApplyError', () => {
     });
 
     translateApplyError(notFoundError, intent);
-    const second = translateApplyError(notFoundError, { ...intent, id: 'intent-d' });
-    const third = translateApplyError(notFoundError, { ...intent, id: 'intent-e' });
+    const second = translateApplyError(notFoundError, {
+      ...intent,
+      id: 'intent-d',
+    });
+    const third = translateApplyError(notFoundError, {
+      ...intent,
+      id: 'intent-e',
+    });
 
     expect(second).toBe(third);
     expect(third).toMatch(/re-fetch/i);
