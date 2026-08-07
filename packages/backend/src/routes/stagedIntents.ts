@@ -956,7 +956,7 @@ function assertTaskCreateGrouped(
  * pre-author on the strength of bringing the Design/Planning task itself to
  * Ready.
  */
-export class GroomDesignFollowOnRejectedError extends Error {
+class GroomDesignFollowOnRejectedError extends Error {
   constructor(taskType: string) {
     super(
       `[stagedIntents] a groom session cannot stage "task.create" against a ${taskType} subject task — its ` +
