@@ -26,6 +26,7 @@ import { queryUnits, type ArchUnit } from './ArchUnitStore';
 import { ProjectService } from '../projects/ProjectService';
 import { loadManifest, resolveConfigDir } from '../groom/groomLoad';
 import { NotionClient } from '../notion/NotionClient';
+import { formatTaskId } from '../tasks/taskId';
 
 interface SelectiveInjectionRegions {
   packages?: string[];
@@ -96,7 +97,7 @@ async function defaultFetchNotionArchitecturePages(
   const notion = new NotionClient();
   const pages: ArchitecturePageDoc[] = [];
   for (const pg of manifest.context_pages ?? []) {
-    const page = await notion.fetchPageMarkdown(pg.id);
+    const page = await notion.fetchPageMarkdown(formatTaskId('notion', pg.id));
     pages.push({
       id: pg.id,
       title: pg.title ?? page.title,
