@@ -4217,6 +4217,24 @@ export function translateApplyError(
   intent: StagedIntent,
 ): string {
   const raw = err instanceof Error ? err.message : String(err);
+
+  const patchMismatchKey = patchBodySectionMismatchKey(raw, intent);
+  if (patchMismatchKey) {
+    const priorFailures =
+      patchBodySectionMismatchStreaks.get(patchMismatchKey) ?? 0;
+    patchBodySectionMismatchStreaks.set(patchMismatchKey, priorFailures + 1);
+    if (priorFailures >= 1) {
+      return (
+        `${raw} This is the same "text to replace not found" mismatch as the previous attempt — ` +
+        "do not retry the identical find text again. Re-fetch the section's current content from " +
+        "Notion first: its stored text rarely matches Notion's own serialization verbatim " +
+        '(auto-linkified URLs, curly quotes, table formatting). Anchor the edit on stable plain ' +
+        'prose or a heading instead of a table row, using text copied from the fresh fetch.'
+      );
+    }
+    return raw;
+  }
+
   const notFoundMatch = raw.match(
     /Could not find (?:page|database) with ID:\s*([0-9a-fA-F-]+)/,
   );
@@ -4232,6 +4250,43 @@ export function translateApplyError(
         'existing task. Re-stage this intent against the correct task id.'
     : `Could not apply "${intent.kind}": the referenced task id does not resolve to ` +
         'an existing task. Re-stage this intent against the correct task id.';
+}
+
+/**
+ * Consecutive-identical-mismatch counter for task.patchBodySection apply
+ * failures, keyed by (sessionId, taskId, section, find) — the same shape of
+ * in-memory bookkeeping as groupRevisionRounds above, just scoped to a single
+ * session's repeated retries of one section-and-find combination rather than
+ * a group's verification rounds. Reset is unnecessary: a differing find,
+ * section, task, or session produces a different key, and a successful apply
+ * never revisits this map for that key again.
+ */
+const patchBodySectionMismatchStreaks = new Map<string, number>();
+
+/**
+ * Recognizes NotionClient.patchBodySection's "text to replace not found in
+ * section" error (NotionClient.ts:976-979) and, when the failing intent is
+ * itself a task.patchBodySection replace, returns the streak key for that
+ * exact (sessionId, taskId, section, find) combination — or null for any
+ * other error/kind, so callers can distinguish "not this failure mode" from
+ * "first occurrence of this failure mode".
+ */
+function patchBodySectionMismatchKey(
+  rawMessage: string,
+  intent: StagedIntent,
+): string | null {
+  if (intent.kind !== 'task.patchBodySection') return null;
+  if (!rawMessage.includes('text to replace not found in section')) {
+    return null;
+  }
+  const payload = intent.payload as Partial<PatchBodySectionPayload> | null;
+  if (!payload || payload.operation !== 'replace') return null;
+  return JSON.stringify([
+    intent.sessionId ?? null,
+    payload.taskId ?? null,
+    payload.section ?? null,
+    payload.find ?? null,
+  ]);
 }
 
 /**
