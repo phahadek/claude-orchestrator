@@ -217,7 +217,7 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
   },
   'POST /api/gate/items/:id/reject': {
     audience: 'operator',
-    reason: 'gate item disposition — the consent gate\'s reject path',
+    reason: "gate item disposition — the consent gate's reject path",
   },
   'POST /api/gate/items/:id/reopen': {
     audience: 'operator',

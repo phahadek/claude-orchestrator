@@ -141,7 +141,9 @@ function makeProdMutatingItem(
 }
 
 /** A Prod-Mutating item held at pending-approval, with a disposition-bearing pass event carrying the given evidence. */
-function makePendingApprovalItem(evidence: unknown = { basis: 'read-only check' }) {
+function makePendingApprovalItem(
+  evidence: unknown = { basis: 'read-only check' },
+) {
   const item = makeProdMutatingItem();
   appendGateItemEvent(item.id, {
     disposition: 'pass',
@@ -336,7 +338,10 @@ describe('reconcileHumanObservationMirrors — consent mirrors (Prod-Mutating pe
     reconcileHumanObservationMirrors();
     expect(liveMirrorRows('consent')).toHaveLength(0);
 
-    appendGateItemEvent(item.id, { disposition: 'pass', operator: 'gate-verifier' });
+    appendGateItemEvent(item.id, {
+      disposition: 'pass',
+      operator: 'gate-verifier',
+    });
     const result = reconcileHumanObservationMirrors();
 
     expect(result.staged).toEqual([item.id]);

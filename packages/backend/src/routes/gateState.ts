@@ -282,7 +282,9 @@ export function createGateStateRouter(): Router {
     const id = String(req.params.id);
     const body = req.body as { operator?: unknown; reason?: unknown };
     if (typeof body.reason !== 'string' || !body.reason.trim()) {
-      res.status(400).json({ error: 'reason is required to reject a gate item' });
+      res
+        .status(400)
+        .json({ error: 'reason is required to reject a gate item' });
       return;
     }
     try {
@@ -294,7 +296,8 @@ export function createGateStateRouter(): Router {
       res.json(updated);
     } catch (err) {
       res.status(400).json({
-        error: err instanceof Error ? err.message : 'gate item rejection failed',
+        error:
+          err instanceof Error ? err.message : 'gate item rejection failed',
       });
     }
   });

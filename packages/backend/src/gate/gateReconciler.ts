@@ -676,12 +676,16 @@ export interface GateItemMirrorReconcileResult {
 
 /** True for a runnable Human-Observation item — no headless session can judge rendered UI/visual state, so it needs an operator disposition. */
 function isMirrorCandidate(item: GateItem): boolean {
-  return item.classification === 'Human-Observation' && item.state === 'runnable';
+  return (
+    item.classification === 'Human-Observation' && item.state === 'runnable'
+  );
 }
 
 /** True for a Prod-Mutating item held at pending-approval — a pass an operator must explicitly consent to or reject before it resolves. */
 function isConsentCandidate(item: GateItem): boolean {
-  return item.classification === 'Prod-Mutating' && item.state === 'pending-approval';
+  return (
+    item.classification === 'Prod-Mutating' && item.state === 'pending-approval'
+  );
 }
 
 /** The withdrawal reason for a mirror whose backing item left the classification/state that earned it a mirror of the given origin. */
@@ -726,11 +730,13 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
   const sink = configuredMirrorSink;
 
   const allItems = gateStore.listAll();
-  const candidatesByOrigin: [GateItemMirrorOrigin, (item: GateItem) => boolean][] =
-    [
-      ['mirror', isMirrorCandidate],
-      ['consent', isConsentCandidate],
-    ];
+  const candidatesByOrigin: [
+    GateItemMirrorOrigin,
+    (item: GateItem) => boolean,
+  ][] = [
+    ['mirror', isMirrorCandidate],
+    ['consent', isConsentCandidate],
+  ];
   for (const [origin, matches] of candidatesByOrigin) {
     for (const item of allItems.filter(matches)) {
       if (findActiveGateVerifyMirrorForItem(item.id, origin)) continue;
@@ -739,11 +745,13 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
     }
   }
 
-  const stillLiveByOrigin: Record<GateItemMirrorOrigin, (item: GateItem) => boolean> =
-    {
-      mirror: isMirrorCandidate,
-      consent: isConsentCandidate,
-    };
+  const stillLiveByOrigin: Record<
+    GateItemMirrorOrigin,
+    (item: GateItem) => boolean
+  > = {
+    mirror: isMirrorCandidate,
+    consent: isConsentCandidate,
+  };
   for (const [origin, stillLive] of Object.entries(stillLiveByOrigin) as [
     GateItemMirrorOrigin,
     (item: GateItem) => boolean,

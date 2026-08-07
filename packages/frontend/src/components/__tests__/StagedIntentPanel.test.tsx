@@ -940,7 +940,10 @@ describe('StagedIntentPanel', () => {
         payload: {
           gateItemId: 'gate-consent-1',
           origin: 'consent',
-          evidence: { basis: 'read-only dry run', note: 'no rows would change' },
+          evidence: {
+            basis: 'read-only dry run',
+            note: 'no rows would change',
+          },
         },
         ...overrides,
       });
@@ -949,9 +952,7 @@ describe('StagedIntentPanel', () => {
     it('renders the pending-approval headline and the evidence behind the held pass', () => {
       render(<StagedIntentPanel intent={makeConsentIntent()} />);
 
-      expect(
-        screen.getByText(/Prod-Mutating — pending approval/),
-      ).toBeTruthy();
+      expect(screen.getByText(/Prod-Mutating — pending approval/)).toBeTruthy();
       expect(screen.getByText(/Basis: read-only dry run/)).toBeTruthy();
       expect(screen.getByText(/no rows would change/)).toBeTruthy();
     });
@@ -979,7 +980,9 @@ describe('StagedIntentPanel', () => {
       render(<StagedIntentPanel intent={intent} onApplied={onApplied} />);
       fireEvent.click(screen.getByTestId('staged-intent-gate-consent-approve'));
 
-      await waitFor(() => expect(approve).toHaveBeenCalledWith('gate-consent-1'));
+      await waitFor(() =>
+        expect(approve).toHaveBeenCalledWith('gate-consent-1'),
+      );
       await waitFor(() =>
         expect(onApplied).toHaveBeenCalledWith(
           intent,
