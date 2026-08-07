@@ -114,7 +114,9 @@ describe('ConvergenceSparkline', () => {
       'convergence-sparkline-series-seed_open',
     );
     const ys = Array.from(
-      seedPath.getAttribute('d')!.matchAll(/[ML]-?\d+(?:\.\d+)?,(-?\d+(?:\.\d+)?)/g),
+      seedPath
+        .getAttribute('d')!
+        .matchAll(/[ML]-?\d+(?:\.\d+)?,(-?\d+(?:\.\d+)?)/g),
     ).map((m) => Number(m[1]));
     // Bottom of the plot is y = HEIGHT (64), never the midpoint (32).
     for (const y of ys) {
@@ -133,7 +135,9 @@ describe('ConvergenceSparkline', () => {
       'convergence-sparkline-series-tasks_open',
     );
     const ys = Array.from(
-      tasksPath.getAttribute('d')!.matchAll(/[ML]-?\d+(?:\.\d+)?,(-?\d+(?:\.\d+)?)/g),
+      tasksPath
+        .getAttribute('d')!
+        .matchAll(/[ML]-?\d+(?:\.\d+)?,(-?\d+(?:\.\d+)?)/g),
     ).map((m) => Number(m[1]));
     // First point (value 0) must draw at the very bottom, y = HEIGHT.
     expect(ys[0]).toBeCloseTo(64, 5);
