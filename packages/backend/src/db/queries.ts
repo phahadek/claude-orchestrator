@@ -6692,6 +6692,38 @@ export function listStagedIntentsByGroup(groupId: string): StagedIntentRow[] {
   }) as StagedIntentRow[];
 }
 
+let _stmtListActiveBodyPatchIntentsForTask: Database.Statement | null = null;
+
+/**
+ * Active (staged/approved) task.updateBody / task.patchBodySection intents
+ * for a task, regardless of group — the same-task body-patch set
+ * computeProposedBody (routes/stagedIntents.ts) folds into its preview so an
+ * ungrouped body patch is never invisible to a grouped Ready-flip's gate
+ * check just because it wasn't staged into that group. task.patchBodySection
+ * rows store their dedup-scoped `<taskId>::<section>` compound key in the
+ * task_id column (see extractTaskId in stagedIntents.ts), not the bare
+ * taskId — the LIKE clause matches that compound form alongside
+ * task.updateBody's plain taskId.
+ */
+export function listActiveBodyPatchIntentsForTask(
+  taskId: string,
+): StagedIntentRow[] {
+  _stmtListActiveBodyPatchIntentsForTask ??= db.prepare<{
+    task_id: string;
+    task_id_prefix: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE (task_id = @task_id OR task_id LIKE @task_id_prefix)
+       AND kind IN ('task.updateBody', 'task.patchBodySection')
+       AND state IN ('staged', 'approved')
+     ORDER BY created_at ASC`,
+  );
+  return _stmtListActiveBodyPatchIntentsForTask.all({
+    task_id: taskId,
+    task_id_prefix: `${taskId}::%`,
+  }) as StagedIntentRow[];
+}
+
 let _stmtListStagedIntentsBySession: Database.Statement | null = null;
 
 /**

@@ -54,6 +54,7 @@ import {
   listStagedIntentsByMilestone,
   UNATTRIBUTED_MILESTONE_BUCKET,
   listStagedIntentsByGroup,
+  listActiveBodyPatchIntentsForTask,
   listStagedIntentsBySession,
   findActiveStagedIntentForTask,
   listActiveOpsSetStateIntentsForTask,
@@ -4479,11 +4480,18 @@ export function composePatchBodySectionPreview(
 
 /**
  * Composes the proposed body a Ready readiness check should see: the stored
- * page body with any live (staged/approved) task.updateBody for this task in
- * the same group applied over it, or else every live task.patchBodySection
- * for this task spliced in at their target headings — used by both the
- * eager approve-time check and (implicitly, via commit ordering)
- * authoritative at commit time.
+ * page body with any live (staged/approved) task.updateBody for this task
+ * applied over it, or else every live task.patchBodySection for this task
+ * spliced in at their target headings — used by both the eager approve-time
+ * check and (implicitly, via commit ordering) authoritative at commit time.
+ * Sourced from the group (listStagedIntentsByGroup) *and* from any active
+ * same-task body-patch intent staged with no group at all
+ * (listActiveBodyPatchIntentsForTask, filtered to group_id IS NULL) — a body
+ * fix staged ungrouped is otherwise invisible to a grouped Ready-flip's
+ * preview, so the gate keeps failing against the stale stored body with no
+ * signal that the fix exists but wasn't folded in. The two sources are
+ * merged and re-sorted by created_at so cross-source patches still apply in
+ * staging order.
  */
 async function computeProposedBody(
   backend: ReturnType<typeof getTaskBackend>,
@@ -4491,9 +4499,14 @@ async function computeProposedBody(
   taskId: string,
 ): Promise<string> {
   const stored = (await backend.fetchTaskPage(taskId)) ?? '';
-  if (!groupId) return stored;
-  const groupIntents = listStagedIntentsByGroup(groupId);
-  const updateBodyRow = groupIntents.find(
+  const groupIntents = groupId ? listStagedIntentsByGroup(groupId) : [];
+  const ungroupedIntents = listActiveBodyPatchIntentsForTask(taskId).filter(
+    (row) => !row.group_id,
+  );
+  const intents = [...groupIntents, ...ungroupedIntents].sort(
+    (a, b) => a.created_at - b.created_at,
+  );
+  const updateBodyRow = intents.find(
     (row) =>
       row.kind === 'task.updateBody' &&
       ACTIVE_STATES.includes(row.state) &&
@@ -4503,7 +4516,7 @@ async function computeProposedBody(
     const payload = JSON.parse(updateBodyRow.payload) as UpdateBodyPayload;
     return composeProposedBody(stored, payload.sections);
   }
-  const patchRows = groupIntents.filter(
+  const patchRows = intents.filter(
     (row) =>
       row.kind === 'task.patchBodySection' &&
       ACTIVE_STATES.includes(row.state) &&
@@ -4513,6 +4526,32 @@ async function computeProposedBody(
     const payload = JSON.parse(row.payload) as PatchBodySectionPayload;
     return composePatchBodySectionPreview(body, payload.section, payload);
   }, stored);
+}
+
+/**
+ * Diagnoses the residual case computeProposedBody's fold-in (above) cannot
+ * safely resolve: an active same-task task.updateBody/task.patchBodySection
+ * intent staged into a *different* group than this Ready-flip's own
+ * (group_id set, but not this groupId). That patch is never folded into the
+ * preview — doing so would leak another decision's pending content into this
+ * one's gate check — so when the gate still blocks, name it explicitly
+ * rather than let the session read a repeat of the same body-content error
+ * with no signal that grouping, not the body, is the actual problem. A
+ * fully ungrouped patch (group_id NULL) is excluded here since
+ * computeProposedBody already folds those in — it was applied, not ignored.
+ */
+function describeUnappliedCrossGroupBodyPatches(
+  groupId: string | null | undefined,
+  taskId: string,
+): string[] {
+  return listActiveBodyPatchIntentsForTask(taskId)
+    .filter((row) => row.group_id && row.group_id !== groupId)
+    .map(
+      (row) =>
+        `An active ${row.kind} intent (${row.id}) for this task exists in a different group ` +
+        `(${row.group_id}) and was not applied to this preview — regroup it into this decision, ` +
+        'or commit that group first, rather than re-staging this flip unchanged.',
+    );
 }
 
 /**
@@ -4570,9 +4609,16 @@ export async function runStageTimeReadyChecks(
     body,
   );
   if (!gateResult.allowed) {
+    const crossGroupReasons = describeUnappliedCrossGroupBodyPatches(
+      intent.groupId,
+      payload.taskId,
+    );
     setStagedIntentAnnotation(
       intent.id,
-      JSON.stringify({ blocked: true, reasons: gateResult.reasons }),
+      JSON.stringify({
+        blocked: true,
+        reasons: [...gateResult.reasons, ...crossGroupReasons],
+      }),
     );
     const annotated = getStagedIntentRow(intent.id);
     return annotated ? rowToApi(annotated) : intent;
