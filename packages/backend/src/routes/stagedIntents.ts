@@ -3711,7 +3711,11 @@ async function applyIntent(
       // appendGateItemEvent), rather than a second bespoke write path. A
       // mirror's operator-supplied disposition routes through this exact
       // same call, so the resulting gate_item state is identical to a
-      // direct GateReadinessPanel disposition for the same input.
+      // direct GateReadinessPanel disposition for the same input — which
+      // requires passing `undefined` (not the 'gate-verifier' default) for
+      // passOperator on a mirror: no verifier ever ran here, so tagging the
+      // pass as the verifier's own would trip isVerifierBlockedFromPassing
+      // and strand the item as advisory-only forever.
       return routeVerificationResult(
         item,
         result,
@@ -3719,6 +3723,7 @@ async function applyIntent(
         null,
         {},
         false,
+        payload.origin === 'mirror' ? undefined : 'gate-verifier',
       );
     }
     case 'notion.pageEdit': {
