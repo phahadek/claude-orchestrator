@@ -93,6 +93,43 @@ export function isValidOpsTransition(from: OpsState, to: OpsState): boolean {
 }
 
 /**
+ * Session-reachable terminal ops_journal states, by task Type — resolved at
+ * grooming (task 3b022f91-52f3-8121). A dispatched/interactive 🔧
+ * Operational run drives the journal to applied-pending-confirm and leaves
+ * the final applied-pending-confirm -> resolved confirmation to the
+ * operator, so its own session-reachable terminal target is
+ * applied-pending-confirm, blocked, or resolved. A 🔎 Investigation
+ * self-verifies in-session — there is no operator-applied change to
+ * reconcile — so its terminal target is resolved or blocked. Any other (or
+ * uncached/missing) task Type falls back to the Operational set, the more
+ * permissive of the two. Used by PlanningOrchestrator.checkTerminal to nudge
+ * a session that reaches terminal with its journal still at an intermediate
+ * waypoint (pending / candidate / staged-proposal, or for Investigation also
+ * applied-pending-confirm) instead of letting it settle half-finished.
+ */
+const INVESTIGATION_SESSION_TERMINAL_STATES: ReadonlySet<OpsState> = new Set([
+  'resolved',
+  'blocked',
+]);
+
+const OPERATIONAL_SESSION_TERMINAL_STATES: ReadonlySet<OpsState> = new Set([
+  'applied-pending-confirm',
+  'resolved',
+  'blocked',
+]);
+
+export function isSessionTerminalOpsState(
+  state: OpsState,
+  taskType: string | null | undefined,
+): boolean {
+  const allowed =
+    taskType === '🔎 Investigation'
+      ? INVESTIGATION_SESSION_TERMINAL_STATES
+      : OPERATIONAL_SESSION_TERMINAL_STATES;
+  return allowed.has(state);
+}
+
+/**
  * Thrown by foldOpsTransitionChain when a hop within the chain itself is
  * illegal — in practice unreachable from the stage-time caller, which only
  * ever folds a chain of already-individually-validated staged intents, but

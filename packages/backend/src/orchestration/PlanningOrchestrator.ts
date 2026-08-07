@@ -24,7 +24,12 @@ import {
   isPlanningSession,
   isGateVerifySession,
 } from '../session/sessionPredicates';
-import { getEntry } from '../ops/opsJournal';
+import {
+  getEntry,
+  isSessionTerminalOpsState,
+  type OpsState,
+} from '../ops/opsJournal';
+import { getCachedType } from '../tasks/TaskWriteCommands';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
 import {
@@ -86,6 +91,23 @@ const NO_DECISION_NUDGE_MESSAGE =
   'You reached terminal without staging — stage your decision, or an ' +
   'explicit no-op (planning.noOp) if nothing needs changing. The chat ' +
   'write-up is not the deliverable.';
+
+/**
+ * The bounded self-correct re-turn nudge sent exactly once (per session)
+ * when a dispatched ops session reaches terminal with its ops_journal entry
+ * still at an intermediate waypoint for its task's Type — see checkTerminal's
+ * noDecisionNudgeSent guard (shared with NO_DECISION_NUDGE_MESSAGE) and
+ * isSessionTerminalOpsState.
+ */
+function opsJournalNotTerminalNudgeMessage(state: OpsState): string {
+  return (
+    `You reached terminal with the ops journal still at "${state}" — that ` +
+    'is not a session-reachable terminal state. Continue the investigation ' +
+    'to its type-appropriate terminal (resolved, or applied-pending-confirm ' +
+    'for an Operational run), or stage journal.setState -> "blocked" if you ' +
+    'genuinely cannot proceed.'
+  );
+}
 
 type PlanningDisposition = 'approve' | 'pushback' | 'decline' | 'answer';
 
@@ -318,6 +340,27 @@ export class PlanningOrchestrator {
     return { all, countable, stillPending, owesGatedArtifacts };
   }
 
+  /**
+   * The session's ops_journal state, if it is a task the session may not yet
+   * conclude on — i.e. an ops session (not gate-verify) with a journal entry
+   * that sits below its task Type's session-reachable terminal set (see
+   * isSessionTerminalOpsState). Returns undefined for every case that must
+   * pass through unaffected: a non-ops session, a gate-verify session (no
+   * Notion task), a task with no journal entry at all, or a journal already
+   * at a state the session is allowed to stop on (including blocked, which
+   * is a fully acceptable terminal outcome for every task Type).
+   */
+  private incompleteOpsJournalStateFor(sessionId: string): OpsState | null {
+    const row = getSession(sessionId);
+    if (!row || row.session_type !== 'ops' || !row.task_id) return null;
+    if (isGateVerifySession(row.task_id)) return null;
+    const entry = getEntry(row.task_id);
+    if (!entry) return null;
+    const taskType = getCachedType(row.task_id);
+    if (isSessionTerminalOpsState(entry.state, taskType)) return null;
+    return entry.state;
+  }
+
   checkTerminal(sessionId: string): boolean {
     const { all, countable, stillPending, owesGatedArtifacts } =
       this.computeStagedIntentState(sessionId);
@@ -332,6 +375,37 @@ export class PlanningOrchestrator {
     }
 
     if (hasStagedDecision(all)) {
+      const incompleteJournalState =
+        this.incompleteOpsJournalStateFor(sessionId);
+      if (incompleteJournalState) {
+        if (!this.noDecisionNudgeSent.has(sessionId)) {
+          this.noDecisionNudgeSent.add(sessionId);
+          this.stagedCountAtResume.set(sessionId, countable.length);
+          this.sessionManager
+            .enqueueFeedback(
+              sessionId,
+              'planning-terminal-ops-journal-incomplete-nudge',
+              opsJournalNotTerminalNudgeMessage(incompleteJournalState),
+            )
+            .catch((err) => {
+              logger.error(
+                `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after ops-journal-incomplete nudge: ${err}`,
+              );
+            });
+          return false;
+        }
+
+        const row = getSession(sessionId);
+        if (row?.task_id) {
+          setTaskPauseReason(
+            row.task_id,
+            'ops_journal_terminal_incomplete',
+            `Ops session ${sessionId} reached terminal with its ops_journal ` +
+              `entry still at "${incompleteJournalState}" — twice, after one ` +
+              'self-correct nudge.',
+          );
+        }
+      }
       this.markTerminal(sessionId, 'planning_no_pending_dispositions');
       return true;
     }
