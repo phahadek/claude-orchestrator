@@ -6,6 +6,7 @@ import type {
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { CollapsibleField } from './CollapsibleField';
 import { useHighlightedCardKeyboardActions } from '../types/panelKeyboard';
+import { groupBlockedCount } from './groupRejectOutcome';
 import panelStyles from './DecisionPanel.module.css';
 import intentStyles from './StagedIntentPanel.module.css';
 import styles from './GroupCard.module.css';
@@ -141,8 +142,9 @@ export function GroupCard({
 
   const head = headProposalOf(members);
   const actionSuffix = actionSuffixFor(members[0]?.intent.groupKind);
-  const visibleBlockedCount = members.filter(
-    ({ intent }) =>
+  const memberIntents = members.map(({ intent }) => intent);
+  const visibleBlockedCount = memberIntents.filter(
+    (intent) =>
       intent.state === 'needs_revision' ||
       intent.state === 'pending_verification',
   ).length;
@@ -150,10 +152,9 @@ export function GroupCard({
   // group blocked solely by a hidden (auto-rejected, live-session) member
   // still needs to render blocked, just without a Recover affordance for a
   // row the operator can't see (see groupNonCommittable below).
-  const blockedCount = Math.max(
-    visibleBlockedCount,
-    members[0]?.intent.groupBlockedMemberCount ?? 0,
-  );
+  const blockedCount = groupBlockedCount(memberIntents);
+  const resolvedOutcome: StagedIntentRejectOutcome =
+    draft.outcome ?? (blockedCount > 0 ? 'decline' : 'pushback');
   // Mirrors the backend's commit-guard predicate exactly (blocked member OR
   // incomplete owning session) — the group card must render blocked and
   // disable its controls whenever the backend would refuse the commit, not
@@ -346,9 +347,9 @@ export function GroupCard({
           <button
             type="button"
             role="radio"
-            aria-checked={draft.outcome === 'pushback'}
+            aria-checked={resolvedOutcome === 'pushback'}
             className={
-              draft.outcome === 'pushback'
+              resolvedOutcome === 'pushback'
                 ? panelStyles.outcomeOptionActive
                 : panelStyles.outcomeOption
             }
@@ -359,9 +360,9 @@ export function GroupCard({
           <button
             type="button"
             role="radio"
-            aria-checked={draft.outcome === 'decline'}
+            aria-checked={resolvedOutcome === 'decline'}
             className={
-              draft.outcome === 'decline'
+              resolvedOutcome === 'decline'
                 ? panelStyles.outcomeOptionActive
                 : panelStyles.outcomeOption
             }
@@ -374,11 +375,9 @@ export function GroupCard({
           ref={reasonInputRef}
           className={panelStyles.reasonInput}
           placeholder={
-            draft.outcome === 'pushback'
+            resolvedOutcome === 'pushback'
               ? 'What should the session revise?'
-              : draft.outcome === 'decline'
-                ? 'Why is this being declined?'
-                : 'Choose Pushback or Decline, then explain why'
+              : 'Why is this being declined?'
           }
           value={draft.reason}
           onChange={(e) => onSetDraft({ reason: e.target.value })}
@@ -386,18 +385,14 @@ export function GroupCard({
         <button
           type="button"
           className={panelStyles.denyButton}
-          disabled={
-            inFlight || disabled || !draft.outcome || !draft.reason.trim()
-          }
+          disabled={inFlight || disabled || !draft.reason.trim()}
           onClick={onRejectGroup}
         >
           {inFlight
             ? 'Submitting…'
-            : draft.outcome === 'pushback'
+            : resolvedOutcome === 'pushback'
               ? `↩ Pushback${actionSuffix}`
-              : draft.outcome === 'decline'
-                ? `✕ Decline${actionSuffix}`
-                : `Reject${actionSuffix}`}
+              : `✕ Decline${actionSuffix}`}
         </button>
       </div>
     </div>

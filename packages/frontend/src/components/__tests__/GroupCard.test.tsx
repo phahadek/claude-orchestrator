@@ -32,7 +32,7 @@ function baseProps(overrides: Partial<Parameters<typeof GroupCard>[0]> = {}) {
     onDismiss: vi.fn(),
     onApproved: vi.fn(),
     inFlight: false,
-    draft: { outcome: null, reason: '' },
+    draft: { outcome: 'pushback' as const, reason: '' },
     onSetDraft: vi.fn(),
     onApproveGroup: vi.fn(),
     onRejectGroup: vi.fn(),
@@ -80,7 +80,7 @@ describe('GroupCard keyboard ring bindings', () => {
     render(<GroupCard {...baseProps({ onRejectGroup, highlighted: true })} />);
 
     const reasonField = screen.getByPlaceholderText(
-      'Choose Pushback or Decline, then explain why',
+      'What should the session revise?',
     ) as HTMLTextAreaElement;
     expect(document.activeElement).not.toBe(reasonField);
 
@@ -99,5 +99,68 @@ describe('GroupCard keyboard ring bindings', () => {
 
     rerender(<GroupCard {...baseProps({ highlighted: true })} />);
     expect(card.className).toMatch(/keyboardHighlighted/);
+  });
+});
+
+describe('GroupCard reject-outcome default', () => {
+  it('defaults to pushback and enables reject once a reason is entered, with no blocked members', () => {
+    const onRejectGroup = vi.fn();
+    render(
+      <GroupCard
+        {...baseProps({
+          draft: { outcome: null, reason: 'looks off' },
+          onRejectGroup,
+        })}
+      />,
+    );
+
+    screen.getByPlaceholderText('What should the session revise?');
+    const rejectButton = screen.getByRole('button', {
+      name: /Pushback/,
+    }) as HTMLButtonElement;
+    expect(rejectButton.disabled).toBe(false);
+  });
+
+  it('defaults to decline once a member is blocked, and still only gates on the reason', () => {
+    const onRejectGroup = vi.fn();
+    render(
+      <GroupCard
+        {...baseProps({
+          members: [
+            {
+              intent: {
+                id: 'intent-1',
+                kind: 'task.setStatus',
+                payload: {},
+                projectId: 'proj-1',
+                createdAt: 0,
+                groupId: 'group-1',
+                state: 'needs_revision',
+              },
+              hideActions: true,
+            },
+          ],
+          draft: { outcome: null, reason: 'out of scope' },
+          onRejectGroup,
+        })}
+      />,
+    );
+
+    screen.getByPlaceholderText('Why is this being declined?');
+    const rejectButton = screen.getByRole('button', {
+      name: /Decline/,
+    }) as HTMLButtonElement;
+    expect(rejectButton.disabled).toBe(false);
+  });
+
+  it('disables reject while the reason is empty, regardless of the resolved outcome', () => {
+    render(
+      <GroupCard {...baseProps({ draft: { outcome: null, reason: '' } })} />,
+    );
+
+    const rejectButton = screen.getByRole('button', {
+      name: /Pushback/,
+    }) as HTMLButtonElement;
+    expect(rejectButton.disabled).toBe(true);
   });
 });

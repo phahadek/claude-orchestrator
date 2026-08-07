@@ -278,7 +278,7 @@ describe('useDecisionQueue', () => {
     );
   });
 
-  it('a freshly-rendered group reject draft has no pre-selected outcome', async () => {
+  it('a freshly-rendered group reject draft defaults to pushback when the group has no blocked members', async () => {
     vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
 
     const { result } = renderHook(() =>
@@ -288,14 +288,41 @@ describe('useDecisionQueue', () => {
     await waitFor(() => expect(result.current.loaded).toBe(true));
 
     expect(result.current.draftFor('group-1')).toEqual({
-      outcome: null,
+      outcome: 'pushback',
       reason: '',
     });
   });
 
-  it('refuses to reject a group with no outcome selected, even with a reason typed', async () => {
+  it('a freshly-rendered group reject draft defaults to decline when the group has a blocked member', async () => {
+    const blocked: StagedIntent = {
+      id: 'i-blocked',
+      kind: 'gate.accrete',
+      payload: {},
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'session-1',
+      groupId: 'group-1',
+      state: 'needs_revision',
+    };
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([blocked]);
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({ type: 'session', sessionId: 'session-1' }),
+    );
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    expect(result.current.draftFor('group-1')).toEqual({
+      outcome: 'decline',
+      reason: '',
+    });
+  });
+
+  it('rejects a group using the resolved default outcome once only a reason is entered', async () => {
     vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
-    const rejectGroup = vi.spyOn(stagedIntentsApi, 'rejectGroup');
+    const rejectGroup = vi
+      .spyOn(stagedIntentsApi, 'rejectGroup')
+      .mockResolvedValue({ ok: true, rejected: [] });
 
     const { result } = renderHook(() =>
       useDecisionQueue({ type: 'session', sessionId: 'session-1' }),
@@ -306,6 +333,26 @@ describe('useDecisionQueue', () => {
     act(() => {
       result.current.setDraft('group-1', { reason: 'No need' });
     });
+    await act(async () => {
+      await result.current.handleRejectGroup('group-1');
+    });
+
+    expect(rejectGroup).toHaveBeenCalledWith('group-1', {
+      outcome: 'pushback',
+      reason: 'No need',
+    });
+  });
+
+  it('refuses to reject a group with an empty reason, even once the outcome has resolved', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+    const rejectGroup = vi.spyOn(stagedIntentsApi, 'rejectGroup');
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({ type: 'session', sessionId: 'session-1' }),
+    );
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
     await act(async () => {
       await result.current.handleRejectGroup('group-1');
     });
