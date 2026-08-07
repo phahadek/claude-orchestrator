@@ -16,7 +16,10 @@ import { loadDesignContext } from '../design/designLoad';
 import { loadDocsContext } from '../docs/docsLoad';
 import { getProjectRowById } from '../db/queries';
 import { resolveMilestoneForProject } from '../projects/milestoneResolver';
-import { isPlanningSession } from '../session/sessionPredicates';
+import {
+  isPlanningSession,
+  type SessionType,
+} from '../session/sessionPredicates';
 import { toExternalId, normalizeTaskId } from '../tasks/taskId';
 
 /** Strips a `source:` prefix for URL-building; falls back to the raw id if unprefixed. */
@@ -58,11 +61,7 @@ export function setOpsSessionLauncherRefreshFn(
  * workflow -> sessionType resolution.
  */
 export type PlanningSessionType =
-  | 'groom'
-  | 'design'
-  | 'ops'
-  | 'split'
-  | 'docs'
+  | Extract<SessionType, 'groom' | 'design' | 'ops' | 'split' | 'docs'>
   | 'standard';
 
 /**
