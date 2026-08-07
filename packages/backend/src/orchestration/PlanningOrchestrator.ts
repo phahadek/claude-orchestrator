@@ -883,8 +883,7 @@ export class PlanningOrchestrator {
   ): boolean {
     if (!row.task_id) return false;
     const blockedMembers = listStagedIntentsBySession(sessionId).filter(
-      (i) =>
-        i.state === 'needs_revision' || i.state === 'pending_verification',
+      (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
     );
     if (blockedMembers.length === 0) return false;
     setTaskPauseReason(
@@ -941,11 +940,9 @@ export class PlanningOrchestrator {
   sweepIdleTerminalSessions(nowFn: () => number = () => Date.now()): number {
     const cutoffMs =
       nowFn() -
-      runtimeSettings.idle_planning_terminal_sweep_age_floor_minutes *
-        60_000;
-    const candidates = listIdlePlanningSessionsEligibleForTerminalSweep(
-      cutoffMs,
-    );
+      runtimeSettings.idle_planning_terminal_sweep_age_floor_minutes * 60_000;
+    const candidates =
+      listIdlePlanningSessionsEligibleForTerminalSweep(cutoffMs);
 
     const terminalizedIds: string[] = [];
     for (const row of candidates) {
@@ -992,8 +989,7 @@ export class PlanningOrchestrator {
     scheduler.register({
       name: 'idle_planning_session_terminal_sweep',
       intervalMs: () =>
-        runtimeSettings.idle_planning_terminal_sweep_interval_minutes *
-        60_000,
+        runtimeSettings.idle_planning_terminal_sweep_interval_minutes * 60_000,
       enabled: () => runtimeSettings.idle_planning_terminal_sweep_enabled,
       concurrency: 'skip-if-running',
       run: async () => {
