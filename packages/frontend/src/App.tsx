@@ -184,13 +184,11 @@ export default function App() {
 
   const {
     sessions,
-    tasks,
     tasksReady,
     synced,
     readyCount,
     blockedCount,
     dispatch,
-    resetTasks,
     deleteSession,
     setSessionArchived,
     setSessionFavorited,
@@ -1556,9 +1554,6 @@ export default function App() {
                       }
                     >
                       {activeView === 'denials' ? 'Hide Denials' : '📋 Denials'}
-                    </button>
-                    <button type="button" onClick={() => setShowModal(true)}>
-                      + New Session
                     </button>
                   </div>
                 </div>
