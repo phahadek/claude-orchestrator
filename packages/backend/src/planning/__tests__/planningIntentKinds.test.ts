@@ -89,4 +89,12 @@ describe('PLANNING_INTENT_KINDS', () => {
       false,
     );
   });
+
+  it('docs includes session.requestCapability, the same in-band escalation path groom/design/ops already have', () => {
+    for (const workflow of ['groom', 'design', 'ops', 'docs'] as const) {
+      expect(PLANNING_INTENT_KINDS[workflow]).toContain(
+        'session.requestCapability',
+      );
+    }
+  });
 });

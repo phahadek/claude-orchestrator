@@ -397,6 +397,60 @@ describe('docs digest rendering', () => {
   });
 });
 
+describe('docs Target-surface-aware Session Lifecycle', () => {
+  it('a repo-file Target surface renders the worktree/branch + direct git/PR path, not just notion.pageEdit', () => {
+    const digest: PlanningDigest = {
+      workflow: 'docs',
+      data: deriveDocsDigestSlice(fixtureDocsLoadResult()), // targetSurface: 'docs/api/webhooks.md'
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Document the webhooks API',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output).toMatch(/real per-session worktree and feature branch/);
+    expect(output).toMatch(/draft PR/);
+    expect(output).toContain('GitHub MCP tools');
+    expect(output).not.toMatch(/There is no worktree and no feature branch/);
+  });
+
+  it('a Notion-page Target surface keeps the unchanged no-worktree, notion.pageEdit-only lifecycle text — regression guard', () => {
+    const result = fixtureDocsLoadResult();
+    result.targetSurface = '20a1b2c3-d4e5-4f60-8a1b-2c3d4e5f6071';
+    const digest: PlanningDigest = {
+      workflow: 'docs',
+      data: deriveDocsDigestSlice(result),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Document the webhooks API',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output).toMatch(/There is no worktree and no feature branch/);
+    expect(output).toContain(orchestratorMcpToolName('notion.pageEdit'));
+    expect(output).not.toMatch(/real per-session worktree and feature branch/);
+  });
+
+  it('an undeclared Target surface keeps the unchanged no-worktree lifecycle text', () => {
+    const digest: PlanningDigest = {
+      workflow: 'docs',
+      data: deriveDocsDigestSlice(fixtureDocsLoadResult({ blank: true })),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Undeclared docs task',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output).toMatch(/There is no worktree and no feature branch/);
+  });
+});
+
 // ─── assemblePlanningProcedure ──────────────────────────────────────────────
 
 describe('assemblePlanningProcedure', () => {

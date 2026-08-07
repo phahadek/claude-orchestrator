@@ -499,11 +499,52 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     );
     expect(options.injectedProcedureContent).toContain('docs/api/webhooks.md');
     expect(options.injectedProcedureContent).toContain('docs.stripe.com');
+    // A repo-file Target surface is threaded through to StartOptions so
+    // SessionManager.completeStart's usesWorktree check can provision a
+    // worktree + branch for this dispatch instead of running stage-only.
+    expect(options.docsTargetSurface).toBe('docs/api/webhooks.md');
 
     expect(loadDocsContext).toHaveBeenCalledWith(
       'milestone-1',
       'task-1',
       expect.objectContaining({ repoRoot: '/tmp/proj-1', project: 'proj-1' }),
+    );
+  });
+
+  it('threads a Notion-page Target surface through to StartOptions unchanged, for the stage-only usesWorktree branch', async () => {
+    const { loadDocsContext } = await import('../../docs/docsLoad.js');
+    (loadDocsContext as ReturnType<typeof vi.fn>).mockResolvedValue({
+      task: {
+        id: 'task-1',
+        title: 'Document the webhooks API',
+        status: '🔄 In Progress',
+        type: '📝 Docs',
+        url: 'https://www.notion.so/task-1',
+      },
+      markdown: '## Task\nDocument the webhooks API.',
+      targetSurface: '20a1b2c3-d4e5-4f60-8a1b-2c3d4e5f6071',
+      sourceDomains: ['docs.stripe.com'],
+    });
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = {
+      id: 'task-1',
+      title: 'Document the webhooks API',
+      url: '',
+      blockingDepIds: [],
+    };
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'docs',
+      tasks: [task],
+    });
+
+    const [, , options] = start.mock.calls[0];
+    expect(options.docsTargetSurface).toBe(
+      '20a1b2c3-d4e5-4f60-8a1b-2c3d4e5f6071',
     );
   });
 

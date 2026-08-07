@@ -3252,6 +3252,49 @@ describe('start() — worktree_path persistence', () => {
       );
     },
   );
+
+  it('persists a real worktree_path for a docs session whose task declares a repo-file Target surface', async () => {
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'milestone',
+      taskName: 'my-task',
+      sessionType: 'docs',
+      docsTargetSurface: 'docs/api/webhooks.md',
+    });
+
+    expect(vi.mocked(insertSession)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        worktree_path: expect.stringContaining('.claude/worktrees/'),
+      }),
+    );
+  });
+
+  it('persists worktree_path as null for a docs session whose task declares a Notion-page Target surface — regression guard', async () => {
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'milestone',
+      taskName: 'my-task',
+      sessionType: 'docs',
+      docsTargetSurface: '20a1b2c3-d4e5-4f60-8a1b-2c3d4e5f6071',
+    });
+
+    expect(vi.mocked(insertSession)).toHaveBeenCalledWith(
+      expect.objectContaining({ worktree_path: null }),
+    );
+  });
+
+  it('persists worktree_path as null for a docs session with no declared Target surface', async () => {
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'milestone',
+      taskName: 'my-task',
+      sessionType: 'docs',
+    });
+
+    expect(vi.mocked(insertSession)).toHaveBeenCalledWith(
+      expect.objectContaining({ worktree_path: null }),
+    );
+  });
 });
 
 // ── start() — planning/ops prompt assembly (gate-verify hardening) ─────────

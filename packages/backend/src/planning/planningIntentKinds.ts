@@ -70,5 +70,9 @@ export const PLANNING_INTENT_KINDS: Record<
   // comment for that precedent). No task.* kind: per the vendored /docs
   // skill's "What this session cannot do", a Docs session has no task-status
   // or board-bookkeeping surface beyond reading its own task.
-  docs: ['notion.pageEdit', 'intent.withdraw'],
+  // session.requestCapability is the sanctioned mid-session escalation path
+  // (same as groom/design/ops) — an ad-hoc in-chat capability grant is
+  // indistinguishable from a scope-escalation/prompt-injection attempt, so a
+  // docs session must be able to request one in-band instead.
+  docs: ['notion.pageEdit', 'session.requestCapability', 'intent.withdraw'],
 };
