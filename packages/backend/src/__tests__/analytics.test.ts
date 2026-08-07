@@ -153,6 +153,31 @@ vi.mock('../db/db.js', async () => {
     'Post-migration task',
   );
 
+  // Task with a cached Notion type — proves the rollup joins task name/type,
+  // not just the bare board id.
+  db.prepare(
+    `
+    INSERT INTO sessions (session_id, project_id, task_id, status, started_at, session_type, total_input_tokens, total_output_tokens, model, task_name)
+    VALUES (?, ?, ?, 'done', ?, 'standard', ?, ?, ?, ?)
+  `,
+  ).run(
+    's9-typed',
+    'proj-a',
+    'notion:task-TYPED',
+    NOW - 1 * DAY_MS,
+    100,
+    50,
+    'claude-sonnet-4-6',
+    'Typed task',
+  );
+  db.prepare(
+    `INSERT INTO task_cache (task_id, fetched_at, raw_json) VALUES (?, ?, ?)`,
+  ).run(
+    'notion:task-TYPED',
+    NOW,
+    JSON.stringify({ title: 'Typed task', type: '💻 Code' }),
+  );
+
   return { db };
 });
 
@@ -279,6 +304,19 @@ describe('GET /api/analytics/tokens', () => {
     // Same input/output tokens on both, but post-migration costs more because
     // of its cache spend — proving cache tokens are actually priced in.
     expect(postMigration.totalCost).toBeGreaterThan(preMigration.totalCost);
+  });
+
+  it('includes task name and type per rollup row, joined from the task cache', async () => {
+    const res = await supertest(buildApp()).get(
+      `/api/analytics/tokens?projectId=proj-a&from=${NOW - 10 * DAY_MS}&to=${NOW}`,
+    );
+    expect(res.status).toBe(200);
+    const typed = res.body.taskRollups.find(
+      (r: { boardId: string }) => r.boardId === 'tasktyped',
+    );
+    expect(typed).toBeDefined();
+    expect(typed.taskName).toBe('Typed task');
+    expect(typed.taskType).toBe('💻 Code');
   });
 
   it('sums totals in SQL rather than fetching unbounded rows', async () => {

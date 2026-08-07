@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { db } from '../db/db';
 import { calculateCost, categoryForSessionType } from '../utils/usage';
 import { normalizeBoardId } from '../tasks/taskId';
+import { getCachedType } from '../tasks/TaskWriteCommands';
 
 export const analyticsRouter = Router();
 
@@ -16,6 +17,9 @@ const DEFAULT_RANGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 interface TaskRollupRow {
   boardId: string | null;
+  taskId: string | null;
+  taskName: string | null;
+  taskType: string | null;
   sessionCount: number;
   inputTokens: number;
   outputTokens: number;
@@ -84,6 +88,8 @@ analyticsRouter.get('/tokens', (req: Request, res: Response) => {
       `
       SELECT
         normalize_board_id(task_id) AS board_id,
+        MAX(task_id) AS task_id,
+        MAX(task_name) AS task_name,
         session_type,
         model,
         COUNT(*) AS session_count,
@@ -98,6 +104,8 @@ analyticsRouter.get('/tokens', (req: Request, res: Response) => {
     )
     .all(...params) as {
     board_id: string | null;
+    task_id: string | null;
+    task_name: string | null;
     session_type: string;
     model: string | null;
     session_count: number;
@@ -131,6 +139,9 @@ analyticsRouter.get('/tokens', (req: Request, res: Response) => {
     const rollupKey = row.board_id ?? '(none)';
     const rollup = taskRollups.get(rollupKey) ?? {
       boardId: row.board_id,
+      taskId: row.task_id,
+      taskName: row.task_name,
+      taskType: row.task_id ? getCachedType(row.task_id) : null,
       sessionCount: 0,
       inputTokens: 0,
       outputTokens: 0,
