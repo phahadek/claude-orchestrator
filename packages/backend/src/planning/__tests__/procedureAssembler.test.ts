@@ -413,9 +413,7 @@ describe('docs Target-surface-aware Session Lifecycle', () => {
     expect(output).toMatch(/real per-session worktree and feature branch/);
     expect(output).toMatch(/draft PR/);
     expect(output).toContain('GitHub MCP tools');
-    expect(output).not.toMatch(
-      /There is no worktree and no feature branch/,
-    );
+    expect(output).not.toMatch(/There is no worktree and no feature branch/);
   });
 
   it('a Notion-page Target surface keeps the unchanged no-worktree, notion.pageEdit-only lifecycle text — regression guard', () => {
