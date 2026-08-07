@@ -1,5 +1,5 @@
 import { logger } from '../logger';
-import { getEventsBySession } from '../db/queries';
+import { getEventsBySession, markSessionDone } from '../db/queries';
 import {
   computeSizeSignal,
   isOversized,
@@ -148,6 +148,7 @@ export class DepthReviewService {
 
       const sessionId = crypto.randomUUID();
       const verdictPromise = this.waitForVerdict(sessionId);
+      this.watchForSessionEnd(sessionId);
 
       await this.sessionManager.start(projectContextUrl, projectContextUrl, {
         sessionId,
@@ -244,6 +245,33 @@ ${DEPTH_REVIEW_JSON_SCHEMA_BLOCK}`;
       '',
       'Generated-file diffs (package-lock.json, lockfiles, .snap, .svg) are excluded from the LOC count.',
     ].join('\n');
+  }
+
+  /**
+   * Conclude the depth-review session once its process actually exits.
+   * No PR ever links to a depth-review session — pull_requests carries only
+   * session_id/review_session_id, both scoped to the conformance review —
+   * so nothing else ever transitions this session to a terminal status.
+   * This runs independently of waitForVerdict, whose own listener typically
+   * unsubscribes early (as soon as it parses a verdict out of a text event),
+   * well before the session's process has actually exited.
+   *
+   * Only status 'idle' — AgentSession.handleCleanExit's non-planning
+   * clean-exit signal, the only way a depth-review session (which never
+   * opens a PR) exits successfully — is concluded here. A status that's
+   * already terminal ('error'/'killed', e.g. the session was destroyed
+   * mid-work or crashed) is left alone: it already reflects what actually
+   * happened and must not be stomped with 'done'.
+   */
+  private watchForSessionEnd(sessionId: string): void {
+    const handler = (msg: ServerMessage) => {
+      if (!('sessionId' in msg) || msg.sessionId !== sessionId) return;
+      if (msg.type !== 'session_ended') return;
+      this.sessionManager.off('message', handler);
+      if (msg.status !== 'idle') return;
+      markSessionDone(sessionId, Date.now(), null, 'depth_review_service');
+    };
+    this.sessionManager.on('message', handler);
   }
 
   /**

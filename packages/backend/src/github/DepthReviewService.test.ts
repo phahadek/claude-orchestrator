@@ -5,6 +5,7 @@ import { EventEmitter } from 'events';
 
 vi.mock('../db/queries', () => ({
   getEventsBySession: vi.fn().mockReturnValue([]),
+  markSessionDone: vi.fn(),
 }));
 vi.mock('./GitHubClient', () => ({
   computeSizeSignal: vi.fn().mockReturnValue({
@@ -32,6 +33,7 @@ vi.mock('../notion/NotionClient', () => ({
 // ── Imports (after mocks) ────────────────────────────────────────────────────
 
 import { DepthReviewService } from './DepthReviewService';
+import { markSessionDone } from '../db/queries';
 import type { SessionManager } from '../session/SessionManager';
 import type { DiffSource } from './DiffSource';
 
@@ -388,5 +390,119 @@ describe('DepthReviewService.runDepthReview() — session dispatch', () => {
     expect(opts.taskId).toBe('notion:task-abc');
     expect(opts.taskName).toContain('7');
     expect(opts.customPrompt).toContain('PR #7');
+  });
+});
+
+// ── runDepthReview() — session conclusion ────────────────────────────────────
+
+describe('DepthReviewService.runDepthReview() — session conclusion', () => {
+  it('marks the session done once it actually exits cleanly (session_ended status idle), after its verdict text was already parsed', async () => {
+    const sm = makeMockSessionManager();
+    (sm.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_a: string, _b: string, opts: { sessionId: string }) => {
+        setImmediate(() => {
+          sm.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify({
+                verdict: 'pass',
+                dimensions: fourPassedDims,
+                summary: 'Nothing found.',
+              }),
+            ),
+          );
+          // The process exits (session_ended) only after the verdict text
+          // was already emitted and parsed — waitForVerdict's own listener
+          // has unsubscribed by this point.
+          sm.emit('message', {
+            type: 'session_ended',
+            sessionId: opts.sessionId,
+            status: 'idle',
+          });
+        });
+        return Promise.resolve(opts.sessionId);
+      },
+    );
+
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
+    const result = await service.runDepthReview(
+      1,
+      'owner/repo',
+      makeMockDiffSource(),
+      'proj-1',
+      'https://notion.so/ctx',
+      'notion:task-abc',
+    );
+
+    expect(result).not.toBeNull();
+    // Flush the microtask/macrotask the second emit is queued on.
+    await new Promise((resolve) => setImmediate(resolve));
+    const usedSessionId = (sm.start as ReturnType<typeof vi.fn>).mock
+      .calls[0][2].sessionId;
+    expect(markSessionDone).toHaveBeenCalledWith(
+      usedSessionId,
+      expect.any(Number),
+      null,
+      'depth_review_service',
+    );
+  });
+
+  it('does not mark the session done merely from a parsed verdict text event, before the session has actually exited', async () => {
+    const sm = makeMockSessionManager();
+    wireVerdict(sm, {
+      verdict: 'pass',
+      dimensions: fourPassedDims,
+      summary: 'Nothing found.',
+    });
+
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
+    await service.runDepthReview(
+      1,
+      'owner/repo',
+      makeMockDiffSource(),
+      'proj-1',
+      'https://notion.so/ctx',
+      'notion:task-abc',
+    );
+
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('does not mark the session done when it is destroyed mid-work (session_ended status killed, not idle)', async () => {
+    const sm = makeMockSessionManager();
+    (sm.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_a: string, _b: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          sm.emit('message', {
+            type: 'session_ended',
+            sessionId: opts.sessionId,
+            status: 'killed',
+          }),
+        );
+        return Promise.resolve(opts.sessionId);
+      },
+    );
+
+    const service = new DepthReviewService(
+      sm as unknown as SessionManager,
+      undefined,
+    );
+    await service.runDepthReview(
+      1,
+      'owner/repo',
+      makeMockDiffSource(),
+      'proj-1',
+      'https://notion.so/ctx',
+      'notion:task-abc',
+    );
+
+    expect(markSessionDone).not.toHaveBeenCalled();
   });
 });

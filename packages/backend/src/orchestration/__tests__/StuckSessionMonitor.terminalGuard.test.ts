@@ -163,6 +163,26 @@ describe('StuckSessionMonitor terminal-status guards', () => {
     expect(hasTimer(monitor, 'sess-terminal-notify')).toBe(false);
   });
 
+  it('fireNotify emits no toast and records no flagged:true row for a concluded depth_review session', () => {
+    const { monitor, broadcast } = makeMonitor();
+    seedTimerState(monitor, 'sess-depth-review-done');
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'sess-depth-review-done',
+      session_type: 'depth_review',
+      status: 'done',
+    } as never);
+
+    callFireNotify(monitor, 'sess-depth-review-done');
+
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ flagged: true }),
+      }),
+    );
+    expect(hasTimer(monitor, 'sess-depth-review-done')).toBe(false);
+  });
+
   it('firePause takes no pause action for a terminal session', () => {
     const { monitor, broadcast, sessionManager } = makeMonitor();
     seedTimerState(monitor, 'sess-terminal-pause');
