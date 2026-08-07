@@ -59,7 +59,11 @@ function kindDirectionRank(kind: string): number {
 }
 
 function hasNeedsAttentionBoost(intent: StagedIntent): boolean {
-  if (intent.annotation && 'blocked' in intent.annotation && intent.annotation.blocked) {
+  if (
+    intent.annotation &&
+    'blocked' in intent.annotation &&
+    intent.annotation.blocked
+  ) {
     return true;
   }
   if (intent.advisory?.status === 'flagged') return true;
@@ -69,7 +73,10 @@ function hasNeedsAttentionBoost(intent: StagedIntent): boolean {
 
 /** [kindDirection, needsAttention] — the portion of the backend rank key computable client-side. */
 function partialRankTier(intent: StagedIntent): [number, number] {
-  return [kindDirectionRank(intent.kind), hasNeedsAttentionBoost(intent) ? 1 : 0];
+  return [
+    kindDirectionRank(intent.kind),
+    hasNeedsAttentionBoost(intent) ? 1 : 0,
+  ];
 }
 
 /**

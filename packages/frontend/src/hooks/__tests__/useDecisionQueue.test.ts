@@ -248,11 +248,7 @@ describe('useDecisionQueue', () => {
       publishStagedIntentChange(c);
     });
     await waitFor(() =>
-      expect(result.current.intents.map((i) => i.id)).toEqual([
-        'c',
-        'b',
-        'a',
-      ]),
+      expect(result.current.intents.map((i) => i.id)).toEqual(['c', 'b', 'a']),
     );
 
     // A refetch (e.g. next mount) with the backend's newest-first tie order

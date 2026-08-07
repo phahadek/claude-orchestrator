@@ -249,11 +249,7 @@ describe('rankDecisions', () => {
     // functions used to return, to prove rankDecisions itself enforces the
     // newest-first tie-break rather than merely preserving input order.
     const ranked = rankDecisions([oldest, middle, newest], null);
-    expect(ranked.map((r) => r.id)).toEqual([
-      newest.id,
-      middle.id,
-      oldest.id,
-    ]);
+    expect(ranked.map((r) => r.id)).toEqual([newest.id, middle.id, oldest.id]);
   });
 
   it('a higher rank key still outranks a newer intent with a lower one', () => {
