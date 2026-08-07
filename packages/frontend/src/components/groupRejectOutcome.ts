@@ -1,4 +1,7 @@
-import type { StagedIntent, StagedIntentRejectOutcome } from '../api/stagedIntents';
+import type {
+  StagedIntent,
+  StagedIntentRejectOutcome,
+} from '../api/stagedIntents';
 
 /** The count of blocked members backing the reject-outcome default and the recover/commit guard — visible needs_revision/pending_verification members, or the backend-derived total when it's larger (covers hidden, auto-rejected members the frontend never sees). */
 export function groupBlockedCount(intents: StagedIntent[]): number {
