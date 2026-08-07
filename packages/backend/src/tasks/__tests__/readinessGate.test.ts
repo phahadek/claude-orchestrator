@@ -240,8 +240,7 @@ describe('checkReadiness — 🔧 Operational floor facts', () => {
   });
 
   it('still detects a genuine top-level required heading outside any fence', () => {
-    const body =
-      '```\nsome unrelated example\n```\n\n' + validBody;
+    const body = '```\nsome unrelated example\n```\n\n' + validBody;
     expect(checkReadiness(body, '🔧 Operational')).toEqual([]);
   });
 });
