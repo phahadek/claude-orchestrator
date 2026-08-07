@@ -34,9 +34,7 @@ import {
   findAutoApproveIneligibleTaskCreate,
   type GroomingGateEntry,
 } from '../groom/groomGate';
-import {
-  isInteractiveTaskType,
-} from '../planning/triage';
+import { isInteractiveTaskType } from '../planning/triage';
 import type {
   StagedIntentRow,
   StagedIntentState,
