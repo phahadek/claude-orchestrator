@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { StagedIntent } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
+import { gateApi } from '../api/gate';
 import type { TaskView } from '../types/taskView';
 import type { SessionTaskNameLookup } from '../utils/milestoneStack';
 import { phaseForTask } from '../utils/phaseBurndown';
@@ -9,7 +10,12 @@ import { DecisionPickOnePanel } from './DecisionPickOnePanel';
 import { TriageBatchPanel } from './TriageBatchPanel';
 import { GroupCard } from './GroupCard';
 import { taskIdFor } from './triageVerdict';
-import { taskIdFromIntent, taskNameFromSession } from '../utils/milestoneStack';
+import {
+  taskIdFromIntent,
+  taskNameFromSession,
+  isGateVerifyIntent,
+  gateItemIdFromIntent,
+} from '../utils/milestoneStack';
 import { useDecisionQueue } from '../hooks/useDecisionQueue';
 import panelStyles from './DecisionPanel.module.css';
 import styles from './MilestoneDecisionInbox.module.css';
@@ -65,17 +71,28 @@ function taskLabelFor(
 }
 
 /**
- * A card's display-only title: its own resolved task, falling back to its
- * originating session's task name, falling back to a defined label — never
- * an empty header and never the raw intent.kind, which stays visible
- * separately as secondary detail (see UNRESOLVED_TASK_LABEL).
+ * A card's display-only title: for a gate.verify mirror intent (session-less,
+ * carries a gate item ref rather than a task ref — see gateItemIdFromIntent),
+ * its referenced gate item's text; otherwise its own resolved task, falling
+ * back to its originating session's task name, falling back to a defined
+ * label — never an empty header and never the raw intent.kind, which stays
+ * visible separately as secondary detail (see UNRESOLVED_TASK_LABEL).
  */
 function cardLabelFor(
   taskId: string | null,
   taskById: Map<string, TaskView>,
   sessionId: string | null | undefined,
   sessions: SessionTaskNameLookup[],
+  gateIntent?: StagedIntent,
+  gateItemTextById?: Record<string, string>,
 ): TaskLabel {
+  if (gateIntent && isGateVerifyIntent(gateIntent)) {
+    const gateItemId = gateItemIdFromIntent(gateIntent);
+    const gateItemText = gateItemId
+      ? gateItemTextById?.[gateItemId]
+      : undefined;
+    if (gateItemText) return { icon: null, name: gateItemText };
+  }
   const resolved = taskLabelFor(taskId, taskById);
   if (resolved) return resolved;
   const sessionTaskName = taskNameFromSession(sessionId, sessions);
@@ -240,6 +257,51 @@ export function MilestoneDecisionInbox({
     };
   }, [groupIdsKey]);
 
+  // gate.verify mirror intents carry no task/session ref to title themselves
+  // by — their identity lives in the referenced gate item (see
+  // gateItemIdFromIntent) — so their text is fetched separately, once per
+  // distinct gate item id seen across the current intent list.
+  const [gateItemTextById, setGateItemTextById] = useState<
+    Record<string, string>
+  >({});
+  const gateItemIdsKey = [
+    ...new Set(
+      intents
+        .filter(isGateVerifyIntent)
+        .map(gateItemIdFromIntent)
+        .filter((id): id is string => !!id),
+    ),
+  ]
+    .sort()
+    .join(',');
+
+  useEffect(() => {
+    const gateItemIds = gateItemIdsKey ? gateItemIdsKey.split(',') : [];
+    if (gateItemIds.length === 0) return;
+    let cancelled = false;
+    Promise.all(
+      gateItemIds.map((id) =>
+        gateApi
+          .getGateItemDetail(id)
+          .then((detail) => [id, detail.item.text] as const)
+          .catch(() => [id, null] as const),
+      ),
+    ).then((entries) => {
+      if (cancelled) return;
+      setGateItemTextById((prev) => ({
+        ...prev,
+        ...Object.fromEntries(
+          entries.filter(
+            (entry): entry is [string, string] => entry[1] !== null,
+          ),
+        ),
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [gateItemIdsKey]);
+
   if (!loaded || intents.length === 0) return null;
 
   const cardOrder = buildCardOrder(intents).filter((card) => {
@@ -271,6 +333,8 @@ export function MilestoneDecisionInbox({
             taskById,
             intent.sessionId,
             sessions,
+            intent,
+            gateItemTextById,
           );
           return (
             <div

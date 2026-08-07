@@ -222,4 +222,42 @@ describe('GateReadinessPanel — operator disposition controls', () => {
 
     expect(screen.queryByTestId('gate-item-approve-a')).toBeNull();
   });
+
+  it('renders a Human-Observation item with a passing disposition but non-pass state as "pass (unconfirmed)", not bare "pass"', async () => {
+    const item = makeItem('a', {
+      classification: 'Human-Observation',
+      state: 'runnable',
+      latestDisposition: 'pass',
+    });
+    gateApiMock.listGateItems.mockResolvedValue({
+      items: [item],
+      total: 1,
+      page: 1,
+    });
+
+    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    await screen.findByText('item a');
+
+    const table = screen.getByTestId('gate-items-table');
+    expect(table.textContent).toContain('pass (unconfirmed)');
+  });
+
+  it('renders bare "pass" once a Human-Observation item has actually settled to state pass', async () => {
+    const item = makeItem('a', {
+      classification: 'Human-Observation',
+      state: 'pass',
+      latestDisposition: 'pass',
+    });
+    gateApiMock.listGateItems.mockResolvedValue({
+      items: [item],
+      total: 1,
+      page: 1,
+    });
+
+    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    await screen.findByText('item a');
+
+    const table = screen.getByTestId('gate-items-table');
+    expect(table.textContent).not.toContain('unconfirmed');
+  });
 });
