@@ -34,8 +34,8 @@ describe('ShortcutHint', () => {
     ).toBeDefined();
   });
 
-  it('renders the active panel hints plus the fixed global bindings', () => {
-    render(<ShortcutHint activePanel={panelDeclaration} />);
+  it('renders the active panel hints plus the fixed global bindings, including Focus Search when the view has a search target', () => {
+    render(<ShortcutHint activePanel={panelDeclaration} canFocusSearch />);
     fireEvent.click(
       screen.getByRole('button', { name: /keyboard shortcuts/i }),
     );
@@ -61,11 +61,21 @@ describe('ShortcutHint', () => {
   });
 
   it('omits panel hints when no panel is active', () => {
-    render(<ShortcutHint activePanel={null} />);
+    render(<ShortcutHint activePanel={null} canFocusSearch />);
     fireEvent.click(
       screen.getByRole('button', { name: /keyboard shortcuts/i }),
     );
     expect(screen.queryByText('Approve highlighted card')).toBeNull();
+    expect(screen.getByText('Open Dispatch modal')).toBeDefined();
+  });
+
+  it('omits the Focus Search hint when the active view mounts no search input (e.g. Milestones)', () => {
+    render(<ShortcutHint activePanel={panelDeclaration} canFocusSearch={false} />);
+    fireEvent.click(
+      screen.getByRole('button', { name: /keyboard shortcuts/i }),
+    );
+    expect(screen.queryByText('Focus search')).toBeNull();
+    // Everything else is still advertised.
     expect(screen.getByText('Open Dispatch modal')).toBeDefined();
   });
 

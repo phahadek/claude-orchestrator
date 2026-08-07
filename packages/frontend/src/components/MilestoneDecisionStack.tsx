@@ -98,6 +98,16 @@ export function MilestoneDecisionStack({
     () => ({
       orderedItems: () =>
         Array.from(inboxTargetsRef.current.keys()).map((id) => ({ id })),
+      // Re-dispatches the same 'a' keydown the highlighted card's own local
+      // listener (useHighlightedCardKeyboardActions) responds to, rather
+      // than duplicating a second lookup/approve path here — this way the
+      // global accept shortcut always fires the exact same
+      // handleApply/handleApprove/onApproveGroup call the card's own
+      // primary button's onClick uses, with no risk of the two paths
+      // drifting apart.
+      onApprove: () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
+      },
       hints: [
         { key: 'j', description: 'Next decision' },
         { key: 'k', description: 'Previous decision' },

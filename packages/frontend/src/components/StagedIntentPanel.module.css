@@ -8,6 +8,11 @@
   background: var(--bg-secondary);
 }
 
+.keyboardHighlighted {
+  outline: 2px solid var(--ctp-yellow, #f9e2af);
+  outline-offset: -1px;
+}
+
 .header {
   display: flex;
   align-items: center;

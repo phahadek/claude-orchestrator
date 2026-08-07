@@ -21,6 +21,14 @@ export interface ShortcutHandlers {
   ) => void;
   onFocusSearch: () => void;
   /**
+   * True only while the active view actually mounts a search input for
+   * onFocusSearch to focus (today: the Sessions view's SessionFilterBar).
+   * The '/' binding is a no-op — and ShortcutHint hides its hint — whenever
+   * this is false, so the shortcut is never advertised somewhere it can't
+   * act.
+   */
+  canFocusSearch?: boolean;
+  /**
    * The currently-active panel's keyboard declaration (e.g. the milestone
    * decision-card ring). When present, J/K/Enter dispatch against its
    * ordered item list — moving an id-anchored ring highlight and firing
@@ -149,7 +157,9 @@ export const KEYBOARD_SHORTCUTS: ShortcutDefinition[] = [
     key: '/',
     desc: 'Focus search',
     matches: (e) => e.key === '/',
-    invoke: (h) => h.onFocusSearch(),
+    invoke: (h) => {
+      if (h.canFocusSearch) h.onFocusSearch();
+    },
     preventDefault: true,
   },
 ];

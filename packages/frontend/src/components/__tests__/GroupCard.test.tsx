@@ -89,4 +89,15 @@ describe('GroupCard keyboard ring bindings', () => {
     expect(document.activeElement).toBe(reasonField);
     expect(onRejectGroup).not.toHaveBeenCalled();
   });
+
+  it('renders a distinct keyboard-highlight class when highlighted, absent otherwise', () => {
+    const { rerender } = render(
+      <GroupCard {...baseProps({ highlighted: false })} />,
+    );
+    const card = screen.getByTestId('group-card-group-1');
+    expect(card.className).not.toMatch(/keyboardHighlighted/);
+
+    rerender(<GroupCard {...baseProps({ highlighted: true })} />);
+    expect(card.className).toMatch(/keyboardHighlighted/);
+  });
 });
