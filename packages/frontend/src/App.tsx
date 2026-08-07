@@ -28,7 +28,6 @@ import { SessionGrid } from './components/SessionGrid';
 import { HistoryGrid } from './components/HistoryGrid';
 import { SessionDetail } from './components/SessionDetail';
 import { PRPanel } from './components/PRPanel';
-import { DispatchModal } from './components/DispatchModal';
 import { PermissionEventLog } from './components/PermissionEventLog';
 import { TaskList } from './components/TaskList';
 import { BootLoadingBanner } from './components/BootLoadingBanner';
@@ -230,7 +229,6 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showModal, setShowModal] = useState(false);
   const [activeView, setActiveView] = useState<
     'sessions' | 'history' | 'denials'
   >('sessions');
@@ -492,7 +490,7 @@ export default function App() {
         setActiveBoardId(boardId);
       })
       .catch(() => {
-        /* leave projects empty — DispatchModal handles the empty case */
+        /* leave projects empty */
       });
   }, []);
 
@@ -1265,11 +1263,8 @@ export default function App() {
 
   const { highlightedItemId: panelHighlightedItemId } = useKeyboardShortcuts({
     activePanel,
-    onOpenDispatch: () => setShowModal(true),
     onDismiss: (fromInputField) => {
-      if (showModal) {
-        setShowModal(false);
-      } else if (!fromInputField && (selectedTaskId || selectedId)) {
+      if (!fromInputField && (selectedTaskId || selectedId)) {
         window.history.back();
       } else if (filtersActive) {
         clearFilters();
@@ -1746,20 +1741,6 @@ export default function App() {
           </ErrorBoundary>
         )}
       </div>
-
-      {showModal && activeProject && activeBoardId && (
-        <ErrorBoundary name="DispatchModal" onReset={() => setShowModal(false)}>
-          <DispatchModal
-            tasks={tasks}
-            tasksReady={tasksReady}
-            send={send}
-            resetTasks={resetTasks}
-            project={activeProject}
-            milestoneId={activeBoardId}
-            onClose={() => setShowModal(false)}
-          />
-        </ErrorBoundary>
-      )}
 
       <Notifications
         notifications={notifications}

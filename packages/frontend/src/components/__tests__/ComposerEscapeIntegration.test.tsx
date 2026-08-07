@@ -8,7 +8,6 @@ import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 // from a text field, in which case the draft must be left alone.
 function Harness() {
   useKeyboardShortcuts({
-    onOpenDispatch: () => {},
     onDismiss: (fromInputField) => {
       if (!fromInputField) {
         window.history.back();

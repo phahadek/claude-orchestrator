@@ -3,7 +3,6 @@ import type { PanelKeyboardDeclaration } from '../types/panelKeyboard';
 import { useKeyboardRing } from '../types/panelKeyboard';
 
 export interface ShortcutHandlers {
-  onOpenDispatch: () => void;
   onDismiss: (fromInputField: boolean) => void;
   onSelectNext: () => void;
   onSelectPrev: () => void;
@@ -72,13 +71,6 @@ export const KEYBOARD_SHORTCUTS: ShortcutDefinition[] = [
     // The input's own field context is passed through so the caller can
     // skip navigating away and discarding an in-progress draft.
     invoke: (h, _event, isInputField) => h.onDismiss(isInputField),
-  },
-  {
-    key: 'N',
-    desc: 'Open Dispatch modal',
-    matches: (e) => e.key === 'n' || e.key === 'N',
-    invoke: (h) => h.onOpenDispatch(),
-    preventDefault: true,
   },
   {
     key: 'J',
