@@ -218,6 +218,32 @@ describe('POST /api/staged-intents/batch/commit', () => {
     expect(vetoedIntent.state).toBe('staged');
   });
 
+  it('commits a group with no task.create by standard in a single operator action via both /approve and /batch/commit', async () => {
+    const updateStatus = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    await stageCleanTriageGroup(agent, 'proj-no-create', 't-8', 'g-8');
+    const approveRes = await agent
+      .post('/api/staged-intents/group/g-8/approve')
+      .send({});
+    expect(approveRes.status).toBe(200);
+    expect(approveRes.body.committed.length).toBeGreaterThan(0);
+
+    await stageCleanTriageGroup(agent, 'proj-no-create', 't-9', 'g-9');
+    const batchRes = await agent
+      .post('/api/staged-intents/batch/commit')
+      .send({ groupIds: ['g-9'], milestoneLabel: 'M12' });
+    expect(batchRes.status).toBe(200);
+    expect(batchRes.body.committed).toEqual(['g-9']);
+  });
+
   describe('a task.create riding in the group', () => {
     it('blocks the group when the task.create payload type is 💻 Code, naming the offending member', async () => {
       const updateStatus = vi.fn();
@@ -259,7 +285,7 @@ describe('POST /api/staged-intents/batch/commit', () => {
       expect(updateStatus).not.toHaveBeenCalled();
     });
 
-    it('still commits by standard when the task.create payload type is triage-eligible (📐 Design)', async () => {
+    it('blocks the group when the task.create payload type is a triage-eligible type (🔧 Operational) too — approve-by-standard never exempts task.create of any type', async () => {
       const updateStatus = vi.fn();
       mockGetTaskBackend.mockReturnValue({
         type: 'notion',
@@ -268,18 +294,18 @@ describe('POST /api/staged-intents/batch/commit', () => {
           .mockResolvedValue('Confirm scope at grooming.\n'),
         updateStatus,
         setDependsOn: vi.fn().mockResolvedValue(undefined),
-        createTask: vi.fn().mockResolvedValue('notion:new-design-task'),
+        createTask: vi.fn().mockResolvedValue('notion:new-ops-task'),
       });
       const app = makeApp();
       const agent = supertest(app);
 
-      await agent.post('/api/staged-intents').send({
+      const created = await agent.post('/api/staged-intents').send({
         kind: 'task.create',
         projectId: 'proj-riders-2',
         groupId: 'g-riders-2',
         payload: {
-          title: 'Follow-on Design task',
-          type: '📐 Design',
+          title: 'Follow-on Operational task',
+          type: '🔧 Operational',
           databaseId: 'db-riders',
         },
       });
@@ -296,8 +322,50 @@ describe('POST /api/staged-intents/batch/commit', () => {
       });
 
       expect(res.status).toBe(200);
-      expect(res.body.committed).toEqual(['g-riders-2']);
-      expect(res.body.exceptions).toEqual([]);
+      expect(res.body.committed).toEqual([]);
+      expect(res.body.exceptions).toHaveLength(1);
+      expect(res.body.exceptions[0].groupId).toBe('g-riders-2');
+      expect(res.body.exceptions[0].error).toContain(created.body.id);
+      expect(updateStatus).not.toHaveBeenCalled();
+    });
+
+    it('succeeds through the single-group /group/:groupId/approve route (autoApprove:true, no triageMilestoneLabel) for the identical 💻 Code task.create group that /batch/commit refuses', async () => {
+      const updateStatus = vi.fn();
+      mockGetTaskBackend.mockReturnValue({
+        type: 'notion',
+        fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+        updateStatus,
+        setDependsOn: vi.fn().mockResolvedValue(undefined),
+        createTask: vi.fn().mockResolvedValue('notion:new-code-task-approve'),
+      });
+      const app = makeApp();
+      const agent = supertest(app);
+
+      const created = await agent.post('/api/staged-intents').send({
+        kind: 'task.create',
+        projectId: 'proj-riders-approve',
+        groupId: 'g-riders-approve',
+        payload: {
+          title: 'Follow-on Code task',
+          type: '💻 Code',
+          databaseId: 'db-riders',
+        },
+      });
+      await stageCleanTriageGroup(
+        agent,
+        'proj-riders-approve',
+        't-riders-approve',
+        'g-riders-approve',
+      );
+
+      const res = await agent
+        .post('/api/staged-intents/group/g-riders-approve/approve')
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.committed).toEqual(
+        expect.arrayContaining([created.body.id]),
+      );
     });
 
     it('is still commitable through the explicit per-task human disposition path (/group/:groupId/commit, each member individually approved)', async () => {

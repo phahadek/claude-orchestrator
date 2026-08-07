@@ -1028,37 +1028,29 @@ export interface GroupCommitMember {
 }
 
 /**
- * approve-by-standard / batch-commit's task.create guard (isTriageEligibleForType
- * above is its per-task-gate mirror-image, evaluated at Ready-flip time
- * against the *subject* task's own type). A group committed through
- * approve-by-standard (stagedIntents.ts's commitGroupIntents with
- * `autoApprove: true` — both the single-group `/approve` route and the
- * multi-group `/batch/commit` approve-by-standard surface) is exempted from
- * the per-item human decision on the strength of ITS OWN subject task's
- * triage-eligible type. A `task.create` riding in that same group mints an
- * entirely different task, whose own type was never triage-checked — so a
- * 💻 Code (or any other non-triage-eligible-type) `task.create` must not be
- * allowed to ride through on the subject's exemption. Absent (or
- * unresolvable) payload type is deliberately NOT flagged here: an untyped
- * follow-on carries no evidence it's Code, and checkGroomingPromotionGate's
- * own per-task gate remains the backstop once it actually applies as a
- * concrete task.
+ * The multi-group /batch/commit approve-by-standard surface's task.create
+ * guard: a `task.create` must never be created via that unattended,
+ * many-groups-at-once disposition — regardless of the type it declares.
+ * Task creation is a deliberate per-task human act; batch-committing many
+ * groups on one clean-triage verdict is not that act, no matter what type
+ * the minted task would be. The caller (stagedIntents.ts's
+ * commitGroupIntents) must only invoke this when `opts.triageMilestoneLabel`
+ * is set — i.e. only for the multi-group /batch/commit path. The
+ * single-group `/approve` route (a human explicitly reviewing and approving
+ * one specific group) is a deliberate per-task disposition and must remain
+ * free to create a task.create of any type; it must never call this
+ * function.
  */
 export function findAutoApproveIneligibleTaskCreate(
   members: readonly GroupCommitMember[],
 ): { blocked: boolean; reasons: string[] } {
   const reasons = members
-    .filter(
-      (m) =>
-        m.kind === 'task.create' &&
-        !!m.taskCreatePayloadType &&
-        !isTriageEligibleType(m.taskCreatePayloadType),
-    )
+    .filter((m) => m.kind === 'task.create')
     .map(
       (m) =>
-        `task.create for type "${m.taskCreatePayloadType}" is not a triage-eligible type — approve-by-standard ` +
-        "cannot exempt it on the group's subject task disposition; commit this group through an explicit " +
-        'per-task human decision instead.',
+        `task.create${m.taskCreatePayloadType ? ` for type "${m.taskCreatePayloadType}"` : ''} cannot be ` +
+        'created through the multi-group batch-commit approve-by-standard surface; commit this group ' +
+        'individually through the single-group /approve route instead.',
     );
   return { blocked: reasons.length > 0, reasons };
 }

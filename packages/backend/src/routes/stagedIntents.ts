@@ -36,7 +36,6 @@ import {
 } from '../groom/groomGate';
 import {
   isInteractiveTaskType,
-  isTriageEligibleType,
 } from '../planning/triage';
 import type {
   StagedIntentRow,
@@ -5412,13 +5411,14 @@ async function commitGroupIntents(
         },
       };
     }
-  } else {
-    // approve-by-standard / batch-commit only: a task.create riding in the
-    // group must be triage-eligible in its own right (findAutoApproveIneligibleTaskCreate
-    // — never covered by the group's subject task's own exemption). The
-    // explicit per-task human path above (autoApprove: false, every live
-    // member individually approved) is deliberately unaffected — this is
-    // the exemption mechanism being blocked, not the operation itself.
+  } else if (opts.triageMilestoneLabel) {
+    // Multi-group /batch/commit approve-by-standard surface only: a
+    // task.create riding in the group must never be created via this
+    // unattended, many-groups-at-once disposition, regardless of its type
+    // (findAutoApproveIneligibleTaskCreate). The single-group /approve route
+    // (autoApprove: true, no triageMilestoneLabel) is a human explicitly
+    // reviewing and approving one specific group — a deliberate per-task
+    // disposition — and is deliberately exempt from this check.
     const liveWithTaskCreateType = live.map((r) => ({
       id: r.id,
       kind: r.kind,
@@ -5432,12 +5432,7 @@ async function commitGroupIntents(
     );
     if (ineligible.blocked) {
       const blockingIds = liveWithTaskCreateType
-        .filter(
-          (r) =>
-            r.kind === 'task.create' &&
-            !!r.taskCreatePayloadType &&
-            !isTriageEligibleType(r.taskCreatePayloadType),
-        )
+        .filter((r) => r.kind === 'task.create')
         .map((r) => r.id);
       return {
         status: 409,
