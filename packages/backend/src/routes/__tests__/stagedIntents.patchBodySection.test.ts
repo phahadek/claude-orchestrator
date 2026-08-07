@@ -266,7 +266,56 @@ describe('task.patchBodySection — staging-time preview matches apply-time rend
       { operation: 'replace', find, replaceWith: 'src/a.ts\n- src/c.ts' },
     );
 
-    expect(preview).toContain('src/c.ts');
-    expect(preview).not.toContain('src/b.ts');
+    expect(preview.applied).toBe(true);
+    expect(preview.body).toContain('src/c.ts');
+    expect(preview.body).not.toContain('src/b.ts');
+  });
+
+  it('reports applied: false with a reason when the find-text is absent from the target section', () => {
+    const storedBody = [
+      '## Summary',
+      '',
+      'Some summary.',
+      '',
+      '## Files / paths affected',
+      '',
+      '- src/a.ts',
+    ].join('\n');
+
+    const preview = composePatchBodySectionPreview(
+      storedBody,
+      'Files / paths affected',
+      { operation: 'replace', find: 'src/z.ts', replaceWith: 'src/c.ts' },
+    );
+
+    expect(preview.applied).toBe(false);
+    expect(preview.body).toBe(storedBody);
+    expect(preview.reason).toMatch(/find text not present/i);
+  });
+
+  it('reports applied: false with a reason when a replace patch targets a missing section', () => {
+    const storedBody = ['## Summary', '', 'Some summary.'].join('\n');
+
+    const preview = composePatchBodySectionPreview(storedBody, 'Nonexistent', {
+      operation: 'replace',
+      find: 'foo',
+      replaceWith: 'bar',
+    });
+
+    expect(preview.applied).toBe(false);
+    expect(preview.body).toBe(storedBody);
+    expect(preview.reason).toMatch(/not found/i);
+  });
+
+  it('reports applied: false with a reason when a remove patch targets a missing section', () => {
+    const storedBody = ['## Summary', '', 'Some summary.'].join('\n');
+
+    const preview = composePatchBodySectionPreview(storedBody, 'Nonexistent', {
+      operation: 'remove',
+    });
+
+    expect(preview.applied).toBe(false);
+    expect(preview.body).toBe(storedBody);
+    expect(preview.reason).toMatch(/not found/i);
   });
 });
