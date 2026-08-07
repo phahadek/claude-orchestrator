@@ -2949,17 +2949,24 @@ export class SessionManager extends EventEmitter {
     prUrl: string | undefined,
     projectDir: string,
   ): void {
-    this.sessions.delete(sessionId);
-    revokeStageCredential(sessionId, 'session_teardown');
-
-    // Chokepoint guard: never tear down an idle session's worktree.
-    // The worktree IS the session state for idle sessions — uncommitted WIP must
-    // survive across idle→resume cycles. Teardown is deferred to terminal events
-    // (PR merged/closed, session done/error/killed, explicit delete).
+    // Chokepoint guard: never tear down an idle session's worktree, delete
+    // its in-memory entry, or revoke its stage credential while its DB
+    // status is non-terminal. The worktree IS the session state for idle
+    // sessions — uncommitted WIP (code sessions) must survive across
+    // idle→resume cycles, and a planning session (worktree_path === the
+    // project checkout, pr_url always null) needs its stage credential
+    // intact to resume with a working orchestrator MCP connection. Teardown
+    // is deferred to terminal events (PR merged/closed, session done/error/
+    // killed, explicit delete). This must run first, before any state
+    // mutation below — not predicated on pr_url, which planning sessions
+    // never have.
     const sessionRow = getSession(sessionId);
-    if (sessionRow?.status === 'idle' && sessionRow?.pr_url) {
+    if (sessionRow && !TERMINAL_SESSION_STATUSES.has(sessionRow.status)) {
       return;
     }
+
+    this.sessions.delete(sessionId);
+    revokeStageCredential(sessionId, 'session_teardown');
 
     // Guard: never run destructive teardown (git worktree remove / fs.rmSync)
     // on anything but a real per-session worktree — never the project checkout

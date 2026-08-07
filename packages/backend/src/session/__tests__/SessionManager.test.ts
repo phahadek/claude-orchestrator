@@ -1458,7 +1458,9 @@ describe('cleanupWorktree chokepoint guard', () => {
     expect(removeCalls).toHaveLength(0);
   });
 
-  it('idle session with NO PR — teardown proceeds (no guard)', () => {
+  it('idle session with NO PR — guard also fires (idle is non-terminal regardless of PR)', () => {
+    // A planning session is exactly this shape (idle, pr_url null) — the
+    // guard must protect it too, not just idle sessions with an open PR.
     vi.mocked(getSession).mockReturnValue(makeIdleNoPrRow());
     (sm as any).cleanupWorktree(
       SESSION_ID,
@@ -1471,7 +1473,7 @@ describe('cleanupWorktree chokepoint guard', () => {
       .mock.calls.filter(
         ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
       );
-    expect(removeCalls).toHaveLength(1);
+    expect(removeCalls).toHaveLength(0);
   });
 
   it('done session with PR — teardown proceeds (guard only fires for idle)', () => {
@@ -1491,6 +1493,137 @@ describe('cleanupWorktree chokepoint guard', () => {
         ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
       );
     expect(removeCalls).toHaveLength(1);
+  });
+});
+
+// ── cleanupWorktree — stage-credential revocation is gated by the terminal
+//    status guard, not by an unconditional teardown ──────────────────────────
+
+describe('cleanupWorktree — stage credential revocation ordering', () => {
+  let sm: SessionManager;
+  const PLANNING_SESSION_ID = 'planning-session-xyz789';
+
+  /** Planning-session row shape: worktree_path === the project checkout, pr_url null. */
+  function makePlanningSessionRow(status: string) {
+    return {
+      session_id: PLANNING_SESSION_ID,
+      task_id: 'task-1',
+      task_name: 'my-task',
+      task_url: 'https://notion.so/task',
+      project_context_url: 'https://notion.so/project',
+      project_id: PROJECT_ID,
+      status,
+      session_type: 'groom',
+      pr_url: null,
+      worktree_path: PROJECT_DIR,
+      started_at: 1000,
+      ended_at: status === 'idle' ? null : 2000,
+    } as any;
+  }
+
+  beforeEach(async () => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    const { _resetStageCredentialsForTesting } =
+      await import('../../auth/SessionStageAuth');
+    _resetStageCredentialsForTesting();
+  });
+
+  it('a subprocess exit while DB status is non-terminal retains the stage credential (no revocation recorded)', async () => {
+    const { mintStageCredential } = await import('../../auth/SessionStageAuth');
+    const token = mintStageCredential(PLANNING_SESSION_ID);
+    vi.mocked(getSession).mockReturnValue(makePlanningSessionRow('idle'));
+
+    (sm as any).cleanupWorktree(
+      PLANNING_SESSION_ID,
+      PROJECT_DIR, // planning sessions use the project checkout as their worktree_path
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(
+      vi
+        .mocked(recordEvent)
+        .mock.calls.some(
+          ([evt]) => evt.event_type === 'mcp_session_credential_revoked',
+        ),
+    ).toBe(false);
+
+    // The credential is still the one the CLI's mcp config carries.
+    const { mintStageCredential: remint } =
+      await import('../../auth/SessionStageAuth');
+    expect(remint(PLANNING_SESSION_ID)).toBe(token);
+  });
+
+  it.each(['done', 'error', 'killed'])(
+    'a session reaching genuinely terminal status %s still has its credential revoked',
+    async (status) => {
+      const { mintStageCredential } =
+        await import('../../auth/SessionStageAuth');
+      mintStageCredential(PLANNING_SESSION_ID);
+      vi.mocked(getSession).mockReturnValue(makePlanningSessionRow(status));
+
+      (sm as any).cleanupWorktree(
+        PLANNING_SESSION_ID,
+        PROJECT_DIR,
+        undefined,
+        PROJECT_DIR,
+      );
+
+      expect(
+        vi
+          .mocked(recordEvent)
+          .mock.calls.some(
+            ([evt]) =>
+              evt.event_type === 'mcp_session_credential_revoked' &&
+              (evt.payload as any)?.sessionId === PLANNING_SESSION_ID,
+          ),
+      ).toBe(true);
+    },
+  );
+
+  it('the idle guard is evaluated before any credential revocation or in-memory session deletion', () => {
+    // Seed an in-memory session entry the way wireSession would.
+    const fakeSession = { sessionType: 'groom' } as any;
+    (sm as any).sessions.set(PLANNING_SESSION_ID, fakeSession);
+    vi.mocked(getSession).mockReturnValue(makePlanningSessionRow('idle'));
+
+    (sm as any).cleanupWorktree(
+      PLANNING_SESSION_ID,
+      PROJECT_DIR,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    // Guard fired first — the in-memory entry must survive the non-terminal exit.
+    expect((sm as any).sessions.get(PLANNING_SESSION_ID)).toBe(fakeSession);
+    expect(
+      vi
+        .mocked(recordEvent)
+        .mock.calls.some(
+          ([evt]) => evt.event_type === 'mcp_session_credential_revoked',
+        ),
+    ).toBe(false);
+  });
+
+  it('the idle guard protects a planning session row (project checkout as worktree_path, pr_url null)', () => {
+    vi.mocked(getSession).mockReturnValue(makePlanningSessionRow('idle'));
+
+    (sm as any).cleanupWorktree(
+      PLANNING_SESSION_ID,
+      PROJECT_DIR,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
+    expect(removeCalls).toHaveLength(0);
   });
 });
 
