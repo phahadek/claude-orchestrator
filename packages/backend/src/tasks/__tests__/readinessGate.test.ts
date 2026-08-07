@@ -227,6 +227,22 @@ describe('checkReadiness — 🔧 Operational floor facts', () => {
       validBody + '\nThe retry policy will be decide during implementation.';
     expect(checkReadiness(body, '🔧 Operational').length).toBeGreaterThan(0);
   });
+
+  it('does not accept a required heading that only appears inside a fenced code block', () => {
+    const body =
+      '## Example\n```\n## Targets / surfaces affected\n- billing config catalog\n```\n\n### 👁️ Manual verification\n- seed present on prod; worker reconciled and captured the change signal\n';
+    const violations = checkReadiness(body, '🔧 Operational');
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('Targets'),
+      ),
+    ).toBe(true);
+  });
+
+  it('still detects a genuine top-level required heading outside any fence', () => {
+    const body = '```\nsome unrelated example\n```\n\n' + validBody;
+    expect(checkReadiness(body, '🔧 Operational')).toEqual([]);
+  });
 });
 
 describe('checkReadiness — 🔎 Investigation floor facts', () => {

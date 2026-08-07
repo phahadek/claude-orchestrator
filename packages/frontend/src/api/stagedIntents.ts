@@ -90,6 +90,7 @@ export interface StagedIntent {
   annotation?:
     | { blocked: true; violations: StagedIntentViolation[] }
     | { blocked: true; reasons: string[] }
+    | { advisory: true; violations: StagedIntentViolation[] }
     | { autoRejected: true }
     | { autoApproved: true }
     | null;
