@@ -19,6 +19,9 @@ import styles from './AnalyticsPanel.module.css';
 // API response types — kept in sync with packages/backend/src/routes/analytics.ts
 interface TaskRollupRow {
   boardId: string | null;
+  taskId: string | null;
+  taskName: string | null;
+  taskType: string | null;
   sessionCount: number;
   inputTokens: number;
   outputTokens: number;
@@ -94,13 +97,52 @@ function dateRangeToMs(range: DateRange): number {
 // presenting a silently partial cost figure.
 const CACHE_TOKEN_MIGRATION_MS = 1785701061000;
 
-function shortLabel(boardId: string | null): string {
-  const name = boardId ?? '(no task)';
-  return name.length > 24 ? name.slice(0, 24) + '…' : name;
+function taskLabel(row: TaskRollupRow): string {
+  return row.taskName ?? row.boardId ?? '(no task)';
 }
 
 function shortSessionId(sessionId: string): string {
   return sessionId.length > 12 ? sessionId.slice(0, 12) + '…' : sessionId;
+}
+
+type SortKey =
+  | 'task'
+  | 'sessions'
+  | 'input'
+  | 'output'
+  | 'cache'
+  | 'cost';
+type SortDir = 'asc' | 'desc';
+
+interface SortableColumn {
+  key: SortKey;
+  label: string;
+}
+
+const SORTABLE_COLUMNS: SortableColumn[] = [
+  { key: 'task', label: 'Task' },
+  { key: 'sessions', label: 'Sessions' },
+  { key: 'input', label: 'Input' },
+  { key: 'output', label: 'Output' },
+  { key: 'cache', label: 'Cache' },
+  { key: 'cost', label: 'Est. cost' },
+];
+
+function rollupSortValue(row: TaskRollupRow, key: SortKey): string | number {
+  switch (key) {
+    case 'task':
+      return taskLabel(row).toLowerCase();
+    case 'sessions':
+      return row.sessionCount;
+    case 'input':
+      return row.inputTokens;
+    case 'output':
+      return row.outputTokens;
+    case 'cache':
+      return row.cacheReadTokens + row.cacheCreationTokens;
+    case 'cost':
+      return row.totalCost;
+  }
 }
 
 // Two hue families, one per category, so planning vs execution reads at a
@@ -142,6 +184,9 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
   const [taskSessions, setTaskSessions] = useState<
     Map<string, TaskSessionRow[] | 'loading'>
   >(new Map());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
 
   const fetchData = useCallback(() => {
     setLoading(true);
@@ -177,7 +222,41 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
   const taskRollups = data?.taskRollups ?? [];
   const sessionTypeBreakdown = data?.sessionTypeBreakdown ?? [];
 
-  const topRollups = [...taskRollups].sort((a, b) => b.totalCost - a.totalCost);
+  const filteredRollups = searchQuery.trim()
+    ? taskRollups.filter((r) =>
+        taskLabel(r).toLowerCase().includes(searchQuery.trim().toLowerCase()),
+      )
+    : taskRollups;
+
+  const topRollups = [...filteredRollups].sort((a, b) => {
+    if (!sortKey) return b.totalCost - a.totalCost;
+    const av = rollupSortValue(a, sortKey);
+    const bv = rollupSortValue(b, sortKey);
+    const cmp =
+      typeof av === 'string' && typeof bv === 'string'
+        ? av.localeCompare(bv)
+        : (av as number) - (bv as number);
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  const openTask = (taskId: string) => {
+    window.dispatchEvent(new CustomEvent('selectTask', { detail: { taskId } }));
+  };
+
+  const openSession = (sessionId: string) => {
+    window.dispatchEvent(
+      new CustomEvent('selectSession', { detail: { sessionId } }),
+    );
+  };
 
   const typeColors = categoryColors(sessionTypeBreakdown);
   const typeChartData = sessionTypeBreakdown
@@ -237,6 +316,14 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
             </button>
           ))}
         </div>
+        <input
+          type="text"
+          className={styles.searchInput}
+          placeholder="Search tasks…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          aria-label="Search tasks"
+        />
       </div>
 
       {loading && <div className={styles.status}>Loading…</div>}
@@ -371,12 +458,22 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
                   <thead>
                     <tr>
                       <th />
-                      <th>Task</th>
-                      <th>Sessions</th>
-                      <th>Input</th>
-                      <th>Output</th>
-                      <th>Cache</th>
-                      <th>Est. cost</th>
+                      {SORTABLE_COLUMNS.map((col) => (
+                        <th key={col.key}>
+                          <button
+                            type="button"
+                            className={styles.sortHeaderBtn}
+                            onClick={() => handleSort(col.key)}
+                          >
+                            {col.label}
+                            {sortKey === col.key
+                              ? sortDir === 'asc'
+                                ? ' ▲'
+                                : ' ▼'
+                              : ''}
+                          </button>
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
@@ -384,6 +481,7 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
                       const key = r.boardId ?? '__none__';
                       const expanded = expandedTaskIds.has(key);
                       const sessionsForTask = taskSessions.get(key);
+                      const name = taskLabel(r);
                       return (
                         <Fragment key={key}>
                           <tr
@@ -393,11 +491,26 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
                             <td className={styles.expandCell}>
                               {expanded ? '▾' : '▸'}
                             </td>
-                            <td
-                              className={styles.taskNameCell}
-                              title={r.boardId ?? '(no task)'}
-                            >
-                              {shortLabel(r.boardId)}
+                            <td className={styles.taskNameCell} title={name}>
+                              {r.taskType && (
+                                <span className={styles.typeBadge}>
+                                  {r.taskType}
+                                </span>
+                              )}
+                              {r.taskId ? (
+                                <button
+                                  type="button"
+                                  className={styles.taskLink}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openTask(r.taskId as string);
+                                  }}
+                                >
+                                  {name}
+                                </button>
+                              ) : (
+                                <span>{name}</span>
+                              )}
                             </td>
                             <td>{r.sessionCount}</td>
                             <td>{formatTokenCount(r.inputTokens)}</td>
@@ -422,6 +535,7 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
                               <tr
                                 key={s.sessionId}
                                 className={styles.sessionRow}
+                                onClick={() => openSession(s.sessionId)}
                               >
                                 <td />
                                 <td

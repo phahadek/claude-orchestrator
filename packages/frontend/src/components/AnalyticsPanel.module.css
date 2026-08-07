@@ -173,10 +173,64 @@
 }
 
 .taskNameCell {
-  max-width: 260px;
+  max-width: 480px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.typeBadge {
+  flex-shrink: 0;
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.75rem;
+  color: var(--text-muted, #a6adc8);
+}
+
+.taskLink {
+  background: none;
+  border: none;
+  color: var(--accent, #89b4fa);
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskLink:hover {
+  text-decoration: underline;
+}
+
+.searchInput {
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--text-primary, #cdd6f4);
+  font-size: 0.8125rem;
+  padding: 4px 10px;
+  margin-left: auto;
+  min-width: 200px;
+}
+
+.sortHeaderBtn {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: inherit;
+  font-weight: inherit;
+  padding: 0;
+}
+
+.sortHeaderBtn:hover {
+  color: var(--text-primary, #cdd6f4);
 }
 
 .migrationMarker {
@@ -218,6 +272,10 @@
   width: 18px;
   color: var(--text-muted, #a6adc8);
   text-align: center;
+}
+
+.sessionRow {
+  cursor: pointer;
 }
 
 .sessionRow td {

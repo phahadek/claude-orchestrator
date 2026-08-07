@@ -1243,13 +1243,22 @@ export default function App() {
         setSelectedId(detail.sessionId);
       }
     }
+    function onSelectTask(e: Event) {
+      const detail = (e as CustomEvent<{ taskId: string }>).detail;
+      if (detail?.taskId) {
+        setTopView('tasks');
+        setSelectedTaskId(detail.taskId);
+      }
+    }
     function onNavigateToPRs() {
       setTopView('prs');
     }
     window.addEventListener('selectSession', onSelectSession);
+    window.addEventListener('selectTask', onSelectTask);
     window.addEventListener('navigateToPRs', onNavigateToPRs);
     return () => {
       window.removeEventListener('selectSession', onSelectSession);
+      window.removeEventListener('selectTask', onSelectTask);
       window.removeEventListener('navigateToPRs', onNavigateToPRs);
     };
   }, []);
