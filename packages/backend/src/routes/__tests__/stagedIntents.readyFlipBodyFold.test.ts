@@ -181,9 +181,7 @@ describe('Ready-flip preview folds same-task body patches staged outside the gro
     const checked = await stageReadyFlip('notion:target-task', 'group-1');
 
     expect(checked.annotation).toBeTruthy();
-    expect(checked.annotation && 'violations' in checked.annotation).toBe(
-      true,
-    );
+    expect(checked.annotation && 'violations' in checked.annotation).toBe(true);
   });
 
   it('names an active same-task body patch parked in a different group when the gate blocks', async () => {
