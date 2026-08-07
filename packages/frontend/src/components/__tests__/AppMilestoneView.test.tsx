@@ -45,10 +45,6 @@ vi.mock('../ShortcutHint', () => ({
   ShortcutHint: () => null,
 }));
 
-vi.mock('../DispatchModal', () => ({
-  DispatchModal: () => null,
-}));
-
 function stubProjects(projects: unknown[]) {
   vi.stubGlobal(
     'fetch',

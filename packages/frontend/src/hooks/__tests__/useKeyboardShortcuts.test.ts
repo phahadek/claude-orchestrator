@@ -5,7 +5,6 @@ import type { ShortcutHandlers } from '../useKeyboardShortcuts';
 
 function makeHandlers(overrides?: Partial<ShortcutHandlers>): ShortcutHandlers {
   return {
-    onOpenDispatch: vi.fn(),
     onDismiss: vi.fn(),
     onSelectNext: vi.fn(),
     onSelectPrev: vi.fn(),
@@ -51,10 +50,8 @@ describe('useKeyboardShortcuts', () => {
     renderHook(() => useKeyboardShortcuts(handlers));
 
     const input = document.createElement('input');
-    fireKey('N', { target: input });
     fireKey('J', { target: input });
 
-    expect(handlers.onOpenDispatch).not.toHaveBeenCalled();
     expect(handlers.onSelectNext).not.toHaveBeenCalled();
   });
 
@@ -91,18 +88,9 @@ describe('useKeyboardShortcuts', () => {
     renderHook(() => useKeyboardShortcuts(handlers));
 
     const textarea = document.createElement('textarea');
-    fireKey('N', { target: textarea });
     fireKey('K', { target: textarea });
 
-    expect(handlers.onOpenDispatch).not.toHaveBeenCalled();
     expect(handlers.onSelectPrev).not.toHaveBeenCalled();
-  });
-
-  it('N key calls onOpenDispatch', () => {
-    const handlers = makeHandlers();
-    renderHook(() => useKeyboardShortcuts(handlers));
-    fireKey('N');
-    expect(handlers.onOpenDispatch).toHaveBeenCalledTimes(1);
   });
 
   it('Escape calls onDismiss', () => {
@@ -237,8 +225,8 @@ describe('useKeyboardShortcuts', () => {
     const handlers = makeHandlers();
     const { unmount } = renderHook(() => useKeyboardShortcuts(handlers));
     unmount();
-    fireKey('N');
-    expect(handlers.onOpenDispatch).not.toHaveBeenCalled();
+    fireKey('J');
+    expect(handlers.onSelectNext).not.toHaveBeenCalled();
   });
 
   describe('modifier guard', () => {
@@ -262,8 +250,6 @@ describe('useKeyboardShortcuts', () => {
       { key: '6', modifier: 'ctrlKey' },
       { key: '7', modifier: 'ctrlKey' },
       { key: '8', modifier: 'ctrlKey' },
-      { key: 'n', modifier: 'metaKey' },
-      { key: 'n', modifier: 'ctrlKey' },
       { key: 'j', modifier: 'ctrlKey' },
       { key: 'j', modifier: 'metaKey' },
       { key: 'k', modifier: 'ctrlKey' },
@@ -275,7 +261,6 @@ describe('useKeyboardShortcuts', () => {
       { key: 'Escape', modifier: 'metaKey' },
       { key: 'Escape', modifier: 'ctrlKey' },
       { key: '1', modifier: 'altKey' },
-      { key: 'n', modifier: 'altKey' },
     ];
 
     for (const { key, modifier } of cases) {
@@ -284,7 +269,6 @@ describe('useKeyboardShortcuts', () => {
         renderHook(() => useKeyboardShortcuts(handlers));
         fireKey(key, { [modifier]: true });
 
-        expect(handlers.onOpenDispatch).not.toHaveBeenCalled();
         expect(handlers.onDismiss).not.toHaveBeenCalled();
         expect(handlers.onSelectNext).not.toHaveBeenCalled();
         expect(handlers.onSelectPrev).not.toHaveBeenCalled();
@@ -312,21 +296,7 @@ describe('useKeyboardShortcuts', () => {
       expect(handlers.onSwitchView).not.toHaveBeenCalled();
     });
 
-    it('Cmd+N does not open the Dispatch modal', () => {
-      const handlers = makeHandlers();
-      renderHook(() => useKeyboardShortcuts(handlers));
-      fireKey('n', { metaKey: true });
-      expect(handlers.onOpenDispatch).not.toHaveBeenCalled();
-    });
-
-    it('Ctrl+N does not open the Dispatch modal', () => {
-      const handlers = makeHandlers();
-      renderHook(() => useKeyboardShortcuts(handlers));
-      fireKey('n', { ctrlKey: true });
-      expect(handlers.onOpenDispatch).not.toHaveBeenCalled();
-    });
-
-    it('unmodified 1-8, n, j, k, Enter and / still behave as before', () => {
+    it('unmodified 1-8, j, k, Enter and / still behave as before', () => {
       const handlers = makeHandlers({ canFocusSearch: true });
       renderHook(() => useKeyboardShortcuts(handlers));
 
@@ -338,7 +308,6 @@ describe('useKeyboardShortcuts', () => {
       fireKey('6');
       fireKey('7');
       fireKey('8');
-      fireKey('n');
       fireKey('j');
       fireKey('k');
       fireKey('Enter');
@@ -352,7 +321,6 @@ describe('useKeyboardShortcuts', () => {
       expect(handlers.onSwitchView).toHaveBeenNthCalledWith(6, 'architecture');
       expect(handlers.onSwitchView).toHaveBeenNthCalledWith(7, 'analytics');
       expect(handlers.onSwitchView).toHaveBeenNthCalledWith(8, 'settings');
-      expect(handlers.onOpenDispatch).toHaveBeenCalledTimes(1);
       expect(handlers.onSelectNext).toHaveBeenCalledTimes(1);
       expect(handlers.onSelectPrev).toHaveBeenCalledTimes(1);
       expect(handlers.onConfirmSelection).toHaveBeenCalledTimes(1);

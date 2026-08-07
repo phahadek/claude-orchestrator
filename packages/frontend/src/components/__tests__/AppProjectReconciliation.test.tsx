@@ -105,7 +105,6 @@ vi.mock('../HistoryGrid', () => ({
 
 vi.mock('../Notifications', () => ({ Notifications: () => null }));
 vi.mock('../ShortcutHint', () => ({ ShortcutHint: () => null }));
-vi.mock('../DispatchModal', () => ({ DispatchModal: () => null }));
 vi.mock('../TaskList', () => ({
   TaskList: () => <div data-testid="task-list" />,
 }));

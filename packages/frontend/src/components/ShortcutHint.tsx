@@ -6,13 +6,13 @@ import styles from './ShortcutHint.module.css';
 type Binding = { key: string; description: string };
 
 // The fixed bindings that hold across every surface, regardless of which
-// panel (if any) is active — view-switch digits, new-session, and dismiss.
-// J/K/Enter are deliberately excluded: those are context-sensitive and come
-// from the active panel's own declared hints instead. '/' (search focus) is
-// excluded too — it only applies to views that actually mount a search
-// input, so it's appended conditionally below rather than unconditionally
-// advertised everywhere.
-const GLOBAL_KEYS = new Set(['Esc', 'N', '1', '2', '3', '4', '5']);
+// panel (if any) is active — view-switch digits and dismiss. J/K/Enter are
+// deliberately excluded: those are context-sensitive and come from the
+// active panel's own declared hints instead. '/' (search focus) is excluded
+// too — it only applies to views that actually mount a search input, so
+// it's appended conditionally below rather than unconditionally advertised
+// everywhere.
+const GLOBAL_KEYS = new Set(['Esc', '1', '2', '3', '4', '5']);
 
 const FOCUS_SEARCH_SHORTCUT = KEYBOARD_SHORTCUTS.find((s) => s.key === '/');
 

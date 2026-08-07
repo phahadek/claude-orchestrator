@@ -34,10 +34,6 @@ vi.mock('../ShortcutHint', () => ({
   ShortcutHint: () => null,
 }));
 
-vi.mock('../DispatchModal', () => ({
-  DispatchModal: () => null,
-}));
-
 vi.mock('../TaskList', () => ({
   TaskList: () => <div data-testid="task-list" />,
 }));

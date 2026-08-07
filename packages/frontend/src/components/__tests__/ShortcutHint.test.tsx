@@ -50,7 +50,6 @@ describe('ShortcutHint', () => {
     }
 
     // Fixed global bindings.
-    expect(screen.getByText('Open Dispatch modal')).toBeDefined();
     expect(screen.getByText('Close modal / panel')).toBeDefined();
     expect(screen.getByText('Focus search')).toBeDefined();
 
@@ -66,7 +65,7 @@ describe('ShortcutHint', () => {
       screen.getByRole('button', { name: /keyboard shortcuts/i }),
     );
     expect(screen.queryByText('Approve highlighted card')).toBeNull();
-    expect(screen.getByText('Open Dispatch modal')).toBeDefined();
+    expect(screen.getByText('Close modal / panel')).toBeDefined();
   });
 
   it('omits the Focus Search hint when the active view mounts no search input (e.g. Milestones)', () => {
@@ -78,7 +77,7 @@ describe('ShortcutHint', () => {
     );
     expect(screen.queryByText('Focus search')).toBeNull();
     // Everything else is still advertised.
-    expect(screen.getByText('Open Dispatch modal')).toBeDefined();
+    expect(screen.getByText('Close modal / panel')).toBeDefined();
   });
 
   it('opens on "?" and closes on Escape at a desktop viewport width', () => {
