@@ -1526,9 +1526,8 @@ describe('cleanupWorktree — stage credential revocation ordering', () => {
     vi.clearAllMocks();
     sm = new SessionManager();
     vi.mocked(getProjectById).mockReturnValue(makeProject());
-    const { _resetStageCredentialsForTesting } = await import(
-      '../../auth/SessionStageAuth'
-    );
+    const { _resetStageCredentialsForTesting } =
+      await import('../../auth/SessionStageAuth');
     _resetStageCredentialsForTesting();
   });
 
@@ -1545,24 +1544,24 @@ describe('cleanupWorktree — stage credential revocation ordering', () => {
     );
 
     expect(
-      vi.mocked(recordEvent).mock.calls.some(
-        ([evt]) => evt.event_type === 'mcp_session_credential_revoked',
-      ),
+      vi
+        .mocked(recordEvent)
+        .mock.calls.some(
+          ([evt]) => evt.event_type === 'mcp_session_credential_revoked',
+        ),
     ).toBe(false);
 
     // The credential is still the one the CLI's mcp config carries.
-    const { mintStageCredential: remint } = await import(
-      '../../auth/SessionStageAuth'
-    );
+    const { mintStageCredential: remint } =
+      await import('../../auth/SessionStageAuth');
     expect(remint(PLANNING_SESSION_ID)).toBe(token);
   });
 
   it.each(['done', 'error', 'killed'])(
     'a session reaching genuinely terminal status %s still has its credential revoked',
     async (status) => {
-      const { mintStageCredential } = await import(
-        '../../auth/SessionStageAuth'
-      );
+      const { mintStageCredential } =
+        await import('../../auth/SessionStageAuth');
       mintStageCredential(PLANNING_SESSION_ID);
       vi.mocked(getSession).mockReturnValue(makePlanningSessionRow(status));
 
@@ -1574,11 +1573,13 @@ describe('cleanupWorktree — stage credential revocation ordering', () => {
       );
 
       expect(
-        vi.mocked(recordEvent).mock.calls.some(
-          ([evt]) =>
-            evt.event_type === 'mcp_session_credential_revoked' &&
-            (evt.payload as any)?.sessionId === PLANNING_SESSION_ID,
-        ),
+        vi
+          .mocked(recordEvent)
+          .mock.calls.some(
+            ([evt]) =>
+              evt.event_type === 'mcp_session_credential_revoked' &&
+              (evt.payload as any)?.sessionId === PLANNING_SESSION_ID,
+          ),
       ).toBe(true);
     },
   );
@@ -1599,9 +1600,11 @@ describe('cleanupWorktree — stage credential revocation ordering', () => {
     // Guard fired first — the in-memory entry must survive the non-terminal exit.
     expect((sm as any).sessions.get(PLANNING_SESSION_ID)).toBe(fakeSession);
     expect(
-      vi.mocked(recordEvent).mock.calls.some(
-        ([evt]) => evt.event_type === 'mcp_session_credential_revoked',
-      ),
+      vi
+        .mocked(recordEvent)
+        .mock.calls.some(
+          ([evt]) => evt.event_type === 'mcp_session_credential_revoked',
+        ),
     ).toBe(false);
   });
 

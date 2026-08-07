@@ -766,10 +766,7 @@ describe('resume after a non-terminal (idle) subprocess exit — credential surv
     );
 
     // The operator approves the request while the session sits idle.
-    addGrantedCapability(
-      sessionId,
-      'mcp__orchestrator__gateSeed_getState',
-    );
+    addGrantedCapability(sessionId, 'mcp__orchestrator__gateSeed_getState');
 
     // Resume: same never-revoked token, now with the grant recorded.
     const transport = new StreamableHTTPClientTransport(
