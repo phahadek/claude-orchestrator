@@ -40,7 +40,9 @@
  *   it opens is forced human_merge_only (see AgentSession.handlePRDetected)
  *   since its injected procedure — not buildOrchestratorClaudeMd's
  *   code-session lifecycle — governs its PR timing, so isCodeSession stays
- *   false for it.
+ *   false for it. Whether it gets a worktree + branch depends on its task's
+ *   declared Target surface: a repo-file surface gets one (same as ops), a
+ *   Notion-page surface (or an undeclared one) does not — see usesWorktree.
  * - depth_review: a second, separate review pass dispatched only after a
  *   PR's conformance verdict (session type 'review') reaches approved —
  *   judges security/concurrency/reliability/data-integrity/size-
@@ -50,6 +52,8 @@
  *   accounting. Gets its own restricted tool allowlist (no git-push, no
  *   GitHub write-MCP) — see getSessionAllowedTools.
  */
+
+import { isRepoFileTargetSurface } from '../docs/targetSurface';
 
 /**
  * The closed set of session types. Anywhere a new type is added, every
@@ -91,9 +95,21 @@ export function isCodeSession(sessionType: string): boolean {
  * isPlanningSession so 'ops' can gain a worktree while staying in the
  * planning concurrency pool and keeping its stage-only base tool profile —
  * see the 'ops' entry in the session-types doc comment above.
+ *
+ * `docsTargetSurface` is the dispatched Docs task's declared Target surface
+ * (see docs/targetSurface.ts) — a repo-file surface gets a worktree, same as
+ * 'ops'; a Notion-page surface, or an undeclared one, does not. Omitted (or
+ * called with a non-'docs' sessionType) has no effect on any other type.
  */
-export function usesWorktree(sessionType: string): boolean {
-  return sessionType === 'standard' || sessionType === 'ops';
+export function usesWorktree(
+  sessionType: string,
+  docsTargetSurface?: string,
+): boolean {
+  if (sessionType === 'standard' || sessionType === 'ops') return true;
+  if (sessionType === 'docs') {
+    return isRepoFileTargetSurface(docsTargetSurface ?? '');
+  }
+  return false;
 }
 
 /** True for session types that can open a pull request against the base branch. */

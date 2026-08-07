@@ -38,6 +38,24 @@ describe('sessionPredicates', () => {
     expect(usesWorktree('docs')).toBe(false);
   });
 
+  it('usesWorktree for docs is Target-surface-aware: repo-file gets a worktree, Notion-page/undeclared does not', () => {
+    expect(usesWorktree('docs', 'docs/api/webhooks.md')).toBe(true);
+    expect(usesWorktree('docs', 'packages/backend/README.md')).toBe(true);
+    expect(
+      usesWorktree('docs', '20a1b2c3-d4e5-4f60-8a1b-2c3d4e5f6071'),
+    ).toBe(false);
+    expect(
+      usesWorktree(
+        'docs',
+        'https://www.notion.so/My-Page-20a1b2c3d4e54f608a1b2c3d4e5f6071',
+      ),
+    ).toBe(false);
+    expect(usesWorktree('docs', '')).toBe(false);
+    expect(usesWorktree('docs')).toBe(false);
+    // Non-docs types are unaffected by a docsTargetSurface argument.
+    expect(usesWorktree('groom', 'docs/api/webhooks.md')).toBe(false);
+  });
+
   it('countsAgainstConcurrency is true for everything but review', () => {
     expect(countsAgainstConcurrency('standard')).toBe(true);
     expect(countsAgainstConcurrency('review')).toBe(false);

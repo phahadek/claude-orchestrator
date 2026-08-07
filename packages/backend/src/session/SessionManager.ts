@@ -438,6 +438,15 @@ export interface StartOptions {
    * sessions only; every other sessionType ignores it.
    */
   declaredWrites?: DeclaredWriteEntry[];
+  /**
+   * A dispatched Docs session's declared Target surface (see
+   * docs/targetSurface.ts), resolved by OpsSessionLauncher.buildInjectedProcedure
+   * before calling start(). Feeds usesWorktree's Target-surface-aware branch
+   * so a repo-file Target surface gets a real worktree + branch, same as an
+   * ops session, instead of always running stage-only against the project
+   * checkout. Ignored for every sessionType other than 'docs'.
+   */
+  docsTargetSurface?: string;
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -1295,6 +1304,7 @@ export class SessionManager extends EventEmitter {
       sessionId: providedSessionId,
       taskKind,
       taskId: precomputedTaskId,
+      docsTargetSurface,
     } = options ?? {};
 
     if (countsAgainstConcurrency(sessionType) && taskKind === undefined) {
@@ -1430,7 +1440,9 @@ export class SessionManager extends EventEmitter {
       started_at: startedAt,
       ended_at: null,
       pr_url: null,
-      worktree_path: usesWorktree(sessionType) ? worktreePath : null,
+      worktree_path: usesWorktree(sessionType, docsTargetSurface)
+        ? worktreePath
+        : null,
       session_type: sessionType,
       task_name: taskName ?? null,
     });
@@ -1552,6 +1564,7 @@ export class SessionManager extends EventEmitter {
       injectedProcedureContent,
       model: launchModel,
       effort: launchEffort,
+      docsTargetSurface,
     } = options;
 
     const project = getProjectById(projectId)!;
@@ -1559,10 +1572,12 @@ export class SessionManager extends EventEmitter {
     const isPlanning = isPlanningSession(sessionType);
     // Worktree-eligible session types (standard, ops) get a real per-session
     // worktree + feature branch + bootstrap. The remaining planning types
-    // (groom/design/split/docs) are stage-only/read-only: cwd is the
-    // project's own checkout (a read-only view in practice, since the base
-    // tool profile has no write/mutate tools).
-    const worktreeEligible = usesWorktree(sessionType);
+    // (groom/design/split) are stage-only/read-only: cwd is the project's
+    // own checkout (a read-only view in practice, since the base tool
+    // profile has no write/mutate tools). docs is Target-surface-aware: a
+    // repo-file Target surface (docsTargetSurface) is worktree-eligible like
+    // ops, a Notion-page (or undeclared) one is stage-only like groom/design.
+    const worktreeEligible = usesWorktree(sessionType, docsTargetSurface);
     const worktreePath = worktreeEligible
       ? path.join(projectDir, '.claude', 'worktrees', sessionId)
       : projectDir;

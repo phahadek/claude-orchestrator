@@ -72,6 +72,7 @@ import {
   PLANNING_INTENT_KINDS,
   type PlanningWorkflow,
 } from './planningIntentKinds';
+import { isRepoFileTargetSurface } from '../docs/targetSurface';
 
 export type { PlanningWorkflow };
 
@@ -760,9 +761,12 @@ function renderSkeleton(
   milestoneId: string,
   projectId: string,
   checkoutDir: string | null,
+  docsTargetSurface?: string,
 ): string {
   const label = SKILL_LABELS[workflow];
   const kinds = PLANNING_INTENT_KINDS[workflow];
+  const docsRepoFileTarget =
+    workflow === 'docs' && isRepoFileTargetSurface(docsTargetSurface ?? '');
   const lifecycle =
     workflow === 'ops'
       ? `This is an injected, non-interactive ${label} session for a single target task ` +
@@ -782,12 +786,23 @@ function renderSkeleton(
         '— never at a "proposal staged" point when there is more of the change left to ' +
         'drive; the only operator/device-auth-only step is the final ' +
         '`applied-pending-confirm` → `resolved` confirmation, not anything before it.'
-      : `This is an injected, non-interactive ${label} session for a single target task ` +
-        `(${taskName} — ${taskUrl}). There is no worktree and no feature branch — this ` +
-        'session runs read-only/stage-only against the project checkout. When the ' +
-        'procedure below reaches a natural stopping point (every open item presented ' +
-        'and either staged or explicitly deferred), end the turn instead of waiting — ' +
-        'the session parks into idle rather than scraping for a PR.';
+      : docsRepoFileTarget
+        ? `This is an injected, non-interactive ${label} session for a single target task ` +
+          `(${taskName} — ${taskUrl}). The declared Target surface is a repo file, so this ` +
+          'session has a real per-session worktree and feature branch, the same as a Code ' +
+          'session — not the stage-only/no-worktree profile groom/design/split run with. ' +
+          'Author into the Target surface directly with the Write/Edit tools, then open a ' +
+          'draft PR against the base branch through the GitHub MCP tools (see the ' +
+          '"Docs Authoring Slice" section below for the exact path) — never stage a ' +
+          '`notion.pageEdit` intent for a repo-file Target surface, that path is for a ' +
+          'Notion-page Target surface only. Once the PR is open, wait for review the same ' +
+          'way a code session does instead of ending the turn.'
+        : `This is an injected, non-interactive ${label} session for a single target task ` +
+          `(${taskName} — ${taskUrl}). There is no worktree and no feature branch — this ` +
+          'session runs read-only/stage-only against the project checkout. When the ' +
+          'procedure below reaches a natural stopping point (every open item presented ' +
+          'and either staged or explicitly deferred), end the turn instead of waiting — ' +
+          'the session parks into idle rather than scraping for a PR.';
   return [
     '## Session Lifecycle',
     '',
@@ -1358,6 +1373,16 @@ function renderSplitDigest(data: SplitDigestSlice): string {
  * hard rule is to stop and ask rather than guess when either is missing.
  */
 function renderDocsDigest(data: DocsDigestSlice): string {
+  const outputPath = !data.targetSurface
+    ? '(undeclared — cannot resolve an output path; stop and ask)'
+    : isRepoFileTargetSurface(data.targetSurface)
+      ? 'repo-file Target surface — this session has a real worktree and branch ' +
+        '(see "Session Lifecycle" above); author with the Write/Edit tools and open a ' +
+        'draft PR against the base branch through the GitHub MCP tools. Never stage a ' +
+        '`notion.pageEdit` intent for this target.'
+      : 'Notion-page Target surface — stage one or more `notion.pageEdit` intents ' +
+        `(\`${orchestratorMcpToolName('notion.pageEdit')}\`) for an operator to apply. ` +
+        'Never open a PR for this target.';
   const lines: string[] = [
     '## Docs Authoring Slice',
     '',
@@ -1365,6 +1390,7 @@ function renderDocsDigest(data: DocsDigestSlice): string {
     `- Task id: \`${data.task.id}\``,
     `- Target surface: ${data.targetSurface || '(not declared — stop and ask; do not guess a target surface)'}`,
     `- Source domains: ${data.sourceDomains.length ? data.sourceDomains.join(', ') : '(not declared — stop and ask; do not widen by inference)'}`,
+    `- Output path: ${outputPath}`,
     '',
     '### Task body',
     '',
@@ -1428,6 +1454,7 @@ export function assemblePlanningProcedure(
       milestoneId,
       projectId,
       checkoutDir,
+      digest.workflow === 'docs' ? digest.data.targetSurface : undefined,
     ),
     renderProcedureCore(digest.workflow),
     renderDigest(digest),

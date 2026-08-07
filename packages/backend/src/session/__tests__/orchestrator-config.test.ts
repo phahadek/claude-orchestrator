@@ -327,6 +327,11 @@ describe('getSessionAllowedTools', () => {
       }
     });
 
+    it('includes the session.requestCapability tool — the in-band escalation path for a docs session, derived automatically from PLANNING_INTENT_KINDS.docs', () => {
+      const tools = getSessionAllowedTools('docs', { allowed_tools: [] });
+      expect(tools).toContain('mcp__orchestrator__session_requestCapability');
+    });
+
     it('merges an allowlisted WebFetch entry per declared source domain and never grants open WebSearch', () => {
       const tools = getSessionAllowedTools(
         'docs',

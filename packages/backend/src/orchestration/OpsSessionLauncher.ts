@@ -316,7 +316,9 @@ export class OpsSessionLauncher {
     opsContext: OpsLoadResult | undefined,
     task: PlanningTaskEntry,
     taskUrl: string,
-  ): Promise<{ content: string; title?: string } | undefined> {
+  ): Promise<
+    { content: string; title?: string; docsTargetSurface?: string } | undefined
+  > {
     try {
       let digest: PlanningDigest;
       if (sessionType === 'groom') {
@@ -383,7 +385,13 @@ export class OpsSessionLauncher {
         milestoneId,
         projectId,
       });
-      return { content, title: resolvedTitle };
+      return {
+        content,
+        title: resolvedTitle,
+        ...(digest.workflow === 'docs' && {
+          docsTargetSurface: digest.data.targetSurface,
+        }),
+      };
     } catch (err) {
       if (err instanceof GroomWorklistTaskNotFoundError) throw err;
       if (err instanceof GroomTaskSourceUnsupportedError) throw err;
@@ -407,7 +415,9 @@ export class OpsSessionLauncher {
     const taskUrl =
       task.url ||
       `https://www.notion.so/${bareTaskId(task.id).replace(/-/g, '')}`;
-    let injectedProcedure: { content: string; title?: string } | undefined;
+    let injectedProcedure:
+      | { content: string; title?: string; docsTargetSurface?: string }
+      | undefined;
     if (isPlanningSession(sessionType)) {
       try {
         injectedProcedure = await this.buildInjectedProcedure(
@@ -458,6 +468,9 @@ export class OpsSessionLauncher {
             declaredWrites: (task as OpsTaskEntry).declaredWrites,
           }),
           ...(injectedProcedureContent && { injectedProcedureContent }),
+          ...(injectedProcedure?.docsTargetSurface !== undefined && {
+            docsTargetSurface: injectedProcedure.docsTargetSurface,
+          }),
           ...(model && { model }),
           ...(effort && { effort }),
         },
