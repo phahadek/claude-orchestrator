@@ -34,7 +34,10 @@ export interface ShortcutHintProps {
   canFocusSearch?: boolean;
 }
 
-export function ShortcutHint({ activePanel, canFocusSearch }: ShortcutHintProps) {
+export function ShortcutHint({
+  activePanel,
+  canFocusSearch,
+}: ShortcutHintProps) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -67,7 +70,12 @@ export function ShortcutHint({ activePanel, canFocusSearch }: ShortcutHintProps)
     })) ?? []),
     ...GLOBAL_SHORTCUTS,
     ...(canFocusSearch && FOCUS_SEARCH_SHORTCUT
-      ? [{ key: FOCUS_SEARCH_SHORTCUT.key, description: FOCUS_SEARCH_SHORTCUT.desc }]
+      ? [
+          {
+            key: FOCUS_SEARCH_SHORTCUT.key,
+            description: FOCUS_SEARCH_SHORTCUT.desc,
+          },
+        ]
       : []),
   ];
 

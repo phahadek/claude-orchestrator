@@ -70,7 +70,9 @@ describe('ShortcutHint', () => {
   });
 
   it('omits the Focus Search hint when the active view mounts no search input (e.g. Milestones)', () => {
-    render(<ShortcutHint activePanel={panelDeclaration} canFocusSearch={false} />);
+    render(
+      <ShortcutHint activePanel={panelDeclaration} canFocusSearch={false} />,
+    );
     fireEvent.click(
       screen.getByRole('button', { name: /keyboard shortcuts/i }),
     );
