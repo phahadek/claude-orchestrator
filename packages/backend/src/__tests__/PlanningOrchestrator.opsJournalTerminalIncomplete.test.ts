@@ -27,7 +27,11 @@ import {
   upsertTaskCache,
 } from '../db/queries';
 import { upsertOpsJournalEntry } from '../db/queries';
-import type { StagedIntentRow, OpsJournalRow, OpsJournalState } from '../db/types';
+import type {
+  StagedIntentRow,
+  OpsJournalRow,
+  OpsJournalState,
+} from '../db/types';
 import { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
 import type { SessionManager } from '../session/SessionManager';
 
