@@ -30,8 +30,13 @@ The permission model, real excerpts from `packages/backend/src/config.ts` and `A
 ```ts
 // A base allowlist, extended per project by .claude-orchestrator.yml:
 export const ALLOWED_TOOLS = [
-  'Bash(git:*)', 'Bash(npm:*)', 'Bash(npx:*)', 'Bash(node:*)', 'Bash(tsc:*)',
-  'Bash(find:*)', 'Bash(grep:*)', /* … */
+  'Bash(git:*)',
+  'Bash(npm:*)',
+  'Bash(npx:*)',
+  'Bash(node:*)',
+  'Bash(tsc:*)',
+  'Bash(find:*)',
+  'Bash(grep:*)' /* … */,
 ];
 
 // canUseTool only fires for calls NOT already covered by allowedTools — deny them.
@@ -73,15 +78,15 @@ sequenceDiagram
     end
 ```
 
-| Layer              | Tech                                          | Path                                                            |
-| ------------------- | --------------------------------------------- | ----------------------------------------------------------------- |
-| Frontend            | React 19 + Vite (TypeScript)                  | `packages/frontend/`                                               |
-| Backend             | Node.js + Express (TypeScript)                | `packages/backend/`                                                |
-| Transport           | WebSocket (`ws`)                              | real-time session events                                           |
-| Database            | SQLite (`better-sqlite3`)                     | session metadata, PR tracking, staged intents, gate/seed items     |
-| Task source         | Notion REST API, GitHub Issues, Jira, or local YAML | configured per project                                       |
-| Session execution   | `claude` CLI subprocess, Agent SDK, or Docker  | one of three `ISessionRunner` implementations per session          |
-| Orchestrator MCP    | in-process MCP server                          | `packages/backend/src/mcp/` — the tool surface (`task.create`, `gate.verify`, `journal.setState`, …) dispatched sessions use to stage writes |
+| Layer             | Tech                                                | Path                                                                                                                                         |
+| ----------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend          | React 19 + Vite (TypeScript)                        | `packages/frontend/`                                                                                                                         |
+| Backend           | Node.js + Express (TypeScript)                      | `packages/backend/`                                                                                                                          |
+| Transport         | WebSocket (`ws`)                                    | real-time session events                                                                                                                     |
+| Database          | SQLite (`better-sqlite3`)                           | session metadata, PR tracking, staged intents, gate/seed items                                                                               |
+| Task source       | Notion REST API, GitHub Issues, Jira, or local YAML | configured per project                                                                                                                       |
+| Session execution | `claude` CLI subprocess, Agent SDK, or Docker       | one of three `ISessionRunner` implementations per session                                                                                    |
+| Orchestrator MCP  | in-process MCP server                               | `packages/backend/src/mcp/` — the tool surface (`task.create`, `gate.verify`, `journal.setState`, …) dispatched sessions use to stage writes |
 
 ## Planning, dispatch & the decision surface
 
@@ -129,7 +134,7 @@ Projects and milestones are managed entirely from the dashboard UI — there is 
 
 ![Token & cost analytics](docs/screenshots/analytics.png)
 
-*(Screenshots above predate the gate, architecture, and milestone views — kept for now rather than fabricated.)*
+_(Screenshots above predate the gate, architecture, and milestone views — kept for now rather than fabricated.)_
 
 The Analytics tab tracks per-session token usage and per-model cost across the project's history.
 

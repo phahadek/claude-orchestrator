@@ -603,8 +603,12 @@ export class AutoLauncher {
       };
     }
     const thresholdAdmission = isUsageThresholdAdmitted(
-      parseThresholdPercent(runtimeSettings.hourly_usage_pause_threshold_percent),
-      parseThresholdPercent(runtimeSettings.weekly_usage_pause_threshold_percent),
+      parseThresholdPercent(
+        runtimeSettings.hourly_usage_pause_threshold_percent,
+      ),
+      parseThresholdPercent(
+        runtimeSettings.weekly_usage_pause_threshold_percent,
+      ),
     );
     if (!thresholdAdmission.allowed) {
       logger.info(

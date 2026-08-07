@@ -234,15 +234,15 @@ Required addition to task board schema: a `Depends On` Rich Text property storin
 
 A local SQLite database (file-based, zero setup) stores everything Notion doesn't hold:
 
-| Table               | Contents                                                                                                    |
-| ------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `sessions`          | session_id, notion_task_id, notion_task_url, project_context_url, status, started_at, ended_at, pr_url      |
-| `session_events`    | session_id, event_type, payload, timestamp — raw event log from Agent SDK                                   |
-| `permission_denials`| session_id, tool_name, tool_use_id, tool_input, timestamp — one row per denied tool call                    |
-| `pull_requests`     | PR metadata, review state, paired review session, merge state                                               |
-| `session_audits`    | post-session compliance check results                                                                       |
-| `settings`          | runtime settings key/value store                                                                            |
-| `task_cache`        | notion_task_id, fetched_at, raw_json — short-lived cache (TTL ~5 min) to avoid redundant API calls          |
+| Table                | Contents                                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------------------------ |
+| `sessions`           | session_id, notion_task_id, notion_task_url, project_context_url, status, started_at, ended_at, pr_url |
+| `session_events`     | session_id, event_type, payload, timestamp — raw event log from Agent SDK                              |
+| `permission_denials` | session_id, tool_name, tool_use_id, tool_input, timestamp — one row per denied tool call               |
+| `pull_requests`      | PR metadata, review state, paired review session, merge state                                          |
+| `session_audits`     | post-session compliance check results                                                                  |
+| `settings`           | runtime settings key/value store                                                                       |
+| `task_cache`         | notion_task_id, fetched_at, raw_json — short-lived cache (TTL ~5 min) to avoid redundant API calls     |
 
 (See [Technical Architecture](./architecture.md) for full column definitions.)
 

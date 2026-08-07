@@ -16,7 +16,9 @@ const zodBoolCoerce = z.union([
 const usagePauseThresholdPercent = z
   .string()
   .refine(
-    (v) => v === '' || (Number.isFinite(Number(v)) && Number(v) >= 1 && Number(v) <= 100),
+    (v) =>
+      v === '' ||
+      (Number.isFinite(Number(v)) && Number(v) >= 1 && Number(v) <= 100),
     { message: 'Must be empty (disabled) or a number between 1 and 100' },
   );
 

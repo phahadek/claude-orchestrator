@@ -248,8 +248,16 @@ describe('checkUsageThresholdAdmission', () => {
   it('allows admission when both thresholds are disabled (null)', () => {
     const result = checkUsageThresholdAdmission(
       usage({
-        fiveHour: { percent: 99, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
-        weekly: { percent: 99, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+        fiveHour: {
+          percent: 99,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
+        weekly: {
+          percent: 99,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
       }),
       null,
       null,
@@ -260,8 +268,16 @@ describe('checkUsageThresholdAdmission', () => {
   it('soft-pauses when the hourly (five_hour) percent crosses its configured threshold, independent of the weekly threshold', () => {
     const result = checkUsageThresholdAdmission(
       usage({
-        fiveHour: { percent: 85, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
-        weekly: { percent: 5, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+        fiveHour: {
+          percent: 85,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
+        weekly: {
+          percent: 5,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
       }),
       80,
       null,
@@ -276,8 +292,16 @@ describe('checkUsageThresholdAdmission', () => {
   it('soft-pauses when the weekly (seven_day) percent crosses its configured threshold, independent of the hourly threshold', () => {
     const result = checkUsageThresholdAdmission(
       usage({
-        fiveHour: { percent: 5, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
-        weekly: { percent: 90, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+        fiveHour: {
+          percent: 5,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
+        weekly: {
+          percent: 90,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
       }),
       null,
       85,
@@ -292,8 +316,16 @@ describe('checkUsageThresholdAdmission', () => {
   it('allows admission when both windows are under their configured thresholds', () => {
     const result = checkUsageThresholdAdmission(
       usage({
-        fiveHour: { percent: 40, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
-        weekly: { percent: 10, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+        fiveHour: {
+          percent: 40,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
+        weekly: {
+          percent: 10,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
       }),
       80,
       85,
