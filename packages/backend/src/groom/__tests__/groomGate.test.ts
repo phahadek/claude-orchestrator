@@ -61,9 +61,11 @@ import { db } from '../../db/db.js';
 import {
   checkGroomingPromotionGate,
   checkAccretionContributions,
+  looksLikeRepoPath,
   type GroomingGateEntry,
   type AccretionCheckOptions,
 } from '../groomGate';
+import { filesPathsEntryExistsInRepo } from '../groomLoad';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
 import { BackendTaskWriteCommands } from '../../tasks/TaskWriteCommands';
@@ -849,6 +851,41 @@ describe('checkGroomingPromotionGate — Files/paths non-repo-path declaration',
       'notion:nonrepo-non-code',
     );
     expect(result.allowed).toBe(true);
+  });
+});
+
+describe('looksLikeRepoPath', () => {
+  it('accepts a backticked, untracked, well-formed new-file entry', () => {
+    expect(
+      looksLikeRepoPath('`src/a/b/new_module.py` (new)'),
+    ).toBe(true);
+  });
+
+  it('accepts the same entry unbackticked', () => {
+    expect(looksLikeRepoPath('src/a/b/new_module.py (new)')).toBe(true);
+  });
+
+  it('rejects a directory entry', () => {
+    expect(looksLikeRepoPath('src/a/b/')).toBe(false);
+  });
+
+  it('rejects an external-prefixed entry', () => {
+    expect(
+      looksLikeRepoPath('Notion: Design the per-flow arm model'),
+    ).toBe(false);
+  });
+
+  it('derives the same path token as filesPathsEntryExistsInRepo across backticked, bold, and trailing-punctuation variants', () => {
+    const trackedFiles = new Set(['src/a/b/existing.py']);
+    const variants = [
+      '`src/a/b/existing.py` (update)',
+      '**src/a/b/existing.py** (update)',
+      'src/a/b/existing.py, updated for the new dispatch path.',
+    ];
+    for (const raw of variants) {
+      expect(looksLikeRepoPath(raw)).toBe(true);
+      expect(filesPathsEntryExistsInRepo(raw, trackedFiles)).toBe(true);
+    }
   });
 });
 

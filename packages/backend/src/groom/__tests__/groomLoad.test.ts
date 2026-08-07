@@ -19,6 +19,7 @@ import {
   isSizeCheckSeedOverThreshold,
   extractPathToken,
   filesPathsEntryExistsInRepo,
+  parseFilesPathsRawItems,
 } from '../groomLoad';
 import { toExternalId } from '../../tasks/taskId';
 import { bindingConstraintIdsForRegions } from '../constraintCatalog';
@@ -799,5 +800,28 @@ describe('filesPathsEntryExistsInRepo — repo-root-level files', () => {
         trackedFiles,
       ),
     ).toBe(false);
+  });
+});
+
+describe('parseFilesPathsRawItems — (new) marker', () => {
+  it('marks a bare (new) entry as new', () => {
+    const [item] = parseFilesPathsRawItems(
+      '- src/a/b/new_module.py (new)',
+    );
+    expect(item.isNew).toBe(true);
+  });
+
+  it('marks a (new — reason) entry (em-dash) as new', () => {
+    const [item] = parseFilesPathsRawItems(
+      '- src/a/b/new_module.py (new — new dispatch module)',
+    );
+    expect(item.isNew).toBe(true);
+  });
+
+  it('marks a (new - reason) entry (hyphen) as new', () => {
+    const [item] = parseFilesPathsRawItems(
+      '- src/a/b/new_module.py (new - new dispatch module)',
+    );
+    expect(item.isNew).toBe(true);
   });
 });

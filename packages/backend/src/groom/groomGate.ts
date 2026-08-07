@@ -52,6 +52,7 @@ import {
 } from '../planning/triage';
 import { ProjectService } from '../projects/ProjectService';
 import type { SeedItemClassification } from '../db/types';
+import { extractPathToken } from './groomLoad';
 
 const SIZE_CHECK_DECISIONS = new Set([
   'no_split',
@@ -640,13 +641,18 @@ const EXTERNAL_PREFIX_RE = /^[A-Za-z][A-Za-z0-9 ]*:\s/;
  * parse as true, while a line naming work in another system
  * (`Notion: Design the per-flow arm model...`) must parse as false. Requires
  * a file extension on the leading token and rejects an explicit
- * external-source prefix.
+ * external-source prefix. Resolves its candidate through groomLoad.ts's
+ * `extractPathToken` (backtick-aware, same `cleanPathToken` normalisation)
+ * rather than a naive split, so this and `filesPathsEntryExistsInRepo` never
+ * disagree on what a given entry's path token is — a conventionally
+ * backticked new-file entry (`` `src/foo/bar.py` (new) ``) must parse the
+ * same whether or not it is backticked.
  */
-function looksLikeRepoPath(raw: string): boolean {
+export function looksLikeRepoPath(raw: string): boolean {
   const trimmed = raw.trim();
   if (EXTERNAL_PREFIX_RE.test(trimmed)) return false;
-  const candidate = trimmed.split(/[\s(]/)[0] ?? '';
-  return /\.[A-Za-z0-9]+$/.test(candidate);
+  const candidate = extractPathToken(trimmed);
+  return !!candidate && /\.[A-Za-z0-9]+$/.test(candidate);
 }
 
 /**
