@@ -48,6 +48,7 @@ vi.mock('../db/queries', () =>
     upsertPullRequest: vi.fn(),
     insertSessionAudit: vi.fn(),
     incrementTokens: vi.fn(),
+    incrementCacheTokens: vi.fn(),
     incrementCompactionCount: vi.fn(),
     setContextOccupancy: vi.fn(),
     setSessionModel: vi.fn(),
@@ -89,7 +90,11 @@ vi.mock('../tasks/TaskBackend', () => ({
 
 import { AgentSession } from '../session/AgentSession';
 import type { ServerMessage } from '../ws/types';
-import { setContextOccupancy, incrementTokens } from '../db/queries';
+import {
+  setContextOccupancy,
+  incrementTokens,
+  incrementCacheTokens,
+} from '../db/queries';
 
 function makeSession(sessionId = 'occ-test') {
   return new AgentSession(
@@ -354,6 +359,69 @@ describe('context-window occupancy tracking', () => {
         (m as { status?: string }).status === 'killed',
     );
     expect(killedMsgs).toHaveLength(0);
+  });
+
+  it('assistant events no longer write cache tokens to the DB', async () => {
+    const session = makeSession('occ-no-assistant-cache-write');
+    await runWithEvents(session, [
+      {
+        type: 'assistant',
+        message: {
+          id: 'msg-a',
+          type: 'message',
+          usage: {
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_input_tokens: 100,
+            cache_creation_input_tokens: 50,
+          },
+          content: [{ type: 'text', text: 'a' }],
+        },
+      },
+    ]);
+
+    expect(vi.mocked(incrementCacheTokens)).not.toHaveBeenCalled();
+  });
+
+  it('result event persists cache tokens additively via incrementCacheTokens', async () => {
+    const session = makeSession('occ-result-cache-tokens');
+    await runWithEvents(session, [
+      {
+        type: 'result',
+        subtype: 'success',
+        usage: {
+          input_tokens: 100,
+          output_tokens: 20,
+          cache_read_input_tokens: 5000,
+          cache_creation_input_tokens: 200,
+        },
+      },
+    ]);
+
+    expect(vi.mocked(incrementCacheTokens)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(incrementCacheTokens)).toHaveBeenCalledWith(
+      'occ-result-cache-tokens',
+      5000,
+      200,
+    );
+  });
+
+  it('does not call incrementCacheTokens when a result event carries no cache usage', async () => {
+    const session = makeSession('occ-result-no-cache');
+    await runWithEvents(session, [
+      {
+        type: 'result',
+        subtype: 'success',
+        usage: {
+          input_tokens: 100,
+          output_tokens: 20,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+      },
+    ]);
+
+    expect(vi.mocked(incrementCacheTokens)).not.toHaveBeenCalled();
   });
 });
 
