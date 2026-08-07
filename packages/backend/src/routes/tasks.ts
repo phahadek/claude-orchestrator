@@ -362,6 +362,8 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     reviewIterationCount: row.pr_review_iteration ?? 0,
     reviewIterationCap: cap,
     pauseReason: pauseStruct,
+    flakeRecoveryAttempts: row.pr_flake_recovery_attempts ?? 0,
+    flakeRecoveryMaxRetries: typedGetSetting('flake_recovery_max_retries'),
   });
 
   const totalTokens = {

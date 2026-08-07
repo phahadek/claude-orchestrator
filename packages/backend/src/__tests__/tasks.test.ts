@@ -1175,6 +1175,53 @@ describe('TaskView recoveryDescriptor', () => {
   });
 });
 
+describe('TaskView displayStatus — auto_recovering threading', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'board:board-1',
+      raw_json: JSON.stringify([
+        { id: 'task-1', status: '👀 In Review', dependsOn: [] },
+      ]),
+      fetched_at: Date.now(),
+    } as never);
+  });
+
+  it("returns 'auto_recovering' for a ci_failing pause when pr_flake_recovery_attempts is below the max_retries setting", async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-1', '👀 In Review', {
+        pr_pause_reason: 'ci_failing',
+        pr_flake_recovery_attempts: 0,
+      }),
+    ]);
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    const task = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-1',
+    );
+    expect(task.displayStatus).toBe('auto_recovering');
+  });
+
+  it("returns 'needs_attention' for a ci_failing pause once pr_flake_recovery_attempts reaches the max_retries setting (default 2)", async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-1', '👀 In Review', {
+        pr_pause_reason: 'ci_failing',
+        pr_flake_recovery_attempts: 2,
+      }),
+    ]);
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    const task = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-1',
+    );
+    expect(task.displayStatus).toBe('needs_attention');
+  });
+});
+
 // ── POST /api/tasks/:taskId/recover ────────────────────────────────────────────
 
 function buildAppWithServices(

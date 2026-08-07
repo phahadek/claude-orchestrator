@@ -435,4 +435,24 @@ describe('getActiveTaskAggregates — review session token fields', () => {
     expect(rows[0].review_session_input_tokens).toBe(150);
     expect(rows[0].review_session_output_tokens).toBe(75);
   });
+
+  it('threads pull_requests.flake_recovery_attempts through as pr_flake_recovery_attempts', async () => {
+    const { db } = await import('../db/db.js');
+    upsertTaskCache(
+      PREFIXED_ID,
+      JSON.stringify({
+        id: PREFIXED_ID,
+        title: 'Flaky Task',
+        status: '🔍 In Review',
+      }),
+    );
+    upsertPullRequest(makePR({ pr_number: 77, task_id: PREFIXED_ID }));
+    db.prepare(
+      'UPDATE pull_requests SET flake_recovery_attempts = 1 WHERE pr_number = ?',
+    ).run(77);
+
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].pr_flake_recovery_attempts).toBe(1);
+  });
 });

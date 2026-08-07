@@ -8,6 +8,7 @@ export type DisplayStatus =
   | 'in_progress'
   | 'in_review'
   | 'needs_attention'
+  | 'auto_recovering'
   | 'ready_to_merge'
   | 'done'
   | 'backlog'

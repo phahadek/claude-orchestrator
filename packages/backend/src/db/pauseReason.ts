@@ -368,6 +368,26 @@ export function serializePauseReason(struct: PauseReasonStruct): string {
   return JSON.stringify(struct);
 }
 
+/**
+ * True while a 'needs_attention' + 'automatic' pause (ci_failing, analyze_failing
+ * today) is still within its bounded automatic-recovery budget — the caller should
+ * surface it as a lower-weight in-flight status instead of escalating to a human.
+ * Does not touch 'recoverable' + 'automatic' reasons (stuck_timeout, api_overloaded,
+ * rate_limit) — those keep surfacing as 'needs_attention' immediately, unchanged.
+ */
+export function isAutomaticRecoveryPending(
+  parsed: Pick<PauseReasonStruct, 'severity' | 'retry_strategy'> | null | undefined,
+  flakeRecoveryAttempts: number,
+  flakeRecoveryMaxRetries: number,
+): boolean {
+  if (!parsed) return false;
+  return (
+    parsed.severity === 'needs_attention' &&
+    parsed.retry_strategy === 'automatic' &&
+    flakeRecoveryAttempts < flakeRecoveryMaxRetries
+  );
+}
+
 export function parsePauseReason(raw: string | null): PauseReasonStruct | null {
   if (raw === null || raw === '') return null;
 

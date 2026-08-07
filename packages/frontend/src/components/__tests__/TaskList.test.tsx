@@ -2921,4 +2921,36 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('move-panel')).toBeNull();
     });
   });
+
+  describe('auto_recovering group', () => {
+    it('renders auto_recovering tasks in a group distinct from Needs Attention', () => {
+      const recovering = makeTask({
+        taskId: 'r1',
+        taskName: 'Recovering Task',
+        displayStatus: 'auto_recovering',
+      });
+      const needsAttention = makeTask({
+        taskId: 'n1',
+        taskName: 'Stuck Task',
+        displayStatus: 'needs_attention',
+      });
+
+      renderList([recovering, needsAttention]);
+
+      const recoveringGroup = screen.getByTestId(
+        'group-header-auto_recovering',
+      );
+      const needsAttentionGroup = screen.getByTestId(
+        'group-header-needs_attention',
+      );
+      expect(recoveringGroup).toBeDefined();
+      expect(needsAttentionGroup).toBeDefined();
+      expect(within(recoveringGroup).getByText(/Auto-Recovering/i)).toBeDefined();
+      expect(
+        within(needsAttentionGroup).getByText(/Needs Attention/i),
+      ).toBeDefined();
+      expect(screen.getByText('Recovering Task')).toBeDefined();
+      expect(screen.getByText('Stuck Task')).toBeDefined();
+    });
+  });
 });
