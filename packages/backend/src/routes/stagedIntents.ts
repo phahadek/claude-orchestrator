@@ -4696,7 +4696,7 @@ export function composePatchBodySectionPreview(
  * staging order.
  */
 /** A staged task.patchBodySection intent whose patch did not compose against the current preview body — named so the gate can report it rather than silently validating a stale body. */
-export interface UnappliedBodyPatch {
+interface UnappliedBodyPatch {
   intentId: string;
   reason: string;
 }
