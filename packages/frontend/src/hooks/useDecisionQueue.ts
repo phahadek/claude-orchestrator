@@ -9,6 +9,7 @@ import {
 } from '../api/stagedIntents';
 import { subscribeStagedIntentChange } from './stagedIntentBus';
 import { triageVerdict } from '../components/triageVerdict';
+import { defaultGroupRejectOutcome } from '../components/GroupCard';
 
 /** Which lens the queue fetches through — the only thing that differs between the session DecisionPanel and MilestoneDecisionInbox. */
 export type DecisionQueueScope =
@@ -212,10 +213,18 @@ export function useDecisionQueue(
     }
   }, [includedCleanGroupIds]);
 
+  const defaultDraftFor = useCallback(
+    (groupId: string): DecisionQueueGroupDraft => ({
+      outcome: defaultGroupRejectOutcome(groups.get(groupId) ?? []),
+      reason: '',
+    }),
+    [groups],
+  );
+
   const draftFor = useCallback(
     (groupId: string): DecisionQueueGroupDraft =>
-      rejectDrafts[groupId] ?? { outcome: null, reason: '' },
-    [rejectDrafts],
+      rejectDrafts[groupId] ?? defaultDraftFor(groupId),
+    [rejectDrafts, defaultDraftFor],
   );
 
   const setDraft = useCallback(
@@ -223,12 +232,12 @@ export function useDecisionQueue(
       setRejectDrafts((prev) => ({
         ...prev,
         [groupId]: {
-          ...(prev[groupId] ?? { outcome: null, reason: '' }),
+          ...(prev[groupId] ?? defaultDraftFor(groupId)),
           ...patch,
         },
       }));
     },
-    [],
+    [defaultDraftFor],
   );
 
   const clearGroupError = useCallback((groupId: string) => {
@@ -268,12 +277,13 @@ export function useDecisionQueue(
     async (groupId: string) => {
       const draft = draftFor(groupId);
       const reason = draft.reason.trim();
-      if (!reason || !draft.outcome) return;
+      if (!reason) return;
+      const outcome = draft.outcome ?? defaultGroupRejectOutcome(groups.get(groupId) ?? []);
       setGroupInFlight(groupId);
       clearGroupError(groupId);
       try {
         await stagedIntentsApi.rejectGroup(groupId, {
-          outcome: draft.outcome,
+          outcome,
           reason,
         });
         const removedIds = intentsRef.current
@@ -291,7 +301,7 @@ export function useDecisionQueue(
         setGroupInFlight(null);
       }
     },
-    [draftFor, clearGroupError],
+    [draftFor, clearGroupError, groups],
   );
 
   const handleRecoverGroup = useCallback(

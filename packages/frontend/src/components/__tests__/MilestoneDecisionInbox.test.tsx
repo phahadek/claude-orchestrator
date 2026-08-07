@@ -410,7 +410,10 @@ describe('MilestoneDecisionInbox', () => {
     // (actions aren't hidden for it) once expanded, while the committed
     // sibling stays read-only.
     fireEvent.click(screen.getByTestId('group-member-toggle-blocked-member'));
-    expect(screen.getByRole('button', { name: /decline/i })).toBeTruthy();
+    const memberPanel = screen.getByTestId('group-member-blocked-member');
+    expect(
+      within(memberPanel).getByRole('button', { name: /decline/i }),
+    ).toBeTruthy();
   });
 
   it('shows a failed group approve error only on that group card, not on other group cards', async () => {
@@ -665,7 +668,7 @@ describe('MilestoneDecisionInbox', () => {
     expect(approveButton.disabled).toBe(true);
   });
 
-  it('disables the group reject submit until an outcome is chosen, even with a reason typed', async () => {
+  it('enables the group reject submit once a reason is typed, defaulting to pushback with no outcome chosen', async () => {
     const groupId = 'group-reject';
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
       {
@@ -687,7 +690,7 @@ describe('MilestoneDecisionInbox', () => {
 
     const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
     fireEvent.change(
-      within(card).getByPlaceholderText(/pushback or decline/i),
+      within(card).getByPlaceholderText(/what should the session revise/i),
       {
         target: { value: 'No need' },
       },
@@ -695,9 +698,9 @@ describe('MilestoneDecisionInbox', () => {
 
     expect(
       within(card)
-        .getByRole('button', { name: /reject groom/i })
+        .getByRole('button', { name: /pushback groom/i })
         .hasAttribute('disabled'),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('issues an explicit decline (never inferred) when Decline is chosen on the group reject toggle', async () => {

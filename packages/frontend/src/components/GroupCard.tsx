@@ -84,6 +84,22 @@ function actionSuffixFor(groupKind: StagedIntent['groupKind']): string {
  * the per-intent groomProposal/decisionProposal precedence StagedIntentPanel
  * already applies to a standalone intent.
  */
+/** The count of blocked members backing the reject-outcome default and the recover/commit guard — visible needs_revision/pending_verification members, or the backend-derived total when it's larger (covers hidden, auto-rejected members the frontend never sees). */
+export function groupBlockedCount(intents: StagedIntent[]): number {
+  const visibleBlockedCount = intents.filter(
+    (intent) =>
+      intent.state === 'needs_revision' || intent.state === 'pending_verification',
+  ).length;
+  return Math.max(visibleBlockedCount, intents[0]?.groupBlockedMemberCount ?? 0);
+}
+
+/** Mirrors the single-intent path's default (StagedIntentPanel): decline when any member is blocked, since pushing back a group with a blocked member is refused server-side; pushback otherwise. */
+export function defaultGroupRejectOutcome(
+  intents: StagedIntent[],
+): StagedIntentRejectOutcome {
+  return groupBlockedCount(intents) > 0 ? 'decline' : 'pushback';
+}
+
 function headProposalOf(members: GroupCardMember[]) {
   for (const { intent } of members) {
     if (intent.groomProposal) return { groomProposal: intent.groomProposal };
@@ -141,8 +157,9 @@ export function GroupCard({
 
   const head = headProposalOf(members);
   const actionSuffix = actionSuffixFor(members[0]?.intent.groupKind);
-  const visibleBlockedCount = members.filter(
-    ({ intent }) =>
+  const memberIntents = members.map(({ intent }) => intent);
+  const visibleBlockedCount = memberIntents.filter(
+    (intent) =>
       intent.state === 'needs_revision' ||
       intent.state === 'pending_verification',
   ).length;
@@ -150,10 +167,9 @@ export function GroupCard({
   // group blocked solely by a hidden (auto-rejected, live-session) member
   // still needs to render blocked, just without a Recover affordance for a
   // row the operator can't see (see groupNonCommittable below).
-  const blockedCount = Math.max(
-    visibleBlockedCount,
-    members[0]?.intent.groupBlockedMemberCount ?? 0,
-  );
+  const blockedCount = groupBlockedCount(memberIntents);
+  const resolvedOutcome: StagedIntentRejectOutcome =
+    draft.outcome ?? (blockedCount > 0 ? 'decline' : 'pushback');
   // Mirrors the backend's commit-guard predicate exactly (blocked member OR
   // incomplete owning session) — the group card must render blocked and
   // disable its controls whenever the backend would refuse the commit, not
@@ -346,9 +362,9 @@ export function GroupCard({
           <button
             type="button"
             role="radio"
-            aria-checked={draft.outcome === 'pushback'}
+            aria-checked={resolvedOutcome === 'pushback'}
             className={
-              draft.outcome === 'pushback'
+              resolvedOutcome === 'pushback'
                 ? panelStyles.outcomeOptionActive
                 : panelStyles.outcomeOption
             }
@@ -359,9 +375,9 @@ export function GroupCard({
           <button
             type="button"
             role="radio"
-            aria-checked={draft.outcome === 'decline'}
+            aria-checked={resolvedOutcome === 'decline'}
             className={
-              draft.outcome === 'decline'
+              resolvedOutcome === 'decline'
                 ? panelStyles.outcomeOptionActive
                 : panelStyles.outcomeOption
             }
@@ -374,11 +390,9 @@ export function GroupCard({
           ref={reasonInputRef}
           className={panelStyles.reasonInput}
           placeholder={
-            draft.outcome === 'pushback'
+            resolvedOutcome === 'pushback'
               ? 'What should the session revise?'
-              : draft.outcome === 'decline'
-                ? 'Why is this being declined?'
-                : 'Choose Pushback or Decline, then explain why'
+              : 'Why is this being declined?'
           }
           value={draft.reason}
           onChange={(e) => onSetDraft({ reason: e.target.value })}
@@ -386,18 +400,14 @@ export function GroupCard({
         <button
           type="button"
           className={panelStyles.denyButton}
-          disabled={
-            inFlight || disabled || !draft.outcome || !draft.reason.trim()
-          }
+          disabled={inFlight || disabled || !draft.reason.trim()}
           onClick={onRejectGroup}
         >
           {inFlight
             ? 'Submitting…'
-            : draft.outcome === 'pushback'
+            : resolvedOutcome === 'pushback'
               ? `↩ Pushback${actionSuffix}`
-              : draft.outcome === 'decline'
-                ? `✕ Decline${actionSuffix}`
-                : `Reject${actionSuffix}`}
+              : `✕ Decline${actionSuffix}`}
         </button>
       </div>
     </div>
