@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type {
   StagedIntent,
   StagedIntentRejectOutcome,
@@ -9,7 +9,7 @@ import {
 } from '../api/stagedIntents';
 import { subscribeStagedIntentChange } from './stagedIntentBus';
 import { triageVerdict } from '../components/triageVerdict';
-import { defaultGroupRejectOutcome } from '../components/GroupCard';
+import { defaultGroupRejectOutcome } from '../components/groupRejectOutcome';
 
 /** Which lens the queue fetches through — the only thing that differs between the session DecisionPanel and MilestoneDecisionInbox. */
 export type DecisionQueueScope =
@@ -158,17 +158,20 @@ export function useDecisionQueue(
         )
       : intents;
 
-  const groups = new Map<string, StagedIntent[]>();
-  const ungrouped: StagedIntent[] = [];
-  for (const intent of visibleIntents) {
-    if (intent.groupId) {
-      const arr = groups.get(intent.groupId) ?? [];
-      arr.push(intent);
-      groups.set(intent.groupId, arr);
-    } else {
-      ungrouped.push(intent);
+  const { groups, ungrouped } = useMemo(() => {
+    const groups = new Map<string, StagedIntent[]>();
+    const ungrouped: StagedIntent[] = [];
+    for (const intent of visibleIntents) {
+      if (intent.groupId) {
+        const arr = groups.get(intent.groupId) ?? [];
+        arr.push(intent);
+        groups.set(intent.groupId, arr);
+      } else {
+        ungrouped.push(intent);
+      }
     }
-  }
+    return { groups, ungrouped };
+  }, [visibleIntents]);
 
   const groupEntries = [...groups.entries()];
   const cleanGroupIds = groupEntries
