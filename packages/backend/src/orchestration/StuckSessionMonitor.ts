@@ -58,6 +58,25 @@ const PAUSE_MESSAGE =
   'Stop running tools and wait for further instructions.';
 
 /**
+ * Session statuses that mean the session has concluded for good, by any
+ * path — not just the session_ended broadcast clear() was previously keyed
+ * on exclusively. Mirrors db/queries.ts's TERMINAL_SESSION_STATUSES plus
+ * 'superseded'; defined locally (rather than imported) so this module's own
+ * terminal check doesn't depend on every test that mocks db/queries.js also
+ * re-exporting the constant.
+ */
+const TERMINAL_SESSION_STATUSES: ReadonlySet<string> = new Set([
+  'done',
+  'error',
+  'killed',
+  'superseded',
+]);
+
+function isSessionTerminal(status: string | null | undefined): boolean {
+  return status != null && TERMINAL_SESSION_STATUSES.has(status);
+}
+
+/**
  * Per-session timer that escalates when a session goes too long without any
  * activity. Three escalating responses:
  *
@@ -107,9 +126,29 @@ export class StuckSessionMonitor {
       intervalMs: DEFAULT_SCAN_INTERVAL_MS,
       concurrency: 'skip-if-running',
       run: async () => {
+        this.reapTerminalTimers();
         await this.scanForStuckSessions();
       },
     });
+  }
+
+  /**
+   * Sweep every tracked timer and clear any whose session row has already
+   * reached a terminal status through a path other than the session_ended
+   * broadcast (a watcher-driven transition such as pr_merge_watcher /
+   * auto_merger, or an external actor writing the row directly) — clear()
+   * previously fired only on that one broadcast, so a session finishing by
+   * any other route kept a live timer indefinitely. Runs on the same
+   * cadence as scanForStuckSessions so a stray timer is cleared within one
+   * scan interval of the session going terminal.
+   */
+  private reapTerminalTimers(): void {
+    for (const sessionId of [...this.timers.keys()]) {
+      const session = getSession(sessionId);
+      if (isSessionTerminal(session?.status)) {
+        this.clear(sessionId);
+      }
+    }
   }
 
   /** Clear all per-session timers. Called on shutdown. */
@@ -635,6 +674,14 @@ export class StuckSessionMonitor {
       this.scheduleNotifyAndPause(sessionId, state);
       return;
     }
+    // Cheap guard mirroring the missing-row bail below: if the session
+    // already reached a terminal status via a path that didn't clear this
+    // timer in time (see reapTerminalTimers), degrade to silence instead of
+    // alerting on work that's already finished.
+    if (isSessionTerminal(getSession(sessionId)?.status)) {
+      this.clear(sessionId);
+      return;
+    }
     this.persistTimerState(sessionId);
     recordEvent({
       event_type: 'stuck_session_notify_checked',
@@ -659,11 +706,19 @@ export class StuckSessionMonitor {
   private firePause(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state) return;
-    if (!getSession(sessionId)) {
+    const session = getSession(sessionId);
+    if (!session) {
       // Parent row is gone (e.g. session deleted before the timer fired) —
       // nothing to pause. Clean up the orphaned timer state and bail before
       // any DB write, which would otherwise violate the FK to sessions.
       this.timers.delete(sessionId);
+      return;
+    }
+    // Same terminal-status guard as fireNotify: a session that already
+    // finished via a path that didn't clear this timer in time must not be
+    // paused as if it were still stuck.
+    if (isSessionTerminal(session.status)) {
+      this.clear(sessionId);
       return;
     }
     state.pauseTimer = null;

@@ -121,6 +121,43 @@ describe('reconcileSessionsMap()', () => {
     },
   );
 
+  it('emits session_ended for a terminal-status drop so StuckSessionMonitor clears its timer', () => {
+    const sessionId = 'terminal-emits-session-ended';
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: sessionId,
+      status: 'error',
+      task_id: 'task-42',
+    } as never);
+
+    const sm = new SessionManager();
+    setSessionEntry(sm, sessionId);
+    const messages: unknown[] = [];
+    sm.on('message', (msg) => messages.push(msg));
+
+    sm.reconcileSessionsMap();
+
+    expect(messages).toContainEqual({
+      type: 'session_ended',
+      sessionId,
+      status: 'error',
+      taskId: 'task-42',
+    });
+  });
+
+  it('does not emit session_ended for a missing-row drop', () => {
+    const sessionId = 'missing-row-no-emit';
+    vi.mocked(queries.getSession).mockReturnValue(null as never);
+
+    const sm = new SessionManager();
+    setSessionEntry(sm, sessionId);
+    const messages: unknown[] = [];
+    sm.on('message', (msg) => messages.push(msg));
+
+    sm.reconcileSessionsMap();
+
+    expect(messages).toHaveLength(0);
+  });
+
   it('never touches an entry whose DB row is non-terminal (genuinely live)', () => {
     const sessionId = 'live-session';
     vi.mocked(queries.getSession).mockReturnValue({

@@ -4430,6 +4430,21 @@ export class SessionManager extends EventEmitter {
         ? `terminal_status:${row.status}`
         : 'missing_db_row';
       revokeStageCredential(sessionId, revocationReason);
+      if (row) {
+        // The row reached a terminal status through some path other than
+        // this session's own clean-exit (an external actor, per this
+        // method's own doc comment above) — that path may never have
+        // broadcast session_ended, which is the only signal
+        // StuckSessionMonitor clears its timers on. Emit it here so a stray
+        // timer for this session doesn't keep firing after the row already
+        // shows the session concluded.
+        this.emit('message', {
+          type: 'session_ended',
+          sessionId,
+          status: row.status,
+          ...(row.task_id && { taskId: row.task_id }),
+        } satisfies ServerMessage);
+      }
       dropped++;
       recordEvent({
         event_type: 'session_map_entry_dropped',
