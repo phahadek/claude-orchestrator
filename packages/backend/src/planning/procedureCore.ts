@@ -21,8 +21,12 @@
 
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import { ALLOWED_TRANSITIONS, type OpsState } from '../ops/opsJournal';
+import type { SessionType } from '../session/sessionPredicates';
 
-export type SkillId = 'groom' | 'design' | 'ops' | 'split' | 'docs';
+export type SkillId = Extract<
+  SessionType,
+  'groom' | 'design' | 'ops' | 'split' | 'docs'
+>;
 
 /** `blocked` / `incident-frozen` are freezes reachable from (and returning to) any non-terminal state — not part of the normal path. */
 const OPS_JOURNAL_FREEZE_STATES: ReadonlySet<OpsState> = new Set([

@@ -24,6 +24,18 @@ import {
 import { passesGroomDepGate } from '../../orchestration/planningCandidates';
 import { normalizeBoardId } from '../../tasks/taskId';
 import type { NotionTask } from '../../notion/types';
+import type { SessionType } from '../../session/sessionPredicates';
+import type { PlanningSessionType } from '../../orchestration/OpsSessionLauncher';
+
+/**
+ * Compile-time-only check: fails to typecheck if SkillId or
+ * PlanningSessionType ever stop being derived from SessionType (e.g. if one
+ * gains a literal SessionType doesn't have). Not exercised at runtime.
+ */
+type AssertExtendsSessionType<T extends SessionType | 'standard'> = T;
+type _SkillIdDerivesFromSessionType = AssertExtendsSessionType<SkillId>;
+type _PlanningSessionTypeDerivesFromSessionType =
+  AssertExtendsSessionType<PlanningSessionType>;
 
 const repoRoot = join(__dirname, '..', '..', '..', '..', '..');
 const sharedHardRulesPath = join(
