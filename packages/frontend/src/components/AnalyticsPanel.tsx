@@ -564,7 +564,9 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
                       labelStyle={{ color: '#cdd6f4', marginBottom: 4 }}
                       itemStyle={{ color: '#cdd6f4' }}
                       formatter={(value: number, name: string) => [
-                        name === 'Cost' ? formatCost(value) : formatTokenCount(value),
+                        name === 'Cost'
+                          ? formatCost(value)
+                          : formatTokenCount(value),
                         name,
                       ]}
                     />
