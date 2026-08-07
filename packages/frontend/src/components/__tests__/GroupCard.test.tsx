@@ -115,10 +115,9 @@ describe('GroupCard reject-outcome default', () => {
     );
 
     screen.getByPlaceholderText('What should the session revise?');
-    const rejectButton = screen.getByRole(
-      'button',
-      { name: /Pushback/ },
-    ) as HTMLButtonElement;
+    const rejectButton = screen.getByRole('button', {
+      name: /Pushback/,
+    }) as HTMLButtonElement;
     expect(rejectButton.disabled).toBe(false);
   });
 
@@ -148,10 +147,9 @@ describe('GroupCard reject-outcome default', () => {
     );
 
     screen.getByPlaceholderText('Why is this being declined?');
-    const rejectButton = screen.getByRole(
-      'button',
-      { name: /Decline/ },
-    ) as HTMLButtonElement;
+    const rejectButton = screen.getByRole('button', {
+      name: /Decline/,
+    }) as HTMLButtonElement;
     expect(rejectButton.disabled).toBe(false);
   });
 
@@ -160,10 +158,9 @@ describe('GroupCard reject-outcome default', () => {
       <GroupCard {...baseProps({ draft: { outcome: null, reason: '' } })} />,
     );
 
-    const rejectButton = screen.getByRole(
-      'button',
-      { name: /Pushback/ },
-    ) as HTMLButtonElement;
+    const rejectButton = screen.getByRole('button', {
+      name: /Pushback/,
+    }) as HTMLButtonElement;
     expect(rejectButton.disabled).toBe(true);
   });
 });

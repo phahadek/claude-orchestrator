@@ -278,7 +278,8 @@ export function useDecisionQueue(
       const draft = draftFor(groupId);
       const reason = draft.reason.trim();
       if (!reason) return;
-      const outcome = draft.outcome ?? defaultGroupRejectOutcome(groups.get(groupId) ?? []);
+      const outcome =
+        draft.outcome ?? defaultGroupRejectOutcome(groups.get(groupId) ?? []);
       setGroupInFlight(groupId);
       clearGroupError(groupId);
       try {

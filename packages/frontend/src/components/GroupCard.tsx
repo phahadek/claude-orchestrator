@@ -88,9 +88,13 @@ function actionSuffixFor(groupKind: StagedIntent['groupKind']): string {
 export function groupBlockedCount(intents: StagedIntent[]): number {
   const visibleBlockedCount = intents.filter(
     (intent) =>
-      intent.state === 'needs_revision' || intent.state === 'pending_verification',
+      intent.state === 'needs_revision' ||
+      intent.state === 'pending_verification',
   ).length;
-  return Math.max(visibleBlockedCount, intents[0]?.groupBlockedMemberCount ?? 0);
+  return Math.max(
+    visibleBlockedCount,
+    intents[0]?.groupBlockedMemberCount ?? 0,
+  );
 }
 
 /** Mirrors the single-intent path's default (StagedIntentPanel): decline when any member is blocked, since pushing back a group with a blocked member is refused server-side; pushback otherwise. */
