@@ -1324,6 +1324,83 @@ describe('TaskWriteCommands.moveTask', () => {
       undefined,
     );
   });
+
+  it('moves a Ready Operational task whose body fails the readiness gate without throwing, preserving its status', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatusAndType('Ready', '🔧 Operational'),
+    );
+    const backend = makeMoveBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+    const params = makeMoveParams();
+    params.content.status = 'Ready';
+    // Missing the required "Targets / surfaces affected" heading — this
+    // body would fail checkReadiness if the gate re-ran on the move path.
+    params.content.bodyMarkdown = '## Files / paths affected\nsome/file.ts';
+
+    const result = await commands.moveTask(params);
+
+    expect(result.newTaskId).toBe('notion:new-id');
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:new-id',
+      STATUS_DISPLAY['Ready'],
+      undefined,
+    );
+    expect(backend.archive).not.toHaveBeenCalledWith(
+      'notion:new-id',
+      undefined,
+    );
+    expect(result.readinessAdvisory).toBeDefined();
+    expect(result.readinessAdvisory!.length).toBeGreaterThan(0);
+  });
+
+  it('never raises ReadinessGateError on the move path', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatusAndType('Ready', '🔧 Operational'),
+    );
+    const backend = makeMoveBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+    const params = makeMoveParams();
+    params.content.status = 'Ready';
+    params.content.bodyMarkdown = '## Files / paths affected\nsome/file.ts';
+
+    await expect(commands.moveTask(params)).resolves.not.toThrow();
+  });
+
+  it('preserves status, type, priority, and body faithfully across a move', async () => {
+    mockGetTaskCache.mockReturnValue(cacheRowWithStatus('In Progress'));
+    const backend = makeMoveBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+    const params = makeMoveParams();
+    params.content = {
+      title: 'Some task',
+      bodyMarkdown: '## Summary\nDetailed body content',
+      status: 'In Progress',
+      type: '💻 Code',
+      priority: 'High',
+    };
+
+    const result = await commands.moveTask(params);
+
+    expect(backend.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Some task',
+        type: '💻 Code',
+        priority: 'High',
+      }),
+      undefined,
+    );
+    expect(backend.updateBodyRaw).toHaveBeenCalledWith(
+      'notion:new-id',
+      '## Summary\nDetailed body content',
+      undefined,
+    );
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:new-id',
+      STATUS_DISPLAY['In Progress'],
+      undefined,
+    );
+    expect(result.newTaskId).toBe('notion:new-id');
+  });
 });
 
 describe('TaskWriteCommands.accreteGateContribution', () => {

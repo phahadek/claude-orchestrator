@@ -971,6 +971,7 @@ export interface StagedIntent {
   annotation?:
     | { blocked: true; violations: ReadinessViolation[] }
     | { blocked: true; reasons: string[] }
+    | { advisory: true; violations: ReadinessViolation[] }
     | { autoRejected: true }
     | { autoApproved: true }
     | null;
@@ -3497,6 +3498,26 @@ function recordAlreadyAppliedCreateSupersedeRefusal(
  *   silently minted). Left undisturbed to keep this change scoped to the
  *   create-shaped kinds the incident actually implicates.
  */
+/**
+ * A task.move never hard-blocks on the readiness gate (re-parenting copies
+ * already-groomed content verbatim, it doesn't re-author it — see
+ * MoveTaskResult.readinessAdvisory), but a violation against today's gate is
+ * still worth surfacing. Both commit sites (single apply + group commit)
+ * otherwise unconditionally null the annotation on a successful apply, which
+ * would silently drop it — so they route the commit-time annotation through
+ * this helper instead of a bare `null`.
+ */
+function readinessAdvisoryAnnotation(
+  intent: StagedIntent,
+  result: unknown,
+): string | null {
+  if (intent.kind !== 'task.move') return null;
+  const advisory = (result as { readinessAdvisory?: ReadinessViolation[] })
+    ?.readinessAdvisory;
+  if (!advisory || advisory.length === 0) return null;
+  return JSON.stringify({ advisory: true, violations: advisory });
+}
+
 async function applyIntent(
   intent: StagedIntent,
   override?: { reason: string },
@@ -5342,7 +5363,7 @@ async function commitGroupIntents(
         createdTaskIds.set(intent.id, (result as { id: string }).id);
       }
       const committedRow = transitionStagedIntent(intent.id, 'committed', {
-        annotation: null,
+        annotation: readinessAdvisoryAnnotation(intent, result),
       });
       broadcastIntentChange(rowToApi(committedRow));
       mirrorJournalDecisionIfStagedProposal(intent);
@@ -5749,7 +5770,7 @@ export function createStagedIntentsRouter(
           mirrorDisposition,
         );
         const committed = transitionStagedIntent(intent.id, 'committed', {
-          annotation: null,
+          annotation: readinessAdvisoryAnnotation(intent, result),
         });
         broadcastIntentChange(rowToApi(committed));
         mirrorJournalDecisionIfStagedProposal(intent);

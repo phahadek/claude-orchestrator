@@ -334,7 +334,7 @@ function checkRequiredHeadingSection(
   headingLabel: string,
 ): ReadinessViolation[] {
   const target = normalizeHeadingText(headingLabel);
-  const lines = body.split('\n');
+  const lines = stripNonProse(body);
   let found = false;
   let inSection = false;
   let hasContent = false;
