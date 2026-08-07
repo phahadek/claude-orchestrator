@@ -33,6 +33,8 @@ const SETTING_KEYS = [
   'session_mode',
   'auto_launch_concurrency',
   'auto_launch_poll_interval_ms',
+  'hourly_usage_pause_threshold_percent',
+  'weekly_usage_pause_threshold_percent',
   'min_host_free_memory_mb',
   'per_session_reserve_mb',
   'session_cgroup_prod_reserve_mb',
@@ -109,6 +111,12 @@ function applyToRuntime(
       break;
     case 'auto_launch_poll_interval_ms':
       runtimeSettings.auto_launch_poll_interval_ms = value as number;
+      break;
+    case 'hourly_usage_pause_threshold_percent':
+      runtimeSettings.hourly_usage_pause_threshold_percent = value as string;
+      break;
+    case 'weekly_usage_pause_threshold_percent':
+      runtimeSettings.weekly_usage_pause_threshold_percent = value as string;
       break;
     case 'min_host_free_memory_mb':
       runtimeSettings.min_host_free_memory_mb = value as number;
@@ -234,6 +242,10 @@ function runtimeSettingsAsRecord(): {
     auto_launch_poll_interval_ms: String(
       runtimeSettings.auto_launch_poll_interval_ms,
     ),
+    hourly_usage_pause_threshold_percent:
+      runtimeSettings.hourly_usage_pause_threshold_percent,
+    weekly_usage_pause_threshold_percent:
+      runtimeSettings.weekly_usage_pause_threshold_percent,
     min_host_free_memory_mb: String(runtimeSettings.min_host_free_memory_mb),
     per_session_reserve_mb: String(runtimeSettings.per_session_reserve_mb),
     session_cgroup_prod_reserve_mb: String(

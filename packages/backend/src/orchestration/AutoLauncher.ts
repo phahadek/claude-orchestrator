@@ -29,7 +29,11 @@ import { runWithConcurrency, yieldToEventLoop } from '../utils/concurrency';
 import { getProjectRepos } from '../projects/ProjectService';
 import { hasMemoryHeadroom } from './memoryAdmission';
 import { CrashBudget } from './crashBudget';
-import { isUsageAdmitted } from './usageAdmission';
+import {
+  isUsageAdmitted,
+  isUsageThresholdAdmitted,
+  parseThresholdPercent,
+} from './usageAdmission';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -595,6 +599,29 @@ export class AutoLauncher {
         detail: {
           window: usageAdmission.window,
           deferredUntil: usageAdmission.deferredUntil,
+        },
+      };
+    }
+    const thresholdAdmission = isUsageThresholdAdmitted(
+      parseThresholdPercent(
+        runtimeSettings.hourly_usage_pause_threshold_percent,
+      ),
+      parseThresholdPercent(
+        runtimeSettings.weekly_usage_pause_threshold_percent,
+      ),
+    );
+    if (!thresholdAdmission.allowed) {
+      logger.info(
+        `[AutoLauncher] pausing dispatch — plan usage (${thresholdAdmission.window}) at ${thresholdAdmission.percent}% ` +
+          `crossed the configured soft-pause threshold of ${thresholdAdmission.thresholdPercent}% (proactive, not a hard exhaustion block)`,
+      );
+      return {
+        allowed: false,
+        reason: 'usage_threshold_paused',
+        detail: {
+          window: thresholdAdmission.window,
+          percent: thresholdAdmission.percent,
+          thresholdPercent: thresholdAdmission.thresholdPercent,
         },
       };
     }

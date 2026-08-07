@@ -34,6 +34,82 @@ function isExhausted(window: UsageWindow | undefined): boolean {
   return window.percent >= 100 || window.severity === 'exceeded';
 }
 
+/**
+ * Result of the configurable soft-threshold check — distinct from
+ * UsageAdmissionResult's hard-exhaustion 'usage_deferral' reason so callers
+ * (and operators reading AutoLauncher's surfaced reason string) can tell a
+ * proactive threshold pause from a real plan-exhaustion block. Unlike the
+ * hard gate, this is not persisted as a deferral: it is re-evaluated from
+ * the live poller snapshot on every admission check, so it clears itself
+ * the moment the polled percent drops back under the configured threshold.
+ */
+export interface UsageThresholdResult {
+  allowed: boolean;
+  window?: UsageDeferralWindow;
+  percent?: number;
+  thresholdPercent?: number;
+  reason?: 'usage_threshold_paused';
+}
+
+/** Parses a settings percent field ('' = disabled) into a number, or null when disabled/invalid. */
+export function parseThresholdPercent(raw: string): number | null {
+  if (raw === '') return null;
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : null;
+}
+
+/**
+ * Pure soft-threshold check: pauses admission once a window's live polled
+ * percent reaches the configured threshold, ahead of the hard 100%
+ * exhaustion gate in checkUsageAdmission. Either threshold may be null
+ * (disabled) independently of the other.
+ */
+export function checkUsageThresholdAdmission(
+  usage: PlanUsage,
+  hourlyThresholdPercent: number | null,
+  weeklyThresholdPercent: number | null,
+): UsageThresholdResult {
+  if (!usage.available) return { allowed: true };
+
+  const windows: Array<
+    [UsageDeferralWindow, UsageWindow | undefined, number | null]
+  > = [
+    ['five_hour', usage.fiveHour, hourlyThresholdPercent],
+    ['seven_day', usage.weekly, weeklyThresholdPercent],
+  ];
+
+  for (const [window, snapshot, thresholdPercent] of windows) {
+    if (thresholdPercent == null || !snapshot) continue;
+    if (snapshot.percent >= thresholdPercent) {
+      return {
+        allowed: false,
+        window,
+        percent: snapshot.percent,
+        thresholdPercent,
+        reason: 'usage_threshold_paused',
+      };
+    }
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Convenience wrapper: checkUsageThresholdAdmission against the registered
+ * poller's live snapshot and the configured settings thresholds.
+ */
+export function isUsageThresholdAdmitted(
+  hourlyThresholdPercent: number | null,
+  weeklyThresholdPercent: number | null,
+): UsageThresholdResult {
+  const usage = _poller?.getCache() ?? { available: false };
+  return checkUsageThresholdAdmission(
+    usage,
+    hourlyThresholdPercent,
+    weeklyThresholdPercent,
+  );
+}
+
 function fallbackDeferralMs(): number {
   // No parseable resets_at — defer a short, bounded interval rather than
   // blocking indefinitely; the next admission check will re-evaluate.
