@@ -291,7 +291,8 @@ function failEvidence(item: GateItem, verifierEvidence: unknown): unknown {
 /**
  * Appends the verifier's outcome and routes it:
  *  - pass/needs-setup: appendGateItemEvent as-is (pass is provenance-tagged
- *    operator='gate-verifier'; needs-setup is the non-terminal abstain).
+ *    with `passOperator`, 'gate-verifier' by default; needs-setup is the
+ *    non-terminal abstain).
  *  - fail: dedup — while a prior filed follow-up is still open (not Done),
  *    log the fresh failure against it instead of refiling; escalate to
  *    needs-setup instead of refiling once maxFixAttempts is spent; otherwise
@@ -361,6 +362,22 @@ export async function routeVerificationResult(
   concurrency: GateVerificationConcurrencyConfig = {},
   /** true = unattended (reconciler auto-launch / boot reattachment); false = operator-triggered manual dispatch (dispatchGateItemVerification) — recorded on every event this run appends. */
   unattended = false,
+  /**
+   * The operator provenance recorded on a `pass` event. Deliberately no
+   * default value — a JS default parameter only substitutes on an
+   * `undefined` *argument*, which is exactly the value the mirror call site
+   * below needs to pass through untouched, so a default here would silently
+   * clobber it back to 'gate-verifier'. Every headless-verifier-originated
+   * call (auto-run, boot reattachment, and an operator-approved verifier
+   * report re-routed through here from the decision surface) passes
+   * 'gate-verifier' explicitly. stagedIntents.ts's gate.verify apply case
+   * passes `undefined` only for an operator-supplied Human-Observation
+   * *mirror* disposition — there, no verifier ever ran; the pass is a
+   * human's own judgment and must not be tagged as the verifier's, or
+   * isVerifierBlockedFromPassing (gateService.ts) wrongly suppresses it to
+   * advisory-only and the item never advances.
+   */
+  passOperator: string | undefined,
 ): Promise<ProcessedGateItem> {
   const maxFixAttempts = concurrency.maxFixAttempts ?? DEFAULT_MAX_FIX_ATTEMPTS;
 
@@ -489,12 +506,15 @@ export async function routeVerificationResult(
       unattended,
     });
   } else {
-    // pass — auto-pass is provenance-tagged, never anonymous.
+    // pass — a verifier-originated auto-pass is provenance-tagged, never
+    // anonymous; an operator-supplied mirror pass carries passOperator
+    // (undefined) so isVerifierBlockedFromPassing doesn't mistake it for
+    // the verifier's own verdict.
     appendGateItemEvent(item.id, {
       disposition: result.disposition,
       evidence: result.evidence,
       deploySha: deploySha ?? undefined,
-      operator: 'gate-verifier',
+      operator: passOperator,
       unattended,
     });
   }
@@ -558,6 +578,7 @@ async function runReservedVerification(
       deploySha,
       concurrency,
       unattended,
+      'gate-verifier',
     );
   } finally {
     inFlightVerifications.delete(item.id);
@@ -602,6 +623,7 @@ export async function reattachOutstandingGateVerifications(): Promise<void> {
           deploySha,
           concurrency,
           true,
+          'gate-verifier',
         );
       } catch (err) {
         logger.error(
