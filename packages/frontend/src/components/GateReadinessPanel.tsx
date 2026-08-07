@@ -94,7 +94,9 @@ function toMilestoneToken(boardMilestone: string | null | undefined) {
  * queue) pending an operator's own confirmation. Rendering bare "pass" here
  * reads as resolved when it isn't, so this label distinguishes the two.
  */
-function dispositionLabelFor(item: Pick<GateItem, 'classification' | 'state' | 'latestDisposition'>): string {
+function dispositionLabelFor(
+  item: Pick<GateItem, 'classification' | 'state' | 'latestDisposition'>,
+): string {
   if (
     item.latestDisposition === 'pass' &&
     item.state !== 'pass' &&

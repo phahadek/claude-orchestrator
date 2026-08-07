@@ -266,9 +266,10 @@ export function MilestoneDecisionInbox({
   >({});
   const gateItemIdsKey = [
     ...new Set(
-      intents.filter(isGateVerifyIntent).map(gateItemIdFromIntent).filter(
-        (id): id is string => !!id,
-      ),
+      intents
+        .filter(isGateVerifyIntent)
+        .map(gateItemIdFromIntent)
+        .filter((id): id is string => !!id),
     ),
   ]
     .sort()
