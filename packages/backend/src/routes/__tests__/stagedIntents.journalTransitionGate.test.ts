@@ -518,9 +518,9 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
 
       const secondMirrors = activeIntentsForTask('task-self-3');
       expect(secondMirrors).toHaveLength(1);
-      expect(JSON.parse((secondMirrors[0] as any).payload).fields.findingOrProposal).toEqual(
-        { summary: 'second pass' },
-      );
+      expect(
+        JSON.parse((secondMirrors[0] as any).payload).fields.findingOrProposal,
+      ).toEqual({ summary: 'second pass' });
     });
   });
 });
