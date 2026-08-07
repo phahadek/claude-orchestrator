@@ -8,6 +8,7 @@ import {
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { MilestoneDecisionInbox } from '../MilestoneDecisionInbox';
 import { stagedIntentsApi } from '../../api/stagedIntents';
+import { gateApi } from '../../api/gate';
 import type { StagedIntent } from '../../api/stagedIntents';
 import type { TaskView } from '../../types/taskView';
 
@@ -1061,6 +1062,51 @@ describe('MilestoneDecisionInbox', () => {
     );
     expect(seedCard.textContent).toContain('Seed target');
     expect(seedCard.textContent).toContain('seed.stage');
+  });
+
+  it('resolves a gate.verify card header from its referenced gate item text, not the unresolved-label fallback', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'gate-verify-intent',
+        kind: 'gate.verify',
+        payload: { gateItemId: 'gate-item-1' },
+        projectId: 'proj-1',
+        createdAt: 0,
+        sessionId: null,
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+    vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+      item: {
+        id: 'gate-item-1',
+        project: 'proj-1',
+        milestone: 'M1',
+        text: 'Confirm the login redirect works in prod',
+        classification: 'Human-Observation',
+        state: 'runnable',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      sources: [],
+      events: [],
+    });
+
+    render(
+      <MilestoneDecisionInbox projectId="proj-1" milestone="M1" tasks={[]} />,
+    );
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = await screen.findByTestId(
+      'milestone-decision-card-gate-verify-intent',
+    );
+    await waitFor(() =>
+      expect(card.textContent).toContain(
+        'Confirm the login redirect works in prod',
+      ),
+    );
+    expect(card.textContent).not.toContain('Untitled decision');
   });
 
   it('signals onCardsRemoved with the dispositioned card id, so a caller (e.g. the decision stack) can re-select whatever is now topmost', async () => {

@@ -87,6 +87,24 @@ function toMilestoneToken(boardMilestone: string | null | undefined) {
   return match ? match[0].toUpperCase() : boardMilestone;
 }
 
+/**
+ * A Human-Observation-tier item's `pass` disposition never actually resolves
+ * the item — isVerifierBlockedFromPassing (backend gateService.ts) keeps its
+ * state at `runnable` (and its mirrored staged_intent in the Human Decisions
+ * queue) pending an operator's own confirmation. Rendering bare "pass" here
+ * reads as resolved when it isn't, so this label distinguishes the two.
+ */
+function dispositionLabelFor(item: Pick<GateItem, 'classification' | 'state' | 'latestDisposition'>): string {
+  if (
+    item.latestDisposition === 'pass' &&
+    item.state !== 'pass' &&
+    item.classification === 'Human-Observation'
+  ) {
+    return 'pass (unconfirmed)';
+  }
+  return item.latestDisposition ?? '—';
+}
+
 function formatEvidenceValue(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value;
@@ -1460,7 +1478,7 @@ export function GateReadinessPanel({
                           {item.state}
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
-                          {item.latestDisposition ?? '—'}
+                          {dispositionLabelFor(item)}
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
                           {new Date(item.updatedAt).toLocaleString()}
