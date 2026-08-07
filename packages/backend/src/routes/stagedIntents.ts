@@ -34,7 +34,10 @@ import {
   findAutoApproveIneligibleTaskCreate,
   type GroomingGateEntry,
 } from '../groom/groomGate';
-import { isInteractiveTaskType, isTriageEligibleType } from '../planning/triage';
+import {
+  isInteractiveTaskType,
+  isTriageEligibleType,
+} from '../planning/triage';
 import type {
   StagedIntentRow,
   StagedIntentState,
@@ -958,7 +961,7 @@ export class GroomDesignFollowOnRejectedError extends Error {
     super(
       `[stagedIntents] a groom session cannot stage "task.create" against a ${taskType} subject task — its ` +
         "follow-on Code tasks are that task's Design Execution session (/design) deliverable, produced once " +
-        'its open questions lock, not grooming\'s to pre-author.',
+        "its open questions lock, not grooming's to pre-author.",
     );
     this.name = 'GroomDesignFollowOnRejectedError';
   }

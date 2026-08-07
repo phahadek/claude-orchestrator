@@ -223,7 +223,9 @@ describe('POST /api/staged-intents/batch/commit', () => {
       const updateStatus = vi.fn();
       mockGetTaskBackend.mockReturnValue({
         type: 'notion',
-        fetchTaskPage: vi.fn().mockResolvedValue('Confirm scope at grooming.\n'),
+        fetchTaskPage: vi
+          .fn()
+          .mockResolvedValue('Confirm scope at grooming.\n'),
         updateStatus,
         setDependsOn: vi.fn().mockResolvedValue(undefined),
         createTask: vi.fn().mockResolvedValue('notion:new-code-task'),
@@ -261,7 +263,9 @@ describe('POST /api/staged-intents/batch/commit', () => {
       const updateStatus = vi.fn();
       mockGetTaskBackend.mockReturnValue({
         type: 'notion',
-        fetchTaskPage: vi.fn().mockResolvedValue('Confirm scope at grooming.\n'),
+        fetchTaskPage: vi
+          .fn()
+          .mockResolvedValue('Confirm scope at grooming.\n'),
         updateStatus,
         setDependsOn: vi.fn().mockResolvedValue(undefined),
         createTask: vi.fn().mockResolvedValue('notion:new-design-task'),
@@ -348,7 +352,9 @@ describe('POST /api/staged-intents/batch/commit', () => {
         return { dependsOn: dependsOnRes.body, setStatus: setStatusRes.body };
       })();
 
-      await agent.post(`/api/staged-intents/${created.body.id}/approve`).send({});
+      await agent
+        .post(`/api/staged-intents/${created.body.id}/approve`)
+        .send({});
       await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
       await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
 
