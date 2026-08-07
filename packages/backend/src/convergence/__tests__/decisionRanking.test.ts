@@ -240,4 +240,36 @@ describe('rankDecisions', () => {
     expect(ranked).toHaveLength(1);
     expect(conv.distanceToGreen).toBe(1);
   });
+
+  it('tied intents (same blocking/kind-tier/needs-attention) sort newest-first', () => {
+    const oldest = row({ task_id: null, kind: 'gate.verify', created_at: 1 });
+    const middle = row({ task_id: null, kind: 'gate.verify', created_at: 2 });
+    const newest = row({ task_id: null, kind: 'gate.verify', created_at: 3 });
+    // Pass them in as-returned-oldest-first order, as the list* query
+    // functions used to return, to prove rankDecisions itself enforces the
+    // newest-first tie-break rather than merely preserving input order.
+    const ranked = rankDecisions([oldest, middle, newest], null);
+    expect(ranked.map((r) => r.id)).toEqual([newest.id, middle.id, oldest.id]);
+  });
+
+  it('a higher rank key still outranks a newer intent with a lower one', () => {
+    const olderBlocking = row({
+      task_id: 'task-blocked',
+      kind: 'task.updateBody',
+      created_at: 1,
+    });
+    const newerNonBlocking = row({
+      task_id: 'task-satisfied',
+      kind: 'task.updateBody',
+      created_at: 100,
+    });
+    const ranked = rankDecisions(
+      [newerNonBlocking, olderBlocking],
+      convergence(['task-blocked']),
+    );
+    expect(ranked.map((r) => r.id)).toEqual([
+      olderBlocking.id,
+      newerNonBlocking.id,
+    ]);
+  });
 });

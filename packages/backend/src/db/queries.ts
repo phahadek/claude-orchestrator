@@ -6601,7 +6601,7 @@ export function listStagedIntentsByMilestone(
       `SELECT * FROM staged_intent
        WHERE project_id = @project_id AND milestone IS NULL
          AND state IN ('staged', 'approved', 'needs_revision', 'pending_verification')
-       ORDER BY created_at ASC`,
+       ORDER BY created_at DESC`,
     );
     return _stmtListStagedIntentsUnattributed.all({
       project_id: projectId,
@@ -6614,7 +6614,7 @@ export function listStagedIntentsByMilestone(
     `SELECT * FROM staged_intent
      WHERE project_id = @project_id AND milestone = @milestone
        AND state IN ('staged', 'approved', 'needs_revision', 'pending_verification')
-     ORDER BY created_at ASC`,
+     ORDER BY created_at DESC`,
   );
   return _stmtListStagedIntentsByMilestone.all({
     project_id: projectId,

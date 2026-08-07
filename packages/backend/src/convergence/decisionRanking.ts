@@ -156,11 +156,14 @@ function compareRankKeys(a: RankKey, b: RankKey): number {
 
 /**
  * Orders staged decisions by unblock-impact, descending (highest-impact
- * first). Stable: intents tied on every criterion keep their relative
- * (created_at ASC, as returned by the list* query functions) order. Pass
- * `null` for convergence (e.g. the "unattributed" milestone bucket, which
- * has no single milestone's convergence to join against) to rank purely on
- * kind/direction + needs-attention.
+ * first). Intents tied on every rank-key criterion break the tie
+ * newest-first (created_at DESC) — a freshly staged intent of equal or
+ * lower rank surfaces above older ones in its tier rather than sinking to
+ * the bottom of a large tied block (e.g. a gate-heavy milestone's backlog
+ * of gate.verify mirrors). Pass `null` for convergence (e.g. the
+ * "unattributed" milestone bucket, which has no single milestone's
+ * convergence to join against) to rank purely on kind/direction +
+ * needs-attention.
  */
 export function rankDecisions(
   intents: StagedIntentRow[],
@@ -169,6 +172,10 @@ export function rankDecisions(
   const blockingTaskIds = buildBlockingTaskIdSet(convergence);
   return intents
     .map((row) => ({ row, key: computeRankKey(row, blockingTaskIds) }))
-    .sort((a, b) => compareRankKeys(a.key, b.key))
+    .sort((a, b) => {
+      const rankCmp = compareRankKeys(a.key, b.key);
+      if (rankCmp !== 0) return rankCmp;
+      return b.row.created_at - a.row.created_at;
+    })
     .map((entry) => entry.row);
 }
