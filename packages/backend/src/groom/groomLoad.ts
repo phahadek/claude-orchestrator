@@ -495,7 +495,12 @@ function stripHyphens(id: string): string {
   return id.replace(/-/g, '');
 }
 
-const NEW_MARKER = /\(\s*new\s*\)/i;
+/**
+ * Matches both `(new)` and the `(new — reason)` / `(new - reason)` form
+ * taught by config/task-writing.md's sibling Notion `(update — Section
+ * name)` convention — the dash may be a hyphen, en-dash, or em-dash.
+ */
+const NEW_MARKER = /\(\s*new\s*\)|\(\s*new\s*[-–—][^)]*\)/i;
 
 function cleanPathToken(tok: string): string {
   return tok
