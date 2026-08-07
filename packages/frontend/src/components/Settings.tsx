@@ -556,6 +556,120 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                 </div>
                 <div className={styles.field}>
                   <label className={styles.label}>
+                    Grooming session model
+                    <span className={styles.hint}>
+                      {' '}
+                      (empty = falls back to planning session model)
+                    </span>
+                  </label>
+                  <select
+                    className={styles.select}
+                    value={settings?.groom_session_model ?? ''}
+                    onChange={(e) =>
+                      void handleChange('groom_session_model', e.target.value)
+                    }
+                  >
+                    {MODEL_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className={styles.select}
+                    value={settings?.groom_session_effort ?? ''}
+                    onChange={(e) =>
+                      void handleChange(
+                        'groom_session_effort',
+                        e.target.value,
+                      )
+                    }
+                  >
+                    {EFFORT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label}>
+                    Design session model
+                    <span className={styles.hint}>
+                      {' '}
+                      (empty = falls back to planning session model)
+                    </span>
+                  </label>
+                  <select
+                    className={styles.select}
+                    value={settings?.design_session_model ?? ''}
+                    onChange={(e) =>
+                      void handleChange('design_session_model', e.target.value)
+                    }
+                  >
+                    {MODEL_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className={styles.select}
+                    value={settings?.design_session_effort ?? ''}
+                    onChange={(e) =>
+                      void handleChange(
+                        'design_session_effort',
+                        e.target.value,
+                      )
+                    }
+                  >
+                    {EFFORT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label}>
+                    Docs session model
+                    <span className={styles.hint}>
+                      {' '}
+                      (empty = falls back to planning session model)
+                    </span>
+                  </label>
+                  <select
+                    className={styles.select}
+                    value={settings?.docs_session_model ?? ''}
+                    onChange={(e) =>
+                      void handleChange('docs_session_model', e.target.value)
+                    }
+                  >
+                    {MODEL_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className={styles.select}
+                    value={settings?.docs_session_effort ?? ''}
+                    onChange={(e) =>
+                      void handleChange(
+                        'docs_session_effort',
+                        e.target.value,
+                      )
+                    }
+                  >
+                    {EFFORT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label}>
                     Large-task model
                     <span className={styles.hint}>
                       {' '}

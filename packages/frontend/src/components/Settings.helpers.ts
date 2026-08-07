@@ -15,6 +15,12 @@ export interface SettingsValues {
   ops_session_effort: string;
   gate_verify_session_model: string;
   gate_verify_session_effort: string;
+  groom_session_model: string;
+  groom_session_effort: string;
+  design_session_model: string;
+  design_session_effort: string;
+  docs_session_model: string;
+  docs_session_effort: string;
   session_mode: string;
   auto_launch_concurrency: string;
   auto_launch_poll_interval_ms: string;
@@ -65,6 +71,12 @@ const NON_NUMERIC_KEYS = new Set<keyof SettingsValues>([
   'ops_session_effort',
   'gate_verify_session_model',
   'gate_verify_session_effort',
+  'groom_session_model',
+  'groom_session_effort',
+  'design_session_model',
+  'design_session_effort',
+  'docs_session_model',
+  'docs_session_effort',
   'session_mode',
   'large_task_model',
   'large_task_effort',

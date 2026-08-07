@@ -671,28 +671,46 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     const modelSetting =
       this.launchModel ||
-      (this.sessionType === 'ops'
-        ? isGateVerifySession(this.taskId)
-          ? runtimeSettings.gate_verify_session_model ||
-            runtimeSettings.ops_session_model
-          : runtimeSettings.ops_session_model
-        : isPlanningSession(this.sessionType)
-          ? runtimeSettings.planning_session_model
-          : isCodeSession(this.sessionType)
-            ? runtimeSettings.code_session_model
-            : runtimeSettings.review_session_model);
+      (isGateVerifySession(this.taskId)
+        ? runtimeSettings.gate_verify_session_model ||
+          runtimeSettings.ops_session_model
+        : this.sessionType === 'ops'
+          ? runtimeSettings.ops_session_model
+          : this.sessionType === 'groom'
+            ? runtimeSettings.groom_session_model ||
+              runtimeSettings.planning_session_model
+            : this.sessionType === 'design'
+              ? runtimeSettings.design_session_model ||
+                runtimeSettings.planning_session_model
+              : this.sessionType === 'docs'
+                ? runtimeSettings.docs_session_model ||
+                  runtimeSettings.planning_session_model
+                : this.sessionType === 'split'
+                  ? runtimeSettings.planning_session_model
+                  : isCodeSession(this.sessionType)
+                    ? runtimeSettings.code_session_model
+                    : runtimeSettings.review_session_model);
     const effortSetting =
       this.launchEffort ||
-      (this.sessionType === 'ops'
-        ? isGateVerifySession(this.taskId)
-          ? runtimeSettings.gate_verify_session_effort ||
-            runtimeSettings.ops_session_effort
-          : runtimeSettings.ops_session_effort
-        : isPlanningSession(this.sessionType)
-          ? runtimeSettings.planning_session_effort
-          : isCodeSession(this.sessionType)
-            ? runtimeSettings.code_session_effort
-            : runtimeSettings.review_session_effort);
+      (isGateVerifySession(this.taskId)
+        ? runtimeSettings.gate_verify_session_effort ||
+          runtimeSettings.ops_session_effort
+        : this.sessionType === 'ops'
+          ? runtimeSettings.ops_session_effort
+          : this.sessionType === 'groom'
+            ? runtimeSettings.groom_session_effort ||
+              runtimeSettings.planning_session_effort
+            : this.sessionType === 'design'
+              ? runtimeSettings.design_session_effort ||
+                runtimeSettings.planning_session_effort
+              : this.sessionType === 'docs'
+                ? runtimeSettings.docs_session_effort ||
+                  runtimeSettings.planning_session_effort
+                : this.sessionType === 'split'
+                  ? runtimeSettings.planning_session_effort
+                  : isCodeSession(this.sessionType)
+                    ? runtimeSettings.code_session_effort
+                    : runtimeSettings.review_session_effort);
     if (effortSetting) {
       setSessionEffort(this.sessionId, effortSetting);
     }

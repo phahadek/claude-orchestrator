@@ -69,6 +69,9 @@ const SettingsSchema = z.object({
   planning_session_model: z.string(),
   ops_session_model: z.string(),
   gate_verify_session_model: z.string(),
+  groom_session_model: z.string(),
+  design_session_model: z.string(),
+  docs_session_model: z.string(),
   tier3_classifier_model: z.string(),
 
   // Enum settings — only accepted values are valid
@@ -95,6 +98,9 @@ const SettingsSchema = z.object({
     'xhigh',
     'max',
   ]),
+  groom_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
+  design_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
+  docs_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
 
   // JSON-serialised string arrays
   ai_reviewer_usernames: z.array(z.string()),
@@ -145,6 +151,9 @@ export const SETTING_DEFAULTS: Settings = {
   planning_session_model: '',
   ops_session_model: '',
   gate_verify_session_model: '',
+  groom_session_model: '',
+  design_session_model: '',
+  docs_session_model: '',
   tier3_classifier_model: 'claude-haiku-4-5-20251001',
   session_mode: 'cli',
   release_channel: 'stable',
@@ -155,6 +164,9 @@ export const SETTING_DEFAULTS: Settings = {
   planning_session_effort: '',
   ops_session_effort: '',
   gate_verify_session_effort: '',
+  groom_session_effort: '',
+  design_session_effort: '',
+  docs_session_effort: '',
   ai_reviewer_usernames: [],
   bot_comment_deny_list: [],
   bot_comment_allow_list: [],

@@ -59,6 +59,12 @@ const SETTING_KEYS = [
   'ops_session_effort',
   'gate_verify_session_model',
   'gate_verify_session_effort',
+  'groom_session_model',
+  'groom_session_effort',
+  'design_session_model',
+  'design_session_effort',
+  'docs_session_model',
+  'docs_session_effort',
   'tier3_classifier_model',
   'capability_auto_approve_allowlist',
   'milestone_attention_aging_threshold_seconds',
@@ -193,6 +199,24 @@ function applyToRuntime(
     case 'gate_verify_session_effort':
       runtimeSettings.gate_verify_session_effort = value as string;
       break;
+    case 'groom_session_model':
+      runtimeSettings.groom_session_model = value as string;
+      break;
+    case 'groom_session_effort':
+      runtimeSettings.groom_session_effort = value as string;
+      break;
+    case 'design_session_model':
+      runtimeSettings.design_session_model = value as string;
+      break;
+    case 'design_session_effort':
+      runtimeSettings.design_session_effort = value as string;
+      break;
+    case 'docs_session_model':
+      runtimeSettings.docs_session_model = value as string;
+      break;
+    case 'docs_session_effort':
+      runtimeSettings.docs_session_effort = value as string;
+      break;
     case 'tier3_classifier_model':
       runtimeSettings.tier3_classifier_model = value as string;
       break;
@@ -288,6 +312,12 @@ function runtimeSettingsAsRecord(): {
     ops_session_effort: runtimeSettings.ops_session_effort,
     gate_verify_session_model: runtimeSettings.gate_verify_session_model,
     gate_verify_session_effort: runtimeSettings.gate_verify_session_effort,
+    groom_session_model: runtimeSettings.groom_session_model,
+    groom_session_effort: runtimeSettings.groom_session_effort,
+    design_session_model: runtimeSettings.design_session_model,
+    design_session_effort: runtimeSettings.design_session_effort,
+    docs_session_model: runtimeSettings.docs_session_model,
+    docs_session_effort: runtimeSettings.docs_session_effort,
     tier3_classifier_model: runtimeSettings.tier3_classifier_model,
     capability_auto_approve_allowlist:
       runtimeSettings.capability_auto_approve_allowlist,
