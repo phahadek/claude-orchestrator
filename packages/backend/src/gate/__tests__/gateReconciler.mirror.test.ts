@@ -1,10 +1,13 @@
 /**
- * Tests for the Human-Observation mirror step
+ * Tests for the reconciler's mirror step
  * (gateReconciler.reconcileHumanObservationMirrors): every runnable
  * Human-Observation gate_item with no live mirror gets one staged as a
- * `gate.verify` intent (origin: 'mirror'), individually (no groupId); the
- * scan is level-triggered and idempotent; a mirror is retired once its
- * gate_item resolves or is reclassified away from Human-Observation.
+ * `gate.verify` intent (origin: 'mirror'), individually (no groupId); every
+ * Prod-Mutating gate_item held at pending-approval gets one staged with
+ * (origin: 'consent') carrying the item's latest disposition-bearing
+ * evidence. The scan is level-triggered and idempotent per origin; a mirror
+ * is retired once its gate_item leaves the state that earned it a mirror
+ * (resolved, reclassified, or — for a consent mirror — approved/rejected).
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
@@ -23,8 +26,11 @@ import {
 } from '../gateStore.js';
 import {
   appendGateItemEvent,
+  approveGateItem,
+  rejectGateItem,
   reclassifyGateItem,
   reconcileGateRunnability,
+  latestDispositionEvidence,
 } from '../gateService.js';
 import {
   configureGateItemMirrorSink,
@@ -58,14 +64,22 @@ beforeEach(() => {
   db.prepare('DELETE FROM audit_log').run();
 
   configureGateItemMirrorSink({
-    stageMirror(item) {
+    stageMirror(item, origin) {
       stageIntent(
         'gate.verify',
-        { gateItemId: item.id, origin: 'mirror' },
+        origin === 'consent'
+          ? {
+              gateItemId: item.id,
+              origin: 'consent',
+              evidence: latestDispositionEvidence(item),
+            }
+          : { gateItemId: item.id, origin: 'mirror' },
         item.project,
         null,
         null,
-        `Human-Observation: ${item.text}`,
+        origin === 'consent'
+          ? `Prod-Mutating (pending approval): ${item.text}`
+          : `Human-Observation: ${item.text}`,
         null,
         null,
         item.milestone,
@@ -100,14 +114,43 @@ function makeRunnableItem(
   return item;
 }
 
-function liveMirrorRows(): { id: string; task_id: string | null }[] {
+function liveMirrorRows(
+  origin: 'mirror' | 'consent' = 'mirror',
+): { id: string; task_id: string | null }[] {
   return db
     .prepare(
       `SELECT id, task_id FROM staged_intent
        WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
-         AND json_extract(payload, '$.origin') = 'mirror'`,
+         AND json_extract(payload, '$.origin') = ?`,
     )
-    .all() as { id: string; task_id: string | null }[];
+    .all(origin) as { id: string; task_id: string | null }[];
+}
+
+function makeProdMutatingItem(
+  overrides: Partial<Parameters<typeof insertItem>[0]> = {},
+) {
+  return insertItem({
+    project: 'proj-mirror',
+    milestone: 'M12',
+    text: 'Backfill the missing invoice rows in prod',
+    classification: 'Prod-Mutating',
+    sources: [{ sourceTaskId: 'notion:def', sourceTaskTitle: 'Backfill' }],
+    updatedAt: new Date(0).toISOString(),
+    ...overrides,
+  });
+}
+
+/** A Prod-Mutating item held at pending-approval, with a disposition-bearing pass event carrying the given evidence. */
+function makePendingApprovalItem(
+  evidence: unknown = { basis: 'read-only check' },
+) {
+  const item = makeProdMutatingItem();
+  appendGateItemEvent(item.id, {
+    disposition: 'pass',
+    evidence,
+    operator: 'gate-verifier',
+  });
+  return item;
 }
 
 describe('reconcileHumanObservationMirrors', () => {
@@ -216,5 +259,104 @@ describe('reconcileHumanObservationMirrors', () => {
     expect(result.staged).toEqual([]);
     expect(result.retired).toEqual([]);
     expect(liveMirrorRows()).toHaveLength(0);
+  });
+});
+
+describe('reconcileHumanObservationMirrors — consent mirrors (Prod-Mutating pending-approval)', () => {
+  it('stages a consent mirror carrying the evidence behind the held pass', () => {
+    const item = makePendingApprovalItem({ basis: 'read-only dry run' });
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.staged).toEqual([item.id]);
+    const rows = liveMirrorRows('consent');
+    expect(rows).toHaveLength(1);
+    const row = db
+      .prepare('SELECT * FROM staged_intent WHERE id = ?')
+      .get(rows[0].id) as { payload: string; group_id: string | null };
+    expect(row.group_id).toBeNull();
+    expect(JSON.parse(row.payload)).toMatchObject({
+      gateItemId: item.id,
+      origin: 'consent',
+      evidence: { basis: 'read-only dry run' },
+    });
+  });
+
+  it('never mirrors an item in another state or classification', () => {
+    makeProdMutatingItem(); // open, never passed — not pending-approval
+    makeRunnableItem({ classification: 'Read-Only' });
+    makeRunnableItem();
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(liveMirrorRows('consent')).toHaveLength(0);
+    // The Human-Observation runnable item is still mirrored as before —
+    // broadening the scan to a second origin doesn't affect the first.
+    expect(liveMirrorRows('mirror')).toHaveLength(1);
+    expect(result.staged).toHaveLength(1);
+  });
+
+  it('is idempotent — a second pass never re-stages a consent mirror with an already-live one', () => {
+    makePendingApprovalItem();
+
+    const first = reconcileHumanObservationMirrors();
+    const second = reconcileHumanObservationMirrors();
+
+    expect(first.staged).toHaveLength(1);
+    expect(second.staged).toEqual([]);
+    expect(liveMirrorRows('consent')).toHaveLength(1);
+  });
+
+  it('retires a consent mirror once its item is approved from the milestone surface, converging with the direct approve path', () => {
+    const item = makePendingApprovalItem();
+    reconcileHumanObservationMirrors();
+    expect(liveMirrorRows('consent')).toHaveLength(1);
+
+    const approved = approveGateItem(item.id, 'pedro');
+    expect(approved.state).toBe('pass');
+
+    const result = reconcileHumanObservationMirrors();
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('consent')).toHaveLength(0);
+  });
+
+  it('retires a consent mirror once its item is rejected, and the item stays unresolved', () => {
+    const item = makePendingApprovalItem();
+    reconcileHumanObservationMirrors();
+
+    rejectGateItem(item.id, 'not consenting', 'pedro');
+
+    const result = reconcileHumanObservationMirrors();
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('consent')).toHaveLength(0);
+  });
+
+  it('closes the loop: a rejected item reopened for re-verification is mirrored again once it passes back to pending-approval', () => {
+    const item = makePendingApprovalItem();
+    reconcileHumanObservationMirrors();
+    rejectGateItem(item.id, 'not consenting');
+    reconcileHumanObservationMirrors();
+    expect(liveMirrorRows('consent')).toHaveLength(0);
+
+    appendGateItemEvent(item.id, {
+      disposition: 'pass',
+      operator: 'gate-verifier',
+    });
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.staged).toEqual([item.id]);
+    expect(liveMirrorRows('consent')).toHaveLength(1);
+  });
+
+  it('never re-stages once approved or rejected — not re-surfaced on a later tick', () => {
+    const item = makePendingApprovalItem();
+    reconcileHumanObservationMirrors();
+    approveGateItem(item.id);
+    reconcileHumanObservationMirrors();
+
+    const result = reconcileHumanObservationMirrors();
+    expect(result.staged).toEqual([]);
+    expect(result.retired).toEqual([]);
+    expect(liveMirrorRows('consent')).toHaveLength(0);
   });
 });

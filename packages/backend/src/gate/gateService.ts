@@ -431,6 +431,21 @@ export function getGateItemDetail(
   return gateStore.getItemDetail(id);
 }
 
+/**
+ * The evidence attached to a gate item's most recent disposition-bearing
+ * event (skipping pure log entries with no disposition) — the read a
+ * pending-approval consent card surfaces alongside the item's text, since
+ * that's the evidence behind the held pass. Undefined when the item has no
+ * disposition-bearing event yet.
+ */
+export function latestDispositionEvidence(item: GateItem): unknown {
+  for (let i = item.events.length - 1; i >= 0; i--) {
+    const event = item.events[i];
+    if (event.disposition !== undefined) return event.evidence;
+  }
+  return undefined;
+}
+
 /** The verify sessions dispatched for a gate item, most recent first. */
 export function getVerifySessionsForGateItem(
   id: string,
@@ -746,6 +761,58 @@ export function approveGateItem(
   if (!updated) {
     throw new Error(
       `gate_item: failed to read back item ${gateItemId} after approval`,
+    );
+  }
+  return updated;
+}
+
+/**
+ * The Prod-Mutating consent gate's other exit: records withheld consent as a
+ * `fail` disposition on the item — no new state, since the readiness rollup
+ * already treats `fail` as unresolved (RESOLVED_STATES excludes it) and
+ * `fail` sits outside REOPEN_BLOCKED_STATES, so reject then reopen forms a
+ * complete loop back to re-verification, unlike the one-way
+ * `pending-approval` state itself. Mirrors approveGateItem's guards, plus a
+ * mandatory operator reason — withholding consent without a recorded reason
+ * would be indistinguishable from an item nobody has looked at yet.
+ */
+export function rejectGateItem(
+  gateItemId: string,
+  reason: string,
+  operator?: string,
+): GateItem {
+  const item = gateStore.getItem(gateItemId);
+  if (!item) {
+    throw new Error(`gate_item: no item ${gateItemId}`);
+  }
+  if (item.classification !== 'Prod-Mutating') {
+    throw new Error(
+      `gate_item ${gateItemId}: rejection only applies to Prod-Mutating items (classification=${item.classification})`,
+    );
+  }
+  if (item.state !== 'pending-approval') {
+    throw new Error(
+      `gate_item ${gateItemId}: not pending approval (state=${item.state})`,
+    );
+  }
+  if (!reason.trim()) {
+    throw new Error(
+      `gate_item ${gateItemId}: rejection requires an operator reason`,
+    );
+  }
+  const now = new Date().toISOString();
+  gateStore.appendEvent(gateItemId, {
+    disposition: 'fail',
+    operator,
+    evidence: { reason },
+    at: now,
+  });
+  gateStore.advanceState(gateItemId, 'fail', 'fail', now);
+
+  const updated = gateStore.getItem(gateItemId);
+  if (!updated) {
+    throw new Error(
+      `gate_item: failed to read back item ${gateItemId} after rejection`,
     );
   }
   return updated;

@@ -39,6 +39,7 @@ import {
   listMilestoneReadiness,
   appendGateItemEvent,
   approveGateItem,
+  rejectGateItem,
   reopenGateItem,
   reclassifyGateItem,
   proposeGateItemReclassification,
@@ -1004,6 +1005,61 @@ describe('approveGateItem', () => {
   it('rejects approval when not pending-approval', () => {
     const item = makeItem({ classification: 'Prod-Mutating' });
     expect(() => approveGateItem(item.id)).toThrow();
+  });
+});
+
+describe('rejectGateItem', () => {
+  it('records withheld consent as a fail disposition with the operator reason, leaving the item unresolved', () => {
+    const item = makeItem({ classification: 'Prod-Mutating' });
+    appendGateItemEvent(item.id, { disposition: 'pass' });
+    expect(getGateItem(item.id)?.state).toBe('pending-approval');
+
+    const rejected = rejectGateItem(item.id, 'not comfortable yet', 'pedro');
+    expect(rejected.state).toBe('fail');
+    expect(rejected.currentDisposition).toBe('fail');
+
+    const detail = getGateItemDetail(item.id);
+    expect(detail!.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          disposition: 'fail',
+          operator: 'pedro',
+          evidence: { reason: 'not comfortable yet' },
+        }),
+      ]),
+    );
+
+    const readiness = getGateReadiness('polimarket-analyser', 'M12');
+    expect(readiness.status).toBe('blocked');
+    expect(readiness.blocking.map((b) => b.id)).toContain(item.id);
+  });
+
+  it('rejects rejection for a non-Prod-Mutating item', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    expect(() => rejectGateItem(item.id, 'no')).toThrow();
+  });
+
+  it('rejects rejection when not pending-approval', () => {
+    const item = makeItem({ classification: 'Prod-Mutating' });
+    expect(() => rejectGateItem(item.id, 'no')).toThrow();
+  });
+
+  it('refuses rejection without a reason', () => {
+    const item = makeItem({ classification: 'Prod-Mutating' });
+    appendGateItemEvent(item.id, { disposition: 'pass' });
+    expect(() => rejectGateItem(item.id, '')).toThrow(/reason/);
+    expect(() => rejectGateItem(item.id, '   ')).toThrow(/reason/);
+    expect(getGateItem(item.id)?.state).toBe('pending-approval');
+  });
+
+  it('closes the loop: a rejected item can be reopened for re-verification', () => {
+    const item = makeItem({ classification: 'Prod-Mutating' });
+    appendGateItemEvent(item.id, { disposition: 'pass' });
+    rejectGateItem(item.id, 'no consent');
+    expect(getGateItem(item.id)?.state).toBe('fail');
+
+    const reopened = reopenGateItem(item.id, 'pedro', 'reconsidered');
+    expect(reopened.state).toBe('open');
   });
 });
 

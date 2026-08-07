@@ -644,10 +644,21 @@ export async function reattachOutstandingGateVerifications(): Promise<void> {
  * routeVerificationResult/defaultFollowupFiler from this module, so a static
  * import in the other direction would be a cycle.
  */
+/** The two gate-item states this reconciler surfaces into the Decision Inbox — see reconcileHumanObservationMirrors. */
+type GateItemMirrorOrigin = 'mirror' | 'consent';
+
 export interface GateItemMirrorSink {
-  /** Stage a `gate.verify` mirror intent (origin: 'mirror', no groupId, no pre-set disposition) for this runnable Human-Observation item. */
-  stageMirror(item: GateItem): void;
-  /** Retire (withdraw) a live mirror intent whose backing gate_item has resolved or been reclassified away from Human-Observation. */
+  /**
+   * Stage a `gate.verify` mirror intent for an item the operator needs to
+   * see on the decision surface: `origin: 'mirror'` for a runnable
+   * Human-Observation item (no groupId, no pre-set disposition — the
+   * operator supplies pass/fail/deferred at apply time); `origin: 'consent'`
+   * for a Prod-Mutating item held at pending-approval (the operator
+   * approves/rejects it directly, mirroring GateReadinessPanel's consent
+   * gate rather than routing through a disposition).
+   */
+  stageMirror(item: GateItem, origin: GateItemMirrorOrigin): void;
+  /** Retire (withdraw) a live mirror intent whose backing gate_item has left the state that earned it a mirror. */
   retireMirror(intentId: string, reason: string): void;
 }
 
@@ -663,26 +674,54 @@ export interface GateItemMirrorReconcileResult {
   retired: string[];
 }
 
+/** True for a runnable Human-Observation item — no headless session can judge rendered UI/visual state, so it needs an operator disposition. */
+function isMirrorCandidate(item: GateItem): boolean {
+  return (
+    item.classification === 'Human-Observation' && item.state === 'runnable'
+  );
+}
+
+/** True for a Prod-Mutating item held at pending-approval — a pass an operator must explicitly consent to or reject before it resolves. */
+function isConsentCandidate(item: GateItem): boolean {
+  return (
+    item.classification === 'Prod-Mutating' && item.state === 'pending-approval'
+  );
+}
+
+/** The withdrawal reason for a mirror whose backing item left the classification/state that earned it a mirror of the given origin. */
+function retireReasonFor(origin: GateItemMirrorOrigin, item: GateItem): string {
+  const expectedClassification: GateItemClassification =
+    origin === 'mirror' ? 'Human-Observation' : 'Prod-Mutating';
+  if (item.classification !== expectedClassification) {
+    return `gate_item reclassified to ${item.classification}`;
+  }
+  return `gate_item resolved to ${item.state}`;
+}
+
 /**
  * Human-Observation items are excluded from AUTO_RUN_TIERS — no headless
  * session can judge rendered UI/visual state — so without this they live
  * only in the gate table, invisible unless an operator happens to browse
- * GateReadinessPanel filtered to that classification. This mirrors each
- * runnable, unmirrored Human-Observation item into a staged `gate.verify`
- * intent (reusing its shape/kind and disposition-routing path, see
- * stagedIntents.ts's gate.verify apply case) so it surfaces in the Decision
- * Inbox instead.
+ * GateReadinessPanel filtered to that classification. A Prod-Mutating item
+ * held at pending-approval has the opposite problem: it was verified, but
+ * the consent gate (task-writing.md § Manual Verification Gate) holds it
+ * for an operator's explicit approve/reject rather than resolving it — and
+ * that hold is likewise invisible outside GateReadinessPanel. This mirrors
+ * every unmirrored item matching either case into a staged `gate.verify`
+ * intent (reusing its shape/kind, distinguished by payload.origin — see
+ * GateItemMirrorOrigin) so both surface in the Decision Inbox instead.
  *
  * Level-triggered, not edge-triggered: re-evaluated every reconcile tick
- * (not just on the open->runnable transition) so an item accreted directly
- * into a runnable state is still caught. Idempotent via
- * findActiveGateVerifyMirrorForItem's dedup lookup — a gate_item with an
- * already-live mirror is never re-staged. The companion retire pass rescans
- * every live mirror each tick (rather than hooking the direct
- * GateReadinessPanel dispose/reclassify routes individually) so a mirror is
- * retired however the underlying item left runnable-Human-Observation state
- * — resolved via the direct panel path, or reclassified away — without a
- * stale card lingering in the Inbox.
+ * (not just on the open->runnable or pass->pending-approval transition) so
+ * an item accreted directly into either state is still caught. Idempotent
+ * via findActiveGateVerifyMirrorForItem's per-origin dedup lookup — a
+ * gate_item with an already-live mirror of that origin is never re-staged.
+ * The companion retire pass rescans every live mirror of both origins each
+ * tick (rather than hooking the direct GateReadinessPanel/consent routes
+ * individually) so a mirror is retired however the underlying item left the
+ * matching state — resolved via the direct panel path, approved/rejected
+ * from the milestone surface, or reclassified away — without a stale card
+ * lingering in the Inbox.
  */
 export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResult {
   const staged: string[] = [];
@@ -690,41 +729,50 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
   if (!configuredMirrorSink) return { staged, retired };
   const sink = configuredMirrorSink;
 
-  const runnableHumanObservation = gateStore
-    .listAll()
-    .filter(
-      (item) =>
-        item.classification === 'Human-Observation' &&
-        item.state === 'runnable',
-    );
-  for (const item of runnableHumanObservation) {
-    if (findActiveGateVerifyMirrorForItem(item.id)) continue;
-    sink.stageMirror(item);
-    staged.push(item.id);
+  const allItems = gateStore.listAll();
+  const candidatesByOrigin: [
+    GateItemMirrorOrigin,
+    (item: GateItem) => boolean,
+  ][] = [
+    ['mirror', isMirrorCandidate],
+    ['consent', isConsentCandidate],
+  ];
+  for (const [origin, matches] of candidatesByOrigin) {
+    for (const item of allItems.filter(matches)) {
+      if (findActiveGateVerifyMirrorForItem(item.id, origin)) continue;
+      sink.stageMirror(item, origin);
+      staged.push(item.id);
+    }
   }
 
-  for (const mirror of listActiveGateVerifyMirrors()) {
-    let gateItemId: string | null = null;
-    try {
-      const payload = JSON.parse(mirror.payload) as { gateItemId?: unknown };
-      gateItemId =
-        typeof payload.gateItemId === 'string' ? payload.gateItemId : null;
-    } catch {
-      // Malformed payload — leave gateItemId null, treated as "backing item no longer exists" below.
+  const stillLiveByOrigin: Record<
+    GateItemMirrorOrigin,
+    (item: GateItem) => boolean
+  > = {
+    mirror: isMirrorCandidate,
+    consent: isConsentCandidate,
+  };
+  for (const [origin, stillLive] of Object.entries(stillLiveByOrigin) as [
+    GateItemMirrorOrigin,
+    (item: GateItem) => boolean,
+  ][]) {
+    for (const mirror of listActiveGateVerifyMirrors(origin)) {
+      let gateItemId: string | null = null;
+      try {
+        const payload = JSON.parse(mirror.payload) as { gateItemId?: unknown };
+        gateItemId =
+          typeof payload.gateItemId === 'string' ? payload.gateItemId : null;
+      } catch {
+        // Malformed payload — leave gateItemId null, treated as "backing item no longer exists" below.
+      }
+      const item = gateItemId ? gateStore.getItem(gateItemId) : undefined;
+      if (item !== undefined && stillLive(item)) continue;
+      const reason = !item
+        ? 'backing gate_item no longer exists'
+        : retireReasonFor(origin, item);
+      sink.retireMirror(mirror.id, reason);
+      retired.push(mirror.id);
     }
-    const item = gateItemId ? gateStore.getItem(gateItemId) : undefined;
-    const stillLive =
-      item !== undefined &&
-      item.classification === 'Human-Observation' &&
-      item.state === 'runnable';
-    if (stillLive) continue;
-    const reason = !item
-      ? 'backing gate_item no longer exists'
-      : item.classification !== 'Human-Observation'
-        ? `gate_item reclassified to ${item.classification}`
-        : `gate_item resolved to ${item.state}`;
-    sink.retireMirror(mirror.id, reason);
-    retired.push(mirror.id);
   }
 
   return { staged, retired };

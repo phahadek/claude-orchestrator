@@ -1401,14 +1401,20 @@ interface GateVerifyIntentPayload {
   evidence?: unknown;
   reclassify?: { to: GateItemClassification; reason: string };
   /**
-   * Marks a reconciler-originated stand-in for a runnable Human-Observation
-   * gate_item that no headless session can verify (see
-   * gateReconciler.reconcileHumanObservationMirrors) — reuses gate.verify's
-   * kind/shape and disposition-routing path rather than inventing a new
-   * kind, since the only real difference is *who* supplies the disposition
-   * and *when*. Absent for a genuine verifier-originated report.
+   * Marks a reconciler-originated stand-in the operator sees on the
+   * decision surface instead of dispatching a real verify session (see
+   * gateReconciler.reconcileHumanObservationMirrors). `'mirror'` is a
+   * runnable Human-Observation gate_item that no headless session can
+   * verify — reuses gate.verify's kind/shape and disposition-routing path
+   * rather than inventing a new kind, since the only real difference is
+   * *who* supplies the disposition and *when*. `'consent'` is a
+   * Prod-Mutating gate_item held at pending-approval — it carries no
+   * disposition at all (the pass is already recorded; the operator
+   * approves or rejects the hold itself via the dedicated gate
+   * approve/reject endpoints, not this intent's generic apply path).
+   * Absent for a genuine verifier-originated report.
    */
-  origin?: 'mirror';
+  origin?: 'mirror' | 'consent';
 }
 /**
  * Payload for the notion.pageEdit staged intent — the Notion
@@ -3736,6 +3742,11 @@ async function applyIntent(
     }
     case 'gate.verify': {
       const payload = intent.payload as GateVerifyIntentPayload;
+      if (payload.origin === 'consent') {
+        throw new Error(
+          `[stagedIntents] gate.verify apply: a consent mirror for "${payload.gateItemId}" is dispositioned via the gate approve/reject endpoints, not intent apply`,
+        );
+      }
       const item = getGateItem(payload.gateItemId);
       if (!item) {
         throw new Error(

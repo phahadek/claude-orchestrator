@@ -6,6 +6,7 @@ import type {
   GroomProposalFields,
 } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
+import { gateApi } from '../api/gate';
 import { diffTaskBody, splitSections, type SectionDiff } from './bodyDiff';
 import { CollapsibleField } from './CollapsibleField';
 import { useHighlightedCardKeyboardActions } from '../types/panelKeyboard';
@@ -858,7 +859,7 @@ interface GateVerifyPayload {
   disposition?: 'pass' | 'fail' | 'needs-setup' | 'deferred';
   evidence?: unknown;
   reclassify?: { to: string; reason: string };
-  origin?: 'mirror';
+  origin?: 'mirror' | 'consent';
 }
 
 interface GateVerifyEvidence {
@@ -940,6 +941,8 @@ function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
         Gate item <strong>{payload.gateItemId}</strong>:{' '}
         {payload.origin === 'mirror' ? (
           <strong>Human-Observation — awaiting operator disposition</strong>
+        ) : payload.origin === 'consent' ? (
+          <strong>Prod-Mutating — pending approval</strong>
         ) : (
           <strong>{payload.disposition}</strong>
         )}
@@ -1239,6 +1242,7 @@ export function StagedIntentPanel({
   const [rejectReason, setRejectReason] = useState('');
   const [showOverride, setShowOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
+  const [consentRejectReason, setConsentRejectReason] = useState('');
   const rejectReasonRef = useRef<HTMLTextAreaElement>(null);
 
   const blocked = Boolean(
@@ -1265,6 +1269,18 @@ export function StagedIntentPanel({
   const isGateVerifyMirror =
     intent.kind === 'gate.verify' &&
     (intent.payload as { origin?: string } | null)?.origin === 'mirror';
+  // A Prod-Mutating item held at pending-approval (the consent gate) — its
+  // pass is already recorded, so the operator's only choices are Approve
+  // (release to pass, via the same approveGateItem the GateReadinessPanel
+  // path uses) or Reject-with-reason (records withheld consent as a `fail`
+  // disposition). Neither goes through the generic intent apply/reject
+  // machinery — see StagedIntentPanel.tsx's handleConsentApprove/Reject.
+  const isGateVerifyConsent =
+    intent.kind === 'gate.verify' &&
+    (intent.payload as { origin?: string } | null)?.origin === 'consent';
+  const consentGateItemId = isGateVerifyConsent
+    ? (intent.payload as GateVerifyPayload).gateItemId
+    : null;
 
   const handleApply = async (
     override?: { reason: string },
@@ -1325,6 +1341,7 @@ export function StagedIntentPanel({
   const canUsePrimaryActionViaKeyboard =
     !hideActions &&
     !isNoOp &&
+    !isGateVerifyConsent &&
     inFlight === null &&
     !disabled &&
     (usesApproveAsPrimary
@@ -1383,6 +1400,39 @@ export function StagedIntentPanel({
         return;
       }
       setError(err instanceof Error ? err.message : 'Failed to reject intent');
+    } finally {
+      setInFlight(null);
+    }
+  };
+
+  const handleConsentApprove = async () => {
+    if (!consentGateItemId) return;
+    setInFlight('approve');
+    setError(null);
+    try {
+      const updated = await gateApi.approveItem(consentGateItemId);
+      onApplied?.(intent, updated);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to approve gate item',
+      );
+    } finally {
+      setInFlight(null);
+    }
+  };
+
+  const handleConsentReject = async () => {
+    const reason = consentRejectReason.trim();
+    if (!consentGateItemId || !reason) return;
+    setInFlight('reject');
+    setError(null);
+    try {
+      const updated = await gateApi.rejectItem(consentGateItemId, { reason });
+      onApplied?.(intent, updated);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to reject gate item',
+      );
     } finally {
       setInFlight(null);
     }
@@ -1467,7 +1517,39 @@ export function StagedIntentPanel({
 
       {error && <div className={styles.error}>{error}</div>}
 
-      {hideActions ? null : isNoOp ? (
+      {hideActions ? null : isGateVerifyConsent ? (
+        <div className={styles.rejectForm}>
+          <textarea
+            className={styles.feedbackInput}
+            placeholder="Why is consent being withheld?"
+            value={consentRejectReason}
+            onChange={(e) => setConsentRejectReason(e.target.value)}
+            data-testid="staged-intent-gate-consent-reject-reason"
+          />
+          <div className={styles.permissionButtons}>
+            <button
+              type="button"
+              className={styles.approveButton}
+              disabled={inFlight !== null || disabled}
+              data-testid="staged-intent-gate-consent-approve"
+              onClick={() => void handleConsentApprove()}
+            >
+              {inFlight === 'approve' ? 'Approving…' : 'Approve'}
+            </button>
+            <button
+              type="button"
+              className={styles.denyButton}
+              disabled={
+                inFlight !== null || disabled || !consentRejectReason.trim()
+              }
+              data-testid="staged-intent-gate-consent-reject"
+              onClick={() => void handleConsentReject()}
+            >
+              {inFlight === 'reject' ? 'Submitting…' : 'Reject'}
+            </button>
+          </div>
+        </div>
+      ) : isNoOp ? (
         <div className={styles.rejectForm}>
           <button
             type="button"
