@@ -8,7 +8,13 @@ export function taskNameFromNotionUrl(url: string): string {
     if (!withoutId || /^[0-9a-f]{32}$/i.test(withoutId)) return url;
     // Replace hyphens with spaces and capitalise first word
     const words = withoutId.replace(/-/g, ' ');
-    return words.charAt(0).toUpperCase() + words.slice(1);
+    let decoded = words;
+    try {
+      decoded = decodeURIComponent(words);
+    } catch {
+      // malformed percent-sequence: fall back to the un-decoded text
+    }
+    return decoded.charAt(0).toUpperCase() + decoded.slice(1);
   } catch {
     return url; // fallback: show raw URL
   }
