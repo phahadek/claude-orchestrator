@@ -4728,7 +4728,10 @@ async function computeProposedBody(
   );
   if (updateBodyRow) {
     const payload = JSON.parse(updateBodyRow.payload) as UpdateBodyPayload;
-    return { body: composeProposedBody(stored, payload.sections), unapplied: [] };
+    return {
+      body: composeProposedBody(stored, payload.sections),
+      unapplied: [],
+    };
   }
   const patchRows = intents.filter(
     (row) =>
@@ -4739,7 +4742,11 @@ async function computeProposedBody(
   const unapplied: UnappliedBodyPatch[] = [];
   const body = patchRows.reduce((body, row) => {
     const payload = JSON.parse(row.payload) as PatchBodySectionPayload;
-    const result = composePatchBodySectionPreview(body, payload.section, payload);
+    const result = composePatchBodySectionPreview(
+      body,
+      payload.section,
+      payload,
+    );
     if (!result.applied) {
       unapplied.push({
         intentId: row.id,
@@ -4752,7 +4759,9 @@ async function computeProposedBody(
 }
 
 /** Renders each unapplied patch (see computeProposedBody's ProposedBodyResult) into a human-readable blocked-reason line naming the intent id — mirrors describeUnappliedCrossGroupBodyPatches's phrasing so the two "your fix isn't reflected here" cases read the same way regardless of which one triggered. */
-function describeUnappliedBodyPatches(unapplied: UnappliedBodyPatch[]): string[] {
+function describeUnappliedBodyPatches(
+  unapplied: UnappliedBodyPatch[],
+): string[] {
   return unapplied.map(
     (u) =>
       `Staged patch ${u.intentId} did not compose against the current body (${u.reason}) and was not applied to this preview — ` +
