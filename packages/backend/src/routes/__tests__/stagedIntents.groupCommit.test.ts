@@ -2706,7 +2706,7 @@ describe('task.patchBodySection / task.updateBody staged ungrouped while the ses
     ).toThrow(GroomBodyEditMissingGroupError);
   });
 
-  it('accepts a task.patchBodySection carrying the open group\'s own groupId', () => {
+  it("accepts a task.patchBodySection carrying the open group's own groupId", () => {
     seedGroomSession('groom-body-3', 't-body-original-3');
     stageIntent(
       'task.setDependsOn',

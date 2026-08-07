@@ -174,7 +174,7 @@ describe('procedureCore', () => {
     expect(rendered).toContain('OPEN_QUESTIONS_EXEMPT_TYPES');
   });
 
-  it('states that a groom body edit must join its task\'s open decision group', () => {
+  it("states that a groom body edit must join its task's open decision group", () => {
     const principle = CORE_PRINCIPLES.find(
       (p) => p.id === 'groom-body-edit-grouped',
     )!;
@@ -186,8 +186,12 @@ describe('procedureCore', () => {
     expect(rendered).toMatch(/groupId/);
     expect(rendered).toMatch(/rejected at stage time/);
 
-    expect(principlesFor('design').find((p) => p.id === principle.id)).toBeUndefined();
-    expect(principlesFor('ops').find((p) => p.id === principle.id)).toBeUndefined();
+    expect(
+      principlesFor('design').find((p) => p.id === principle.id),
+    ).toBeUndefined();
+    expect(
+      principlesFor('ops').find((p) => p.id === principle.id),
+    ).toBeUndefined();
   });
 
   it('keeps ordered steps sequential and non-empty per applicable skill', () => {
