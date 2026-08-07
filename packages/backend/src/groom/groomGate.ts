@@ -1015,3 +1015,50 @@ export class GroomingGateError extends Error {
     this.name = 'GroomingGateError';
   }
 }
+
+/**
+ * One staged-intent group member, as `findAutoApproveIneligibleTaskCreate`
+ * needs to see it: its kind, and — for a `task.create` — the type its own
+ * payload declares (never the group's subject task's type; see below).
+ */
+export interface GroupCommitMember {
+  kind: string;
+  /** For `task.create` only: the type field carried on that intent's own payload. */
+  taskCreatePayloadType?: string;
+}
+
+/**
+ * approve-by-standard / batch-commit's task.create guard (isTriageEligibleForType
+ * above is its per-task-gate mirror-image, evaluated at Ready-flip time
+ * against the *subject* task's own type). A group committed through
+ * approve-by-standard (stagedIntents.ts's commitGroupIntents with
+ * `autoApprove: true` — both the single-group `/approve` route and the
+ * multi-group `/batch/commit` approve-by-standard surface) is exempted from
+ * the per-item human decision on the strength of ITS OWN subject task's
+ * triage-eligible type. A `task.create` riding in that same group mints an
+ * entirely different task, whose own type was never triage-checked — so a
+ * 💻 Code (or any other non-triage-eligible-type) `task.create` must not be
+ * allowed to ride through on the subject's exemption. Absent (or
+ * unresolvable) payload type is deliberately NOT flagged here: an untyped
+ * follow-on carries no evidence it's Code, and checkGroomingPromotionGate's
+ * own per-task gate remains the backstop once it actually applies as a
+ * concrete task.
+ */
+export function findAutoApproveIneligibleTaskCreate(
+  members: readonly GroupCommitMember[],
+): { blocked: boolean; reasons: string[] } {
+  const reasons = members
+    .filter(
+      (m) =>
+        m.kind === 'task.create' &&
+        !!m.taskCreatePayloadType &&
+        !isTriageEligibleType(m.taskCreatePayloadType),
+    )
+    .map(
+      (m) =>
+        `task.create for type "${m.taskCreatePayloadType}" is not a triage-eligible type — approve-by-standard ` +
+        "cannot exempt it on the group's subject task disposition; commit this group through an explicit " +
+        'per-task human decision instead.',
+    );
+  return { blocked: reasons.length > 0, reasons };
+}

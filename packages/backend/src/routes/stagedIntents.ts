@@ -31,8 +31,13 @@ import {
 import {
   GroomingGateError,
   checkGroomingPromotionGate,
+  findAutoApproveIneligibleTaskCreate,
   type GroomingGateEntry,
 } from '../groom/groomGate';
+import {
+  isInteractiveTaskType,
+  isTriageEligibleType,
+} from '../planning/triage';
 import type {
   StagedIntentRow,
   StagedIntentState,
@@ -940,6 +945,48 @@ function assertTaskCreateGrouped(
   );
   if (openGroupId) {
     throw new TaskCreateMissingGroupError(openGroupId);
+  }
+}
+
+/**
+ * Thrown at stage time when a groom session stages a `task.create` against a
+ * 📐 Design / 📋 Planning subject task: that type's follow-on Code tasks are
+ * the design decision's own deliverable — produced once its open questions
+ * lock, by a Design Execution session (/design) — never grooming's to
+ * pre-author on the strength of bringing the Design/Planning task itself to
+ * Ready.
+ */
+class GroomDesignFollowOnRejectedError extends Error {
+  constructor(taskType: string) {
+    super(
+      `[stagedIntents] a groom session cannot stage "task.create" against a ${taskType} subject task — its ` +
+        "follow-on Code tasks are that task's Design Execution session (/design) deliverable, produced once " +
+        "its open questions lock, not grooming's to pre-author.",
+    );
+    this.name = 'GroomDesignFollowOnRejectedError';
+  }
+}
+
+/**
+ * Stage-time enforcement of "grooming doesn't pre-author a design's
+ * follow-ons": a `task.create` staged by a session whose own bound task
+ * (`sessions.task_id`) is 📐 Design / 📋 Planning is rejected when that
+ * session is a groom session (session_type 'groom') — a Design Execution
+ * session (session_type 'design') legitimately stages its own follow-on
+ * task.create against the same subject type and is unaffected, as is a groom
+ * session against any other subject type (its legitimate follow-on-filing
+ * path, e.g. an Investigation task or a Code split).
+ */
+function assertGroomTaskCreateNotDesignFollowOn(
+  kind: string,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'task.create' || !sessionId) return;
+  const session = getSession(sessionId);
+  if (!session || session.session_type !== 'groom' || !session.task_id) return;
+  const taskType = getCachedType(session.task_id);
+  if (isInteractiveTaskType(taskType ?? undefined)) {
+    throw new GroomDesignFollowOnRejectedError(taskType as string);
   }
 }
 
@@ -3030,6 +3077,7 @@ export function stageIntent(
   assertNoOutstandingCapabilityRequest(kind, sessionId);
   assertExpectedTerminalKinds(kind, payload, sessionId);
   assertTaskCreateGrouped(kind, sessionId, groupId);
+  assertGroomTaskCreateNotDesignFollowOn(kind, sessionId);
 
   ({ payload, decisionProposal } = applyDesignClosingSynthesisGeneration(
     kind,
@@ -5344,6 +5392,43 @@ async function commitGroupIntents(
         body: {
           error: `group "${groupId}" has ${notApproved.length} intent(s) not yet approved`,
           pendingIds: notApproved.map((r) => r.id),
+        },
+      };
+    }
+  } else {
+    // approve-by-standard / batch-commit only: a task.create riding in the
+    // group must be triage-eligible in its own right (findAutoApproveIneligibleTaskCreate
+    // — never covered by the group's subject task's own exemption). The
+    // explicit per-task human path above (autoApprove: false, every live
+    // member individually approved) is deliberately unaffected — this is
+    // the exemption mechanism being blocked, not the operation itself.
+    const liveWithTaskCreateType = live.map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      taskCreatePayloadType:
+        r.kind === 'task.create'
+          ? (JSON.parse(r.payload) as CreateTaskPayload).type
+          : undefined,
+    }));
+    const ineligible = findAutoApproveIneligibleTaskCreate(
+      liveWithTaskCreateType,
+    );
+    if (ineligible.blocked) {
+      const blockingIds = liveWithTaskCreateType
+        .filter(
+          (r) =>
+            r.kind === 'task.create' &&
+            !!r.taskCreatePayloadType &&
+            !isTriageEligibleType(r.taskCreatePayloadType),
+        )
+        .map((r) => r.id);
+      return {
+        status: 409,
+        body: {
+          error:
+            `group "${groupId}" cannot commit through approve-by-standard: member(s) ` +
+            `${blockingIds.join(', ')} — ${ineligible.reasons.join('; ')}`,
+          blockingIds,
         },
       };
     }
