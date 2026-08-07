@@ -913,6 +913,25 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'The symbolic reference resolves only within its own staged-intent group — ' +
       'it can never name a `task.create` staged in a different group.',
   },
+  {
+    id: 'groom-body-edit-grouped',
+    title: 'A groom body edit joins its task\'s open decision group',
+    appliesTo: ['groom'],
+    text:
+      'A `task.patchBodySection` / `task.updateBody` staged against a task that ' +
+      'already has an open decision group (any live staged/approved/committed ' +
+      'intent of this session\'s carrying a `groupId` for this same task) MUST ' +
+      'carry that same `groupId` — it is rejected at stage time, naming the open ' +
+      'group, if staged ungrouped. A grooming outcome is one atomic decision: the ' +
+      'group commits together, and the promotion gate composes the body it ' +
+      'validates from the group\'s own members — a body edit staged outside the ' +
+      'group can be committed or rejected independently of the Ready flip it was ' +
+      'meant to support. DO stage every body edit with the same `groupId` as the ' +
+      'rest of the pass\'s decision once one is open for the task. A body edit ' +
+      'staged before any group exists yet for that task is unaffected — it may ' +
+      'stay standalone (there is no group to join, and none may ever materialize, ' +
+      'e.g. a pass that ends in `planning.noOp`).',
+  },
 ] as const;
 
 /**
