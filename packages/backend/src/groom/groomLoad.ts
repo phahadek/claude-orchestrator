@@ -500,7 +500,7 @@ function stripHyphens(id: string): string {
  * taught by config/task-writing.md's sibling Notion `(update — Section
  * name)` convention — the dash may be a hyphen, en-dash, or em-dash.
  */
-const NEW_MARKER = /\(\s*new\b(?:\s*[-–—]\s*[^)]*)?\s*\)/i;
+const NEW_MARKER = /\(\s*new\s*\)|\(\s*new\s*[-–—][^)]*\)/i;
 
 function cleanPathToken(tok: string): string {
   return tok
