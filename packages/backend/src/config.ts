@@ -668,6 +668,12 @@ export interface RuntimeSettings {
   auto_archive_grace_minutes: number;
   /** ConcludedSessionArchiver: interval in minutes between archiver sweeps. */
   auto_archive_sweep_interval_minutes: number;
+  /** PlanningOrchestrator idle-terminal sweep: when true, the periodic sweep runs. */
+  idle_planning_terminal_sweep_enabled: boolean;
+  /** PlanningOrchestrator idle-terminal sweep: minutes an idle session must sit before being eligible — defense-in-depth backstop, not the trigger (the completeness predicate is). */
+  idle_planning_terminal_sweep_age_floor_minutes: number;
+  /** PlanningOrchestrator idle-terminal sweep: interval in minutes between sweeps. */
+  idle_planning_terminal_sweep_interval_minutes: number;
   /** Model used for large-context task escalation; empty string = feature off. */
   large_task_model: string;
   /** Reasoning effort for large-task/escalation spawns; empty string = model default. */
@@ -837,6 +843,14 @@ export const runtimeSettings: RuntimeSettings = {
   ),
   auto_archive_sweep_interval_minutes: Number(
     process.env.AUTO_ARCHIVE_SWEEP_INTERVAL_MINUTES ?? 5,
+  ),
+  idle_planning_terminal_sweep_enabled:
+    process.env.IDLE_PLANNING_TERMINAL_SWEEP_ENABLED !== 'false',
+  idle_planning_terminal_sweep_age_floor_minutes: Number(
+    process.env.IDLE_PLANNING_TERMINAL_SWEEP_AGE_FLOOR_MINUTES ?? 24 * 60,
+  ),
+  idle_planning_terminal_sweep_interval_minutes: Number(
+    process.env.IDLE_PLANNING_TERMINAL_SWEEP_INTERVAL_MINUTES ?? 30,
   ),
   large_task_model: '',
   large_task_effort: '',

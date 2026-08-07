@@ -29,6 +29,7 @@ type EventType =
   | 'verdict_routing_failed'
   | 'manual_pr_clear'
   | 'sessions_auto_archived'
+  | 'planning_sessions_idle_swept_terminal'
   | 'pr_attribution_mismatch'
   | 'pr_creation_failed'
   | 'session_aborted'

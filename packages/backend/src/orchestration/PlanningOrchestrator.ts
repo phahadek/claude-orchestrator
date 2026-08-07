@@ -11,6 +11,8 @@ import {
   getPRBySessionId,
   setSessionTerminalCompletionReason,
   TERMINAL_SESSION_STATUSES,
+  hasActiveCapabilityRequestForSession,
+  listIdlePlanningSessionsEligibleForTerminalSweep,
 } from '../db/queries';
 import type {
   Session,
@@ -34,6 +36,9 @@ import {
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { emitTaskUpdated, broadcastTaskStatusChanged } from '../routes/tasks';
 import { NO_OP_INTENT_KIND, hasStagedDecision } from './planningDecisionKinds';
+import { runtimeSettings } from '../config';
+import { recordEvent } from '../audit/AuditLog';
+import type { Scheduler } from './Scheduler';
 
 export const DESIGN_DONE_STATUS = '✅ Done';
 
@@ -288,23 +293,36 @@ export class PlanningOrchestrator {
    * that follows a session's final disposition, with no further apply
    * required.
    */
-  checkTerminal(sessionId: string): boolean {
+  /**
+   * Core completeness predicate shared by the live event-driven path
+   * (checkTerminal) and the cold idle-sweep path
+   * (isSessionCompleteForIdleSweep) — a staged no-op marker requires no
+   * operator disposition, and staging one is itself the terminal signal
+   * rather than "new work" a next turn must settle, so it is excluded from
+   * the pending gate. `owesGatedArtifacts`: a session whose
+   * completeness.disposition was just approved still owes its gated
+   * architecture-unit / closing-synthesis write even though nothing is left
+   * `staged` — that approval is a precondition for further staging, not the
+   * end of the session's mandate. See sessionOwesGatedDesignArtifacts.
+   */
+  private computeStagedIntentState(sessionId: string): {
+    all: StagedIntentRow[];
+    countable: StagedIntentRow[];
+    stillPending: boolean;
+    owesGatedArtifacts: boolean;
+  } {
     const all = listStagedIntentsBySession(sessionId);
-    // A staged no-op marker requires no operator disposition, and staging
-    // one is itself the terminal signal rather than "new work" a next turn
-    // must settle — it is excluded from both the pending gate and the
-    // staged-something-new snapshot below, so it never holds a session
-    // pending or non-terminal the way a real task-write would.
     const countable = all.filter((i) => i.kind !== NO_OP_INTENT_KIND);
     const stillPending = countable.some((i) => i.state === 'staged');
+    const owesGatedArtifacts = sessionOwesGatedDesignArtifacts(sessionId);
+    return { all, countable, stillPending, owesGatedArtifacts };
+  }
+
+  checkTerminal(sessionId: string): boolean {
+    const { all, countable, stillPending, owesGatedArtifacts } =
+      this.computeStagedIntentState(sessionId);
     const priorCount = this.stagedCountAtResume.get(sessionId) ?? 0;
     const stagedNothingNew = countable.length <= priorCount;
-    // A session whose completeness.disposition was just approved still owes
-    // its gated architecture-unit / closing-synthesis write even though
-    // nothing is left `staged` — that approval is a precondition for further
-    // staging, not the end of the session's mandate. See
-    // sessionOwesGatedDesignArtifacts.
-    const owesGatedArtifacts = sessionOwesGatedDesignArtifacts(sessionId);
     const reachedTerminal =
       !stillPending && stagedNothingNew && !owesGatedArtifacts;
 
@@ -369,21 +387,7 @@ export class PlanningOrchestrator {
     // unreachable (excluded from both the operator-facing decision surface
     // and any live session), so raise a needs-attention pause reason
     // against the target task rather than leaving them silently stranded.
-    if (row.task_id) {
-      const blockedMembers = listStagedIntentsBySession(sessionId).filter(
-        (i) =>
-          i.state === 'needs_revision' || i.state === 'pending_verification',
-      );
-      if (blockedMembers.length > 0) {
-        setTaskPauseReason(
-          row.task_id,
-          'planning_terminal_blocked_members',
-          `Planning session ${sessionId} reached terminal (${reason}) with ` +
-            `${blockedMembers.length} blocked staged intent(s) still outstanding: ` +
-            `${blockedMembers.map((i) => i.id).join(', ')}.`,
-        );
-      }
-    }
+    this.surfaceBlockedMembersPauseReason(sessionId, row, reason);
 
     // An ops-terminal closing group that never carried its journal.setState
     // -> "resolved" transition leaves an Investigation's journal stuck at a
@@ -862,6 +866,141 @@ export class PlanningOrchestrator {
         );
       }
     }
+  }
+
+  /**
+   * Sets the 'planning_terminal_blocked_members' pause reason when the
+   * session holds staged intents stuck at needs_revision/pending_verification
+   * — shared by markTerminal (which surfaces this alongside terminalizing)
+   * and the idle-sweep's blocked branch (which surfaces this INSTEAD of
+   * terminalizing, since those intents can never be resolved once the
+   * subprocess is gone). Returns true if a pause reason was set.
+   */
+  private surfaceBlockedMembersPauseReason(
+    sessionId: string,
+    row: Session,
+    reason: string,
+  ): boolean {
+    if (!row.task_id) return false;
+    const blockedMembers = listStagedIntentsBySession(sessionId).filter(
+      (i) =>
+        i.state === 'needs_revision' || i.state === 'pending_verification',
+    );
+    if (blockedMembers.length === 0) return false;
+    setTaskPauseReason(
+      row.task_id,
+      'planning_terminal_blocked_members',
+      `Planning session ${sessionId} reached terminal (${reason}) with ` +
+        `${blockedMembers.length} blocked staged intent(s) still outstanding: ` +
+        `${blockedMembers.map((i) => i.id).join(', ')}.`,
+    );
+    return true;
+  }
+
+  /**
+   * Cold-path completeness check for a session with no live in-memory
+   * process — reuses computeStagedIntentState, the same core predicate
+   * checkTerminal applies on the live event-driven path, with
+   * stagedNothingNew treated as unconditionally true: nothing can ever be
+   * staged again for a session whose subprocess has already exited, so the
+   * turn-boundary comparison checkTerminal needs is moot here. Adds two
+   * gates that only matter once resumption is impossible:
+   *  - 'blocked': a needs_revision/pending_verification intent can never be
+   *    resolved by this session again — surface it for operator attention
+   *    rather than silently terminalizing over it.
+   *  - an outstanding session.requestCapability intent — the session is
+   *    still (structurally, if not literally) awaiting an answer.
+   */
+  private isSessionCompleteForIdleSweep(
+    sessionId: string,
+  ): 'terminal' | 'blocked' | 'not_ready' {
+    const { all, stillPending, owesGatedArtifacts } =
+      this.computeStagedIntentState(sessionId);
+    if (stillPending || owesGatedArtifacts) return 'not_ready';
+    if (hasActiveCapabilityRequestForSession(sessionId)) return 'not_ready';
+    const blocked = all.some(
+      (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
+    );
+    return blocked ? 'blocked' : 'terminal';
+  }
+
+  /**
+   * Periodic backstop for the gap checkTerminal structurally cannot close:
+   * a planning session whose subprocess has already exited (status='idle',
+   * ended_at set) can never again emit the session_ended/result message
+   * onSessionParked listens for, so checkTerminal is never re-triggered for
+   * it — it sits holding a countLivePlanningSessions() slot forever. This
+   * sweeps that population, applying isSessionCompleteForIdleSweep (positive
+   * evidence of completion, not an inference from elapsed time) gated by a
+   * generous age floor as defense-in-depth, and reuses markTerminal / the
+   * blocked-member pause-reason path rather than writing session status
+   * directly. archiveConcludedSessionsOlderThan's separate idle-exclusion
+   * guard is untouched — a session this sweep terminalizes is reclaimed by
+   * that archiver unchanged, on its own normal cadence.
+   */
+  sweepIdleTerminalSessions(nowFn: () => number = () => Date.now()): number {
+    const cutoffMs =
+      nowFn() -
+      runtimeSettings.idle_planning_terminal_sweep_age_floor_minutes *
+        60_000;
+    const candidates = listIdlePlanningSessionsEligibleForTerminalSweep(
+      cutoffMs,
+    );
+
+    const terminalizedIds: string[] = [];
+    for (const row of candidates) {
+      // Defensive regression guard: status='idle' should already imply no
+      // live in-memory process, but never destroy live work on that
+      // assumption alone.
+      if (this.sessionManager.isAlive(row.session_id)) continue;
+
+      const outcome = this.isSessionCompleteForIdleSweep(row.session_id);
+      if (outcome === 'not_ready') continue;
+      if (outcome === 'blocked') {
+        this.surfaceBlockedMembersPauseReason(
+          row.session_id,
+          row,
+          'planning_idle_sweep_blocked',
+        );
+        continue;
+      }
+      this.markTerminal(row.session_id, 'planning_idle_sweep_terminal', {
+        skipInFlightGuard: true,
+      });
+      terminalizedIds.push(row.session_id);
+    }
+
+    if (terminalizedIds.length > 0) {
+      recordEvent({
+        event_type: 'planning_sessions_idle_swept_terminal',
+        actor_type: 'system',
+        payload: {
+          terminalized_count: terminalizedIds.length,
+          session_ids: terminalizedIds,
+        },
+      });
+      logger.info(
+        `[PlanningOrchestrator] idle-sweep terminalized ${terminalizedIds.length} finished idle planning session(s)`,
+      );
+    }
+
+    return terminalizedIds.length;
+  }
+
+  /** Registers the idle-terminal sweep with the Scheduler — cadence/reentrancy managed by Scheduler, this class owns sweep logic only. */
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'idle_planning_session_terminal_sweep',
+      intervalMs: () =>
+        runtimeSettings.idle_planning_terminal_sweep_interval_minutes *
+        60_000,
+      enabled: () => runtimeSettings.idle_planning_terminal_sweep_enabled,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        const items_processed = this.sweepIdleTerminalSessions();
+        return { items_processed };
+      },
+    });
   }
 }
 
