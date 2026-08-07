@@ -105,13 +105,7 @@ function shortSessionId(sessionId: string): string {
   return sessionId.length > 12 ? sessionId.slice(0, 12) + '…' : sessionId;
 }
 
-type SortKey =
-  | 'task'
-  | 'sessions'
-  | 'input'
-  | 'output'
-  | 'cache'
-  | 'cost';
+type SortKey = 'task' | 'sessions' | 'input' | 'output' | 'cache' | 'cost';
 type SortDir = 'asc' | 'desc';
 
 interface SortableColumn {
