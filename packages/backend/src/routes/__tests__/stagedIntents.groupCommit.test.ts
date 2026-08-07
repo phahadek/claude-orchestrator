@@ -69,6 +69,7 @@ import {
   createStagedIntentsRouter,
   stageIntent,
   TaskCreateMissingGroupError,
+  GroomBodyEditMissingGroupError,
 } from '../stagedIntents';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
@@ -2579,6 +2580,228 @@ describe('task.create staged while the session has an open decision group for it
       ['notion:sibling-task-id-3'],
       { source: 'human' },
     );
+  });
+});
+
+describe('task.patchBodySection / task.updateBody staged ungrouped while the session has an open decision group', () => {
+  function seedGroomSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'groom',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  function seedDesignSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'design',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  function seedOpsSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  it('rejects an ungrouped task.patchBodySection when the session already has an open group for its own task', () => {
+    seedGroomSession('groom-body-1', 't-body-original-1');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-body-original-1', dependsOn: [] },
+      'proj-body',
+      'g-body-1',
+      'groom-body-1',
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.patchBodySection',
+        {
+          taskId: 't-body-original-1',
+          section: 'Context',
+          operation: 'append',
+          content: 'Extra context.',
+        },
+        'proj-body',
+        null,
+        'groom-body-1',
+      ),
+    ).toThrow(GroomBodyEditMissingGroupError);
+  });
+
+  it('rejects an ungrouped task.updateBody when the session already has an open group for its own task', () => {
+    seedGroomSession('groom-body-2', 't-body-original-2');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-body-original-2', dependsOn: [] },
+      'proj-body',
+      'g-body-2',
+      'groom-body-2',
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: 't-body-original-2', sections: sections() },
+        'proj-body',
+        null,
+        'groom-body-2',
+      ),
+    ).toThrow(GroomBodyEditMissingGroupError);
+  });
+
+  it("accepts a task.patchBodySection carrying the open group's own groupId", () => {
+    seedGroomSession('groom-body-3', 't-body-original-3');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-body-original-3', dependsOn: [] },
+      'proj-body',
+      'g-body-3',
+      'groom-body-3',
+    );
+
+    const patch = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-body-original-3',
+        section: 'Context',
+        operation: 'append',
+        content: 'Extra context.',
+      },
+      'proj-body',
+      'g-body-3',
+      'groom-body-3',
+    );
+    expect(patch.groupId).toBe('g-body-3');
+  });
+
+  it('still accepts a standalone ungrouped task.patchBodySection from a groom session with no open decision group for its task', () => {
+    seedGroomSession('groom-body-standalone', 't-body-standalone');
+
+    const patch = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-body-standalone',
+        section: 'Context',
+        operation: 'append',
+        content: 'Extra context.',
+      },
+      'proj-body',
+      null,
+      'groom-body-standalone',
+    );
+    expect(patch.groupId).toBeNull();
+  });
+
+  it('does not affect a design session staging a standalone ungrouped body edit', () => {
+    seedDesignSession('design-body-1', 't-body-design-1');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-body-design-1', dependsOn: [] },
+      'proj-body',
+      'g-body-design-1',
+      'design-body-1',
+    );
+
+    const patch = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-body-design-1',
+        section: 'Context',
+        operation: 'append',
+        content: 'Extra context.',
+      },
+      'proj-body',
+      null,
+      'design-body-1',
+    );
+    expect(patch.groupId).toBeNull();
+  });
+
+  it('does not add a second rejection reason for an ops session — its own pre-existing ops-terminal grouping rule (unrelated to this change) still fires unchanged', () => {
+    seedOpsSession('ops-body-1', 't-body-ops-1');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-body-ops-1', dependsOn: [] },
+      'proj-body',
+      'g-body-ops-1',
+      'ops-body-1',
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: 't-body-ops-1', sections: sections() },
+        'proj-body',
+        null,
+        'ops-body-1',
+      ),
+    ).toThrow(/ops-terminal member/);
+
+    const patch = stageIntent(
+      'task.updateBody',
+      { taskId: 't-body-ops-1', sections: sections() },
+      'proj-body',
+      'g-body-ops-1',
+      'ops-body-1',
+    );
+    expect(patch.groupId).toBe('g-body-ops-1');
   });
 });
 

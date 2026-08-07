@@ -100,7 +100,7 @@ describe('procedureCore', () => {
       'groom' | 'design' | 'ops' | 'split',
       { principles: number; steps: number }
     > = {
-      groom: { principles: 13, steps: 8 },
+      groom: { principles: 14, steps: 8 },
       design: { principles: 23, steps: 7 },
       ops: { principles: 16, steps: 5 },
       split: { principles: 6, steps: 4 },
@@ -172,6 +172,26 @@ describe('procedureCore', () => {
     expect(rendered).toContain('🔎 Investigation');
     expect(rendered).toContain('🧪 Testing');
     expect(rendered).toContain('OPEN_QUESTIONS_EXEMPT_TYPES');
+  });
+
+  it("states that a groom body edit must join its task's open decision group", () => {
+    const principle = CORE_PRINCIPLES.find(
+      (p) => p.id === 'groom-body-edit-grouped',
+    )!;
+    expect(principle).toBeDefined();
+    expect(principle.appliesTo).toEqual(['groom']);
+    const rendered = renderPrinciple(principle, 'groom');
+    expect(rendered).toContain('task.patchBodySection');
+    expect(rendered).toContain('task.updateBody');
+    expect(rendered).toMatch(/groupId/);
+    expect(rendered).toMatch(/rejected at stage time/);
+
+    expect(
+      principlesFor('design').find((p) => p.id === principle.id),
+    ).toBeUndefined();
+    expect(
+      principlesFor('ops').find((p) => p.id === principle.id),
+    ).toBeUndefined();
   });
 
   it('keeps ordered steps sequential and non-empty per applicable skill', () => {

@@ -988,6 +988,63 @@ function assertGroomTaskCreateNotDesignFollowOn(
 }
 
 /**
+ * Thrown at stage time when a groom session stages a `task.patchBodySection`
+ * or `task.updateBody` with no groupId while its dispatching session already
+ * has an open decision group for its own bound task — a body edit staged by
+ * grooming is not an independent write, it composes the body the promotion
+ * gate validates from the group's own members (computeProposedBody), so it
+ * must commit atomically with the rest of that Ready-flip decision rather
+ * than being disposable on its own.
+ */
+export class GroomBodyEditMissingGroupError extends Error {
+  constructor(kind: string, openGroupId: string) {
+    super(
+      `[stagedIntents] "${kind}" was staged with no groupId, but this session already has an open ` +
+        `decision group ("${openGroupId}") for its own task — a groom body edit must carry the same ` +
+        'groupId as the Ready-flip decision it belongs to, so it commits atomically with it. Stage it ' +
+        `again with groupId "${openGroupId}".`,
+    );
+    this.name = 'GroomBodyEditMissingGroupError';
+  }
+}
+
+/**
+ * Stage-time enforcement of "a groom body edit joins its group": mirrors
+ * assertTaskCreateGrouped's pattern — a `task.patchBodySection` /
+ * `task.updateBody` staged by a groom session with no groupId is rejected
+ * once a live decision group already exists for that session's own task
+ * (findOpenGroupIdForSessionTask). A session with no bound task, no
+ * already-open group for that task, or a non-groom session_type is not
+ * checked — a body edit staged before any group exists for the task is
+ * legitimately standalone (there is nothing to auto-assign it into; see
+ * TaskCreateMissingGroupError's doc comment for the mirror-image case), and
+ * design/ops sessions legitimately stage standalone body edits.
+ */
+function assertGroomBodyEditGrouped(
+  kind: string,
+  sessionId: string | null | undefined,
+  groupId: string | null | undefined,
+): void {
+  if (
+    (kind !== 'task.patchBodySection' && kind !== 'task.updateBody') ||
+    groupId ||
+    !sessionId
+  ) {
+    return;
+  }
+  const session = getSession(sessionId);
+  if (session?.session_type !== 'groom' || !session.task_id) return;
+
+  const openGroupId = findOpenGroupIdForSessionTask(
+    sessionId,
+    normalizeTaskId(session.task_id),
+  );
+  if (openGroupId) {
+    throw new GroomBodyEditMissingGroupError(kind, openGroupId);
+  }
+}
+
+/**
  * The general staged-intent surface: a single chokepoint producers (Groom(N),
  * Ops(N), and future callers) stage generic { kind, payload } intents through,
  * and a human applies or rejects. Apply always dispatches through
@@ -3081,6 +3138,7 @@ export function stageIntent(
   assertExpectedTerminalKinds(kind, payload, sessionId);
   assertTaskCreateGrouped(kind, sessionId, groupId);
   assertGroomTaskCreateNotDesignFollowOn(kind, sessionId);
+  assertGroomBodyEditGrouped(kind, sessionId, groupId);
 
   ({ payload, decisionProposal } = applyDesignClosingSynthesisGeneration(
     kind,
