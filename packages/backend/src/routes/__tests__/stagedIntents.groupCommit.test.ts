@@ -2581,3 +2581,131 @@ describe('task.create staged while the session has an open decision group for it
     );
   });
 });
+
+describe('a groom session staging task.create against its own Design/Planning subject task', () => {
+  function seedGroomSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'groom',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  function seedDesignSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'design',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  it.each([
+    ['📐 Design', 'groom-df-1a', 't-groom-design-subject-a'],
+    ['📋 Planning', 'groom-df-1b', 't-groom-design-subject-b'],
+  ])(
+    'rejects a task.create staged by a groom session whose subject task is %s',
+    (taskType, sessionId, taskId) => {
+      seedGroomSession(sessionId, taskId);
+      vi.mocked(getTaskCache).mockReturnValue({
+        task_id: taskId,
+        fetched_at: 0,
+        raw_json: JSON.stringify({ type: taskType }),
+      });
+
+      expect(() =>
+        stageIntent(
+          'task.create',
+          { title: 'Pre-authored follow-on', type: '💻 Code' },
+          'proj-groom-df',
+          `g-${sessionId}`,
+          sessionId,
+        ),
+      ).toThrow(/Design Execution session/);
+    },
+  );
+
+  it('does not affect a groom session staging task.create against a non-Design subject task (its legitimate follow-on-filing path)', () => {
+    seedGroomSession('groom-df-2', 't-groom-investigation-subject');
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 't-groom-investigation-subject',
+      fetched_at: 0,
+      raw_json: JSON.stringify({ type: '🔎 Investigation' }),
+    });
+
+    const create = stageIntent(
+      'task.create',
+      { title: 'Grounded follow-on from an investigation', type: '💻 Code' },
+      'proj-groom-df',
+      'g-groom-df-2',
+      'groom-df-2',
+    );
+    expect(create.kind).toBe('task.create');
+  });
+
+  it('does not affect a Design Execution session staging its own follow-on task.create against its Design subject task', () => {
+    seedDesignSession('design-df-1', 't-design-subject');
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 't-design-subject',
+      fetched_at: 0,
+      raw_json: JSON.stringify({ type: '📐 Design' }),
+    });
+    // Bypasses stageIntent's own completeness.disposition staging (out of
+    // scope here) to directly satisfy assertCompletenessApproval's gate —
+    // same shortcut stagedIntents.completenessGate.test.ts uses.
+    db.prepare(
+      `INSERT INTO staged_intent (id, kind, payload, project_id, state, session_id, created_at, updated_at, payload_hash)
+       VALUES (@id, 'completeness.disposition', @payload, @project_id, 'committed', @session_id, @created_at, @updated_at, @payload_hash)`,
+    ).run({
+      id: 'design-df-1-disposition',
+      payload: JSON.stringify({ taskId: 'notion:t-design-subject' }),
+      project_id: 'proj-design-df',
+      session_id: 'design-df-1',
+      created_at: 1,
+      updated_at: 1,
+      payload_hash: 'irrelevant-hash',
+    });
+
+    const create = stageIntent(
+      'task.create',
+      { title: 'Locked-decision follow-on', type: '💻 Code' },
+      'proj-design-df',
+      'g-design-df-1',
+      'design-df-1',
+    );
+    expect(create.kind).toBe('task.create');
+  });
+});

@@ -217,4 +217,149 @@ describe('POST /api/staged-intents/batch/commit', () => {
     );
     expect(vetoedIntent.state).toBe('staged');
   });
+
+  describe('a task.create riding in the group', () => {
+    it('blocks the group when the task.create payload type is 💻 Code, naming the offending member', async () => {
+      const updateStatus = vi.fn();
+      mockGetTaskBackend.mockReturnValue({
+        type: 'notion',
+        fetchTaskPage: vi.fn().mockResolvedValue('Confirm scope at grooming.\n'),
+        updateStatus,
+        setDependsOn: vi.fn().mockResolvedValue(undefined),
+        createTask: vi.fn().mockResolvedValue('notion:new-code-task'),
+      });
+      const app = makeApp();
+      const agent = supertest(app);
+
+      const created = await agent.post('/api/staged-intents').send({
+        kind: 'task.create',
+        projectId: 'proj-riders',
+        groupId: 'g-riders',
+        payload: {
+          title: 'Follow-on Code task',
+          type: '💻 Code',
+          databaseId: 'db-riders',
+        },
+      });
+      await stageCleanTriageGroup(agent, 'proj-riders', 't-riders', 'g-riders');
+
+      const res = await agent.post('/api/staged-intents/batch/commit').send({
+        groupIds: ['g-riders'],
+        milestoneLabel: 'M12',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.committed).toEqual([]);
+      expect(res.body.exceptions).toHaveLength(1);
+      expect(res.body.exceptions[0].groupId).toBe('g-riders');
+      expect(res.body.exceptions[0].error).toContain(created.body.id);
+      expect(res.body.exceptions[0].error).toContain('💻 Code');
+      expect(updateStatus).not.toHaveBeenCalled();
+    });
+
+    it('still commits by standard when the task.create payload type is triage-eligible (📐 Design)', async () => {
+      const updateStatus = vi.fn();
+      mockGetTaskBackend.mockReturnValue({
+        type: 'notion',
+        fetchTaskPage: vi.fn().mockResolvedValue('Confirm scope at grooming.\n'),
+        updateStatus,
+        setDependsOn: vi.fn().mockResolvedValue(undefined),
+        createTask: vi.fn().mockResolvedValue('notion:new-design-task'),
+      });
+      const app = makeApp();
+      const agent = supertest(app);
+
+      await agent.post('/api/staged-intents').send({
+        kind: 'task.create',
+        projectId: 'proj-riders-2',
+        groupId: 'g-riders-2',
+        payload: {
+          title: 'Follow-on Design task',
+          type: '📐 Design',
+          databaseId: 'db-riders',
+        },
+      });
+      await stageCleanTriageGroup(
+        agent,
+        'proj-riders-2',
+        't-riders-2',
+        'g-riders-2',
+      );
+
+      const res = await agent.post('/api/staged-intents/batch/commit').send({
+        groupIds: ['g-riders-2'],
+        milestoneLabel: 'M12',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.committed).toEqual(['g-riders-2']);
+      expect(res.body.exceptions).toEqual([]);
+    });
+
+    it('is still commitable through the explicit per-task human disposition path (/group/:groupId/commit, each member individually approved)', async () => {
+      const updateStatus = vi.fn();
+      mockGetTaskBackend.mockReturnValue({
+        type: 'notion',
+        fetchTaskPage: vi
+          .fn()
+          .mockResolvedValue('## Open Questions\n- Still open?\n'),
+        updateStatus,
+        setDependsOn: vi.fn().mockResolvedValue(undefined),
+        createTask: vi.fn().mockResolvedValue('notion:new-code-task-2'),
+      });
+      const app = makeApp();
+      const agent = supertest(app);
+
+      const created = await agent.post('/api/staged-intents').send({
+        kind: 'task.create',
+        projectId: 'proj-riders-3',
+        groupId: 'g-riders-3',
+        payload: {
+          title: 'Follow-on Code task',
+          type: '💻 Code',
+          databaseId: 'db-riders',
+        },
+      });
+      const { dependsOn, setStatus } = await (async () => {
+        const dependsOnRes = await agent.post('/api/staged-intents').send({
+          kind: 'task.setDependsOn',
+          projectId: 'proj-riders-3',
+          groupId: 'g-riders-3',
+          payload: { taskId: 't-riders-3', dependsOn: [] },
+        });
+        const setStatusRes = await agent.post('/api/staged-intents').send({
+          kind: 'task.setStatus',
+          projectId: 'proj-riders-3',
+          groupId: 'g-riders-3',
+          payload: {
+            taskId: 't-riders-3',
+            status: 'Ready',
+            groomingGate: {
+              type: '📐 Design',
+              size_check: { decision: 'n/a' },
+              type_check: { decision: 'none' },
+              triage: {
+                proposedVerdict: 'clean',
+                hasOpenQuestionsHeading: true,
+              },
+            },
+          },
+        });
+        return { dependsOn: dependsOnRes.body, setStatus: setStatusRes.body };
+      })();
+
+      await agent.post(`/api/staged-intents/${created.body.id}/approve`).send({});
+      await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+      await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+
+      const res = await agent
+        .post('/api/staged-intents/group/g-riders-3/commit')
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.committed).toEqual(
+        expect.arrayContaining([created.body.id, dependsOn.id, setStatus.id]),
+      );
+    });
+  });
 });
