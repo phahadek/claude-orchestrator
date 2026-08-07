@@ -77,7 +77,7 @@ describe('ShortcutHint', () => {
     );
     expect(screen.queryByText('Focus search')).toBeNull();
     // Everything else is still advertised.
-    expect(screen.getByText('Open Dispatch modal')).toBeDefined();
+    expect(screen.getByText('Close modal / panel')).toBeDefined();
   });
 
   it('opens on "?" and closes on Escape at a desktop viewport width', () => {
