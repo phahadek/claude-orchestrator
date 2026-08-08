@@ -102,7 +102,10 @@ function headProposalOf(members: GroupCardMember[]): HeadProposal {
   }
   for (const { intent } of members) {
     if (intent.decisionProposal) {
-      return { decisionProposal: intent.decisionProposal, sourceIntentId: intent.id };
+      return {
+        decisionProposal: intent.decisionProposal,
+        sourceIntentId: intent.id,
+      };
     }
   }
   for (const { intent } of members) {
