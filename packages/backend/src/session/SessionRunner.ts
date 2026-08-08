@@ -120,11 +120,16 @@ export interface ISessionRunner {
    * lives on. Resolves once the process is confirmed gone, one way or
    * another.
    *
+   * @param concludedCleanly whether this end follows a session that already
+   * recorded why it's concluding (e.g. terminal_completion_reason) — purely
+   * descriptive at this layer; see AgentSession.endSession for how it's
+   * used to classify a forced escalation as a clean conclusion rather than
+   * an unexpected kill.
    * @returns true if escalation to a forceful kill was required (the
    * process did not honor the graceful close), false if it exited on its
    * own. Callers use this to decide whether to audit the escalation.
    */
-  endSession(): Promise<boolean>;
+  endSession(concludedCleanly?: boolean): Promise<boolean>;
 
   /** Forcefully terminate the session. */
   kill(): Promise<void>;

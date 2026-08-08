@@ -594,6 +594,13 @@ export class PlanningOrchestrator {
     // above has already landed, so the clean-exit chain's markSessionIdle
     // call (AgentSession.handleCleanExit) hits the terminal guard in
     // markSessionIdle and is a no-op rather than clobbering done back to idle.
+    //
+    // setSessionTerminalCompletionReason above must land before this call:
+    // AgentSession.endSession reads it synchronously to tell a forced kill
+    // that follows a sanctioned conclusion apart from an unexpected one, so
+    // the escalation (if the CLI doesn't honor stdin close within the grace
+    // period) is classified as a clean conclusion rather than
+    // runner_killed_unexpected/session_errored.
     this.sessionManager.endSession(sessionId);
     this.sessionManager.emit('message', {
       type: 'session_status',
