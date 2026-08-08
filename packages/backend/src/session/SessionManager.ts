@@ -969,6 +969,41 @@ export class SessionManager extends EventEmitter {
 
   constructor(private readonly githubClient?: GitHubClient) {
     super();
+    // Turn-boundary drain for a done-transition markSessionDone deferred
+    // while this session's turn was in flight (e.g. PRMergeWatcher's
+    // markSessionDone racing a still-running review session — see
+    // db/queries.ts's in-flight guard). The result event fires the instant
+    // the turn's result is processed, whether the session then parks alive
+    // (the normal resting state — status stays 'running' with no process
+    // exit) or exits; this is the primary drain, mirroring
+    // PlanningOrchestrator's pendingApproveTerminal handling of the same
+    // signal. applyPendingDoneForSettledSession's run()-settle callers and
+    // resumeOrphanSessions' boot sweep remain as backstops for the exit and
+    // restart cases this handler can't observe.
+    this.on('message', (msg: ServerMessage) => {
+      if (msg.type === 'session_event' && msg.eventType === 'result') {
+        this.applyPendingDoneOnTurnBoundary(msg.sessionId);
+      }
+    });
+  }
+
+  /**
+   * Drains a deferred done-transition on the turn-boundary result event and,
+   * if one was applied, reaps the session via endSession — a session parked
+   * alive with the deferred transition now applied is terminal but may still
+   * hold a live subprocess (the endSession call that markSessionDone's
+   * in-flight guard originally deferred against never happened), so end it
+   * via the same mechanism PRMergeWatcher used, now that it will succeed
+   * against a terminal row instead of being refused.
+   */
+  private applyPendingDoneOnTurnBoundary(sessionId: string): void {
+    if (!applyPendingDone(sessionId)) return;
+    this.emit('message', {
+      type: 'session_status',
+      sessionId,
+      status: 'done',
+    } satisfies ServerMessage);
+    this.endSession(sessionId);
   }
 
   /**
