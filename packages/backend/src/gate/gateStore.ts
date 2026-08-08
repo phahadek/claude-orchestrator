@@ -520,6 +520,59 @@ export function recomputeMinDeployedCommit(
 }
 
 /**
+ * Item-level carry-forward: copies one gate item to a new milestone as a
+ * fresh open item, preserving its full sources array by value — including
+ * the empty-sources case, which `accreteGateContribution`'s
+ * taskId-validated path can't express (a hand-accreted item that has
+ * already survived one milestone close has no single owning task left to
+ * cite). The original item is left untouched: it keeps reading under the
+ * closing milestone exactly as before, since closed-milestone history is
+ * immutable — this only ever inserts a new row. Idempotent by (project,
+ * milestone, text): re-running the carry for the same item and target
+ * milestone returns the copy already carried there instead of minting a
+ * second one, since there is no other durable link back to the source item
+ * to key a guard on.
+ */
+export function carryForwardItem(
+  gateItemId: string,
+  targetMilestone: string,
+  updatedAt: string,
+): GateItem {
+  const source = getItem(gateItemId);
+  if (!source) {
+    throw new Error(`gate_item: no item ${gateItemId} to carry forward`);
+  }
+  const existing = listByMilestone(source.project, targetMilestone).find(
+    (item) => item.text === source.text,
+  );
+  if (existing) return existing;
+
+  const carried = insertItem({
+    project: source.project,
+    milestone: targetMilestone,
+    text: source.text,
+    classification: source.classification,
+    sources: source.sources.map((s) => ({
+      sourceTaskId: s.sourceTaskId,
+      sourceTaskTitle: s.sourceTaskTitle,
+      mergeCommit: s.mergeCommit,
+    })),
+    updatedAt,
+  });
+  recordEvent({
+    event_type: 'gate_item_carried_forward',
+    actor_type: 'system',
+    project_id: source.project,
+    payload: {
+      fromGateItemId: gateItemId,
+      toGateItemId: carried.id,
+      milestone: targetMilestone,
+    },
+  });
+  return carried;
+}
+
+/**
  * Re-homes a moved task's gate_item rows (identified via gate_item_source)
  * onto the target milestone — the gate accretion carry for moveTask. Leaves
  * gate_item_source.source_task_id pointing at the original task id (the

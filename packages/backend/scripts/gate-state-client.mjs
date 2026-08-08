@@ -20,6 +20,7 @@
 //   node gate-state-client.mjs reopen <gateItemId> [reason] [operator]
 //   node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
 //   node gate-state-client.mjs accrete <json-payload>
+//   node gate-state-client.mjs carry-forward <gateItemId> <milestone>
 //
 // Example:
 //   node gate-state-client.mjs event gi-42 \
@@ -28,6 +29,16 @@
 //   node gate-state-client.mjs accrete \
 //     '{"project":"p1","taskId":"notion:t1","title":"Add retry","milestone":"M12",
 //       "classification":"Read-Only","items":[{"text":"Click through checkout once"}]}'
+//   node gate-state-client.mjs carry-forward gi-42 M13
+//
+// `carry-forward` is the item-level re-home for a deferred/pending gate item
+// that has no single owning source task to accrete against (e.g. it was
+// itself hand-carried forward from an earlier milestone) — it copies the
+// item's full text/classification/sources (sources may be empty) to
+// <milestone> as a fresh open item, leaving the original exactly as it was
+// under the closing milestone. Idempotent by (project, milestone, text): a
+// repeat call for the same item and target milestone returns the existing
+// copy rather than minting a second one.
 //
 // `disposition` on an `event` payload is optional (omit it for a pure log
 // entry — evidence recorded, state left unchanged) and, when present, must
@@ -203,6 +214,23 @@ export function accreteGateContribution({ host, port, token, contribution }) {
   });
 }
 
+export function carryForwardGateItem({
+  host,
+  port,
+  token,
+  gateItemId,
+  milestone,
+}) {
+  return requestGateState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/gate/items/${encodeURIComponent(gateItemId)}/carry-forward`,
+    payload: { milestone },
+  });
+}
+
 function parseFlags(argv) {
   function option(name) {
     const i = argv.indexOf(name);
@@ -226,7 +254,8 @@ const USAGE =
   '  node gate-state-client.mjs approve <gateItemId> [operator]\n' +
   '  node gate-state-client.mjs reopen <gateItemId> [reason] [operator]\n' +
   '  node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]\n' +
-  '  node gate-state-client.mjs accrete <json-payload>';
+  '  node gate-state-client.mjs accrete <json-payload>\n' +
+  '  node gate-state-client.mjs carry-forward <gateItemId> <milestone>';
 
 async function main() {
   function fail(message) {
@@ -341,6 +370,16 @@ async function main() {
         port,
         token,
         contribution,
+      });
+    } else if (command === 'carry-forward') {
+      const [gateItemId, milestone] = rest;
+      if (!gateItemId || !milestone) return fail(USAGE);
+      result = await carryForwardGateItem({
+        host,
+        port,
+        token,
+        gateItemId,
+        milestone,
       });
     } else {
       return fail(USAGE);

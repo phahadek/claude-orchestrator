@@ -28,6 +28,7 @@ import {
   getAccretionMarker,
   recordAccretionMarker,
   rehomeItemsBySourceTask,
+  carryForwardItem,
   rollbackContribution,
   addSource,
   schedulePendingAttempt,
@@ -455,6 +456,117 @@ describe('gateStore.rehomeItemsBySourceTask — moveTask accretion carry', () =>
 
     expect(rehomed).toEqual([]);
     expect(getItem(other.id)?.milestone).toBe('M12');
+  });
+});
+
+describe('gateStore.carryForwardItem — item-level sourceless carry-forward', () => {
+  it('carries a sourceless item forward without inventing a taskId', () => {
+    const original = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Mixed-source capture gate — with a gated mirrored source',
+      classification: 'Read-Only',
+      sources: [],
+      updatedAt: new Date(0).toISOString(),
+    });
+    advanceState(original.id, 'deferred', 'deferred', new Date(1).toISOString());
+
+    const carried = carryForwardItem(
+      original.id,
+      'M13',
+      new Date(2).toISOString(),
+    );
+
+    expect(carried.id).not.toBe(original.id);
+    expect(carried.milestone).toBe('M13');
+    expect(carried.state).toBe('open');
+    expect(carried.sources).toEqual([]);
+    expect(carried.text).toBe(original.text);
+  });
+
+  it('leaves the original item deferred under the closing milestone', () => {
+    const original = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Gate mixed-source Twitch capture to linked-broadcast live windows',
+      classification: 'Prod-Mutating',
+      sources: [],
+      updatedAt: new Date(0).toISOString(),
+    });
+    advanceState(original.id, 'deferred', 'deferred', new Date(1).toISOString());
+
+    carryForwardItem(original.id, 'M13', new Date(2).toISOString());
+
+    const reread = getItem(original.id);
+    expect(reread?.state).toBe('deferred');
+    expect(reread?.milestone).toBe('M12');
+  });
+
+  it('preserves classification across the carry, including needs-triage', () => {
+    const original = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Triage the raw_queue_files ProgrammingError backlog',
+      classification: 'needs-triage',
+      sources: [],
+      updatedAt: new Date(0).toISOString(),
+    });
+    advanceState(original.id, 'deferred', 'deferred', new Date(1).toISOString());
+
+    const carried = carryForwardItem(
+      original.id,
+      'M13',
+      new Date(2).toISOString(),
+    );
+
+    expect(carried.classification).toBe('needs-triage');
+  });
+
+  it('preserves a non-empty sources array by value across the carry', () => {
+    const original = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Batch the L1 runner per-pair analyzer loops',
+      classification: 'Read-Only',
+      sources: [
+        { sourceTaskId: 'notion:s1', sourceTaskTitle: 'Task one' },
+        { sourceTaskId: 'notion:s2', sourceTaskTitle: 'Task two' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    advanceState(original.id, 'deferred', 'deferred', new Date(1).toISOString());
+
+    const carried = carryForwardItem(
+      original.id,
+      'M13',
+      new Date(2).toISOString(),
+    );
+
+    expect(carried.sources.map((s) => s.sourceTaskId).sort()).toEqual([
+      'notion:s1',
+      'notion:s2',
+    ]);
+  });
+
+  it('does not duplicate a carried item when run twice', () => {
+    const original = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Speed up fresh_retag writes: skip unchanged matched_keywords',
+      classification: 'Read-Only',
+      sources: [],
+      updatedAt: new Date(0).toISOString(),
+    });
+    advanceState(original.id, 'deferred', 'deferred', new Date(1).toISOString());
+
+    const first = carryForwardItem(original.id, 'M13', new Date(2).toISOString());
+    const second = carryForwardItem(original.id, 'M13', new Date(3).toISOString());
+
+    expect(second.id).toBe(first.id);
+    const targetItems = listByMilestone('polimarket-analyser', 'M13').filter(
+      (item) => item.text === original.text,
+    );
+    expect(targetItems).toHaveLength(1);
   });
 });
 

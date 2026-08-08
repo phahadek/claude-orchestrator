@@ -15,6 +15,7 @@ import {
   reopenGateItem,
   reclassifyGateItem,
   backfillGateTask,
+  carryForwardGateItem,
 } from '../gate/gateService';
 import { dispatchGateItemVerification } from '../gate/gateReconciler';
 import type { GateItemClassification } from '../db/types';
@@ -343,6 +344,49 @@ export function createGateStateRouter(): Router {
         res.status(400).json({
           error:
             err instanceof Error ? err.message : 'gate item reclassify failed',
+        });
+      }
+    },
+  );
+
+  // POST /api/gate/items/:id/carry-forward  { milestone }
+  // Item-level re-home for a deferred/pending gate item to the next
+  // milestone, preserving its full sources array (including empty) — the
+  // sourceless-carry-forward path milestone-wrap Step 3 uses for items that
+  // have no single owning task to accrete against. See
+  // gateService.carryForwardGateItem / gateStore.carryForwardItem.
+  router.post(
+    '/gate/items/:id/carry-forward',
+    (req: Request, res: Response) => {
+      const id = String(req.params.id);
+      const body = req.body as { milestone?: unknown };
+      const milestone =
+        typeof body.milestone === 'string' ? body.milestone : null;
+      if (!milestone) {
+        res.status(400).json({ error: 'milestone is required' });
+        return;
+      }
+      const item = getGateItem(id);
+      if (!item) {
+        res.status(404).json({ error: `no gate item ${id}` });
+        return;
+      }
+      try {
+        const canonicalMilestone = resolveMilestoneForProject(
+          item.project,
+          milestone,
+        );
+        res.json(carryForwardGateItem(id, canonicalMilestone));
+      } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        res.status(400).json({
+          error:
+            err instanceof Error
+              ? err.message
+              : 'gate item carry-forward failed',
         });
       }
     },

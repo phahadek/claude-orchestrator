@@ -73,11 +73,13 @@ postponed seeds. Nothing to carry on the seed side.)*
 
 1. **Enumerate the deferred and pending items — `readiness` won't show them** (it
    lists only *blocking* items, and neither `deferred` nor `pending` blocks). Read
-   them directly; **reads** of the live DB are sanctioned (only *writes* are barred):
+   them directly (LEFT JOIN — a sourceless item has zero `gate_item_source` rows and
+   must not be dropped by the query); **reads** of the live DB are sanctioned (only
+   *writes* are barred):
 
    ```
    SELECT gi.id, gi.classification, gi.state, gi.text, s.source_task_id, s.source_task_title
-   FROM gate_item gi JOIN gate_item_source s ON s.gate_item_id = gi.id
+   FROM gate_item gi LEFT JOIN gate_item_source s ON s.gate_item_id = gi.id
    WHERE gi.project='<projectId>' AND gi.milestone='<closingM>' AND gi.state IN ('deferred', 'pending')
    ```
 
@@ -86,27 +88,48 @@ postponed seeds. Nothing to carry on the seed side.)*
    closed-milestone history), or **(b)** a real postponement → **carry it forward**.
    Don't blanket-carry; don't blanket-drop.
 
-3. **Re-home the carry set to the *next* milestone — accrete a fresh copy, don't move.**
-   There is **no milestone-level re-home verb** (the only `rehomeItemsBySourceTask` is
-   task-move-scoped), and raw-DB moves are barred — so accrete-duplicate is the sanctioned
-   path, and it is *correct by design*: the original stays `deferred` / `pending`
-   (closed-milestone history) while a fresh `open` copy lives in the next milestone for a
-   **fresh gate run**. Group the carry set by `(source_task_id, classification)` —
-   `accrete` takes one classification per call and mints one `gate_item` per `items[]`
-   entry, sourced to that task (classification, incl. `needs-triage`, is preserved):
+3. **Re-home the carry set to the *next* milestone — a fresh copy, never a move.**
+   Raw-DB moves are barred, so every carry is a fresh-copy insert into the next
+   milestone; the original stays `deferred` / `pending` under the closing milestone
+   (immutable closed-milestone history) while the copy lands `open` for a **fresh gate
+   run**. Which verb mints the copy depends on whether the item has a source:
 
-   ```
-   node ~/.claude/scripts/gate-state-client.mjs accrete \
-     '{"project":"<projectId>","taskId":"<source_task_id>","title":"<source_task_title>",
-       "milestone":"<nextM>","classification":"<classification>","items":[{"text":"…"}, …]}'
-   ```
+   - **Has a source (`source_task_id` is non-null).** Group the carry set by
+     `(source_task_id, classification)` and use `accrete` — it takes one
+     classification per call and mints one `gate_item` per `items[]` entry, sourced to
+     that task (classification, incl. `needs-triage`, is preserved):
 
-   The 60s gate reconciler promotes them `open → runnable` within a cycle (the source
-   tasks are long-merged and deployed). `<nextM>` is the **display name** (e.g. `M12`),
-   never the milestone UUID — same id-space rule as the rest of the gate client. A
-   carried `pending` item accretes as a fresh `open` item like any other carry — its
-   backoff clock is **not** preserved across the accrete; it starts fresh once the new
-   copy cycles through `not-yet-triggerable` again in the next milestone's gate run.
+     ```
+     node ~/.claude/scripts/gate-state-client.mjs accrete \
+       '{"project":"<projectId>","taskId":"<source_task_id>","title":"<source_task_title>",
+         "milestone":"<nextM>","classification":"<classification>","items":[{"text":"…"}, …]}'
+     ```
+
+   - **No source (`source_task_id` is null) — the item was itself hand-carried from an
+     earlier milestone and has no single owning task left to cite.** Use
+     `carry-forward` instead: an item-level re-home, one call per item, that copies the
+     item's own text/classification/full sources array (empty, here) straight to the
+     target milestone. **Never invent a placeholder taskId** and force it through
+     `accrete` — it validates the id against the task board and 400s on anything
+     synthetic, and a truncated/prose-embedded id you resolve by hand risks a silent
+     mis-attribution (a short id prefix can collide across unrelated tasks). If you
+     really can trace a sourceless item's prose back to one exact, full task id and want
+     provenance restored, that is a manual accrete-with-caution; otherwise default to
+     `carry-forward` and accept the item stays sourceless in the next milestone too —
+     correct, not a downgrade:
+
+     ```
+     node ~/.claude/scripts/gate-state-client.mjs carry-forward <gateItemId> <nextM>
+     ```
+
+   Either way, `<nextM>` is the **display name** (e.g. `M12`), never the milestone UUID
+   — same id-space rule as the rest of the gate client. A carried `pending` item lands
+   as a fresh `open` item like any other carry — its backoff clock is **not** preserved
+   across the carry; it starts fresh once the new copy cycles through
+   `not-yet-triggerable` again in the next milestone's gate run. `carry-forward` is
+   idempotent by (project, milestone, text) — re-running it for the same item and
+   target milestone returns the copy already carried there rather than duplicating it,
+   so a retried call is safe.
 
 4. **Verify the carry.** Re-read the next milestone's `gate_item` rows; confirm each
    carried item is present (`open`/`runnable`) and that **no text duplicates** an item
