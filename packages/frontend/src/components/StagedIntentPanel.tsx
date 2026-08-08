@@ -37,6 +37,13 @@ interface Props {
    */
   hideActions?: boolean;
   /**
+   * Suppresses this panel's own rendering of `intent.investigation` — used
+   * when the enclosing GroupCard already rendered this same intent's
+   * investigation text in the group's head, so expanding the member in
+   * place doesn't duplicate it.
+   */
+  hideInvestigation?: boolean;
+  /**
    * True while the owning session hasn't signaled its proposal set complete
    * for the turn — the backend refuses apply/approve/reject too, so every
    * disposition control is disabled rather than left to fail. The headline,
@@ -1220,6 +1227,7 @@ export function StagedIntentPanel({
   onDismiss,
   onApproved,
   hideActions,
+  hideInvestigation = false,
   disabled = false,
   highlighted = false,
 }: Props) {
@@ -1496,7 +1504,7 @@ export function StagedIntentPanel({
         )
       )}
 
-      {intent.investigation && (
+      {intent.investigation && !hideInvestigation && (
         <p
           className={styles.rationale}
           data-testid="staged-intent-investigation"

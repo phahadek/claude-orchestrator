@@ -79,19 +79,35 @@ function actionSuffixFor(groupKind: StagedIntent['groupKind']): string {
   return '';
 }
 
+interface HeadProposal {
+  groomProposal?: StagedIntent['groomProposal'];
+  decisionProposal?: string | null;
+  investigation?: string | null;
+  /** The member whose field was used, so the expanded StagedIntentPanel for that member can suppress its own copy and avoid rendering it twice. */
+  sourceIntentId?: string;
+}
+
 /**
  * The card's shared head proposal: the first member's groomProposal, or —
- * when no member carries one — the first member's decisionProposal. Mirrors
- * the per-intent groomProposal/decisionProposal precedence StagedIntentPanel
- * already applies to a standalone intent.
+ * when no member carries one — the first member's decisionProposal, or —
+ * when no member carries either — the first member's investigation. Mirrors
+ * the per-intent groomProposal/decisionProposal/investigation precedence
+ * StagedIntentPanel already applies to a standalone intent.
  */
-function headProposalOf(members: GroupCardMember[]) {
+function headProposalOf(members: GroupCardMember[]): HeadProposal {
   for (const { intent } of members) {
-    if (intent.groomProposal) return { groomProposal: intent.groomProposal };
+    if (intent.groomProposal) {
+      return { groomProposal: intent.groomProposal, sourceIntentId: intent.id };
+    }
   }
   for (const { intent } of members) {
     if (intent.decisionProposal) {
-      return { decisionProposal: intent.decisionProposal };
+      return { decisionProposal: intent.decisionProposal, sourceIntentId: intent.id };
+    }
+  }
+  for (const { intent } of members) {
+    if (intent.investigation) {
+      return { investigation: intent.investigation, sourceIntentId: intent.id };
     }
   }
   return {};
@@ -267,10 +283,17 @@ export function GroupCard({
             <CollapsibleField text={head.groomProposal.operationalSeed} />
           </dd>
         </dl>
+      ) : head.decisionProposal ? (
+        <p className={intentStyles.rationale}>
+          <CollapsibleField text={head.decisionProposal} />
+        </p>
       ) : (
-        head.decisionProposal && (
-          <p className={intentStyles.rationale}>
-            <CollapsibleField text={head.decisionProposal} />
+        head.investigation && (
+          <p
+            className={intentStyles.rationale}
+            data-testid="group-card-investigation"
+          >
+            <CollapsibleField text={head.investigation} />
           </p>
         )
       )}
@@ -319,6 +342,10 @@ export function GroupCard({
                     onApproved={onApproved}
                     hideActions={hideActions}
                     disabled={disabled}
+                    hideInvestigation={
+                      head.investigation !== undefined &&
+                      head.sourceIntentId === intent.id
+                    }
                   />
                 </div>
               )}
