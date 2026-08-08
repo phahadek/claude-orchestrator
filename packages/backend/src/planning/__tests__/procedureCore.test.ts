@@ -307,7 +307,7 @@ describe('procedureCore', () => {
     }
   });
 
-  it('teaches supersede-on-stage-time-block\'s scope limit: only the blocked intent, never its unblocked group siblings — both in CORE_PRINCIPLES and in the assembled hard-rules.md markdown', () => {
+  it("teaches supersede-on-stage-time-block's scope limit: only the blocked intent, never its unblocked group siblings — both in CORE_PRINCIPLES and in the assembled hard-rules.md markdown", () => {
     const skills: SkillId[] = ['groom', 'design', 'ops', 'split'];
     for (const skill of skills) {
       const principle = principlesFor(skill).find(

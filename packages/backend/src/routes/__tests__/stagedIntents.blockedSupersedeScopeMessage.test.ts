@@ -18,7 +18,10 @@ describe('blocked-intent supersede-scope wording', () => {
       id: 'intent-123',
       kind: 'task.setStatus',
     } as Parameters<typeof formatStageTimeBlockFeedback>[0];
-    const message = formatStageTimeBlockFeedback(intent, 'some validation failure');
+    const message = formatStageTimeBlockFeedback(
+      intent,
+      'some validation failure',
+    );
 
     expect(message).toMatch(/supersedes set to "intent-123"/);
     expect(message).toMatch(/only this blocked intent/i);
@@ -26,9 +29,8 @@ describe('blocked-intent supersede-scope wording', () => {
   });
 
   it('formatDispositionMessage (orchestration/PlanningOrchestrator.ts) auto-pushback branch names supersede-only-the-rejected-intent and leave-siblings-in-place', async () => {
-    const { formatDispositionMessage } = await import(
-      '../../orchestration/PlanningOrchestrator'
-    );
+    const { formatDispositionMessage } =
+      await import('../../orchestration/PlanningOrchestrator');
     const intent = {
       id: 'intent-456',
       kind: 'gate.accrete',
@@ -47,9 +49,8 @@ describe('blocked-intent supersede-scope wording', () => {
   });
 
   it('formatDispositionMessage operator-pushback branch (unaffected) does not carry the auto-validation wording', async () => {
-    const { formatDispositionMessage } = await import(
-      '../../orchestration/PlanningOrchestrator'
-    );
+    const { formatDispositionMessage } =
+      await import('../../orchestration/PlanningOrchestrator');
     const intent = {
       id: 'intent-789',
       kind: 'task.setStatus',
