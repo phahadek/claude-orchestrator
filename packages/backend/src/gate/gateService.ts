@@ -426,6 +426,27 @@ export function getGateItem(id: string): GateItem | undefined {
   return gateStore.getItem(id);
 }
 
+/**
+ * Item-level re-home: copies a gate item to `targetMilestone` as a fresh
+ * open item, preserving its full sources array (including empty — the
+ * sourceless carry-forward case that `accreteGateContribution` cannot
+ * express, since it validates and requires a single owning taskId). The
+ * source item is left exactly as it was; see gateStore.carryForwardItem for
+ * the idempotency guard. `targetMilestone` must already be the canonical
+ * milestone display name — callers resolve it the same way accrete's route
+ * does.
+ */
+export function carryForwardGateItem(
+  gateItemId: string,
+  targetMilestone: string,
+): GateItem {
+  return gateStore.carryForwardItem(
+    gateItemId,
+    targetMilestone,
+    new Date().toISOString(),
+  );
+}
+
 /** The item's full detail: its denormalized fields plus its sources and event history, by value. */
 export function getGateItemDetail(
   id: string,

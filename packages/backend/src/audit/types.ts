@@ -72,6 +72,7 @@ type EventType =
   | 'gate_item_reclassified'
   | 'gate_item_source_added'
   | 'gate_item_rehomed'
+  | 'gate_item_carried_forward'
   | 'seed_item_created'
   | 'seed_item_event_appended'
   | 'seed_item_state_changed'
