@@ -111,7 +111,10 @@ describe('DepthReviewService — turn-boundary conclusion', () => {
     (sm.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
       (_a: string, _b: string, opts: { sessionId: string }) => {
         setImmediate(() => {
-          sm.emit('message', makeVerdictTextMessage(opts.sessionId, passingVerdict));
+          sm.emit(
+            'message',
+            makeVerdictTextMessage(opts.sessionId, passingVerdict),
+          );
           sm.emit('message', makeResultMessage(opts.sessionId));
           // No session_ended — the session parks alive, exactly like the
           // deployed bug's 49-idle census.
@@ -157,7 +160,10 @@ describe('DepthReviewService — turn-boundary conclusion', () => {
     (sm.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
       (_a: string, _b: string, opts: { sessionId: string }) => {
         setImmediate(() => {
-          sm.emit('message', makeVerdictTextMessage(opts.sessionId, passingVerdict));
+          sm.emit(
+            'message',
+            makeVerdictTextMessage(opts.sessionId, passingVerdict),
+          );
           sm.emit('message', makeResultMessage(opts.sessionId));
         });
         return Promise.resolve(opts.sessionId);
@@ -228,7 +234,10 @@ describe('DepthReviewService — turn-boundary conclusion', () => {
     (sm.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
       (_a: string, _b: string, opts: { sessionId: string }) => {
         setImmediate(() => {
-          sm.emit('message', makeVerdictTextMessage(opts.sessionId, passingVerdict));
+          sm.emit(
+            'message',
+            makeVerdictTextMessage(opts.sessionId, passingVerdict),
+          );
           sm.emit('message', makeResultMessage(opts.sessionId));
         });
         return Promise.resolve(opts.sessionId);
