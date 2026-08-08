@@ -1045,6 +1045,81 @@ function assertGroomBodyEditGrouped(
 }
 
 /**
+ * States a standalone body-edit orphan can be adopted from. Mirrors
+ * findOpenGroupIdForSessionTask's ACTIVE set plus `needs_revision` — an
+ * orphan pushed back for revision is still adopted (its groupId is
+ * reassigned without moving it off needs_revision), because that is exactly
+ * the case the group-commit path's groupBlocked check is relying on to
+ * surface it: adoption is the mechanism, not a separate annotation step.
+ * `committed`/`rejected`/`superseded`/`withdrawn` rows are left alone — they
+ * are no longer live decisions to fold in.
+ */
+const BODY_EDIT_ADOPTABLE_STATES: readonly StagedIntentState[] = [
+  'staged',
+  'approved',
+  'needs_revision',
+];
+
+/**
+ * Reconciliation sweep for the carve-out assertGroomBodyEditGrouped cannot
+ * see: sessions naturally stage a body fix before the decision that groups
+ * it, so the guard above finds no open group yet and allows the body edit
+ * standalone — legitimately, since the group may never materialize (e.g. a
+ * pass that ends in `planning.noOp`). But when the group *does* open
+ * afterward, that earlier body edit is left stranded outside the atomic
+ * decision it was meant to support, with no way for the guard (which only
+ * fires on the body edit's own stage call) to retroactively catch it.
+ *
+ * This runs on the other side of that ordering: at every stage call that
+ * itself carries a groupId for a groom session's own bound task — the same
+ * trigger point assertGroomBodyEditGrouped already inspects — it adopts that
+ * session's own still-open standalone task.patchBodySection / task.updateBody
+ * rows for the task into the newly-carried group via setStagedIntentGroup
+ * (the same primitive the re-stage/dedup branch below already uses). Running
+ * on every such call, not only the first, also reconciles a group that was
+ * already open before this sweep shipped: the next intent staged into it
+ * picks up any stray pre-existing orphan, so no separate backfill migration
+ * is needed.
+ *
+ * Scoped to a live decision group of the session's own bound task the way
+ * findOpenGroupIdForSessionTask is — a non-groom session, a session with no
+ * bound task, or a call with no groupId is a no-op.
+ */
+function sweepGroomBodyEditsIntoGroup(
+  sessionId: string | null | undefined,
+  groupId: string | null | undefined,
+): void {
+  if (!groupId || !sessionId) return;
+  const session = getSession(sessionId);
+  if (session?.session_type !== 'groom' || !session.task_id) return;
+  const taskId = normalizeTaskId(session.task_id);
+
+  // task.patchBodySection's task_id column carries a `${taskId}::${section}`
+  // compound dedup key (see extractTaskId), never the bare taskId — the task
+  // id portion (everything before the first `::`, since the id itself may
+  // contain a `:` — e.g. `notion:xxx`) is pulled out and normalized the same
+  // way the plain task.updateBody id is, rather than compared as-is.
+  const orphans = listStagedIntentsBySession(sessionId).filter((r) => {
+    if (
+      (r.kind !== 'task.patchBodySection' && r.kind !== 'task.updateBody') ||
+      r.group_id ||
+      !BODY_EDIT_ADOPTABLE_STATES.includes(r.state) ||
+      !r.task_id
+    ) {
+      return false;
+    }
+    const rowTaskId = r.task_id.includes('::')
+      ? r.task_id.slice(0, r.task_id.indexOf('::'))
+      : r.task_id;
+    return normalizeTaskId(rowTaskId) === taskId;
+  });
+  for (const orphan of orphans) {
+    const grouped = setStagedIntentGroup(orphan.id, groupId);
+    broadcastIntentChange(rowToApi(grouped));
+  }
+}
+
+/**
  * The general staged-intent surface: a single chokepoint producers (Groom(N),
  * Ops(N), and future callers) stage generic { kind, payload } intents through,
  * and a human applies or rejects. Apply always dispatches through
@@ -3158,6 +3233,7 @@ export function stageIntent(
   assertTaskCreateGrouped(kind, sessionId, groupId);
   assertGroomTaskCreateNotDesignFollowOn(kind, sessionId);
   assertGroomBodyEditGrouped(kind, sessionId, groupId);
+  sweepGroomBodyEditsIntoGroup(sessionId, groupId);
 
   ({ payload, decisionProposal } = applyDesignClosingSynthesisGeneration(
     kind,
