@@ -1100,9 +1100,12 @@ export class PlanningOrchestrator {
     const terminalizedIds: string[] = [];
     for (const row of candidates) {
       // Defensive regression guard: status='idle' should already imply no
-      // live in-memory process, but never destroy live work on that
-      // assumption alone.
-      if (this.sessionManager.isAlive(row.session_id)) continue;
+      // live process, but never destroy live work on that assumption
+      // alone. Checked against the real OS process (isProcessAlive), not
+      // the in-memory session map (isAlive) — a stale map entry must never
+      // block this sweep from reconciling a session whose process is
+      // actually gone.
+      if (this.sessionManager.isProcessAlive(row.session_id)) continue;
 
       const outcome = this.isSessionCompleteForIdleSweep(row.session_id);
       if (outcome === 'not_ready') continue;

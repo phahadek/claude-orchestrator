@@ -38,11 +38,13 @@ function makeSessionManager(aliveIds: Set<string> = new Set()) {
     endSession: vi.fn(),
     getLiveSession: vi.fn().mockReturnValue(undefined),
     isAlive: vi.fn((id: string) => aliveIds.has(id)),
+    isProcessAlive: vi.fn((id: string) => aliveIds.has(id)),
   }) as unknown as SessionManager & {
     enqueueFeedback: ReturnType<typeof vi.fn>;
     endSession: ReturnType<typeof vi.fn>;
     getLiveSession: ReturnType<typeof vi.fn>;
     isAlive: ReturnType<typeof vi.fn>;
+    isProcessAlive: ReturnType<typeof vi.fn>;
   };
 }
 

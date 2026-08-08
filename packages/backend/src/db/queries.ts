@@ -908,6 +908,24 @@ export function countLivePlanningSessions(): number {
 }
 
 /**
+ * Full rows behind countLivePlanningSessions' count — the candidate
+ * population for the OS-process liveness reconciler
+ * (session/sessionLivenessReconciler.ts), which cross-references each row
+ * against real process liveness rather than the in-memory session map or
+ * status/elapsed-time alone.
+ */
+export function listLivePlanningSessionRows(): Session[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM sessions
+       WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
+         AND archived = 0`,
+    )
+    .all() as Session[];
+  return rows.filter((r) => isPlanningSession(r.session_type ?? ''));
+}
+
+/**
  * Idle planning-type sessions (groom/design/ops/split/docs — see
  * isPlanningSession) with ended_at set, unarchived, and older than the
  * given cutoff — the candidate population for
