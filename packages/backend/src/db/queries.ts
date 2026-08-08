@@ -361,9 +361,12 @@ export function getOtherRunningSessionsForTask(
  * 'done' now would either stomp an active turn or get silently reverted by
  * that turn's own terminal write once it finishes. Instead of writing, the
  * transition is deferred onto pending_done_* and a session_done_deferred_while_running
- * audit event is recorded. The deferred transition is applied once the turn
- * completes — see applyPendingDone, called from SessionManager's run()-settle
- * handler and its boot-time sweep — so it is never silently lost.
+ * audit event is recorded. The deferred transition is applied once the
+ * turn's boundary is reached — see applyPendingDone, primarily drained on
+ * the turn-boundary result event (fires whether the session then parks
+ * alive, the normal resting state, or exits), with SessionManager's
+ * run()-settle handler and its boot-time sweep as backstops — so it is
+ * never silently lost.
  *
  * opts.skipInFlightGuard bypasses the guard for callers that have already
  * independently confirmed there is no live process for this session (e.g.
@@ -404,9 +407,15 @@ export function markSessionDone(
 
 /**
  * Applies a done-transition previously deferred by markSessionDone, once the
- * session's turn has genuinely completed (i.e. its process has exited — the
- * caller is responsible for only invoking this at that point, never while a
- * turn might still be in flight). No-op if nothing is pending. If the session
+ * session's turn has reached its boundary — the turn-boundary result event
+ * fires the instant a turn's result is processed, whether the session then
+ * parks alive (the normal resting state — status stays 'running' with no
+ * process exit) or exits. Process exit is NOT a precondition: a parked
+ * session may never exit on its own, so waiting for exit would strand the
+ * deferred transition forever. The caller is only responsible for invoking
+ * this once the in-flight turn that justified the deferral has ended (the
+ * result event, or an actual process exit as a backstop), never while that
+ * turn might still be in flight. No-op if nothing is pending. If the session
  * already reached a terminal status via another path in the meantime, the
  * stale pending mark is dropped rather than applied (that other terminal
  * status wins — it reflects something more recent).
