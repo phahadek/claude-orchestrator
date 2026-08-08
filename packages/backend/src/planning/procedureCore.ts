@@ -933,9 +933,17 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'group can be committed or rejected independently of the Ready flip it was ' +
       'meant to support. DO stage every body edit with the same `groupId` as the ' +
       "rest of the pass's decision once one is open for the task. A body edit " +
-      'staged before any group exists yet for that task is unaffected — it may ' +
-      'stay standalone (there is no group to join, and none may ever materialize, ' +
-      'e.g. a pass that ends in `planning.noOp`).',
+      'staged before any group exists yet for that task stays standalone at that ' +
+      'moment — there is no group yet to join. That is not a permanent exemption: ' +
+      'the next time this session stages anything else with a `groupId` for that ' +
+      "same task, every one of the session's own still-open " +
+      '(staged/approved/needs_revision) standalone body edits for that task is ' +
+      'automatically adopted into that group — its `groupId` is reassigned, no ' +
+      're-staging required. DO NOT rely on staging order (body edit before the ' +
+      'decision) to keep it ungrouped on purpose — it will be swept in the moment ' +
+      'the group opens. The only body edit that stays standalone forever is one ' +
+      'whose session never opens a group for that task at all (e.g. a pass that ' +
+      'ends in `planning.noOp`).',
   },
 ] as const;
 

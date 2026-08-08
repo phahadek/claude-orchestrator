@@ -64,6 +64,7 @@ import {
   insertStagedIntent,
   getStagedIntent,
   insertSession,
+  transitionStagedIntent,
 } from '../../db/queries';
 import {
   createStagedIntentsRouter,
@@ -2873,6 +2874,189 @@ describe('task.patchBodySection / task.updateBody staged ungrouped while the ses
       'ops-body-1',
     );
     expect(patch.groupId).toBe('g-body-ops-1');
+  });
+});
+
+describe("retroactive adoption — a standalone groom body edit joins its task's group once one opens", () => {
+  function seedGroomSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'groom',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  it('adopts a standalone staged body edit into the group the same session opens afterward', () => {
+    seedGroomSession('groom-adopt-1', 't-adopt-1');
+    const orphan = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-adopt-1',
+        section: 'Context',
+        operation: 'append',
+        content: 'Fixed the body first.',
+      },
+      'proj-body',
+      null,
+      'groom-adopt-1',
+    );
+    expect(orphan.groupId).toBeNull();
+
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-adopt-1', dependsOn: [] },
+      'proj-body',
+      'g-adopt-1',
+      'groom-adopt-1',
+    );
+
+    expect(getStagedIntent(orphan.id)!.group_id).toBe('g-adopt-1');
+  });
+
+  it('adopts a needs_revision orphan (group_id reassigned) and the resulting group is groupBlocked until it resolves', async () => {
+    seedGroomSession('groom-adopt-2', 't-adopt-2');
+    const orphan = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-adopt-2',
+        section: 'Context',
+        operation: 'append',
+        content: 'Fixed the body first.',
+      },
+      'proj-body',
+      null,
+      'groom-adopt-2',
+    );
+    transitionStagedIntent(orphan.id, 'needs_revision', {
+      dispositionReason: 'needs a rewrite',
+    });
+    expect(getStagedIntent(orphan.id)!.state).toBe('needs_revision');
+
+    const groupId = 'g-adopt-2';
+    const dependsOn = stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-adopt-2', dependsOn: [] },
+      'proj-body',
+      groupId,
+      'groom-adopt-2',
+    );
+
+    const app = makeApp();
+    const agent = supertest(app);
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+
+    const adopted = getStagedIntent(orphan.id)!;
+    expect(adopted.group_id).toBe(groupId);
+    expect(adopted.state).toBe('needs_revision');
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+    expect(commit.status).toBe(409);
+    expect(commit.body.blockingId).toBe(orphan.id);
+  });
+
+  it('leaves a superseded orphan alone — it is not adopted into the newly opened group', () => {
+    seedGroomSession('groom-adopt-3', 't-adopt-3');
+    const first = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-adopt-3',
+        section: 'Context',
+        operation: 'append',
+        content: 'First version.',
+      },
+      'proj-body',
+      null,
+      'groom-adopt-3',
+    );
+    // Restaging the same kind/task with different content supersedes `first`.
+    const second = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-adopt-3',
+        section: 'Context',
+        operation: 'append',
+        content: 'Second version.',
+      },
+      'proj-body',
+      null,
+      'groom-adopt-3',
+    );
+    expect(getStagedIntent(first.id)!.state).toBe('superseded');
+
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-adopt-3', dependsOn: [] },
+      'proj-body',
+      'g-adopt-3',
+      'groom-adopt-3',
+    );
+
+    expect(getStagedIntent(first.id)!.group_id).toBeNull();
+    expect(getStagedIntent(second.id)!.group_id).toBe('g-adopt-3');
+  });
+
+  it('reconciles an orphan even when the group was already open before this stage call — the sweep runs on every stage into the group, not only the first', () => {
+    seedGroomSession('groom-adopt-4', 't-adopt-4');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-adopt-4', dependsOn: [] },
+      'proj-body',
+      'g-adopt-4',
+      'groom-adopt-4',
+    );
+
+    // Simulate a pre-existing stray orphan (e.g. staged before this fix
+    // shipped) sitting outside the already-open group.
+    insertStagedIntent({
+      id: 'stray-orphan-4',
+      kind: 'task.updateBody',
+      payload: JSON.stringify({ taskId: 't-adopt-4', sections: sections() }),
+      payload_hash: 'hash-stray-orphan-4',
+      task_id: 't-adopt-4',
+      project_id: 'proj-body',
+      session_id: 'groom-adopt-4',
+      group_id: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      milestone: null,
+      created_at: 1000,
+      updated_at: 1000,
+    });
+
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-adopt-4', dependsOn: ['notion:some-other-task'] },
+      'proj-body',
+      'g-adopt-4',
+      'groom-adopt-4',
+    );
+
+    expect(getStagedIntent('stray-orphan-4')!.group_id).toBe('g-adopt-4');
   });
 });
 

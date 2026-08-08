@@ -185,6 +185,9 @@ describe('procedureCore', () => {
     expect(rendered).toContain('task.updateBody');
     expect(rendered).toMatch(/groupId/);
     expect(rendered).toMatch(/rejected at stage time/);
+    expect(rendered).toMatch(/automatically adopted/);
+    expect(rendered).toMatch(/no re-staging required/);
+    expect(rendered).toMatch(/never opens a group/);
 
     expect(
       principlesFor('design').find((p) => p.id === principle.id),
