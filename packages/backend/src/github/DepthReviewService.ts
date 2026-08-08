@@ -1,5 +1,10 @@
 import { logger } from '../logger';
-import { getEventsBySession, markSessionDone } from '../db/queries';
+import {
+  getEventsBySession,
+  getSession,
+  markSessionDone,
+  TERMINAL_SESSION_STATUSES,
+} from '../db/queries';
 import {
   computeSizeSignal,
   isOversized,
@@ -248,30 +253,86 @@ ${DEPTH_REVIEW_JSON_SCHEMA_BLOCK}`;
   }
 
   /**
-   * Conclude the depth-review session once its process actually exits.
-   * No PR ever links to a depth-review session — pull_requests carries only
+   * Conclude the depth-review session once its verdict turn ends. No PR ever
+   * links to a depth-review session — pull_requests carries only
    * session_id/review_session_id, both scoped to the conformance review —
    * so nothing else ever transitions this session to a terminal status.
    * This runs independently of waitForVerdict, whose own listener typically
-   * unsubscribes early (as soon as it parses a verdict out of a text event),
-   * well before the session's process has actually exited.
+   * unsubscribes early (as soon as it parses a verdict out of a text event).
    *
-   * Only status 'idle' — AgentSession.handleCleanExit's non-planning
-   * clean-exit signal, the only way a depth-review session (which never
-   * opens a PR) exits successfully — is concluded here. A status that's
-   * already terminal ('error'/'killed', e.g. the session was destroyed
-   * mid-work or crashed) is left alone: it already reflects what actually
-   * happened and must not be stomped with 'done'.
+   * Binds primarily to the turn-boundary 'result' session_event — it fires
+   * the instant a turn's result event is processed, whether the session then
+   * parks alive (the normal resting state after a clean CLI exit) or the
+   * process actually exits, unlike 'session_ended' which only fires on
+   * actual process exit and — for depth-review sessions specifically — never
+   * arrives (see PlanningOrchestrator's identical distinction for planning
+   * sessions). 'session_ended' is kept as a safety net for the case where it
+   * does fire. Either signal terminalizes the session and reaps its
+   * subprocess so it doesn't sit resident post-verdict — see
+   * PlanningOrchestrator.markTerminal for the equivalent pattern.
+   *
+   * A session already in a terminal status ('error'/'killed', e.g. it was
+   * destroyed mid-work or crashed) is left alone: it already reflects what
+   * actually happened and must not be stomped with 'done'. The subprocess is
+   * still reaped in that case since the terminal-status writer that ran
+   * first may not have reaped it.
    */
   private watchForSessionEnd(sessionId: string): void {
+    let settled = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+    const cleanup = () => {
+      this.sessionManager.off('message', handler);
+      if (timeoutHandle !== null) {
+        clearTimeout(timeoutHandle);
+        timeoutHandle = null;
+      }
+    };
+
+    const conclude = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const row = getSession(sessionId);
+      if (!row) return;
+      if (!TERMINAL_SESSION_STATUSES.has(row.status)) {
+        // skipInFlightGuard: this fires at the turn boundary (the 'result'
+        // event) or on actual process exit ('session_ended') — in the
+        // former case the row may still read 'running' (its normal resting
+        // state while parked alive), and without the override
+        // markSessionDone would just defer onto pending_done_* again, which
+        // nothing ever drains for a depth-review session (see
+        // PlanningOrchestrator.applyPendingApproveTerminal for the same
+        // reasoning at the same signal).
+        markSessionDone(sessionId, Date.now(), null, 'depth_review_service', {
+          skipInFlightGuard: true,
+        });
+      }
+      this.sessionManager.endSession(sessionId);
+    };
+
     const handler = (msg: ServerMessage) => {
       if (!('sessionId' in msg) || msg.sessionId !== sessionId) return;
-      if (msg.type !== 'session_ended') return;
-      this.sessionManager.off('message', handler);
-      if (msg.status !== 'idle') return;
-      markSessionDone(sessionId, Date.now(), null, 'depth_review_service');
+      if (msg.type === 'session_event' && msg.eventType === 'result') {
+        conclude();
+        return;
+      }
+      if (msg.type === 'session_ended') {
+        conclude();
+      }
     };
     this.sessionManager.on('message', handler);
+
+    // Safety net for a depth-review session whose process never reaches a
+    // turn boundary at all (e.g. launch hangs before any result event) —
+    // without this the listener would accumulate on the SessionManager
+    // emitter for the process lifetime, same as the bug this replaces.
+    timeoutHandle = setTimeout(() => {
+      logger.warn(
+        `[DepthReviewService] watchForSessionEnd timed out after ${Math.round(this.timeoutMs / 60000)} min for session ${sessionId} — concluding without a turn-boundary signal`,
+      );
+      conclude();
+    }, this.timeoutMs);
   }
 
   /**
