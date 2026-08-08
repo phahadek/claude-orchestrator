@@ -1008,10 +1008,9 @@ describe('nextPendingGateItems', () => {
         new Date().toISOString(),
       );
     }
-    const ids = nextPendingGateItems(
-      readOnly.project,
-      readOnly.milestone,
-    ).map((i) => i.id);
+    const ids = nextPendingGateItems(readOnly.project, readOnly.milestone).map(
+      (i) => i.id,
+    );
     expect(ids.sort()).toEqual([readOnly.id, prodMutating.id].sort());
   });
 });
