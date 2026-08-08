@@ -93,6 +93,27 @@ const NO_DECISION_NUDGE_MESSAGE =
   'write-up is not the deliverable.';
 
 /**
+ * The bounded self-correct re-turn nudge sent once per distinct blocked-set
+ * (see checkTerminal's blockedMembersNudgeSentFor guard) when a planning
+ * session ends its turn while holding staged intents of its own at
+ * needs_revision/pending_verification — the resumable twin of
+ * surfaceBlockedMembersPauseReason, which only covers a session that is
+ * already terminal or has no live process. Names the blocked intent ids so
+ * the session's next turn can act on (supersede/answer) exactly those.
+ */
+function formatBlockedMembersNudgeMessage(
+  blockedMembers: StagedIntentRow[],
+): string {
+  return (
+    `You ended your turn holding ${blockedMembers.length} of your own staged ` +
+    'intent(s) blocked at needs_revision/pending_verification: ' +
+    `${blockedMembers.map((i) => i.id).join(', ')}. Resolve these — supersede ` +
+    'a needs_revision intent with a corrected one, or address whatever ' +
+    'pending_verification is waiting on — before ending the turn again.'
+  );
+}
+
+/**
  * The bounded self-correct re-turn nudge sent exactly once (per session)
  * when a dispatched ops session reaches terminal with its ops_journal entry
  * still at an intermediate waypoint for its task's Type — see checkTerminal's
@@ -183,6 +204,18 @@ export class PlanningOrchestrator {
    * double-penalizes a session against the crash budget.
    */
   private noDecisionNudgeSent = new Set<string>();
+
+  /**
+   * Sessions that have already received the bounded blocked-members re-turn
+   * nudge (see checkTerminal), keyed by session id to the exact blocked
+   * intent id set (sorted, joined) the nudge named — a session-scoped budget
+   * of one nudge per distinct blocked set, so a session that ignores the
+   * nudge and ends its turn again with the *same* set unresolved escalates
+   * to surfaceBlockedMembersPauseReason instead of being nudged forever,
+   * while a set that changes (operator dispositions some, session supersedes
+   * others) earns a fresh nudge.
+   */
+  private blockedMembersNudgeSentFor = new Map<string, string>();
 
   constructor(private sessionManager: SessionManager) {
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
@@ -364,10 +397,48 @@ export class PlanningOrchestrator {
   checkTerminal(sessionId: string): boolean {
     const { all, countable, stillPending, owesGatedArtifacts } =
       this.computeStagedIntentState(sessionId);
+
+    // Resumable twin of surfaceBlockedMembersPauseReason: a session that
+    // ends its turn holding its own needs_revision/pending_verification
+    // intents is still alive to supersede/resolve them, so re-engage it with
+    // a bounded nudge instead of falling straight through to terminal (which
+    // would otherwise surface the pause reason and end the process while it
+    // could still self-correct). Checked ahead of the reachedTerminal gate
+    // below since a blocked member matters regardless of whether other
+    // intents are still awaiting disposition.
+    const blockedMembers = all.filter(
+      (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
+    );
+    const blockedKey = blockedMembers
+      .map((i) => i.id)
+      .sort()
+      .join(',');
+    const blockedBudgetExhausted =
+      blockedMembers.length > 0 &&
+      this.blockedMembersNudgeSentFor.get(sessionId) === blockedKey;
+
+    if (blockedMembers.length > 0 && !blockedBudgetExhausted) {
+      this.blockedMembersNudgeSentFor.set(sessionId, blockedKey);
+      this.stagedCountAtResume.set(sessionId, countable.length);
+      this.sessionManager
+        .enqueueFeedback(
+          sessionId,
+          'planning-terminal-blocked-members-nudge',
+          formatBlockedMembersNudgeMessage(blockedMembers),
+        )
+        .catch((err) => {
+          logger.error(
+            `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after blocked-members nudge: ${err}`,
+          );
+        });
+      return false;
+    }
+
     const priorCount = this.stagedCountAtResume.get(sessionId) ?? 0;
     const stagedNothingNew = countable.length <= priorCount;
     const reachedTerminal =
-      !stillPending && stagedNothingNew && !owesGatedArtifacts;
+      blockedBudgetExhausted ||
+      (!stillPending && stagedNothingNew && !owesGatedArtifacts);
 
     if (!reachedTerminal) {
       this.stagedCountAtResume.set(sessionId, countable.length);
@@ -512,6 +583,7 @@ export class PlanningOrchestrator {
     setSessionTerminalCompletionReason(sessionId, reason);
     this.stagedCountAtResume.delete(sessionId);
     this.noDecisionNudgeSent.delete(sessionId);
+    this.blockedMembersNudgeSentFor.delete(sessionId);
     // The normal run().then() cleanup that frees a session's in-memory
     // planning-concurrency slot only fires when its subprocess exits — a
     // session marked terminal here (from the apply path, which can fire
