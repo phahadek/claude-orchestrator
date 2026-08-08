@@ -207,16 +207,19 @@ describe('getGateReadiness', () => {
     );
   });
 
-  it('surfaces a pending (parked) Opportunistic item as a sibling of blocking, never counted toward it or the green status', () => {
+  it('surfaces a pending (parked) item as a sibling of blocking, never counted toward it or the green status', () => {
     const stillOpen = makeItem({
       text: 'unresolved',
       classification: 'Read-Only',
     });
     const parked = makeItem({
       text: 'not yet triggerable',
-      classification: 'Opportunistic',
+      classification: 'Read-Only',
     });
-    appendGateItemEvent(parked.id, { disposition: 'not-yet-triggerable' });
+    appendGateItemEvent(parked.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
 
     const readiness = getGateReadiness('polimarket-analyser', 'M12');
     expect(readiness.blocking.map((b) => b.id)).toEqual([stillOpen.id]);
@@ -227,9 +230,12 @@ describe('getGateReadiness', () => {
   it('is green when the only non-resolved items are parked', () => {
     const parked = makeItem({
       text: 'not yet triggerable',
-      classification: 'Opportunistic',
+      classification: 'Read-Only',
     });
-    appendGateItemEvent(parked.id, { disposition: 'not-yet-triggerable' });
+    appendGateItemEvent(parked.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
 
     const readiness = getGateReadiness('polimarket-analyser', 'M12');
     expect(readiness.blocking).toEqual([]);
@@ -850,8 +856,8 @@ describe('appendGateItemEvent', () => {
 });
 
 describe('appendGateItemEvent — not-yet-triggerable pending lifecycle', () => {
-  it('parks an Opportunistic item to pending with a 3h-out next_attempt_at on the first result', () => {
-    const item = makeItem({ classification: 'Opportunistic' });
+  it('parks a Read-Only item to pending with a 3h-out next_attempt_at on the first result', () => {
+    const item = makeItem({ classification: 'Read-Only' });
     const updated = appendGateItemEvent(item.id, {
       disposition: 'not-yet-triggerable',
       evidence: 'the quarterly window has not closed yet',
@@ -872,19 +878,42 @@ describe('appendGateItemEvent — not-yet-triggerable pending lifecycle', () => 
     expect(deltaHours).toBeCloseTo(3, 5);
   });
 
-  it('rejects not-yet-triggerable for a non-Opportunistic item', () => {
+  it('parks a Prod-Mutating item to pending on the same not-yet-triggerable abstain', () => {
+    const item = makeItem({ classification: 'Prod-Mutating' });
+    const updated = appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'the mutating trigger has not fired yet',
+    });
+    expect(updated.state).toBe('pending');
+  });
+
+  it('rejects not-yet-triggerable for a non-pending-eligible item', () => {
+    const item = makeItem({ classification: 'Human-Observation' });
+    expect(() =>
+      appendGateItemEvent(item.id, {
+        disposition: 'not-yet-triggerable',
+        evidence: 'has not happened yet',
+      }),
+    ).toThrow(/not-yet-triggerable only applies to pending-eligible/);
+    expect(getGateItem(item.id)?.state).toBe('open');
+  });
+
+  it('rejects not-yet-triggerable without an evidence/reason', () => {
     const item = makeItem({ classification: 'Read-Only' });
     expect(() =>
       appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' }),
-    ).toThrow(/not-yet-triggerable only applies to Opportunistic/);
+    ).toThrow(/requires an evidence/);
     expect(getGateItem(item.id)?.state).toBe('open');
   });
 
   it('doubles the backoff on each consecutive not-yet-triggerable result, capped at 168h', () => {
-    const item = makeItem({ classification: 'Opportunistic' });
+    const item = makeItem({ classification: 'Read-Only' });
     const expectedHours = [3, 6, 12, 24, 48, 96, 168, 168];
     for (const hours of expectedHours) {
-      appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+      appendGateItemEvent(item.id, {
+        disposition: 'not-yet-triggerable',
+        evidence: 'still waiting',
+      });
       const after = getGateItemDetail(item.id)!.item as {
         nextAttemptAt?: string;
         updatedAt: string;
@@ -901,19 +930,28 @@ describe('appendGateItemEvent — not-yet-triggerable pending lifecycle', () => 
   });
 
   it('restarts the backoff from 3h when a fresh not-yet-triggerable follows a reopen out of pending', () => {
-    const item = makeItem({ classification: 'Opportunistic' });
-    appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
-    appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+    const item = makeItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
     expect(
       (getGateItemDetail(item.id)!.item as { pendingAttemptCount: number })
         .pendingAttemptCount,
     ).toBe(2);
 
+    reclassifyGateItem(item.id, 'Human-Observation', 'pedro');
     reclassifyGateItem(item.id, 'Read-Only', 'pedro');
-    reclassifyGateItem(item.id, 'Opportunistic', 'pedro');
     expect(getGateItem(item.id)?.state).toBe('open');
 
-    appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+    appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
     const detail = getGateItemDetail(item.id)!;
     const after = detail.item as {
       nextAttemptAt?: string;
@@ -930,8 +968,11 @@ describe('appendGateItemEvent — not-yet-triggerable pending lifecycle', () => 
 
 describe('nextPendingGateItems', () => {
   it('skips a pending item until its next_attempt_at elapses', () => {
-    const item = makeItem({ classification: 'Opportunistic' });
-    appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+    const item = makeItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
     expect(getGateItem(item.id)?.state).toBe('pending');
 
     expect(nextPendingGateItems(item.project, item.milestone)).toHaveLength(0);
@@ -948,20 +989,45 @@ describe('nextPendingGateItems', () => {
   });
 
   it('never returns a non-pending item', () => {
-    const item = makeItem({ classification: 'Opportunistic' });
+    const item = makeItem({ classification: 'Read-Only' });
     expect(nextPendingGateItems(item.project, item.milestone)).toHaveLength(0);
+  });
+
+  it('pulls across pending-eligible tiers in one batch (no tier argument)', () => {
+    const readOnly = makeItem({ classification: 'Read-Only' });
+    const prodMutating = makeItem({ classification: 'Prod-Mutating' });
+    for (const item of [readOnly, prodMutating]) {
+      appendGateItemEvent(item.id, {
+        disposition: 'not-yet-triggerable',
+        evidence: 'still waiting',
+      });
+      schedulePendingAttempt(
+        item.id,
+        new Date(Date.now() - 1000).toISOString(),
+        1,
+        new Date().toISOString(),
+      );
+    }
+    const ids = nextPendingGateItems(
+      readOnly.project,
+      readOnly.milestone,
+    ).map((i) => i.id);
+    expect(ids.sort()).toEqual([readOnly.id, prodMutating.id].sort());
   });
 });
 
 describe('reclassifyGateItem — pending lifecycle', () => {
-  it('forces a pending item back to open when reclassified away from Opportunistic', () => {
-    const item = makeItem({ classification: 'Opportunistic' });
-    appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+  it('forces a pending item back to open when reclassified to a non-pending-eligible target', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
     expect(getGateItem(item.id)?.state).toBe('pending');
 
-    const updated = reclassifyGateItem(item.id, 'Read-Only', 'pedro');
+    const updated = reclassifyGateItem(item.id, 'Human-Observation', 'pedro');
     expect(updated.state).toBe('open');
-    expect(updated.classification).toBe('Read-Only');
+    expect(updated.classification).toBe('Human-Observation');
 
     const detail = getGateItemDetail(item.id)!.item as {
       nextAttemptAt?: string;
@@ -971,17 +1037,44 @@ describe('reclassifyGateItem — pending lifecycle', () => {
     expect(detail.pendingAttemptCount).toBe(0);
   });
 
+  it('preserves a pending item and its backoff schedule when reclassified between two pending-eligible tiers', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    expect(getGateItem(item.id)?.state).toBe('pending');
+    const before = getGateItemDetail(item.id)!.item as {
+      nextAttemptAt?: string;
+      pendingAttemptCount: number;
+    };
+
+    const updated = reclassifyGateItem(item.id, 'Prod-Mutating', 'pedro');
+    expect(updated.state).toBe('pending');
+    expect(updated.classification).toBe('Prod-Mutating');
+
+    const after = getGateItemDetail(item.id)!.item as {
+      nextAttemptAt?: string;
+      pendingAttemptCount: number;
+    };
+    expect(after.nextAttemptAt).toBe(before.nextAttemptAt);
+    expect(after.pendingAttemptCount).toBe(before.pendingAttemptCount);
+  });
+
   it('leaves a non-pending item state untouched on reclassification', () => {
     const item = makeItem({ classification: 'needs-triage' });
-    const updated = reclassifyGateItem(item.id, 'Opportunistic', 'pedro');
+    const updated = reclassifyGateItem(item.id, 'Read-Only', 'pedro');
     expect(updated.state).toBe('open');
   });
 });
 
 describe('reopenGateItem — pending is blocked', () => {
   it('rejects reopening a pending item', () => {
-    const item = makeItem({ classification: 'Opportunistic' });
-    appendGateItemEvent(item.id, { disposition: 'not-yet-triggerable' });
+    const item = makeItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
     expect(() => reopenGateItem(item.id, 'pedro')).toThrow(/already pending/);
   });
 });
@@ -1194,34 +1287,6 @@ describe('proposeGateItemReclassification', () => {
     expect(outcome.rejectedReason).toMatch(/only propose/);
   });
 
-  it('applies a proposal to Opportunistic and leaves the item runnable rather than resolving it', () => {
-    const item = makeItem({ classification: 'needs-triage' });
-    const outcome = proposeGateItemReclassification(
-      item.id,
-      'Opportunistic',
-      'the triggering condition has not happened yet — check opportunistically when it does',
-    );
-    expect(outcome.applied).toBe(true);
-    expect(outcome.item.classification).toBe('Opportunistic');
-    // Reclassification alone never resolves an item — it stays out of the
-    // terminal pass/deferred/discarded states, eligible for a later run.
-    expect(['pass', 'deferred', 'discarded']).not.toContain(outcome.item.state);
-
-    const detail = getGateItemDetail(item.id);
-    expect(detail!.events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          disposition: 'reclassified',
-          operator: 'gate-verifier',
-          evidence: expect.objectContaining({
-            from: 'needs-triage',
-            to: 'Opportunistic',
-          }),
-        }),
-      ]),
-    );
-  });
-
   it("rejects a no-op proposal to the item's current classification", () => {
     const item = makeItem({ classification: 'Human-Observation' });
     const outcome = proposeGateItemReclassification(
@@ -1255,7 +1320,7 @@ describe('proposeGateItemReclassification', () => {
     expect(second.rejectedReason).toMatch(/needs operator attention/);
   });
 
-  it('caps a verifier proposing Opportunistic after an earlier verifier reclassification of the same item', () => {
+  it('caps a verifier proposing Human-Observation after an earlier verifier reclassification of the same item', () => {
     const item = makeItem({ classification: 'Read-Only' });
     const first = proposeGateItemReclassification(
       item.id,
@@ -1267,12 +1332,12 @@ describe('proposeGateItemReclassification', () => {
     // An operator moves it back to an auto-run tier...
     reclassifyGateItem(item.id, 'Read-Only', 'pedro');
 
-    // ...and the verifier tries Opportunistic next — still capped at one
+    // ...and the verifier tries Human-Observation next — still capped at one
     // verifier-initiated reclassification per item.
     const second = proposeGateItemReclassification(
       item.id,
-      'Opportunistic',
-      'the condition has not happened yet',
+      'Human-Observation',
+      'looks like UI after all',
     );
     expect(second.applied).toBe(false);
     expect(second.rejectedReason).toMatch(/needs operator attention/);
@@ -1482,9 +1547,12 @@ describe('listMilestoneReadiness', () => {
   it('reports a parked item as green with a non-zero parkedCount, not blocked', () => {
     const parked = makeItem({
       milestone: 'M12',
-      classification: 'Opportunistic',
+      classification: 'Read-Only',
     });
-    appendGateItemEvent(parked.id, { disposition: 'not-yet-triggerable' });
+    appendGateItemEvent(parked.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
 
     const rows = listMilestoneReadiness({ project: 'polimarket-analyser' });
     expect(rows).toEqual(

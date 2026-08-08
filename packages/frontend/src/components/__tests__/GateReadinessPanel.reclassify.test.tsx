@@ -85,7 +85,6 @@ describe('GateReadinessPanel — operator reclassify control', () => {
     expect(optionValues).toEqual([
       'needs-triage',
       'Read-Only',
-      'Opportunistic',
       'Prod-Mutating',
       'Human-Observation',
     ]);

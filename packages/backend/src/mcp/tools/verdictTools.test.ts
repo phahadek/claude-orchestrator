@@ -356,7 +356,7 @@ describe('gate.verify', () => {
     await close();
   });
 
-  it('accepts a reclassify proposal to Opportunistic', async () => {
+  it('accepts a reclassify proposal to needs-triage', async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session, 'ops');
     await client.callTool({
@@ -365,8 +365,8 @@ describe('gate.verify', () => {
         gateItemId: 'item-4',
         disposition: 'needs-setup',
         reclassify: {
-          to: 'Opportunistic',
-          reason: 'the triggering condition has not happened yet',
+          to: 'needs-triage',
+          reason: 'cannot tell what tier fits',
         },
       },
     });
@@ -375,8 +375,8 @@ describe('gate.verify', () => {
       disposition: 'needs-setup',
       evidence: undefined,
       reclassify: {
-        to: 'Opportunistic',
-        reason: 'the triggering condition has not happened yet',
+        to: 'needs-triage',
+        reason: 'cannot tell what tier fits',
       },
     });
     await close();

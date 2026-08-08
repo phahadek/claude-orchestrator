@@ -467,7 +467,6 @@ export type NewConvergenceSnapshotRow = Omit<ConvergenceSnapshotRow, 'id'>;
 export type GateItemClassification =
   | 'Read-Only'
   | 'Prod-Mutating'
-  | 'Opportunistic'
   | 'Human-Observation'
   | 'needs-triage';
 

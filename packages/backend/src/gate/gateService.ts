@@ -70,12 +70,14 @@ export function createLocalGitAncestrySource(
  * it, the same non-terminal shape as `noted` — the item stays runnable, but
  * nextRunnableGateItems skips it until a later event (reclassify/reopen/a
  * new fail) supersedes it as the item's latest. `not-yet-triggerable` is the
- * Opportunistic-only "the real-world trigger hasn't happened yet" abstain —
- * server-rejected for any other classification (mirroring approveGateItem's
- * Prod-Mutating-only guard). Unlike `noted`/`needs-setup`, it does advance
- * state: to `pending`, with a backoff-scheduled next_attempt_at, so a
- * near-certain repeat non-result doesn't get re-dispatched every tick (see
- * nextStateForDisposition / computeNotYetTriggerableBackoffHours below).
+ * "the real-world trigger hasn't happened yet" abstain — server-rejected
+ * unless the item's classification is pending-eligible (Read-Only or
+ * Prod-Mutating; mirroring approveGateItem's Prod-Mutating-only guard for
+ * approval). Unlike `noted`/`needs-setup`, it does advance state: to
+ * `pending`, with a backoff-scheduled next_attempt_at, so a near-certain
+ * repeat non-result doesn't get re-dispatched every tick (see
+ * nextStateForDisposition / computeNotYetTriggerableBackoffHours below). It
+ * also requires non-empty evidence, like `discarded`.
  */
 const GATE_DISPOSITIONS = [
   'pass',
@@ -136,7 +138,7 @@ export interface GateReadiness {
   status: 'green' | 'blocked';
   blocking: GateBlockingItem[];
   /**
-   * Opportunistic items parked at `pending` (backoff-scheduled for a later
+   * Items parked at `pending` (backoff-scheduled for a later
    * not-yet-triggerable re-check) — a sibling bucket to `blocking`, never a
    * subset of it. Visible to every reader but never counted toward
    * `blocking.length` or the green/blocked status.
@@ -345,7 +347,6 @@ const DEFAULT_BATCH_LIMIT = 10;
 const TIER_ORDER: GateItemClassification[] = [
   'needs-triage',
   'Read-Only',
-  'Opportunistic',
   'Prod-Mutating',
 ];
 
@@ -398,9 +399,10 @@ export function nextRunnableGateItems(
  * Pending-analog dispatch pull: mirrors nextRunnableGateItems, but over
  * `pending` items — skipping one whose backoff (next_attempt_at) hasn't
  * elapsed yet, the same way nextRunnableGateItems skips a `needs-setup`
- * abstain via isAwaitingSetup. Every `pending` item is Opportunistic (see
- * appendGateItemEvent's not-yet-triggerable guard), so there is no tier
- * argument to mirror TIER_ORDER with.
+ * abstain via isAwaitingSetup. A `pending` item may be any pending-eligible
+ * classification (Read-Only or Prod-Mutating — see appendGateItemEvent's
+ * not-yet-triggerable guard), so there is no tier argument to mirror
+ * TIER_ORDER with; the caller pulls across tiers in one batch.
  */
 function isBackoffPending(item: GateItem, now: string): boolean {
   return item.nextAttemptAt !== undefined && item.nextAttemptAt > now;
@@ -525,7 +527,7 @@ export interface MilestoneReadiness {
   milestone: string;
   status: 'green' | 'blocked';
   blockingCount: number;
-  /** Opportunistic items parked at `pending` — never counted toward blockingCount or the green/blocked status. */
+  /** Items parked at `pending` — never counted toward blockingCount or the green/blocked status. */
   parkedCount: number;
 }
 
@@ -598,7 +600,19 @@ export interface AppendGateItemEventInput {
   unattended?: boolean;
 }
 
-/** Prod-Mutating passes stop short of resolving — they wait for approveGateItem. Opportunistic not-yet-triggerable parks at `pending`, not a state literally named after the disposition. */
+/**
+ * Classifications eligible for the `not-yet-triggerable` -> `pending` abstain
+ * — the "when can this be verified" axis, orthogonal to "who can verify it".
+ * Human-Observation and needs-triage are excluded: an item still awaiting
+ * triage has no verifier to abstain in the first place, and Human-Observation
+ * is never auto-run so there is no unattended dispatch to abstain from.
+ */
+const PENDING_ELIGIBLE_CLASSIFICATIONS = new Set<GateItemClassification>([
+  'Read-Only',
+  'Prod-Mutating',
+]);
+
+/** Prod-Mutating passes stop short of resolving — they wait for approveGateItem. A not-yet-triggerable result (Read-Only or Prod-Mutating) parks at `pending`, not a state literally named after the disposition. */
 function nextStateForDisposition(
   disposition: GateDisposition,
   classification: GateItemClassification,
@@ -678,10 +692,15 @@ export function appendGateItemEvent(
   }
   if (
     event.disposition === 'not-yet-triggerable' &&
-    item.classification !== 'Opportunistic'
+    !PENDING_ELIGIBLE_CLASSIFICATIONS.has(item.classification)
   ) {
     throw new Error(
-      `gate_item ${gateItemId}: not-yet-triggerable only applies to Opportunistic items (classification=${item.classification})`,
+      `gate_item ${gateItemId}: not-yet-triggerable only applies to pending-eligible items (classification=${item.classification})`,
+    );
+  }
+  if (event.disposition === 'not-yet-triggerable' && !event.evidence) {
+    throw new Error(
+      `gate_item_event: 'not-yet-triggerable' requires an evidence/reason`,
     );
   }
   const now = new Date().toISOString();
@@ -825,8 +844,8 @@ export function rejectGateItem(
  * sanctioned path back to resolution, so reopening them is a no-op we reject.
  * `pending` joins them for the same reason — it already carries its own
  * scheduled backoff re-check; an operator forces it back to `open` early via
- * reclassifyGateItem (away from Opportunistic) instead of this generic
- * reopen.
+ * reclassifyGateItem (away from a pending-eligible tier) instead of this
+ * generic reopen.
  */
 const REOPEN_BLOCKED_STATES = new Set([
   'open',
@@ -877,17 +896,17 @@ export function reopenGateItem(
 const RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Read-Only',
   'Prod-Mutating',
-  'Opportunistic',
   'Human-Observation',
 ]);
 
 /**
  * The /gate skill's triage step: moves a needs-triage (or any) item into a
- * resolved classification. Reclassifying a `pending` item away from
- * Opportunistic forces it back to `open` in the same call — a pending item's
- * backoff schedule only makes sense while it remains Opportunistic, and
- * advanceState clears next_attempt_at/pending_attempt_count on any
- * transition out of `pending`.
+ * resolved classification. Reclassifying a `pending` item to a target that
+ * is itself pending-eligible (Read-Only <-> Prod-Mutating) preserves the
+ * `pending` state and its backoff schedule — only a reclassify to a
+ * non-pending-eligible target (Human-Observation, needs-triage) forces it
+ * back to `open` in the same call, since advanceState clears
+ * next_attempt_at/pending_attempt_count on any transition out of `pending`.
  */
 export function reclassifyGateItem(
   gateItemId: string,
@@ -910,7 +929,10 @@ export function reclassifyGateItem(
     now,
     operator,
   );
-  if (item.state === 'pending' && classification !== 'Opportunistic') {
+  if (
+    item.state === 'pending' &&
+    !PENDING_ELIGIBLE_CLASSIFICATIONS.has(classification)
+  ) {
     gateStore.advanceState(gateItemId, 'open', 'reclassified', now);
     const reopened = gateStore.getItem(gateItemId);
     if (!reopened) {
@@ -928,20 +950,13 @@ export function reclassifyGateItem(
  * (see gateItemVerifier's `reclassify` report field). Human-Observation and
  * needs-triage route the item *out* of auto-run, so they're applied here
  * with provenance regardless of how the verdict reached this function.
- * Opportunistic routes the item *into* auto-run, but that's no longer a
- * bare self-application: a gate.verify report is staged as a normal intent
- * and an operator disposes it before proposeGateItemReclassification ever
- * runs for it (see GateVerificationResult.awaitingDisposition), so an
- * Opportunistic proposal is already operator-approved by the time it lands
- * here — the "would need staging" bar this set otherwise enforces.
  * MAX_VERIFIER_RECLASSIFY_ATTEMPTS independently caps repeat proposals per
  * item. Read-Only and Prod-Mutating remain excluded — a verifier is never
- * allowed to propose either.
+ * allowed to propose either auto-run tier.
  */
 const VERIFIER_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Human-Observation',
   'needs-triage',
-  'Opportunistic',
 ]);
 
 /** Ping-pong guard: caps how many times a verifier may reclassify the same item before a human has to step in via /gate. */

@@ -34,7 +34,6 @@ export const gateContributionDecisionSchema = z
   .enum([
     'Read-Only',
     'Prod-Mutating',
-    'Opportunistic',
     'Human-Observation',
     'needs-triage',
     'none',
@@ -286,7 +285,6 @@ export const gateContributionItemInputSchema = z.object({
     .enum([
       'Read-Only',
       'Prod-Mutating',
-      'Opportunistic',
       'Human-Observation',
       'needs-triage',
     ])
@@ -349,7 +347,6 @@ export const gateVerifyDispositionSchema = z.enum([
 export const gateVerifyReclassifyToSchema = z.enum([
   'Human-Observation',
   'needs-triage',
-  'Opportunistic',
 ]);
 
 export const gateVerifyReclassifySchema = z.object({

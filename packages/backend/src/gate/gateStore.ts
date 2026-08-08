@@ -333,7 +333,6 @@ export function schedulePendingAttempt(
 const VALID_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Read-Only',
   'Prod-Mutating',
-  'Opportunistic',
   'Human-Observation',
   // A verifier's self-correction proposal (see gateService's
   // proposeGateItemReclassification) may hand an item back to needs-triage

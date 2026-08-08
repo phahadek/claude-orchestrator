@@ -42,7 +42,6 @@ const PAGE_SIZE = 20;
 const CLASSIFICATION_OPTIONS: GateItemClassification[] = [
   'needs-triage',
   'Read-Only',
-  'Opportunistic',
   'Prod-Mutating',
   'Human-Observation',
 ];
@@ -216,7 +215,7 @@ interface RollupHeaderProps {
   awaitingSetupCount?: number;
   /** Clicking the awaiting-setup badge drives the awaitingSetup list filter. */
   onSelectAwaitingSetup?: () => void;
-  /** Opportunistic items parked at `pending` (backoff-scheduled) — rendered as a standalone badge, distinct from blocking and resolved, never folded into the progress bar/chip totals. */
+  /** Items parked at `pending` (backoff-scheduled) — rendered as a standalone badge, distinct from blocking and resolved, never folded into the progress bar/chip totals. */
   parkedCount?: number;
   /** Clicking the parked badge drives the `pending` state list filter. */
   onSelectParked?: () => void;
@@ -281,7 +280,7 @@ function RollupHeader({
             className={styles.parkedBadge}
             data-testid={`${testId}-parked-count`}
             onClick={onSelectParked}
-            title="Opportunistic items parked awaiting their next backoff-scheduled not-yet-triggerable re-check — non-blocking, excluded from the green/blocked status."
+            title="Items parked awaiting their next backoff-scheduled not-yet-triggerable re-check — non-blocking, excluded from the green/blocked status."
           >
             Parked: {parkedCount}
           </button>

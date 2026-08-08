@@ -233,7 +233,7 @@ export function buildGateVerifyProcedure(item: GateItem): string {
             'mis-classified — most commonly, it actually describes ' +
             'UI/visual/interactive behavior that only a human observing the ' +
             'running app can judge, but it is tagged an auto-run tier ' +
-            '(Read-Only/Opportunistic/Prod-Mutating) so this session was ' +
+            '(Read-Only/Prod-Mutating) so this session was ' +
             'dispatched to headlessly verify something it structurally ' +
             'cannot observe — propose the correct classification instead ' +
             'of forcing a pass/fail, or abstaining to a bare needs-setup ' +

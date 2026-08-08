@@ -139,7 +139,7 @@ node ~/.claude/scripts/gate-state-client.mjs next --milestone <M> [--classificat
 
 Returns up to `limit` (default 10) `runnable` items from **one** tier. Tier
 pull order, when `--classification` is omitted: `needs-triage` →
-`Read-Only` → `Opportunistic` → `Prod-Mutating` — untriaged items surface
+`Read-Only` → `Prod-Mutating` — untriaged items surface
 first, then increasing blast radius. Never request the full runnable set;
 always let the server pick or explicitly scope one tier.
 
@@ -173,23 +173,23 @@ For every item in the pulled batch:
 
 4. **Perform the active check** the item describes (only when reading history
    didn't settle it):
-   - **Read-Only / Opportunistic** — mechanical or low-risk checks you can
+   - **Read-Only** — mechanical or low-risk checks you can
      run and judge directly (read code, hit a read endpoint, inspect
      output).
+     - **Scratch-write convention:** a **self-contained scratch write with clean
+       rollback** (a throwaway scratch task you create and archive, restoring any
+       survivors) is **`Read-Only`**, not `Prod-Mutating` — its blast radius is
+       bounded and reversible. Reserve **`Prod-Mutating`** for a flip of **real**
+       state (a real task's status, a real config row). This removes the recurring
+       hesitation on staging checks that only ever touch scratch objects.
    - **Prod-Mutating** — do **not** self-grant a pass. These are
      non-mechanical: surface the exact action to the human, get their
      explicit go-ahead before performing anything that mutates production,
      and never mark one `pass` without a human present for it.
-     - **Scratch-write convention:** a **self-contained scratch write with clean
-       rollback** (a throwaway scratch task you create and archive, restoring any
-       survivors) is **`Opportunistic`**, not `Prod-Mutating` — its blast radius is
-       bounded and reversible. Reserve **`Prod-Mutating`** for a flip of **real**
-       state (a real task's status, a real config row). This removes the recurring
-       hesitation on staging checks that only ever touch scratch objects.
    - **needs-triage** — the item's classification isn't resolved yet, usually a
      **backfill artifact** (an entire milestone can land as `needs-triage` — M11
      did). Read `item.text` and judge which tier it belongs to (mechanical
-     read-only check → `Read-Only`; on-demand / low-risk → `Opportunistic`;
+     read-only check or bounded scratch write → `Read-Only`;
      anything that mutates production → `Prod-Mutating`). When you're confident,
      reclassify **before** dispositioning — **don't** guess a class or disposition
      the item blind:
@@ -198,7 +198,7 @@ For every item in the pulled batch:
      node ~/.claude/scripts/gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
      ```
 
-     `classification` must be one of `Read-Only`, `Prod-Mutating`, `Opportunistic`
+     `classification` must be one of `Read-Only`, `Prod-Mutating`, `Human-Observation`
      — the server rejects anything else, including `needs-triage` itself. Once
      reclassified, the item is picked up by its new tier on the next `next` pull
      (and by the continuous reconciler's auto-run path for
@@ -231,10 +231,10 @@ For every item in the pulled batch:
    | `fail` | ❌ stays blocking | behavior is **broken** — file the fix as a Code task (`filedFollowon: <taskId>`); the item stays unresolved, re-verified after the fix deploys. "Record `fail`" is not a resolution. |
    | `noted` | non-terminal (stays `runnable`) | "attempted, not yet resolved" — records the event + evidence without advancing state. The sanctioned home for a non-resolving attempt (or just omit `disposition`). |
    | `needs-setup` | non-terminal (stays `runnable`) | the verifier's bounded best-effort **abstain** — records the attempt; `next` skips the item until a later event supersedes it. |
-   | `not-yet-triggerable` | non-terminal (advances to `pending`) | **`Opportunistic`-only** — the triggering condition genuinely hasn't happened yet (no occurrence in history, nothing to stage). Enters a backoff schedule; `next` skips it until the backoff clock elapses, then it resurfaces `runnable` for a fresh look. |
+   | `not-yet-triggerable` | non-terminal (advances to `pending`) | **`Read-Only`/`Prod-Mutating`-only, and requires `evidence`** — the triggering condition genuinely hasn't happened yet (no occurrence in history, nothing to stage). Enters a backoff schedule; `next` skips it until the backoff clock elapses, then it resurfaces `runnable` for a fresh look. |
 
    **Rules the vocabulary encodes:**
-   - **"Hasn't happened yet" on an `Opportunistic` item is `not-yet-triggerable`, not
+   - **"Hasn't happened yet" on a `Read-Only`/`Prod-Mutating` item is `not-yet-triggerable`, not
      `deferred`.** `deferred` means punted to a *later milestone*; `not-yet-triggerable`
      means the same milestone, waiting on its own backoff clock for the trigger to occur
      naturally. Don't reach for `deferred` just because nothing has fired yet — that's
@@ -267,7 +267,7 @@ For every item in the pulled batch:
    transcript excerpt) and `filedFollowon` when a fix was filed rather than fixed
    in place.
 
-   For a `Read-Only` / `Opportunistic` item this resolves the item directly.
+   For a `Read-Only` item this resolves the item directly.
    For a `Prod-Mutating` item, a `pass` event parks the item at
    `pending-approval` — it does **not** resolve yet.
 

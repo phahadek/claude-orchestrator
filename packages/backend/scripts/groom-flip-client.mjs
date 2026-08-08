@@ -26,7 +26,7 @@
 //     "hard_block_deps": ["<id>", ...],           // [] is a valid "no deps"
 //     "size_check": {...}, "type_check": {...},   // see groomGate.ts
 //     "gate_contribution": {
-//       "classification": "Read-Only"|"Prod-Mutating"|"Opportunistic"|"needs-triage"|"none"|"n/a",
+//       "classification": "Read-Only"|"Prod-Mutating"|"Human-Observation"|"needs-triage"|"none"|"n/a",
 //       "items": [{"text": "..."}]                // [] when classification is "none"/"n/a"
 //     },
 //     "seed_contribution": {
