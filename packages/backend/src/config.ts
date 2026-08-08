@@ -209,6 +209,13 @@ const PLANNING_READONLY_BASH_TOOLS = [
 // adds only path-scoped git inspection (`git grep`, `git log <path>`,
 // `git show <sha>:<path>`) — the exact code-region exploration the /groom
 // skill is designed to do — never a bare git status/branch/log/ls-files.
+//
+// Post-deploy verification (the af76fa24 pattern shouldn't recur in a
+// subsequently dispatched groom session's Bash calls) is a session_events
+// read requiring the `read:session-events:<projectId>` capability, which is
+// human-approval gated — out of scope for an automated Code session to grant
+// itself. That check belongs to the Manual Verification Gate / the
+// GateItemVerifier auto-run flow (see ff290fc4), not to a code change here.
 const GROOM_READONLY_BASH_TOOLS = [
   'Bash(cd:*)',
   'Bash(which:*)',
