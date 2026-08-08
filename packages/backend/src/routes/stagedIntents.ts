@@ -2558,6 +2558,25 @@ function explicitSupersedesAlternative(state: StagedIntentState): string {
   }
 }
 
+/**
+ * The unblocked-target warning: an explicit `supersedes` pointer is meant to
+ * retire a genuinely blocked intent (see isBlockedStagedIntentRow) — a
+ * `staged`/`approved` sibling that never failed validation and is not itself
+ * being corrected in place (see the reasoning-only-correction path, which
+ * legitimately re-supersedes an unblocked intent to fix its
+ * groomProposal/decisionProposal without changing the payload) should
+ * normally be left alone rather than retired and re-staged. This does not
+ * reject the supersede — a same-task reasoning correction is a real use case
+ * this must not break — it only warns so the redundant-resupersede pattern
+ * (superseding every unblocked sibling in a group to clear one blocked
+ * member) is visible in logs instead of silently costing a full re-stage.
+ */
+const EXPLICIT_SUPERSEDES_UNBLOCKED_TARGET_MESSAGE =
+  'is not blocked (no failed stage-time validation, no ' +
+  'needs_revision/pending_verification state) — an unblocked sibling should ' +
+  'normally be left in place rather than retired and re-staged; only a ' +
+  'blocked intent needs an explicit supersedes to retire it';
+
 /** An explicit `explicitSupersedes` pointer that cannot be honoured — never silently dropped. */
 export class ExplicitSupersedesError extends Error {
   constructor(message: string) {
@@ -3183,6 +3202,12 @@ export function stageIntent(
       throw new ExplicitSupersedesError(
         `explicit supersedes target "${explicitSupersedes}" is in state "${explicit.state}" and cannot be ` +
           `superseded; ${explicitSupersedesAlternative(explicit.state)}`,
+      );
+    }
+    if (!isBlockedStagedIntentRow(explicit)) {
+      logger.warn(
+        `[stagedIntents] explicit supersedes target "${explicitSupersedes}" ` +
+          EXPLICIT_SUPERSEDES_UNBLOCKED_TARGET_MESSAGE,
       );
     }
     explicitValid = explicit;
@@ -4520,6 +4545,30 @@ function getActiveStagedIntent(id: string): StagedIntentRow | undefined {
   return row && ACTIVE_STATES.includes(row.state) ? row : undefined;
 }
 
+/**
+ * True when `row` is actually blocked — either parked in one of
+ * BLOCKED_STATES (needs_revision/pending_verification, the
+ * routeStageTimeBlock path), or still sitting in `staged` but carrying a
+ * `{blocked: true}` annotation (the readiness-gate path, which "never blocks
+ * the stage itself" per computeGateReadyIntent's doc comment above — see
+ * ReadyPathMissingGroupError's neighbourhood). Used by the explicit-supersedes
+ * guard in stageIntent: only a genuinely blocked intent may be named as a
+ * `supersedes` target — an unblocked sibling that merely sits at `staged`
+ * clean must be left in place rather than retired and re-staged, which is
+ * pure cost with no correctness benefit (a superseded row never blocks a
+ * group commit either way).
+ */
+function isBlockedStagedIntentRow(row: StagedIntentRow): boolean {
+  if (BLOCKED_STATES.includes(row.state)) return true;
+  if (!row.annotation) return false;
+  try {
+    const parsed = JSON.parse(row.annotation) as { blocked?: unknown };
+    return parsed.blocked === true;
+  } catch {
+    return false;
+  }
+}
+
 /** The operator-resolvable-exit surface: a member stuck in needs_revision/pending_verification, reachable so it can be individually declined off the commit guard's predicate. */
 function getBlockedStagedIntent(id: string): StagedIntentRow | undefined {
   const row = getStagedIntentRow(id);
@@ -4936,7 +4985,7 @@ function isAutoRejectedNeedsRevision(row: StagedIntentRow): boolean {
   }
 }
 
-function formatStageTimeBlockFeedback(
+export function formatStageTimeBlockFeedback(
   intent: StagedIntent,
   detail: string,
 ): string {
@@ -4945,7 +4994,11 @@ function formatStageTimeBlockFeedback(
     `and was sent back for revision:\n- ${detail}\n` +
     `To fix this, stage the corrected intent with supersedes set to "${intent.id}" ` +
     `(the id of this blocked intent) so it retires the blocked one instead of leaving it ` +
-    "in place — staging an unlinked correction does not retire it and will wedge this intent's group."
+    "in place — staging an unlinked correction does not retire it and will wedge this intent's group. " +
+    'Supersede ONLY this blocked intent — its unblocked group siblings (sitting cleanly at ' +
+    'staged/approved) must be left in place, not retired and re-staged; a superseded member ' +
+    'never blocks a group commit, so re-staging an unblocked sibling fixes nothing and only ' +
+    'multiplies the cost of this correction.'
   );
 }
 

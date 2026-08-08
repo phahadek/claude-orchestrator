@@ -485,7 +485,12 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       "above, and withdrawing does not retire it into the corrected one's slot the way " +
       'an explicit `supersedes` does. This is the same `supersedes` field the platform ' +
       'already requires the corrected payload to carry — no separate call, no auto-' +
-      'supersede: only a caller that names the blocked id explicitly may retire it.',
+      'supersede: only a caller that names the blocked id explicitly may retire it. ' +
+      'Supersede ONLY the blocked intent named in the feedback — its group siblings that ' +
+      'were never blocked (sitting cleanly at `staged`/`approved`) must be left in place, ' +
+      'NOT superseded and re-staged: a superseded member never blocks a group commit ' +
+      'either way, so retiring an unblocked sibling fixes nothing and only multiplies the ' +
+      'cost of this correction round.',
   },
   {
     id: 'incidental-tooling-gap-not-a-blocker',

@@ -307,6 +307,24 @@ describe('procedureCore', () => {
     }
   });
 
+  it('teaches supersede-on-stage-time-block\'s scope limit: only the blocked intent, never its unblocked group siblings — both in CORE_PRINCIPLES and in the assembled hard-rules.md markdown', () => {
+    const skills: SkillId[] = ['groom', 'design', 'ops', 'split'];
+    for (const skill of skills) {
+      const principle = principlesFor(skill).find(
+        (p) => p.id === 'supersede-on-stage-time-block',
+      );
+      expect(principle, `${skill}`).toBeDefined();
+      const rendered = renderPrinciple(principle!, skill);
+      expect(rendered).toMatch(/supersede only the blocked intent/i);
+      expect(rendered).toMatch(/siblings.*must be left in place/i);
+      expect(rendered).toMatch(/never blocks a group commit/i);
+    }
+
+    const markdown = renderHardRulesMarkdown();
+    expect(markdown).toMatch(/supersede only the blocked intent/i);
+    expect(markdown).toMatch(/siblings.*must be left in place/i);
+  });
+
   it('keeps the self-caught-mistake withdraw directive rendering, and distinguishes it from the needs_revision supersede case rather than contradicting it', () => {
     const withdraw = CORE_PRINCIPLES.find(
       (p) => p.id === 'withdraw-self-caught-mistake',
