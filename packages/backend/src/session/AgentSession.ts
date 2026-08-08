@@ -3128,9 +3128,25 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * forced escalation is audited here (naming this session and that the
    * graceful close failed) so a subprocess surviving its session leaves a
    * trace instead of going unnoticed.
+   *
+   * If the session's row already carries a terminal_completion_reason (set
+   * by e.g. PlanningOrchestrator.markTerminal before it calls this), this
+   * *is* the sanctioned conclusion path — a forced kill that follows is the
+   * reap of a CLI that didn't honor stdin close, not a fault, and must not
+   * be classified as runner_killed_unexpected/session_errored by the run()
+   * loop's own exit handling. hasEnded is set synchronously, before any
+   * await, specifically to win that race: once runner.endSession() sends a
+   * kill signal, run()'s exit-handling continuation is queued as a
+   * microtask ahead of anything after this method's first await, so the
+   * guard has to already be in place before escalation starts, not after.
    */
   async endSession(): Promise<void> {
-    const escalated = await this.runner.endSession();
+    const row = getSession(this.sessionId);
+    const concludedCleanly = !!row?.terminal_completion_reason;
+    if (concludedCleanly) {
+      this.hasEnded = true;
+    }
+    const escalated = await this.runner.endSession(concludedCleanly);
     if (escalated) {
       recordEvent({
         event_type: 'session_teardown_escalated',
@@ -3141,6 +3157,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         payload: {
           sessionId: this.sessionId,
           reason: 'graceful_stdin_close_timed_out',
+          concludedCleanly,
+          terminalCompletionReason: row?.terminal_completion_reason ?? null,
         },
       });
     }

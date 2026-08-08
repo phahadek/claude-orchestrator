@@ -278,15 +278,22 @@ export class CliSessionRunner implements ISessionRunner {
   }
 
   /**
+   * @param concludedCleanly whether the caller is closing stdin as the
+   * sanctioned conclusion of a session that already recorded why it's
+   * ending (e.g. a groom session's markTerminal, after
+   * setSessionTerminalCompletionReason) rather than an unexplained
+   * teardown. Purely descriptive here (logging only) — AgentSession.endSession
+   * is what actually carries this into the exit-code classification, since
+   * it owns the DB/audit side this runner stays free of.
    * @returns true if the process did not exit on its own within the grace
    * period and had to be escalated to a forceful kill() — callers use this
    * to decide whether the escalation is audit-worthy.
    */
-  async endSession(): Promise<boolean> {
+  async endSession(concludedCleanly = false): Promise<boolean> {
     if (this.proc?.stdin?.writable) {
       this.proc.stdin.end();
     }
-    return this.waitForExitOrEscalate();
+    return this.waitForExitOrEscalate(concludedCleanly);
   }
 
   /**
@@ -296,7 +303,9 @@ export class CliSessionRunner implements ISessionRunner {
    * marked terminal — escalate to the same SIGTERM/SIGKILL process-tree
    * kill() used for explicit aborts.
    */
-  private async waitForExitOrEscalate(): Promise<boolean> {
+  private async waitForExitOrEscalate(
+    concludedCleanly: boolean,
+  ): Promise<boolean> {
     if (!this.proc || this.proc.exitCode !== null) return false;
     const exited = await new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => resolve(false), GRACEFUL_END_TIMEOUT_MS);
@@ -308,7 +317,9 @@ export class CliSessionRunner implements ISessionRunner {
     if (exited) return false;
     log(
       this.sessionId,
-      `did not exit within ${GRACEFUL_END_TIMEOUT_MS}ms of stdin close; escalating to kill()`,
+      `did not exit within ${GRACEFUL_END_TIMEOUT_MS}ms of stdin close` +
+        (concludedCleanly ? ' (session already concluded cleanly)' : '') +
+        '; escalating to kill()',
     );
     await this.kill();
     return true;
