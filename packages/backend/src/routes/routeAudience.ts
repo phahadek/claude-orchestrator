@@ -235,6 +235,10 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'tooling',
     reason: 'called by packages/backend/scripts/gate-state-client.mjs',
   },
+  'POST /api/gate/items/:id/carry-forward': {
+    audience: 'tooling',
+    reason: 'called by packages/backend/scripts/gate-state-client.mjs',
+  },
   'POST /api/gate/verify-launch': {
     audience: 'operator',
     reason: 'gate verify-session launch',
