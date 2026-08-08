@@ -1115,7 +1115,7 @@ function formatGatedArtifactsUnblockedMessage(intent: StagedIntentRow): string {
   );
 }
 
-function formatDispositionMessage(
+export function formatDispositionMessage(
   intent: StagedIntentRow,
   disposition: Exclude<PlanningDisposition, 'approve'>,
   reason?: string | null,
@@ -1130,7 +1130,11 @@ function formatDispositionMessage(
         ? `Staged intent ${intent.id} (${intent.kind}) failed validation and was sent back for ` +
             `revision. Validation error: ${reason ?? ''}\n` +
             `To fix this, stage the corrected intent with supersedes set to "${intent.id}" (the id ` +
-            'of this rejected intent) so it retires the rejected one instead of leaving it in place.'
+            'of this rejected intent) so it retires the rejected one instead of leaving it in place. ' +
+            'Supersede ONLY this rejected intent — its unblocked group siblings (sitting cleanly at ' +
+            'staged/approved) must be left in place, not retired and re-staged; a superseded member ' +
+            'never blocks a group commit, so re-staging an unblocked sibling fixes nothing and only ' +
+            'multiplies the cost of this correction.'
         : `Staged intent ${intent.id} (${intent.kind}) was sent back for revision. Feedback: ${reason ?? ''}`;
     case 'answer':
       if (answer?.chosenLabel) {
