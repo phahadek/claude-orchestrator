@@ -701,14 +701,9 @@ describe('stage-proposal MCP tools — envelope fields misplaced inside payload'
 });
 
 describe('gate.accrete — classification tier guidance', () => {
-  const REAL_TIERS = [
-    'Read-Only',
-    'Prod-Mutating',
-    'Opportunistic',
-    'Human-Observation',
-  ];
+  const REAL_TIERS = ['Read-Only', 'Prod-Mutating', 'Human-Observation'];
 
-  it('the batch-level classification field exposes a non-empty description naming all four real tiers', () => {
+  it('the batch-level classification field exposes a non-empty description naming all three real tiers', () => {
     const description = gateContributionDecisionSchema.description;
     expect(description).toBeTruthy();
     for (const tier of REAL_TIERS) {

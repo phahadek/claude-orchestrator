@@ -34,7 +34,6 @@ export const gateContributionDecisionSchema = z
   .enum([
     'Read-Only',
     'Prod-Mutating',
-    'Opportunistic',
     'Human-Observation',
     'needs-triage',
     'none',
@@ -283,13 +282,7 @@ export const gateContributionSourceTaskSchema = z.object({
 export const gateContributionItemInputSchema = z.object({
   text: z.string(),
   classification: z
-    .enum([
-      'Read-Only',
-      'Prod-Mutating',
-      'Opportunistic',
-      'Human-Observation',
-      'needs-triage',
-    ])
+    .enum(['Read-Only', 'Prod-Mutating', 'Human-Observation', 'needs-triage'])
     .optional()
     .describe(
       `${GATE_ITEM_TIER_SELECTION_GUIDANCE} Overrides the batch-level ` +
@@ -349,7 +342,6 @@ export const gateVerifyDispositionSchema = z.enum([
 export const gateVerifyReclassifyToSchema = z.enum([
   'Human-Observation',
   'needs-triage',
-  'Opportunistic',
 ]);
 
 export const gateVerifyReclassifySchema = z.object({

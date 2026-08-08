@@ -307,7 +307,7 @@ a `task.updateBody` body-append for the accretion itself:
 ```bash
 node ~/.claude/scripts/gate-state-client.mjs accrete \
   '{"project":"<project-id>","taskId":"<task-id>","title":"<task-title>",
-    "milestone":"<M>","classification":"<Read-Only|Prod-Mutating|Opportunistic|needs-triage>",
+    "milestone":"<M>","classification":"<Read-Only|Prod-Mutating|Human-Observation|needs-triage>",
     "items":[{"text":"<item 1>"}, "…"]}'
 ```
 

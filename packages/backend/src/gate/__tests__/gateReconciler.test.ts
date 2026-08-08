@@ -37,6 +37,7 @@ import {
   setSourceMergeCommit,
   advanceState,
   getItem,
+  schedulePendingAttempt,
 } from '../gateStore.js';
 import {
   approveGateItem,
@@ -490,11 +491,23 @@ describe('runGateReconcilerTick', () => {
     expect(getItem(item.id)?.state).toBe('runnable');
   });
 
-  it('auto-runs and auto-disposes an Opportunistic item on pass', async () => {
+  it('pulls a backoff-elapsed pending item via nextPendingGateItems and dispatches it through the same tick', async () => {
     const item = makeRunnableItem({
-      text: 'opportunistic',
-      classification: 'Opportunistic',
+      text: 'not yet triggerable, now elapsed',
+      classification: 'Read-Only',
     });
+    appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    expect(getItem(item.id)?.state).toBe('pending');
+    schedulePendingAttempt(
+      item.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+
     const verifier: GateItemVerifier = {
       verify: async () => ({ disposition: 'pass' }),
     };
@@ -503,6 +516,28 @@ describe('runGateReconcilerTick', () => {
       verifier,
     });
     expect(getItem(item.id)?.state).toBe('pass');
+  });
+
+  it('does not dispatch a pending item whose backoff has not elapsed yet', async () => {
+    const item = makeRunnableItem({
+      text: 'not yet triggerable, still backing off',
+      classification: 'Read-Only',
+    });
+    appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    expect(getItem(item.id)?.state).toBe('pending');
+
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' })),
+    };
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).not.toHaveBeenCalled();
+    expect(getItem(item.id)?.state).toBe('pending');
   });
 
   it('files a follow-up fix task on failure, attaches it as a new source, and re-opens the item', async () => {

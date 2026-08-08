@@ -27,6 +27,7 @@ import {
   getGateReadiness,
   reconcileGateRunnability,
   nextRunnableGateItems,
+  nextPendingGateItems,
   appendGateItemEvent,
   createLocalGitAncestrySource,
   isFollowupTaskDone,
@@ -169,12 +170,15 @@ export const defaultFollowupFiler: FollowupFixTaskFiler = {
 
 /**
  * Classifications the reconciler auto-runs, one tier at a time. Read-Only
- * and Opportunistic auto-dispose on pass (gateService resolves it straight
- * to 'pass'); Prod-Mutating is run the same way but never mutates — its
- * verifier only gathers read-only evidence, and gateService routes a pass to
+ * auto-disposes on pass (gateService resolves it straight to 'pass');
+ * Prod-Mutating is run the same way but never mutates — its verifier only
+ * gathers read-only evidence, and gateService routes a pass to
  * 'pending-approval' (held until an operator calls approveGateItem) rather
- * than resolving it. needs-triage is excluded: it requires human
- * classification before it can be routed at all. Human-Observation is
+ * than resolving it. Both tiers are also pending-eligible: a
+ * `not-yet-triggerable` result parks the item at `pending` on a backoff
+ * schedule, pulled back in by nextPendingGateItems alongside this loop (see
+ * the tick's auto-run loop below). needs-triage is excluded: it requires
+ * human classification before it can be routed at all. Human-Observation is
  * excluded too, but for a different reason: it is not merely unrouted, it
  * is unverifiable by any headless session (UI/visual/interactive behavior
  * can only be judged by a human observing the running app) so it never
@@ -184,11 +188,7 @@ export const defaultFollowupFiler: FollowupFixTaskFiler = {
  * refuses to let a verifier-originated pass resolve it regardless of how it
  * was dispatched.
  */
-const AUTO_RUN_TIERS: GateItemClassification[] = [
-  'Read-Only',
-  'Opportunistic',
-  'Prod-Mutating',
-];
+const AUTO_RUN_TIERS: GateItemClassification[] = ['Read-Only', 'Prod-Mutating'];
 
 const DEFAULT_TIER_LIMIT = 10;
 
@@ -930,6 +930,31 @@ export async function runGateReconcilerTick(
             processed.push(outcome);
             dispatchBudget--;
           }
+        }
+      }
+
+      // Backoff-elapsed `pending` items — the not-yet-triggerable re-check
+      // pull, mirroring the AUTO_RUN_TIERS loop above but over `pending`
+      // state rather than a classification tier (pending is orthogonal to
+      // classification; see nextPendingGateItems).
+      const pendingBatch = nextPendingGateItems(project, milestone, { limit });
+      for (const item of pendingBatch) {
+        await yieldToEventLoop();
+
+        if (dispatchBudget <= 0) {
+          skippedForBudget++;
+          continue;
+        }
+        const outcome = await processItem(
+          item,
+          verifier,
+          followupFiler,
+          deployShaByProject[item.project] ?? null,
+          options.concurrency,
+        );
+        if (outcome) {
+          processed.push(outcome);
+          dispatchBudget--;
         }
       }
     }

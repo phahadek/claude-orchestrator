@@ -13,15 +13,19 @@ const GATE_ITEM_TIER_DESCRIPTIONS: Record<GateItemClassification, string> = {
     'log/record inspection, a computed-value check. Includes checks that ' +
     "require a live dispatched session to occur: that session's tool " +
     'calls, verdicts and errors land in session_events/audit_log and are ' +
-    'readable afterwards, so the check itself is still a read.',
+    'readable afterwards, so the check itself is still a read. Also ' +
+    'covers a check that requires a bounded scratch write (e.g. seeding ' +
+    'one row) purely to produce a trace to read back — the write is ' +
+    'instrumental only, never itself the verdict. Not run on demand when ' +
+    'the checkable condition has not happened yet: report ' +
+    '`not-yet-triggerable` and it parks at `pending` on a backoff ' +
+    'schedule until a later re-check.',
   'Prod-Mutating':
     'A check that changes production state to run it (a ' +
     'write, a deploy action, a config apply) — passes stop short of ' +
-    'resolving and wait for an explicit approval step.',
-  Opportunistic:
-    'A check that only becomes checkable when some ' +
-    'unscheduled real-world event happens on its own (e.g. the next time a ' +
-    'particular error naturally occurs) — not run on demand.',
+    'resolving and wait for an explicit approval step. Also eligible for ' +
+    '`not-yet-triggerable`/`pending` when the mutating condition has not ' +
+    'happened yet.',
   'Human-Observation':
     'Only for what a human must see with their own eyes: ' +
     'rendered UI, colour, layout, wrapping, or a visual read of a running ' +
@@ -41,7 +45,6 @@ const GATE_ITEM_TIER_DESCRIPTIONS: Record<GateItemClassification, string> = {
 const REAL_TIER_ORDER: GateItemClassification[] = [
   'Read-Only',
   'Prod-Mutating',
-  'Opportunistic',
   'Human-Observation',
 ];
 

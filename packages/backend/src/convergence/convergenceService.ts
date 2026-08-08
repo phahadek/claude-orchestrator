@@ -55,7 +55,7 @@ interface GateAxisBlockingItem {
 interface GateAxis {
   status: 'green' | 'blocked';
   blockingCount: number;
-  /** Opportunistic items parked at `pending` — visible but never counted toward blockingCount or the green/blocked status. */
+  /** Items parked at `pending` (any pending-eligible tier) — visible but never counted toward blockingCount or the green/blocked status. */
   parkedCount: number;
   /** Subset of blocking items sitting in a bespoke (unrecognized) state — needs human re-disposition, distinct from the blocking total. */
   bespokeCount: number;

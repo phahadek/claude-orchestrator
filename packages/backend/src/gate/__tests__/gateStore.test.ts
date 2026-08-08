@@ -98,7 +98,7 @@ describe('gateStore', () => {
       project: 'polimarket-analyser',
       milestone: 'M12',
       text: 'Confirm resolution review flags stale entries',
-      classification: 'Opportunistic',
+      classification: 'Read-Only',
       sources: [
         { sourceTaskId: 'notion:s1', sourceTaskTitle: 'Task one' },
         { sourceTaskId: 'notion:s2', sourceTaskTitle: 'Task two' },
@@ -312,7 +312,7 @@ describe('gateStore.addSource — pending auto-reopen', () => {
       project: 'polimarket-analyser',
       milestone: 'M12',
       text: 'Verify the quarterly report lands',
-      classification: 'Opportunistic',
+      classification: 'Read-Only',
       sources: [{ sourceTaskId: 'notion:p1', sourceTaskTitle: 'Add report' }],
       updatedAt: new Date(0).toISOString(),
     });
@@ -350,7 +350,7 @@ describe('gateStore.addSource — pending auto-reopen', () => {
       project: 'polimarket-analyser',
       milestone: 'M12',
       text: 'Verify the quarterly report lands',
-      classification: 'Opportunistic',
+      classification: 'Read-Only',
       sources: [{ sourceTaskId: 'notion:q1', sourceTaskTitle: 'Add report' }],
       updatedAt: new Date(0).toISOString(),
     });

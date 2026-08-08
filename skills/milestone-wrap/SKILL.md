@@ -58,12 +58,12 @@ badge is `gateGreen && seedGreen` (`GateReadinessPanel.tsx`); both must be green
 
 ## Step 3 — Carry deferred + pending gate items forward to the next milestone
 
-**Green is not "all verified."** `readiness` counts `deferred` (and, for
-`Opportunistic` items awaiting their trigger, `pending`) as resolved
+**Green is not "all verified."** `readiness` counts `deferred` (and, for an item
+awaiting its not-yet-triggerable condition, `pending`) as resolved
 (`RESOLVED_STATES = {pass, deferred}` in `gateService.ts`, `pending` non-blocking by
 its own backoff semantics), so a milestone with deferred or pending gate items reads
 **green** and wraps clean — but neither state means *resolved*. `deferred` means
-*postponed / not-yet-verified*; `pending` means *the `Opportunistic` trigger genuinely
+*postponed / not-yet-verified*; `pending` means *the item's trigger genuinely
 hasn't happened yet and the item is backing off, waiting for another look*. Left
 untouched, those items **die under the closed milestone**: nothing ever surfaces them
 again. Every deferral (and every still-waiting `pending` item) was a promise to verify
