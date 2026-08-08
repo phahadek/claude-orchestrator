@@ -691,7 +691,11 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
     });
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Summary\nClean.\n\n## 👁️ Manual verification\n- Some step\n',
+        ),
       updateStatus: vi.fn().mockImplementation(async () => {
         calls.push('setStatus');
       }),
@@ -967,6 +971,69 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
       expect.arrayContaining([expect.objectContaining({ tier: 'structural' })]),
     );
   });
+
+  it('blocks a group whose task.patchBodySection member does not compose, naming that intent id in the blocked reason', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      patchBodySection: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const taskId = 't-non-composing';
+    const groupId = 'g-non-composing';
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-non-composing',
+      groupId,
+      payload: { taskId, dependsOn: [] },
+    });
+    // Targets a section that isn't in the stored body — cannot compose.
+    const patch = await agent.post('/api/staged-intents').send({
+      kind: 'task.patchBodySection',
+      projectId: 'proj-non-composing',
+      groupId,
+      payload: {
+        taskId,
+        section: 'Files / paths affected',
+        operation: 'replace',
+        find: 'src/missing.ts',
+        replaceWith: 'src/present.ts',
+      },
+    });
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-non-composing',
+      groupId,
+      payload: {
+        taskId,
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+        },
+      },
+    });
+
+    await agent
+      .post(`/api/staged-intents/${dependsOn.body.id}/approve`)
+      .send({});
+    await agent.post(`/api/staged-intents/${patch.body.id}/approve`).send({});
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.reasons.join(' ')).toContain(patch.body.id);
+    expect(commit.body.reasons.join(' ')).toContain('did not compose');
+  });
 });
 
 describe('Manual-verification-strip grouping — commit-time hard enforcement', () => {
@@ -1002,7 +1069,11 @@ describe('Manual-verification-strip grouping — commit-time hard enforcement', 
     const patchBodySection = vi.fn().mockResolvedValue(undefined);
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Summary\nClean.\n\n## 👁️ Manual verification\n- Some step\n',
+        ),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
       patchBodySection,

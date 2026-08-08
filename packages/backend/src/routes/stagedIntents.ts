@@ -4584,55 +4584,100 @@ function findMarkdownSectionRange(
 }
 
 /**
+ * Result of composePatchBodySectionPreview: `applied: false` replaces the old
+ * silent-identity-return — the composer could not simulate the patch (target
+ * section missing, or find-text absent from it), so `body` is the input
+ * unchanged and `reason` names why, for the caller to surface rather than
+ * discard. `applied: true` means `body` is the spliced result exactly as
+ * before.
+ */
+export interface PatchComposeResult {
+  body: string;
+  applied: boolean;
+  reason?: string;
+}
+
+/**
  * Staging-time preview of a task.patchBodySection apply: splices the
  * patch's result into the stored body at the target heading's boundaries,
  * without ever touching Notion. Best-effort — when the patch can't be
  * simulated (section/find text absent for replace, section absent for
- * remove) the stored body is returned unchanged, since apply time remains
- * the sole authority that fails explicitly.
+ * remove) `applied: false` is reported alongside the unchanged body, since
+ * apply time remains the sole authority that fails explicitly (and does so
+ * loudly — see NotionClient.patchBodySection's identical-condition throw).
  */
 export function composePatchBodySectionPreview(
   storedBody: string,
   section: string,
   patch: PatchBodySectionOperation,
-): string {
+): PatchComposeResult {
   const lines = storedBody.split('\n');
   const range = findMarkdownSectionRange(lines, section);
 
   if (patch.operation === 'remove') {
-    if (!range) return storedBody;
-    return [...lines.slice(0, range.start), ...lines.slice(range.end)].join(
-      '\n',
-    );
+    if (!range) {
+      return {
+        body: storedBody,
+        applied: false,
+        reason: `section "${section}" not found`,
+      };
+    }
+    return {
+      body: [...lines.slice(0, range.start), ...lines.slice(range.end)].join(
+        '\n',
+      ),
+      applied: true,
+    };
   }
 
   if (patch.operation === 'append') {
     if (!range) {
-      return [
-        storedBody.trimEnd(),
-        '',
-        `## ${section}`,
-        '',
-        patch.content,
-      ].join('\n');
+      return {
+        body: [
+          storedBody.trimEnd(),
+          '',
+          `## ${section}`,
+          '',
+          patch.content,
+        ].join('\n'),
+        applied: true,
+      };
     }
-    return [
-      ...lines.slice(0, range.end),
-      patch.content,
-      ...lines.slice(range.end),
-    ].join('\n');
+    return {
+      body: [
+        ...lines.slice(0, range.end),
+        patch.content,
+        ...lines.slice(range.end),
+      ].join('\n'),
+      applied: true,
+    };
   }
 
   // replace
-  if (!range) return storedBody;
+  if (!range) {
+    return {
+      body: storedBody,
+      applied: false,
+      reason: `section "${section}" not found`,
+    };
+  }
   const sectionText = lines.slice(range.start + 1, range.end).join('\n');
-  if (!sectionText.includes(patch.find)) return storedBody;
+  if (!sectionText.includes(patch.find)) {
+    return {
+      body: storedBody,
+      applied: false,
+      reason: `find text not present in section "${section}"`,
+    };
+  }
   const mutated = sectionText.replace(patch.find, patch.replaceWith);
-  return [
-    ...lines.slice(0, range.start + 1),
-    mutated,
-    ...lines.slice(range.end),
-  ].join('\n');
+  return {
+    body: [
+      ...lines.slice(0, range.start + 1),
+      mutated,
+      ...lines.slice(range.end),
+    ].join('\n'),
+    applied: true,
+  };
 }
 
 /**
@@ -4650,11 +4695,23 @@ export function composePatchBodySectionPreview(
  * merged and re-sorted by created_at so cross-source patches still apply in
  * staging order.
  */
+/** A staged task.patchBodySection intent whose patch did not compose against the current preview body — named so the gate can report it rather than silently validating a stale body. */
+interface UnappliedBodyPatch {
+  intentId: string;
+  reason: string;
+}
+
+interface ProposedBodyResult {
+  body: string;
+  /** Every staged patch folded into this preview that could not actually be composed — see composePatchBodySectionPreview's `applied: false`. Always empty when a task.updateBody row wins instead (updateBody replaces sections wholesale; it cannot fail to compose). */
+  unapplied: UnappliedBodyPatch[];
+}
+
 async function computeProposedBody(
   backend: ReturnType<typeof getTaskBackend>,
   groupId: string | null | undefined,
   taskId: string,
-): Promise<string> {
+): Promise<ProposedBodyResult> {
   const stored = (await backend.fetchTaskPage(taskId)) ?? '';
   const groupIntents = groupId ? listStagedIntentsByGroup(groupId) : [];
   const ungroupedIntents = listActiveBodyPatchIntentsForTask(taskId).filter(
@@ -4671,7 +4728,10 @@ async function computeProposedBody(
   );
   if (updateBodyRow) {
     const payload = JSON.parse(updateBodyRow.payload) as UpdateBodyPayload;
-    return composeProposedBody(stored, payload.sections);
+    return {
+      body: composeProposedBody(stored, payload.sections),
+      unapplied: [],
+    };
   }
   const patchRows = intents.filter(
     (row) =>
@@ -4679,10 +4739,34 @@ async function computeProposedBody(
       ACTIVE_STATES.includes(row.state) &&
       (JSON.parse(row.payload) as PatchBodySectionPayload).taskId === taskId,
   );
-  return patchRows.reduce((body, row) => {
+  const unapplied: UnappliedBodyPatch[] = [];
+  const body = patchRows.reduce((body, row) => {
     const payload = JSON.parse(row.payload) as PatchBodySectionPayload;
-    return composePatchBodySectionPreview(body, payload.section, payload);
+    const result = composePatchBodySectionPreview(
+      body,
+      payload.section,
+      payload,
+    );
+    if (!result.applied) {
+      unapplied.push({
+        intentId: row.id,
+        reason: result.reason ?? 'patch did not compose',
+      });
+    }
+    return result.body;
   }, stored);
+  return { body, unapplied };
+}
+
+/** Renders each unapplied patch (see computeProposedBody's ProposedBodyResult) into a human-readable blocked-reason line naming the intent id — mirrors describeUnappliedCrossGroupBodyPatches's phrasing so the two "your fix isn't reflected here" cases read the same way regardless of which one triggered. */
+function describeUnappliedBodyPatches(
+  unapplied: UnappliedBodyPatch[],
+): string[] {
+  return unapplied.map(
+    (u) =>
+      `Staged patch ${u.intentId} did not compose against the current body (${u.reason}) and was not applied to this preview — ` +
+      'fix or re-target the patch, since committing this flip would validate a body you will not actually get.',
+  );
 }
 
 /**
@@ -4741,12 +4825,20 @@ export async function runStageTimeReadyChecks(
   // fail the gate for other reasons anyway (e.g. missing size_check) isn't
   // instead masked by an unrelated crash fetching the body.
   let body = '';
+  let unappliedPatches: UnappliedBodyPatch[] = [];
   try {
     const backend = getTaskBackend(intent.projectId);
-    body = await computeProposedBody(backend, intent.groupId, payload.taskId);
+    const proposed = await computeProposedBody(
+      backend,
+      intent.groupId,
+      payload.taskId,
+    );
+    body = proposed.body;
+    unappliedPatches = proposed.unapplied;
   } catch {
     // handled by the empty-body fallback above
   }
+  const unappliedReasons = describeUnappliedBodyPatches(unappliedPatches);
 
   const gateResult = await checkGroomingPromotionGate(
     payload.groomingGate ?? {},
@@ -4774,8 +4866,21 @@ export async function runStageTimeReadyChecks(
       intent.id,
       JSON.stringify({
         blocked: true,
-        reasons: [...gateResult.reasons, ...crossGroupReasons],
+        reasons: [
+          ...gateResult.reasons,
+          ...crossGroupReasons,
+          ...unappliedReasons,
+        ],
       }),
+    );
+    const annotated = getStagedIntentRow(intent.id);
+    return annotated ? rowToApi(annotated) : intent;
+  }
+
+  if (unappliedReasons.length > 0) {
+    setStagedIntentAnnotation(
+      intent.id,
+      JSON.stringify({ blocked: true, reasons: unappliedReasons }),
     );
     const annotated = getStagedIntentRow(intent.id);
     return annotated ? rowToApi(annotated) : intent;
@@ -5072,7 +5177,8 @@ type GroupCompletenessFailure =
   | { kind: 'manualVerificationStrip'; taskId: string }
   | { kind: 'gateContribution'; taskId: string; reasons: string[] }
   | { kind: 'seedContribution'; taskId: string; reasons: string[] }
-  | { kind: 'groomingGate'; taskId: string; reasons: string[] };
+  | { kind: 'groomingGate'; taskId: string; reasons: string[] }
+  | { kind: 'unappliedBodyPatch'; taskId: string; reasons: string[] };
 
 function describeGroupCompletenessFailure(
   failure: GroupCompletenessFailure,
@@ -5080,6 +5186,8 @@ function describeGroupCompletenessFailure(
   switch (failure.kind) {
     case 'dependsOn':
       return new DependsOnCompletenessError(failure.taskId).message;
+    case 'unappliedBodyPatch':
+      return new GroomingGateError(failure.reasons).message;
     case 'manualVerificationStrip':
       return new ManualVerificationStripCompletenessError(failure.taskId)
         .message;
@@ -5201,15 +5309,25 @@ async function checkGroupArmingIntentCompleteness(
   // project surfaces its own dedicated block reason inside
   // checkGroomingPromotionGate rather than crashing this check outright.
   let groomingGateBody = '';
+  let groomingGateUnapplied: UnappliedBodyPatch[] = [];
   try {
     const groomingGateBackend = getTaskBackend(row.project_id);
-    groomingGateBody = await computeProposedBody(
+    const proposed = await computeProposedBody(
       groomingGateBackend,
       groupId,
       payload.taskId,
     );
+    groomingGateBody = proposed.body;
+    groomingGateUnapplied = proposed.unapplied;
   } catch {
     // handled by the empty-body fallback above
+  }
+  if (groomingGateUnapplied.length > 0) {
+    return fail({
+      kind: 'unappliedBodyPatch',
+      taskId: payload.taskId,
+      reasons: describeUnappliedBodyPatches(groomingGateUnapplied),
+    });
   }
   const gateResult = await checkGroomingPromotionGate(
     payload.groomingGate ?? {},
@@ -5352,7 +5470,14 @@ async function precheckGroupCommit(
 
     if (!readinessOverrideWouldApply(payload, opts)) {
       const backend = getTaskBackend(row.project_id);
-      const body = await computeProposedBody(backend, groupId, payload.taskId);
+      // checkGroupArmingIntentCompleteness above already re-derives this same
+      // body and returns 409 on any unapplied patch, so `unapplied` here is
+      // always empty by construction — only `body` is needed.
+      const { body } = await computeProposedBody(
+        backend,
+        groupId,
+        payload.taskId,
+      );
       const violations = checkReadiness(body, getCachedType(payload.taskId));
       if (violations.length > 0) {
         setStagedIntentAnnotation(
@@ -6203,17 +6328,24 @@ export function createStagedIntentsRouter(
         const payload = intent.payload as SetStatusPayload;
         if (payload.status === 'Ready') {
           const backend = getTaskBackend(intent.projectId);
-          const body = await computeProposedBody(
+          const proposed = await computeProposedBody(
             backend,
             intent.groupId,
             payload.taskId,
           );
-          const violations = checkReadiness(
-            body,
-            getCachedType(payload.taskId),
+          const unappliedReasons = describeUnappliedBodyPatches(
+            proposed.unapplied,
           );
-          if (violations.length > 0) {
-            annotation = { blocked: true, violations };
+          if (unappliedReasons.length > 0) {
+            annotation = { blocked: true, reasons: unappliedReasons };
+          } else {
+            const violations = checkReadiness(
+              proposed.body,
+              getCachedType(payload.taskId),
+            );
+            if (violations.length > 0) {
+              annotation = { blocked: true, violations };
+            }
           }
         }
       }

@@ -220,3 +220,80 @@ describe('Ready-flip preview folds same-task body patches staged outside the gro
     ).toBe(true);
   });
 });
+
+describe('computeProposedBody surfaces non-composing patches instead of silently discarding them', () => {
+  it('names an ungrouped non-composing patch (find-text absent) in the blocked reason while a composing sibling still applies', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend('## Open Questions\n- Still unresolved?\n'),
+    );
+    recordAccretion('notion:mixed-ungrouped');
+
+    // Composes cleanly.
+    stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:mixed-ungrouped',
+        section: 'Open Questions',
+        operation: 'append',
+        content: '- a new question',
+      },
+      'proj-1',
+    );
+    // Does not compose: find-text is not present in the section.
+    const nonComposing = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:mixed-ungrouped',
+        section: 'Open Questions',
+        operation: 'replace',
+        find: 'text that is not there',
+        replaceWith: 'replacement',
+      },
+      'proj-1',
+    );
+
+    const checked = await stageReadyFlip('notion:mixed-ungrouped', 'group-1');
+
+    expect(checked.annotation).toBeTruthy();
+    const reasons =
+      checked.annotation && 'reasons' in checked.annotation
+        ? checked.annotation.reasons
+        : [];
+    expect(
+      reasons.some(
+        (r) => r.includes(nonComposing.id) && r.includes('did not compose'),
+      ),
+    ).toBe(true);
+  });
+
+  it('names a grouped non-composing patch (missing target section) in the blocked reason for the Ready flip it shares a group with', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend('## Open Questions\n- Still unresolved?\n'),
+    );
+    recordAccretion('notion:mixed-grouped');
+
+    const nonComposing = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:mixed-grouped',
+        section: 'Nonexistent Section',
+        operation: 'remove',
+      },
+      'proj-1',
+      'group-1',
+    );
+
+    const checked = await stageReadyFlip('notion:mixed-grouped', 'group-1');
+
+    expect(checked.annotation).toBeTruthy();
+    const reasons =
+      checked.annotation && 'reasons' in checked.annotation
+        ? checked.annotation.reasons
+        : [];
+    expect(
+      reasons.some(
+        (r) => r.includes(nonComposing.id) && r.includes('did not compose'),
+      ),
+    ).toBe(true);
+  });
+});
