@@ -321,10 +321,18 @@ export type ServerMessage =
   | {
       /**
        * Streams staged-intent lifecycle changes (create/approve/reject/
-       * commit/supersede) for the SessionPanel decision panel — mirrors the
-       * REST-truth + WS-notification pattern of task_updated: the frontend
-       * treats `intent` as a live snapshot, never a delta, and REST
-       * (stagedIntentsApi) stays the source of truth for apply/reject.
+       * commit/supersede) for the SessionPanel decision panel and the
+       * milestone decision inbox — mirrors the REST-truth + WS-notification
+       * pattern of task_updated: the frontend treats `intent` as a live
+       * snapshot, never a delta, and REST (stagedIntentsApi) stays the
+       * source of truth for apply/reject. Only broadcast when
+       * isVisibleOnDecisionSurface(row) holds — an intent that route's
+       * decision-surface visibility gate would withhold (e.g. an
+       * auto-rejected needs_revision row whose owning session hasn't gone
+       * terminal) is never sent over this channel, so a subscriber never has
+       * to reimplement that (session-status-dependent) predicate itself. A
+       * subscriber must still compare `intent.projectId` against its own
+       * scope — this payload is not pre-filtered by project or milestone.
        */
       type: 'staged_intent_changed';
       intent: StagedIntent;

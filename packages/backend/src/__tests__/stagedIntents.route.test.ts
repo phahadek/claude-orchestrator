@@ -47,6 +47,7 @@ import {
   createStagedIntentsRouter,
   setStagedIntentBroadcast,
   stageIntent,
+  broadcastIntentById,
   READY_PATH_KINDS,
   OPS_TERMINAL_KINDS,
 } from '../routes/stagedIntents';
@@ -1567,6 +1568,168 @@ describe('group-blockedness on the milestone list response', () => {
     );
     expect(found.groupBlocked).toBe(false);
     expect(found.groupBlockedMemberCount).toBe(0);
+  });
+});
+
+describe('live broadcast gated on the same decision-surface visibility rule REST applies', () => {
+  const PROJECT_ID = 'proj-live-gate';
+
+  let counter = 0;
+  function makeRow(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
+    counter += 1;
+    const now = Date.now();
+    const row: StagedIntentRow = {
+      id: `live-gate-${counter}`,
+      kind: 'task.updateBody',
+      payload: JSON.stringify({ taskId: `task-${counter}` }),
+      payload_hash: `hash-${counter}`,
+      task_id: `task-${counter}`,
+      project_id: PROJECT_ID,
+      session_id: null,
+      group_id: null,
+      milestone: 'M1',
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: now,
+      updated_at: now,
+      ...overrides,
+    };
+    insertStagedIntent(row);
+    return row;
+  }
+
+  function makeSessionManager(hasActiveTurn: boolean) {
+    const emitter = new EventEmitter();
+    return Object.assign(emitter, {
+      getLiveSession: vi.fn().mockReturnValue({ hasActiveTurn: () => hasActiveTurn }),
+    }) as unknown as SessionManager & EventEmitter;
+  }
+
+  function insertSessionWithStatus(sessionId: string, status: string): void {
+    insertSession({
+      session_id: sessionId,
+      task_id: `task:${sessionId}`,
+      task_url: null,
+      project_context_url: null,
+      status,
+      started_at: 0,
+      session_type: 'groom',
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+    } as never);
+  }
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+    db.prepare('DELETE FROM milestones').run();
+    db.prepare('DELETE FROM projects').run();
+    counter = 0;
+    insertProjectWithMilestone(PROJECT_ID, 'M1');
+  });
+
+  it('does not broadcast an auto-rejected needs_revision intent while its owning session is still live', () => {
+    const sessionManager = makeSessionManager(false);
+    createStagedIntentsRouter(undefined, sessionManager);
+    insertSessionWithStatus('sess-livegate-1', 'running');
+    const row = makeRow({
+      session_id: 'sess-livegate-1',
+      state: 'needs_revision',
+      annotation: JSON.stringify({ autoRejected: true }),
+    });
+
+    const broadcasts: ServerMessage[] = [];
+    setStagedIntentBroadcast((msg) => broadcasts.push(msg));
+    broadcastIntentById(row.id);
+
+    expect(broadcasts).toHaveLength(0);
+  });
+
+  it('broadcasts the same auto-rejected needs_revision intent once its owning session reaches a terminal status', () => {
+    const sessionManager = makeSessionManager(false);
+    createStagedIntentsRouter(undefined, sessionManager);
+    insertSessionWithStatus('sess-livegate-done', 'done');
+    const row = makeRow({
+      session_id: 'sess-livegate-done',
+      state: 'needs_revision',
+      annotation: JSON.stringify({ autoRejected: true }),
+    });
+
+    const broadcasts: ServerMessage[] = [];
+    setStagedIntentBroadcast((msg) => broadcasts.push(msg));
+    broadcastIntentById(row.id);
+
+    expect(broadcasts).toHaveLength(1);
+    expect(
+      (broadcasts[0] as Extract<ServerMessage, { type: 'staged_intent_changed' }>)
+        .intent.id,
+    ).toBe(row.id);
+  });
+
+  it('does not broadcast a session.requestCapability intent from a session with an in-flight turn (regression — already correct via sessionComplete)', () => {
+    const sessionManager = makeSessionManager(true);
+    createStagedIntentsRouter(undefined, sessionManager);
+    insertSessionWithStatus('sess-livegate-turning', 'running');
+    const row = makeRow({
+      kind: 'session.requestCapability',
+      session_id: 'sess-livegate-turning',
+      payload: JSON.stringify({ capability: 'bash:ls' }),
+    });
+
+    const broadcasts: ServerMessage[] = [];
+    setStagedIntentBroadcast((msg) => broadcasts.push(msg));
+    broadcastIntentById(row.id);
+
+    expect(broadcasts).toHaveLength(0);
+  });
+
+  it('after a live broadcast, the panel contents match what the REST route returns for the same scope', async () => {
+    const sessionManager = makeSessionManager(false);
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter(undefined, sessionManager));
+
+    insertSessionWithStatus('sess-livegate-2', 'running');
+    const visible = makeRow({ state: 'staged' });
+    const hidden = makeRow({
+      session_id: 'sess-livegate-2',
+      state: 'needs_revision',
+      annotation: JSON.stringify({ autoRejected: true }),
+    });
+
+    const broadcasts: ServerMessage[] = [];
+    setStagedIntentBroadcast((msg) => broadcasts.push(msg));
+    broadcastIntentById(visible.id);
+    broadcastIntentById(hidden.id);
+
+    const broadcastIds = broadcasts
+      .filter(
+        (m): m is Extract<ServerMessage, { type: 'staged_intent_changed' }> =>
+          m.type === 'staged_intent_changed',
+      )
+      .map((m) => m.intent.id);
+    expect(broadcastIds).toEqual([visible.id]);
+
+    const res = await supertest(app)
+      .get('/api/staged-intents')
+      .query({ projectId: PROJECT_ID, milestone: 'M1' });
+    const restIds = res.body.intents.map((i: { id: string }) => i.id);
+    expect(restIds).toContain(visible.id);
+    expect(restIds).not.toContain(hidden.id);
+    expect(broadcastIds).toEqual(restIds);
   });
 });
 
