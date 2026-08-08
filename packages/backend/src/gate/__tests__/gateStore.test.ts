@@ -469,7 +469,12 @@ describe('gateStore.carryForwardItem — item-level sourceless carry-forward', (
       sources: [],
       updatedAt: new Date(0).toISOString(),
     });
-    advanceState(original.id, 'deferred', 'deferred', new Date(1).toISOString());
+    advanceState(
+      original.id,
+      'deferred',
+      'deferred',
+      new Date(1).toISOString(),
+    );
 
     const carried = carryForwardItem(
       original.id,
@@ -493,7 +498,12 @@ describe('gateStore.carryForwardItem — item-level sourceless carry-forward', (
       sources: [],
       updatedAt: new Date(0).toISOString(),
     });
-    advanceState(original.id, 'deferred', 'deferred', new Date(1).toISOString());
+    advanceState(
+      original.id,
+      'deferred',
+      'deferred',
+      new Date(1).toISOString(),
+    );
 
     carryForwardItem(original.id, 'M13', new Date(2).toISOString());
 
@@ -511,7 +521,12 @@ describe('gateStore.carryForwardItem — item-level sourceless carry-forward', (
       sources: [],
       updatedAt: new Date(0).toISOString(),
     });
-    advanceState(original.id, 'deferred', 'deferred', new Date(1).toISOString());
+    advanceState(
+      original.id,
+      'deferred',
+      'deferred',
+      new Date(1).toISOString(),
+    );
 
     const carried = carryForwardItem(
       original.id,
@@ -534,7 +549,12 @@ describe('gateStore.carryForwardItem — item-level sourceless carry-forward', (
       ],
       updatedAt: new Date(0).toISOString(),
     });
-    advanceState(original.id, 'deferred', 'deferred', new Date(1).toISOString());
+    advanceState(
+      original.id,
+      'deferred',
+      'deferred',
+      new Date(1).toISOString(),
+    );
 
     const carried = carryForwardItem(
       original.id,
@@ -557,10 +577,23 @@ describe('gateStore.carryForwardItem — item-level sourceless carry-forward', (
       sources: [],
       updatedAt: new Date(0).toISOString(),
     });
-    advanceState(original.id, 'deferred', 'deferred', new Date(1).toISOString());
+    advanceState(
+      original.id,
+      'deferred',
+      'deferred',
+      new Date(1).toISOString(),
+    );
 
-    const first = carryForwardItem(original.id, 'M13', new Date(2).toISOString());
-    const second = carryForwardItem(original.id, 'M13', new Date(3).toISOString());
+    const first = carryForwardItem(
+      original.id,
+      'M13',
+      new Date(2).toISOString(),
+    );
+    const second = carryForwardItem(
+      original.id,
+      'M13',
+      new Date(3).toISOString(),
+    );
 
     expect(second.id).toBe(first.id);
     const targetItems = listByMilestone('polimarket-analyser', 'M13').filter(
