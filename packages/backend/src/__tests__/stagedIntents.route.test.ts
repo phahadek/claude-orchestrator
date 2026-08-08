@@ -1607,7 +1607,9 @@ describe('live broadcast gated on the same decision-surface visibility rule REST
   function makeSessionManager(hasActiveTurn: boolean) {
     const emitter = new EventEmitter();
     return Object.assign(emitter, {
-      getLiveSession: vi.fn().mockReturnValue({ hasActiveTurn: () => hasActiveTurn }),
+      getLiveSession: vi
+        .fn()
+        .mockReturnValue({ hasActiveTurn: () => hasActiveTurn }),
     }) as unknown as SessionManager & EventEmitter;
   }
 
@@ -1674,8 +1676,12 @@ describe('live broadcast gated on the same decision-surface visibility rule REST
 
     expect(broadcasts).toHaveLength(1);
     expect(
-      (broadcasts[0] as Extract<ServerMessage, { type: 'staged_intent_changed' }>)
-        .intent.id,
+      (
+        broadcasts[0] as Extract<
+          ServerMessage,
+          { type: 'staged_intent_changed' }
+        >
+      ).intent.id,
     ).toBe(row.id);
   });
 
