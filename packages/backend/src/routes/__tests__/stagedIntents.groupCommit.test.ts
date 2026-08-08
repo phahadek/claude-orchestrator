@@ -2877,7 +2877,7 @@ describe('task.patchBodySection / task.updateBody staged ungrouped while the ses
   });
 });
 
-describe('retroactive adoption — a standalone groom body edit joins its task\'s group once one opens', () => {
+describe("retroactive adoption — a standalone groom body edit joins its task's group once one opens", () => {
   function seedGroomSession(sessionId: string, taskId: string) {
     insertSession({
       session_id: sessionId,
@@ -2960,9 +2960,7 @@ describe('retroactive adoption — a standalone groom body edit joins its task\'
 
     const app = makeApp();
     const agent = supertest(app);
-    await agent
-      .post(`/api/staged-intents/${dependsOn.id}/approve`)
-      .send({});
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
 
     const adopted = getStagedIntent(orphan.id)!;
     expect(adopted.group_id).toBe(groupId);
