@@ -139,6 +139,56 @@ describe('useDecisionQueue', () => {
     );
   });
 
+  it('milestone scope does not admit a broadcast intent from a different project sharing the same milestone label', async () => {
+    // Milestone short ids are NOT unique across projects — M14 can be live
+    // in claude-dashboard and polimarket simultaneously. The panel is
+    // scoped on (projectId, milestone) together, matching the REST fetch.
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({
+        type: 'milestone',
+        projectId: 'claude-dashboard',
+        milestone: 'M14',
+      }),
+    );
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    const otherProjectIntent: StagedIntent = {
+      id: 'i-polimarket',
+      kind: 'task.updateBody',
+      payload: {},
+      projectId: 'polimarket',
+      createdAt: 0,
+      sessionId: 'session-x',
+      milestone: 'M14',
+      state: 'staged',
+      sessionComplete: true,
+    };
+    const sameProjectIntent: StagedIntent = {
+      id: 'i-claude-dashboard',
+      kind: 'task.updateBody',
+      payload: {},
+      projectId: 'claude-dashboard',
+      createdAt: 1,
+      sessionId: 'session-y',
+      milestone: 'M14',
+      state: 'staged',
+      sessionComplete: true,
+    };
+
+    act(() => {
+      publishStagedIntentChange(otherProjectIntent);
+      publishStagedIntentChange(sameProjectIntent);
+    });
+
+    await waitFor(() =>
+      expect(result.current.intents.map((i) => i.id)).toEqual([
+        'i-claude-dashboard',
+      ]),
+    );
+  });
+
   it('milestone scope places a live-arriving intent at the top of its rank tier, not at the end', async () => {
     const older: StagedIntent = {
       id: 'older',

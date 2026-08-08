@@ -158,11 +158,31 @@ export function setStagedIntentBroadcast(
   stagedIntentBroadcastFn = fn;
 }
 
+/**
+ * Gates the WS broadcast on the same decision-surface visibility rule the
+ * REST fetch applies (see isVisibleOnDecisionSurface) — an intent that fetch
+ * would withhold (e.g. an auto-rejected needs_revision row whose owning
+ * session hasn't gone terminal) must never reach a live subscriber, since
+ * the client cannot reliably re-derive that session-status-dependent
+ * predicate itself. Uses the already-computed API shape (`intent.state`,
+ * `intent.annotation`, `intent.sessionId`) rather than re-reading the row,
+ * since every call site already has one on hand.
+ */
 function broadcastIntentChange(intent: StagedIntent): void {
+  if (!isIntentVisibleOnDecisionSurface(intent, stagedIntentSessionManager)) {
+    return;
+  }
   stagedIntentBroadcastFn?.({ type: 'staged_intent_changed', intent });
 }
 
-function broadcastIntentById(id: string): void {
+/**
+ * Exported for tests: re-reads the row by id and re-broadcasts through the
+ * same visibility gate broadcastIntentChange applies, so a test can assert
+ * the gate's behavior (e.g. an auto-rejected row staying silent until its
+ * owning session goes terminal) without depending on which production
+ * call site happens to trigger the re-broadcast.
+ */
+export function broadcastIntentById(id: string): void {
   const row = getStagedIntentRow(id);
   if (row) broadcastIntentChange(rowToApi(row));
 }
@@ -544,25 +564,67 @@ function assertOwningSessionComplete(
  * Every other intent kind/state is unaffected — visibility for those is
  * unchanged.
  */
-function isVisibleOnDecisionSurface(
-  row: StagedIntentRow,
+/**
+ * The field-level core of the decision-surface visibility rule, shared by
+ * isVisibleOnDecisionSurface (reads a DB row) and
+ * isIntentVisibleOnDecisionSurface (reads the API-shaped StagedIntent the
+ * WS broadcast carries) so the two never drift — see isVisibleOnDecisionSurface
+ * for the rule itself.
+ */
+function isVisibleOnDecisionSurfaceCore(
+  kind: string,
+  sessionId: string | null | undefined,
+  isAutoRejected: boolean,
   sessionManager: SessionManager | undefined,
 ): boolean {
-  if (row.kind === 'session.requestCapability') {
-    if (!row.session_id) return true;
+  if (kind === 'session.requestCapability') {
+    if (!sessionId) return true;
     const turnInFlight =
-      sessionManager?.getLiveSession?.(row.session_id)?.hasActiveTurn() ??
-      false;
-    return isSessionComplete(row.session_id, turnInFlight);
+      sessionManager?.getLiveSession?.(sessionId)?.hasActiveTurn() ?? false;
+    return isSessionComplete(sessionId, turnInFlight);
   }
-  if (isAutoRejectedNeedsRevision(row)) {
-    if (!row.session_id) return true;
-    const owningSession = getSession(row.session_id);
+  if (isAutoRejected) {
+    if (!sessionId) return true;
+    const owningSession = getSession(sessionId);
     return (
       !owningSession || TERMINAL_SESSION_STATUSES.has(owningSession.status)
     );
   }
   return true;
+}
+
+function isVisibleOnDecisionSurface(
+  row: StagedIntentRow,
+  sessionManager: SessionManager | undefined,
+): boolean {
+  return isVisibleOnDecisionSurfaceCore(
+    row.kind,
+    row.session_id,
+    isAutoRejectedNeedsRevision(row),
+    sessionManager,
+  );
+}
+
+/**
+ * API-shape twin of isVisibleOnDecisionSurface, used to gate the WS
+ * broadcast (broadcastIntentChange) against every call site's already-
+ * converted StagedIntent rather than requiring a second DB read.
+ */
+function isIntentVisibleOnDecisionSurface(
+  intent: StagedIntent,
+  sessionManager: SessionManager | undefined,
+): boolean {
+  const isAutoRejected =
+    intent.state === 'needs_revision' &&
+    !!intent.annotation &&
+    'autoRejected' in intent.annotation &&
+    intent.annotation.autoRejected === true;
+  return isVisibleOnDecisionSurfaceCore(
+    intent.kind,
+    intent.sessionId,
+    isAutoRejected,
+    sessionManager,
+  );
 }
 
 // Group-completeness ACTIVE states: 'staged'/'approved'/'committed' cover a

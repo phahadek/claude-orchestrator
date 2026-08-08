@@ -182,11 +182,17 @@ export function useDecisionQueue(
 
   useEffect(() => {
     return subscribeStagedIntentChange((intent) => {
+      // Milestone short ids are NOT unique across projects (see context.md) —
+      // the REST fetch scopes on (projectId, milestone) together
+      // (stagedIntentsApi.listByMilestone), so the live matcher must too, or
+      // a milestone-label collision across projects (e.g. two projects both
+      // running "M14") injects another project's intents into this panel.
       const matches =
         scope.type === 'session'
           ? intent.sessionId === scope.sessionId
-          : (intent.milestone ?? UNATTRIBUTED_MILESTONE_BUCKET) ===
-            scope.milestone;
+          : intent.projectId === scope.projectId &&
+            (intent.milestone ?? UNATTRIBUTED_MILESTONE_BUCKET) ===
+              scope.milestone;
       if (!matches) return;
       setIntents((prev) => {
         const withoutIntent = prev.filter((i) => i.id !== intent.id);
