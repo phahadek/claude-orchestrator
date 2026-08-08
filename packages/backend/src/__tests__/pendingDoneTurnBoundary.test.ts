@@ -91,7 +91,9 @@ describe('applyPendingDone — turn-boundary contract', () => {
     markSessionDone('s2', 1000, null, 'auto_merger');
 
     // Session reached terminal a different way (e.g. crashed) before the drain fired.
-    db.prepare(`UPDATE sessions SET status = 'error' WHERE session_id = 's2'`).run();
+    db.prepare(
+      `UPDATE sessions SET status = 'error' WHERE session_id = 's2'`,
+    ).run();
 
     const applied = applyPendingDone('s2');
     expect(applied).toBe(false);
@@ -112,7 +114,9 @@ describe('applyPendingDone — turn-boundary contract', () => {
     const effective = markSessionIdle('s3', 2000, null);
     expect(effective).toBe('done');
     expect(getRow('s3').status).toBe('done');
-    expect(auditEventCount('s3', 'session_idle_write_skipped_terminal')).toBe(1);
+    expect(auditEventCount('s3', 'session_idle_write_skipped_terminal')).toBe(
+      1,
+    );
   });
 
   it('clean-exit-then-drain converges on done', () => {
@@ -130,7 +134,11 @@ describe('applyPendingDone — turn-boundary contract', () => {
   });
 
   it('a standard coding session parked idle with an open PR is never given a pending_done_*', () => {
-    insertSession({ session_id: 's5', status: 'running', pr_url: 'https://pr/5' });
+    insertSession({
+      session_id: 's5',
+      status: 'running',
+      pr_url: 'https://pr/5',
+    });
 
     // Its own turn ends cleanly (parks idle awaiting review) — no markSessionDone call.
     markSessionIdle('s5', 1000, 'https://pr/5');
