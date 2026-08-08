@@ -593,6 +593,22 @@ scheduler.register({
     return { items_processed: dropped };
   },
 });
+// Session liveness reconciler: the DB → OS mirror of session_map_reconciler
+// above. That sweep only ever drops a stale in-memory entry once the DB row
+// is already terminal; this one terminalizes a non-terminal planning
+// session row whose OS subprocess does not exist, then drops its in-memory
+// entry too — so the two sweeps can't leave a session stranded in the gap
+// where each defers to the other's axis. Same cadence pattern.
+scheduler.register({
+  name: 'session_liveness_reconciler',
+  intervalMs: 10 * 60_000,
+  runOnBoot: true,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const { reconciled } = sessionManager.reconcilePlanningSessionLiveness();
+    return { items_processed: reconciled.length };
+  },
+});
 // Gate-verification reconciler: runnability/readiness reconcile on every
 // tick; auto-run verification drives the same wired verifier, gated by the
 // global gate_verification_enabled master switch and, per item, by that

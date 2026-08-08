@@ -99,6 +99,11 @@ import {
   listStagedIntentsBySession,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
+import { isSessionProcessAlive } from './processLiveness';
+import {
+  reconcileSessionLiveness,
+  type SessionLivenessReconcileResult,
+} from './sessionLivenessReconciler';
 import { isUsageAdmitted } from '../orchestration/usageAdmission';
 import { CrashBudget } from '../orchestration/crashBudget';
 import {
@@ -3186,6 +3191,17 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Returns true if an OS process actually exists for this session —
+   * independent of (and not to be confused with) isAlive()/the in-memory
+   * `this.sessions` map, which can be stale in either direction. See
+   * ./processLiveness for the underlying check and ./sessionLivenessReconciler
+   * for the sweep that uses this as its liveness signal.
+   */
+  isProcessAlive(sessionId: string): boolean {
+    return isSessionProcessAlive(sessionId);
+  }
+
+  /**
    * Count live code sessions (standard/review-adjacent, excludes review and
    * planning types groom/design/ops). Used by AutoLauncher for concurrency —
    * planning sessions compete for the separate shared planning-session pool
@@ -4501,6 +4517,24 @@ export class SessionManager extends EventEmitter {
       );
     }
     return { dropped };
+  }
+
+  /**
+   * DB → OS reconciliation sweep: terminalizes a non-terminal planning
+   * session row whose OS subprocess does not exist, and drops its
+   * in-memory entry — the mirror-image counterpart to reconcileSessionsMap
+   * above (memory → DB), which only ever drops a stale in-memory entry and
+   * never writes a terminal status itself. Delegates the actual sweep logic
+   * to sessionLivenessReconciler.ts, wiring this instance's map-eviction so
+   * a reconciled session's in-memory entry (if any) is dropped in the same
+   * pass — closing the gap where a stale in-memory entry paired with a
+   * non-terminal DB row is unreachable by either sweep alone.
+   */
+  reconcilePlanningSessionLiveness(): SessionLivenessReconcileResult {
+    return reconcileSessionLiveness({
+      evictSessionMapEntry: (sessionId) =>
+        this.evictDeadSessionEntry(sessionId),
+    });
   }
 
   /**
