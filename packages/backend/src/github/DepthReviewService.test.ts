@@ -6,6 +6,8 @@ import { EventEmitter } from 'events';
 vi.mock('../db/queries', () => ({
   getEventsBySession: vi.fn().mockReturnValue([]),
   markSessionDone: vi.fn(),
+  getSession: vi.fn(),
+  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
 }));
 vi.mock('./GitHubClient', () => ({
   computeSizeSignal: vi.fn().mockReturnValue({
@@ -33,7 +35,7 @@ vi.mock('../notion/NotionClient', () => ({
 // ── Imports (after mocks) ────────────────────────────────────────────────────
 
 import { DepthReviewService } from './DepthReviewService';
-import { markSessionDone } from '../db/queries';
+import { markSessionDone, getSession } from '../db/queries';
 import type { SessionManager } from '../session/SessionManager';
 import type { DiffSource } from './DiffSource';
 
@@ -43,6 +45,7 @@ function makeMockSessionManager() {
   const emitter = new EventEmitter();
   return Object.assign(emitter, {
     start: vi.fn().mockResolvedValue('depth-session-id'),
+    endSession: vi.fn(),
   });
 }
 
@@ -398,6 +401,9 @@ describe('DepthReviewService.runDepthReview() — session dispatch', () => {
 describe('DepthReviewService.runDepthReview() — session conclusion', () => {
   it('marks the session done once it actually exits cleanly (session_ended status idle), after its verdict text was already parsed', async () => {
     const sm = makeMockSessionManager();
+    (getSession as ReturnType<typeof vi.fn>).mockReturnValue({
+      status: 'idle',
+    });
     (sm.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
       (_a: string, _b: string, opts: { sessionId: string }) => {
         setImmediate(() => {
@@ -448,7 +454,9 @@ describe('DepthReviewService.runDepthReview() — session conclusion', () => {
       expect.any(Number),
       null,
       'depth_review_service',
+      { skipInFlightGuard: true },
     );
+    expect(sm.endSession).toHaveBeenCalledWith(usedSessionId);
   });
 
   it('does not mark the session done merely from a parsed verdict text event, before the session has actually exited', async () => {
@@ -475,8 +483,11 @@ describe('DepthReviewService.runDepthReview() — session conclusion', () => {
     expect(markSessionDone).not.toHaveBeenCalled();
   });
 
-  it('does not mark the session done when it is destroyed mid-work (session_ended status killed, not idle)', async () => {
+  it('does not mark the session done when it is destroyed mid-work (row already terminal at killed, not idle)', async () => {
     const sm = makeMockSessionManager();
+    (getSession as ReturnType<typeof vi.fn>).mockReturnValue({
+      status: 'killed',
+    });
     (sm.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
       (_a: string, _b: string, opts: { sessionId: string }) => {
         setImmediate(() =>
@@ -502,7 +513,11 @@ describe('DepthReviewService.runDepthReview() — session conclusion', () => {
       'https://notion.so/ctx',
       'notion:task-abc',
     );
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(markSessionDone).not.toHaveBeenCalled();
+    // Still reaped — a terminal-status writer that ran first (e.g. the
+    // session was destroyed) may not have reaped the subprocess either.
+    expect(sm.endSession).toHaveBeenCalled();
   });
 });
