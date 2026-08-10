@@ -1,13 +1,16 @@
 import {
   listLivePlanningSessionRows,
+  listLiveSessionRows,
   getSessionLastActivityMs,
   updateSessionStatus,
 } from '../db/queries';
+import { isPlanningSession } from './sessionPredicates';
 import { revokeStageCredential } from '../auth/SessionStageAuth';
 import { recordEvent } from '../audit/AuditLog';
 import { runtimeSettings } from '../config';
 import { isSessionProcessAlive } from './processLiveness';
 import { logger } from '../logger';
+import type { Session } from '../db/types';
 
 /**
  * Minimum time since a session's last recorded activity (or since it
@@ -50,6 +53,35 @@ export interface SessionLivenessReconcileResult {
 export function reconcileSessionLiveness(
   deps: SessionLivenessReconcilerDeps = {},
 ): SessionLivenessReconcileResult {
+  return runLivenessSweep(listLivePlanningSessionRows(), 'planning', deps);
+}
+
+/**
+ * Non-planning counterpart to reconcileSessionLiveness above: covers
+ * standard/review/depth_review (and any other non-planning) session rows,
+ * which have no other periodic OS-process-liveness sweep —
+ * StuckSessionMonitor only matches rows whose last event is 'result' (a
+ * session killed before it ever emits a session_events row never matches
+ * that INNER JOIN), and resumeOrphanSessions only runs on backend boot.
+ * Same grace-floor / api-mode-skip / map-eviction semantics as the planning
+ * sweep; kept as a separate exported function (rather than folding into
+ * reconcileSessionLiveness) so the planning sweep's audit event name and
+ * behavior stay byte-for-byte unchanged for existing callers/tests.
+ */
+export function reconcileNonPlanningSessionLiveness(
+  deps: SessionLivenessReconcilerDeps = {},
+): SessionLivenessReconcileResult {
+  const rows = listLiveSessionRows().filter(
+    (row) => !isPlanningSession(row.session_type ?? ''),
+  );
+  return runLivenessSweep(rows, 'non-planning', deps);
+}
+
+function runLivenessSweep(
+  rows: Session[],
+  population: 'planning' | 'non-planning',
+  deps: SessionLivenessReconcilerDeps,
+): SessionLivenessReconcileResult {
   // API-mode sessions have no OS subprocess by design — a "no process
   // found" verdict would be true for every live session in that mode, not
   // just dead ones, so this reconciler does not apply to it.
@@ -62,7 +94,7 @@ export function reconcileSessionLiveness(
   const now = deps.nowFn ? deps.nowFn() : Date.now();
 
   const reconciled: string[] = [];
-  for (const row of listLivePlanningSessionRows()) {
+  for (const row of rows) {
     if (isProcessAlive(row.session_id)) continue;
 
     const lastActivity =
@@ -83,7 +115,10 @@ export function reconcileSessionLiveness(
 
   if (reconciled.length > 0) {
     recordEvent({
-      event_type: 'planning_sessions_liveness_reconciled',
+      event_type:
+        population === 'planning'
+          ? 'planning_sessions_liveness_reconciled'
+          : 'non_planning_sessions_liveness_reconciled',
       actor_type: 'system',
       payload: {
         reconciled_count: reconciled.length,
@@ -92,7 +127,7 @@ export function reconcileSessionLiveness(
       },
     });
     logger.info(
-      `[sessionLivenessReconciler] reconciled ${reconciled.length} planning session(s) with no live OS process`,
+      `[sessionLivenessReconciler] reconciled ${reconciled.length} ${population} session(s) with no live OS process`,
     );
   }
 
