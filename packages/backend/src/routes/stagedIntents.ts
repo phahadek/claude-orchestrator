@@ -4937,7 +4937,7 @@ async function maybeAutoApproveTestRequest(
   const inputs = resolveTestRequestExecutionInputs(intent);
   if (!inputs) return intent;
 
-  let contentHash: string | null = null;
+  let contentHash: string | null;
   try {
     contentHash = await computeWholeTreeContentHash(inputs.worktreePath);
   } catch (err) {
