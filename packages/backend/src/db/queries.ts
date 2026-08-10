@@ -441,7 +441,11 @@ export function markSessionDone(
       actor_type: 'system',
       actor_id: sessionId,
       task_id: current.task_id ?? null,
-      payload: { from: current.status, to: 'done', call_site: callSite ?? 'unknown' },
+      payload: {
+        from: current.status,
+        to: 'done',
+        call_site: callSite ?? 'unknown',
+      },
     });
   }
 }

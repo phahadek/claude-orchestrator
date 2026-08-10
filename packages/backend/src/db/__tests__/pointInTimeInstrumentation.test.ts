@@ -32,7 +32,9 @@ import {
   updateDeployRunStatus,
 } from '../queries.js';
 
-function auditEvents(eventType: string): Array<{ payload: string; task_id: string | null }> {
+function auditEvents(
+  eventType: string,
+): Array<{ payload: string; task_id: string | null }> {
   return db
     .prepare(`SELECT payload, task_id FROM audit_log WHERE event_type = ?`)
     .all(eventType) as Array<{ payload: string; task_id: string | null }>;
@@ -206,7 +208,11 @@ describe('gate_item schedule/min_deployed_commit instrumentation', () => {
 
   it('records gate_item_min_deployed_commit_changed', () => {
     seedGateItem();
-    updateGateItemMinDeployedCommit(GATE_ITEM_ID, 'abc123', '2024-01-02T00:00:00Z');
+    updateGateItemMinDeployedCommit(
+      GATE_ITEM_ID,
+      'abc123',
+      '2024-01-02T00:00:00Z',
+    );
     const events = auditEvents('gate_item_min_deployed_commit_changed');
     expect(events).toHaveLength(1);
     expect(JSON.parse(events[0].payload)).toMatchObject({
