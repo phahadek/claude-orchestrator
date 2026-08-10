@@ -20,8 +20,8 @@ import {
   insertPendingReviewSync,
   deletePendingReviewSync,
   getAllPendingReviewSyncs,
-  hasTestResultForSha,
-  upsertTestResult,
+  getTestContentCacheResult,
+  upsertTestContentCacheResult,
   hasAnalyzeResultForSha,
   upsertAnalyzeResult,
   getAnalyzeResult,
@@ -50,6 +50,7 @@ import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runTestCommands } from '../session/test-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
+import { computeWorktreeContentHash } from '../session/analyzeGating';
 import { recordEvent } from '../audit/AuditLog';
 import { opensPr } from '../session/sessionPredicates';
 import type { ServerMessage } from '../ws/types';
@@ -498,8 +499,12 @@ export class ReviewOrchestrator {
 
   /**
    * Run the configured test: commands for a PR's head SHA.
-   * Deduplicates: if a result already exists for this SHA, skips execution.
-   * Persists { passed, output } keyed by (prNumber, repo, sha) for F2 to consult.
+   * Deduplicates against the shared F2 content-hash cache: if an identical
+   * whole-tree content hash already has a result, skips execution.
+   * Persists { passed, output } keyed by (project_id, content_hash) in
+   * orchestrator_test_content_cache for F2 to consult — the same cache
+   * PreReviewPipeline.buildTestsStage checks, so a push doesn't run tests
+   * twice for the same content.
    */
   async runTestPipeline(
     prNumber: number,
@@ -513,9 +518,13 @@ export class ReviewOrchestrator {
   ): Promise<void> {
     if (!commands?.length || !headSha) return;
 
-    if (hasTestResultForSha(prNumber, repo, headSha)) {
+    const project = getProjectByGithubRepo(repo);
+    if (!project) return;
+
+    const contentHash = await computeWorktreeContentHash(worktreePath);
+    if (getTestContentCacheResult(project.id, contentHash)) {
       logger.info(
-        `[ReviewOrchestrator] tests already ran for PR #${prNumber} SHA ${headSha.slice(0, 7)} — skipping`,
+        `[ReviewOrchestrator] tests content-cache hit for PR #${prNumber} SHA ${headSha.slice(0, 7)} — skipping`,
       );
       return;
     }
@@ -532,7 +541,7 @@ export class ReviewOrchestrator {
       { maxRssMb, failFast },
     );
 
-    upsertTestResult(prNumber, repo, headSha, passed, output);
+    upsertTestContentCacheResult(project.id, contentHash, passed, output);
 
     logger.info(
       `[ReviewOrchestrator] tests ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,

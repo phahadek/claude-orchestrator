@@ -4844,94 +4844,85 @@ export function getAllActiveMerges(): ActiveMergeRow[] {
   return db.prepare(`SELECT * FROM active_merges`).all() as ActiveMergeRow[];
 }
 
-// ─── orchestrator_test_results ────────────────────────────────────────────────
+// ─── orchestrator_test_content_cache ────────────────────────────────────────
+//
+// orchestrator_test_results (the legacy (pr_number, repo, sha)-keyed table)
+// has no remaining production readers/writers — F2 (the orchestrator-run
+// test gate) is fully migrated onto the shared content-hash cache below.
+// The table itself is left in schema.ts as historical data; only its
+// query functions were removed.
 
-export interface TestResultRow {
-  pr_number: number;
-  repo: string;
-  sha: string;
+export interface TestContentCacheRow {
+  project_id: string;
+  content_hash: string;
   passed: number;
   output: string;
   ran_at: string;
 }
 
-export function hasTestResultForSha(
-  prNumber: number,
-  repo: string,
-  sha: string,
-): boolean {
-  const row = db
+/**
+ * F2's (the orchestrator-run test gate) shared cache, keyed by
+ * (project_id, content_hash) — computeWorktreeContentHash's whole-tree
+ * sha256 — rather than (pr_number, repo, sha). A hit means an identical tree
+ * already passed/failed under this project's test commands; F2 downgrades
+ * to cache-hit-only and skips re-execution.
+ */
+export function getTestContentCacheResult(
+  projectId: string,
+  contentHash: string,
+): TestContentCacheRow | undefined {
+  return db
     .prepare<{
-      pr_number: number;
-      repo: string;
-      sha: string;
+      project_id: string;
+      content_hash: string;
     }>(
-      `SELECT 1 FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+      `SELECT * FROM orchestrator_test_content_cache WHERE project_id = @project_id AND content_hash = @content_hash`,
     )
-    .get({ pr_number: prNumber, repo, sha });
-  return row != null;
+    .get({ project_id: projectId, content_hash: contentHash }) as
+    | TestContentCacheRow
+    | undefined;
 }
 
-export function upsertTestResult(
-  prNumber: number,
-  repo: string,
-  sha: string,
+/**
+ * INSERT OR REPLACE (not OR IGNORE like the analyze content cache) — a
+ * flaky-invalidation rerun must overwrite the prior verdict for the same
+ * content hash, not silently no-op against it.
+ */
+export function upsertTestContentCacheResult(
+  projectId: string,
+  contentHash: string,
   passed: boolean,
   output: string,
 ): void {
   db.prepare<{
-    pr_number: number;
-    repo: string;
-    sha: string;
+    project_id: string;
+    content_hash: string;
     passed: number;
     output: string;
     ran_at: string;
   }>(
-    `INSERT OR REPLACE INTO orchestrator_test_results (pr_number, repo, sha, passed, output, ran_at)
-     VALUES (@pr_number, @repo, @sha, @passed, @output, @ran_at)`,
+    `INSERT OR REPLACE INTO orchestrator_test_content_cache (project_id, content_hash, passed, output, ran_at)
+     VALUES (@project_id, @content_hash, @passed, @output, @ran_at)`,
   ).run({
-    pr_number: prNumber,
-    repo,
-    sha,
+    project_id: projectId,
+    content_hash: contentHash,
     passed: passed ? 1 : 0,
     output,
     ran_at: new Date().toISOString(),
   });
 }
 
-export function getTestResult(
-  prNumber: number,
-  repo: string,
-  sha: string,
-): TestResultRow | undefined {
-  return db
-    .prepare<{
-      pr_number: number;
-      repo: string;
-      sha: string;
-    }>(
-      `SELECT * FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
-    )
-    .get({ pr_number: prNumber, repo, sha }) as TestResultRow | undefined;
-}
-
 /**
- * Invalidate the permanent per-(pr,repo,sha) F2 test result row so a
- * verified-flaky disposition can trigger a same-SHA re-run. Callers must
- * audit this via recordEvent — deletion alone is silent.
+ * Invalidate a content-hash cache entry — the flaky.confirm actuation path
+ * for F2. Callers must audit this via recordEvent — deletion alone is silent.
  */
-export function deleteTestResult(
-  prNumber: number,
-  repo: string,
-  sha: string,
+export function deleteTestContentCacheResult(
+  projectId: string,
+  contentHash: string,
 ): void {
-  db.prepare<{
-    pr_number: number;
-    repo: string;
-    sha: string;
-  }>(
-    `DELETE FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
-  ).run({ pr_number: prNumber, repo, sha });
+  db.prepare<{ project_id: string; content_hash: string }>(
+    `DELETE FROM orchestrator_test_content_cache WHERE project_id = @project_id AND content_hash = @content_hash`,
+  ).run({ project_id: projectId, content_hash: contentHash });
 }
 
 // ─── orchestrator_analyze_results ───────────────────────────────────────────

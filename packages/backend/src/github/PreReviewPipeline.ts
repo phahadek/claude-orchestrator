@@ -6,9 +6,9 @@ import {
   setLastReviewedSha,
   setPreReviewStage,
   setPauseReason,
-  hasTestResultForSha,
-  upsertTestResult,
-  deleteTestResult,
+  getTestContentCacheResult,
+  upsertTestContentCacheResult,
+  deleteTestContentCacheResult,
   hasAnalyzeResultForSha,
   upsertAnalyzeResult,
   getAnalyzeResult,
@@ -27,6 +27,7 @@ import {
   normalizeAnalyzeCommand,
   isAnalyzeCommandTriggered,
   computeTriggerContentHash,
+  computeWorktreeContentHash,
   matchesTransientOutputPattern,
 } from '../session/analyzeGating';
 import { validateAndRepairGitConfig } from '../orchestration/gitConfigIntegrity';
@@ -453,9 +454,13 @@ export class PreReviewPipeline {
         const config = loadOrchestratorConfig(ctx.project.projectDir);
         if (!config.test?.length) return;
 
-        if (hasTestResultForSha(ctx.prNumber, ctx.repo, ctx.headSha)) {
+        const contentHash = await computeWorktreeContentHash(
+          ctx.worktreePath,
+        );
+        const cached = getTestContentCacheResult(ctx.project.id, contentHash);
+        if (cached) {
           logger.info(
-            `[PreReviewPipeline] tests already ran for PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
+            `[PreReviewPipeline] tests content-cache hit PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
           );
           return;
         }
@@ -469,7 +474,12 @@ export class PreReviewPipeline {
           { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
         );
 
-        upsertTestResult(ctx.prNumber, ctx.repo, ctx.headSha, passed, output);
+        upsertTestContentCacheResult(
+          ctx.project.id,
+          contentHash,
+          passed,
+          output,
+        );
 
         logger.info(
           `[PreReviewPipeline] tests ${passed ? 'PASSED' : 'FAILED'} for PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)}`,
@@ -498,6 +508,8 @@ export class PreReviewPipeline {
     const config = loadOrchestratorConfig(project.projectDir);
     if (!config.test?.length) return null;
 
+    const contentHash = await computeWorktreeContentHash(worktreePath);
+
     recordEvent({
       event_type: 'flake_recovery_f2_invalidated',
       actor_type: 'system',
@@ -505,7 +517,7 @@ export class PreReviewPipeline {
       task_id: null,
       payload: { prNumber, repo, sha: headSha },
     });
-    deleteTestResult(prNumber, repo, headSha);
+    deleteTestContentCacheResult(project.id, contentHash);
 
     const { passed, output } = await runTestCommands(
       worktreePath,
@@ -515,7 +527,7 @@ export class PreReviewPipeline {
         logger.info(`[PreReviewPipeline] flaky-rerun PR #${prNumber}: ${msg}`),
       { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
     );
-    upsertTestResult(prNumber, repo, headSha, passed, output);
+    upsertTestContentCacheResult(project.id, contentHash, passed, output);
 
     // Re-verify head_sha immediately before recording the outcome — a push
     // that landed mid-run means this result no longer speaks to the SHA the

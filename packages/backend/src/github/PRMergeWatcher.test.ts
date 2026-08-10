@@ -20,7 +20,7 @@ vi.mock('../db/queries.js', () =>
     setPRReviewResult: vi.fn(),
     setPendingPush: vi.fn(),
     getSetting: vi.fn().mockReturnValue(null),
-    getTestResult: vi.fn().mockReturnValue(undefined),
+    getTestContentCacheResult: vi.fn().mockReturnValue(undefined),
     markSessionDone: vi.fn(),
     updateSessionStatus: vi.fn(),
     clearTerminalPRFlags: vi.fn(),
@@ -58,6 +58,11 @@ vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
 }));
 
+vi.mock('../session/analyzeGating.js', () => ({
+  computeWorktreeContentHash: vi.fn().mockResolvedValue('content-hash-x'),
+  computeTriggerContentHash: vi.fn().mockResolvedValue(null),
+}));
+
 import { PRMergeWatcher } from './PRMergeWatcher';
 import {
   getAllOpenPRs,
@@ -71,7 +76,7 @@ import {
   consumeAutofixSha,
   deleteAllAutofixShasForPR,
   setHeadSha,
-  getTestResult,
+  getTestContentCacheResult,
   markSessionDone,
   updateSessionStatus,
   setPendingPush,
@@ -3341,7 +3346,10 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getProjectByGithubRepo).mockReturnValue(null);
-    vi.mocked(getTestResult).mockReturnValue(undefined);
+    vi.mocked(getTestContentCacheResult).mockReturnValue(undefined);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/wt/session',
+    } as any);
   });
 
   function mockCategorizeClean(github: GitHubClient): void {
@@ -3376,10 +3384,9 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       bash_rules: [],
       bootstrap_script: '',
     } as any);
-    vi.mocked(getTestResult).mockReturnValue({
-      pr_number: 42,
-      repo: 'owner/repo',
-      sha: 'sha-fail',
+    vi.mocked(getTestContentCacheResult).mockReturnValue({
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
       passed: 0,
       output: 'FAIL src/foo.test.ts\n  ● test name\n    expected 1 to equal 2',
       ran_at: '2026-01-01T00:00:00Z',
@@ -3439,10 +3446,9 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       bash_rules: [],
       bootstrap_script: '',
     } as any);
-    vi.mocked(getTestResult).mockReturnValue({
-      pr_number: 42,
-      repo: 'owner/repo',
-      sha: 'sha-pass',
+    vi.mocked(getTestContentCacheResult).mockReturnValue({
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
       passed: 1,
       output: 'All tests passed',
       ran_at: '2026-01-01T00:00:00Z',
@@ -3491,10 +3497,9 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       bash_rules: [],
       bootstrap_script: '',
     } as any);
-    vi.mocked(getTestResult).mockReturnValue({
-      pr_number: 42,
-      repo: 'owner/repo',
-      sha: 'sha-fail',
+    vi.mocked(getTestContentCacheResult).mockReturnValue({
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
       passed: 0,
       output: 'Test failed',
       ran_at: '2026-01-01T00:00:00Z',
@@ -3539,10 +3544,9 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       bash_rules: [],
       bootstrap_script: '',
     } as any);
-    vi.mocked(getTestResult).mockReturnValue({
-      pr_number: 42,
-      repo: 'owner/repo',
-      sha: 'sha-new',
+    vi.mocked(getTestContentCacheResult).mockReturnValue({
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
       passed: 0,
       output: 'Fix failed',
       ran_at: '2026-01-01T00:00:00Z',
@@ -3587,7 +3591,7 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       bash_rules: [],
       bootstrap_script: '',
     } as any);
-    vi.mocked(getTestResult).mockReturnValue({
+    vi.mocked(getTestContentCacheResult).mockReturnValue({
       passed: 0,
       output: 'irrelevant',
     } as any);

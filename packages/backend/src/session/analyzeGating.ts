@@ -63,6 +63,21 @@ function listWorktreeFiles(worktreePath: string): Promise<string[]> {
   });
 }
 
+function hashFiles(worktreePath: string, files: string[]): string {
+  const hash = createHash('sha256');
+  for (const file of files) {
+    hash.update(file);
+    hash.update('\0');
+    try {
+      hash.update(fs.readFileSync(path.join(worktreePath, file)));
+    } catch {
+      hash.update('MISSING');
+    }
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
 /**
  * Content hash over the current bytes of every worktree file matching
  * `triggerPaths`. Two PRs off the same base whose trigger-path files are
@@ -83,37 +98,20 @@ export async function computeTriggerContentHash(
     )
     .sort();
   if (matched.length === 0) return null;
-  return hashWorktreeFiles(worktreePath, matched);
-}
 
-function hashWorktreeFiles(worktreePath: string, files: string[]): string {
-  const hash = createHash('sha256');
-  for (const file of files) {
-    hash.update(file);
-    hash.update('\0');
-    try {
-      hash.update(fs.readFileSync(path.join(worktreePath, file)));
-    } catch {
-      hash.update('MISSING');
-    }
-    hash.update('\0');
-  }
-  return hash.digest('hex');
+  return hashFiles(worktreePath, matched);
 }
 
 /**
- * Content hash over the current bytes of every file `git ls-files` reports
- * in the worktree — the test.request lane's verification hash (see
- * orchestration/testRequestLane.ts): the auto-grant never trusts a
- * session-asserted claim about its own tree content, it always recomputes
- * this independently, and the same hash keys the (project, content) run
- * coalescing so two concurrent identical-tree requests share one execution.
- * Returns null for an empty tree — callers must not key a run on a null hash.
+ * Whole-tree counterpart to computeTriggerContentHash: content hash over
+ * every git-tracked file in the worktree, not just those matching a
+ * trigger-path glob. This is F2's (the orchestrator-run test gate) cache
+ * key — two PRs/pushes whose full tree content is byte-identical share one
+ * test run via orchestrator_test_content_cache.
  */
-export async function computeWholeTreeContentHash(
+export async function computeWorktreeContentHash(
   worktreePath: string,
-): Promise<string | null> {
-  const allFiles = (await listWorktreeFiles(worktreePath)).sort();
-  if (allFiles.length === 0) return null;
-  return hashWorktreeFiles(worktreePath, allFiles);
+): Promise<string> {
+  const allFiles = await listWorktreeFiles(worktreePath);
+  return hashFiles(worktreePath, [...allFiles].sort());
 }

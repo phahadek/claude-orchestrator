@@ -1976,4 +1976,21 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // orchestrator_test_content_cache: the shared content-hash cache F2 (the
+  // orchestrator-run test gate) now consults ahead of orchestrator_test_results.
+  // Keyed by (project_id, content_hash) — the whole-tree sha256 from
+  // computeWorktreeContentHash — rather than (pr_number, repo, sha), so two
+  // PRs/pushes whose full tree content is byte-identical share one test run.
+  // Project-scoped because test commands are configured per project.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS orchestrator_test_content_cache (
+      project_id    TEXT    NOT NULL,
+      content_hash  TEXT    NOT NULL,
+      passed        INTEGER NOT NULL,
+      output        TEXT    NOT NULL DEFAULT '',
+      ran_at        TEXT    NOT NULL,
+      PRIMARY KEY (project_id, content_hash)
+    );
+  `);
 }

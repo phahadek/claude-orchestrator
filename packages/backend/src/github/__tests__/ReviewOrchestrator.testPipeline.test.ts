@@ -23,16 +23,20 @@ vi.mock('../../session/autofix-runner', () => ({
   loadAutofixCommands: vi.fn().mockReturnValue([]),
   runAutofix: vi.fn().mockResolvedValue({ success: true, summary: 'no diff' }),
 }));
+
+const PROJECT = { id: 'proj-1', projectDir: '/project' };
+const mockGetProjectByGithubRepo = vi.fn().mockReturnValue(PROJECT);
 vi.mock('../../config', () => ({
-  getProjectByGithubRepo: vi.fn(),
+  getProjectByGithubRepo: (...args: unknown[]) =>
+    mockGetProjectByGithubRepo(...args),
   getProjectById: vi.fn(),
   normalizePath: vi.fn().mockImplementation((p: string) => p),
   runtimeSettings: { session_mode: 'cli', auto_review_concurrency: 1 },
 }));
 
-// DB queries mock — includes new test-result functions
-const mockHasTestResultForSha = vi.fn().mockReturnValue(false);
-const mockUpsertTestResult = vi.fn();
+// DB queries mock — includes the shared F2 content-hash cache functions
+const mockGetTestContentCacheResult = vi.fn().mockReturnValue(undefined);
+const mockUpsertTestContentCacheResult = vi.fn();
 
 vi.mock('../../db/queries', () => ({
   getPRByNumber: vi.fn(),
@@ -53,8 +57,20 @@ vi.mock('../../db/queries', () => ({
   hasAnalyzeResultForSha: vi.fn().mockReturnValue(false),
   upsertAnalyzeResult: vi.fn(),
   getAnalyzeResult: vi.fn().mockReturnValue(null),
-  hasTestResultForSha: () => mockHasTestResultForSha(),
-  upsertTestResult: (...args: unknown[]) => mockUpsertTestResult(...args),
+  getTestContentCacheResult: (...args: unknown[]) =>
+    mockGetTestContentCacheResult(...args),
+  upsertTestContentCacheResult: (...args: unknown[]) =>
+    mockUpsertTestContentCacheResult(...args),
+}));
+
+// analyzeGating mock — deterministic whole-tree content hash
+const mockComputeWorktreeContentHash = vi
+  .fn()
+  .mockResolvedValue('worktree-content-hash');
+vi.mock('../../session/analyzeGating', () => ({
+  computeWorktreeContentHash: (...args: unknown[]) =>
+    mockComputeWorktreeContentHash(...args),
+  computeTriggerContentHash: vi.fn().mockResolvedValue(null),
 }));
 
 // test-runner mock
@@ -116,7 +132,9 @@ function makeReviewService() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockHasTestResultForSha.mockReturnValue(false);
+  mockGetProjectByGithubRepo.mockReturnValue(PROJECT);
+  mockGetTestContentCacheResult.mockReturnValue(undefined);
+  mockComputeWorktreeContentHash.mockResolvedValue('worktree-content-hash');
   mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
   mockLoadOrchestratorConfig.mockReturnValue({
     mcp_servers: undefined,
@@ -153,7 +171,7 @@ describe('ReviewOrchestrator.runTestPipeline — empty test commands', () => {
     );
 
     expect(mockRunTestCommands).not.toHaveBeenCalled();
-    expect(mockUpsertTestResult).not.toHaveBeenCalled();
+    expect(mockUpsertTestContentCacheResult).not.toHaveBeenCalled();
   });
 
   it('is a no-op when headSha is empty', async () => {
@@ -171,13 +189,19 @@ describe('ReviewOrchestrator.runTestPipeline — empty test commands', () => {
     );
 
     expect(mockRunTestCommands).not.toHaveBeenCalled();
-    expect(mockUpsertTestResult).not.toHaveBeenCalled();
+    expect(mockUpsertTestContentCacheResult).not.toHaveBeenCalled();
   });
 });
 
-describe('ReviewOrchestrator.runTestPipeline — dedup on unchanged SHA', () => {
-  it('skips execution when a result already exists for the SHA', async () => {
-    mockHasTestResultForSha.mockReturnValue(true);
+describe('ReviewOrchestrator.runTestPipeline — dedup on content hash', () => {
+  it('skips execution when the content hash already has a cached result', async () => {
+    mockGetTestContentCacheResult.mockReturnValue({
+      project_id: 'proj-1',
+      content_hash: 'worktree-content-hash',
+      passed: 1,
+      output: 'cached',
+      ran_at: '2026-01-01T00:00:00Z',
+    });
 
     const sm = makeSessionManager();
     const rs = makeReviewService();
@@ -193,11 +217,11 @@ describe('ReviewOrchestrator.runTestPipeline — dedup on unchanged SHA', () => 
     );
 
     expect(mockRunTestCommands).not.toHaveBeenCalled();
-    expect(mockUpsertTestResult).not.toHaveBeenCalled();
+    expect(mockUpsertTestContentCacheResult).not.toHaveBeenCalled();
   });
 
-  it('does run when the SHA has no prior result', async () => {
-    mockHasTestResultForSha.mockReturnValue(false);
+  it('does run when the content hash has no prior result', async () => {
+    mockGetTestContentCacheResult.mockReturnValue(undefined);
 
     const sm = makeSessionManager();
     const rs = makeReviewService();
@@ -216,10 +240,11 @@ describe('ReviewOrchestrator.runTestPipeline — dedup on unchanged SHA', () => 
   });
 });
 
-describe('ReviewOrchestrator.runTestPipeline — re-run on new SHA', () => {
-  it('runs tests and persists for sha-A, then runs again for sha-B', async () => {
-    // First SHA — no prior result
-    mockHasTestResultForSha.mockReturnValueOnce(false);
+describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', () => {
+  it('runs tests and persists for hash-A, then runs again for hash-B', async () => {
+    // First content hash — no prior result
+    mockComputeWorktreeContentHash.mockResolvedValueOnce('hash-A');
+    mockGetTestContentCacheResult.mockReturnValueOnce(undefined);
     mockRunTestCommands.mockResolvedValueOnce({
       passed: true,
       output: 'pass-A',
@@ -238,22 +263,23 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new SHA', () => {
       300,
     );
 
-    expect(mockUpsertTestResult).toHaveBeenCalledWith(
-      1,
-      'org/repo',
-      'sha-A',
+    expect(mockUpsertTestContentCacheResult).toHaveBeenCalledWith(
+      'proj-1',
+      'hash-A',
       true,
       'pass-A',
     );
 
     vi.clearAllMocks();
-    mockHasTestResultForSha.mockReturnValueOnce(false);
+    mockGetProjectByGithubRepo.mockReturnValue(PROJECT);
+    mockComputeWorktreeContentHash.mockResolvedValueOnce('hash-B');
+    mockGetTestContentCacheResult.mockReturnValueOnce(undefined);
     mockRunTestCommands.mockResolvedValueOnce({
       passed: false,
       output: 'fail-B',
     });
 
-    // Second SHA — also no prior result → runs again
+    // Second content hash — also no prior result → runs again
     await orch.runTestPipeline(
       1,
       'org/repo',
@@ -264,10 +290,9 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new SHA', () => {
     );
 
     expect(mockRunTestCommands).toHaveBeenCalledOnce();
-    expect(mockUpsertTestResult).toHaveBeenCalledWith(
-      1,
-      'org/repo',
-      'sha-B',
+    expect(mockUpsertTestContentCacheResult).toHaveBeenCalledWith(
+      'proj-1',
+      'hash-B',
       false,
       'fail-B',
     );
@@ -276,7 +301,6 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new SHA', () => {
 
 describe('ReviewOrchestrator.runTestPipeline — persistence', () => {
   it('persists passed:true and output when commands pass', async () => {
-    mockHasTestResultForSha.mockReturnValue(false);
     mockRunTestCommands.mockResolvedValue({
       passed: true,
       output: 'test output',
@@ -295,17 +319,15 @@ describe('ReviewOrchestrator.runTestPipeline — persistence', () => {
       60,
     );
 
-    expect(mockUpsertTestResult).toHaveBeenCalledWith(
-      7,
-      'myorg/myrepo',
-      'sha-xyz',
+    expect(mockUpsertTestContentCacheResult).toHaveBeenCalledWith(
+      'proj-1',
+      'worktree-content-hash',
       true,
       'test output',
     );
   });
 
   it('persists passed:false when commands fail', async () => {
-    mockHasTestResultForSha.mockReturnValue(false);
     mockRunTestCommands.mockResolvedValue({ passed: false, output: 'FAILED' });
 
     const sm = makeSessionManager();
@@ -321,18 +343,15 @@ describe('ReviewOrchestrator.runTestPipeline — persistence', () => {
       60,
     );
 
-    expect(mockUpsertTestResult).toHaveBeenCalledWith(
-      7,
-      'myorg/myrepo',
-      'sha-xyz',
+    expect(mockUpsertTestContentCacheResult).toHaveBeenCalledWith(
+      'proj-1',
+      'worktree-content-hash',
       false,
       'FAILED',
     );
   });
 
   it('passes worktreePath and timeoutSec to runTestCommands', async () => {
-    mockHasTestResultForSha.mockReturnValue(false);
-
     const sm = makeSessionManager();
     const rs = makeReviewService();
     const orch = new ReviewOrchestrator(rs, sm, true);

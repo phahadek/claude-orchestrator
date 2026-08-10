@@ -15,6 +15,7 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { computeWorktreeContentHash } from '../session/analyzeGating';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
@@ -46,7 +47,7 @@ import {
   setLastReviewedSha,
   setPRReviewResult,
   setPendingPush,
-  getTestResult,
+  getTestContentCacheResult,
   markSessionDone,
   updateSessionStatus,
   clearTerminalPRFlags,
@@ -583,19 +584,29 @@ export class PRMergeWatcher extends EventEmitter {
     const config = project ? loadOrchestratorConfig(project.projectDir) : null;
 
     // ── Orchestrator-run test gate (F2) ──────────────────────────────────────
-    // When test: commands are configured, the per-SHA test result is the
-    // authoritative CI signal — GitHub CI is disabled on private repos so
-    // GitHub reports the PR mergeable; we gate on F1's result instead.
-    // Skipped for terminally-paused PRs so we fall through to the read-only
-    // GitHub merge-state refresh below instead of remediating.
+    // When test: commands are configured, the shared content-hash cache
+    // (orchestrator_test_content_cache, keyed by (project_id, whole-tree
+    // content hash) — the same cache buildTestsStage/runTestPipeline write
+    // into) is the authoritative CI signal — GitHub CI is disabled on
+    // private repos so GitHub reports the PR mergeable; we gate on that
+    // cached verdict instead. Skipped for terminally-paused PRs so we fall
+    // through to the read-only GitHub merge-state refresh below instead of
+    // remediating.
     if (
       !terminalPause &&
       config &&
       config.test.length > 0 &&
       pr.head_sha &&
-      pr.session_id
+      pr.session_id &&
+      project
     ) {
-      const testResult = getTestResult(pr.pr_number, pr.repo, pr.head_sha);
+      const worktreePath = getSession(pr.session_id)?.worktree_path;
+      const testResult = worktreePath
+        ? getTestContentCacheResult(
+            project.id,
+            await computeWorktreeContentHash(worktreePath),
+          )
+        : undefined;
       if (testResult && !testResult.passed) {
         if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
           setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
