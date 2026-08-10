@@ -134,17 +134,28 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
       const taskId = `task-pair-${from}-${to}`;
       seedEntry(taskId, from);
 
-      // A transition to `resolved` closes the investigation and is an
-      // ops-terminal member (see OPS_TERMINAL_KINDS in stagedIntents.ts) —
-      // it now requires a groupId, orthogonal to the transition-legality
-      // check this test exercises.
+      // A transition to `resolved` closes the investigation, and a
+      // transition to `applied-pending-confirm` is the Operational
+      // completing intent (see OPS_TERMINAL_KINDS in stagedIntents.ts) — both
+      // are ops-terminal members and require a groupId, and the latter also
+      // requires a reconciliation assertion (see
+      // OpsReconciliationAssertionMissingError) — both orthogonal to the
+      // transition-legality check this test exercises.
       const res = await supertest(app)
         .post('/api/staged-intents')
         .send({
           kind: 'journal.setState',
-          payload: { taskId, state: to },
+          payload: {
+            taskId,
+            state: to,
+            ...(to === 'applied-pending-confirm'
+              ? { reconciliation: { description: 'assertion', passed: true } }
+              : {}),
+          },
           projectId: 'proj-1',
-          ...(to === 'resolved' ? { groupId: `group-${taskId}` } : {}),
+          ...(to === 'resolved' || to === 'applied-pending-confirm'
+            ? { groupId: `group-${taskId}` }
+            : {}),
         });
 
       const expectedLegal = isValidOpsTransition(from, to);

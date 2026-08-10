@@ -79,7 +79,9 @@ import {
   getPRByNumber,
   setPRReviewResult,
   getSessionDeclaredWrites,
+  getLatestOpsSessionByTaskId,
 } from '../db/queries';
+import type { OpsReconciliationAssertion } from '../db/types';
 import { parseTaskId, normalizeTaskId } from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
 import { recordEvent } from '../audit/AuditLog';
@@ -97,11 +99,13 @@ import {
   isValidOpsTransition,
   foldOpsTransitionChain,
   ALLOWED_TRANSITIONS,
+  opsCompletionRequiresReconciliation,
   type OpsState,
   type OpsJournalEntry,
 } from '../ops/opsJournal';
 import { classifyReadyProposal } from '../tasks/deferralClassifier';
 import type { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
+import { closeDeferredOpsTask } from '../orchestration/PlanningOrchestrator';
 import type { SessionManager } from '../session/SessionManager';
 import {
   BackendArchWriteCommands,
@@ -282,15 +286,19 @@ export const OPS_TERMINAL_KINDS: readonly string[] = [
  * member. journal.setState is conditional on its target state: an
  * incidental mid-run journal.setState (recording a gap without closing the
  * investigation — see "incidental-tooling-gap-not-a-blocker" in
- * procedureCore.ts) never targets `resolved`, ops_journal's one terminal
- * state (ALLOWED_TRANSITIONS, opsJournal.ts), so only a transition to
- * `resolved` is a member — the same shape as task.setStatus's
- * target-status-Ready-only membership in the Ready path. task.updateBody /
- * task.patchBodySection / task.create are only ops-terminal when staged by an
- * ops session (`session_type === 'ops'`) — every other session type stages
- * those same kinds for unrelated reasons (design's closing synthesis, a
- * split's narrowed original, groom's Manual-verification strip), which this
- * must not reach.
+ * procedureCore.ts) never targets `resolved` or carries a reconciliation
+ * assertion, so only a transition to `resolved` (the Investigation no-change
+ * terminal, staged directly) or to `applied-pending-confirm` carrying a
+ * reconciliation assertion (the Operational completing intent — the
+ * orchestrator's own automatic follow-through to `resolved` happens after
+ * this intent applies, see applyIntent's 'journal.setState' case) is a
+ * member — the same shape as task.setStatus's target-status-Ready-only
+ * membership in the Ready path. task.updateBody / task.patchBodySection /
+ * task.create are only ops-terminal when staged by an ops session
+ * (`session_type === 'ops'`) — every other session type stages those same
+ * kinds for unrelated reasons (design's closing synthesis, a split's
+ * narrowed original, groom's Manual-verification strip), which this must not
+ * reach.
  */
 function isOpsTerminalKind(
   kind: string,
@@ -298,8 +306,10 @@ function isOpsTerminalKind(
   sessionId: string | null | undefined,
 ): boolean {
   if (kind === 'journal.setState') {
+    const p = payload as Partial<JournalSetStatePayload> | null;
     return (
-      (payload as Partial<JournalSetStatePayload> | null)?.state === 'resolved'
+      p?.state === 'resolved' ||
+      (p?.state === 'applied-pending-confirm' && !!p.reconciliation)
     );
   }
   if (!OPS_TERMINAL_KINDS.includes(kind) || !sessionId) return false;
@@ -395,12 +405,17 @@ export function isOpsTerminalClosingSetMember(row: StagedIntentRow): boolean {
 }
 
 /**
- * True when this group already carries a live journal.setState -> "resolved"
+ * True when this group already carries a live journal.setState closing
  * transition — the one member of the ops-terminal closing set that actually
- * closes the investigation (completeOpsTask's synchronous check). Checked
- * against the durable store so a sibling committed in an earlier apply of
- * the same group still satisfies the invariant for a later apply, the same
- * tolerance hasGroupDependsOn gives task.setDependsOn.
+ * closes the task: `resolved` directly (Investigation's no-change terminal),
+ * or `applied-pending-confirm` carrying a reconciliation assertion
+ * (Operational's completing intent — completeOpsTask's synchronous check
+ * still only fires for the direct-to-`resolved` case; the Operational path
+ * reaches `resolved`, and closes the task, automatically after this intent
+ * applies, see closeDeferredOpsTask). Checked against the durable store so a
+ * sibling committed in an earlier apply of the same group still satisfies
+ * the invariant for a later apply, the same tolerance hasGroupDependsOn
+ * gives task.setDependsOn.
  */
 function hasGroupOpsTerminalResolvedJournal(groupId: string): boolean {
   return listStagedIntentsByGroup(groupId).some((row) => {
@@ -411,7 +426,10 @@ function hasGroupOpsTerminalResolvedJournal(groupId: string): boolean {
       return false;
     }
     const payload = JSON.parse(row.payload) as JournalSetStatePayload;
-    return payload.state === 'resolved';
+    return (
+      payload.state === 'resolved' ||
+      (payload.state === 'applied-pending-confirm' && !!payload.reconciliation)
+    );
   });
 }
 
@@ -419,23 +437,24 @@ function hasGroupOpsTerminalResolvedJournal(groupId: string): boolean {
  * Group-completeness twin of DependsOnCompletenessError, for the ops-terminal
  * closing set: a group that carries any ops-terminal member (a task-body
  * write recording the finding, or a follow-on task.create) but never carries
- * the journal.setState -> "resolved" transition that actually closes the
- * investigation is a group that can go terminal without ever producing that
- * transition — see the worked instance this guards against, where a
- * closing group contained only a task.create and the investigation's journal
- * was left stuck at `candidate` forever. Enforced at group-commit time
- * (checkOpsTerminalGroupCompleteness / precheckGroupCommit), not stage time —
- * an ops-terminal group is legitimately incomplete while the session is
- * still assembling it.
+ * the journal.setState transition that actually closes the task (`resolved`
+ * for Investigation, or `applied-pending-confirm` with a reconciliation
+ * assertion for Operational) is a group that can go terminal without ever
+ * producing that transition — see the worked instance this guards against,
+ * where a closing group contained only a task.create and the investigation's
+ * journal was left stuck at `candidate` forever. Enforced at group-commit
+ * time (checkOpsTerminalGroupCompleteness / precheckGroupCommit), not stage
+ * time — an ops-terminal group is legitimately incomplete while the session
+ * is still assembling it.
  */
 class OpsTerminalGroupIncompleteError extends Error {
   constructor(groupId: string) {
     super(
       `[stagedIntents] group "${groupId}" is an ops-terminal closing group but has no live ` +
-        'journal.setState transitioning to "resolved" — an ops/investigation session\'s closing ' +
-        'group must carry that transition, alongside any task-body write recording the finding and ' +
-        'any follow-on task.create, before it can commit. Stage the journal.setState -> "resolved" ' +
-        'transition in the same group before committing.',
+        'journal.setState transitioning to "resolved", or to "applied-pending-confirm" with a ' +
+        "reconciliation assertion — an ops/investigation session's closing group must carry that " +
+        'transition, alongside any task-body write recording the finding and any follow-on ' +
+        'task.create, before it can commit.',
     );
     this.name = 'OpsTerminalGroupIncompleteError';
   }
@@ -1574,6 +1593,15 @@ interface JournalSetStatePayload {
   taskId: string;
   state: OpsState;
   fields?: Parameters<typeof setEntryState>[2];
+  /**
+   * Required on the Operational completing intent (target state
+   * "applied-pending-confirm", every task Type except 🔎 Investigation —
+   * see opsCompletionRequiresReconciliation): the orchestrator evaluates it
+   * once this intent applies (applyIntent's 'journal.setState' case) and
+   * advances or interrupts accordingly. Absent on every other
+   * journal.setState target.
+   */
+  reconciliation?: OpsReconciliationAssertion;
 }
 /**
  * Payload for the gate.verify staged intent — a gate-verify session's
@@ -2329,6 +2357,48 @@ class OpsJournalTransitionRejectedError extends Error {
 }
 
 /**
+ * Thrown when an Operational completing intent (journal.setState ->
+ * "applied-pending-confirm") is staged with no reconciliation assertion —
+ * locked at grooming 2026-08-10: resolving with an unverified marker would
+ * auto-close the task without ever checking the thing reconciliation exists
+ * to check, defeating its purpose. Rejected at stage time, mirroring
+ * OpsJournalTransitionRejectedError, rather than only at apply time, so a
+ * session (or the operator reviewing the decision surface) sees the missing
+ * assertion immediately.
+ */
+class OpsReconciliationAssertionMissingError extends Error {
+  constructor(taskId: string) {
+    super(
+      `[stagedIntents] journal.setState rejected for task "${taskId}": a transition to ` +
+        '"applied-pending-confirm" is the Operational completing intent and must carry a ' +
+        'reconciliation assertion ("reconciliation": {"description": "<what must be true>", ' +
+        '"passed": <boolean>}) — a declaration of what must be true once the change applies, ' +
+        'evaluated automatically once this intent applies.',
+    );
+    this.name = 'OpsReconciliationAssertionMissingError';
+  }
+}
+
+/**
+ * Stage-time gate for the Operational completing intent: `reconciliation`
+ * must be present with a non-empty `description` and a boolean `passed` —
+ * see OpsReconciliationAssertionMissingError.
+ */
+function assertReconciliationAssertionPresent(
+  taskId: string,
+  reconciliation: OpsReconciliationAssertion | undefined,
+): void {
+  if (
+    !reconciliation ||
+    typeof reconciliation.description !== 'string' ||
+    !reconciliation.description.trim() ||
+    typeof reconciliation.passed !== 'boolean'
+  ) {
+    throw new OpsReconciliationAssertionMissingError(taskId);
+  }
+}
+
+/**
  * Parses/normalizes one raw task-reference id to the single canonical form
  * every staged-intent write path persists (staged_intent.task_id,
  * audit_log.task_id, dependsOn entries) — this is the write-boundary
@@ -2486,7 +2556,7 @@ export async function validateAndNormalizeTaskReferences(
   }
 
   if (kind === 'journal.setState') {
-    const p = payload as { taskId?: unknown; state?: unknown } | null;
+    const p = payload as Partial<JournalSetStatePayload> | null;
     if (typeof p?.taskId === 'string' && typeof p?.state === 'string') {
       const entry = getOpsJournalEntry(p.taskId);
       const targetState = p.state as OpsState;
@@ -2503,6 +2573,12 @@ export async function validateAndNormalizeTaskReferences(
             targetState,
           );
         }
+      }
+      if (
+        targetState === 'applied-pending-confirm' &&
+        opsCompletionRequiresReconciliation(getCachedType(p.taskId))
+      ) {
+        assertReconciliationAssertionPresent(p.taskId, p.reconciliation);
       }
     }
   }
@@ -3539,6 +3615,64 @@ function mirrorJournalDecisionIfStagedProposal(
   }
 }
 
+/**
+ * Automatic reconciliation for an Operational completing intent, run once
+ * its journal.setState -> "applied-pending-confirm" transition has applied
+ * (applyIntent's 'journal.setState' case, above). This is the replacement
+ * for the manual applied-pending-confirm -> resolved confirmation that has
+ * never been taken in practice (task 3b822f91-52f3-8180): a pass drives the
+ * journal straight to "resolved" and closes the task, with no operator
+ * involvement; a failure stages an interrupting journal.setState -> "blocked"
+ * intent naming the mismatch, so only a failed reconciliation ever reaches
+ * the operator.
+ */
+async function reconcileOpsCompletion(
+  projectId: string,
+  taskId: string,
+  assertion: OpsReconciliationAssertion,
+): Promise<void> {
+  if (assertion.passed) {
+    setEntryState(taskId, 'resolved', {
+      resolution: { assertion: assertion.description, passed: true },
+    });
+    const opsSession = getLatestOpsSessionByTaskId(taskId);
+    if (opsSession) {
+      try {
+        await closeDeferredOpsTask(opsSession);
+      } catch (err) {
+        logger.error(
+          `[stagedIntents] deferred close failed for task ${taskId}: ${err}`,
+        );
+      }
+    }
+    return;
+  }
+
+  const entry = getOpsJournalEntry(taskId);
+  if (!entry) return;
+  stageIntent(
+    'journal.setState',
+    {
+      taskId,
+      state: 'blocked',
+      fields: {
+        resolution: {
+          assertion: assertion.description,
+          passed: false,
+          mismatch: assertion.mismatch,
+        },
+      },
+    },
+    projectId,
+    null,
+    null,
+    `Reconciliation failed for ${taskId}: ${assertion.mismatch ?? assertion.description}`,
+    null,
+    null,
+    entry.milestone,
+  );
+}
+
 /** States a session may still withdraw from — mirrors ACTIVE_STATES below (declared later in this file). */
 const WITHDRAWABLE_STATES: StagedIntentState[] = ['staged', 'approved'];
 
@@ -3959,6 +4093,13 @@ async function applyIntent(
         payload.state,
         payload.fields,
       );
+      if (payload.state === 'applied-pending-confirm' && payload.reconciliation) {
+        await reconcileOpsCompletion(
+          intent.projectId,
+          payload.taskId,
+          payload.reconciliation,
+        );
+      }
       return { ok: true, previousState };
     }
     case 'gate.verify': {
@@ -6179,7 +6320,8 @@ export function createStagedIntentsRouter(
       if (
         err instanceof TaskReferenceValidationError ||
         err instanceof InvestigationAccretionRejectedError ||
-        err instanceof OpsJournalTransitionRejectedError
+        err instanceof OpsJournalTransitionRejectedError ||
+        err instanceof OpsReconciliationAssertionMissingError
       ) {
         res.status(400).json({ error: err.message });
         return;
