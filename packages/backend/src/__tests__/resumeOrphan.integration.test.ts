@@ -764,8 +764,7 @@ describe('resumeOrphanSessions() — planning-session resumability pre-check', (
     vi.mocked(fs.existsSync).mockImplementation(
       (p) =>
         String(p) === '/fake/project' ||
-        String(p) ===
-          '/fake/project/.claude/session-prompts/mixed-planning.md',
+        String(p) === '/fake/project/.claude/session-prompts/mixed-planning.md',
     );
 
     const sm = new SessionManager();
