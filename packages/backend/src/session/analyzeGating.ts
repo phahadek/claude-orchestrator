@@ -83,9 +83,12 @@ export async function computeTriggerContentHash(
     )
     .sort();
   if (matched.length === 0) return null;
+  return hashWorktreeFiles(worktreePath, matched);
+}
 
+function hashWorktreeFiles(worktreePath: string, files: string[]): string {
   const hash = createHash('sha256');
-  for (const file of matched) {
+  for (const file of files) {
     hash.update(file);
     hash.update('\0');
     try {
@@ -96,4 +99,21 @@ export async function computeTriggerContentHash(
     hash.update('\0');
   }
   return hash.digest('hex');
+}
+
+/**
+ * Content hash over the current bytes of every file `git ls-files` reports
+ * in the worktree — the test.request lane's verification hash (see
+ * orchestration/testRequestLane.ts): the auto-grant never trusts a
+ * session-asserted claim about its own tree content, it always recomputes
+ * this independently, and the same hash keys the (project, content) run
+ * coalescing so two concurrent identical-tree requests share one execution.
+ * Returns null for an empty tree — callers must not key a run on a null hash.
+ */
+export async function computeWholeTreeContentHash(
+  worktreePath: string,
+): Promise<string | null> {
+  const allFiles = (await listWorktreeFiles(worktreePath)).sort();
+  if (allFiles.length === 0) return null;
+  return hashWorktreeFiles(worktreePath, allFiles);
 }

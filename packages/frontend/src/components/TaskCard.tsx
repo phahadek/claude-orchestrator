@@ -126,6 +126,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'API overloaded (529) — automatic retries were exhausted. Review and resume manually.',
   manual_verification_pending:
     'Manual verification required — review the checklist and sign off to allow auto-merge.',
+  test_request_cycle_exceeded:
+    'Session exceeded its test.request cycle limit — review and resume manually.',
 };
 
 function verdictLabel(verdict: string): string {

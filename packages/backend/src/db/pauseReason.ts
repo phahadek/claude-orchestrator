@@ -53,7 +53,8 @@ export type CanonicalPauseReason =
   | 'ops_journal_terminal_incomplete'
   | 'usage_limit_deferred'
   | 'api_overloaded_exhausted'
-  | 'manual_verification_pending';
+  | 'manual_verification_pending'
+  | 'test_request_cycle_exceeded';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -295,6 +296,18 @@ export const PAUSE_REASON_REGISTRY: Record<
   // verify-manual-items route, matching awaiting_human_approval/max_reviews.
   manual_verification_pending: {
     source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // The test.request lane's iterate-on-red bound (mirrors
+  // flake_recovery_max_retries): a session's staged test.request count within
+  // one session exceeded test_request_cycle_limit — the mechanical auto-grant
+  // stops auto-running further requests and leaves this for an operator to
+  // look at, rather than looping indefinitely. No RECOVERY_ACTION_MAP entry —
+  // same as awaiting_human_approval/max_reviews, this needs a human look, not
+  // a one-click redispatch/resume that would just resume the same loop.
+  test_request_cycle_exceeded: {
+    source: 'session',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },

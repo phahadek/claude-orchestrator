@@ -77,7 +77,7 @@ beforeEach(() => {
 });
 
 describe('stage-proposal MCP tools — registration', () => {
-  it('registers exactly the 20 stage-proposal tool names', async () => {
+  it('registers exactly the 21 stage-proposal tool names', async () => {
     const { client, close } = await connectedClient();
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -103,6 +103,7 @@ describe('stage-proposal MCP tools — registration', () => {
         'task.setStatus',
         'task.setType',
         'task.updateBody',
+        'test.request',
       ].sort(),
     );
     await close();

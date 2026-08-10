@@ -432,6 +432,26 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_session_feedback_inbox_session_delivered
       ON session_feedback_inbox(session_id, delivered_at);
 
+    CREATE TABLE IF NOT EXISTS test_request_runs (
+      id           TEXT    PRIMARY KEY,
+      project_id   TEXT    NOT NULL,
+      content_hash TEXT    NOT NULL,
+      state        TEXT    NOT NULL,
+      output       TEXT    NOT NULL DEFAULT '',
+      started_at   INTEGER NOT NULL,
+      finished_at  INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_project_hash
+      ON test_request_runs(project_id, content_hash);
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_state
+      ON test_request_runs(state);
+
+    CREATE TABLE IF NOT EXISTS session_test_request_cycles (
+      session_id TEXT    PRIMARY KEY,
+      count      INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);

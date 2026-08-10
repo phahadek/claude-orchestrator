@@ -769,6 +769,19 @@ export interface ReviewDisputePayload {
 }
 
 /**
+ * Payload for the test.request staged-intent kind — a code session's
+ * request to run the project's configured `test:` commands against its own
+ * worktree, mechanically auto-granted (see maybeAutoApproveTestRequest in
+ * routes/stagedIntents.ts) on a project-scoped whole-tree content-hash check
+ * rather than trusting the session's own claim. No operator disposition
+ * needed on the success path — this is a read-only, non-mutating request.
+ */
+export interface TestRequestPayload {
+  taskId: string;
+  reason: string;
+}
+
+/**
  * Payload for the ops.prIntent staged-intent kind — a dispatched Ops
  * session's mid-execution "I intend to open a PR for X, here's the diff
  * scope and why" declaration. Unlike a Code task's task-body Files/paths
@@ -921,6 +934,36 @@ export interface FeedbackInboxRow {
   payload: string;
   enqueued_at: number;
   delivered_at: number | null;
+}
+
+// ─── test_request_runs ──────────────────────────────────────────────────────
+
+/**
+ * One row per test.request lane execution — keyed by (project_id,
+ * content_hash) for coalescing concurrent identical requests, and durable
+ * so a backend crash mid-run leaves a `running` row a boot-time sweep can
+ * recover (see recoverInterruptedTestRequestRuns in
+ * orchestration/testRequestLane.ts) rather than leaving it silently stuck.
+ */
+export type TestRequestRunState = 'running' | 'passed' | 'failed';
+
+export interface TestRequestRunRow {
+  id: string;
+  project_id: string;
+  content_hash: string;
+  state: TestRequestRunState;
+  output: string;
+  started_at: number;
+  finished_at: number | null;
+}
+
+// ─── session_test_request_cycles ───────────────────────────────────────────
+
+/** Per-session iterate-on-red counter, bounding the test.request auto-grant loop (mirrors flake_recovery_max_retries). */
+export interface TestRequestCycleRow {
+  session_id: string;
+  count: number;
+  updated_at: number;
 }
 
 // ─── arch_unit ────────────────────────────────────────────────────────────

@@ -272,13 +272,26 @@ async function classifyDeferral(body: string): Promise<Advisory> {
   });
 }
 
-/** Small in-process semaphore so a batch of Ready-flips doesn't spawn unbounded classify subprocesses. */
-class Semaphore {
+/**
+ * Small in-process semaphore so a batch of Ready-flips doesn't spawn
+ * unbounded classify subprocesses. Exported for reuse by the test.request
+ * governed lane's per-project concurrency cap (see
+ * orchestration/testRequestLane.ts) — same bounded-concurrency need, just a
+ * separate pool keyed per project instead of one process-wide pool.
+ */
+export class Semaphore {
   private available: number;
+  private readonly size: number;
   private readonly queue: (() => void)[] = [];
 
   constructor(size: number) {
     this.available = size;
+    this.size = size;
+  }
+
+  /** Count currently held (not available) — the admission-check peek, never mutates state. */
+  inUse(): number {
+    return this.size - this.available;
   }
 
   async acquire(): Promise<() => void> {

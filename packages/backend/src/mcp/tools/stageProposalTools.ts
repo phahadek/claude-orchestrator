@@ -418,6 +418,20 @@ export function registerStageProposalTools(
   );
 
   registerTool(
+    'test.request',
+    {
+      title: 'Request a run of this project\'s configured test commands',
+      description:
+        'Stages a test.request intent — a request to run the project\'s configured `test:` commands against this session\'s own worktree. Mechanically auto-granted (no operator disposition needed) whenever the project has `test:` commands configured: the server independently recomputes a whole-tree content hash off the live worktree rather than trusting anything this call claims, admits the run through the same per-project concurrency + host memory-headroom gate every other dispatch decision uses, and coalesces two concurrent requests for identical tree content into one execution. The (truncated) pass/fail result is delivered back to this session via its feedback inbox on the next turn. Bounded by a per-session cycle counter — exceeding it pauses the session for an operator instead of auto-running further requests. Cannot belong to a group.',
+      inputSchema: envelope({
+        taskId: z.string(),
+        reason: z.string(),
+      }),
+    },
+    async (args) => stage('test.request', args.payload, ctx, args),
+  );
+
+  registerTool(
     'ops.prIntent',
     {
       title: 'Declare an intent to open a PR for this Ops task',

@@ -4,6 +4,7 @@ import { GitHubClient } from './github/GitHubClient';
 import { runPRBootSweep } from './github/PRBootSweep';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
 import { runGitConfigIntegrityCheck } from './orchestration/gitConfigIntegrity';
+import { recoverInterruptedTestRequestRuns } from './orchestration/testRequestLane';
 import { logger } from './logger';
 import { getCorporateMode } from './config/corporateMode';
 import { recordEvent, getLatestEventByType } from './audit/AuditLog';
@@ -234,6 +235,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'jsonl_import',
     'session_events_pruner_at_boot',
     'git_config_integrity_check',
+    'test_request_run_recovery',
     'resume_orphan_sessions',
     'planning_approve_terminal_reconciliation',
     'stuck_session_monitor_rehydrate',
@@ -254,6 +256,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   );
   await tracker.runStep('git_config_integrity_check', () =>
     runGitConfigIntegrityCheck(),
+  );
+  await tracker.runStep('test_request_run_recovery', () =>
+    recoverInterruptedTestRequestRuns(),
   );
   await tracker.runStep(
     'resume_orphan_sessions',
