@@ -740,7 +740,10 @@ describe('routeApplyTimeFailure — idempotent on an already-blocked row', () =>
       setProperties: vi.fn(),
     });
     seedPlanningSession('session-idem-1', 'notion:task-idem-1');
-    const intent = stagePropertiesIntent('session-idem-1', 'notion:task-idem-1');
+    const intent = stagePropertiesIntent(
+      'session-idem-1',
+      'notion:task-idem-1',
+    );
     transitionStagedIntent(intent.id, 'needs_revision', {
       dispositionReason: 'prior failure',
     });
@@ -769,7 +772,10 @@ describe('routeApplyTimeFailure — idempotent on an already-blocked row', () =>
       setProperties: vi.fn(),
     });
     seedPlanningSession('session-idem-2', 'notion:task-idem-2');
-    const intent = stagePropertiesIntent('session-idem-2', 'notion:task-idem-2');
+    const intent = stagePropertiesIntent(
+      'session-idem-2',
+      'notion:task-idem-2',
+    );
     transitionStagedIntent(intent.id, 'pending_verification');
     const row = getStagedIntent(intent.id)!;
 
@@ -796,7 +802,10 @@ describe('routeApplyTimeFailure — idempotent on an already-blocked row', () =>
       setProperties: vi.fn(),
     });
     seedPlanningSession('session-idem-3', 'notion:task-idem-3');
-    const intent = stagePropertiesIntent('session-idem-3', 'notion:task-idem-3');
+    const intent = stagePropertiesIntent(
+      'session-idem-3',
+      'notion:task-idem-3',
+    );
     // Captured before either call transitions the row — the same stale
     // snapshot a losing concurrent invocation would be holding.
     const staleRow = getStagedIntent(intent.id)!;
@@ -805,10 +814,18 @@ describe('routeApplyTimeFailure — idempotent on an already-blocked row', () =>
     const sm = makeSessionManager();
     const planningOrchestrator = new PlanningOrchestrator(sm as any);
 
-    const first = await routeApplyTimeFailure(staleRow, err, planningOrchestrator);
+    const first = await routeApplyTimeFailure(
+      staleRow,
+      err,
+      planningOrchestrator,
+    );
     expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
 
-    const second = await routeApplyTimeFailure(staleRow, err, planningOrchestrator);
+    const second = await routeApplyTimeFailure(
+      staleRow,
+      err,
+      planningOrchestrator,
+    );
     expect(second.reason).toBe(first.reason);
   });
 
@@ -818,7 +835,10 @@ describe('routeApplyTimeFailure — idempotent on an already-blocked row', () =>
       setProperties: vi.fn(),
     });
     seedPlanningSession('session-idem-4', 'notion:task-idem-4');
-    const intent = stagePropertiesIntent('session-idem-4', 'notion:task-idem-4');
+    const intent = stagePropertiesIntent(
+      'session-idem-4',
+      'notion:task-idem-4',
+    );
     const row = getStagedIntent(intent.id)!;
     const sm = makeSessionManager();
     const planningOrchestrator = new PlanningOrchestrator(sm as any);
