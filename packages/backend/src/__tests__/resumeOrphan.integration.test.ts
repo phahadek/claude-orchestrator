@@ -214,6 +214,8 @@ vi.mock('../db/queries', () =>
     setContextOccupancy: vi.fn(),
     insertSessionAudit: vi.fn(),
     setSessionModel: vi.fn(),
+  setSessionModelSettingKey: vi.fn(),
+  setSessionEffortSettingKey: vi.fn(),
     getPRBySessionId: vi.fn(() => null),
     setHeadSha: vi.fn(),
     // Required by getCorporateMode() which is called unconditionally in resumeOrphanSessions().

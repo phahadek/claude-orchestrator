@@ -36,6 +36,8 @@ vi.mock('../../db/queries', () =>
     incrementCompactionCount: vi.fn(),
     setContextOccupancy: vi.fn(),
     setSessionModel: vi.fn(),
+  setSessionModelSettingKey: vi.fn(),
+  setSessionEffortSettingKey: vi.fn(),
     setSessionMetadata: vi.fn(),
     getPRBySessionId: vi.fn().mockReturnValue(null),
     setHeadSha: vi.fn(),

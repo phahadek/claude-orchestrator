@@ -52,6 +52,8 @@ vi.mock('../db/queries', () =>
     incrementTokens: vi.fn(),
     setContextOccupancy: vi.fn(),
     setSessionModel: vi.fn(),
+  setSessionModelSettingKey: vi.fn(),
+  setSessionEffortSettingKey: vi.fn(),
     getPRBySessionId: vi.fn(() => null),
     getPRByNotionTaskId: vi.fn(() => null),
     getPRByNumber: vi.fn(() => null),

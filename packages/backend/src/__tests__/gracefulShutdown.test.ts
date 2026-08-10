@@ -176,6 +176,8 @@ vi.mock('../db/queries', () =>
     incrementTokens: vi.fn(),
     insertSessionAudit: vi.fn(),
     setSessionModel: vi.fn(),
+  setSessionModelSettingKey: vi.fn(),
+  setSessionEffortSettingKey: vi.fn(),
     setSessionMetadata: vi.fn(),
     getPRBySessionId: vi.fn(() => null),
     setHeadSha: vi.fn(),
