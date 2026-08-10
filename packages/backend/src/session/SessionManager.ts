@@ -102,6 +102,7 @@ import { recoverSession } from './sessionRecovery';
 import { isSessionProcessAlive } from './processLiveness';
 import {
   reconcileSessionLiveness,
+  reconcileNonPlanningSessionLiveness,
   type SessionLivenessReconcileResult,
 } from './sessionLivenessReconciler';
 import { isUsageAdmitted } from '../orchestration/usageAdmission';
@@ -4605,6 +4606,19 @@ export class SessionManager extends EventEmitter {
    */
   reconcilePlanningSessionLiveness(): SessionLivenessReconcileResult {
     return reconcileSessionLiveness({
+      evictSessionMapEntry: (sessionId) =>
+        this.evictDeadSessionEntry(sessionId),
+    });
+  }
+
+  /**
+   * Non-planning counterpart to reconcilePlanningSessionLiveness above —
+   * covers standard/review/depth_review session rows, which have no other
+   * periodic OS-process-liveness sweep. See
+   * sessionLivenessReconciler.reconcileNonPlanningSessionLiveness.
+   */
+  reconcileNonPlanningSessionLiveness(): SessionLivenessReconcileResult {
+    return reconcileNonPlanningSessionLiveness({
       evictSessionMapEntry: (sessionId) =>
         this.evictDeadSessionEntry(sessionId),
     });

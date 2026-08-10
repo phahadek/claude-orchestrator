@@ -31,7 +31,10 @@ import {
   insertEvent,
 } from '../../db/queries.js';
 import { runtimeSettings } from '../../config';
-import { reconcileSessionLiveness } from '../sessionLivenessReconciler';
+import {
+  reconcileSessionLiveness,
+  reconcileNonPlanningSessionLiveness,
+} from '../sessionLivenessReconciler';
 
 const NOW = 1_700_000_000_000;
 const OLD_START = NOW - 60 * 60_000; // 1 hour before "now" — well past the grace floor
@@ -47,6 +50,7 @@ function seedSession(opts: {
   sessionId: string;
   status: string;
   startedAt?: number;
+  sessionType?: string;
 }): void {
   insertSession({
     session_id: opts.sessionId,
@@ -55,7 +59,7 @@ function seedSession(opts: {
     project_context_url: null,
     status: opts.status,
     started_at: opts.startedAt ?? OLD_START,
-    session_type: 'groom',
+    session_type: opts.sessionType ?? 'groom',
     task_name: null,
   } as never);
 }
@@ -200,5 +204,154 @@ describe('reconcileSessionLiveness', () => {
       .prepare('SELECT status FROM sessions WHERE session_id = ?')
       .get('api-mode-session') as { status: string };
     expect(row.status).toBe('running');
+  });
+});
+
+describe('reconcileNonPlanningSessionLiveness', () => {
+  it('reconciles a dead standard session with zero session_events rows to killed', () => {
+    seedSession({
+      sessionId: 'ghost-standard',
+      status: 'running',
+      sessionType: 'standard',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual(['ghost-standard']);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('ghost-standard') as { status: string };
+    expect(row.status).toBe('killed');
+    const eventCount = db
+      .prepare('SELECT COUNT(*) AS c FROM session_events WHERE session_id = ?')
+      .get('ghost-standard') as { c: number };
+    expect(eventCount.c).toBe(0);
+  });
+
+  it('reconciles a dead review session to killed', () => {
+    seedSession({
+      sessionId: 'ghost-review',
+      status: 'running',
+      sessionType: 'review',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual(['ghost-review']);
+  });
+
+  it('reconciles a dead depth_review session to killed', () => {
+    seedSession({
+      sessionId: 'ghost-depth-review',
+      status: 'running',
+      sessionType: 'depth_review',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual(['ghost-depth-review']);
+  });
+
+  it('leaves a live resumed standard session alone', () => {
+    seedSession({
+      sessionId: 'live-resumed-standard',
+      status: 'running',
+      sessionType: 'standard',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual([]);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('live-resumed-standard') as { status: string };
+    expect(row.status).toBe('running');
+  });
+
+  it('does not touch planning-type sessions — those stay in the planning-scoped sweep', () => {
+    seedSession({
+      sessionId: 'ghost-groom',
+      status: 'running',
+      sessionType: 'groom',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual([]);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('ghost-groom') as { status: string };
+    expect(row.status).toBe('running');
+  });
+
+  it('skips a just-created row that has not yet cleared the process-race grace floor', () => {
+    seedSession({
+      sessionId: 'just-started-standard',
+      status: 'starting',
+      startedAt: NOW - 5_000,
+      sessionType: 'standard',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual([]);
+  });
+
+  it('does not reconcile anything in api session mode', () => {
+    runtimeSettings.session_mode = 'api';
+    seedSession({
+      sessionId: 'api-mode-standard',
+      status: 'running',
+      sessionType: 'standard',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual([]);
+  });
+
+  it('records an audit event distinct from the planning sweep', () => {
+    seedSession({
+      sessionId: 'ghost-standard-2',
+      status: 'running',
+      sessionType: 'standard',
+    });
+
+    reconcileNonPlanningSessionLiveness({
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'non_planning_sessions_liveness_reconciled',
+        payload: expect.objectContaining({
+          reconciled_count: 1,
+          session_ids: ['ghost-standard-2'],
+          reason: 'process_not_found',
+        }),
+      }),
+    );
   });
 });

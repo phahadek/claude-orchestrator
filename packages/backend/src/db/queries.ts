@@ -937,6 +937,28 @@ export function listLivePlanningSessionRows(): Session[] {
 }
 
 /**
+ * All non-terminal session rows regardless of session_type — the candidate
+ * population for the non-planning half of the OS-process liveness
+ * reconciler (session/sessionLivenessReconciler.ts). Unlike
+ * listLivePlanningSessionRows above, this is not filtered to
+ * isPlanningSession: it exists to catch standard/review/depth_review
+ * sessions (code sessions and PR-review sessions), which have no other
+ * periodic OS-process-liveness sweep — StuckSessionMonitor only matches
+ * rows whose last event is 'result', so a session killed before it ever
+ * emits a session_events row is invisible to it, and resumeOrphanSessions
+ * only runs on backend boot.
+ */
+export function listLiveSessionRows(): Session[] {
+  return db
+    .prepare(
+      `SELECT * FROM sessions
+       WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
+         AND archived = 0`,
+    )
+    .all() as Session[];
+}
+
+/**
  * Idle planning-type sessions (groom/design/ops/split/docs — see
  * isPlanningSession) with ended_at set, unarchived, and older than the
  * given cutoff — the candidate population for

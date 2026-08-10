@@ -609,6 +609,21 @@ scheduler.register({
     return { items_processed: reconciled.length };
   },
 });
+// Non-planning counterpart to session_liveness_reconciler above: covers
+// standard/review/depth_review session rows, which have no other periodic
+// OS-process-liveness sweep — StuckSessionMonitor requires a 'result' event
+// to exist, and resumeOrphanSessions only runs on backend boot. Same
+// cadence pattern.
+scheduler.register({
+  name: 'non_planning_session_liveness_reconciler',
+  intervalMs: 10 * 60_000,
+  runOnBoot: true,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const { reconciled } = sessionManager.reconcileNonPlanningSessionLiveness();
+    return { items_processed: reconciled.length };
+  },
+});
 // Gate-verification reconciler: runnability/readiness reconcile on every
 // tick; auto-run verification drives the same wired verifier, gated by the
 // global gate_verification_enabled master switch and, per item, by that
