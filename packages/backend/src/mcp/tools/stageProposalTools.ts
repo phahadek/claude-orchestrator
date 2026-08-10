@@ -17,6 +17,7 @@ import {
   gateContributionDecisionSchema,
   seedContributionDecisionSchema,
   opsStateSchema,
+  opsReconciliationAssertionSchema,
   taskBodySectionsSchema,
   patchBodySectionPayloadSchema,
   groomingGateEntrySchema,
@@ -335,11 +336,20 @@ export function registerStageProposalTools(
     {
       title: 'Stage an ops journal state change',
       description:
-        'Stages a journal.setState intent — an in-place ops_journal entry transition (see ops/opsJournal.ts).',
+        'Stages a journal.setState intent — an in-place ops_journal entry transition (see ' +
+        'ops/opsJournal.ts). A transition to "applied-pending-confirm" is the Operational ' +
+        'completing intent (every task Type except 🔎 Investigation) and must carry ' +
+        '`reconciliation` — a declaration of what must be true once the change applies, which ' +
+        'the orchestrator evaluates automatically once this intent applies: a pass drives the ' +
+        'journal straight to "resolved" with no operator involvement, a failure stages an ' +
+        'interrupting intent naming the mismatch. Perform the actual check yourself (re-read the ' +
+        'config row, count the backfill) before staging — reconciliation.passed is your own ' +
+        'verdict, not re-derived by the orchestrator.',
       inputSchema: envelope({
         taskId: z.string(),
         state: opsStateSchema,
         fields: z.record(z.string(), z.unknown()).optional(),
+        reconciliation: opsReconciliationAssertionSchema.optional(),
       }),
     },
     async (args) => stage('journal.setState', args.payload, ctx, args),

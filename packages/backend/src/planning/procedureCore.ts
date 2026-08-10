@@ -270,7 +270,16 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'state is satisfied. DO NOT treat "the proposal is ready to stage" as a ' +
       'stopping point when the session already holds, or could earn by request, ' +
       'the tool needed to carry it further. `applied-pending-confirm` names a ' +
-      'change actually applied — it has no legal meaning for an Investigation ' +
+      'change actually applied — for an Operational task, the `journal.setState` ' +
+      '→ `applied-pending-confirm` intent that reaches it IS the completing intent, and ' +
+      'MUST carry a `reconciliation` assertion — `{"description": "<what must be true once ' +
+      'the change applies>", "passed": <boolean>}` — naming what you yourself checked ' +
+      '(re-read the config row, count the backfill) and whether it held; a stage with no ' +
+      'assertion is refused at stage time. Once the operator approves that completing intent, ' +
+      'the orchestrator evaluates the assertion automatically: `passed: true` drives the ' +
+      'journal straight to `resolved` and closes the task with no further operator step; ' +
+      '`passed: false` stages an interrupting intent naming the mismatch instead, so only a ' +
+      'failed reconciliation ever reaches the operator a second time. It has no legal meaning for an Investigation ' +
       'whose conclusion is that no change is needed, so THE NO-CHANGE TERMINAL ' +
       'exists for exactly that outcome, and staging it is not the parking this ' +
       'rule forbids. Once a decided-no-change conclusion is reached, DO stage ' +

@@ -94,17 +94,22 @@ export function isValidOpsTransition(from: OpsState, to: OpsState): boolean {
 
 /**
  * Session-reachable terminal ops_journal states, by task Type — resolved at
- * grooming (task 3b022f91-52f3-8121). A dispatched/interactive 🔧
- * Operational run drives the journal to applied-pending-confirm and leaves
- * the final applied-pending-confirm -> resolved confirmation to the
- * operator, so its own session-reachable terminal target is
- * applied-pending-confirm, blocked, or resolved. A 🔎 Investigation
- * self-verifies in-session — there is no operator-applied change to
- * reconcile — so its terminal target is resolved or blocked. Any other (or
- * uncached/missing) task Type falls back to the Operational set, the more
- * permissive of the two. Used by PlanningOrchestrator.checkTerminal to nudge
- * a session that reaches terminal with its journal still at an intermediate
- * waypoint (pending / candidate / staged-proposal, or for Investigation also
+ * grooming (task 3b822f91-52f3-8180). A dispatched/interactive 🔧
+ * Operational run drives the journal to applied-pending-confirm, carrying a
+ * reconciliation assertion (see OpsReconciliationAssertion) on the
+ * completing intent — the orchestrator evaluates it automatically once that
+ * intent applies (routes/stagedIntents.ts's applyIntent), advancing straight
+ * to resolved on a pass with no operator involvement, or staging an
+ * interrupting intent on a failure. So the session's own reachable target is
+ * applied-pending-confirm (or resolved/blocked, both also directly
+ * reachable); resolved itself is then normally reached automatically rather
+ * than staged by the session. A 🔎 Investigation self-verifies in-session —
+ * there is no operator-applied change to reconcile — so its terminal target
+ * is resolved or blocked. Any other (or uncached/missing) task Type falls
+ * back to the Operational set, the more permissive of the two. Used by
+ * PlanningOrchestrator.checkTerminal to nudge a session that reaches
+ * terminal with its journal still at an intermediate waypoint (pending /
+ * candidate / staged-proposal, or for Investigation also
  * applied-pending-confirm) instead of letting it settle half-finished.
  */
 const INVESTIGATION_SESSION_TERMINAL_STATES: ReadonlySet<OpsState> = new Set([
@@ -127,6 +132,21 @@ export function isSessionTerminalOpsState(
       ? INVESTIGATION_SESSION_TERMINAL_STATES
       : OPERATIONAL_SESSION_TERMINAL_STATES;
   return allowed.has(state);
+}
+
+/**
+ * True when a `journal.setState` -> "applied-pending-confirm" transition for
+ * this task Type is the Operational completing intent and must therefore
+ * carry a reconciliation assertion — every Type except 🔎 Investigation
+ * (which never legitimately reaches applied-pending-confirm at all; see
+ * isSessionTerminalOpsState). Mirrors isSessionTerminalOpsState's own
+ * fallback rule so an uncached/missing Type is treated as Operational here
+ * too, rather than silently letting an unrecognized Type skip the gate.
+ */
+export function opsCompletionRequiresReconciliation(
+  taskType: string | null | undefined,
+): boolean {
+  return taskType !== '🔎 Investigation';
 }
 
 /**

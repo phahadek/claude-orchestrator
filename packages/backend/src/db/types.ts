@@ -408,6 +408,22 @@ export interface OpsJournalRow {
   updated_at: string;
 }
 
+/**
+ * Reconciliation assertion carried by an Operational completing intent
+ * (`journal.setState` -> "applied-pending-confirm") — a declaration of what
+ * must be true once the change applies. The session performs the actual
+ * check itself (re-reading a config row, counting a backfill) and reports
+ * the outcome here; the orchestrator only acts on it, after apply: `passed`
+ * drives the journal to "resolved" automatically with no operator
+ * involvement, a failure stages an interrupting `journal.setState` ->
+ * "blocked" intent carrying `mismatch` for the operator to review.
+ */
+export interface OpsReconciliationAssertion {
+  description: string;
+  passed: boolean;
+  mismatch?: string;
+}
+
 // ─── capability_disqualification ────────────────────────────────────────────
 
 /**

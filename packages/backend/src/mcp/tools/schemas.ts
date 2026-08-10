@@ -69,6 +69,29 @@ export const opsStateSchema = z.enum([
   'resolved',
 ]);
 
+/**
+ * OpsReconciliationAssertion — db/types.ts. Required on the Operational
+ * completing intent (journal.setState -> "applied-pending-confirm"): a
+ * declaration of what must be true once the change applies, evaluated
+ * automatically once this intent applies (see stagedIntents.ts's
+ * reconcileOpsCompletion). The session performs the actual check itself
+ * (re-reading a config row, counting a backfill) and reports the outcome
+ * here — `passed` is the session's own verdict, not re-derived by the
+ * orchestrator.
+ */
+export const opsReconciliationAssertionSchema = z.object({
+  description: z
+    .string()
+    .describe('What must be true once the change applies.'),
+  passed: z
+    .boolean()
+    .describe('Whether the session confirmed the assertion holds.'),
+  mismatch: z
+    .string()
+    .optional()
+    .describe('What was actually observed instead, when passed is false.'),
+});
+
 /** bodyRender.ts's BlockModel union — the Context section's structured content model. */
 const blockModelSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('paragraph'), text: z.string() }),
