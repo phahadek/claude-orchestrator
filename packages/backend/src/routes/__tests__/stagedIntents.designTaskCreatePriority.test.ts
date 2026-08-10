@@ -51,7 +51,10 @@ function insertDispositionRow(runAt: string): number {
       source_task_id: TASK_ID,
       project: 'demo',
       milestone: 'M13',
-      questions: JSON.stringify({ probed: ['unstated-premises'], questions: [] }),
+      questions: JSON.stringify({
+        probed: ['unstated-premises'],
+        questions: [],
+      }),
       run_at: runAt,
     });
   return Number(result.lastInsertRowid);
