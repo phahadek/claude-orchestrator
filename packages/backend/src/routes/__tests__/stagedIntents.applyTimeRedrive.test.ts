@@ -40,11 +40,14 @@ import {
   getSession,
   getStagedIntent,
   setStagedIntentAppliedTaskId,
+  transitionStagedIntent,
 } from '../../db/queries';
 import {
   createStagedIntentsRouter,
   stageIntent,
   translateApplyError,
+  routeApplyTimeFailure,
+  commitGroupIntents,
 } from '../stagedIntents';
 import { PlanningOrchestrator } from '../../orchestration/PlanningOrchestrator';
 import { NotionApiError } from '../../notion/types';
@@ -718,5 +721,167 @@ describe('translateApplyError', () => {
     expect(translateApplyError(notFoundError, differentFind)).not.toMatch(
       /re-fetch/i,
     );
+  });
+});
+
+// ── idempotent routeApplyTimeFailure — a losing concurrent group-commit
+// invocation must not throw IllegalStagedIntentTransitionError ────────────
+//
+// commitGroupIntents' blocked-member guard reads state at entry, before
+// either invocation writes, so two concurrent commits over the same failing
+// member can both reach routeApplyTimeFailure with a stale pre-failure row.
+// Re-issuing the same pushback transition on an already-blocked row used to
+// throw out of the unguarded async route handler, destroying the structured
+// commit report (committed/failedId/remaining) the throw bypasses.
+describe('routeApplyTimeFailure — idempotent on an already-blocked row', () => {
+  it('returns normally, not throwing, when the row is already at needs_revision', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setProperties: vi.fn(),
+    });
+    seedPlanningSession('session-idem-1', 'notion:task-idem-1');
+    const intent = stagePropertiesIntent('session-idem-1', 'notion:task-idem-1');
+    transitionStagedIntent(intent.id, 'needs_revision', {
+      dispositionReason: 'prior failure',
+    });
+    const row = getStagedIntent(intent.id)!;
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+
+    await expect(
+      routeApplyTimeFailure(
+        row,
+        new Error('backend write failed'),
+        planningOrchestrator,
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        reason: expect.stringContaining('backend write failed'),
+      }),
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+  });
+
+  it('returns normally, not throwing, when the row is already at pending_verification', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setProperties: vi.fn(),
+    });
+    seedPlanningSession('session-idem-2', 'notion:task-idem-2');
+    const intent = stagePropertiesIntent('session-idem-2', 'notion:task-idem-2');
+    transitionStagedIntent(intent.id, 'pending_verification');
+    const row = getStagedIntent(intent.id)!;
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+
+    await expect(
+      routeApplyTimeFailure(
+        row,
+        new Error('backend write failed'),
+        planningOrchestrator,
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        reason: expect.stringContaining('backend write failed'),
+      }),
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('pending_verification');
+  });
+
+  it('returns the same translated reason for the already-blocked case as the first-failure case', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setProperties: vi.fn(),
+    });
+    seedPlanningSession('session-idem-3', 'notion:task-idem-3');
+    const intent = stagePropertiesIntent('session-idem-3', 'notion:task-idem-3');
+    // Captured before either call transitions the row — the same stale
+    // snapshot a losing concurrent invocation would be holding.
+    const staleRow = getStagedIntent(intent.id)!;
+    const err = new Error('backend write failed');
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+
+    const first = await routeApplyTimeFailure(staleRow, err, planningOrchestrator);
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+
+    const second = await routeApplyTimeFailure(staleRow, err, planningOrchestrator);
+    expect(second.reason).toBe(first.reason);
+  });
+
+  it('the first-failure path still transitions to needs_revision and records exactly one staged_intent_disposition event', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setProperties: vi.fn(),
+    });
+    seedPlanningSession('session-idem-4', 'notion:task-idem-4');
+    const intent = stagePropertiesIntent('session-idem-4', 'notion:task-idem-4');
+    const row = getStagedIntent(intent.id)!;
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    mockRecordEvent.mockClear();
+
+    await routeApplyTimeFailure(
+      row,
+      new Error('backend write failed'),
+      planningOrchestrator,
+    );
+
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+    const dispositionEvents = mockRecordEvent.mock.calls.filter(
+      ([evt]) => evt.event_type === 'staged_intent_disposition',
+    );
+    expect(dispositionEvents).toHaveLength(1);
+  });
+
+  it('two concurrent commitGroupIntents calls over the same failing member both return a structured result instead of one throwing', async () => {
+    const setProperties = vi
+      .fn()
+      .mockRejectedValue(new Error('backend write failed'));
+    mockGetTaskBackend.mockReturnValue({ type: 'notion', setProperties });
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    seedPlanningSession('session-race', 'notion:task-race');
+    const groupId = 'group-race';
+    const intent = stageIntent(
+      'task.setProperties',
+      { taskId: 'notion:task-race', patch: { title: 'Renamed' } },
+      'proj-1',
+      groupId,
+      'session-race',
+    );
+    transitionStagedIntent(intent.id, 'approved');
+
+    // Fired without awaiting between them: both invocations run their
+    // synchronous entry checks (blocked-member guard, live-member filter)
+    // against the same unmodified row before either reaches its first
+    // `await applyIntent(...)` and yields — reproducing the race two
+    // concurrent group-commit requests would hit.
+    const [result1, result2] = await Promise.all([
+      commitGroupIntents(
+        groupId,
+        { override: false, reason: '', actorType: 'human' },
+        planningOrchestrator,
+        sm as any,
+      ),
+      commitGroupIntents(
+        groupId,
+        { override: false, reason: '', actorType: 'human' },
+        planningOrchestrator,
+        sm as any,
+      ),
+    ]);
+
+    for (const result of [result1, result2]) {
+      expect(result.status).toBe(500);
+      expect(result.body.committed).toEqual([]);
+      expect(result.body.failedId).toBe(intent.id);
+      expect(result.body.remaining).toEqual([]);
+    }
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
   });
 });
