@@ -287,11 +287,9 @@ sessionsRouter.post(
       return;
     }
     if (project.gitMode !== 'local-only') {
-      res
-        .status(400)
-        .json({
-          error: 'mark-merged is only available for local-only projects',
-        });
+      res.status(400).json({
+        error: 'mark-merged is only available for local-only projects',
+      });
       return;
     }
 

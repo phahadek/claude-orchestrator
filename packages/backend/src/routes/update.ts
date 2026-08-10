@@ -82,11 +82,9 @@ router.post(
 
       const asset = selectAsset(info);
       if (!asset) {
-        res
-          .status(422)
-          .json({
-            error: 'no suitable installer asset found for this platform',
-          });
+        res.status(422).json({
+          error: 'no suitable installer asset found for this platform',
+        });
         return;
       }
 
