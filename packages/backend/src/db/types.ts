@@ -29,6 +29,11 @@ export interface Session {
   status: SessionStatus;
   started_at: number;
   ended_at: number | null;
+  // Set only on a genuine terminal transition (status -> done/error/killed),
+  // never on a non-terminal write that happens to also set ended_at (e.g.
+  // the deferred-while-running path). NULL for historical rows. Unlike
+  // ended_at, this can answer "was this session terminal at time T".
+  terminalized_at: number | null;
   pr_url: string | null;
   worktree_path: string | null;
   archived: number; // 0 | 1 (SQLite boolean)
@@ -60,6 +65,7 @@ export interface Session {
 export type NewSession = Omit<
   Session,
   | 'ended_at'
+  | 'terminalized_at'
   | 'pr_url'
   | 'worktree_path'
   | 'archived'
@@ -87,6 +93,7 @@ export type NewSession = Omit<
   | 'terminal_completion_reason'
 > & {
   ended_at?: number | null;
+  terminalized_at?: number | null;
   pr_url?: string | null;
   worktree_path?: string | null;
   archived?: number;

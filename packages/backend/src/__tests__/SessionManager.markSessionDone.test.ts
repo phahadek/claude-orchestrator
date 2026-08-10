@@ -40,7 +40,11 @@ vi.mock('../db/queries', async () => {
 
 import { StuckSessionMonitor } from '../orchestration/StuckSessionMonitor';
 import type { SessionManager } from '../session/SessionManager';
-import { markSessionDone, applyPendingDone } from '../db/queries';
+import {
+  markSessionDone,
+  applyPendingDone,
+  updateSessionStatus,
+} from '../db/queries';
 import { queryAuditLogByProject } from '../audit/AuditLog';
 import { db } from '../db/db.js';
 
@@ -83,6 +87,18 @@ function getStatus(sessionId: string): string | undefined {
       .prepare('SELECT status FROM sessions WHERE session_id = ?')
       .get(sessionId) as { status: string } | undefined
   )?.status;
+}
+
+function getTimestamps(
+  sessionId: string,
+): { ended_at: number | null; terminalized_at: number | null } | undefined {
+  return db
+    .prepare(
+      'SELECT ended_at, terminalized_at FROM sessions WHERE session_id = ?',
+    )
+    .get(sessionId) as
+    | { ended_at: number | null; terminalized_at: number | null }
+    | undefined;
 }
 
 function getAuditRows(
@@ -222,6 +238,86 @@ describe('markSessionDone in-flight guard', () => {
 
     expect(applyPendingDone('sess-raced')).toBe(false);
     expect(getStatus('sess-raced')).toBe('error');
+  });
+});
+
+// ── terminalized_at: durable genuine-terminalization timestamp ──────────────
+
+describe('terminalized_at', () => {
+  it('stays NULL while a done-transition is deferred (status_before=running is not terminal), and is set only once the deferred transition drains', () => {
+    insertSession('sess-deferred-term', 'running', 'task-abc');
+    const deferredEndedAt = Date.now() - 1000;
+
+    markSessionDone(
+      'sess-deferred-term',
+      deferredEndedAt,
+      null,
+      'test_call_site',
+    );
+
+    // Deferral is not a terminal transition: status stays running, and
+    // terminalized_at must not be set even though a done-transition (with
+    // its own ended_at value) has been recorded for later application.
+    expect(getStatus('sess-deferred-term')).toBe('running');
+    expect(getTimestamps('sess-deferred-term')?.terminalized_at).toBeNull();
+
+    const applied = applyPendingDone('sess-deferred-term');
+    expect(applied).toBe(true);
+
+    const after = getTimestamps('sess-deferred-term');
+    // ended_at semantics are unchanged: it reflects the original deferral
+    // time, preserved for backwards compatibility.
+    expect(after?.ended_at).toBe(deferredEndedAt);
+    // terminalized_at reflects the genuine terminal instant — when the
+    // transition actually drained — not the original deferral time.
+    expect(after?.terminalized_at).not.toBeNull();
+    expect(after?.terminalized_at).toBeGreaterThanOrEqual(deferredEndedAt);
+  });
+
+  it('is set immediately for an idle→done transition (not deferred)', () => {
+    insertSession('sess-idle-term', 'idle');
+    const endedAt = Date.now();
+
+    markSessionDone('sess-idle-term', endedAt, null, 'boot_idle_merged_pr');
+
+    const row = getTimestamps('sess-idle-term');
+    expect(row?.ended_at).toBe(endedAt);
+    expect(row?.terminalized_at).toBe(endedAt);
+  });
+});
+
+describe('terminalized_at on error/killed transitions', () => {
+  it('sets terminalized_at when a session reaches error', () => {
+    insertSession('sess-error-term', 'running');
+    const endedAt = Date.now();
+
+    updateSessionStatus('sess-error-term', 'error', endedAt);
+
+    expect(getStatus('sess-error-term')).toBe('error');
+    const row = getTimestamps('sess-error-term');
+    expect(row?.ended_at).toBe(endedAt);
+    expect(row?.terminalized_at).toBe(endedAt);
+  });
+
+  it('sets terminalized_at when a session reaches killed', () => {
+    insertSession('sess-killed-term', 'running');
+    const endedAt = Date.now();
+
+    updateSessionStatus('sess-killed-term', 'killed', endedAt);
+
+    expect(getStatus('sess-killed-term')).toBe('killed');
+    const row = getTimestamps('sess-killed-term');
+    expect(row?.ended_at).toBe(endedAt);
+    expect(row?.terminalized_at).toBe(endedAt);
+  });
+
+  it('does NOT set terminalized_at for a non-terminal status transition (e.g. running)', () => {
+    insertSession('sess-running-term', 'starting');
+
+    updateSessionStatus('sess-running-term', 'running');
+
+    expect(getStatus('sess-running-term')).toBe('running');
+    expect(getTimestamps('sess-running-term')?.terminalized_at).toBeNull();
   });
 });
 

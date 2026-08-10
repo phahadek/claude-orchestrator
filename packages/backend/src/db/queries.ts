@@ -91,9 +91,11 @@ const stmtUpdateSessionStatus = db.prepare<{
   session_id: string;
   status: string;
   ended_at: number | null;
+  terminalized_at: number | null;
 }>(`
   UPDATE sessions
-  SET status = @status, ended_at = @ended_at
+  SET status = @status, ended_at = @ended_at,
+      terminalized_at = COALESCE(terminalized_at, @terminalized_at)
   WHERE session_id = @session_id
 `);
 
@@ -148,6 +150,9 @@ export function updateSessionStatus(
     session_id: sessionId,
     status,
     ended_at: endedAt ?? null,
+    terminalized_at: TERMINAL_SESSION_STATUSES.has(status)
+      ? (endedAt ?? Date.now())
+      : null,
   });
 }
 
@@ -180,9 +185,11 @@ const stmtMarkSessionDone = db.prepare<{
   session_id: string;
   ended_at: number;
   pr_url: string | null;
+  terminalized_at: number;
 }>(`
   UPDATE sessions
-  SET status = 'done', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url)
+  SET status = 'done', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url),
+      terminalized_at = COALESCE(terminalized_at, @terminalized_at)
   WHERE session_id = @session_id
 `);
 
@@ -402,6 +409,7 @@ export function markSessionDone(
     session_id: sessionId,
     ended_at: endedAt,
     pr_url: prUrl ?? null,
+    terminalized_at: endedAt,
   });
 }
 
@@ -440,6 +448,9 @@ export function applyPendingDone(sessionId: string): boolean {
     session_id: sessionId,
     ended_at: current.pending_done_ended_at,
     pr_url: current.pending_done_pr_url,
+    // The genuine terminal instant is now (the drain), not the original
+    // deferral time preserved in ended_at for backwards compatibility.
+    terminalized_at: Date.now(),
   });
   clearPendingDone(sessionId);
   recordEvent({
