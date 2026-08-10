@@ -109,7 +109,10 @@ describe('getGateItemAsOf', () => {
     expect(current?.state).toBe('open');
     expect(current?.classification).toBe('Human-Observation');
 
-    const asOfAfterResolve = getGateItemAsOf(id, new Date(T1 + 1).toISOString());
+    const asOfAfterResolve = getGateItemAsOf(
+      id,
+      new Date(T1 + 1).toISOString(),
+    );
     expect(asOfAfterResolve?.state).toBe('resolved');
     expect(asOfAfterResolve?.current_disposition).toBe('pass');
     expect(asOfAfterResolve?.classification).toBe('Read-Only');
@@ -165,7 +168,10 @@ describe('getOpsJournalEntryAsOf', () => {
     const current = getOpsJournalEntry(taskId);
     expect(current?.state).toBe('resolved');
 
-    const asOfAfter = getOpsJournalEntryAsOf(taskId, new Date(T1 + 1).toISOString());
+    const asOfAfter = getOpsJournalEntryAsOf(
+      taskId,
+      new Date(T1 + 1).toISOString(),
+    );
     expect(asOfAfter?.state).toBe('resolved');
   });
 
@@ -206,7 +212,9 @@ describe('getSessionAsOf', () => {
     expect(asOfResult?.session_id).toBe(sessionId);
     expect(isUnreconstructable(asOfResult?.status)).toBe(true);
 
-    expect(getSessionAsOf(sessionId, new Date(T0).toISOString())).toBeUndefined();
+    expect(
+      getSessionAsOf(sessionId, new Date(T0).toISOString()),
+    ).toBeUndefined();
     expect(getSession(sessionId)?.status).toBe('done');
   });
 });
@@ -218,7 +226,12 @@ describe('getPRAsOf', () => {
       `INSERT INTO pull_requests
         (pr_number, pr_url, task_id, repo, state, draft, created_at, updated_at, synced_at)
        VALUES (1, 'https://github.com/o/r/pull/1', ?, 'o/r', 'open', 0, ?, ?, ?)`,
-    ).run(taskId, new Date(T0).toISOString(), new Date(T1).toISOString(), new Date(T1).toISOString());
+    ).run(
+      taskId,
+      new Date(T0).toISOString(),
+      new Date(T1).toISOString(),
+      new Date(T1).toISOString(),
+    );
 
     const asOfResult = getPRAsOf(taskId, new Date(T2).toISOString());
     expect(asOfResult?.task_id).toBe(taskId);

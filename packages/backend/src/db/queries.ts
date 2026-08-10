@@ -98,7 +98,9 @@ function unreconstructable(reason: string): Unreconstructable {
   return { __unreconstructable: true, reason };
 }
 
-export function isUnreconstructable(value: unknown): value is Unreconstructable {
+export function isUnreconstructable(
+  value: unknown,
+): value is Unreconstructable {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -756,7 +758,9 @@ export function getSession(sessionId: string): Session | undefined {
 const SESSION_STATUS_UNRECONSTRUCTABLE_REASON =
   'sessions.status has no historical record until the point-in-time instrumentation task lands — cannot answer "what was this session\'s status at T", only "what is it now"';
 
-export type SessionAsOf = Omit<Session, 'status'> & { status: Unreconstructable };
+export type SessionAsOf = Omit<Session, 'status'> & {
+  status: Unreconstructable;
+};
 
 /**
  * Point-in-time read of a session row for the given `asOf` cutoff. `status`
@@ -5547,7 +5551,10 @@ export function getOpsJournalEntryAsOf(
   const stateEvents = queryOpsJournalAuditEvents(
     'ops_journal_state_changed',
     taskId,
-  ) as { ts: number; payload: { from: OpsJournalState; to: OpsJournalState } }[];
+  ) as {
+    ts: number;
+    payload: { from: OpsJournalState; to: OpsJournalState };
+  }[];
 
   const seedTs = [...seedEvents].reverse().find((e) => e.ts <= asOfMs)?.ts;
   if (seedTs === undefined) return undefined;
@@ -5728,9 +5735,7 @@ function queryGateItemAuditTransitions(
     .prepare<
       { event_type: string; like: string },
       { ts: number; payload: string }
-    >(
-      `SELECT ts, payload FROM audit_log WHERE event_type = @event_type AND payload LIKE @like ORDER BY id ASC`,
-    )
+    >(`SELECT ts, payload FROM audit_log WHERE event_type = @event_type AND payload LIKE @like ORDER BY id ASC`)
     .all({ event_type: eventType, like: `%"gateItemId":"${gateItemId}"%` });
   return rows
     .map((r) => {
@@ -5739,7 +5744,12 @@ function queryGateItemAuditTransitions(
         from: string;
         to: string;
       };
-      return { ts: r.ts, from: payload.from, to: payload.to, gateItemId: payload.gateItemId };
+      return {
+        ts: r.ts,
+        from: payload.from,
+        to: payload.to,
+        gateItemId: payload.gateItemId,
+      };
     })
     .filter((r) => r.gateItemId === gateItemId);
 }
@@ -5780,9 +5790,10 @@ export function getGateItemAsOf(
   const asOfMs = Date.parse(asOf);
 
   const createdRow = db
-    .prepare<{ like: string }, { ts: number }>(
-      `SELECT ts FROM audit_log WHERE event_type = 'gate_item_created' AND payload LIKE @like ORDER BY id ASC LIMIT 1`,
-    )
+    .prepare<
+      { like: string },
+      { ts: number }
+    >(`SELECT ts FROM audit_log WHERE event_type = 'gate_item_created' AND payload LIKE @like ORDER BY id ASC LIMIT 1`)
     .get({ like: `%"gateItemId":"${id}"%` });
   if (createdRow && createdRow.ts > asOfMs) return undefined;
 
