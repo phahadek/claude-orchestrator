@@ -20,7 +20,7 @@ vi.mock('../db/queries.js', () =>
     setPRReviewResult: vi.fn(),
     setPendingPush: vi.fn(),
     getSetting: vi.fn().mockReturnValue(null),
-    getTestContentCacheResult: vi.fn().mockReturnValue(undefined),
+    getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
     markSessionDone: vi.fn(),
     updateSessionStatus: vi.fn(),
     clearTerminalPRFlags: vi.fn(),
@@ -59,7 +59,7 @@ vi.mock('../audit/AuditLog.js', () => ({
 }));
 
 vi.mock('../session/analyzeGating.js', () => ({
-  computeWorktreeContentHash: vi.fn().mockResolvedValue('content-hash-x'),
+  computeWholeTreeContentHash: vi.fn().mockResolvedValue('content-hash-x'),
   computeTriggerContentHash: vi.fn().mockResolvedValue(null),
 }));
 
@@ -76,7 +76,7 @@ import {
   consumeAutofixSha,
   deleteAllAutofixShasForPR,
   setHeadSha,
-  getTestContentCacheResult,
+  getLatestTestRequestRun,
   markSessionDone,
   updateSessionStatus,
   setPendingPush,
@@ -3346,7 +3346,7 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getProjectByGithubRepo).mockReturnValue(null);
-    vi.mocked(getTestContentCacheResult).mockReturnValue(undefined);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
     vi.mocked(getSession).mockReturnValue({
       worktree_path: '/wt/session',
     } as any);
@@ -3384,12 +3384,14 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       bash_rules: [],
       bootstrap_script: '',
     } as any);
-    vi.mocked(getTestContentCacheResult).mockReturnValue({
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
       project_id: 'proj-1',
       content_hash: 'content-hash-x',
-      passed: 0,
+      state: 'failed',
       output: 'FAIL src/foo.test.ts\n  ● test name\n    expected 1 to equal 2',
-      ran_at: '2026-01-01T00:00:00Z',
+      started_at: 1000,
+      finished_at: 2000,
     } as any);
     const sessions = makeMockSessions();
 
@@ -3446,12 +3448,14 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       bash_rules: [],
       bootstrap_script: '',
     } as any);
-    vi.mocked(getTestContentCacheResult).mockReturnValue({
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
       project_id: 'proj-1',
       content_hash: 'content-hash-x',
-      passed: 1,
+      state: 'passed',
       output: 'All tests passed',
-      ran_at: '2026-01-01T00:00:00Z',
+      started_at: 1000,
+      finished_at: 2000,
     } as any);
     const sessions = makeMockSessions();
 
@@ -3497,12 +3501,14 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       bash_rules: [],
       bootstrap_script: '',
     } as any);
-    vi.mocked(getTestContentCacheResult).mockReturnValue({
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
       project_id: 'proj-1',
       content_hash: 'content-hash-x',
-      passed: 0,
+      state: 'failed',
       output: 'Test failed',
-      ran_at: '2026-01-01T00:00:00Z',
+      started_at: 1000,
+      finished_at: 2000,
     } as any);
     const sessions = makeMockSessions();
 
@@ -3544,12 +3550,14 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       bash_rules: [],
       bootstrap_script: '',
     } as any);
-    vi.mocked(getTestContentCacheResult).mockReturnValue({
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
       project_id: 'proj-1',
       content_hash: 'content-hash-x',
-      passed: 0,
+      state: 'failed',
       output: 'Fix failed',
-      ran_at: '2026-01-01T00:00:00Z',
+      started_at: 1000,
+      finished_at: 2000,
     } as any);
     const sessions = makeMockSessions();
 
@@ -3591,8 +3599,8 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       bash_rules: [],
       bootstrap_script: '',
     } as any);
-    vi.mocked(getTestContentCacheResult).mockReturnValue({
-      passed: 0,
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      state: 'failed',
       output: 'irrelevant',
     } as any);
 

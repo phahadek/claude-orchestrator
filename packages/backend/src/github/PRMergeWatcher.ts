@@ -15,7 +15,7 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
-import { computeWorktreeContentHash } from '../session/analyzeGating';
+import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
@@ -47,7 +47,7 @@ import {
   setLastReviewedSha,
   setPRReviewResult,
   setPendingPush,
-  getTestContentCacheResult,
+  getLatestTestRequestRun,
   markSessionDone,
   updateSessionStatus,
   clearTerminalPRFlags,
@@ -585,9 +585,9 @@ export class PRMergeWatcher extends EventEmitter {
 
     // ── Orchestrator-run test gate (F2) ──────────────────────────────────────
     // When test: commands are configured, the shared content-hash cache
-    // (orchestrator_test_content_cache, keyed by (project_id, whole-tree
-    // content hash) — the same cache buildTestsStage/runTestPipeline write
-    // into) is the authoritative CI signal — GitHub CI is disabled on
+    // (test_request_runs, keyed by (project_id, whole-tree content hash) —
+    // the same table buildTestsStage/runTestPipeline/the test.request lane
+    // write into) is the authoritative CI signal — GitHub CI is disabled on
     // private repos so GitHub reports the PR mergeable; we gate on that
     // cached verdict instead. Skipped for terminally-paused PRs so we fall
     // through to the read-only GitHub merge-state refresh below instead of
@@ -601,13 +601,13 @@ export class PRMergeWatcher extends EventEmitter {
       project
     ) {
       const worktreePath = getSession(pr.session_id)?.worktree_path;
-      const testResult = worktreePath
-        ? getTestContentCacheResult(
-            project.id,
-            await computeWorktreeContentHash(worktreePath),
-          )
+      const contentHash = worktreePath
+        ? await computeWholeTreeContentHash(worktreePath)
+        : null;
+      const testResult = contentHash
+        ? getLatestTestRequestRun(project.id, contentHash)
         : undefined;
-      if (testResult && !testResult.passed) {
+      if (testResult && testResult.state === 'failed') {
         if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
           setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
           setPauseReason(

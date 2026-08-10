@@ -9,9 +9,8 @@ const mockSetPRReviewResult = vi.fn();
 const mockSetLastReviewedSha = vi.fn();
 const mockSetPreReviewStage = vi.fn();
 const mockSetPauseReason = vi.fn();
-const mockGetTestContentCacheResult = vi.fn().mockReturnValue(undefined);
-const mockUpsertTestContentCacheResult = vi.fn();
-const mockDeleteTestContentCacheResult = vi.fn();
+const mockGetLatestTestRequestRun = vi.fn().mockReturnValue(undefined);
+const mockDeleteTestRequestRunsForContentHash = vi.fn();
 const mockHasAnalyzeResultForSha = vi.fn().mockReturnValue(false);
 const mockUpsertAnalyzeResult = vi.fn();
 const mockGetAnalyzeResult = vi.fn().mockReturnValue(null);
@@ -27,12 +26,10 @@ vi.mock('../../db/queries', () => ({
   setLastReviewedSha: (...args: unknown[]) => mockSetLastReviewedSha(...args),
   setPreReviewStage: (...args: unknown[]) => mockSetPreReviewStage(...args),
   setPauseReason: (...args: unknown[]) => mockSetPauseReason(...args),
-  getTestContentCacheResult: (...args: unknown[]) =>
-    mockGetTestContentCacheResult(...args),
-  upsertTestContentCacheResult: (...args: unknown[]) =>
-    mockUpsertTestContentCacheResult(...args),
-  deleteTestContentCacheResult: (...args: unknown[]) =>
-    mockDeleteTestContentCacheResult(...args),
+  getLatestTestRequestRun: (...args: unknown[]) =>
+    mockGetLatestTestRequestRun(...args),
+  deleteTestRequestRunsForContentHash: (...args: unknown[]) =>
+    mockDeleteTestRequestRunsForContentHash(...args),
   hasAnalyzeResultForSha: (...args: unknown[]) =>
     mockHasAnalyzeResultForSha(...args),
   upsertAnalyzeResult: (...args: unknown[]) => mockUpsertAnalyzeResult(...args),
@@ -46,7 +43,7 @@ vi.mock('../../db/queries', () => ({
 }));
 
 const mockComputeTriggerContentHash = vi.fn().mockResolvedValue(null);
-const mockComputeWorktreeContentHash = vi
+const mockComputeWholeTreeContentHash = vi
   .fn()
   .mockResolvedValue('worktree-content-hash');
 vi.mock('../../session/analyzeGating', async (importOriginal) => {
@@ -56,10 +53,18 @@ vi.mock('../../session/analyzeGating', async (importOriginal) => {
     ...actual,
     computeTriggerContentHash: (...args: unknown[]) =>
       mockComputeTriggerContentHash(...args),
-    computeWorktreeContentHash: (...args: unknown[]) =>
-      mockComputeWorktreeContentHash(...args),
+    computeWholeTreeContentHash: (...args: unknown[]) =>
+      mockComputeWholeTreeContentHash(...args),
   };
 });
+
+const mockRunProjectTestRequest = vi
+  .fn()
+  .mockResolvedValue({ passed: true, output: '' });
+vi.mock('../../orchestration/testRequestLane', () => ({
+  runProjectTestRequest: (...args: unknown[]) =>
+    mockRunProjectTestRequest(...args),
+}));
 
 const mockRunVerifyAsGate = vi.fn().mockResolvedValue({ passed: true });
 vi.mock('../../orchestration/verifyRunner', () => ({
@@ -198,11 +203,12 @@ beforeEach(() => {
     backupAvailable: true,
   });
   mockRunTestCommands.mockResolvedValue({ passed: true, output: '' });
-  mockGetTestContentCacheResult.mockReturnValue(undefined);
+  mockRunProjectTestRequest.mockResolvedValue({ passed: true, output: '' });
+  mockGetLatestTestRequestRun.mockReturnValue(undefined);
   mockHasAnalyzeResultForSha.mockReturnValue(false);
   mockGetAnalyzeContentCacheResult.mockReturnValue(undefined);
   mockComputeTriggerContentHash.mockResolvedValue(null);
-  mockComputeWorktreeContentHash.mockResolvedValue('worktree-content-hash');
+  mockComputeWholeTreeContentHash.mockResolvedValue('worktree-content-hash');
   mockGetChangedFiles.mockResolvedValue([]);
   mockLoadAutofixCommands.mockReturnValue([]);
   mockLoadOrchestratorConfig.mockReturnValue({
@@ -1099,7 +1105,7 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
   });
 
   it('records test result and continues to awaiting_review even when tests fail', async () => {
-    mockRunTestCommands.mockResolvedValue({
+    mockRunProjectTestRequest.mockResolvedValue({
       passed: false,
       output: 'test failures',
     });
@@ -1109,11 +1115,11 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
     const result = await pipeline.run(makeJob(), makeProject());
 
     expect(result.passed).toBe(true);
-    expect(mockUpsertTestContentCacheResult).toHaveBeenCalledWith(
-      'proj-1',
-      'worktree-content-hash',
-      false,
-      'test failures',
+    expect(mockRunProjectTestRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'proj-1',
+        contentHash: 'worktree-content-hash',
+      }),
     );
     expect(mockSetPreReviewStage).toHaveBeenCalledWith(
       PR_NUMBER,
@@ -1123,7 +1129,10 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
   });
 
   it('does not call setPreReviewStage(blocked_tests) — tests is non-blocking', async () => {
-    mockRunTestCommands.mockResolvedValue({ passed: false, output: 'FAIL' });
+    mockRunProjectTestRequest.mockResolvedValue({
+      passed: false,
+      output: 'FAIL',
+    });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -1138,12 +1147,14 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
   });
 
   it('skips tests when the content hash already has a cached result', async () => {
-    mockGetTestContentCacheResult.mockReturnValue({
+    mockGetLatestTestRequestRun.mockReturnValue({
+      id: 'run-1',
       project_id: 'proj-1',
       content_hash: 'worktree-content-hash',
-      passed: 1,
+      state: 'passed',
       output: 'ok',
-      ran_at: '2026-01-01T00:00:00Z',
+      started_at: 1000,
+      finished_at: 2000,
     });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
@@ -1151,7 +1162,7 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
     await pipeline.run(makeJob(), makeProject());
 
     expect(mockRunTestCommands).not.toHaveBeenCalled();
-    expect(mockUpsertTestContentCacheResult).not.toHaveBeenCalled();
+    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
   });
 });
 
@@ -1270,7 +1281,7 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
       test_max_rss_mb: 0,
       test_fail_fast: true,
     });
-    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    mockRunProjectTestRequest.mockResolvedValue({ passed: true, output: 'ok' });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -1285,7 +1296,7 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
     expect(result).toEqual({ outcome: 'passed', passed: true, output: 'ok' });
 
     // Audited: invalidation happened, recorded before the re-run.
-    expect(mockDeleteTestContentCacheResult).toHaveBeenCalledWith(
+    expect(mockDeleteTestRequestRunsForContentHash).toHaveBeenCalledWith(
       'proj-1',
       'worktree-content-hash',
     );
@@ -1312,19 +1323,15 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
     );
 
     // Re-run on the same SHA — no new commit, no new head_sha.
-    expect(mockRunTestCommands).toHaveBeenCalledWith(
-      WORKTREE,
-      ['npm test'],
-      300,
-      expect.any(Function),
-      { maxRssMb: 0, failFast: true },
-    );
-    expect(mockUpsertTestContentCacheResult).toHaveBeenCalledWith(
-      'proj-1',
-      'worktree-content-hash',
-      true,
-      'ok',
-    );
+    expect(mockRunProjectTestRequest).toHaveBeenCalledWith({
+      projectId: 'proj-1',
+      contentHash: 'worktree-content-hash',
+      worktreePath: WORKTREE,
+      commands: ['npm test'],
+      timeoutSec: 300,
+      maxRssMb: 0,
+      failFast: true,
+    });
   });
 
   it('returns null when the project has no F2 test commands configured', async () => {
@@ -1346,8 +1353,9 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
     );
 
     expect(result).toBeNull();
-    expect(mockDeleteTestContentCacheResult).not.toHaveBeenCalled();
+    expect(mockDeleteTestRequestRunsForContentHash).not.toHaveBeenCalled();
     expect(mockRunTestCommands).not.toHaveBeenCalled();
+    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
   });
 
   it('records inconclusive when head_sha drifted by the time the re-run completed', async () => {
@@ -1357,7 +1365,7 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
       test_max_rss_mb: 0,
       test_fail_fast: true,
     });
-    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    mockRunProjectTestRequest.mockResolvedValue({ passed: true, output: 'ok' });
     const sm = makeSessionManager();
     const github = {
       getPRState: vi

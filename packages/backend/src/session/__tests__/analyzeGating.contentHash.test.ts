@@ -3,13 +3,13 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
-import { computeWorktreeContentHash } from '../analyzeGating';
+import { computeWholeTreeContentHash } from '../analyzeGating';
 
-// ── computeWorktreeContentHash — F2's whole-tree content-hash key ───────────
+// ── computeWholeTreeContentHash — F2's whole-tree content-hash key ──────────
 //
-// Extends computeTriggerContentHash's per-file-sha256 technique from a
-// trigger_paths-only subset to every git-tracked file in the worktree — this
-// is the cache key orchestrator_test_content_cache is keyed on.
+// F2 (the orchestrator-run test gate) keys its shared cache
+// (test_request_runs) on this hash, so it must be sensitive to any change
+// in the tree — not just files matching a trigger_paths glob.
 
 function initGitRepo(dir: string): void {
   execSync('git init -q', { cwd: dir });
@@ -24,7 +24,7 @@ function writeAndTrack(dir: string, file: string, content: string): void {
   execSync(`git add ${file}`, { cwd: dir });
 }
 
-describe('computeWorktreeContentHash', () => {
+describe('computeWholeTreeContentHash', () => {
   let worktree: string;
 
   beforeEach(() => {
@@ -36,12 +36,17 @@ describe('computeWorktreeContentHash', () => {
     fs.rmSync(worktree, { recursive: true, force: true });
   });
 
+  it('returns null for an empty tree — callers must not key a run on a null hash', async () => {
+    const hash = await computeWholeTreeContentHash(worktree);
+    expect(hash).toBeNull();
+  });
+
   it('is deterministic for the same tree content', async () => {
     writeAndTrack(worktree, 'a.txt', 'hello');
     writeAndTrack(worktree, 'b.txt', 'world');
 
-    const first = await computeWorktreeContentHash(worktree);
-    const second = await computeWorktreeContentHash(worktree);
+    const first = await computeWholeTreeContentHash(worktree);
+    const second = await computeWholeTreeContentHash(worktree);
 
     expect(first).toBe(second);
     expect(first).toMatch(/^[0-9a-f]{64}$/);
@@ -49,20 +54,20 @@ describe('computeWorktreeContentHash', () => {
 
   it('changes when a tracked file changes content — a push after PR-open must not hit stale cache', async () => {
     writeAndTrack(worktree, 'a.txt', 'hello');
-    const before = await computeWorktreeContentHash(worktree);
+    const before = await computeWholeTreeContentHash(worktree);
 
     fs.writeFileSync(path.join(worktree, 'a.txt'), 'hello, world');
-    const after = await computeWorktreeContentHash(worktree);
+    const after = await computeWholeTreeContentHash(worktree);
 
     expect(after).not.toBe(before);
   });
 
   it('changes when a new tracked file is added, even outside any trigger_paths glob', async () => {
     writeAndTrack(worktree, 'a.txt', 'hello');
-    const before = await computeWorktreeContentHash(worktree);
+    const before = await computeWholeTreeContentHash(worktree);
 
     writeAndTrack(worktree, 'unrelated/deep/file.bin', 'binary-ish content');
-    const after = await computeWorktreeContentHash(worktree);
+    const after = await computeWholeTreeContentHash(worktree);
 
     expect(after).not.toBe(before);
   });
@@ -70,7 +75,7 @@ describe('computeWorktreeContentHash', () => {
   it('is stable regardless of git-tracked file listing order', async () => {
     writeAndTrack(worktree, 'z.txt', 'zzz');
     writeAndTrack(worktree, 'a.txt', 'aaa');
-    const hash = await computeWorktreeContentHash(worktree);
+    const hash = await computeWholeTreeContentHash(worktree);
 
     const worktree2 = fs.mkdtempSync(
       path.join(os.tmpdir(), 'content-hash-test-'),
@@ -79,7 +84,7 @@ describe('computeWorktreeContentHash', () => {
       initGitRepo(worktree2);
       writeAndTrack(worktree2, 'a.txt', 'aaa');
       writeAndTrack(worktree2, 'z.txt', 'zzz');
-      const hash2 = await computeWorktreeContentHash(worktree2);
+      const hash2 = await computeWholeTreeContentHash(worktree2);
       expect(hash2).toBe(hash);
     } finally {
       fs.rmSync(worktree2, { recursive: true, force: true });

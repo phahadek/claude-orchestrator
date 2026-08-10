@@ -6,9 +6,8 @@ import {
   setLastReviewedSha,
   setPreReviewStage,
   setPauseReason,
-  getTestContentCacheResult,
-  upsertTestContentCacheResult,
-  deleteTestContentCacheResult,
+  getLatestTestRequestRun,
+  deleteTestRequestRunsForContentHash,
   hasAnalyzeResultForSha,
   upsertAnalyzeResult,
   getAnalyzeResult,
@@ -27,12 +26,13 @@ import {
   normalizeAnalyzeCommand,
   isAnalyzeCommandTriggered,
   computeTriggerContentHash,
-  computeWorktreeContentHash,
+  computeWholeTreeContentHash,
   matchesTransientOutputPattern,
 } from '../session/analyzeGating';
 import { validateAndRepairGitConfig } from '../orchestration/gitConfigIntegrity';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { runTestCommands } from '../session/test-runner';
+import { runProjectTestRequest } from '../orchestration/testRequestLane';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { formatCIFailureFeedback } from './reviewUtils';
 import { recordEvent } from '../audit/AuditLog';
@@ -454,30 +454,42 @@ export class PreReviewPipeline {
         const config = loadOrchestratorConfig(ctx.project.projectDir);
         if (!config.test?.length) return;
 
-        const contentHash = await computeWorktreeContentHash(ctx.worktreePath);
-        const cached = getTestContentCacheResult(ctx.project.id, contentHash);
-        if (cached) {
+        const contentHash = await computeWholeTreeContentHash(
+          ctx.worktreePath,
+        );
+        if (
+          contentHash &&
+          getLatestTestRequestRun(ctx.project.id, contentHash)
+        ) {
           logger.info(
             `[PreReviewPipeline] tests content-cache hit PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
           );
           return;
         }
 
-        const { passed, output } = await runTestCommands(
-          ctx.worktreePath,
-          config.test,
-          config.test_timeout_sec,
-          (msg) =>
-            logger.info(`[PreReviewPipeline] test PR #${ctx.prNumber}: ${msg}`),
-          { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
-        );
-
-        upsertTestContentCacheResult(
-          ctx.project.id,
-          contentHash,
-          passed,
-          output,
-        );
+        const { passed } = contentHash
+          ? await runProjectTestRequest({
+              projectId: ctx.project.id,
+              contentHash,
+              worktreePath: ctx.worktreePath,
+              commands: config.test,
+              timeoutSec: config.test_timeout_sec,
+              maxRssMb: config.test_max_rss_mb,
+              failFast: config.test_fail_fast,
+            })
+          : await runTestCommands(
+              ctx.worktreePath,
+              config.test,
+              config.test_timeout_sec,
+              (msg) =>
+                logger.info(
+                  `[PreReviewPipeline] test PR #${ctx.prNumber}: ${msg}`,
+                ),
+              {
+                maxRssMb: config.test_max_rss_mb,
+                failFast: config.test_fail_fast,
+              },
+            );
 
         logger.info(
           `[PreReviewPipeline] tests ${passed ? 'PASSED' : 'FAILED'} for PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)}`,
@@ -488,9 +500,10 @@ export class PreReviewPipeline {
 
   /**
    * Actuate a session's verified-flaky disposition on the F2 (orchestrator-run
-   * test) gate: audit + invalidate the permanent per-(pr,repo,sha) test result
-   * row, then re-run the same test commands against the same SHA — no new
-   * commit, no new SHA. Returns null when the project has no F2 tests configured.
+   * test) gate: audit + invalidate the shared content-hash cache entry
+   * (test_request_runs, keyed by (project_id, content_hash)), then re-run the
+   * same test commands against the same SHA — no new commit, no new SHA.
+   * Returns null when the project has no F2 tests configured.
    */
   async rerunFlakyTests(
     prNumber: number,
@@ -506,7 +519,7 @@ export class PreReviewPipeline {
     const config = loadOrchestratorConfig(project.projectDir);
     if (!config.test?.length) return null;
 
-    const contentHash = await computeWorktreeContentHash(worktreePath);
+    const contentHash = await computeWholeTreeContentHash(worktreePath);
 
     recordEvent({
       event_type: 'flake_recovery_f2_invalidated',
@@ -515,17 +528,30 @@ export class PreReviewPipeline {
       task_id: null,
       payload: { prNumber, repo, sha: headSha },
     });
-    deleteTestContentCacheResult(project.id, contentHash);
+    if (contentHash) {
+      deleteTestRequestRunsForContentHash(project.id, contentHash);
+    }
 
-    const { passed, output } = await runTestCommands(
-      worktreePath,
-      config.test,
-      config.test_timeout_sec,
-      (msg) =>
-        logger.info(`[PreReviewPipeline] flaky-rerun PR #${prNumber}: ${msg}`),
-      { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
-    );
-    upsertTestContentCacheResult(project.id, contentHash, passed, output);
+    const { passed, output } = contentHash
+      ? await runProjectTestRequest({
+          projectId: project.id,
+          contentHash,
+          worktreePath,
+          commands: config.test,
+          timeoutSec: config.test_timeout_sec,
+          maxRssMb: config.test_max_rss_mb,
+          failFast: config.test_fail_fast,
+        })
+      : await runTestCommands(
+          worktreePath,
+          config.test,
+          config.test_timeout_sec,
+          (msg) =>
+            logger.info(
+              `[PreReviewPipeline] flaky-rerun PR #${prNumber}: ${msg}`,
+            ),
+          { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
+        );
 
     // Re-verify head_sha immediately before recording the outcome — a push
     // that landed mid-run means this result no longer speaks to the SHA the

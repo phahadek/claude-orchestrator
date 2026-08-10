@@ -34,9 +34,8 @@ vi.mock('../../config', () => ({
   runtimeSettings: { session_mode: 'cli', auto_review_concurrency: 1 },
 }));
 
-// DB queries mock — includes the shared F2 content-hash cache functions
-const mockGetTestContentCacheResult = vi.fn().mockReturnValue(undefined);
-const mockUpsertTestContentCacheResult = vi.fn();
+// DB queries mock — includes the shared F2 content-hash cache read
+const mockGetLatestTestRequestRun = vi.fn().mockReturnValue(undefined);
 
 vi.mock('../../db/queries', () => ({
   getPRByNumber: vi.fn(),
@@ -57,29 +56,37 @@ vi.mock('../../db/queries', () => ({
   hasAnalyzeResultForSha: vi.fn().mockReturnValue(false),
   upsertAnalyzeResult: vi.fn(),
   getAnalyzeResult: vi.fn().mockReturnValue(null),
-  getTestContentCacheResult: (...args: unknown[]) =>
-    mockGetTestContentCacheResult(...args),
-  upsertTestContentCacheResult: (...args: unknown[]) =>
-    mockUpsertTestContentCacheResult(...args),
+  getLatestTestRequestRun: (...args: unknown[]) =>
+    mockGetLatestTestRequestRun(...args),
 }));
 
 // analyzeGating mock — deterministic whole-tree content hash
-const mockComputeWorktreeContentHash = vi
+const mockComputeWholeTreeContentHash = vi
   .fn()
   .mockResolvedValue('worktree-content-hash');
 vi.mock('../../session/analyzeGating', () => ({
-  computeWorktreeContentHash: (...args: unknown[]) =>
-    mockComputeWorktreeContentHash(...args),
+  computeWholeTreeContentHash: (...args: unknown[]) =>
+    mockComputeWholeTreeContentHash(...args),
   computeTriggerContentHash: vi.fn().mockResolvedValue(null),
 }));
 
-// test-runner mock
+// test-runner mock — used only on the "no content hash" fallback path
 const mockRunTestCommands = vi
   .fn()
   .mockResolvedValue({ passed: true, output: 'ok' });
 
 vi.mock('../../session/test-runner', () => ({
   runTestCommands: (...args: unknown[]) => mockRunTestCommands(...args),
+}));
+
+// test.request lane mock — the shared execution path runTestPipeline uses
+// on a cache miss when a content hash is available
+const mockRunProjectTestRequest = vi
+  .fn()
+  .mockResolvedValue({ passed: true, output: 'ok' });
+vi.mock('../../orchestration/testRequestLane', () => ({
+  runProjectTestRequest: (...args: unknown[]) =>
+    mockRunProjectTestRequest(...args),
 }));
 
 // orchestrator-config mock — returns test commands when configured
@@ -133,9 +140,10 @@ function makeReviewService() {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetProjectByGithubRepo.mockReturnValue(PROJECT);
-  mockGetTestContentCacheResult.mockReturnValue(undefined);
-  mockComputeWorktreeContentHash.mockResolvedValue('worktree-content-hash');
+  mockGetLatestTestRequestRun.mockReturnValue(undefined);
+  mockComputeWholeTreeContentHash.mockResolvedValue('worktree-content-hash');
   mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+  mockRunProjectTestRequest.mockResolvedValue({ passed: true, output: 'ok' });
   mockLoadOrchestratorConfig.mockReturnValue({
     mcp_servers: undefined,
     allowed_tools: [],
@@ -170,8 +178,8 @@ describe('ReviewOrchestrator.runTestPipeline — empty test commands', () => {
       300,
     );
 
+    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
     expect(mockRunTestCommands).not.toHaveBeenCalled();
-    expect(mockUpsertTestContentCacheResult).not.toHaveBeenCalled();
   });
 
   it('is a no-op when headSha is empty', async () => {
@@ -188,19 +196,21 @@ describe('ReviewOrchestrator.runTestPipeline — empty test commands', () => {
       300,
     );
 
+    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
     expect(mockRunTestCommands).not.toHaveBeenCalled();
-    expect(mockUpsertTestContentCacheResult).not.toHaveBeenCalled();
   });
 });
 
 describe('ReviewOrchestrator.runTestPipeline — dedup on content hash', () => {
   it('skips execution when the content hash already has a cached result', async () => {
-    mockGetTestContentCacheResult.mockReturnValue({
+    mockGetLatestTestRequestRun.mockReturnValue({
+      id: 'run-1',
       project_id: 'proj-1',
       content_hash: 'worktree-content-hash',
-      passed: 1,
+      state: 'passed',
       output: 'cached',
-      ran_at: '2026-01-01T00:00:00Z',
+      started_at: 1000,
+      finished_at: 2000,
     });
 
     const sm = makeSessionManager();
@@ -216,12 +226,12 @@ describe('ReviewOrchestrator.runTestPipeline — dedup on content hash', () => {
       300,
     );
 
+    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
     expect(mockRunTestCommands).not.toHaveBeenCalled();
-    expect(mockUpsertTestContentCacheResult).not.toHaveBeenCalled();
   });
 
   it('does run when the content hash has no prior result', async () => {
-    mockGetTestContentCacheResult.mockReturnValue(undefined);
+    mockGetLatestTestRequestRun.mockReturnValue(undefined);
 
     const sm = makeSessionManager();
     const rs = makeReviewService();
@@ -236,16 +246,16 @@ describe('ReviewOrchestrator.runTestPipeline — dedup on content hash', () => {
       300,
     );
 
-    expect(mockRunTestCommands).toHaveBeenCalledOnce();
+    expect(mockRunProjectTestRequest).toHaveBeenCalledOnce();
   });
 });
 
 describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', () => {
-  it('runs tests and persists for hash-A, then runs again for hash-B', async () => {
+  it('runs tests and shares the cache key for hash-A, then runs again for hash-B', async () => {
     // First content hash — no prior result
-    mockComputeWorktreeContentHash.mockResolvedValueOnce('hash-A');
-    mockGetTestContentCacheResult.mockReturnValueOnce(undefined);
-    mockRunTestCommands.mockResolvedValueOnce({
+    mockComputeWholeTreeContentHash.mockResolvedValueOnce('hash-A');
+    mockGetLatestTestRequestRun.mockReturnValueOnce(undefined);
+    mockRunProjectTestRequest.mockResolvedValueOnce({
       passed: true,
       output: 'pass-A',
     });
@@ -263,18 +273,21 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', ()
       300,
     );
 
-    expect(mockUpsertTestContentCacheResult).toHaveBeenCalledWith(
-      'proj-1',
-      'hash-A',
-      true,
-      'pass-A',
-    );
+    expect(mockRunProjectTestRequest).toHaveBeenCalledWith({
+      projectId: 'proj-1',
+      contentHash: 'hash-A',
+      worktreePath: '/worktree',
+      commands: ['npm test'],
+      timeoutSec: 300,
+      maxRssMb: 0,
+      failFast: true,
+    });
 
     vi.clearAllMocks();
     mockGetProjectByGithubRepo.mockReturnValue(PROJECT);
-    mockComputeWorktreeContentHash.mockResolvedValueOnce('hash-B');
-    mockGetTestContentCacheResult.mockReturnValueOnce(undefined);
-    mockRunTestCommands.mockResolvedValueOnce({
+    mockComputeWholeTreeContentHash.mockResolvedValueOnce('hash-B');
+    mockGetLatestTestRequestRun.mockReturnValueOnce(undefined);
+    mockRunProjectTestRequest.mockResolvedValueOnce({
       passed: false,
       output: 'fail-B',
     });
@@ -289,19 +302,22 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', ()
       300,
     );
 
-    expect(mockRunTestCommands).toHaveBeenCalledOnce();
-    expect(mockUpsertTestContentCacheResult).toHaveBeenCalledWith(
-      'proj-1',
-      'hash-B',
-      false,
-      'fail-B',
-    );
+    expect(mockRunProjectTestRequest).toHaveBeenCalledOnce();
+    expect(mockRunProjectTestRequest).toHaveBeenCalledWith({
+      projectId: 'proj-1',
+      contentHash: 'hash-B',
+      worktreePath: '/worktree',
+      commands: ['npm test'],
+      timeoutSec: 300,
+      maxRssMb: 0,
+      failFast: true,
+    });
   });
 });
 
-describe('ReviewOrchestrator.runTestPipeline — persistence', () => {
-  it('persists passed:true and output when commands pass', async () => {
-    mockRunTestCommands.mockResolvedValue({
+describe('ReviewOrchestrator.runTestPipeline — persistence via the shared lane', () => {
+  it('runs via runProjectTestRequest, which durably persists into the shared cache', async () => {
+    mockRunProjectTestRequest.mockResolvedValue({
       passed: true,
       output: 'test output',
     });
@@ -319,15 +335,19 @@ describe('ReviewOrchestrator.runTestPipeline — persistence', () => {
       60,
     );
 
-    expect(mockUpsertTestContentCacheResult).toHaveBeenCalledWith(
-      'proj-1',
-      'worktree-content-hash',
-      true,
-      'test output',
-    );
+    expect(mockRunProjectTestRequest).toHaveBeenCalledWith({
+      projectId: 'proj-1',
+      contentHash: 'worktree-content-hash',
+      worktreePath: '/work',
+      commands: ['npm test'],
+      timeoutSec: 60,
+      maxRssMb: 0,
+      failFast: true,
+    });
   });
 
-  it('persists passed:false when commands fail', async () => {
+  it('falls back to a direct runTestCommands run when no content hash is available', async () => {
+    mockComputeWholeTreeContentHash.mockResolvedValue(null);
     mockRunTestCommands.mockResolvedValue({ passed: false, output: 'FAILED' });
 
     const sm = makeSessionManager();
@@ -343,32 +363,11 @@ describe('ReviewOrchestrator.runTestPipeline — persistence', () => {
       60,
     );
 
-    expect(mockUpsertTestContentCacheResult).toHaveBeenCalledWith(
-      'proj-1',
-      'worktree-content-hash',
-      false,
-      'FAILED',
-    );
-  });
-
-  it('passes worktreePath and timeoutSec to runTestCommands', async () => {
-    const sm = makeSessionManager();
-    const rs = makeReviewService();
-    const orch = new ReviewOrchestrator(rs, sm, true);
-
-    await orch.runTestPipeline(
-      1,
-      'org/repo',
-      'sha-123',
-      '/my/worktree',
-      ['vitest run'],
-      120,
-    );
-
+    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
     expect(mockRunTestCommands).toHaveBeenCalledWith(
-      '/my/worktree',
-      ['vitest run'],
-      120,
+      '/work',
+      ['npm test'],
+      60,
       expect.any(Function),
       { maxRssMb: 0, failFast: true },
     );

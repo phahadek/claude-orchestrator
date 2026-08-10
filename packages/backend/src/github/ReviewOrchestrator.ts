@@ -20,8 +20,7 @@ import {
   insertPendingReviewSync,
   deletePendingReviewSync,
   getAllPendingReviewSyncs,
-  getTestContentCacheResult,
-  upsertTestContentCacheResult,
+  getLatestTestRequestRun,
   hasAnalyzeResultForSha,
   upsertAnalyzeResult,
   getAnalyzeResult,
@@ -50,7 +49,8 @@ import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runTestCommands } from '../session/test-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
-import { computeWorktreeContentHash } from '../session/analyzeGating';
+import { computeWholeTreeContentHash } from '../session/analyzeGating';
+import { runProjectTestRequest } from '../orchestration/testRequestLane';
 import { recordEvent } from '../audit/AuditLog';
 import { opensPr } from '../session/sessionPredicates';
 import type { ServerMessage } from '../ws/types';
@@ -499,11 +499,12 @@ export class ReviewOrchestrator {
 
   /**
    * Run the configured test: commands for a PR's head SHA.
-   * Deduplicates against the shared F2 content-hash cache: if an identical
-   * whole-tree content hash already has a result, skips execution.
-   * Persists { passed, output } keyed by (project_id, content_hash) in
-   * orchestrator_test_content_cache for F2 to consult — the same cache
-   * PreReviewPipeline.buildTestsStage checks, so a push doesn't run tests
+   * Deduplicates against the shared F2 content-hash cache
+   * (test_request_runs, the same table the test.request lane and
+   * PreReviewPipeline.buildTestsStage write into): if an identical
+   * whole-tree content hash already has a result, skips execution. On a
+   * miss, runs via runProjectTestRequest, which durably records the result
+   * into test_request_runs for F2 to consult — so a push doesn't run tests
    * twice for the same content.
    */
   async runTestPipeline(
@@ -521,8 +522,8 @@ export class ReviewOrchestrator {
     const project = getProjectByGithubRepo(repo);
     if (!project) return;
 
-    const contentHash = await computeWorktreeContentHash(worktreePath);
-    if (getTestContentCacheResult(project.id, contentHash)) {
+    const contentHash = await computeWholeTreeContentHash(worktreePath);
+    if (contentHash && getLatestTestRequestRun(project.id, contentHash)) {
       logger.info(
         `[ReviewOrchestrator] tests content-cache hit for PR #${prNumber} SHA ${headSha.slice(0, 7)} — skipping`,
       );
@@ -533,15 +534,24 @@ export class ReviewOrchestrator {
       `[ReviewOrchestrator] running tests for PR #${prNumber} SHA ${headSha.slice(0, 7)} (timeout ${timeoutSec}s)`,
     );
 
-    const { passed, output } = await runTestCommands(
-      worktreePath,
-      commands,
-      timeoutSec,
-      (msg) => logger.info(`[ReviewOrchestrator] test PR #${prNumber}: ${msg}`),
-      { maxRssMb, failFast },
-    );
-
-    upsertTestContentCacheResult(project.id, contentHash, passed, output);
+    const { passed } = contentHash
+      ? await runProjectTestRequest({
+          projectId: project.id,
+          contentHash,
+          worktreePath,
+          commands,
+          timeoutSec,
+          maxRssMb,
+          failFast,
+        })
+      : await runTestCommands(
+          worktreePath,
+          commands,
+          timeoutSec,
+          (msg) =>
+            logger.info(`[ReviewOrchestrator] test PR #${prNumber}: ${msg}`),
+          { maxRssMb, failFast },
+        );
 
     logger.info(
       `[ReviewOrchestrator] tests ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,

@@ -7,59 +7,84 @@ vi.mock('../db/db.js', async () => {
 });
 
 import {
-  getTestContentCacheResult,
-  upsertTestContentCacheResult,
-  deleteTestContentCacheResult,
+  insertTestRequestRun,
+  completeTestRequestRun,
+  getLatestTestRequestRun,
+  deleteTestRequestRunsForContentHash,
 } from '../db/queries.js';
 
-// ── orchestrator_test_content_cache — F2's shared cache ──────────────────────
+// ── test_request_runs — F2's shared content-hash cache ───────────────────────
 //
-// Keyed by (project_id, content_hash) rather than (pr_number, repo, sha) —
-// this is what lets ReviewOrchestrator.runTestPipeline (the push-triggered
-// pre-run) and PreReviewPipeline.buildTestsStage (the review pipeline's own
-// check) share one cached verdict for the same tree content, and what
-// PRMergeWatcher's merge-gate read consults directly.
+// F2 (the orchestrator-run test gate) now reads/writes the same
+// (project_id, content_hash)-keyed table the test.request lane
+// (orchestration/testRequestLane.ts) uses — insertTestRequestRun /
+// completeTestRequestRun are the lane's own write path; getLatestTestRequestRun
+// / deleteTestRequestRunsForContentHash are the read/invalidate path F2 adds.
 
-describe('orchestrator_test_content_cache queries', () => {
-  it('returns undefined for a content hash with no prior result', () => {
-    expect(getTestContentCacheResult('proj-1', 'hash-a')).toBeUndefined();
+let seq = 0;
+function nextRunId(): string {
+  seq += 1;
+  return `run-${seq}`;
+}
+
+describe('test_request_runs — F2 shared-cache read/invalidate', () => {
+  it('returns undefined for a content hash with no prior run', () => {
+    expect(getLatestTestRequestRun('proj-1', 'hash-a')).toBeUndefined();
   });
 
-  it('a write from one caller is visible to a different caller reading the same key — the "shared cache" property', () => {
-    // Simulates ReviewOrchestrator.runTestPipeline writing the result...
-    upsertTestContentCacheResult('proj-1', 'hash-a', true, 'all tests passed');
+  it('a completed write from one caller is visible to a different caller reading the same key — the "shared cache" property', () => {
+    // Simulates ReviewOrchestrator.runTestPipeline (via runProjectTestRequest)
+    // writing the result...
+    const id = nextRunId();
+    insertTestRequestRun(id, 'proj-1', 'hash-a');
+    completeTestRequestRun(id, 'passed', 'all tests passed');
 
     // ...and PreReviewPipeline.buildTestsStage (or PRMergeWatcher's
     // merge-gate read) independently reading it back by the same key.
-    const result = getTestContentCacheResult('proj-1', 'hash-a');
+    const result = getLatestTestRequestRun('proj-1', 'hash-a');
     expect(result).toMatchObject({
       project_id: 'proj-1',
       content_hash: 'hash-a',
-      passed: 1,
+      state: 'passed',
       output: 'all tests passed',
     });
   });
 
-  it('scopes by project_id — a hit in one project is not visible to another project with the same content hash', () => {
-    upsertTestContentCacheResult('proj-1', 'shared-hash', true, 'ok');
-    expect(getTestContentCacheResult('proj-2', 'shared-hash')).toBeUndefined();
+  it('excludes still-running runs — a run in flight is not a cache hit', () => {
+    const id = nextRunId();
+    insertTestRequestRun(id, 'proj-1', 'hash-running');
+    expect(getLatestTestRequestRun('proj-1', 'hash-running')).toBeUndefined();
   });
 
-  it('upsert overwrites an existing entry for the same key (flaky-rerun repopulation)', () => {
-    upsertTestContentCacheResult('proj-1', 'hash-b', false, 'flaky failure');
-    expect(getTestContentCacheResult('proj-1', 'hash-b')?.passed).toBe(0);
+  it('scopes by project_id — a hit in one project is not visible to another project with the same content hash', () => {
+    const id = nextRunId();
+    insertTestRequestRun(id, 'proj-1', 'shared-hash');
+    completeTestRequestRun(id, 'passed', 'ok');
+    expect(getLatestTestRequestRun('proj-2', 'shared-hash')).toBeUndefined();
+  });
 
-    upsertTestContentCacheResult('proj-1', 'hash-b', true, 'passed on rerun');
-    const result = getTestContentCacheResult('proj-1', 'hash-b');
-    expect(result?.passed).toBe(1);
+  it('returns the most recent completed run when several exist for the same key', () => {
+    const first = nextRunId();
+    insertTestRequestRun(first, 'proj-1', 'hash-b');
+    completeTestRequestRun(first, 'failed', 'flaky failure');
+    expect(getLatestTestRequestRun('proj-1', 'hash-b')?.state).toBe('failed');
+
+    const second = nextRunId();
+    insertTestRequestRun(second, 'proj-1', 'hash-b');
+    completeTestRequestRun(second, 'passed', 'passed on rerun');
+
+    const result = getLatestTestRequestRun('proj-1', 'hash-b');
+    expect(result?.state).toBe('passed');
     expect(result?.output).toBe('passed on rerun');
   });
 
-  it('delete removes the entry — the flaky.confirm invalidation path', () => {
-    upsertTestContentCacheResult('proj-1', 'hash-c', true, 'ok');
-    expect(getTestContentCacheResult('proj-1', 'hash-c')).toBeDefined();
+  it('delete removes every run for the key — the flaky.confirm invalidation path', () => {
+    const id = nextRunId();
+    insertTestRequestRun(id, 'proj-1', 'hash-c');
+    completeTestRequestRun(id, 'passed', 'ok');
+    expect(getLatestTestRequestRun('proj-1', 'hash-c')).toBeDefined();
 
-    deleteTestContentCacheResult('proj-1', 'hash-c');
-    expect(getTestContentCacheResult('proj-1', 'hash-c')).toBeUndefined();
+    deleteTestRequestRunsForContentHash('proj-1', 'hash-c');
+    expect(getLatestTestRequestRun('proj-1', 'hash-c')).toBeUndefined();
   });
 });
