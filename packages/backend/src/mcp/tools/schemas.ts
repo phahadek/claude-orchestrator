@@ -80,7 +80,9 @@ export const opsStateSchema = z.enum([
  * orchestrator.
  */
 export const opsReconciliationAssertionSchema = z.object({
-  description: z.string().describe('What must be true once the change applies.'),
+  description: z
+    .string()
+    .describe('What must be true once the change applies.'),
   passed: z
     .boolean()
     .describe('Whether the session confirmed the assertion holds.'),

@@ -4093,7 +4093,10 @@ async function applyIntent(
         payload.state,
         payload.fields,
       );
-      if (payload.state === 'applied-pending-confirm' && payload.reconciliation) {
+      if (
+        payload.state === 'applied-pending-confirm' &&
+        payload.reconciliation
+      ) {
         await reconcileOpsCompletion(
           intent.projectId,
           payload.taskId,

@@ -231,7 +231,9 @@ describe('automatic reconciliation once the Operational completing intent applie
     });
     expect(stageRes.status).toBe(201);
 
-    await agent.post(`/api/staged-intents/${stageRes.body.id}/approve`).send({});
+    await agent
+      .post(`/api/staged-intents/${stageRes.body.id}/approve`)
+      .send({});
     const applyRes = await agent
       .post(`/api/staged-intents/group/${groupId}/commit`)
       .send({});
@@ -241,7 +243,11 @@ describe('automatic reconciliation once the Operational completing intent applie
   it('drives the journal to resolved automatically on a passing assertion — no operator action required', async () => {
     seedEntry('task-pass', 'staged-proposal');
     seedTaskType('task-pass', '🔧 Operational');
-    seedOpsSession('session-pass', 'task-pass', 'planning_no_pending_dispositions');
+    seedOpsSession(
+      'session-pass',
+      'task-pass',
+      'planning_no_pending_dispositions',
+    );
 
     const { applyRes } = await stageAndApplyCompletingIntent('task-pass', {
       description: 'config row re-read and matches the intended value',
@@ -265,7 +271,11 @@ describe('automatic reconciliation once the Operational completing intent applie
   it('a failed assertion leaves the journal at applied-pending-confirm and stages an interrupting intent carrying the mismatch', async () => {
     seedEntry('task-fail', 'staged-proposal');
     seedTaskType('task-fail', '🔧 Operational');
-    seedOpsSession('session-fail', 'task-fail', 'planning_no_pending_dispositions');
+    seedOpsSession(
+      'session-fail',
+      'task-fail',
+      'planning_no_pending_dispositions',
+    );
 
     const { applyRes } = await stageAndApplyCompletingIntent('task-fail', {
       description: 'config row re-read and matches the intended value',
@@ -301,7 +311,11 @@ describe('the staged-proposal -> applied-pending-confirm -> resolved path, exerc
     const agent = supertest(app);
     seedEntry('task-e2e', 'staged-proposal');
     seedTaskType('task-e2e', '🔧 Operational');
-    seedOpsSession('session-e2e', 'task-e2e', 'planning_no_pending_dispositions');
+    seedOpsSession(
+      'session-e2e',
+      'task-e2e',
+      'planning_no_pending_dispositions',
+    );
 
     expect(journalRow('task-e2e').state).toBe('staged-proposal');
 
@@ -318,7 +332,9 @@ describe('the staged-proposal -> applied-pending-confirm -> resolved path, exerc
     expect(stageRes.status).toBe(201);
     expect(journalRow('task-e2e').state).toBe('staged-proposal');
 
-    await agent.post(`/api/staged-intents/${stageRes.body.id}/approve`).send({});
+    await agent
+      .post(`/api/staged-intents/${stageRes.body.id}/approve`)
+      .send({});
     const applyRes = await agent
       .post('/api/staged-intents/group/group-e2e/commit')
       .send({});
@@ -351,7 +367,9 @@ describe('🔎 Investigation closure is unchanged — resolved/blocked reachable
     });
     expect(stageRes.status).toBe(201);
 
-    await agent.post(`/api/staged-intents/${stageRes.body.id}/approve`).send({});
+    await agent
+      .post(`/api/staged-intents/${stageRes.body.id}/approve`)
+      .send({});
     const applyRes = await agent
       .post('/api/staged-intents/group/group-inv-1/commit')
       .send({});
