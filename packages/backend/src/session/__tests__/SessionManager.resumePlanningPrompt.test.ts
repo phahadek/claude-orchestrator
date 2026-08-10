@@ -160,9 +160,7 @@ describe('SessionManager — _buildAndWriteResumeSystemPrompt', () => {
   let sm: SessionManager;
 
   beforeEach(() => {
-    projectDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'resume-prompt-test-'),
-    );
+    projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-prompt-test-'));
     sm = new SessionManager();
     mockBuildSessionContext.mockClear();
     mockRecordEvent.mockClear();
@@ -172,7 +170,13 @@ describe('SessionManager — _buildAndWriteResumeSystemPrompt', () => {
     fs.rmSync(projectDir, { recursive: true, force: true });
   });
 
-  const planningTypes: SessionType[] = ['groom', 'design', 'ops', 'split', 'docs'];
+  const planningTypes: SessionType[] = [
+    'groom',
+    'design',
+    'ops',
+    'split',
+    'docs',
+  ];
 
   for (const sessionType of planningTypes) {
     it(`reuses the existing on-disk prompt file untouched for a resumed ${sessionType} session`, async () => {
