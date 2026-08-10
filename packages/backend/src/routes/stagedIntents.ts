@@ -160,6 +160,7 @@ import type {
   PRReviewService,
   PRReviewResult,
 } from '../github/PRReviewService';
+import { asyncHandler } from './asyncHandler';
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
 // Mirrors tasks.ts's task_updated wiring: REST stays the fetch/apply source of
@@ -6583,7 +6584,7 @@ export function createStagedIntentsRouter(
   });
 
   // ── POST /api/staged-intents ─────────────────────────────────────────────
-  router.post('/staged-intents', async (req: Request, res: Response) => {
+  router.post('/staged-intents', asyncHandler(async (req: Request, res: Response) => {
     const body = req.body as {
       kind?: unknown;
       payload?: unknown;
@@ -6671,7 +6672,7 @@ export function createStagedIntentsRouter(
 
     const checked = await runStageTimeReadyChecks(intent);
     res.status(201).json(checked);
-  });
+  }));
 
   // ── POST /api/staged-intents/:id/apply ───────────────────────────────────
   // Human / device-authenticated surface only — the only place `override` is
@@ -6681,7 +6682,7 @@ export function createStagedIntentsRouter(
   // standalone-intents-only, server-enforced below.
   router.post(
     '/staged-intents/:id/apply',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const row = getActiveStagedIntent(String(req.params.id));
       if (!row) {
         res.status(404).json({ error: 'staged intent not found' });
@@ -6833,7 +6834,7 @@ export function createStagedIntentsRouter(
         );
         res.status(500).json({ error: reason, redrivenToSession: redriven });
       }
-    },
+    }),
   );
 
   // ── POST /api/staged-intents/:id/approve ─────────────────────────────────
@@ -6845,7 +6846,7 @@ export function createStagedIntentsRouter(
   // itself — the commit-time check remains the sole authority.
   router.post(
     '/staged-intents/:id/approve',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const row = getActiveStagedIntent(String(req.params.id));
       if (!row) {
         res.status(404).json({ error: 'staged intent not found' });
@@ -7034,7 +7035,7 @@ export function createStagedIntentsRouter(
       const updatedIntent = rowToApi(updated);
       broadcastIntentChange(updatedIntent);
       res.json(updatedIntent);
-    },
+    }),
   );
 
   // ── POST /api/staged-intents/:id/acknowledge ──────────────────────────────
@@ -7172,7 +7173,7 @@ export function createStagedIntentsRouter(
   // that arms auto-dispatch).
   router.post(
     '/staged-intents/group/:groupId/commit',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const groupId = String(req.params.groupId);
       const body = req.body as {
         override?: unknown;
@@ -7197,7 +7198,7 @@ export function createStagedIntentsRouter(
         sessionManager,
       );
       res.status(result.status).json(result.body);
-    },
+    }),
   );
 
   // ── POST /api/staged-intents/group/:groupId/approve ──────────────────────
@@ -7210,7 +7211,7 @@ export function createStagedIntentsRouter(
   // "approve the groom" can never partially commit.
   router.post(
     '/staged-intents/group/:groupId/approve',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const groupId = String(req.params.groupId);
       const body = req.body as {
         override?: unknown;
@@ -7235,7 +7236,7 @@ export function createStagedIntentsRouter(
         sessionManager,
       );
       res.status(result.status).json(result.body);
-    },
+    }),
   );
 
   // ── POST /api/staged-intents/group/:groupId/reject ───────────────────────
@@ -7261,7 +7262,7 @@ export function createStagedIntentsRouter(
   // the whole group instead.
   router.post(
     '/staged-intents/group/:groupId/reject',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const groupId = String(req.params.groupId);
       const body = req.body as { outcome?: unknown; reason?: unknown };
       const outcome: StagedIntentRejectOutcome | null =
@@ -7349,7 +7350,7 @@ export function createStagedIntentsRouter(
         });
       }
       res.json({ ok: true, rejected });
-    },
+    }),
   );
 
   // ── POST /api/staged-intents/batch/commit ─────────────────────────────────
@@ -7369,7 +7370,7 @@ export function createStagedIntentsRouter(
   // A vetoed row is simply never included in `groupIds` by the caller.
   router.post(
     '/staged-intents/batch/commit',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const body = req.body as {
         groupIds?: unknown;
         milestoneLabel?: unknown;
@@ -7428,7 +7429,7 @@ export function createStagedIntentsRouter(
       }
 
       res.json({ ok: true, committed, exceptions });
-    },
+    }),
   );
 
   // ── POST /api/staged-intents/:id/reject ──────────────────────────────────
@@ -7450,7 +7451,7 @@ export function createStagedIntentsRouter(
   // recover route instead, which re-surfaces it to staged first.
   router.post(
     '/staged-intents/:id/reject',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const id = String(req.params.id);
       const row = getActiveStagedIntent(id) ?? getBlockedStagedIntent(id);
       if (!row) {
@@ -7500,7 +7501,7 @@ export function createStagedIntentsRouter(
         planningOrchestrator,
       );
       res.json({ ok: true });
-    },
+    }),
   );
 
   // ── POST /api/staged-intents/:id/answer ──────────────────────────────────
@@ -7514,7 +7515,7 @@ export function createStagedIntentsRouter(
   // ordinary intents.
   router.post(
     '/staged-intents/:id/answer',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const row = getActiveStagedIntent(String(req.params.id));
       if (!row) {
         res.status(404).json({ error: 'staged intent not found' });
@@ -7587,7 +7588,7 @@ export function createStagedIntentsRouter(
       });
 
       res.json({ ok: true, intent: resolvedIntent });
-    },
+    }),
   );
 
   return router;

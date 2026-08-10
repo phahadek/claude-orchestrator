@@ -18,6 +18,7 @@ import type {
 import { toExternalId, normalizeTaskId } from '../tasks/taskId';
 import { recordEvent } from '../audit/AuditLog';
 import type { PlanningDispatchLaunchedPayload } from '../audit/types';
+import { asyncHandler } from './asyncHandler';
 
 /**
  * Worklist entry ids from loadOpsContext are bare Notion UUIDs, but the
@@ -145,7 +146,7 @@ export function createPlanningLaunchRouter(
 ): Router {
   const router = Router();
 
-  router.post('/planning/launch', async (req: Request, res: Response) => {
+  router.post('/planning/launch', asyncHandler(async (req: Request, res: Response) => {
     const body = req.body as {
       workflow?: unknown;
       projectId?: unknown;
@@ -246,7 +247,7 @@ export function createPlanningLaunchRouter(
         error: err instanceof Error ? err.message : 'planning launch failed',
       });
     }
-  });
+  }));
 
   return router;
 }

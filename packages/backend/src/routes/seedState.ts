@@ -22,6 +22,7 @@ import {
   resolveMilestoneAnyProject,
   UnknownMilestoneError,
 } from '../projects/milestoneResolver';
+import { asyncHandler } from './asyncHandler';
 
 /**
  * Thin read/write surface over seedService's module functions — the
@@ -212,7 +213,7 @@ export function createSeedStateRouter(): Router {
   });
 
   // POST /api/seed/backfill  { project, taskId, milestone, candidates }
-  router.post('/seed/backfill', async (req: Request, res: Response) => {
+  router.post('/seed/backfill', asyncHandler(async (req: Request, res: Response) => {
     const body = req.body as {
       project?: unknown;
       taskId?: unknown;
@@ -271,7 +272,7 @@ export function createSeedStateRouter(): Router {
         error: message,
       });
     }
-  });
+  }));
 
   // POST /api/seed/accrete-contribution
   //   { project, taskId, title, milestone, decision, seeds: [{ spec }] }
@@ -282,7 +283,7 @@ export function createSeedStateRouter(): Router {
   // empty seeds array.
   router.post(
     '/seed/accrete-contribution',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const body = req.body as {
         project?: unknown;
         taskId?: unknown;
@@ -349,7 +350,7 @@ export function createSeedStateRouter(): Router {
           error: err instanceof Error ? err.message : 'seed accretion failed',
         });
       }
-    },
+    }),
   );
 
   return router;

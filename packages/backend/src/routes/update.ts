@@ -11,6 +11,7 @@ import { launchInstallerAndExit } from '../updater/UpdateInstaller';
 import type { ServerMessage } from '../ws/types';
 import { typedGetSetting, typedSetSetting } from '../config/settings';
 import type { ReleaseChannel } from '../updater/UpdateChecker';
+import { asyncHandler } from './asyncHandler';
 
 let _checker: UpdateChecker | null = null;
 let _broadcast: ((msg: ServerMessage) => void) | null = null;
@@ -26,7 +27,7 @@ export function setUpdateChecker(
 const router = Router();
 
 /** POST /api/update/check — force an immediate check */
-router.post('/update/check', async (_req: Request, res: Response) => {
+router.post('/update/check', asyncHandler(async (_req: Request, res: Response) => {
   if (!_checker) {
     res.status(503).json({ error: 'updater not initialized' });
     return;
@@ -37,7 +38,7 @@ router.post('/update/check', async (_req: Request, res: Response) => {
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 /** POST /api/update/dismiss — suppress banner for the given version */
 router.post('/update/dismiss', (req: Request, res: Response) => {
@@ -55,7 +56,7 @@ router.post('/update/dismiss', (req: Request, res: Response) => {
 });
 
 /** POST /api/update/install — download asset and launch installer */
-router.post('/update/install', async (req: Request, res: Response) => {
+router.post('/update/install', asyncHandler(async (req: Request, res: Response) => {
   const { version } = req.body as { version?: string };
   if (!version) {
     res.status(400).json({ error: 'version required' });
@@ -103,7 +104,7 @@ router.post('/update/install', async (req: Request, res: Response) => {
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 /** GET /api/update/channel — get the current release channel */
 router.get('/update/channel', (_req: Request, res: Response) => {

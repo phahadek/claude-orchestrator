@@ -22,6 +22,7 @@ import { GitHubClient } from '../github/GitHubClient';
 import { JiraClient } from '../tasks/JiraClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 import { recordEvent } from '../audit/AuditLog';
+import { asyncHandler } from './asyncHandler';
 
 let _autoMerger: AutoMerger | null = null;
 export function setAutoMerger(merger: AutoMerger): void {
@@ -180,7 +181,7 @@ projectsRouter.get('/projects', (_req: Request, res: Response) => {
   res.json(ProjectService.list());
 });
 
-projectsRouter.post('/projects', async (req: Request, res: Response) => {
+projectsRouter.post('/projects', asyncHandler(async (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown> | undefined;
   if (!body) {
     res.status(400).json({ error: 'Request body is required' });
@@ -290,9 +291,9 @@ projectsRouter.post('/projects', async (req: Request, res: Response) => {
     baseBranch: typeof body.baseBranch === 'string' ? body.baseBranch : 'dev',
   });
   res.status(201).json(project);
-});
+}));
 
-projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
+projectsRouter.patch('/projects/:id', asyncHandler(async (req: Request, res: Response) => {
   const id = String(req.params.id);
   const body = (req.body as Record<string, unknown>) ?? {};
 
@@ -501,7 +502,7 @@ projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
     return;
   }
   res.json(updated);
-});
+}));
 
 projectsRouter.delete('/projects/:id', (req: Request, res: Response) => {
   const id = String(req.params.id);
@@ -741,7 +742,7 @@ projectsRouter.post(
 
 projectsRouter.get(
   '/notion/validate-board',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const rawId = typeof req.query.id === 'string' ? req.query.id.trim() : '';
     if (!rawId) {
       res.status(400).json({ error: 'id query parameter is required' });
@@ -762,14 +763,14 @@ projectsRouter.get(
         err instanceof Error ? err.message : 'Notion validation failed';
       res.status(400).json({ error: message });
     }
-  },
+  }),
 );
 
 // ── GitHub milestone validation ──────────────────────────────────────────────
 
 projectsRouter.get(
   '/projects/:id/github/validate-milestone',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const projectId = String(req.params.id);
     const project = ProjectService.getById(projectId);
     if (!project) {
@@ -830,14 +831,14 @@ projectsRouter.get(
           : 'GitHub milestone validation failed';
       res.status(400).json({ error: message });
     }
-  },
+  }),
 );
 
 // ── Jira Epic validation ──────────────────────────────────────────────────────
 
 projectsRouter.get(
   '/projects/:id/jira/validate-epic',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const projectId = String(req.params.id);
     const project = ProjectService.getById(projectId);
     if (!project) {
@@ -901,7 +902,7 @@ projectsRouter.get(
         err instanceof Error ? err.message : 'Jira Epic validation failed';
       res.status(400).json({ error: message });
     }
-  },
+  }),
 );
 
 // ── Orchestrator config (read-only) ──────────────────────────────────────────
@@ -928,7 +929,7 @@ projectsRouter.get(
 
 projectsRouter.get(
   '/projects/:id/github-milestones',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const id = String(req.params.id);
     const project = ProjectService.getById(id);
     if (!project) {
@@ -970,7 +971,7 @@ projectsRouter.get(
           : 'Failed to fetch GitHub milestones';
       res.status(400).json({ error: message });
     }
-  },
+  }),
 );
 
 // ── Merge-Ready bulk merge ────────────────────────────────────────────────────

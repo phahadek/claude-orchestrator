@@ -33,6 +33,7 @@ import {
 } from '../planning/procedureAssembler';
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import { logger } from '../logger';
+import { asyncHandler } from './asyncHandler';
 
 const GATE_RECONCILER_JOB = 'gate_verification_reconciler';
 
@@ -462,7 +463,7 @@ export function createDeployRouter(): Router {
   // Gate-panel launch control: starts a deploy_run targeting the playbook's
   // latest dev (resolved server-side at launch), gated by the playbook's
   // initial confirm-gate.
-  router.post('/deploy/launch', async (req: Request, res: Response) => {
+  router.post('/deploy/launch', asyncHandler(async (req: Request, res: Response) => {
     const body = req.body as { projectId?: unknown };
     const projectId =
       typeof body.projectId === 'string' ? body.projectId : null;
@@ -490,7 +491,7 @@ export function createDeployRouter(): Router {
         error: err instanceof Error ? err.message : 'deploy launch failed',
       });
     }
-  });
+  }));
 
   // GET /api/deploy/status?projectId=...
   // Gate-panel progress read: the project's active deploy_run if any,

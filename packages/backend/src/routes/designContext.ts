@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { loadDesignContext } from '../design/designLoad';
+import { asyncHandler } from './asyncHandler';
 
 /**
  * Read-only surface for the /design skill's loader: wraps loadDesignContext
@@ -13,7 +14,7 @@ export function createDesignContextRouter(): Router {
   const router = Router();
 
   // GET /api/design-context?milestone=<milestoneId>&task=<taskId>&project=<projectId>
-  router.get('/design-context', async (req: Request, res: Response) => {
+  router.get('/design-context', asyncHandler(async (req: Request, res: Response) => {
     const milestone =
       typeof req.query.milestone === 'string' ? req.query.milestone : null;
     const task = typeof req.query.task === 'string' ? req.query.task : null;
@@ -41,7 +42,7 @@ export function createDesignContextRouter(): Router {
           err instanceof Error ? err.message : 'design-context load failed',
       });
     }
-  });
+  }));
 
   return router;
 }

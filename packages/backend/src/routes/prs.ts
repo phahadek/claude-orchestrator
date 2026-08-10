@@ -34,6 +34,7 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { ServerMessage } from '../ws/types';
 import { emitTaskUpdated, executeRerunPipeline } from './tasks';
+import { asyncHandler } from './asyncHandler';
 
 let _broadcast: (msg: ServerMessage) => void = () => {};
 export function setPRBroadcast(fn: (msg: ServerMessage) => void): void {
@@ -105,7 +106,7 @@ export function createPrsRouter(
   }
 
   // ── GET /api/prs?projectId=<id> ─────────────────────────────────────────────
-  router.get('/prs', async (req: Request, res: Response) => {
+  router.get('/prs', asyncHandler(async (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : '';
     if (!projectId) {
@@ -234,10 +235,10 @@ export function createPrsRouter(
       autoMergeEnabled,
     }));
     res.json(items);
-  });
+  }));
 
   // ── POST /api/prs/:prNumber/review ──────────────────────────────────────────
-  router.post('/prs/:prNumber/review', async (req: Request, res: Response) => {
+  router.post('/prs/:prNumber/review', asyncHandler(async (req: Request, res: Response) => {
     const prNumber = parseInt(String(req.params.prNumber), 10);
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : '';
@@ -328,7 +329,7 @@ export function createPrsRouter(
       }
       res.status(500).json({ error: (err as Error).message });
     }
-  });
+  }));
 
   // ── GET /api/prs/:owner/:repoName/:prNumber/review-result ────────────────────
   // Detail-view read: the list endpoint only carries a lightweight
@@ -360,7 +361,7 @@ export function createPrsRouter(
   // with the periodic watcher poll.
   router.get(
     '/prs/:owner/:repoName/:prNumber/mergeability',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const repo = `${req.params.owner}/${req.params.repoName}`;
       const prNumber = parseInt(String(req.params.prNumber), 10);
       try {
@@ -412,13 +413,13 @@ export function createPrsRouter(
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
-    },
+    }),
   );
 
   // ── POST /api/prs/:owner/:repoName/:prNumber/merge ───────────────────────────
   router.post(
     '/prs/:owner/:repoName/:prNumber/merge',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const repo = `${req.params.owner}/${req.params.repoName}`;
       const prNumber = parseInt(String(req.params.prNumber), 10);
       const mergeProject = getProjectByGithubRepo(repo);
@@ -660,13 +661,13 @@ export function createPrsRouter(
         }
         res.status(500).json({ error: (err as Error).message });
       }
-    },
+    }),
   );
 
   // ── POST /api/prs/:owner/:repoName/:prNumber/re-review ───────────────────────
   router.post(
     '/prs/:owner/:repoName/:prNumber/re-review',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const repo = `${req.params.owner}/${req.params.repoName}`;
       const prNumber = parseInt(String(req.params.prNumber), 10);
       const prRow = getPRByNumber(prNumber, repo);
@@ -713,13 +714,13 @@ export function createPrsRouter(
         }
         res.status(500).json({ error: (err as Error).message });
       }
-    },
+    }),
   );
 
   // ── POST /api/prs/:owner/:repoName/:prNumber/approve ─────────────────────────
   router.post(
     '/prs/:owner/:repoName/:prNumber/approve',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const repo = `${req.params.owner}/${req.params.repoName}`;
       const prNumber = parseInt(String(req.params.prNumber), 10);
       const prRow = getPRByNumber(prNumber, repo);
@@ -785,7 +786,7 @@ export function createPrsRouter(
       // Kick off auto-merge for projects with the toggle enabled (no-op otherwise)
       if (autoMerger) autoMerger.attempt(prNumber, repo);
       res.json(result);
-    },
+    }),
   );
 
   // ── POST /api/prs/:owner/:repoName/:prNumber/verify-manual-items ────────────
@@ -793,7 +794,7 @@ export function createPrsRouter(
   // auto-merge. No per-item verified-state is persisted.
   router.post(
     '/prs/:owner/:repoName/:prNumber/verify-manual-items',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const repo = `${req.params.owner}/${req.params.repoName}`;
       const prNumber = parseInt(String(req.params.prNumber), 10);
       const prRow = getPRByNumber(prNumber, repo);
@@ -815,7 +816,7 @@ export function createPrsRouter(
       });
       if (autoMerger) autoMerger.attempt(prNumber, repo);
       res.json({ ok: true });
-    },
+    }),
   );
 
   // ── DELETE /api/prs/:prNumber?projectId=<id> ─────────────────────────────────
@@ -841,7 +842,7 @@ export function createPrsRouter(
   });
 
   // ── GET /api/prs/:prNumber/diff?projectId=<id> ───────────────────────────────
-  router.get('/prs/:prNumber/diff', async (req: Request, res: Response) => {
+  router.get('/prs/:prNumber/diff', asyncHandler(async (req: Request, res: Response) => {
     const prNumber = parseInt(String(req.params.prNumber), 10);
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : '';
@@ -865,12 +866,12 @@ export function createPrsRouter(
       }
       res.status(500).json({ error: (err as Error).message });
     }
-  });
+  }));
 
   // ── POST /api/prs/:owner/:repoName/:prNumber/fix-conflicts ──────────────────
   router.post(
     '/prs/:owner/:repoName/:prNumber/fix-conflicts',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const repo = `${req.params.owner}/${req.params.repoName}`;
       const prNumber = parseInt(String(req.params.prNumber), 10);
       const prRow = getPRByNumber(prNumber, repo);
@@ -900,11 +901,11 @@ export function createPrsRouter(
       });
       if (prRow.task_id) emitTaskUpdated(prRow.task_id);
       res.json({ sessionId });
-    },
+    }),
   );
 
   // ── POST /api/prs/:prNumber/fix ──────────────────────────────────────────────
-  router.post('/prs/:prNumber/fix', async (req: Request, res: Response) => {
+  router.post('/prs/:prNumber/fix', asyncHandler(async (req: Request, res: Response) => {
     const prNumber = parseInt(String(req.params.prNumber), 10);
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : '';
@@ -941,13 +942,13 @@ export function createPrsRouter(
     const fixMessage = `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${reviewResult.summary}`;
     await sessionManager.sendOrResume(prRow.session_id, fixMessage);
     res.json({ sessionId: prRow.session_id });
-  });
+  }));
 
   // ── POST /api/prs/:prNumber/unpark ──────────────────────────────────────────
   // @deprecated Superseded by POST /tasks/:taskId/recover (rerun action), which
   // folds in this unpark behavior. Retained as a thin alias over the shared
   // rerun executor for the current frontend; /recover is the canonical interface.
-  router.post('/prs/:prNumber/unpark', async (req: Request, res: Response) => {
+  router.post('/prs/:prNumber/unpark', asyncHandler(async (req: Request, res: Response) => {
     const prNumber = parseInt(String(req.params.prNumber), 10);
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : '';
@@ -980,11 +981,11 @@ export function createPrsRouter(
     });
 
     res.json({ ok: true });
-  });
+  }));
 
   // ── POST /api/prs/ingest ─────────────────────────────────────────────────────
   // Backfill a PR that exists on GitHub but was never tracked by the orchestrator.
-  router.post('/prs/ingest', async (req: Request, res: Response) => {
+  router.post('/prs/ingest', asyncHandler(async (req: Request, res: Response) => {
     const { repo, prNumber } = req.body as {
       repo?: unknown;
       prNumber?: unknown;
@@ -1073,7 +1074,7 @@ export function createPrsRouter(
     });
 
     res.status(201).json({ pr_number: pr.id, repo, taskId, sessionId });
-  });
+  }));
 
   return router;
 }

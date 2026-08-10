@@ -19,6 +19,7 @@ import { probeNotionToken } from '../notion/NotionClient';
 import { NotionApiError } from '../notion/types';
 import { JiraClient, JiraApiError } from '../tasks/JiraClient';
 import { requireDeviceAuth, isLoopbackIp } from '../auth/DeviceAuth';
+import { asyncHandler } from './asyncHandler';
 
 const router = Router();
 
@@ -188,7 +189,7 @@ async function validateJiraToken(
   }
 }
 
-router.post('/setup/validate', async (req, res) => {
+router.post('/setup/validate', asyncHandler(async (req, res) => {
   const { type, token, host, email } = req.body as {
     type?: string;
     token?: string;
@@ -220,7 +221,7 @@ router.post('/setup/validate', async (req, res) => {
   }
 
   res.json(result);
-});
+}));
 
 // ── Import ────────────────────────────────────────────────────────────────────
 

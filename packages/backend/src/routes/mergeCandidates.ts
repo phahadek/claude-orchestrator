@@ -5,6 +5,7 @@ import { getProjectRowById } from '../db/queries';
 import { computeMergeCandidates } from '../orchestration/mergeCandidates';
 import { planMerge, type MergePlanInput } from '../orchestration/mergeSession';
 import { stageIntent } from './stagedIntents';
+import { asyncHandler } from './asyncHandler';
 
 /**
  * Read-only surface for the scope-overlap merge-candidate detector
@@ -25,7 +26,7 @@ export function createMergeCandidatesRouter(): Router {
   const router = Router();
 
   // GET /api/merge-candidates?milestone=M12&project=p1
-  router.get('/merge-candidates', async (req: Request, res: Response) => {
+  router.get('/merge-candidates', asyncHandler(async (req: Request, res: Response) => {
     const milestone =
       typeof req.query.milestone === 'string' ? req.query.milestone : null;
     const project =
@@ -64,7 +65,7 @@ export function createMergeCandidatesRouter(): Router {
           err instanceof Error ? err.message : 'merge-candidates load failed',
       });
     }
-  });
+  }));
 
   // POST /api/merge-candidates/confirm
   // Body: { projectId, milestoneTasks, mergeSet, survivorId? } — an

@@ -36,6 +36,7 @@ import {
   resolveMilestoneAnyProject,
   UnknownMilestoneError,
 } from '../projects/milestoneResolver';
+import { asyncHandler } from './asyncHandler';
 
 /**
  * Thin read/write surface over gateService's module functions — the
@@ -77,7 +78,7 @@ export function createGateStateRouter(): Router {
   });
 
   // POST /api/gate/reconcile  { deploySha }
-  router.post('/gate/reconcile', async (req: Request, res: Response) => {
+  router.post('/gate/reconcile', asyncHandler(async (req: Request, res: Response) => {
     const body = req.body as { deploySha?: unknown };
     const deploySha =
       typeof body.deploySha === 'string' ? body.deploySha : null;
@@ -86,7 +87,7 @@ export function createGateStateRouter(): Router {
       return;
     }
     res.json(await reconcileGateRunnability(deploySha));
-  });
+  }));
 
   // GET /api/gate/next?project=P&milestone=M12&classification=Read-Only&limit=5
   router.get('/gate/next', (req: Request, res: Response) => {
@@ -393,7 +394,7 @@ export function createGateStateRouter(): Router {
   );
 
   // POST /api/gate/backfill  { project, taskId, milestone, milestoneBoardIds }
-  router.post('/gate/backfill', async (req: Request, res: Response) => {
+  router.post('/gate/backfill', asyncHandler(async (req: Request, res: Response) => {
     const body = req.body as {
       project?: unknown;
       taskId?: unknown;
@@ -448,7 +449,7 @@ export function createGateStateRouter(): Router {
         error: message,
       });
     }
-  });
+  }));
 
   // POST /api/gate/accrete-contribution
   //   { project, taskId, title, milestone, classification, items: [{ text }] }
@@ -458,7 +459,7 @@ export function createGateStateRouter(): Router {
   // "none"/"n/a" mint the marker alone, with an empty items array.
   router.post(
     '/gate/accrete-contribution',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const body = req.body as {
         project?: unknown;
         taskId?: unknown;
@@ -528,7 +529,7 @@ export function createGateStateRouter(): Router {
           error: err instanceof Error ? err.message : 'gate accretion failed',
         });
       }
-    },
+    }),
   );
 
   // POST /api/gate/verify-launch  { itemIds }

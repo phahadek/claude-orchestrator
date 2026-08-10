@@ -19,6 +19,7 @@ import {
   type SizeCheckSeed,
 } from '../split/splitCandidate';
 import type { OpsSessionLauncher } from '../orchestration/OpsSessionLauncher';
+import { asyncHandler } from './asyncHandler';
 
 /**
  * The consolidated grooming Ready-flip endpoint: replaces the /groom skill's
@@ -50,7 +51,7 @@ export function createGroomFlipRouter(
   //     groomingGate: {size_check, type_check, ...},
   //     gateContribution: {classification, items: [{text}]},
   //     seedContribution: {decision, seeds: [{spec}]} }
-  router.post('/groom/flip', async (req: Request, res: Response) => {
+  router.post('/groom/flip', asyncHandler(async (req: Request, res: Response) => {
     const body = req.body as {
       project?: unknown;
       taskId?: unknown;
@@ -236,7 +237,7 @@ export function createGroomFlipRouter(
           err instanceof Error ? err.message : 'grooming Ready-flip failed',
       });
     }
-  });
+  }));
 
   return router;
 }

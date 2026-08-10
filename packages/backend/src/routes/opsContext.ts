@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { loadOpsContext } from '../ops/opsLoad';
+import { asyncHandler } from './asyncHandler';
 
 /**
  * Read-only surface for the /ops skill's loader: wraps loadOpsContext
@@ -12,7 +13,7 @@ export function createOpsContextRouter(): Router {
   const router = Router();
 
   // GET /api/ops-context?milestone=<milestoneId>&project=<projectId>
-  router.get('/ops-context', async (req: Request, res: Response) => {
+  router.get('/ops-context', asyncHandler(async (req: Request, res: Response) => {
     const milestone =
       typeof req.query.milestone === 'string' ? req.query.milestone : null;
     const project =
@@ -33,7 +34,7 @@ export function createOpsContextRouter(): Router {
         error: err instanceof Error ? err.message : 'ops-context load failed',
       });
     }
-  });
+  }));
 
   return router;
 }

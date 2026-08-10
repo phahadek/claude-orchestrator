@@ -31,6 +31,7 @@ import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
 import { groomBlockingDepTitles } from '../orchestration/planningCandidates';
 import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
 import yaml from 'js-yaml';
+import { asyncHandler } from './asyncHandler';
 export type { TaskView } from '../ws/types';
 
 export interface TasksActiveResponse {
@@ -644,7 +645,7 @@ export function createTasksRouter(
   });
 
   // ── GET /api/tasks/non-milestone?projectId=<id> ─────────────────────────
-  router.get('/tasks/non-milestone', async (req: Request, res: Response) => {
+  router.get('/tasks/non-milestone', asyncHandler(async (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : '';
     if (!projectId) {
@@ -687,10 +688,10 @@ export function createTasksRouter(
     await annotateOpsDepBlocking(views, notionTasks, projectId);
 
     res.json(views);
-  });
+  }));
 
   // ── GET /api/tasks/active?projectId=<id>&boardId=<id> ────────────────────
-  router.get('/tasks/active', async (req: Request, res: Response) => {
+  router.get('/tasks/active', asyncHandler(async (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : '';
     if (!projectId) {
@@ -758,7 +759,7 @@ export function createTasksRouter(
       coldCache: false,
     };
     res.json(response);
-  });
+  }));
 
   // ── POST /api/tasks/refresh ──────────────────────────────────────────────
   router.post('/tasks/refresh', (req: Request, res: Response) => {
@@ -789,7 +790,7 @@ export function createTasksRouter(
   // @deprecated Superseded by POST /tasks/:taskId/recover (redispatch action).
   // Retained as a thin alias over the shared redispatch executor for the current
   // frontend; the unified /recover endpoint is the canonical recovery interface.
-  router.post('/tasks/:taskId/unblock', async (req: Request, res: Response) => {
+  router.post('/tasks/:taskId/unblock', asyncHandler(async (req: Request, res: Response) => {
     const taskId = String(req.params.taskId);
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;
@@ -827,7 +828,7 @@ export function createTasksRouter(
     });
 
     res.json({ ok: true, newStatus: '🗂️ Ready' });
-  });
+  }));
 
   // ── POST /api/tasks/:taskId/assign-repo ────────────────────────────────────
   router.post('/tasks/:taskId/assign-repo', (req: Request, res: Response) => {
@@ -869,7 +870,7 @@ export function createTasksRouter(
 
   // ── GET /api/tasks/:taskId/page?projectId=<id> ──────────────────────────────
   // Read-only fetch of the task's full spec body as markdown, uniform across sources.
-  router.get('/tasks/:taskId/page', async (req: Request, res: Response) => {
+  router.get('/tasks/:taskId/page', asyncHandler(async (req: Request, res: Response) => {
     const taskId = String(req.params.taskId);
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : '';
@@ -897,14 +898,14 @@ export function createTasksRouter(
         error: err instanceof Error ? err.message : `task not found: ${taskId}`,
       });
     }
-  });
+  }));
 
   // ── POST /api/tasks/move-preview ────────────────────────────────────────────
   // Read-only preview for the move confirm UI: runs the same planMove used by
   // TaskWriteCommands.moveTask (via the source milestone's dependency graph) so
   // the operator sees the cascade set or refusal reason before staging a
   // task.move intent through the general staged-intent surface.
-  router.post('/tasks/move-preview', async (req: Request, res: Response) => {
+  router.post('/tasks/move-preview', asyncHandler(async (req: Request, res: Response) => {
     const body = req.body as {
       projectId?: unknown;
       taskId?: unknown;
@@ -971,12 +972,12 @@ export function createTasksRouter(
         error: err instanceof Error ? err.message : 'Failed to preview move',
       });
     }
-  });
+  }));
 
   // ── POST /api/tasks/:taskId/recover ─────────────────────────────────────────
   // Generalized recovery endpoint: derives the action from the current pause reason
   // and executes redispatch / rerun / resume accordingly.
-  router.post('/tasks/:taskId/recover', async (req: Request, res: Response) => {
+  router.post('/tasks/:taskId/recover', asyncHandler(async (req: Request, res: Response) => {
     const taskId = String(req.params.taskId);
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;
@@ -1077,10 +1078,10 @@ export function createTasksRouter(
     });
 
     res.json({ ok: true, action });
-  });
+  }));
 
   // ── PATCH /api/tasks/:id/status ──────────────────────────────────────────
-  router.patch('/tasks/:id/status', async (req: Request, res: Response) => {
+  router.patch('/tasks/:id/status', asyncHandler(async (req: Request, res: Response) => {
     const taskId = String(req.params.id);
     const body = req.body as { status?: unknown; projectId?: unknown };
     const status = typeof body.status === 'string' ? body.status : null;
@@ -1106,7 +1107,7 @@ export function createTasksRouter(
         error: err instanceof Error ? err.message : 'Failed to update status',
       });
     }
-  });
+  }));
 
   return router;
 }
