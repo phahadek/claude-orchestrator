@@ -454,9 +454,7 @@ export class PreReviewPipeline {
         const config = loadOrchestratorConfig(ctx.project.projectDir);
         if (!config.test?.length) return;
 
-        const contentHash = await computeWholeTreeContentHash(
-          ctx.worktreePath,
-        );
+        const contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
         if (
           contentHash &&
           getLatestTestRequestRun(ctx.project.id, contentHash)
