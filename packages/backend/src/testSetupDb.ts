@@ -1,3 +1,5 @@
+import { resolveTestScratchDataDir } from './testScratchDataDir';
+
 // Vitest setupFile — runs before any test file's module graph is evaluated.
 // Forces every test process onto an in-memory database, regardless of what
 // DB_PATH (or any other env var pointing at a production data file) was
@@ -15,7 +17,10 @@ process.env.DB_PATH = ':memory:';
 // config into every test process. Point every worker at its own disposable,
 // process-scoped data dir instead. pid-scoped (not shared) so parallel
 // vitest worker processes can never race on the same config.json.
-process.env.XDG_DATA_HOME = `${process.cwd()}/.test-scratch-datadir-DO-NOT-COMMIT/pid-${process.pid}`;
+// Anchored to this module's own location (not process.cwd()) so the
+// directory always lands under packages/backend/ regardless of where
+// vitest was invoked from — see testScratchDataDir.ts and .gitignore.
+process.env.XDG_DATA_HOME = resolveTestScratchDataDir(process.pid);
 
 // Dynamic imports (not static ones) so this module's DB_PATH assignment above
 // runs before db.ts opens its connection — a static `import` would be
