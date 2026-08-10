@@ -128,67 +128,86 @@ export class DispatchTriggerEvaluator {
   }
 
   async tickOnce(): Promise<number> {
-    // Usage admission is an account-wide gate, independent of arm/capacity
-    // accounting below: when the plan usage is exhausted, don't dispatch at
-    // all this tick — the deferral (persisted by isUsageAdmitted) is
-    // re-evaluated automatically on the next tick.
-    if (!isUsageAdmitted().allowed) return 0;
-
-    const listProjects = this.options.listProjects ?? getAllProjects;
-    const projects = listProjects();
-    if (projects.length === 0) return 0;
-
-    const orderedProjects = rotateFromIndex(projects, this.roundRobinIndex);
-    this.roundRobinIndex = (this.roundRobinIndex + 1) % projects.length;
-
-    const available = computeAvailableCapacity({
-      maxConcurrentPlanningSessions: typedGetSetting(
-        'max_concurrent_planning_sessions',
-      ),
-      humanReserve: typedGetSetting('human_reserve'),
-      activePlanningSessions: this.sessionManager.getLivePlanningSessionCount(),
-    });
-    if (available <= 0) return 0;
-
+    const startedAt = Date.now();
+    let eligibleCount = 0;
     let dispatched = 0;
-    for (const project of orderedProjects) {
-      if (dispatched >= available) break;
-      await yieldToEventLoop();
+    try {
+      // Usage admission is an account-wide gate, independent of arm/capacity
+      // accounting below: when the plan usage is exhausted, don't dispatch at
+      // all this tick — the deferral (persisted by isUsageAdmitted) is
+      // re-evaluated automatically on the next tick.
+      if (!isUsageAdmitted().allowed) return 0;
 
-      const groomCandidates = await this.scanProjectGroomCandidates(project.id);
-      dispatched += await this.dispatchUpTo(
-        groomCandidates,
-        available - dispatched,
-        (c) => this.dispatchPlanningCandidate(c, 'groom'),
-      );
-      if (dispatched >= available) continue;
+      const listProjects = this.options.listProjects ?? getAllProjects;
+      const projects = listProjects();
+      if (projects.length === 0) return 0;
 
-      const opsCandidates = await this.scanProjectOpsCandidates(project.id);
-      dispatched += await this.dispatchUpTo(
-        opsCandidates,
-        available - dispatched,
-        (c) => this.dispatchOpsCandidate(c),
-      );
-      if (dispatched >= available) continue;
+      const orderedProjects = rotateFromIndex(projects, this.roundRobinIndex);
+      this.roundRobinIndex = (this.roundRobinIndex + 1) % projects.length;
 
-      const designCandidates = await this.scanProjectDesignCandidates(
-        project.id,
-      );
-      dispatched += await this.dispatchUpTo(
-        designCandidates,
-        available - dispatched,
-        (c) => this.dispatchPlanningCandidate(c, 'design'),
-      );
-      if (dispatched >= available) continue;
+      const available = computeAvailableCapacity({
+        maxConcurrentPlanningSessions: typedGetSetting(
+          'max_concurrent_planning_sessions',
+        ),
+        humanReserve: typedGetSetting('human_reserve'),
+        activePlanningSessions:
+          this.sessionManager.getLivePlanningSessionCount(),
+      });
+      if (available <= 0) return 0;
 
-      const docsCandidates = await this.scanProjectDocsCandidates(project.id);
-      dispatched += await this.dispatchUpTo(
-        docsCandidates,
-        available - dispatched,
-        (c) => this.dispatchPlanningCandidate(c, 'docs'),
+      for (const project of orderedProjects) {
+        if (dispatched >= available) break;
+        await yieldToEventLoop();
+
+        const groomCandidates = await this.scanProjectGroomCandidates(
+          project.id,
+        );
+        eligibleCount += groomCandidates.length;
+        dispatched += await this.dispatchUpTo(
+          groomCandidates,
+          available - dispatched,
+          (c) => this.dispatchPlanningCandidate(c, 'groom'),
+        );
+        if (dispatched >= available) continue;
+
+        const opsCandidates = await this.scanProjectOpsCandidates(project.id);
+        eligibleCount += opsCandidates.length;
+        dispatched += await this.dispatchUpTo(
+          opsCandidates,
+          available - dispatched,
+          (c) => this.dispatchOpsCandidate(c),
+        );
+        if (dispatched >= available) continue;
+
+        const designCandidates = await this.scanProjectDesignCandidates(
+          project.id,
+        );
+        eligibleCount += designCandidates.length;
+        dispatched += await this.dispatchUpTo(
+          designCandidates,
+          available - dispatched,
+          (c) => this.dispatchPlanningCandidate(c, 'design'),
+        );
+        if (dispatched >= available) continue;
+
+        const docsCandidates = await this.scanProjectDocsCandidates(
+          project.id,
+        );
+        eligibleCount += docsCandidates.length;
+        dispatched += await this.dispatchUpTo(
+          docsCandidates,
+          available - dispatched,
+          (c) => this.dispatchPlanningCandidate(c, 'docs'),
+        );
+      }
+      return dispatched;
+    } finally {
+      const elapsedMs = Date.now() - startedAt;
+      const skippedCount = eligibleCount - dispatched;
+      logger.info(
+        `[DispatchTriggerEvaluator] poll complete (eligible=${eligibleCount}, launched=${dispatched}, skipped=${skippedCount}) durationMs=${elapsedMs}`,
       );
     }
-    return dispatched;
   }
 
   /** Dispatches candidates FIFO until `remaining` sessions have launched or the list is exhausted. */

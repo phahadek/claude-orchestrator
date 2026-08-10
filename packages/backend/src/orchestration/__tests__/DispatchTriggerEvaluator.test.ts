@@ -414,6 +414,29 @@ describe('DispatchTriggerEvaluator — usage admission gate', () => {
   });
 });
 
+describe('DispatchTriggerEvaluator — poll complete log line', () => {
+  it('logs a poll complete line with durationMs once per tick', async () => {
+    const { logger } = await import('../../logger.js');
+    const infoSpy = vi.spyOn(logger, 'info').mockImplementation(() => {});
+
+    const listProjects = vi.fn().mockReturnValue([]);
+    const evaluator = new DispatchTriggerEvaluator({} as never, {} as never, {
+      listProjects: listProjects as never,
+    });
+
+    await evaluator.tickOnce();
+
+    const matches = infoSpy.mock.calls.filter(([message]) =>
+      typeof message === 'string' &&
+      message.includes('[DispatchTriggerEvaluator] poll complete') &&
+      message.includes('durationMs='),
+    );
+    expect(matches).toHaveLength(1);
+
+    infoSpy.mockRestore();
+  });
+});
+
 describe('DispatchTriggerEvaluator — dispatch provenance audit rows', () => {
   const PROJECT = 'proj-provenance';
   const MILESTONE = 'milestone-provenance';
