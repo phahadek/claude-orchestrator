@@ -27,7 +27,9 @@ export function runMigrations(target: Database.Database): void {
       task_name                 TEXT,
       review_result             TEXT,
       compaction_count          INTEGER NOT NULL DEFAULT 0,
-      effort                    TEXT
+      effort                    TEXT,
+      model_setting_key         TEXT,
+      effort_setting_key        TEXT
     );
 
     CREATE TABLE IF NOT EXISTS session_events (
@@ -1937,6 +1939,20 @@ export function runMigrations(target: Database.Database): void {
   // out of scope.
   try {
     target.exec(`ALTER TABLE sessions ADD COLUMN terminalized_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+
+  // Which settings key (e.g. "groom_session_model") the session's model/effort
+  // were actually resolved from — dedicated key vs. shared fallback — so
+  // provenance is recoverable even when the resolved values happen to match.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN model_setting_key TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN effort_setting_key TEXT`);
   } catch {
     /* already exists */
   }

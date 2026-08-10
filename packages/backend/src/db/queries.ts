@@ -1236,6 +1236,24 @@ export function setSessionEffort(sessionId: string, effort: string): void {
   );
 }
 
+export function setSessionModelSettingKey(
+  sessionId: string,
+  key: string,
+): void {
+  db.prepare(
+    'UPDATE sessions SET model_setting_key = ? WHERE session_id = ?',
+  ).run(key, sessionId);
+}
+
+export function setSessionEffortSettingKey(
+  sessionId: string,
+  key: string,
+): void {
+  db.prepare(
+    'UPDATE sessions SET effort_setting_key = ? WHERE session_id = ?',
+  ).run(key, sessionId);
+}
+
 export function setSessionTags(sessionId: string, tags: string[]): void {
   db.prepare('UPDATE sessions SET tags = ? WHERE session_id = ?').run(
     JSON.stringify(tags),
