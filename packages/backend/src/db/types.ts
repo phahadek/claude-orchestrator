@@ -49,6 +49,8 @@ export interface Session {
   cache_creation_tokens: number;
   model?: string | null;
   effort?: string | null; // resolved effort level used at session launch, e.g. "high"
+  model_setting_key?: string | null; // settings key the model was resolved from, e.g. "groom_session_model"
+  effort_setting_key?: string | null; // settings key the effort was resolved from, e.g. "groom_session_effort"
   task_name: string | null;
   metadata: string | null; // JSON blob for small session metadata (e.g. aiTitle)
   review_result: string | null; // JSON — verdict stored for local-only review sessions

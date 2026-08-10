@@ -34,6 +34,8 @@ const runCalls = vi.hoisted(
 );
 
 const mockSendMessage = vi.hoisted(() => vi.fn());
+const mockSetSessionModelSettingKey = vi.hoisted(() => vi.fn());
+const mockSetSessionEffortSettingKey = vi.hoisted(() => vi.fn());
 
 vi.mock('../../db/queries', () =>
   mockDbQueries({
@@ -48,6 +50,8 @@ vi.mock('../../db/queries', () =>
     incrementCompactionCount: vi.fn(),
     setContextOccupancy: vi.fn(),
     setSessionModel: vi.fn(),
+    setSessionModelSettingKey: mockSetSessionModelSettingKey,
+    setSessionEffortSettingKey: mockSetSessionEffortSettingKey,
     setSessionMetadata: vi.fn(),
     getPRBySessionId: vi.fn().mockReturnValue(null),
     setHeadSha: vi.fn(),
@@ -173,6 +177,8 @@ function makeSession(
 beforeEach(() => {
   runCalls.length = 0;
   mockSendMessage.mockReset();
+  mockSetSessionModelSettingKey.mockReset();
+  mockSetSessionEffortSettingKey.mockReset();
   mockRuntimeSettings.large_task_model = '';
   mockRuntimeSettings.code_session_model = '';
   mockRuntimeSettings.review_session_model = '';
@@ -270,6 +276,26 @@ describe('AgentSession — per-class effort resolution', () => {
     expect(runCalls[0].options.effort).toBe('low');
   });
 
+  it('groom session records model_setting_key = groom_session_model even when identical to planning_session_model', async () => {
+    mockRuntimeSettings.planning_session_model = 'claude-sonnet-5';
+    mockRuntimeSettings.groom_session_model = 'claude-sonnet-5';
+    mockRuntimeSettings.planning_session_effort = 'high';
+    mockRuntimeSettings.groom_session_effort = 'medium';
+
+    const session = makeSession('groom');
+    await session.run();
+
+    expect(runCalls).toHaveLength(1);
+    expect(mockSetSessionModelSettingKey).toHaveBeenCalledWith(
+      'test-session-effort',
+      'groom_session_model',
+    );
+    expect(mockSetSessionEffortSettingKey).toHaveBeenCalledWith(
+      'test-session-effort',
+      'groom_session_effort',
+    );
+  });
+
   it('design session uses design_session_model/effort when set, ignoring planning_session_model/effort', async () => {
     mockRuntimeSettings.planning_session_model = 'claude-sonnet-4-6';
     mockRuntimeSettings.planning_session_effort = 'high';
@@ -313,6 +339,26 @@ describe('AgentSession — per-class effort resolution', () => {
     expect(runCalls).toHaveLength(1);
     expect(runCalls[0].options.model).toBe('claude-opus-4-8');
     expect(runCalls[0].options.effort).toBe('xhigh');
+  });
+
+  it('gate-verify session records gate_verify_session_model rather than ops_session_model', async () => {
+    mockRuntimeSettings.ops_session_model = 'claude-sonnet-5';
+    mockRuntimeSettings.ops_session_effort = 'high';
+    mockRuntimeSettings.gate_verify_session_model = 'claude-sonnet-5';
+    mockRuntimeSettings.gate_verify_session_effort = 'high';
+
+    const session = makeSession('ops', 'gate-item:abc123');
+    await session.run();
+
+    expect(runCalls).toHaveLength(1);
+    expect(mockSetSessionModelSettingKey).toHaveBeenCalledWith(
+      'test-session-effort',
+      'gate_verify_session_model',
+    );
+    expect(mockSetSessionEffortSettingKey).toHaveBeenCalledWith(
+      'test-session-effort',
+      'gate_verify_session_effort',
+    );
   });
 
   it('large-task/escalation spawn on a planning session uses large_task_effort instead of planning_session_effort', async () => {
