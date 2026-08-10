@@ -27,9 +27,7 @@ beforeEach(() => {
 
 describe('isSessionProcessAlive', () => {
   it('returns true when a fresh spawn --session-id <id> is in the process table', () => {
-    execSyncMock.mockReturnValue(
-      'claude --session-id abc-123 --other-flag\n',
-    );
+    execSyncMock.mockReturnValue('claude --session-id abc-123 --other-flag\n');
 
     expect(isSessionProcessAlive('abc-123')).toBe(true);
   });

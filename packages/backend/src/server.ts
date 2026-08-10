@@ -620,8 +620,7 @@ scheduler.register({
   runOnBoot: true,
   concurrency: 'skip-if-running',
   run: async () => {
-    const { reconciled } =
-      sessionManager.reconcileNonPlanningSessionLiveness();
+    const { reconciled } = sessionManager.reconcileNonPlanningSessionLiveness();
     return { items_processed: reconciled.length };
   },
 });

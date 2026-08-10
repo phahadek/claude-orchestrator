@@ -226,9 +226,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
       .get('ghost-standard') as { status: string };
     expect(row.status).toBe('killed');
     const eventCount = db
-      .prepare(
-        'SELECT COUNT(*) AS c FROM session_events WHERE session_id = ?',
-      )
+      .prepare('SELECT COUNT(*) AS c FROM session_events WHERE session_id = ?')
       .get('ghost-standard') as { c: number };
     expect(eventCount.c).toBe(0);
   });
