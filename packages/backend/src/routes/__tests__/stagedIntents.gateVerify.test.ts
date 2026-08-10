@@ -532,7 +532,7 @@ describe('gate.verify — Human-Observation mirror apply (operator-supplied disp
     });
     setSourceMergeCommit(item.id, 'notion:abc', 'sha1');
     setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { project: 'proj-a' });
+    await reconcileGateRunnability('sha1', { project: 'proj-a' });
 
     const app = makeApp();
     const agent = supertest(app);

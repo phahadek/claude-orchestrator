@@ -807,7 +807,7 @@ export async function runGateReconcilerTick(
     const sha = await trigger.latestDeploySha(project);
     deployShaByProject[project] = sha;
     if (!sha) continue;
-    const result = reconcileGateRunnability(sha, {
+    const result = await reconcileGateRunnability(sha, {
       project,
       ancestrySource: ancestrySourceForProject(project),
     });
