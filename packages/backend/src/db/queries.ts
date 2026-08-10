@@ -75,8 +75,36 @@ import type {
   FlowArmRow,
   ConvergenceSnapshotRow,
   NewConvergenceSnapshotRow,
+  OpsJournalState,
 } from './types';
 import { FLOW_IDS, DEFAULT_ARM, type FlowId } from '../orchestration/flowArm';
+
+// ─── asOf reconstruction ────────────────────────────────────────────────────
+// Point-in-time reads for the gate-verify read path (see gate/gateItemVerifier.ts
+// and the mcp/tools/*ReadTools.ts it drives): "was X true at T" must never
+// silently fall back to whatever the row says right now. A field with no
+// historical record yet (sessions.status, pull_requests.*, deploy_run.status,
+// gate_item.min_deployed_commit/next_attempt_at/pending_attempt_count — all
+// pending the sibling point-in-time instrumentation task) is replaced with an
+// explicit Unreconstructable marker rather than the live value.
+
+/** Explicit "we don't know" marker for an asOf field with no history yet. */
+export interface Unreconstructable {
+  readonly __unreconstructable: true;
+  readonly reason: string;
+}
+
+function unreconstructable(reason: string): Unreconstructable {
+  return { __unreconstructable: true, reason };
+}
+
+export function isUnreconstructable(value: unknown): value is Unreconstructable {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Partial<Unreconstructable>).__unreconstructable === true
+  );
+}
 
 // ─── sessions ──────────────────────────────────────────────────────────────
 
@@ -723,6 +751,31 @@ export function getRunningSessionsWithMergedOrClosedPR(): StuckResultSessionRow[
 
 export function getSession(sessionId: string): Session | undefined {
   return stmtGetSession.get({ session_id: sessionId }) as Session | undefined;
+}
+
+const SESSION_STATUS_UNRECONSTRUCTABLE_REASON =
+  'sessions.status has no historical record until the point-in-time instrumentation task lands — cannot answer "what was this session\'s status at T", only "what is it now"';
+
+export type SessionAsOf = Omit<Session, 'status'> & { status: Unreconstructable };
+
+/**
+ * Point-in-time read of a session row for the given `asOf` cutoff. `status`
+ * is not reconstructable yet (see module header) and always comes back as an
+ * Unreconstructable marker rather than the live value. Returns undefined both
+ * when the session doesn't exist and when it wasn't started yet as of `asOf`.
+ */
+export function getSessionAsOf(
+  sessionId: string,
+  asOf: string,
+): SessionAsOf | undefined {
+  const current = getSession(sessionId);
+  if (!current) return undefined;
+  const asOfMs = Date.parse(asOf);
+  if (current.started_at > asOfMs) return undefined;
+  return {
+    ...current,
+    status: unreconstructable(SESSION_STATUS_UNRECONSTRUCTABLE_REASON),
+  };
 }
 
 export function getAllSessionIds(): string[] {
@@ -2241,6 +2294,53 @@ function getPRByTaskId(taskId: string): PullRequestRow | null {
 }
 
 export const getPRByNotionTaskId = getPRByTaskId;
+
+// A PR row's identity/provenance fields are set once at creation and never
+// mutate afterward; everything else (state, review/merge/CI status, pause
+// reason, etc.) has no per-field historical record until the sibling
+// point-in-time instrumentation task lands — see module header.
+const PR_STATIC_FIELDS = new Set<keyof PullRequestRow>([
+  'id',
+  'pr_number',
+  'pr_url',
+  'task_id',
+  'session_id',
+  'repo',
+  'head_branch',
+  'base_branch',
+  'created_at',
+  'node_id',
+]);
+
+const PR_UNRECONSTRUCTABLE_REASON =
+  'pull_requests.* mutable fields (state, review/merge/CI status, pause reason, etc.) have no historical record until the point-in-time instrumentation task lands — cannot answer "what was this PR\'s state at T", only "what is it now"';
+
+export type PRAsOf = {
+  [K in keyof PullRequestRow]: PullRequestRow[K] | Unreconstructable;
+};
+
+/**
+ * Point-in-time read of the most recent PR for a task, as of `asOf`. Only
+ * the static identity fields (see PR_STATIC_FIELDS) come back with real
+ * values; every mutable field is an Unreconstructable marker — see module
+ * header. Returns undefined both when no PR exists for the task and when the
+ * PR wasn't created yet as of `asOf`.
+ */
+export function getPRAsOf(taskId: string, asOf: string): PRAsOf | undefined {
+  const current = getPRByNotionTaskId(taskId);
+  if (!current) return undefined;
+  const asOfMs = Date.parse(asOf);
+  if (current.created_at && Date.parse(current.created_at) > asOfMs) {
+    return undefined;
+  }
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(current) as (keyof PullRequestRow)[]) {
+    result[key] = PR_STATIC_FIELDS.has(key)
+      ? current[key]
+      : unreconstructable(PR_UNRECONSTRUCTABLE_REASON);
+  }
+  return result as PRAsOf;
+}
 
 /**
  * Returns the most recent merged PR for a task, or null if none exists.
@@ -4302,6 +4402,47 @@ export function getDeployRun(runId: string): DeployRunRow | undefined {
   return _stmtGetDeployRun.get({ run_id: runId }) as DeployRunRow | undefined;
 }
 
+// run_id/project/target_sha/started_at are set once at creation; status,
+// current_step and completed_at have no per-field historical record until
+// the sibling point-in-time instrumentation task lands — see module header.
+const DEPLOY_RUN_STATIC_FIELDS = new Set<keyof DeployRunRow>([
+  'run_id',
+  'project',
+  'target_sha',
+  'started_at',
+]);
+
+const DEPLOY_RUN_UNRECONSTRUCTABLE_REASON =
+  'deploy_run.status/current_step/completed_at have no historical record until the point-in-time instrumentation task lands — cannot answer "what was this run\'s status at T", only "what is it now"';
+
+export type DeployRunAsOf = {
+  [K in keyof DeployRunRow]: DeployRunRow[K] | Unreconstructable;
+};
+
+/**
+ * Point-in-time read of a deploy_run row as of `asOf`. Only the static
+ * identity fields (see DEPLOY_RUN_STATIC_FIELDS) come back with real values;
+ * status/current_step/completed_at are Unreconstructable markers — see
+ * module header. Returns undefined both when the run doesn't exist and when
+ * it wasn't started yet as of `asOf`.
+ */
+export function getDeployRunAsOf(
+  runId: string,
+  asOf: string,
+): DeployRunAsOf | undefined {
+  const current = getDeployRun(runId);
+  if (!current) return undefined;
+  const asOfMs = Date.parse(asOf);
+  if (Date.parse(current.started_at) > asOfMs) return undefined;
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(current) as (keyof DeployRunRow)[]) {
+    result[key] = DEPLOY_RUN_STATIC_FIELDS.has(key)
+      ? current[key]
+      : unreconstructable(DEPLOY_RUN_UNRECONSTRUCTABLE_REASON);
+  }
+  return result as DeployRunAsOf;
+}
+
 /** The project's in-flight run, if any — relies on the at-most-one-active-run-per-project index. */
 export function getActiveDeployRunForProject(
   project: string,
@@ -5333,6 +5474,118 @@ export function getOpsJournalEntry(taskId: string): OpsJournalRow | undefined {
   }) as OpsJournalRow | undefined;
 }
 
+/**
+ * ops_journal_state_changed/entry_seeded/entry_dropped are recorded with
+ * whatever task_id string the caller of setEntryState/reconcileJournal
+ * happened to hold (see opsJournal.ts) — not necessarily the bare form
+ * ops_journal.task_id normalizes to. Match against both so a caller who
+ * only has the bare or the notion:-prefixed form still finds its history.
+ */
+function opsJournalAuditTaskIdCandidates(taskId: string): string[] {
+  const bare = toBareOpsJournalTaskId(taskId);
+  return bare === taskId ? [taskId] : [taskId, bare];
+}
+
+function queryOpsJournalAuditEvents(
+  eventType: string,
+  taskId: string,
+): { ts: number; payload: Record<string, unknown> }[] {
+  const candidates = opsJournalAuditTaskIdCandidates(taskId);
+  const placeholders = candidates.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT ts, payload FROM audit_log WHERE event_type = ? AND task_id IN (${placeholders}) ORDER BY id ASC`,
+    )
+    .all(eventType, ...candidates) as { ts: number; payload: string }[];
+  return rows.map((r) => ({ ts: r.ts, payload: JSON.parse(r.payload) }));
+}
+
+const OPS_JOURNAL_UNRECONSTRUCTABLE_REASON =
+  'ops_journal fields other than state (disposition/evidence/finding_or_proposal/falsification/filed_followons/needs_from_operator/resolution/worked_in) have no per-field historical record — only state transitions are audited';
+
+export interface OpsJournalAsOf {
+  task_id: string;
+  project: string;
+  milestone: string;
+  state: OpsJournalState;
+  disposition: Unreconstructable;
+  worked_in: Unreconstructable;
+  evidence: Unreconstructable;
+  finding_or_proposal: Unreconstructable;
+  falsification: Unreconstructable;
+  filed_followons: Unreconstructable;
+  needs_from_operator: Unreconstructable;
+  resolution: Unreconstructable;
+  updated_at: string;
+}
+
+/**
+ * Point-in-time read of an ops_journal entry's `state`, reconstructed by
+ * replaying `ops_journal_state_changed`/`ops_journal_entry_seeded`/
+ * `ops_journal_entry_dropped` audit_log rows up to `asOf`. Every other
+ * column has no per-field history and comes back as an Unreconstructable
+ * marker — see module header. Returns undefined when the entry doesn't
+ * exist now, wasn't seeded yet as of `asOf`, or was dropped and not
+ * re-seeded by `asOf`.
+ */
+export function getOpsJournalEntryAsOf(
+  taskId: string,
+  asOf: string,
+): OpsJournalAsOf | undefined {
+  const current = getOpsJournalEntry(taskId);
+  if (!current) return undefined;
+  const asOfMs = Date.parse(asOf);
+
+  const seedEvents = queryOpsJournalAuditEvents(
+    'ops_journal_entry_seeded',
+    taskId,
+  );
+  const dropEvents = queryOpsJournalAuditEvents(
+    'ops_journal_entry_dropped',
+    taskId,
+  );
+  const stateEvents = queryOpsJournalAuditEvents(
+    'ops_journal_state_changed',
+    taskId,
+  ) as { ts: number; payload: { from: OpsJournalState; to: OpsJournalState } }[];
+
+  const seedTs = [...seedEvents].reverse().find((e) => e.ts <= asOfMs)?.ts;
+  if (seedTs === undefined) return undefined;
+  const droppedAfterSeed = dropEvents.some(
+    (e) => e.ts > seedTs && e.ts <= asOfMs,
+  );
+  if (droppedAfterSeed) return undefined;
+
+  let state = current.state;
+  for (let i = stateEvents.length - 1; i >= 0; i--) {
+    if (stateEvents[i].ts > asOfMs) {
+      state = stateEvents[i].payload.from;
+    } else {
+      break;
+    }
+  }
+
+  return {
+    task_id: current.task_id,
+    project: current.project,
+    milestone: current.milestone,
+    state,
+    disposition: unreconstructable(OPS_JOURNAL_UNRECONSTRUCTABLE_REASON),
+    worked_in: unreconstructable(OPS_JOURNAL_UNRECONSTRUCTABLE_REASON),
+    evidence: unreconstructable(OPS_JOURNAL_UNRECONSTRUCTABLE_REASON),
+    finding_or_proposal: unreconstructable(
+      OPS_JOURNAL_UNRECONSTRUCTABLE_REASON,
+    ),
+    falsification: unreconstructable(OPS_JOURNAL_UNRECONSTRUCTABLE_REASON),
+    filed_followons: unreconstructable(OPS_JOURNAL_UNRECONSTRUCTABLE_REASON),
+    needs_from_operator: unreconstructable(
+      OPS_JOURNAL_UNRECONSTRUCTABLE_REASON,
+    ),
+    resolution: unreconstructable(OPS_JOURNAL_UNRECONSTRUCTABLE_REASON),
+    updated_at: current.updated_at,
+  };
+}
+
 export function listOpsJournalEntries(): OpsJournalRow[] {
   _stmtListOpsJournalEntries ??= db.prepare(`SELECT * FROM ops_journal`);
   return _stmtListOpsJournalEntries.all() as OpsJournalRow[];
@@ -5465,6 +5718,137 @@ export function getGateItem(id: string): GateItemRow | undefined {
     `SELECT * FROM gate_item WHERE id = @id`,
   );
   return _stmtGetGateItem.get({ id }) as GateItemRow | undefined;
+}
+
+function queryGateItemAuditTransitions(
+  eventType: 'gate_item_state_changed' | 'gate_item_reclassified',
+  gateItemId: string,
+): { ts: number; from: string; to: string }[] {
+  const rows = db
+    .prepare<
+      { event_type: string; like: string },
+      { ts: number; payload: string }
+    >(
+      `SELECT ts, payload FROM audit_log WHERE event_type = @event_type AND payload LIKE @like ORDER BY id ASC`,
+    )
+    .all({ event_type: eventType, like: `%"gateItemId":"${gateItemId}"%` });
+  return rows
+    .map((r) => {
+      const payload = JSON.parse(r.payload) as {
+        gateItemId: string;
+        from: string;
+        to: string;
+      };
+      return { ts: r.ts, from: payload.from, to: payload.to, gateItemId: payload.gateItemId };
+    })
+    .filter((r) => r.gateItemId === gateItemId);
+}
+
+const GATE_ITEM_UNRECONSTRUCTABLE_REASON =
+  'gate_item.min_deployed_commit/next_attempt_at/pending_attempt_count have no historical record until the point-in-time instrumentation task lands — cannot answer "what was this field at T", only "what is it now"';
+
+export interface GateItemAsOf {
+  id: string;
+  project: string;
+  milestone: string;
+  text: string;
+  classification: GateItemClassification;
+  state: string;
+  current_disposition: string | null;
+  min_deployed_commit: Unreconstructable;
+  next_attempt_at: Unreconstructable;
+  pending_attempt_count: Unreconstructable;
+  updated_at: string;
+}
+
+/**
+ * Point-in-time read of a gate_item's `state`, `classification`, and
+ * `current_disposition`, reconstructed by replaying `gate_item_created`/
+ * `gate_item_state_changed`/`gate_item_reclassified` audit_log rows (and
+ * gate_item_event's disposition history for current_disposition) up to
+ * `asOf`. min_deployed_commit/next_attempt_at/pending_attempt_count have no
+ * per-field history yet and come back as Unreconstructable markers — see
+ * module header. Returns undefined both when the item doesn't exist and
+ * when it wasn't created yet as of `asOf`.
+ */
+export function getGateItemAsOf(
+  id: string,
+  asOf: string,
+): GateItemAsOf | undefined {
+  const current = getGateItem(id);
+  if (!current) return undefined;
+  const asOfMs = Date.parse(asOf);
+
+  const createdRow = db
+    .prepare<{ like: string }, { ts: number }>(
+      `SELECT ts FROM audit_log WHERE event_type = 'gate_item_created' AND payload LIKE @like ORDER BY id ASC LIMIT 1`,
+    )
+    .get({ like: `%"gateItemId":"${id}"%` });
+  if (createdRow && createdRow.ts > asOfMs) return undefined;
+
+  const stateEvents = queryGateItemAuditTransitions(
+    'gate_item_state_changed',
+    id,
+  );
+  const reclassifyEvents = queryGateItemAuditTransitions(
+    'gate_item_reclassified',
+    id,
+  );
+
+  let state = current.state;
+  for (let i = stateEvents.length - 1; i >= 0; i--) {
+    if (stateEvents[i].ts > asOfMs) {
+      state = stateEvents[i].from;
+    } else {
+      break;
+    }
+  }
+
+  let classification = current.classification;
+  for (let i = reclassifyEvents.length - 1; i >= 0; i--) {
+    if (reclassifyEvents[i].ts > asOfMs) {
+      classification = reclassifyEvents[i].from as GateItemClassification;
+    } else {
+      break;
+    }
+  }
+
+  // current_disposition changes exactly when a state transition is recorded
+  // (gateStore.advanceState writes both together) — find the latest such
+  // transition at/before asOf, then the gate_item_event whose `at` produced
+  // it (the last event inserted at/before that transition's audit ts; the
+  // insert always precedes the audit write within the same synchronous call).
+  let lastStateChangeTs: number | undefined;
+  for (const se of stateEvents) {
+    if (se.ts > asOfMs) break;
+    lastStateChangeTs = se.ts;
+  }
+  let currentDisposition: string | null = null;
+  if (lastStateChangeTs !== undefined) {
+    for (const ev of listGateItemEvents(id)) {
+      if (Date.parse(ev.at) <= lastStateChangeTs) {
+        currentDisposition = ev.disposition;
+      } else {
+        break;
+      }
+    }
+  }
+
+  return {
+    id: current.id,
+    project: current.project,
+    milestone: current.milestone,
+    text: current.text,
+    classification,
+    state,
+    current_disposition: currentDisposition,
+    min_deployed_commit: unreconstructable(GATE_ITEM_UNRECONSTRUCTABLE_REASON),
+    next_attempt_at: unreconstructable(GATE_ITEM_UNRECONSTRUCTABLE_REASON),
+    pending_attempt_count: unreconstructable(
+      GATE_ITEM_UNRECONSTRUCTABLE_REASON,
+    ),
+    updated_at: current.updated_at,
+  };
 }
 
 export function listGateItemsByMilestone(

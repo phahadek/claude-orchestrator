@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   getSession,
+  getSessionAsOf,
   getEventsBySession,
   getGrantedCapabilities,
 } from '../../db/queries';
@@ -50,8 +51,12 @@ export function registerSessionRecordReadTool(
         'Read-only: returns { session, events, auditLog } for `targetSessionId`, the ' +
         "orchestrator's own runtime record (session_events + audit_log). Requires a " +
         'durable grant naming this exact target session id — request it via ' +
-        '`session.requestCapability` with capability `read:session-record:<targetSessionId>`.',
-      inputSchema: { targetSessionId: z.string() },
+        '`session.requestCapability` with capability `read:session-record:<targetSessionId>`. ' +
+        'Optional `asOf` (ISO timestamp) reconstructs the record as of that time instead of ' +
+        'reading current state: events/auditLog are filtered to entries at or before `asOf`, ' +
+        'and `session.status` comes back as an { __unreconstructable: true, reason } marker ' +
+        "instead of the live value (no per-field history yet — see queries.ts's asOf module header).",
+      inputSchema: { targetSessionId: z.string(), asOf: z.string().optional() },
     },
     async (args) => {
       const capability = sessionRecordReadCapability(args.targetSessionId);
@@ -62,20 +67,26 @@ export function registerSessionRecordReadTool(
         );
       }
 
-      const session = getSession(args.targetSessionId);
+      const session = args.asOf
+        ? getSessionAsOf(args.targetSessionId, args.asOf)
+        : getSession(args.targetSessionId);
       if (!session) {
         throw new Error(`session not found: "${args.targetSessionId}"`);
       }
 
+      const asOfMs = args.asOf ? Date.parse(args.asOf) : undefined;
       const events = getEventsBySession(args.targetSessionId)
         .filter((ev) => !isSystemOnlyUserEvent(ev.payload))
+        .filter((ev) => asOfMs === undefined || ev.timestamp <= asOfMs)
         .map((ev) => ({
           eventType: eventKind(ev),
           content: ev.payload,
           timestamp: ev.timestamp,
           ...(ev.message_id != null && { messageId: ev.message_id }),
         }));
-      const auditLog = getAuditLogByActorId(args.targetSessionId);
+      const auditLog = getAuditLogByActorId(args.targetSessionId).filter(
+        (entry) => asOfMs === undefined || entry.ts <= asOfMs,
+      );
 
       return {
         content: [

@@ -40,8 +40,26 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
  * read-only verification session. The session never runs a vendored skill
  * to assemble this itself.
  */
+/**
+ * The timestamp the item's claim is actually about: the latest of its
+ * source PRs' merge times (gate_item_source.added_at), or the item's own
+ * updatedAt when it has no recorded sources. Reading current-state would
+ * silently answer "is X true right now" instead of "was X true once this
+ * merged" — a gate item dispatched for verification well after merge can
+ * have its underlying session/PR/ops_journal/gate_item rows move on in the
+ * meantime (a session redispatched, a PR's state changed post-merge), so
+ * the operational-record reads below must pin to this cutoff, not now.
+ */
+function claimAsOf(item: GateItem): string {
+  return item.sources.reduce(
+    (latest, s) => (s.addedAt > latest ? s.addedAt : latest),
+    item.updatedAt,
+  );
+}
+
 export function buildGateVerifyProcedure(item: GateItem): string {
   const isHumanObservation = item.classification === 'Human-Observation';
+  const asOf = claimAsOf(item);
   return [
     '## Session Lifecycle',
     '',
@@ -62,6 +80,23 @@ export function buildGateVerifyProcedure(item: GateItem): string {
     `- milestone: ${item.milestone}`,
     `- classification: ${item.classification}`,
     `- text: ${item.text}`,
+    `- claim asOf: ${asOf}`,
+    '',
+    `**This item's claim is about ${asOf}** — the point this item's ` +
+      'underlying change merged/deployed, not "right now". The record you ' +
+      'read may have moved on since (a session redispatched, a PR ' +
+      "reviewed again, an ops_journal entry re-transitioned) — that's a " +
+      "later fact, not evidence about whether this item's claim held at " +
+      'the time it describes. Wherever a tool below accepts an `asOf` ' +
+      `parameter, pass \`asOf: "${asOf}"\` explicitly — omitting it reads ` +
+      'current state, which answers a different question than the one ' +
+      'this item asks. This applies to `gateSeed.getState`, ' +
+      '`pullRequest.getByTaskId`, and `session.getRecord`; other tools ' +
+      '(e.g. `auditLog.query`) are already point-in-time by construction ' +
+      '(you filter their results by timestamp yourself). A field that ' +
+      'comes back as `{"__unreconstructable": true, "reason": "..."}` has ' +
+      'no historical record yet — treat it as unknown, never as if it were ' +
+      'the current value.',
     '',
     ...renderProjectRecordAccess('ops', item.project),
     ...renderOpsCapabilities(),
