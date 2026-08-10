@@ -227,7 +227,10 @@ export class PlanningOrchestrator {
     // state for a dispatched planning session, status stays 'running') or
     // exits — unlike session_ended, which only fires on actual process exit.
     if (msg.type === 'session_event' && msg.eventType === 'result') {
-      this.applyPendingApproveTerminal(msg.sessionId);
+      const wentTerminal = this.applyPendingApproveTerminal(msg.sessionId);
+      if (!wentTerminal) {
+        this.checkBlockedMembersNudgeOnTurnEnd(msg.sessionId);
+      }
       return;
     }
     if (msg.type !== 'session_ended') return;
@@ -308,6 +311,24 @@ export class PlanningOrchestrator {
     this.checkTerminal(sessionId);
   }
 
+  /**
+   * Turn-boundary twin of checkTerminal's blocked-members nudge — reachable
+   * from the result event alone, since a session that merely ends a turn and
+   * stays resumable (the common case) never emits session_ended and so never
+   * reaches onSessionParked/checkTerminal. Shares checkBlockedMembersNudge's
+   * detection and per-blocked-set budget with checkTerminal so a set nudged
+   * here does not also collect a fresh nudge at the session's next park, and
+   * deliberately does not drive the session terminal — that stays
+   * checkTerminal's alone, since running it at every turn boundary would end
+   * the session's process on this path too, which is not appropriate here.
+   */
+  private checkBlockedMembersNudgeOnTurnEnd(sessionId: string): void {
+    const row = getSession(sessionId);
+    if (!row || !isPlanningSession(row.session_type ?? '')) return;
+    const all = listStagedIntentsBySession(sessionId);
+    this.checkBlockedMembersNudge(sessionId, all);
+  }
+
   /** Returns true if at least one blocked, non-escalated group's errors were routed back to the session (i.e. it is about to resume). */
   private async verifyAndRoutePendingGroups(
     sessionId: string,
@@ -337,10 +358,12 @@ export class PlanningOrchestrator {
    * terminal (done) state as a side effect when true.
    *
    * stagedCountAtResume is refreshed here — to the current total — on every
-   * non-terminal call, not just from a disposition. checkTerminal already
-   * runs on every park (onSessionParked fires on every session_ended/idle
-   * message), so anchoring the snapshot to "count as of the last park"
-   * rather than "count as of the last disposition" makes the comparison
+   * non-terminal call, not just from a disposition. checkTerminal runs on
+   * every park (onSessionParked fires on every session_ended/idle message —
+   * a turn that merely ends and stays resumable does not park and does not
+   * reach checkTerminal; see checkBlockedMembersNudgeOnTurnEnd for that
+   * case), so anchoring the snapshot to "count as of the last park" rather
+   * than "count as of the last disposition" makes the comparison
    * self-correcting: a resume that isn't routed through handleDisposition/
    * handleGroupDisposition (e.g. a capability-grant resume) can no longer
    * leave the snapshot stale, and a park whose turn staged nothing new is
@@ -394,18 +417,23 @@ export class PlanningOrchestrator {
     return entry.state;
   }
 
-  checkTerminal(sessionId: string): boolean {
-    const { all, countable, stillPending, owesGatedArtifacts } =
-      this.computeStagedIntentState(sessionId);
-
-    // Resumable twin of surfaceBlockedMembersPauseReason: a session that
-    // ends its turn holding its own needs_revision/pending_verification
-    // intents is still alive to supersede/resolve them, so re-engage it with
-    // a bounded nudge instead of falling straight through to terminal (which
-    // would otherwise surface the pause reason and end the process while it
-    // could still self-correct). Checked ahead of the reachedTerminal gate
-    // below since a blocked member matters regardless of whether other
-    // intents are still awaiting disposition.
+  /**
+   * Resumable twin of surfaceBlockedMembersPauseReason: a session that ends
+   * its turn holding its own needs_revision/pending_verification intents is
+   * still alive to supersede/resolve them, so re-engage it with a bounded
+   * nudge instead of falling straight through to terminal (which would
+   * otherwise surface the pause reason and end the process while it could
+   * still self-correct). Shared by checkTerminal (checked ahead of its
+   * reachedTerminal gate, since a blocked member matters regardless of
+   * whether other intents are still awaiting disposition) and
+   * checkBlockedMembersNudgeOnTurnEnd (the turn-boundary path that must not
+   * drive the session terminal). `all` is passed in rather than refetched
+   * here since both callers already have it.
+   */
+  private checkBlockedMembersNudge(
+    sessionId: string,
+    all: StagedIntentRow[],
+  ): { blockedMembers: StagedIntentRow[]; blockedBudgetExhausted: boolean } {
     const blockedMembers = all.filter(
       (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
     );
@@ -419,6 +447,7 @@ export class PlanningOrchestrator {
 
     if (blockedMembers.length > 0 && !blockedBudgetExhausted) {
       this.blockedMembersNudgeSentFor.set(sessionId, blockedKey);
+      const countable = all.filter((i) => i.kind !== NO_OP_INTENT_KIND);
       this.stagedCountAtResume.set(sessionId, countable.length);
       this.sessionManager
         .enqueueFeedback(
@@ -431,6 +460,18 @@ export class PlanningOrchestrator {
             `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after blocked-members nudge: ${err}`,
           );
         });
+    }
+
+    return { blockedMembers, blockedBudgetExhausted };
+  }
+
+  checkTerminal(sessionId: string): boolean {
+    const { all, countable, stillPending, owesGatedArtifacts } =
+      this.computeStagedIntentState(sessionId);
+
+    const { blockedMembers, blockedBudgetExhausted } =
+      this.checkBlockedMembersNudge(sessionId, all);
+    if (blockedMembers.length > 0 && !blockedBudgetExhausted) {
       return false;
     }
 
