@@ -32,14 +32,13 @@ describe('resolveTestScratchDataDir', () => {
 describe('.gitignore rule for the scratch dir', () => {
   it('matches the scratch directory at both the repository root and packages/backend/', () => {
     const rootCandidate = '.test-scratch-datadir-DO-NOT-COMMIT/pid-1/bar';
-    const backendCandidate = 'packages/backend/.test-scratch-datadir-DO-NOT-COMMIT/pid-1/bar';
+    const backendCandidate =
+      'packages/backend/.test-scratch-datadir-DO-NOT-COMMIT/pid-1/bar';
 
     for (const candidate of [rootCandidate, backendCandidate]) {
-      const output = execFileSync(
-        'git',
-        ['check-ignore', '-q', candidate],
-        { cwd: repoRoot }
-      );
+      const output = execFileSync('git', ['check-ignore', '-q', candidate], {
+        cwd: repoRoot,
+      });
       // check-ignore exits 0 (no throw) when the path is ignored; nothing further to assert.
       expect(output).toBeDefined();
     }
