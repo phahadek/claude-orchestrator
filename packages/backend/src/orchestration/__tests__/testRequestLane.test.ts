@@ -31,14 +31,19 @@ import {
   runProjectTestRequest,
   recoverInterruptedTestRequestRuns,
 } from '../testRequestLane';
-import { insertTestRequestRun, listRunningTestRequestRuns } from '../../db/queries';
+import {
+  insertTestRequestRun,
+  listRunningTestRequestRuns,
+} from '../../db/queries';
 
 beforeEach(() => {
   mockRunTestCommands.mockReset();
   db.prepare('DELETE FROM test_request_runs').run();
 });
 
-function baseSpec(overrides: Partial<Parameters<typeof runProjectTestRequest>[0]> = {}) {
+function baseSpec(
+  overrides: Partial<Parameters<typeof runProjectTestRequest>[0]> = {},
+) {
   return {
     projectId: 'proj-1',
     contentHash: 'hash-a',

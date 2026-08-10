@@ -13,13 +13,17 @@ vi.mock('../../db/db', async () => {
   return { db: setupTestDb() };
 });
 
-const { mockGetProjectById, mockLoadOrchestratorConfig, mockComputeHash, mockRunProjectTestRequest } =
-  vi.hoisted(() => ({
-    mockGetProjectById: vi.fn(),
-    mockLoadOrchestratorConfig: vi.fn(),
-    mockComputeHash: vi.fn(),
-    mockRunProjectTestRequest: vi.fn(),
-  }));
+const {
+  mockGetProjectById,
+  mockLoadOrchestratorConfig,
+  mockComputeHash,
+  mockRunProjectTestRequest,
+} = vi.hoisted(() => ({
+  mockGetProjectById: vi.fn(),
+  mockLoadOrchestratorConfig: vi.fn(),
+  mockComputeHash: vi.fn(),
+  mockRunProjectTestRequest: vi.fn(),
+}));
 
 vi.mock('../../config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../config')>();

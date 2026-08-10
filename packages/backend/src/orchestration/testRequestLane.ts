@@ -24,7 +24,10 @@
 
 import { randomUUID } from 'crypto';
 import { Semaphore } from '../tasks/deferralClassifier';
-import { runTestCommands, type TestCommandResult } from '../session/test-runner';
+import {
+  runTestCommands,
+  type TestCommandResult,
+} from '../session/test-runner';
 import { hasTestRequestAdmission } from './memoryAdmission';
 import { typedGetSetting } from '../config/settings';
 import {
@@ -49,7 +52,9 @@ const projectSemaphores = new Map<string, Semaphore>();
 function getProjectSemaphore(projectId: string): Semaphore {
   let sem = projectSemaphores.get(projectId);
   if (!sem) {
-    sem = new Semaphore(typedGetSetting('test_request_max_concurrent_per_project'));
+    sem = new Semaphore(
+      typedGetSetting('test_request_max_concurrent_per_project'),
+    );
     projectSemaphores.set(projectId, sem);
   }
   return sem;
@@ -121,12 +126,23 @@ async function executeTestRequestRun(
       (msg) => logger.info(`[testRequestLane] ${msg}`),
       { maxRssMb: spec.maxRssMb, failFast: spec.failFast },
     );
-    completeTestRequestRun(runId, result.passed ? 'passed' : 'failed', result.output);
+    completeTestRequestRun(
+      runId,
+      result.passed ? 'passed' : 'failed',
+      result.output,
+    );
     return result;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    completeTestRequestRun(runId, 'failed', `[testRequestLane] execution error: ${message}`);
-    return { passed: false, output: `[testRequestLane] execution error: ${message}` };
+    completeTestRequestRun(
+      runId,
+      'failed',
+      `[testRequestLane] execution error: ${message}`,
+    );
+    return {
+      passed: false,
+      output: `[testRequestLane] execution error: ${message}`,
+    };
   } finally {
     release();
   }

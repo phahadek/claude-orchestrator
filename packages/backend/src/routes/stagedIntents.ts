@@ -4789,15 +4789,13 @@ const TEST_REQUEST_DELIVERY_OUTPUT_CAP = 8_000;
  * any missing piece (no project, no configured test commands, session has
  * no worktree) — none of these throw; they just mean this intent cannot run.
  */
-function resolveTestRequestExecutionInputs(intent: StagedIntent):
-  | {
-      worktreePath: string;
-      commands: string[];
-      timeoutSec: number;
-      maxRssMb: number;
-      failFast: boolean;
-    }
-  | null {
+function resolveTestRequestExecutionInputs(intent: StagedIntent): {
+  worktreePath: string;
+  commands: string[];
+  timeoutSec: number;
+  maxRssMb: number;
+  failFast: boolean;
+} | null {
   if (!intent.sessionId) return null;
   const project = getProjectById(intent.projectId);
   if (!project) return null;
@@ -4833,7 +4831,7 @@ async function triggerTestRequestExecution(
     result = {
       passed: false,
       output:
-        '[test.request] could not resolve this project\'s test: commands or the requesting session\'s worktree',
+        "[test.request] could not resolve this project's test: commands or the requesting session's worktree",
     };
   } else {
     let contentHash: string | null = null;

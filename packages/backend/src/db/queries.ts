@@ -6381,7 +6381,9 @@ export function listRunningTestRequestRuns(): TestRequestRunRow[] {
 
 export function getSessionTestRequestCycleCount(sessionId: string): number {
   const row = db
-    .prepare(`SELECT count FROM session_test_request_cycles WHERE session_id = ?`)
+    .prepare(
+      `SELECT count FROM session_test_request_cycles WHERE session_id = ?`,
+    )
     .get(sessionId) as { count: number } | undefined;
   return row?.count ?? 0;
 }
