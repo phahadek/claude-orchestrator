@@ -615,9 +615,15 @@ describe('resumeOrphanSessions() — planning-session resumability pre-check', (
       worktree_path: null,
     });
     vi.mocked(queries.getSessionsByStatus).mockReturnValue([planning]);
-    // Only the project dir exists on disk (there is no worktree for this row).
+    // The project dir exists on disk (there is no worktree for this row), and
+    // so does the on-disk system-prompt file dispatch would have written —
+    // resume reuses it rather than rebuilding, see
+    // _buildAndWriteResumeSystemPrompt.
     vi.mocked(fs.existsSync).mockImplementation(
-      (p) => String(p) === '/fake/project',
+      (p) =>
+        String(p) === '/fake/project' ||
+        String(p) ===
+          '/fake/project/.claude/session-prompts/planning-session.md',
     );
     vi.mocked(execSync).mockReturnValue('');
 
@@ -751,8 +757,15 @@ describe('resumeOrphanSessions() — planning-session resumability pre-check', (
       planning,
       standard,
     ]);
+    // The on-disk system-prompt file dispatch would have written for the
+    // planning session must also exist, or _buildAndWriteResumeSystemPrompt
+    // fails loud rather than resuming — see the other test in this
+    // describe block.
     vi.mocked(fs.existsSync).mockImplementation(
-      (p) => String(p) === '/fake/project',
+      (p) =>
+        String(p) === '/fake/project' ||
+        String(p) ===
+          '/fake/project/.claude/session-prompts/mixed-planning.md',
     );
 
     const sm = new SessionManager();
