@@ -2460,9 +2460,30 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * Fetch task content, build session context, write the system-prompt file
-   * outside the worktree, and return its path. Returns undefined when not in
-   * CLI mode, when task_url is absent, or when building fails.
+   * Resume-side counterpart to the dispatch-time branch at
+   * completeStart()'s sessionContextContent assembly (~:1950-1979). Branches
+   * by session type instead of unconditionally calling buildSessionContext —
+   * see the task's write-up for why the unconditional call was a bug:
+   * planning sessions (groom/design/ops/split/docs) were having their
+   * dispatch-assembled procedure silently replaced by the coding scaffold on
+   * every resume (e.g. every backend restart).
+   *
+   * - planning (isPlanningSession): the procedure was already assembled and
+   *   written once at dispatch to the deterministic, sessionId-keyed path
+   *   `<projectDir>/.claude/session-prompts/<sessionId>.md` (see
+   *   writeSystemPromptFile). That file survives a backend restart same as
+   *   the worktree does, so resume reuses it byte-for-byte rather than
+   *   rebuilding — there is no in-memory injectedProcedureContent to rebuild
+   *   from post-restart, and no DB column persisting it. If the file is
+   *   missing, fail loud (mirroring the dispatch-time guard at ~:1966-1979)
+   *   rather than silently falling back to the coding scaffold.
+   * - review / depth_review: call buildReviewClaudeMd / buildDepthReviewClaudeMd
+   *   directly, same as dispatch — cheap, deterministic, no on-disk reuse.
+   * - standard: unchanged — build via buildSessionContext and (re)write.
+   *
+   * Returns undefined when not in CLI mode, when task_url is absent, or when
+   * building fails (standard/review/depth_review paths only — the planning
+   * path's missing-file case throws instead, see above).
    */
   private async _buildAndWriteResumeSystemPrompt(
     row: Session,
@@ -2471,7 +2492,59 @@ export class SessionManager extends EventEmitter {
     projectDir: string,
     worktreePath: string,
   ): Promise<string | undefined> {
+    if (isPlanningSession(row.session_type)) {
+      const existingPath = path.join(
+        projectDir,
+        '.claude',
+        'session-prompts',
+        `${row.session_id}.md`,
+      );
+      if (!fs.existsSync(existingPath)) {
+        throw new Error(
+          `[SessionManager] planning session (sessionType=${row.session_type}) ` +
+            `${row.session_id.slice(0, 8)} has no on-disk system-prompt file at ` +
+            `${existingPath} — refusing to fall back to buildSessionContext's ` +
+            'coding scaffold on resume',
+        );
+      }
+      logger.info(
+        `[SessionManager] reusing existing planning system prompt at ${existingPath} for ${row.session_id.slice(0, 8)}`,
+      );
+      return existingPath;
+    }
+
+    const taskName = row.task_name ?? row.task_url ?? '';
     try {
+      if (row.session_type === 'review') {
+        const context = buildReviewClaudeMd(
+          taskName,
+          orchConfig.review_rules.length > 0
+            ? orchConfig.review_rules
+            : undefined,
+        );
+        const filePath = writeSystemPromptFile(
+          projectDir,
+          row.session_id,
+          context,
+        );
+        logger.info(
+          `[SessionManager] system prompt written to ${filePath} for ${row.session_id.slice(0, 8)}`,
+        );
+        return filePath;
+      }
+      if (row.session_type === 'depth_review') {
+        const context = buildDepthReviewClaudeMd(taskName);
+        const filePath = writeSystemPromptFile(
+          projectDir,
+          row.session_id,
+          context,
+        );
+        logger.info(
+          `[SessionManager] system prompt written to ${filePath} for ${row.session_id.slice(0, 8)}`,
+        );
+        return filePath;
+      }
+
       let taskContent: string | undefined;
       if (row.task_id && row.project_id) {
         try {
@@ -2483,7 +2556,7 @@ export class SessionManager extends EventEmitter {
         }
       }
       const context = buildSessionContext({
-        taskName: row.task_name ?? row.task_url ?? '',
+        taskName,
         taskUrl: row.task_url ?? '',
         projectContextUrl: row.project_context_url ?? '',
         targetBranch: project.baseBranch ?? 'dev',
