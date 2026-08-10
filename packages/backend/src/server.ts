@@ -140,6 +140,7 @@ import {
   handleUncaughtException,
   handleUnhandledRejection,
 } from './audit/recordFault';
+import { asyncErrorBoundary } from './routes/asyncHandler';
 import { setupSessionCgroup } from './session/sessionCgroup';
 
 runMigrations(db);
@@ -344,6 +345,12 @@ app.use('/api', createMergeCandidatesRouter());
 app.use('/api', createOpsContextRouter());
 app.use('/api', createMilestonesRouter());
 app.use('/api', createPlanningLaunchRouter(opsSessionLauncher));
+
+// Terminal error boundary: catches rejections/throws from asyncHandler-wrapped
+// route handlers that weren't already handled inside the route. Must stay
+// last among router mounts — Express selects error middleware by position.
+app.use(asyncErrorBoundary);
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')),
