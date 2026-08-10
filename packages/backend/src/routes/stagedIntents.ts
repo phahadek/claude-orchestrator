@@ -6584,95 +6584,100 @@ export function createStagedIntentsRouter(
   });
 
   // ── POST /api/staged-intents ─────────────────────────────────────────────
-  router.post('/staged-intents', asyncHandler(async (req: Request, res: Response) => {
-    const body = req.body as {
-      kind?: unknown;
-      payload?: unknown;
-      projectId?: unknown;
-      groupId?: unknown;
-      decisionProposal?: unknown;
-      investigation?: unknown;
-      groomProposal?: unknown;
-      supersedes?: unknown;
-      milestone?: unknown;
-    };
-    const kind = typeof body.kind === 'string' ? body.kind : null;
-    const projectId =
-      typeof body.projectId === 'string' ? body.projectId : null;
-    const groupId = typeof body.groupId === 'string' ? body.groupId : null;
-    const decisionProposal =
-      typeof body.decisionProposal === 'string' ? body.decisionProposal : null;
-    const investigation =
-      typeof body.investigation === 'string' ? body.investigation : null;
-    const groomProposal = parseGroomProposal(body.groomProposal);
-    const supersedes =
-      typeof body.supersedes === 'string' ? body.supersedes : null;
-    const milestone =
-      typeof body.milestone === 'string' ? body.milestone : null;
+  router.post(
+    '/staged-intents',
+    asyncHandler(async (req: Request, res: Response) => {
+      const body = req.body as {
+        kind?: unknown;
+        payload?: unknown;
+        projectId?: unknown;
+        groupId?: unknown;
+        decisionProposal?: unknown;
+        investigation?: unknown;
+        groomProposal?: unknown;
+        supersedes?: unknown;
+        milestone?: unknown;
+      };
+      const kind = typeof body.kind === 'string' ? body.kind : null;
+      const projectId =
+        typeof body.projectId === 'string' ? body.projectId : null;
+      const groupId = typeof body.groupId === 'string' ? body.groupId : null;
+      const decisionProposal =
+        typeof body.decisionProposal === 'string'
+          ? body.decisionProposal
+          : null;
+      const investigation =
+        typeof body.investigation === 'string' ? body.investigation : null;
+      const groomProposal = parseGroomProposal(body.groomProposal);
+      const supersedes =
+        typeof body.supersedes === 'string' ? body.supersedes : null;
+      const milestone =
+        typeof body.milestone === 'string' ? body.milestone : null;
 
-    if (!kind) {
-      res.status(400).json({ error: 'kind is required' });
-      return;
-    }
-    if (!KNOWN_INTENT_KINDS.has(kind)) {
-      res.status(400).json({ error: `unknown intent kind "${kind}"` });
-      return;
-    }
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId is required' });
-      return;
-    }
-
-    let normalizedPayload: unknown;
-    try {
-      normalizedPayload = await validateAndNormalizeTaskReferences(
-        kind,
-        body.payload,
-        projectId,
-        groupId,
-      );
-    } catch (err) {
-      if (
-        err instanceof TaskReferenceValidationError ||
-        err instanceof InvestigationAccretionRejectedError ||
-        err instanceof OpsJournalTransitionRejectedError ||
-        err instanceof OpsReconciliationAssertionMissingError
-      ) {
-        res.status(400).json({ error: err.message });
+      if (!kind) {
+        res.status(400).json({ error: 'kind is required' });
         return;
       }
-      throw err;
-    }
-
-    let intent: StagedIntent;
-    try {
-      intent = stageIntent(
-        kind,
-        normalizedPayload,
-        projectId,
-        groupId,
-        null,
-        decisionProposal,
-        groomProposal,
-        supersedes,
-        milestone,
-        investigation,
-      );
-    } catch (err) {
-      if (
-        err instanceof ReadyPathMissingGroupError ||
-        err instanceof UnknownMilestoneError ||
-        err instanceof GateVerifyPayloadValidationError
-      ) {
-        res.status(400).json({ error: err.message });
+      if (!KNOWN_INTENT_KINDS.has(kind)) {
+        res.status(400).json({ error: `unknown intent kind "${kind}"` });
         return;
       }
-      throw err;
-    }
+      if (!projectId) {
+        res.status(400).json({ error: 'projectId is required' });
+        return;
+      }
 
-    const checked = await runStageTimeReadyChecks(intent);
-    res.status(201).json(checked);
-  }));
+      let normalizedPayload: unknown;
+      try {
+        normalizedPayload = await validateAndNormalizeTaskReferences(
+          kind,
+          body.payload,
+          projectId,
+          groupId,
+        );
+      } catch (err) {
+        if (
+          err instanceof TaskReferenceValidationError ||
+          err instanceof InvestigationAccretionRejectedError ||
+          err instanceof OpsJournalTransitionRejectedError ||
+          err instanceof OpsReconciliationAssertionMissingError
+        ) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+
+      let intent: StagedIntent;
+      try {
+        intent = stageIntent(
+          kind,
+          normalizedPayload,
+          projectId,
+          groupId,
+          null,
+          decisionProposal,
+          groomProposal,
+          supersedes,
+          milestone,
+          investigation,
+        );
+      } catch (err) {
+        if (
+          err instanceof ReadyPathMissingGroupError ||
+          err instanceof UnknownMilestoneError ||
+          err instanceof GateVerifyPayloadValidationError
+        ) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+
+      const checked = await runStageTimeReadyChecks(intent);
+      res.status(201).json(checked);
+    }),
+  );
 
   // ── POST /api/staged-intents/:id/apply ───────────────────────────────────
   // Human / device-authenticated surface only — the only place `override` is

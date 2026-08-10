@@ -189,39 +189,42 @@ async function validateJiraToken(
   }
 }
 
-router.post('/setup/validate', asyncHandler(async (req, res) => {
-  const { type, token, host, email } = req.body as {
-    type?: string;
-    token?: string;
-    host?: string;
-    email?: string;
-  };
-  if (type !== 'github' && type !== 'notion' && type !== 'jira') {
-    res
-      .status(400)
-      .json({ error: 'type must be "github", "notion", or "jira"' });
-    return;
-  }
-  if (typeof token !== 'string' || !token) {
-    res.status(400).json({ error: 'token is required' });
-    return;
-  }
-  if (type === 'jira' && (typeof host !== 'string' || !host)) {
-    res.status(400).json({ error: 'host is required for jira validation' });
-    return;
-  }
+router.post(
+  '/setup/validate',
+  asyncHandler(async (req, res) => {
+    const { type, token, host, email } = req.body as {
+      type?: string;
+      token?: string;
+      host?: string;
+      email?: string;
+    };
+    if (type !== 'github' && type !== 'notion' && type !== 'jira') {
+      res
+        .status(400)
+        .json({ error: 'type must be "github", "notion", or "jira"' });
+      return;
+    }
+    if (typeof token !== 'string' || !token) {
+      res.status(400).json({ error: 'token is required' });
+      return;
+    }
+    if (type === 'jira' && (typeof host !== 'string' || !host)) {
+      res.status(400).json({ error: 'host is required for jira validation' });
+      return;
+    }
 
-  let result: { valid: boolean; message: string };
-  if (type === 'github') {
-    result = await validateGitHubToken(token);
-  } else if (type === 'notion') {
-    result = await validateNotionToken(token);
-  } else {
-    result = await validateJiraToken(host as string, token, email);
-  }
+    let result: { valid: boolean; message: string };
+    if (type === 'github') {
+      result = await validateGitHubToken(token);
+    } else if (type === 'notion') {
+      result = await validateNotionToken(token);
+    } else {
+      result = await validateJiraToken(host as string, token, email);
+    }
 
-  res.json(result);
-}));
+    res.json(result);
+  }),
+);
 
 // ── Import ────────────────────────────────────────────────────────────────────
 

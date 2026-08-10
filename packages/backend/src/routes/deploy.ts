@@ -463,35 +463,38 @@ export function createDeployRouter(): Router {
   // Gate-panel launch control: starts a deploy_run targeting the playbook's
   // latest dev (resolved server-side at launch), gated by the playbook's
   // initial confirm-gate.
-  router.post('/deploy/launch', asyncHandler(async (req: Request, res: Response) => {
-    const body = req.body as { projectId?: unknown };
-    const projectId =
-      typeof body.projectId === 'string' ? body.projectId : null;
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId is required' });
-      return;
-    }
-
-    const project = getProjectRowById(projectId);
-    if (!project) {
-      res.status(404).json({ error: `unknown project ${projectId}` });
-      return;
-    }
-
-    try {
-      const orchestrator = getOrchestrator(projectId, project.project_dir);
-      const run = await orchestrator.startDeploy();
-      res.status(202).json({ run });
-    } catch (err) {
-      if (err instanceof DeployRunConflictError) {
-        res.status(409).json({ error: err.message });
+  router.post(
+    '/deploy/launch',
+    asyncHandler(async (req: Request, res: Response) => {
+      const body = req.body as { projectId?: unknown };
+      const projectId =
+        typeof body.projectId === 'string' ? body.projectId : null;
+      if (!projectId) {
+        res.status(400).json({ error: 'projectId is required' });
         return;
       }
-      res.status(500).json({
-        error: err instanceof Error ? err.message : 'deploy launch failed',
-      });
-    }
-  }));
+
+      const project = getProjectRowById(projectId);
+      if (!project) {
+        res.status(404).json({ error: `unknown project ${projectId}` });
+        return;
+      }
+
+      try {
+        const orchestrator = getOrchestrator(projectId, project.project_dir);
+        const run = await orchestrator.startDeploy();
+        res.status(202).json({ run });
+      } catch (err) {
+        if (err instanceof DeployRunConflictError) {
+          res.status(409).json({ error: err.message });
+          return;
+        }
+        res.status(500).json({
+          error: err instanceof Error ? err.message : 'deploy launch failed',
+        });
+      }
+    }),
+  );
 
   // GET /api/deploy/status?projectId=...
   // Gate-panel progress read: the project's active deploy_run if any,

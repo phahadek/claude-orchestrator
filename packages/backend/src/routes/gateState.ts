@@ -78,16 +78,19 @@ export function createGateStateRouter(): Router {
   });
 
   // POST /api/gate/reconcile  { deploySha }
-  router.post('/gate/reconcile', asyncHandler(async (req: Request, res: Response) => {
-    const body = req.body as { deploySha?: unknown };
-    const deploySha =
-      typeof body.deploySha === 'string' ? body.deploySha : null;
-    if (!deploySha) {
-      res.status(400).json({ error: 'deploySha is required' });
-      return;
-    }
-    res.json(await reconcileGateRunnability(deploySha));
-  }));
+  router.post(
+    '/gate/reconcile',
+    asyncHandler(async (req: Request, res: Response) => {
+      const body = req.body as { deploySha?: unknown };
+      const deploySha =
+        typeof body.deploySha === 'string' ? body.deploySha : null;
+      if (!deploySha) {
+        res.status(400).json({ error: 'deploySha is required' });
+        return;
+      }
+      res.json(await reconcileGateRunnability(deploySha));
+    }),
+  );
 
   // GET /api/gate/next?project=P&milestone=M12&classification=Read-Only&limit=5
   router.get('/gate/next', (req: Request, res: Response) => {
@@ -394,62 +397,65 @@ export function createGateStateRouter(): Router {
   );
 
   // POST /api/gate/backfill  { project, taskId, milestone, milestoneBoardIds }
-  router.post('/gate/backfill', asyncHandler(async (req: Request, res: Response) => {
-    const body = req.body as {
-      project?: unknown;
-      taskId?: unknown;
-      milestone?: unknown;
-      milestoneBoardIds?: unknown;
-    };
-    const project = typeof body.project === 'string' ? body.project : null;
-    const taskId = typeof body.taskId === 'string' ? body.taskId : null;
-    const milestone =
-      typeof body.milestone === 'string' ? body.milestone : null;
-    if (!project) {
-      res.status(400).json({ error: 'project is required' });
-      return;
-    }
-    if (!taskId) {
-      res.status(400).json({ error: 'taskId is required' });
-      return;
-    }
-    if (!milestone) {
-      res.status(400).json({ error: 'milestone is required' });
-      return;
-    }
-    const milestoneBoardIds = Array.isArray(body.milestoneBoardIds)
-      ? body.milestoneBoardIds.filter(
-          (id): id is string => typeof id === 'string',
-        )
-      : undefined;
-
-    let canonicalMilestone: string;
-    try {
-      canonicalMilestone = resolveMilestoneForProject(project, milestone);
-    } catch (err) {
-      if (err instanceof UnknownMilestoneError) {
-        res.status(400).json({ error: err.message });
+  router.post(
+    '/gate/backfill',
+    asyncHandler(async (req: Request, res: Response) => {
+      const body = req.body as {
+        project?: unknown;
+        taskId?: unknown;
+        milestone?: unknown;
+        milestoneBoardIds?: unknown;
+      };
+      const project = typeof body.project === 'string' ? body.project : null;
+      const taskId = typeof body.taskId === 'string' ? body.taskId : null;
+      const milestone =
+        typeof body.milestone === 'string' ? body.milestone : null;
+      if (!project) {
+        res.status(400).json({ error: 'project is required' });
         return;
       }
-      throw err;
-    }
+      if (!taskId) {
+        res.status(400).json({ error: 'taskId is required' });
+        return;
+      }
+      if (!milestone) {
+        res.status(400).json({ error: 'milestone is required' });
+        return;
+      }
+      const milestoneBoardIds = Array.isArray(body.milestoneBoardIds)
+        ? body.milestoneBoardIds.filter(
+            (id): id is string => typeof id === 'string',
+          )
+        : undefined;
 
-    try {
-      const result = await backfillGateTask({
-        project,
-        taskId,
-        milestone: canonicalMilestone,
-        milestoneBoardIds,
-      });
-      res.json(result);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'gate backfill failed';
-      res.status(message.includes('not found') ? 404 : 409).json({
-        error: message,
-      });
-    }
-  }));
+      let canonicalMilestone: string;
+      try {
+        canonicalMilestone = resolveMilestoneForProject(project, milestone);
+      } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+
+      try {
+        const result = await backfillGateTask({
+          project,
+          taskId,
+          milestone: canonicalMilestone,
+          milestoneBoardIds,
+        });
+        res.json(result);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'gate backfill failed';
+        res.status(message.includes('not found') ? 404 : 409).json({
+          error: message,
+        });
+      }
+    }),
+  );
 
   // POST /api/gate/accrete-contribution
   //   { project, taskId, title, milestone, classification, items: [{ text }] }

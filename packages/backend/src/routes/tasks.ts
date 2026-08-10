@@ -645,121 +645,127 @@ export function createTasksRouter(
   });
 
   // ── GET /api/tasks/non-milestone?projectId=<id> ─────────────────────────
-  router.get('/tasks/non-milestone', asyncHandler(async (req: Request, res: Response) => {
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
+  router.get(
+    '/tasks/non-milestone',
+    asyncHandler(async (req: Request, res: Response) => {
+      const projectId =
+        typeof req.query.projectId === 'string' ? req.query.projectId : '';
+      if (!projectId) {
+        res.status(400).json({ error: 'projectId query param is required' });
+        return;
+      }
 
-    const project = getProjectById(projectId);
-    if (!project) {
-      res.status(404).json({ error: `Project '${projectId}' not found` });
-      return;
-    }
+      const project = getProjectById(projectId);
+      if (!project) {
+        res.status(404).json({ error: `Project '${projectId}' not found` });
+        return;
+      }
 
-    const cacheKey = `non_milestone:${projectId}`;
-    const cacheRow = getTaskCache(cacheKey);
-    if (!cacheRow) {
-      res.json([]);
-      return;
-    }
+      const cacheKey = `non_milestone:${projectId}`;
+      const cacheRow = getTaskCache(cacheKey);
+      if (!cacheRow) {
+        res.json([]);
+        return;
+      }
 
-    let notionTasks: NotionTask[];
-    try {
-      notionTasks = JSON.parse(cacheRow.raw_json) as NotionTask[];
-    } catch {
-      res.json([]);
-      return;
-    }
+      let notionTasks: NotionTask[];
+      try {
+        notionTasks = JSON.parse(cacheRow.raw_json) as NotionTask[];
+      } catch {
+        res.json([]);
+        return;
+      }
 
-    const taskIds = notionTasks.map((t) => t.id);
-    const aggregates = getActiveTaskAggregates(taskIds);
-    const cap = getReviewIterationCap();
-    const views: TaskView[] = aggregates
-      .map((row) => buildTaskViewFromRow(row, cap))
-      .filter((v) => !v.notionStatus.includes('Deferred'));
+      const taskIds = notionTasks.map((t) => t.id);
+      const aggregates = getActiveTaskAggregates(taskIds);
+      const cap = getReviewIterationCap();
+      const views: TaskView[] = aggregates
+        .map((row) => buildTaskViewFromRow(row, cap))
+        .filter((v) => !v.notionStatus.includes('Deferred'));
 
-    resolveDependencyBlocking(views, notionTasks);
+      resolveDependencyBlocking(views, notionTasks);
 
-    annotateGroomDepBlocking(views, notionTasks);
+      annotateGroomDepBlocking(views, notionTasks);
 
-    await annotateOpsDepBlocking(views, notionTasks, projectId);
+      await annotateOpsDepBlocking(views, notionTasks, projectId);
 
-    res.json(views);
-  }));
+      res.json(views);
+    }),
+  );
 
   // ── GET /api/tasks/active?projectId=<id>&boardId=<id> ────────────────────
-  router.get('/tasks/active', asyncHandler(async (req: Request, res: Response) => {
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
+  router.get(
+    '/tasks/active',
+    asyncHandler(async (req: Request, res: Response) => {
+      const projectId =
+        typeof req.query.projectId === 'string' ? req.query.projectId : '';
+      if (!projectId) {
+        res.status(400).json({ error: 'projectId query param is required' });
+        return;
+      }
 
-    const project = getProjectById(projectId);
-    if (!project) {
-      res.status(404).json({ error: `Project '${projectId}' not found` });
-      return;
-    }
+      const project = getProjectById(projectId);
+      if (!project) {
+        res.status(404).json({ error: `Project '${projectId}' not found` });
+        return;
+      }
 
-    // Determine boardId: prefer explicit query param, fall back to project default
-    const boardId =
-      typeof req.query.boardId === 'string' && req.query.boardId
-        ? req.query.boardId
-        : project.boardId;
+      // Determine boardId: prefer explicit query param, fall back to project default
+      const boardId =
+        typeof req.query.boardId === 'string' && req.query.boardId
+          ? req.query.boardId
+          : project.boardId;
 
-    // Read the board cache to get the list of task IDs for this board.
-    // boardId is the DB milestone UUID, matching the write-side cache key.
-    const cacheKey = `board:${boardId}`;
-    const boardCacheRow = getTaskCache(cacheKey);
+      // Read the board cache to get the list of task IDs for this board.
+      // boardId is the DB milestone UUID, matching the write-side cache key.
+      const cacheKey = `board:${boardId}`;
+      const boardCacheRow = getTaskCache(cacheKey);
 
-    // Cold cache: no data yet — return immediately without blocking on Notion.
-    if (!boardCacheRow) {
+      // Cold cache: no data yet — return immediately without blocking on Notion.
+      if (!boardCacheRow) {
+        const response: TasksActiveResponse = {
+          tasks: [],
+          lastRefreshedAt: null,
+          stale: false,
+          coldCache: true,
+        };
+        res.json(response);
+        return;
+      }
+
+      let allBoardTasks: NotionTask[];
+      try {
+        allBoardTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
+      } catch {
+        allBoardTasks = [];
+      }
+      const taskIds = allBoardTasks.map((t) => t.id);
+
+      const aggregates = getActiveTaskAggregates(taskIds);
+      const cap = getReviewIterationCap();
+      const views: TaskView[] = aggregates
+        .map((row) => buildTaskViewFromRow(row, cap))
+        .filter((v) => !v.notionStatus.includes('Deferred'));
+
+      resolveDependencyBlocking(views, allBoardTasks);
+
+      annotateGroomDepBlocking(views, allBoardTasks);
+
+      await annotateOpsDepBlocking(views, allBoardTasks, projectId);
+
+      const stale =
+        Date.now() - boardCacheRow.fetched_at >
+        runtimeSettings.task_cache_refresh_interval_ms * 2;
+
       const response: TasksActiveResponse = {
-        tasks: [],
-        lastRefreshedAt: null,
-        stale: false,
-        coldCache: true,
+        tasks: views,
+        lastRefreshedAt: boardCacheRow.fetched_at,
+        stale,
+        coldCache: false,
       };
       res.json(response);
-      return;
-    }
-
-    let allBoardTasks: NotionTask[];
-    try {
-      allBoardTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
-    } catch {
-      allBoardTasks = [];
-    }
-    const taskIds = allBoardTasks.map((t) => t.id);
-
-    const aggregates = getActiveTaskAggregates(taskIds);
-    const cap = getReviewIterationCap();
-    const views: TaskView[] = aggregates
-      .map((row) => buildTaskViewFromRow(row, cap))
-      .filter((v) => !v.notionStatus.includes('Deferred'));
-
-    resolveDependencyBlocking(views, allBoardTasks);
-
-    annotateGroomDepBlocking(views, allBoardTasks);
-
-    await annotateOpsDepBlocking(views, allBoardTasks, projectId);
-
-    const stale =
-      Date.now() - boardCacheRow.fetched_at >
-      runtimeSettings.task_cache_refresh_interval_ms * 2;
-
-    const response: TasksActiveResponse = {
-      tasks: views,
-      lastRefreshedAt: boardCacheRow.fetched_at,
-      stale,
-      coldCache: false,
-    };
-    res.json(response);
-  }));
+    }),
+  );
 
   // ── POST /api/tasks/refresh ──────────────────────────────────────────────
   router.post('/tasks/refresh', (req: Request, res: Response) => {
@@ -790,45 +796,48 @@ export function createTasksRouter(
   // @deprecated Superseded by POST /tasks/:taskId/recover (redispatch action).
   // Retained as a thin alias over the shared redispatch executor for the current
   // frontend; the unified /recover endpoint is the canonical recovery interface.
-  router.post('/tasks/:taskId/unblock', asyncHandler(async (req: Request, res: Response) => {
-    const taskId = String(req.params.taskId);
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+  router.post(
+    '/tasks/:taskId/unblock',
+    asyncHandler(async (req: Request, res: Response) => {
+      const taskId = String(req.params.taskId);
+      const projectId =
+        typeof req.query.projectId === 'string' ? req.query.projectId : null;
 
-    if (!projectId) {
-      res.status(422).json({ error: 'projectId is required' });
-      return;
-    }
+      if (!projectId) {
+        res.status(422).json({ error: 'projectId is required' });
+        return;
+      }
 
-    let backend: Awaited<ReturnType<typeof getTaskBackend>>;
-    try {
-      backend = getTaskBackend(projectId);
-    } catch {
-      res
-        .status(422)
-        .json({ error: `Cannot resolve backend for project '${projectId}'` });
-      return;
-    }
+      let backend: Awaited<ReturnType<typeof getTaskBackend>>;
+      try {
+        backend = getTaskBackend(projectId);
+      } catch {
+        res
+          .status(422)
+          .json({ error: `Cannot resolve backend for project '${projectId}'` });
+        return;
+      }
 
-    try {
-      await executeRedispatch(backend, taskId, sessionManager);
-    } catch (err) {
-      res.status(500).json({
-        error: err instanceof Error ? err.message : 'Failed to update status',
+      try {
+        await executeRedispatch(backend, taskId, sessionManager);
+      } catch (err) {
+        res.status(500).json({
+          error: err instanceof Error ? err.message : 'Failed to update status',
+        });
+        return;
+      }
+
+      recordEvent({
+        event_type: 'task_unblocked',
+        actor_type: 'human',
+        project_id: projectId,
+        task_id: taskId,
+        payload: { taskId, projectId },
       });
-      return;
-    }
 
-    recordEvent({
-      event_type: 'task_unblocked',
-      actor_type: 'human',
-      project_id: projectId,
-      task_id: taskId,
-      payload: { taskId, projectId },
-    });
-
-    res.json({ ok: true, newStatus: '🗂️ Ready' });
-  }));
+      res.json({ ok: true, newStatus: '🗂️ Ready' });
+    }),
+  );
 
   // ── POST /api/tasks/:taskId/assign-repo ────────────────────────────────────
   router.post('/tasks/:taskId/assign-repo', (req: Request, res: Response) => {
@@ -870,244 +879,262 @@ export function createTasksRouter(
 
   // ── GET /api/tasks/:taskId/page?projectId=<id> ──────────────────────────────
   // Read-only fetch of the task's full spec body as markdown, uniform across sources.
-  router.get('/tasks/:taskId/page', asyncHandler(async (req: Request, res: Response) => {
-    const taskId = String(req.params.taskId);
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : '';
+  router.get(
+    '/tasks/:taskId/page',
+    asyncHandler(async (req: Request, res: Response) => {
+      const taskId = String(req.params.taskId);
+      const projectId =
+        typeof req.query.projectId === 'string' ? req.query.projectId : '';
 
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId is required' });
-      return;
-    }
+      if (!projectId) {
+        res.status(400).json({ error: 'projectId is required' });
+        return;
+      }
 
-    let backend: ReturnType<typeof getTaskBackend>;
-    try {
-      backend = getTaskBackend(projectId);
-    } catch {
-      res
-        .status(400)
-        .json({ error: `Cannot resolve backend for project '${projectId}'` });
-      return;
-    }
+      let backend: ReturnType<typeof getTaskBackend>;
+      try {
+        backend = getTaskBackend(projectId);
+      } catch {
+        res
+          .status(400)
+          .json({ error: `Cannot resolve backend for project '${projectId}'` });
+        return;
+      }
 
-    try {
-      const markdown = await backend.fetchTaskPage(taskId);
-      res.json({ markdown });
-    } catch (err) {
-      res.status(404).json({
-        error: err instanceof Error ? err.message : `task not found: ${taskId}`,
-      });
-    }
-  }));
+      try {
+        const markdown = await backend.fetchTaskPage(taskId);
+        res.json({ markdown });
+      } catch (err) {
+        res.status(404).json({
+          error:
+            err instanceof Error ? err.message : `task not found: ${taskId}`,
+        });
+      }
+    }),
+  );
 
   // ── POST /api/tasks/move-preview ────────────────────────────────────────────
   // Read-only preview for the move confirm UI: runs the same planMove used by
   // TaskWriteCommands.moveTask (via the source milestone's dependency graph) so
   // the operator sees the cascade set or refusal reason before staging a
   // task.move intent through the general staged-intent surface.
-  router.post('/tasks/move-preview', asyncHandler(async (req: Request, res: Response) => {
-    const body = req.body as {
-      projectId?: unknown;
-      taskId?: unknown;
-      sourceMilestoneId?: unknown;
-      targetMilestoneId?: unknown;
-    };
-    const projectId = typeof body.projectId === 'string' ? body.projectId : '';
-    const taskId = typeof body.taskId === 'string' ? body.taskId : '';
-    const sourceMilestoneId =
-      typeof body.sourceMilestoneId === 'string' ? body.sourceMilestoneId : '';
-    const targetMilestoneId =
-      typeof body.targetMilestoneId === 'string' ? body.targetMilestoneId : '';
+  router.post(
+    '/tasks/move-preview',
+    asyncHandler(async (req: Request, res: Response) => {
+      const body = req.body as {
+        projectId?: unknown;
+        taskId?: unknown;
+        sourceMilestoneId?: unknown;
+        targetMilestoneId?: unknown;
+      };
+      const projectId =
+        typeof body.projectId === 'string' ? body.projectId : '';
+      const taskId = typeof body.taskId === 'string' ? body.taskId : '';
+      const sourceMilestoneId =
+        typeof body.sourceMilestoneId === 'string'
+          ? body.sourceMilestoneId
+          : '';
+      const targetMilestoneId =
+        typeof body.targetMilestoneId === 'string'
+          ? body.targetMilestoneId
+          : '';
 
-    if (!projectId || !taskId || !sourceMilestoneId || !targetMilestoneId) {
-      res.status(400).json({
-        error:
-          'projectId, taskId, sourceMilestoneId and targetMilestoneId are required',
-      });
-      return;
-    }
-
-    const sourceMilestone = getMilestoneById(sourceMilestoneId);
-    const targetMilestone = getMilestoneById(targetMilestoneId);
-    if (!sourceMilestone || !targetMilestone) {
-      res.status(404).json({ error: 'unknown milestone' });
-      return;
-    }
-
-    let backend: ReturnType<typeof getTaskBackend>;
-    try {
-      backend = getTaskBackend(projectId);
-    } catch {
-      res
-        .status(400)
-        .json({ error: `Cannot resolve backend for project '${projectId}'` });
-      return;
-    }
-
-    try {
-      const sourceGraph = (
-        await backend.fetchReadyTasks(sourceMilestone.id, true)
-      ).map((r) => ({ id: r.task.id, dependsOn: r.task.dependsOn }));
-
-      const plan = planMove({
-        taskId,
-        sourceMilestoneTasks: sourceGraph,
-        isLaterMove:
-          targetMilestone.display_order > sourceMilestone.display_order,
-      });
-
-      res.json({
-        ok: true,
-        isLaterMove:
-          targetMilestone.display_order > sourceMilestone.display_order,
-        cascadeSet: plan.cascadeSet,
-        droppedEdges: plan.droppedEdges,
-      });
-    } catch (err) {
-      if (err instanceof MoveTaskError) {
-        res.status(409).json({ ok: false, error: err.message });
+      if (!projectId || !taskId || !sourceMilestoneId || !targetMilestoneId) {
+        res.status(400).json({
+          error:
+            'projectId, taskId, sourceMilestoneId and targetMilestoneId are required',
+        });
         return;
       }
-      res.status(500).json({
-        error: err instanceof Error ? err.message : 'Failed to preview move',
-      });
-    }
-  }));
+
+      const sourceMilestone = getMilestoneById(sourceMilestoneId);
+      const targetMilestone = getMilestoneById(targetMilestoneId);
+      if (!sourceMilestone || !targetMilestone) {
+        res.status(404).json({ error: 'unknown milestone' });
+        return;
+      }
+
+      let backend: ReturnType<typeof getTaskBackend>;
+      try {
+        backend = getTaskBackend(projectId);
+      } catch {
+        res
+          .status(400)
+          .json({ error: `Cannot resolve backend for project '${projectId}'` });
+        return;
+      }
+
+      try {
+        const sourceGraph = (
+          await backend.fetchReadyTasks(sourceMilestone.id, true)
+        ).map((r) => ({ id: r.task.id, dependsOn: r.task.dependsOn }));
+
+        const plan = planMove({
+          taskId,
+          sourceMilestoneTasks: sourceGraph,
+          isLaterMove:
+            targetMilestone.display_order > sourceMilestone.display_order,
+        });
+
+        res.json({
+          ok: true,
+          isLaterMove:
+            targetMilestone.display_order > sourceMilestone.display_order,
+          cascadeSet: plan.cascadeSet,
+          droppedEdges: plan.droppedEdges,
+        });
+      } catch (err) {
+        if (err instanceof MoveTaskError) {
+          res.status(409).json({ ok: false, error: err.message });
+          return;
+        }
+        res.status(500).json({
+          error: err instanceof Error ? err.message : 'Failed to preview move',
+        });
+      }
+    }),
+  );
 
   // ── POST /api/tasks/:taskId/recover ─────────────────────────────────────────
   // Generalized recovery endpoint: derives the action from the current pause reason
   // and executes redispatch / rerun / resume accordingly.
-  router.post('/tasks/:taskId/recover', asyncHandler(async (req: Request, res: Response) => {
-    const taskId = String(req.params.taskId);
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+  router.post(
+    '/tasks/:taskId/recover',
+    asyncHandler(async (req: Request, res: Response) => {
+      const taskId = String(req.params.taskId);
+      const projectId =
+        typeof req.query.projectId === 'string' ? req.query.projectId : null;
 
-    if (!projectId) {
-      res.status(422).json({ error: 'projectId is required' });
-      return;
-    }
-
-    // Load current task state to read pause reason
-    const rows = getActiveTaskAggregates([taskId]);
-    const row = rows[0] ?? null;
-    const pauseStruct = row
-      ? parsePauseReason(
-          row.pr_pause_reason ??
-            row.session_pr_creation_failed_pause_reason ??
-            null,
-        )
-      : null;
-
-    const descriptor = deriveRecoveryDescriptor(pauseStruct?.reason ?? null);
-
-    if (!descriptor.available || !descriptor.action) {
-      res.status(422).json({
-        error: 'No recovery action available for this task',
-        pauseReason: pauseStruct?.reason ?? null,
-      });
-      return;
-    }
-
-    const action = descriptor.action;
-
-    try {
-      if (action === 'redispatch') {
-        let backend: Awaited<ReturnType<typeof getTaskBackend>>;
-        try {
-          backend = getTaskBackend(projectId);
-        } catch {
-          res.status(422).json({
-            error: `Cannot resolve backend for project '${projectId}'`,
-          });
-          return;
-        }
-
-        await executeRedispatch(backend, taskId, sessionManager);
-      } else if (action === 'rerun') {
-        const prRow = getPRByNotionTaskId(taskId);
-        if (!prRow) {
-          res.status(422).json({
-            error: 'No PR found for this task — cannot rerun pipeline',
-          });
-          return;
-        }
-
-        executeRerunPipeline(
-          prRow.pr_number,
-          prRow.repo,
-          taskId,
-          reviewOrchestrator,
-        );
-      } else if (action === 'resume') {
-        const sessionId = row?.code_session_id ?? null;
-        if (!sessionId) {
-          res.status(422).json({
-            error: 'No code session found for this task — cannot resume',
-          });
-          return;
-        }
-
-        // Clear PR-level pause so the task transitions away from needs_attention
-        const prRow = getPRByNotionTaskId(taskId);
-        if (prRow) {
-          clearTerminalPRFlags(prRow.pr_number, prRow.repo, 'human_unpark');
-        }
-
-        if (sessionManager) {
-          await sessionManager.sendOrResume(
-            sessionId,
-            'Recovery requested. Please review the current state and continue working on the task.',
-          );
-        }
-
-        emitTaskUpdated(taskId);
+      if (!projectId) {
+        res.status(422).json({ error: 'projectId is required' });
+        return;
       }
-    } catch (err) {
-      res.status(500).json({
-        error: err instanceof Error ? err.message : 'Recovery action failed',
+
+      // Load current task state to read pause reason
+      const rows = getActiveTaskAggregates([taskId]);
+      const row = rows[0] ?? null;
+      const pauseStruct = row
+        ? parsePauseReason(
+            row.pr_pause_reason ??
+              row.session_pr_creation_failed_pause_reason ??
+              null,
+          )
+        : null;
+
+      const descriptor = deriveRecoveryDescriptor(pauseStruct?.reason ?? null);
+
+      if (!descriptor.available || !descriptor.action) {
+        res.status(422).json({
+          error: 'No recovery action available for this task',
+          pauseReason: pauseStruct?.reason ?? null,
+        });
+        return;
+      }
+
+      const action = descriptor.action;
+
+      try {
+        if (action === 'redispatch') {
+          let backend: Awaited<ReturnType<typeof getTaskBackend>>;
+          try {
+            backend = getTaskBackend(projectId);
+          } catch {
+            res.status(422).json({
+              error: `Cannot resolve backend for project '${projectId}'`,
+            });
+            return;
+          }
+
+          await executeRedispatch(backend, taskId, sessionManager);
+        } else if (action === 'rerun') {
+          const prRow = getPRByNotionTaskId(taskId);
+          if (!prRow) {
+            res.status(422).json({
+              error: 'No PR found for this task — cannot rerun pipeline',
+            });
+            return;
+          }
+
+          executeRerunPipeline(
+            prRow.pr_number,
+            prRow.repo,
+            taskId,
+            reviewOrchestrator,
+          );
+        } else if (action === 'resume') {
+          const sessionId = row?.code_session_id ?? null;
+          if (!sessionId) {
+            res.status(422).json({
+              error: 'No code session found for this task — cannot resume',
+            });
+            return;
+          }
+
+          // Clear PR-level pause so the task transitions away from needs_attention
+          const prRow = getPRByNotionTaskId(taskId);
+          if (prRow) {
+            clearTerminalPRFlags(prRow.pr_number, prRow.repo, 'human_unpark');
+          }
+
+          if (sessionManager) {
+            await sessionManager.sendOrResume(
+              sessionId,
+              'Recovery requested. Please review the current state and continue working on the task.',
+            );
+          }
+
+          emitTaskUpdated(taskId);
+        }
+      } catch (err) {
+        res.status(500).json({
+          error: err instanceof Error ? err.message : 'Recovery action failed',
+        });
+        return;
+      }
+
+      recordEvent({
+        event_type: 'task_recovered',
+        actor_type: 'human',
+        project_id: projectId,
+        task_id: taskId,
+        payload: { taskId, projectId, action },
       });
-      return;
-    }
 
-    recordEvent({
-      event_type: 'task_recovered',
-      actor_type: 'human',
-      project_id: projectId,
-      task_id: taskId,
-      payload: { taskId, projectId, action },
-    });
-
-    res.json({ ok: true, action });
-  }));
+      res.json({ ok: true, action });
+    }),
+  );
 
   // ── PATCH /api/tasks/:id/status ──────────────────────────────────────────
-  router.patch('/tasks/:id/status', asyncHandler(async (req: Request, res: Response) => {
-    const taskId = String(req.params.id);
-    const body = req.body as { status?: unknown; projectId?: unknown };
-    const status = typeof body.status === 'string' ? body.status : null;
-    const projectId =
-      typeof body.projectId === 'string' ? body.projectId : null;
+  router.patch(
+    '/tasks/:id/status',
+    asyncHandler(async (req: Request, res: Response) => {
+      const taskId = String(req.params.id);
+      const body = req.body as { status?: unknown; projectId?: unknown };
+      const status = typeof body.status === 'string' ? body.status : null;
+      const projectId =
+        typeof body.projectId === 'string' ? body.projectId : null;
 
-    if (!status) {
-      res.status(400).json({ error: 'status is required' });
-      return;
-    }
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId is required' });
-      return;
-    }
+      if (!status) {
+        res.status(400).json({ error: 'status is required' });
+        return;
+      }
+      if (!projectId) {
+        res.status(400).json({ error: 'projectId is required' });
+        return;
+      }
 
-    try {
-      await getTaskBackend(projectId).updateStatus(taskId, status, {
-        source: 'human',
-      });
-      res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({
-        error: err instanceof Error ? err.message : 'Failed to update status',
-      });
-    }
-  }));
+      try {
+        await getTaskBackend(projectId).updateStatus(taskId, status, {
+          source: 'human',
+        });
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({
+          error: err instanceof Error ? err.message : 'Failed to update status',
+        });
+      }
+    }),
+  );
 
   return router;
 }

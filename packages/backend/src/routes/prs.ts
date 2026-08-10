@@ -106,230 +106,236 @@ export function createPrsRouter(
   }
 
   // ── GET /api/prs?projectId=<id> ─────────────────────────────────────────────
-  router.get('/prs', asyncHandler(async (req: Request, res: Response) => {
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
-    const project = getProjectById(projectId);
-    if (!project) {
-      res.status(400).json({ error: 'Project not found' });
-      return;
-    }
-
-    const autoMergeEnabled = project.autoMergeEnabled;
-
-    // Local-only projects: return code sessions as unified local_branch items
-    if (project.gitMode === 'local-only') {
-      const sessions = getSessionsByProject(projectId);
-      const codeSessions = sessions.filter(
-        (s) => s.session_type === 'standard' && !s.archived,
-      );
-      const reviewSessions = sessions.filter(
-        (s) => s.session_type === 'review',
-      );
-
-      // Build map of task_id -> latest review session result
-      const reviewResultByTask = new Map<string, PRReviewResult>();
-      for (const rs of reviewSessions) {
-        if (!rs.task_id || !rs.review_result) continue;
-        const existing = reviewResultByTask.get(rs.task_id);
-        if (!existing) {
-          try {
-            reviewResultByTask.set(
-              rs.task_id,
-              JSON.parse(rs.review_result) as PRReviewResult,
-            );
-          } catch {
-            // skip malformed JSON
-          }
-        }
-      }
-
-      const localItems = codeSessions.map((s) => ({
-        type: 'local_branch' as const,
-        sessionId: s.session_id,
-        branchName: `session/${s.session_id}`,
-        baseBranch: 'dev',
-        status: s.status,
-        reviewResult: s.task_id
-          ? (reviewResultByTask.get(s.task_id) ?? null)
-          : null,
-        createdAt: new Date(s.started_at).toISOString(),
-        autoMergeEnabled,
-        notionTaskId: s.task_id,
-        notionTaskTitle: s.task_id ? getTaskTitleFromCache(s.task_id) : null,
-      }));
-      res.json(localItems);
-      return;
-    }
-
-    if (!project.githubRepo) {
-      res.status(422).json({ error: 'Project has no githubRepo configured' });
-      return;
-    }
-
-    const repo = project.githubRepo;
-    const rows = getPRs(repo);
-
-    // Reconcile stale open PRs against GitHub state (best-effort)
-    const reconciledStates = new Map<number, string>();
-    try {
-      const openOnGitHub = await github.listOpenPRs(repo);
-      const openNumbers = new Set(openOnGitHub.map((p) => p.id));
-      const stale = rows.filter(
-        (r) => r.state === 'open' && !openNumbers.has(r.pr_number),
-      );
-      for (const pr of stale) {
-        if (mergeWatcher) {
-          const state = await mergeWatcher.reconcileTerminalState(pr);
-          if (state) reconciledStates.set(pr.pr_number, state);
-          continue;
-        }
-        const prStateResult = await github.getPRState(pr.pr_number, repo);
-        const state = prStateResult.state;
-        updatePRState(pr.pr_number, repo, state);
-        reconciledStates.set(pr.pr_number, state);
-      }
-    } catch (err) {
-      // reconciliation is best-effort; return cached data on GitHub error,
-      // but the error itself must not be swallowed silently.
-      logger.warn(
-        `[prs] PR reconciliation failed for ${repo}:`,
-        (err as Error).message,
-      );
-    }
-
-    const items = rows.map((pr) => ({
-      type: 'pr' as const,
-      prNumber: pr.pr_number,
-      prUrl: pr.pr_url,
-      title: pr.title,
-      headBranch: pr.head_branch,
-      branchName: pr.head_branch ?? '',
-      baseBranch: pr.base_branch ?? '',
-      state: reconciledStates.get(pr.pr_number) ?? pr.state,
-      notionTaskId: pr.task_id,
-      notionTaskTitle: pr.task_id ? getTaskTitleFromCache(pr.task_id) : null,
-      sessionId: pr.session_id ?? null,
-      reviewSessionId: pr.review_session_id ?? null,
-      repo: pr.repo,
-      reviewVerdict: pr.review_result
-        ? (JSON.parse(pr.review_result) as PRReviewResult).verdict
-        : null,
-      reviewedAt: pr.review_at,
-      createdAt: pr.created_at,
-      updatedAt: pr.updated_at,
-      reviewIteration: pr.review_iteration,
-      mergeState: pr.merge_state ?? null,
-      failingChecks: parseFailingChecks(pr.failing_checks),
-      pauseReason: pr.pause_reason ?? null,
-      preReviewStage: pr.pre_review_stage ?? null,
-      awaitingReReview:
-        (pr.pre_review_stage === 'blocked_autofix' ||
-          pr.pre_review_stage === 'blocked_verify') &&
-        (pr.pending_push === 1 ||
-          (!!pr.head_sha && pr.head_sha !== pr.last_reviewed_sha)),
-      autoMergeEnabled,
-    }));
-    res.json(items);
-  }));
-
-  // ── POST /api/prs/:prNumber/review ──────────────────────────────────────────
-  router.post('/prs/:prNumber/review', asyncHandler(async (req: Request, res: Response) => {
-    const prNumber = parseInt(String(req.params.prNumber), 10);
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
-    const project = getProjectById(projectId);
-    if (!project?.githubRepo) {
-      res.status(422).json({ error: 'Project has no githubRepo configured' });
-      return;
-    }
-    const repo = project.githubRepo;
-    let prRow = getPRByNumber(prNumber, repo);
-    if (!prRow) {
-      // On-demand sync: PR may not have been synced yet (e.g. just created).
-      // Fetch the specific PR from GitHub and upsert before retrying.
-      try {
-        const pr = await github.fetchPR(repo, prNumber);
-        const now = new Date().toISOString();
-        const sessionMatch = lookupSessionByBranch(pr.headBranch);
-        upsertPullRequest({
-          pr_number: pr.id,
-          pr_url: pr.url,
-          task_id: sessionMatch?.task_id ?? null,
-          session_id: sessionMatch?.session_id ?? null,
-          repo,
-          title: pr.title,
-          body: pr.body ?? null,
-          head_branch: pr.headBranch,
-          base_branch: pr.baseBranch,
-          state: pr.state,
-          draft: pr.draft ? 1 : 0,
-          review_result: null,
-          review_at: null,
-          created_at: pr.createdAt,
-          updated_at: pr.updatedAt,
-          synced_at: now,
-          review_iteration: 0,
-          review_session_id: null,
-          head_sha: pr.headSha,
-          last_reviewed_sha: null,
-          node_id: pr.nodeId,
-          merge_state: pr.mergeableState,
-          merge_state_checked_at: now,
-          conflict_nudge_sha: null,
-        });
-        if (sessionMatch) {
-          logger.info(
-            `[prs] on-demand sync PR #${prNumber}: linked session ${sessionMatch.session_id.slice(0, 8)} via head_branch "${pr.headBranch}"`,
-          );
-        }
-        prRow = getPRByNumber(prNumber, repo);
-      } catch {
-        // GitHub fetch failed — fall through to 404
-      }
-    }
-    if (!prRow) {
-      res.status(404).json({ error: `PR #${prNumber} not found` });
-      return;
-    }
-    const contextUrl = project.contextUrl;
-    try {
-      const result = await Promise.race([
-        prReviewService.reviewPR(
-          { type: 'pr', prNumber, repo },
-          new GitHubDiffSource(github, repo, prNumber),
-          projectId,
-          contextUrl,
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Review timed out')), 120_000),
-        ),
-      ]);
-      setPRReviewResult(prNumber, repo, JSON.stringify(result));
-      _broadcast({
-        type: 'pr_review_complete',
-        prNumber,
-        repo,
-        verdict: result.verdict,
-        summary: result.summary,
-      });
-      res.json(result);
-    } catch (err) {
-      if (err instanceof Error && err.message === 'Review timed out') {
-        res.status(504).json({ error: 'Review timed out' });
+  router.get(
+    '/prs',
+    asyncHandler(async (req: Request, res: Response) => {
+      const projectId =
+        typeof req.query.projectId === 'string' ? req.query.projectId : '';
+      if (!projectId) {
+        res.status(400).json({ error: 'projectId query param is required' });
         return;
       }
-      res.status(500).json({ error: (err as Error).message });
-    }
-  }));
+      const project = getProjectById(projectId);
+      if (!project) {
+        res.status(400).json({ error: 'Project not found' });
+        return;
+      }
+
+      const autoMergeEnabled = project.autoMergeEnabled;
+
+      // Local-only projects: return code sessions as unified local_branch items
+      if (project.gitMode === 'local-only') {
+        const sessions = getSessionsByProject(projectId);
+        const codeSessions = sessions.filter(
+          (s) => s.session_type === 'standard' && !s.archived,
+        );
+        const reviewSessions = sessions.filter(
+          (s) => s.session_type === 'review',
+        );
+
+        // Build map of task_id -> latest review session result
+        const reviewResultByTask = new Map<string, PRReviewResult>();
+        for (const rs of reviewSessions) {
+          if (!rs.task_id || !rs.review_result) continue;
+          const existing = reviewResultByTask.get(rs.task_id);
+          if (!existing) {
+            try {
+              reviewResultByTask.set(
+                rs.task_id,
+                JSON.parse(rs.review_result) as PRReviewResult,
+              );
+            } catch {
+              // skip malformed JSON
+            }
+          }
+        }
+
+        const localItems = codeSessions.map((s) => ({
+          type: 'local_branch' as const,
+          sessionId: s.session_id,
+          branchName: `session/${s.session_id}`,
+          baseBranch: 'dev',
+          status: s.status,
+          reviewResult: s.task_id
+            ? (reviewResultByTask.get(s.task_id) ?? null)
+            : null,
+          createdAt: new Date(s.started_at).toISOString(),
+          autoMergeEnabled,
+          notionTaskId: s.task_id,
+          notionTaskTitle: s.task_id ? getTaskTitleFromCache(s.task_id) : null,
+        }));
+        res.json(localItems);
+        return;
+      }
+
+      if (!project.githubRepo) {
+        res.status(422).json({ error: 'Project has no githubRepo configured' });
+        return;
+      }
+
+      const repo = project.githubRepo;
+      const rows = getPRs(repo);
+
+      // Reconcile stale open PRs against GitHub state (best-effort)
+      const reconciledStates = new Map<number, string>();
+      try {
+        const openOnGitHub = await github.listOpenPRs(repo);
+        const openNumbers = new Set(openOnGitHub.map((p) => p.id));
+        const stale = rows.filter(
+          (r) => r.state === 'open' && !openNumbers.has(r.pr_number),
+        );
+        for (const pr of stale) {
+          if (mergeWatcher) {
+            const state = await mergeWatcher.reconcileTerminalState(pr);
+            if (state) reconciledStates.set(pr.pr_number, state);
+            continue;
+          }
+          const prStateResult = await github.getPRState(pr.pr_number, repo);
+          const state = prStateResult.state;
+          updatePRState(pr.pr_number, repo, state);
+          reconciledStates.set(pr.pr_number, state);
+        }
+      } catch (err) {
+        // reconciliation is best-effort; return cached data on GitHub error,
+        // but the error itself must not be swallowed silently.
+        logger.warn(
+          `[prs] PR reconciliation failed for ${repo}:`,
+          (err as Error).message,
+        );
+      }
+
+      const items = rows.map((pr) => ({
+        type: 'pr' as const,
+        prNumber: pr.pr_number,
+        prUrl: pr.pr_url,
+        title: pr.title,
+        headBranch: pr.head_branch,
+        branchName: pr.head_branch ?? '',
+        baseBranch: pr.base_branch ?? '',
+        state: reconciledStates.get(pr.pr_number) ?? pr.state,
+        notionTaskId: pr.task_id,
+        notionTaskTitle: pr.task_id ? getTaskTitleFromCache(pr.task_id) : null,
+        sessionId: pr.session_id ?? null,
+        reviewSessionId: pr.review_session_id ?? null,
+        repo: pr.repo,
+        reviewVerdict: pr.review_result
+          ? (JSON.parse(pr.review_result) as PRReviewResult).verdict
+          : null,
+        reviewedAt: pr.review_at,
+        createdAt: pr.created_at,
+        updatedAt: pr.updated_at,
+        reviewIteration: pr.review_iteration,
+        mergeState: pr.merge_state ?? null,
+        failingChecks: parseFailingChecks(pr.failing_checks),
+        pauseReason: pr.pause_reason ?? null,
+        preReviewStage: pr.pre_review_stage ?? null,
+        awaitingReReview:
+          (pr.pre_review_stage === 'blocked_autofix' ||
+            pr.pre_review_stage === 'blocked_verify') &&
+          (pr.pending_push === 1 ||
+            (!!pr.head_sha && pr.head_sha !== pr.last_reviewed_sha)),
+        autoMergeEnabled,
+      }));
+      res.json(items);
+    }),
+  );
+
+  // ── POST /api/prs/:prNumber/review ──────────────────────────────────────────
+  router.post(
+    '/prs/:prNumber/review',
+    asyncHandler(async (req: Request, res: Response) => {
+      const prNumber = parseInt(String(req.params.prNumber), 10);
+      const projectId =
+        typeof req.query.projectId === 'string' ? req.query.projectId : '';
+      if (!projectId) {
+        res.status(400).json({ error: 'projectId query param is required' });
+        return;
+      }
+      const project = getProjectById(projectId);
+      if (!project?.githubRepo) {
+        res.status(422).json({ error: 'Project has no githubRepo configured' });
+        return;
+      }
+      const repo = project.githubRepo;
+      let prRow = getPRByNumber(prNumber, repo);
+      if (!prRow) {
+        // On-demand sync: PR may not have been synced yet (e.g. just created).
+        // Fetch the specific PR from GitHub and upsert before retrying.
+        try {
+          const pr = await github.fetchPR(repo, prNumber);
+          const now = new Date().toISOString();
+          const sessionMatch = lookupSessionByBranch(pr.headBranch);
+          upsertPullRequest({
+            pr_number: pr.id,
+            pr_url: pr.url,
+            task_id: sessionMatch?.task_id ?? null,
+            session_id: sessionMatch?.session_id ?? null,
+            repo,
+            title: pr.title,
+            body: pr.body ?? null,
+            head_branch: pr.headBranch,
+            base_branch: pr.baseBranch,
+            state: pr.state,
+            draft: pr.draft ? 1 : 0,
+            review_result: null,
+            review_at: null,
+            created_at: pr.createdAt,
+            updated_at: pr.updatedAt,
+            synced_at: now,
+            review_iteration: 0,
+            review_session_id: null,
+            head_sha: pr.headSha,
+            last_reviewed_sha: null,
+            node_id: pr.nodeId,
+            merge_state: pr.mergeableState,
+            merge_state_checked_at: now,
+            conflict_nudge_sha: null,
+          });
+          if (sessionMatch) {
+            logger.info(
+              `[prs] on-demand sync PR #${prNumber}: linked session ${sessionMatch.session_id.slice(0, 8)} via head_branch "${pr.headBranch}"`,
+            );
+          }
+          prRow = getPRByNumber(prNumber, repo);
+        } catch {
+          // GitHub fetch failed — fall through to 404
+        }
+      }
+      if (!prRow) {
+        res.status(404).json({ error: `PR #${prNumber} not found` });
+        return;
+      }
+      const contextUrl = project.contextUrl;
+      try {
+        const result = await Promise.race([
+          prReviewService.reviewPR(
+            { type: 'pr', prNumber, repo },
+            new GitHubDiffSource(github, repo, prNumber),
+            projectId,
+            contextUrl,
+          ),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Review timed out')), 120_000),
+          ),
+        ]);
+        setPRReviewResult(prNumber, repo, JSON.stringify(result));
+        _broadcast({
+          type: 'pr_review_complete',
+          prNumber,
+          repo,
+          verdict: result.verdict,
+          summary: result.summary,
+        });
+        res.json(result);
+      } catch (err) {
+        if (err instanceof Error && err.message === 'Review timed out') {
+          res.status(504).json({ error: 'Review timed out' });
+          return;
+        }
+        res.status(500).json({ error: (err as Error).message });
+      }
+    }),
+  );
 
   // ── GET /api/prs/:owner/:repoName/:prNumber/review-result ────────────────────
   // Detail-view read: the list endpoint only carries a lightweight
@@ -842,31 +848,34 @@ export function createPrsRouter(
   });
 
   // ── GET /api/prs/:prNumber/diff?projectId=<id> ───────────────────────────────
-  router.get('/prs/:prNumber/diff', asyncHandler(async (req: Request, res: Response) => {
-    const prNumber = parseInt(String(req.params.prNumber), 10);
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
-    const project = getProjectById(projectId);
-    if (!project?.githubRepo) {
-      res.status(422).json({ error: 'Project has no githubRepo configured' });
-      return;
-    }
-    const repo = project.githubRepo;
-    try {
-      const result = await github.fetchDiff(prNumber, repo);
-      res.json({ diff: result.diff, filesChanged: result.filesChanged });
-    } catch (err) {
-      if (err instanceof GitHubApiError) {
-        res.status(err.status).json({ error: err.message });
+  router.get(
+    '/prs/:prNumber/diff',
+    asyncHandler(async (req: Request, res: Response) => {
+      const prNumber = parseInt(String(req.params.prNumber), 10);
+      const projectId =
+        typeof req.query.projectId === 'string' ? req.query.projectId : '';
+      if (!projectId) {
+        res.status(400).json({ error: 'projectId query param is required' });
         return;
       }
-      res.status(500).json({ error: (err as Error).message });
-    }
-  }));
+      const project = getProjectById(projectId);
+      if (!project?.githubRepo) {
+        res.status(422).json({ error: 'Project has no githubRepo configured' });
+        return;
+      }
+      const repo = project.githubRepo;
+      try {
+        const result = await github.fetchDiff(prNumber, repo);
+        res.json({ diff: result.diff, filesChanged: result.filesChanged });
+      } catch (err) {
+        if (err instanceof GitHubApiError) {
+          res.status(err.status).json({ error: err.message });
+          return;
+        }
+        res.status(500).json({ error: (err as Error).message });
+      }
+    }),
+  );
 
   // ── POST /api/prs/:owner/:repoName/:prNumber/fix-conflicts ──────────────────
   router.post(
@@ -905,176 +914,187 @@ export function createPrsRouter(
   );
 
   // ── POST /api/prs/:prNumber/fix ──────────────────────────────────────────────
-  router.post('/prs/:prNumber/fix', asyncHandler(async (req: Request, res: Response) => {
-    const prNumber = parseInt(String(req.params.prNumber), 10);
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
-    const project = getProjectById(projectId);
-    if (!project?.githubRepo) {
-      res.status(422).json({ error: 'Project has no githubRepo configured' });
-      return;
-    }
-    const repo = project.githubRepo;
-    const prRow = getPRByNumber(prNumber, repo);
-    if (!prRow) {
-      res.status(404).json({ error: `PR #${prNumber} not found` });
-      return;
-    }
-    if (!prRow.session_id) {
-      res.status(422).json({ error: 'No session linked to this PR' });
-      return;
-    }
-    if (!prRow.review_result) {
-      res.status(422).json({ error: 'Run a review before sending a fix' });
-      return;
-    }
-    const reviewResult = JSON.parse(prRow.review_result) as PRReviewResult;
-    const failingDimensions = (reviewResult.dimensions ?? []).filter(
-      (d) => !d.passed,
-    );
-    const lines = failingDimensions
-      .map((d) => `❌ ${d.name}: ${d.notes}`)
-      .join('\n');
-    const fixMessage = `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${reviewResult.summary}`;
-    await sessionManager.sendOrResume(prRow.session_id, fixMessage);
-    res.json({ sessionId: prRow.session_id });
-  }));
+  router.post(
+    '/prs/:prNumber/fix',
+    asyncHandler(async (req: Request, res: Response) => {
+      const prNumber = parseInt(String(req.params.prNumber), 10);
+      const projectId =
+        typeof req.query.projectId === 'string' ? req.query.projectId : '';
+      if (!projectId) {
+        res.status(400).json({ error: 'projectId query param is required' });
+        return;
+      }
+      const project = getProjectById(projectId);
+      if (!project?.githubRepo) {
+        res.status(422).json({ error: 'Project has no githubRepo configured' });
+        return;
+      }
+      const repo = project.githubRepo;
+      const prRow = getPRByNumber(prNumber, repo);
+      if (!prRow) {
+        res.status(404).json({ error: `PR #${prNumber} not found` });
+        return;
+      }
+      if (!prRow.session_id) {
+        res.status(422).json({ error: 'No session linked to this PR' });
+        return;
+      }
+      if (!prRow.review_result) {
+        res.status(422).json({ error: 'Run a review before sending a fix' });
+        return;
+      }
+      const reviewResult = JSON.parse(prRow.review_result) as PRReviewResult;
+      const failingDimensions = (reviewResult.dimensions ?? []).filter(
+        (d) => !d.passed,
+      );
+      const lines = failingDimensions
+        .map((d) => `❌ ${d.name}: ${d.notes}`)
+        .join('\n');
+      const fixMessage = `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${reviewResult.summary}`;
+      await sessionManager.sendOrResume(prRow.session_id, fixMessage);
+      res.json({ sessionId: prRow.session_id });
+    }),
+  );
 
   // ── POST /api/prs/:prNumber/unpark ──────────────────────────────────────────
   // @deprecated Superseded by POST /tasks/:taskId/recover (rerun action), which
   // folds in this unpark behavior. Retained as a thin alias over the shared
   // rerun executor for the current frontend; /recover is the canonical interface.
-  router.post('/prs/:prNumber/unpark', asyncHandler(async (req: Request, res: Response) => {
-    const prNumber = parseInt(String(req.params.prNumber), 10);
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
-    const project = getProjectById(projectId);
-    if (!project?.githubRepo) {
-      res.status(422).json({ error: 'Project has no githubRepo configured' });
-      return;
-    }
-    const repo = project.githubRepo;
-    const prRow = getPRByNumber(prNumber, repo);
-    if (!prRow) {
-      res.status(404).json({ error: `PR #${prNumber} not found` });
-      return;
-    }
+  router.post(
+    '/prs/:prNumber/unpark',
+    asyncHandler(async (req: Request, res: Response) => {
+      const prNumber = parseInt(String(req.params.prNumber), 10);
+      const projectId =
+        typeof req.query.projectId === 'string' ? req.query.projectId : '';
+      if (!projectId) {
+        res.status(400).json({ error: 'projectId query param is required' });
+        return;
+      }
+      const project = getProjectById(projectId);
+      if (!project?.githubRepo) {
+        res.status(422).json({ error: 'Project has no githubRepo configured' });
+        return;
+      }
+      const repo = project.githubRepo;
+      const prRow = getPRByNumber(prNumber, repo);
+      if (!prRow) {
+        res.status(404).json({ error: `PR #${prNumber} not found` });
+        return;
+      }
 
-    // Shared rerun executor: clears terminal PR flags, re-enqueues the
-    // pre-review/autofix pipeline, and emits a task update.
-    executeRerunPipeline(prNumber, repo, prRow.task_id, reviewOrchestrator);
+      // Shared rerun executor: clears terminal PR flags, re-enqueues the
+      // pre-review/autofix pipeline, and emits a task update.
+      executeRerunPipeline(prNumber, repo, prRow.task_id, reviewOrchestrator);
 
-    recordEvent({
-      event_type: 'pr_unparked',
-      actor_type: 'human',
-      actor_id: null,
-      task_id: prRow.task_id ?? null,
-      payload: { pr_number: prNumber, repo },
-    });
+      recordEvent({
+        event_type: 'pr_unparked',
+        actor_type: 'human',
+        actor_id: null,
+        task_id: prRow.task_id ?? null,
+        payload: { pr_number: prNumber, repo },
+      });
 
-    res.json({ ok: true });
-  }));
+      res.json({ ok: true });
+    }),
+  );
 
   // ── POST /api/prs/ingest ─────────────────────────────────────────────────────
   // Backfill a PR that exists on GitHub but was never tracked by the orchestrator.
-  router.post('/prs/ingest', asyncHandler(async (req: Request, res: Response) => {
-    const { repo, prNumber } = req.body as {
-      repo?: unknown;
-      prNumber?: unknown;
-    };
+  router.post(
+    '/prs/ingest',
+    asyncHandler(async (req: Request, res: Response) => {
+      const { repo, prNumber } = req.body as {
+        repo?: unknown;
+        prNumber?: unknown;
+      };
 
-    if (typeof repo !== 'string' || typeof prNumber !== 'number') {
-      res
-        .status(400)
-        .json({ error: 'repo (string) and prNumber (number) are required' });
-      return;
-    }
-
-    const project = getProjectByGithubRepo(repo);
-    if (!project) {
-      res.status(400).json({
-        error: `No project configured for repo "${repo}". Set github_repo on the project first.`,
-      });
-      return;
-    }
-
-    const existing = getPRByNumber(prNumber, repo);
-    if (existing) {
-      res.status(409).json({ error: `PR #${prNumber} already tracked.` });
-      return;
-    }
-
-    let pr: Awaited<ReturnType<typeof github.fetchPR>>;
-    try {
-      pr = await github.fetchPR(repo, prNumber);
-    } catch (err) {
-      if (err instanceof GitHubApiError && err.status === 404) {
-        res.status(404).json({ error: `PR #${prNumber} not found on GitHub.` });
+      if (typeof repo !== 'string' || typeof prNumber !== 'number') {
+        res
+          .status(400)
+          .json({ error: 'repo (string) and prNumber (number) are required' });
         return;
       }
-      throw err;
-    }
 
-    const notionTask = extractNotionTaskFromBody(pr.body);
-    const taskId = notionTask?.taskId ?? null;
-    const taskUrl = notionTask?.taskUrl ?? null;
-    if (!taskId) {
-      logger.warn(
-        `[prs/ingest] PR #${prNumber} (${repo}): no Notion URL found in body — inserting with task_id=null`,
-      );
-    }
+      const project = getProjectByGithubRepo(repo);
+      if (!project) {
+        res.status(400).json({
+          error: `No project configured for repo "${repo}". Set github_repo on the project first.`,
+        });
+        return;
+      }
 
-    const sessionMatch = lookupSessionByBranch(pr.headBranch);
-    const sessionId = sessionMatch?.session_id ?? null;
-    if (!sessionId) {
-      logger.warn(
-        `[prs/ingest] PR #${prNumber} (${repo}): could not derive session_id from branch "${pr.headBranch}" — inserting with session_id=null`,
-      );
-    }
+      const existing = getPRByNumber(prNumber, repo);
+      if (existing) {
+        res.status(409).json({ error: `PR #${prNumber} already tracked.` });
+        return;
+      }
 
-    const now = new Date().toISOString();
-    upsertPullRequest({
-      pr_number: pr.id,
-      pr_url: pr.url,
-      task_id: taskId,
-      session_id: sessionId,
-      repo,
-      title: pr.title,
-      body: pr.body ?? null,
-      head_branch: pr.headBranch,
-      base_branch: pr.baseBranch,
-      state: pr.state,
-      draft: pr.draft ? 1 : 0,
-      review_result: null,
-      review_at: null,
-      created_at: pr.createdAt,
-      updated_at: pr.updatedAt,
-      synced_at: now,
-      head_sha: pr.headSha,
-      node_id: pr.nodeId,
-      merge_state: pr.mergeableState,
-      merge_state_checked_at: now,
-      conflict_nudge_sha: null,
-    });
+      let pr: Awaited<ReturnType<typeof github.fetchPR>>;
+      try {
+        pr = await github.fetchPR(repo, prNumber);
+      } catch (err) {
+        if (err instanceof GitHubApiError && err.status === 404) {
+          res
+            .status(404)
+            .json({ error: `PR #${prNumber} not found on GitHub.` });
+          return;
+        }
+        throw err;
+      }
 
-    sessionManager.emit('pr_opened', {
-      prNumber: pr.id,
-      repo,
-      taskId,
-      taskUrl: taskUrl ?? '',
-      contextUrl: project.contextUrl ?? '',
-    });
+      const notionTask = extractNotionTaskFromBody(pr.body);
+      const taskId = notionTask?.taskId ?? null;
+      const taskUrl = notionTask?.taskUrl ?? null;
+      if (!taskId) {
+        logger.warn(
+          `[prs/ingest] PR #${prNumber} (${repo}): no Notion URL found in body — inserting with task_id=null`,
+        );
+      }
 
-    res.status(201).json({ pr_number: pr.id, repo, taskId, sessionId });
-  }));
+      const sessionMatch = lookupSessionByBranch(pr.headBranch);
+      const sessionId = sessionMatch?.session_id ?? null;
+      if (!sessionId) {
+        logger.warn(
+          `[prs/ingest] PR #${prNumber} (${repo}): could not derive session_id from branch "${pr.headBranch}" — inserting with session_id=null`,
+        );
+      }
+
+      const now = new Date().toISOString();
+      upsertPullRequest({
+        pr_number: pr.id,
+        pr_url: pr.url,
+        task_id: taskId,
+        session_id: sessionId,
+        repo,
+        title: pr.title,
+        body: pr.body ?? null,
+        head_branch: pr.headBranch,
+        base_branch: pr.baseBranch,
+        state: pr.state,
+        draft: pr.draft ? 1 : 0,
+        review_result: null,
+        review_at: null,
+        created_at: pr.createdAt,
+        updated_at: pr.updatedAt,
+        synced_at: now,
+        head_sha: pr.headSha,
+        node_id: pr.nodeId,
+        merge_state: pr.mergeableState,
+        merge_state_checked_at: now,
+        conflict_nudge_sha: null,
+      });
+
+      sessionManager.emit('pr_opened', {
+        prNumber: pr.id,
+        repo,
+        taskId,
+        taskUrl: taskUrl ?? '',
+        contextUrl: project.contextUrl ?? '',
+      });
+
+      res.status(201).json({ pr_number: pr.id, repo, taskId, sessionId });
+    }),
+  );
 
   return router;
 }
