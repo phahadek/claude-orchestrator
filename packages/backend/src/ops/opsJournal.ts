@@ -6,13 +6,7 @@ import {
   upsertOpsJournalEntry,
   deleteOpsJournalEntry,
 } from '../db/queries';
-import type {
-  OpsJournalRow,
-  OpsJournalState,
-  OpsReconciliationAssertion,
-} from '../db/types';
-
-export type { OpsReconciliationAssertion };
+import type { OpsJournalRow, OpsJournalState } from '../db/types';
 
 export type OpsState = OpsJournalState;
 
