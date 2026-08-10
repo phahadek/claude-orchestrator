@@ -146,6 +146,9 @@ export function updateSessionStatus(
   status: string,
   endedAt?: number,
 ): void {
+  const current = stmtGetSession.get({ session_id: sessionId }) as
+    | { status: string; task_id: string | null }
+    | undefined;
   stmtUpdateSessionStatus.run({
     session_id: sessionId,
     status,
@@ -154,6 +157,15 @@ export function updateSessionStatus(
       ? (endedAt ?? Date.now())
       : null,
   });
+  if (current && current.status !== status) {
+    recordEvent({
+      event_type: 'session_status_changed',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: { from: current.status, to: status },
+    });
+  }
 }
 
 export function updateSessionWorktreePath(
@@ -320,7 +332,19 @@ export function markSessionSuperseded(
   sessionId: string,
   endedAt: number,
 ): void {
+  const current = stmtGetSession.get({ session_id: sessionId }) as
+    | { status: string; task_id: string | null }
+    | undefined;
   stmtMarkSessionSuperseded.run({ session_id: sessionId, ended_at: endedAt });
+  if (current && current.status !== 'superseded') {
+    recordEvent({
+      event_type: 'session_status_changed',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: { from: current.status, to: 'superseded' },
+    });
+  }
 }
 
 /**
@@ -411,6 +435,15 @@ export function markSessionDone(
     pr_url: prUrl ?? null,
     terminalized_at: endedAt,
   });
+  if (current && current.status !== 'done') {
+    recordEvent({
+      event_type: 'session_status_changed',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: { from: current.status, to: 'done', call_site: callSite ?? 'unknown' },
+    });
+  }
 }
 
 /**
@@ -459,6 +492,17 @@ export function applyPendingDone(sessionId: string): boolean {
     actor_id: sessionId,
     task_id: current.task_id ?? null,
     payload: { call_site: current.pending_done_call_site ?? 'unknown' },
+  });
+  recordEvent({
+    event_type: 'session_status_changed',
+    actor_type: 'system',
+    actor_id: sessionId,
+    task_id: current.task_id ?? null,
+    payload: {
+      from: current.status,
+      to: 'done',
+      call_site: current.pending_done_call_site ?? 'unknown',
+    },
   });
   return true;
 }
@@ -566,6 +610,15 @@ export function markSessionIdle(
     ended_at: endedAt,
     pr_url: prUrl ?? null,
   });
+  if (current && current.status !== 'idle') {
+    recordEvent({
+      event_type: 'session_status_changed',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: { from: current.status, to: 'idle' },
+    });
+  }
   return 'idle';
 }
 
@@ -2260,6 +2313,7 @@ export function setPRReviewResult(
   repo: string,
   result: string,
 ): void {
+  const before = getPRByNumber(prNumber, repo);
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -2277,6 +2331,19 @@ export function setPRReviewResult(
     review_result: result,
     review_at: new Date().toISOString(),
   });
+  if (before && before.review_result !== result) {
+    recordEvent({
+      event_type: 'pr_review_result_changed',
+      actor_type: 'system',
+      task_id: before.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        from: before.review_result,
+        to: result,
+      },
+    });
+  }
 }
 
 /**
@@ -2362,11 +2429,20 @@ export function updatePRState(
   repo: string,
   state: string,
 ): void {
+  const before = getPRByNumber(prNumber, repo);
   db.prepare<{ pr_number: number; repo: string; state: string }>(
     `
     UPDATE pull_requests SET state = @state WHERE pr_number = @pr_number AND repo = @repo
   `,
   ).run({ pr_number: prNumber, repo, state });
+  if (before && before.state !== state) {
+    recordEvent({
+      event_type: 'pr_state_changed',
+      actor_type: 'system',
+      task_id: before.task_id ?? null,
+      payload: { pr_number: prNumber, repo, from: before.state, to: state },
+    });
+  }
 }
 
 export function setPreReviewStage(
@@ -2513,6 +2589,7 @@ export function updateMergeState(
       ? JSON.stringify(failingChecks)
       : null;
   const now = new Date().toISOString();
+  const before = getPRByNumber(prNumber, repo);
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -2539,6 +2616,24 @@ export function updateMergeState(
     checked_at: now,
     failing_checks: failingChecksJson,
   });
+  if (
+    before &&
+    (before.mergeable !== mergeable || before.merge_state !== mergeState)
+  ) {
+    recordEvent({
+      event_type: 'pr_merge_state_changed',
+      actor_type: 'system',
+      task_id: before.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        from_mergeable: before.mergeable,
+        to_mergeable: mergeable,
+        from_merge_state: before.merge_state,
+        to_merge_state: mergeState,
+      },
+    });
+  }
 }
 
 /**
@@ -2617,6 +2712,7 @@ export function setPauseReason(
     reason !== null
       ? serializePauseReason(pauseReasonFromCanonical(reason, detail))
       : null;
+  const before = getPRByNumber(prNumber, repo);
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -2635,6 +2731,19 @@ export function setPauseReason(
     pause_reason: serialized,
     pause_reason_set_at: reason !== null ? Date.now() : null,
   });
+  if (before && before.pause_reason !== serialized) {
+    recordEvent({
+      event_type: 'pr_pause_reason_changed',
+      actor_type: 'system',
+      task_id: before.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        from: before.pause_reason,
+        to: serialized,
+      },
+    });
+  }
 }
 
 /**
@@ -4238,6 +4347,7 @@ export function updateDeployRunStatus(
   status: string,
   completedAt: string | null,
 ): void {
+  const before = getDeployRun(runId);
   _stmtUpdateDeployRunStatus ??= db.prepare<{
     run_id: string;
     status: string;
@@ -4250,6 +4360,14 @@ export function updateDeployRunStatus(
     status,
     completed_at: completedAt,
   });
+  if (before && before.status !== status) {
+    recordEvent({
+      event_type: 'deploy_run_status_changed',
+      actor_type: 'system',
+      project_id: before.project,
+      payload: { run_id: runId, from: before.status, to: status },
+    });
+  }
 }
 
 export function listDeployRunEvents(runId: string): DeployRunEventRow[] {
@@ -5505,6 +5623,7 @@ export function updateGateItemMinDeployedCommit(
   minDeployedCommit: string,
   updatedAt: string,
 ): void {
+  const before = getGateItem(id);
   _stmtUpdateGateItemMinDeployedCommit ??= db.prepare<{
     id: string;
     min_deployed_commit: string;
@@ -5517,6 +5636,17 @@ export function updateGateItemMinDeployedCommit(
     min_deployed_commit: minDeployedCommit,
     updated_at: updatedAt,
   });
+  if (before && before.min_deployed_commit !== minDeployedCommit) {
+    recordEvent({
+      event_type: 'gate_item_min_deployed_commit_changed',
+      actor_type: 'system',
+      payload: {
+        gate_item_id: id,
+        from: before.min_deployed_commit,
+        to: minDeployedCommit,
+      },
+    });
+  }
 }
 
 let _stmtUpdateGateItemPendingSchedule: Database.Statement | null = null;
@@ -5532,6 +5662,7 @@ export function updateGateItemPendingSchedule(
   pendingAttemptCount: number,
   updatedAt: string,
 ): void {
+  const before = getGateItem(id);
   _stmtUpdateGateItemPendingSchedule ??= db.prepare<{
     id: string;
     next_attempt_at: string;
@@ -5546,6 +5677,23 @@ export function updateGateItemPendingSchedule(
     pending_attempt_count: pendingAttemptCount,
     updated_at: updatedAt,
   });
+  if (
+    before &&
+    (before.next_attempt_at !== nextAttemptAt ||
+      before.pending_attempt_count !== pendingAttemptCount)
+  ) {
+    recordEvent({
+      event_type: 'gate_item_schedule_changed',
+      actor_type: 'system',
+      payload: {
+        gate_item_id: id,
+        from_next_attempt_at: before.next_attempt_at,
+        to_next_attempt_at: nextAttemptAt,
+        from_pending_attempt_count: before.pending_attempt_count,
+        to_pending_attempt_count: pendingAttemptCount,
+      },
+    });
+  }
 }
 
 let _stmtTouchGateItemUpdatedAt: Database.Statement | null = null;

@@ -125,7 +125,15 @@ type EventType =
   | 'admission_stall_cleared'
   | 'session_teardown_escalated'
   | 'stuck_session_pause_delivery_failed'
-  | 'session_nudge_delivery_failed';
+  | 'session_nudge_delivery_failed'
+  | 'session_status_changed'
+  | 'pr_state_changed'
+  | 'pr_merge_state_changed'
+  | 'pr_pause_reason_changed'
+  | 'pr_review_result_changed'
+  | 'gate_item_schedule_changed'
+  | 'gate_item_min_deployed_commit_changed'
+  | 'deploy_run_status_changed';
 
 type ActorType = 'ai' | 'human' | 'system';
 
