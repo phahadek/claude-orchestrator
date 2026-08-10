@@ -265,7 +265,9 @@ describe('dispatchGateItemVerification', () => {
   });
 
   it('a manually dispatched verifier pass on a Human-Observation item still cannot resolve it', async () => {
-    const item = await makeRunnableItem({ classification: 'Human-Observation' });
+    const item = await makeRunnableItem({
+      classification: 'Human-Observation',
+    });
     const verify = vi.fn(async () => ({
       disposition: 'pass' as const,
       evidence: { basis: 'operational', note: 'audit_log shows it deployed' },
