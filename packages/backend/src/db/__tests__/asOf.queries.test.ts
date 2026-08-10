@@ -24,6 +24,8 @@ import {
   getSession,
   getPRAsOf,
   getPRByNotionTaskId,
+  getDeployRunAsOf,
+  getDeployRun,
   isUnreconstructable,
 } from '../queries.js';
 
@@ -53,6 +55,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM ops_journal').run();
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM pull_requests').run();
+  db.prepare('DELETE FROM deploy_run').run();
   db.prepare('DELETE FROM audit_log').run();
 });
 
@@ -240,5 +243,30 @@ describe('getPRAsOf', () => {
 
     expect(getPRByNotionTaskId(taskId)?.state).toBe('open');
     expect(getPRAsOf(taskId, new Date(T0 - 1).toISOString())).toBeUndefined();
+  });
+});
+
+describe('getDeployRunAsOf', () => {
+  it('keeps static fields, marks mutable fields unreconstructable', () => {
+    const runId = 'run-1';
+    db.prepare(
+      `INSERT INTO deploy_run (run_id, project, target_sha, current_step, status, started_at)
+       VALUES (?, 'proj-1', 'abc123', 'building', 'running', ?)`,
+    ).run(runId, new Date(T0).toISOString());
+
+    const asOfResult = getDeployRunAsOf(runId, new Date(T1).toISOString());
+    expect(asOfResult?.run_id).toBe(runId);
+    expect(asOfResult?.target_sha).toBe('abc123');
+    expect(isUnreconstructable(asOfResult?.status)).toBe(true);
+    expect(isUnreconstructable(asOfResult?.current_step)).toBe(true);
+
+    db.prepare(
+      `UPDATE deploy_run SET status = 'succeeded', completed_at = ? WHERE run_id = ?`,
+    ).run(new Date(T1).toISOString(), runId);
+    expect(getDeployRun(runId)?.status).toBe('succeeded');
+
+    expect(
+      getDeployRunAsOf(runId, new Date(T0 - 1).toISOString()),
+    ).toBeUndefined();
   });
 });
