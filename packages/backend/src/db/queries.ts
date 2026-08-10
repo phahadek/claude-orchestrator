@@ -38,6 +38,8 @@ import type {
   SessionPauseInterval,
   TaskRepoAssignmentRow,
   FeedbackInboxRow,
+  TestRequestRunRow,
+  TestRequestRunState,
   OpsJournalRow,
   CapabilityDisqualificationRow,
   NewCapabilityDisqualificationRow,
@@ -6316,6 +6318,65 @@ export function countUndeliveredInboxItems(sessionId: string): number {
     )
     .get(sessionId) as { count: number };
   return row.count;
+}
+
+// ─── test_request_runs ──────────────────────────────────────────────────────
+
+export function insertTestRequestRun(
+  id: string,
+  projectId: string,
+  contentHash: string,
+): void {
+  db.prepare(
+    `INSERT INTO test_request_runs (id, project_id, content_hash, state, output, started_at, finished_at)
+     VALUES (?, ?, ?, 'running', '', ?, NULL)`,
+  ).run(id, projectId, contentHash, Date.now());
+}
+
+export function completeTestRequestRun(
+  id: string,
+  state: TestRequestRunState,
+  output: string,
+): void {
+  db.prepare(
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ? WHERE id = ?`,
+  ).run(state, output, Date.now(), id);
+}
+
+/** Every run still `running` — used by the boot-time crash-recovery sweep. */
+export function listRunningTestRequestRuns(): TestRequestRunRow[] {
+  return db
+    .prepare(
+      `SELECT id, project_id, content_hash, state, output, started_at, finished_at
+       FROM test_request_runs WHERE state = 'running'`,
+    )
+    .all() as TestRequestRunRow[];
+}
+
+// ─── session_test_request_cycles ───────────────────────────────────────────
+
+export function getSessionTestRequestCycleCount(sessionId: string): number {
+  const row = db
+    .prepare(
+      `SELECT count FROM session_test_request_cycles WHERE session_id = ?`,
+    )
+    .get(sessionId) as { count: number } | undefined;
+  return row?.count ?? 0;
+}
+
+/** Increment the per-session test.request cycle counter and return the new count. */
+export function incrementSessionTestRequestCycleCount(
+  sessionId: string,
+): number {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO session_test_request_cycles (session_id, count, updated_at)
+     VALUES (?, 1, ?)
+     ON CONFLICT(session_id) DO UPDATE SET
+       count = count + 1,
+       updated_at = excluded.updated_at`,
+  ).run(sessionId, now);
+  return getSessionTestRequestCycleCount(sessionId);
 }
 
 // ─── completeness_disposition ───────────────────────────────────────────────

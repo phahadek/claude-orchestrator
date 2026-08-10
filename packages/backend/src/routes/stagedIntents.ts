@@ -144,7 +144,18 @@ import {
   isDeclaredWriteAutoApprove,
   bashCapabilityConfersFileMutation,
 } from '../session/orchestrator-config';
-import { runtimeSettings } from '../config';
+import { runtimeSettings, getProjectById } from '../config';
+import { typedGetSetting } from '../config/settings';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import { computeWholeTreeContentHash } from '../session/analyzeGating';
+import type { TestCommandResult } from '../session/test-runner';
+import { runProjectTestRequest } from '../orchestration/testRequestLane';
+import {
+  getSessionTestRequestCycleCount,
+  incrementSessionTestRequestCycleCount,
+  setSessionPauseReason,
+} from '../db/queries';
+import type { TestRequestPayload } from '../db/types';
 import type {
   PRReviewService,
   PRReviewResult,
@@ -2120,6 +2131,39 @@ function parsePRVerdict(reviewResultJson: string | null): string | null {
   }
 }
 
+class TestRequestValidationError extends Error {
+  constructor(reason: string) {
+    super(`[stagedIntents] test.request rejected: ${reason}`);
+    this.name = 'TestRequestValidationError';
+  }
+}
+
+/**
+ * A code session's request to run the project's `test:` commands. Refuses
+ * at stage time — before the row ever reaches `staged` — the one case that
+ * would otherwise strand it: staging inside a group. Like review.dispute,
+ * this applies via a direct mechanical auto-grant + execution, never a
+ * group commit.
+ */
+function validateTestRequestPayload(
+  payload: unknown,
+  groupId: string | null | undefined,
+): asserts payload is TestRequestPayload {
+  if (groupId) {
+    throw new TestRequestValidationError(
+      'a test.request cannot belong to a group — it applies via a direct ' +
+        'mechanical auto-grant, not a group commit',
+    );
+  }
+  const p = payload as Partial<TestRequestPayload> | null;
+  if (!p || typeof p.taskId !== 'string' || !p.taskId.trim()) {
+    throw new TestRequestValidationError('payload.taskId is required');
+  }
+  if (typeof p.reason !== 'string' || !p.reason.trim()) {
+    throw new TestRequestValidationError('payload.reason is required');
+  }
+}
+
 class ReviewDisputeValidationError extends Error {
   constructor(reason: string) {
     super(`[stagedIntents] review.dispute rejected: ${reason}`);
@@ -2669,6 +2713,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'gate.verify',
   'review.dispute',
   'ops.prIntent',
+  'test.request',
 ]);
 
 /**
@@ -3398,6 +3443,9 @@ export function stageIntent(
   }
   if (kind === 'review.dispute') {
     validateReviewDisputePayload(payload, groupId, decisionProposal);
+  }
+  if (kind === 'test.request') {
+    validateTestRequestPayload(payload, groupId);
   }
   if (kind === 'gate.verify') {
     validateGateVerifyPayload(payload);
@@ -4375,6 +4423,24 @@ async function rejectStagedIntentRow(
       outcome,
       reason,
     );
+  } else if (rejectedIntent.kind === 'test.request') {
+    if (rejectedIntent.sessionId && sessionManager) {
+      try {
+        await sessionManager.enqueueFeedback(
+          rejectedIntent.sessionId,
+          'test_request',
+          JSON.stringify({
+            intentId: rejectedIntent.id,
+            passed: false,
+            output: `test.request ${outcome}: ${reason}`,
+          }),
+        );
+      } catch (err) {
+        logger.error(
+          `[stagedIntents] resume failed for session ${rejectedIntent.sessionId.slice(0, 8)} after test.request ${outcome}: ${err}`,
+        );
+      }
+    }
   } else {
     await planningOrchestrator?.handleDisposition({
       intent: rejected,
@@ -4711,6 +4777,192 @@ async function maybeAutoApproveSeedStage(
 
   const approved = getStagedIntentRow(intent.id);
   return approved ? rowToApi(approved) : intent;
+}
+
+/** Cap on the test.request result delivered into a session's feedback inbox — the durable record in test_request_runs keeps the untruncated output. */
+const TEST_REQUEST_DELIVERY_OUTPUT_CAP = 8_000;
+
+/**
+ * Resolves the project's `test:` command config and the requesting
+ * session's live worktree path for a test.request intent — the two things
+ * both the auto-grant check and the actual execution need. Returns null on
+ * any missing piece (no project, no configured test commands, session has
+ * no worktree) — none of these throw; they just mean this intent cannot run.
+ */
+function resolveTestRequestExecutionInputs(intent: StagedIntent): {
+  worktreePath: string;
+  commands: string[];
+  timeoutSec: number;
+  maxRssMb: number;
+  failFast: boolean;
+} | null {
+  if (!intent.sessionId) return null;
+  const project = getProjectById(intent.projectId);
+  if (!project) return null;
+  const config = loadOrchestratorConfig(project.projectDir);
+  if (!config.test?.length) return null;
+  const session = getSession(intent.sessionId);
+  const worktreePath = session?.worktree_path;
+  if (!worktreePath) return null;
+  return {
+    worktreePath,
+    commands: config.test,
+    timeoutSec: config.test_timeout_sec,
+    maxRssMb: config.test_max_rss_mb,
+    failFast: config.test_fail_fast,
+  };
+}
+
+/**
+ * Runs (or joins, via runProjectTestRequest's coalescing) the test.request
+ * lane execution for an already-approved intent, then finalizes it: commits
+ * the staged intent (test.request has no separate apply step — mirrors
+ * review.dispute/completeness.disposition) and delivers the (truncated)
+ * result to the requesting session's feedback inbox so it wakes with the
+ * outcome instead of polling for it.
+ */
+async function triggerTestRequestExecution(
+  intent: StagedIntent,
+  sessionManager: SessionManager | undefined,
+): Promise<void> {
+  const inputs = resolveTestRequestExecutionInputs(intent);
+  let result: TestCommandResult;
+  if (!inputs) {
+    result = {
+      passed: false,
+      output:
+        "[test.request] could not resolve this project's test: commands or the requesting session's worktree",
+    };
+  } else {
+    let contentHash: string | null = null;
+    try {
+      contentHash = await computeWholeTreeContentHash(inputs.worktreePath);
+    } catch (err) {
+      logger.error(
+        `[stagedIntents] worktree hash failed for test.request ${intent.id}: ${err}`,
+      );
+    }
+    if (!contentHash) {
+      result = {
+        passed: false,
+        output: '[test.request] worktree content hash unavailable',
+      };
+    } else {
+      try {
+        result = await runProjectTestRequest({
+          projectId: intent.projectId,
+          contentHash,
+          worktreePath: inputs.worktreePath,
+          commands: inputs.commands,
+          timeoutSec: inputs.timeoutSec,
+          maxRssMb: inputs.maxRssMb,
+          failFast: inputs.failFast,
+        });
+      } catch (err) {
+        result = {
+          passed: false,
+          output: `[test.request] execution error: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+  }
+
+  const row = getStagedIntentRow(intent.id);
+  if (row && (row.state === 'staged' || row.state === 'approved')) {
+    const committed = transitionStagedIntent(intent.id, 'committed', {
+      annotation: JSON.stringify({ testRequest: { passed: result.passed } }),
+    });
+    broadcastIntentChange(rowToApi(committed));
+  }
+
+  recordEvent({
+    event_type: 'staged_intent_disposition',
+    actor_type: 'system',
+    actor_id: intent.sessionId ?? null,
+    project_id: intent.projectId,
+    task_id: (intent.payload as TestRequestPayload).taskId ?? null,
+    payload: {
+      intentId: intent.id,
+      disposition: 'test_request_completed',
+      passed: result.passed,
+      provenance: 'auto',
+    },
+  });
+
+  if (!intent.sessionId || !sessionManager) return;
+  const output =
+    result.output.length > TEST_REQUEST_DELIVERY_OUTPUT_CAP
+      ? result.output.slice(0, TEST_REQUEST_DELIVERY_OUTPUT_CAP) +
+        '\n...[truncated]'
+      : result.output;
+  try {
+    await sessionManager.enqueueFeedback(
+      intent.sessionId,
+      'test_request',
+      JSON.stringify({ intentId: intent.id, passed: result.passed, output }),
+    );
+  } catch (err) {
+    logger.error(
+      `[stagedIntents] resume failed for session ${intent.sessionId.slice(0, 8)} after test.request ${intent.id}: ${err}`,
+    );
+  }
+}
+
+/**
+ * Stage-time auto-grant for `test.request`: unlike gate.accrete/seed.stage's
+ * own-payload content match, this never trusts a session-asserted claim —
+ * it recomputes a project-scoped whole-tree content hash directly off the
+ * requesting session's live worktree (see computeWholeTreeContentHash) and
+ * auto-approves whenever the project has `test:` commands configured and a
+ * hash could be computed. Bounded by a per-session cycle counter
+ * (session_test_request_cycles, mirroring flake_recovery_max_retries): once
+ * a session's staged test.request count exceeds
+ * runtimeSettings.test_request_cycle_limit, the session is paused
+ * (test_request_cycle_exceeded) instead of auto-running further requests,
+ * so an iterate-on-red loop cannot run unbounded.
+ */
+async function maybeAutoApproveTestRequest(
+  intent: StagedIntent,
+  sessionManager: SessionManager | undefined,
+): Promise<StagedIntent> {
+  if (!intent.sessionId) return intent;
+
+  const priorCount = getSessionTestRequestCycleCount(intent.sessionId);
+  incrementSessionTestRequestCycleCount(intent.sessionId);
+  if (priorCount >= typedGetSetting('test_request_cycle_limit')) {
+    setSessionPauseReason(intent.sessionId, 'test_request_cycle_exceeded');
+    return intent;
+  }
+
+  const inputs = resolveTestRequestExecutionInputs(intent);
+  if (!inputs) return intent;
+
+  let contentHash: string | null;
+  try {
+    contentHash = await computeWholeTreeContentHash(inputs.worktreePath);
+  } catch (err) {
+    logger.error(
+      `[stagedIntents] worktree hash failed for test.request auto-grant on ${intent.id}: ${err}`,
+    );
+    return intent;
+  }
+  if (!contentHash) return intent;
+
+  const row = getStagedIntentRow(intent.id);
+  if (!row) return intent;
+  autoApproveAccretionRow(row);
+
+  const approved = getStagedIntentRow(intent.id);
+  const approvedIntent = approved ? rowToApi(approved) : intent;
+
+  void triggerTestRequestExecution(approvedIntent, sessionManager).catch(
+    (err) =>
+      logger.error(
+        `[stagedIntents] test.request execution failed for ${intent.id}: ${err}`,
+      ),
+  );
+
+  return approvedIntent;
 }
 
 /**
@@ -5365,6 +5617,9 @@ export async function routeStageTimeBlock(
   }
   if (intent.kind === 'seed.stage') {
     intent = await maybeAutoApproveSeedStage(intent);
+  }
+  if (intent.kind === 'test.request') {
+    intent = await maybeAutoApproveTestRequest(intent, sessionManager);
   }
 
   const checked = await runStageTimeReadyChecks(intent);
@@ -6456,6 +6711,12 @@ export function createStagedIntentsRouter(
         });
         return;
       }
+      if (row.kind === 'test.request') {
+        res.status(409).json({
+          error: `staged intent "${row.id}" is a test.request — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
+        });
+        return;
+      }
       const intent = rowToApi(row);
 
       const body = req.body as {
@@ -6628,6 +6889,31 @@ export function createStagedIntentsRouter(
           disposition: 'approve',
         });
         res.json(committedIntent);
+        return;
+      }
+
+      // A test.request has no separate apply step either — an operator
+      // manually approving one the auto-grant declined (e.g. a transient
+      // hash-compute failure) just kicks off the same execution path the
+      // auto-grant would have, out of band from the per-session cycle
+      // counter (that budget only bounds the auto-run loop, not a deliberate
+      // operator override).
+      if (intent.kind === 'test.request') {
+        const approvedRow =
+          row.state === 'staged'
+            ? transitionStagedIntent(intent.id, 'approved', {
+                annotation: null,
+              })
+            : row;
+        const approvedIntent = rowToApi(approvedRow);
+        broadcastIntentChange(approvedIntent);
+        void triggerTestRequestExecution(approvedIntent, sessionManager).catch(
+          (err) =>
+            logger.error(
+              `[stagedIntents] test.request execution failed for ${intent.id}: ${err}`,
+            ),
+        );
+        res.json(approvedIntent);
         return;
       }
 
