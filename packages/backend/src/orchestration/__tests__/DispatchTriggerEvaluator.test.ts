@@ -426,10 +426,11 @@ describe('DispatchTriggerEvaluator — poll complete log line', () => {
 
     await evaluator.tickOnce();
 
-    const matches = infoSpy.mock.calls.filter(([message]) =>
-      typeof message === 'string' &&
-      message.includes('[DispatchTriggerEvaluator] poll complete') &&
-      message.includes('durationMs='),
+    const matches = infoSpy.mock.calls.filter(
+      ([message]) =>
+        typeof message === 'string' &&
+        message.includes('[DispatchTriggerEvaluator] poll complete') &&
+        message.includes('durationMs='),
     );
     expect(matches).toHaveLength(1);
 

@@ -190,9 +190,7 @@ export class DispatchTriggerEvaluator {
         );
         if (dispatched >= available) continue;
 
-        const docsCandidates = await this.scanProjectDocsCandidates(
-          project.id,
-        );
+        const docsCandidates = await this.scanProjectDocsCandidates(project.id);
         eligibleCount += docsCandidates.length;
         dispatched += await this.dispatchUpTo(
           docsCandidates,
