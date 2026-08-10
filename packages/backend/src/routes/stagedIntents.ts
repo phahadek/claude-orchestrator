@@ -4819,7 +4819,7 @@ function patchBodySectionMismatchKey(
  * translated error to the operator instead of treating the failure as
  * silently handled.
  */
-async function routeApplyTimeFailure(
+export async function routeApplyTimeFailure(
   row: StagedIntentRow,
   err: unknown,
   planningOrchestrator: PlanningOrchestrator | undefined,
@@ -4832,13 +4832,24 @@ async function routeApplyTimeFailure(
   // untouched, mirroring routeStageTimeBlock's own no-session bail-out.
   if (!row.session_id) return { reason, redriven: false };
 
-  const { row: rejected } = transitionRejectedIntent(
-    row,
-    'pushback',
-    reason,
-    'auto',
-  );
-  broadcastIntentChange(rowToApi(rejected));
+  // Concurrent commitGroupIntents invocations can both reach this point off
+  // the same stale pre-commit snapshot (commitGroupIntents' blocked-member
+  // guard only checks state at entry, before either invocation writes): by
+  // the time a losing invocation gets here, a winner may have already parked
+  // the row in its target blocked state, and re-issuing the same transition
+  // would throw IllegalStagedIntentTransitionError out of this unguarded
+  // async handler — destroying the structured commit report the throw
+  // bypasses (see this function's doc comment). Re-read live state and skip
+  // the no-op transition when that's already happened; the pushback is still
+  // redelivered below, since the losing caller cannot know the winner's
+  // delivery succeeded, and handleDisposition already no-ops when the
+  // session is gone.
+  const live = getStagedIntentRow(row.id) ?? row;
+  const alreadyBlocked = BLOCKED_STATES.includes(live.state);
+  const rejected = alreadyBlocked
+    ? live
+    : transitionRejectedIntent(row, 'pushback', reason, 'auto').row;
+  if (!alreadyBlocked) broadcastIntentChange(rowToApi(rejected));
 
   const redriven = Boolean(getSession(row.session_id));
   if (planningOrchestrator) {
@@ -5506,7 +5517,7 @@ export async function verifyDispatchedGroupsForSession(
   return outcomes;
 }
 
-interface GroupCommitOptions {
+export interface GroupCommitOptions {
   override: boolean;
   reason: string;
   actorType: ApplyActorType;
@@ -5887,7 +5898,7 @@ async function precheckGroupCommit(
  * group's outcome independent of its siblings) so both surfaces apply,
  * annotate, and audit through the exact same path.
  */
-async function commitGroupIntents(
+export async function commitGroupIntents(
   groupId: string,
   opts: GroupCommitOptions,
   planningOrchestrator?: PlanningOrchestrator,
