@@ -43,7 +43,9 @@ export const asyncErrorBoundary: ErrorRequestHandler = (
     return;
   }
   const error = err instanceof Error ? err : new Error(String(err));
-  logger.error(`[server] unhandled route error: ${error.stack || error.message}`);
+  logger.error(
+    `[server] unhandled route error: ${error.stack || error.message}`,
+  );
   recordFault('routeError', error, false);
   res.status(500).json({ error: 'Internal server error' });
 };
