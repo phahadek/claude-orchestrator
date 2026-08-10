@@ -957,15 +957,6 @@ export interface TestRequestRunRow {
   finished_at: number | null;
 }
 
-// ─── session_test_request_cycles ───────────────────────────────────────────
-
-/** Per-session iterate-on-red counter, bounding the test.request auto-grant loop (mirrors flake_recovery_max_retries). */
-export interface TestRequestCycleRow {
-  session_id: string;
-  count: number;
-  updated_at: number;
-}
-
 // ─── arch_unit ────────────────────────────────────────────────────────────
 
 /** A single titled architecture statement. */

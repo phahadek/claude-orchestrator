@@ -6333,30 +6333,6 @@ export function insertTestRequestRun(
   ).run(id, projectId, contentHash, Date.now());
 }
 
-/** The most recent still-running run for this (project, content-hash) pair, if any — the coalescing lookup. */
-export function getActiveTestRequestRun(
-  projectId: string,
-  contentHash: string,
-): TestRequestRunRow | undefined {
-  return db
-    .prepare(
-      `SELECT id, project_id, content_hash, state, output, started_at, finished_at
-       FROM test_request_runs
-       WHERE project_id = ? AND content_hash = ? AND state = 'running'
-       ORDER BY started_at DESC LIMIT 1`,
-    )
-    .get(projectId, contentHash) as TestRequestRunRow | undefined;
-}
-
-export function getTestRequestRun(id: string): TestRequestRunRow | undefined {
-  return db
-    .prepare(
-      `SELECT id, project_id, content_hash, state, output, started_at, finished_at
-       FROM test_request_runs WHERE id = ?`,
-    )
-    .get(id) as TestRequestRunRow | undefined;
-}
-
 export function completeTestRequestRun(
   id: string,
   state: TestRequestRunState,
