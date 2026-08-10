@@ -936,6 +936,215 @@ describe('PlanningOrchestrator terminal detection', () => {
   });
 });
 
+// ── turn-end blocked-members nudge (result event, not just idle park) ──────
+
+describe('PlanningOrchestrator turn-end blocked-members nudge', () => {
+  it('nudges a session that ends a turn via a result event while holding a needs_revision intent, naming the intent id', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ id: 'blocked-1', state: 'needs_revision' }),
+    ]);
+    new PlanningOrchestrator(sm as any);
+
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'planning-terminal-blocked-members-nudge',
+      expect.stringContaining('blocked-1'),
+    );
+  });
+
+  it('nudges a session that ends a turn via a result event while holding a pending_verification intent, naming the intent id', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ id: 'blocked-2', state: 'pending_verification' }),
+    ]);
+    new PlanningOrchestrator(sm as any);
+
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'planning-terminal-blocked-members-nudge',
+      expect.stringContaining('blocked-2'),
+    );
+  });
+
+  it('does not nudge a session that ends a turn holding no blocked intents', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ id: 'intent-1', state: 'committed' }),
+    ]);
+    new PlanningOrchestrator(sm as any);
+
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+  });
+
+  it('does not drive the session terminal via the turn-end nudge check, even while blocked members are present', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ id: 'blocked-1', state: 'needs_revision' }),
+    ]);
+    new PlanningOrchestrator(sm as any);
+
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'planning-terminal-blocked-members-nudge',
+      expect.any(String),
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sm.endSession).not.toHaveBeenCalled();
+  });
+
+  it('regression: the result branch still applies a pending approve-terminal transition, and does not additionally send a blocked-members nudge once it has gone terminal', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    const liveSession = makeLiveSession(true);
+    sm.getLiveSession.mockReturnValue(liveSession);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+    expect(markSessionDone).not.toHaveBeenCalled();
+
+    (liveSession as any).hasActiveTurn = () => false;
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+      null,
+      expect.stringContaining('approved'),
+      { skipInFlightGuard: true },
+    );
+    expect(sm.enqueueFeedback).not.toHaveBeenCalledWith(
+      'planning-session-1',
+      'planning-terminal-blocked-members-nudge',
+      expect.any(String),
+    );
+  });
+
+  it('does not re-send the nudge for an unchanged blocked-intent set across two consecutive turn ends', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ id: 'blocked-1', state: 'needs_revision' }),
+    ]);
+    new PlanningOrchestrator(sm as any);
+
+    const emitResult = () =>
+      sm.emit('message', {
+        type: 'session_event',
+        sessionId: 'planning-session-1',
+        eventType: 'result',
+        content: '{}',
+      });
+
+    emitResult();
+    await flush();
+    emitResult();
+    await flush();
+
+    const nudgeCalls = sm.enqueueFeedback.mock.calls.filter(
+      (call) => call[1] === 'planning-terminal-blocked-members-nudge',
+    );
+    expect(nudgeCalls).toHaveLength(1);
+  });
+
+  it('once the turn-end nudge budget is exhausted for a blocked set, checkTerminal still falls through to terminal (the existing surfaceBlockedMembersPauseReason path) unchanged', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ id: 'blocked-1', state: 'needs_revision' }),
+    ]);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    // First turn end spends the budget for this exact blocked set.
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+    expect(markSessionDone).not.toHaveBeenCalled();
+
+    // A later terminal check (e.g. from a subsequent idle park) sees the
+    // same unresolved set; the budget is exhausted, so it falls through to
+    // terminal rather than nudging again.
+    const terminal = orch.checkTerminal('planning-session-1');
+
+    expect(terminal).toBe(true);
+    expect(markSessionDone).toHaveBeenCalled();
+  });
+
+  it('regression: the existing session_ended + idle park path still nudges a blocked session as before', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ id: 'blocked-1', state: 'needs_revision' }),
+    ]);
+    new PlanningOrchestrator(sm as any);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'planning-session-1',
+      status: 'idle',
+    });
+    await flush();
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'planning-terminal-blocked-members-nudge',
+      expect.stringContaining('blocked-1'),
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+});
+
 // ── turn-end group verification routing ─────────────────────────────────────
 
 describe('PlanningOrchestrator turn-end group verification', () => {
