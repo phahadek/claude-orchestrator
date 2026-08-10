@@ -1927,4 +1927,17 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // sessions.terminalized_at: written only at a genuine terminal transition
+  // (status -> done/error/killed), never on a non-terminal write that
+  // happens to also touch ended_at (e.g. the deferred-while-running path).
+  // ended_at's semantics are left unchanged for backwards compatibility —
+  // this is a separate, additive column so "was this session terminal at
+  // time T" can be answered directly. NULL for historical rows; backfill is
+  // out of scope.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN terminalized_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
 }
