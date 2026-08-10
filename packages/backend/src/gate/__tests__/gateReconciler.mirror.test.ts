@@ -104,13 +104,13 @@ function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
   });
 }
 
-function makeRunnableItem(
+async function makeRunnableItem(
   overrides: Partial<Parameters<typeof insertItem>[0]> = {},
 ) {
   const item = makeItem(overrides);
   setSourceMergeCommit(item.id, 'notion:abc', 'sha1');
   setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
-  reconcileGateRunnability('sha1', { project: 'proj-mirror' });
+  await reconcileGateRunnability('sha1', { project: 'proj-mirror' });
   return item;
 }
 
@@ -154,8 +154,8 @@ function makePendingApprovalItem(
 }
 
 describe('reconcileHumanObservationMirrors', () => {
-  it('stages a mirror for a runnable Human-Observation item with no groupId', () => {
-    const item = makeRunnableItem();
+  it('stages a mirror for a runnable Human-Observation item with no groupId', async () => {
+    const item = await makeRunnableItem();
 
     const result = reconcileHumanObservationMirrors();
 
@@ -172,8 +172,8 @@ describe('reconcileHumanObservationMirrors', () => {
     });
   });
 
-  it('never mirrors a non-Human-Observation item', () => {
-    makeRunnableItem({ classification: 'Read-Only' });
+  it('never mirrors a non-Human-Observation item', async () => {
+    await makeRunnableItem({ classification: 'Read-Only' });
 
     const result = reconcileHumanObservationMirrors();
 
@@ -196,8 +196,8 @@ describe('reconcileHumanObservationMirrors', () => {
     expect(result.staged).toEqual([item.id]);
   });
 
-  it('is idempotent — a second pass never re-stages an item with an already-live mirror', () => {
-    makeRunnableItem();
+  it('is idempotent — a second pass never re-stages an item with an already-live mirror', async () => {
+    await makeRunnableItem();
 
     const first = reconcileHumanObservationMirrors();
     const second = reconcileHumanObservationMirrors();
@@ -207,8 +207,8 @@ describe('reconcileHumanObservationMirrors', () => {
     expect(liveMirrorRows()).toHaveLength(1);
   });
 
-  it('retires a live mirror once its gate_item resolves via the direct GateReadinessPanel path', () => {
-    const item = makeRunnableItem();
+  it('retires a live mirror once its gate_item resolves via the direct GateReadinessPanel path', async () => {
+    const item = await makeRunnableItem();
     reconcileHumanObservationMirrors();
     expect(liveMirrorRows()).toHaveLength(1);
 
@@ -232,8 +232,8 @@ describe('reconcileHumanObservationMirrors', () => {
     expect(row.disposition_reason).toMatch(/resolved/);
   });
 
-  it('retires a live mirror once its gate_item is reclassified away from Human-Observation', () => {
-    const item = makeRunnableItem();
+  it('retires a live mirror once its gate_item is reclassified away from Human-Observation', async () => {
+    const item = await makeRunnableItem();
     reconcileHumanObservationMirrors();
     expect(liveMirrorRows()).toHaveLength(1);
 
@@ -249,8 +249,8 @@ describe('reconcileHumanObservationMirrors', () => {
     expect(row.disposition_reason).toMatch(/reclassified/);
   });
 
-  it('does not restage a mirror for an item that was just retired in the same tick sequence unless it becomes runnable again', () => {
-    const item = makeRunnableItem();
+  it('does not restage a mirror for an item that was just retired in the same tick sequence unless it becomes runnable again', async () => {
+    const item = await makeRunnableItem();
     reconcileHumanObservationMirrors();
     appendGateItemEvent(item.id, { disposition: 'pass', operator: 'jane' });
     reconcileHumanObservationMirrors();
@@ -282,10 +282,10 @@ describe('reconcileHumanObservationMirrors — consent mirrors (Prod-Mutating pe
     });
   });
 
-  it('never mirrors an item in another state or classification', () => {
+  it('never mirrors an item in another state or classification', async () => {
     makeProdMutatingItem(); // open, never passed — not pending-approval
-    makeRunnableItem({ classification: 'Read-Only' });
-    makeRunnableItem();
+    await makeRunnableItem({ classification: 'Read-Only' });
+    await makeRunnableItem();
 
     const result = reconcileHumanObservationMirrors();
 

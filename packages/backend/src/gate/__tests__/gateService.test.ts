@@ -245,90 +245,90 @@ describe('getGateReadiness', () => {
 });
 
 describe('reconcileGateRunnability', () => {
-  it('marks an item runnable only when deploySha contains min_deployed_commit', () => {
+  it('marks an item runnable only when deploySha contains min_deployed_commit', async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha3', new Date(1).toISOString());
 
-    const notYet = reconcileGateRunnability('sha2', {
+    const notYet = await reconcileGateRunnability('sha2', {
       ancestrySource: orderedAncestry,
     });
     expect(notYet.markedRunnable).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('open');
 
-    const now = reconcileGateRunnability('sha3', {
+    const now = await reconcileGateRunnability('sha3', {
       ancestrySource: orderedAncestry,
     });
     expect(now.markedRunnable).toEqual([item.id]);
     expect(getGateItem(item.id)?.state).toBe('runnable');
   });
 
-  it('never re-opens a pass, even when a later source pushes min_deployed_commit past pass-time', () => {
+  it('never re-opens a pass, even when a later source pushes min_deployed_commit past pass-time', async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     appendGateItemEvent(item.id, { disposition: 'pass', deploySha: 'sha1' });
     expect(getGateItem(item.id)?.state).toBe('pass');
 
     // A later source lands, pushing min_deployed_commit past what was deployed at pass-time.
     setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
 
-    const stillOnSha1 = reconcileGateRunnability('sha1', {
+    const stillOnSha1 = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
     expect(stillOnSha1.reopened).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('pass');
   });
 
-  it('stays pass when the last pass event recorded no deploySha, regardless of min_deployed_commit ancestry', () => {
+  it('stays pass when the last pass event recorded no deploySha, regardless of min_deployed_commit ancestry', async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     appendGateItemEvent(item.id, { disposition: 'pass' });
     expect(getGateItem(item.id)?.state).toBe('pass');
 
-    const result = reconcileGateRunnability('sha1', {
+    const result = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
     expect(result.reopened).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('pass');
   });
 
-  it('leaves a still-valid pass alone', () => {
+  it('leaves a still-valid pass alone', async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     appendGateItemEvent(item.id, { disposition: 'pass', deploySha: 'sha1' });
 
-    const result = reconcileGateRunnability('sha1', {
+    const result = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
     expect(result.reopened).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('pass');
   });
 
-  it('keeps an item open when its source has not merged yet, even with a deployed SHA in play', () => {
+  it('keeps an item open when its source has not merged yet, even with a deployed SHA in play', async () => {
     const item = makeItem();
     expect(getGateItem(item.id)?.minDeployedCommit).toBeFalsy();
 
-    const result = reconcileGateRunnability('sha1', {
+    const result = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
     expect(result.markedRunnable).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('open');
   });
 
-  it('still leaves an item open when its known min_deployed_commit is not covered', () => {
+  it('still leaves an item open when its known min_deployed_commit is not covered', async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha3', new Date(1).toISOString());
 
-    const result = reconcileGateRunnability('sha2', {
+    const result = await reconcileGateRunnability('sha2', {
       ancestrySource: orderedAncestry,
     });
     expect(result.markedRunnable).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('open');
   });
 
-  it('becomes runnable only once every source has merged and deployed, not just the first', () => {
+  it('becomes runnable only once every source has merged and deployed, not just the first', async () => {
     const item = makeItem({
       sources: [
         { sourceTaskId: 'notion:abc', sourceTaskTitle: 'Source A' },
@@ -339,7 +339,7 @@ describe('reconcileGateRunnability', () => {
 
     // Source B hasn't merged yet — the item must stay open even though A is
     // merged and deployed.
-    const beforeBMerges = reconcileGateRunnability('sha2', {
+    const beforeBMerges = await reconcileGateRunnability('sha2', {
       ancestrySource: orderedAncestry,
     });
     expect(beforeBMerges.markedRunnable).toEqual([]);
@@ -347,46 +347,46 @@ describe('reconcileGateRunnability', () => {
 
     // Source B merges but hasn't deployed yet.
     setSourceMergeCommit(item.id, 'notion:def', 'sha3');
-    const beforeBDeploys = reconcileGateRunnability('sha2', {
+    const beforeBDeploys = await reconcileGateRunnability('sha2', {
       ancestrySource: orderedAncestry,
     });
     expect(beforeBDeploys.markedRunnable).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('open');
 
     // Once sha3 deploys, both sources are covered.
-    const result = reconcileGateRunnability('sha3', {
+    const result = await reconcileGateRunnability('sha3', {
       ancestrySource: orderedAncestry,
     });
     expect(result.markedRunnable).toEqual([item.id]);
     expect(getGateItem(item.id)?.state).toBe('runnable');
   });
 
-  it('remains runnable with no sources at all — the no-deploy-dependency path', () => {
+  it('remains runnable with no sources at all — the no-deploy-dependency path', async () => {
     const item = makeItem({ sources: [] });
 
-    const result = reconcileGateRunnability('sha1', {
+    const result = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
     expect(result.markedRunnable).toEqual([item.id]);
     expect(getGateItem(item.id)?.state).toBe('runnable');
   });
 
-  it('does not auto-reopen a pass item with a null min_deployed_commit', () => {
+  it('does not auto-reopen a pass item with a null min_deployed_commit', async () => {
     const item = makeItem();
     appendGateItemEvent(item.id, { disposition: 'pass', deploySha: 'sha1' });
     expect(getGateItem(item.id)?.state).toBe('pass');
 
-    const result = reconcileGateRunnability('sha2', {
+    const result = await reconcileGateRunnability('sha2', {
       ancestrySource: orderedAncestry,
     });
     expect(result.reopened).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('pass');
   });
 
-  it('auto-reopens a failed item (fail -> open -> runnable) only once its min_deployed_commit has genuinely advanced past fail-time and is covered', () => {
+  it('auto-reopens a failed item (fail -> open -> runnable) only once its min_deployed_commit has genuinely advanced past fail-time and is covered', async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: { minDeployedCommitAtFail: 'sha1' },
@@ -396,7 +396,7 @@ describe('reconcileGateRunnability', () => {
 
     // Still on the same commit — already covered before it failed, so this
     // must NOT auto-reopen (nothing has actually changed since the fail).
-    const notYet = reconcileGateRunnability('sha1', {
+    const notYet = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
     expect(notYet.reopened).toEqual([]);
@@ -405,7 +405,7 @@ describe('reconcileGateRunnability', () => {
     // The follow-up fix source merges and pushes min_deployed_commit forward...
     setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
     // ...and once sha2 deploys, the item auto-reopens straight through to runnable.
-    const advanced = reconcileGateRunnability('sha2', {
+    const advanced = await reconcileGateRunnability('sha2', {
       ancestrySource: orderedAncestry,
     });
     expect(advanced.reopened).toEqual([item.id]);
@@ -419,22 +419,22 @@ describe('reconcileGateRunnability', () => {
     });
   });
 
-  it("keeps an item's existing disposition when it flips open -> runnable without being reopened in the tick", () => {
+  it("keeps an item's existing disposition when it flips open -> runnable without being reopened in the tick", async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
     advanceState(item.id, 'open', 'needs-setup', new Date(1).toISOString());
     expect(getGateItem(item.id)?.state).toBe('open');
 
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
 
     expect(getGateItem(item.id)?.state).toBe('runnable');
     expect(getGateItem(item.id)?.currentDisposition).toBe('needs-setup');
   });
 
-  it("keeps an item's existing disposition when it flips runnable -> open after becoming uncovered", () => {
+  it("keeps an item's existing disposition when it flips runnable -> open after becoming uncovered", async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     advanceState(item.id, 'runnable', 'needs-setup', new Date(1).toISOString());
     expect(getGateItem(item.id)?.state).toBe('runnable');
 
@@ -445,13 +445,13 @@ describe('reconcileGateRunnability', () => {
       new Date(2).toISOString(),
     );
 
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
 
     expect(getGateItem(item.id)?.state).toBe('open');
     expect(getGateItem(item.id)?.currentDisposition).toBe('needs-setup');
   });
 
-  it('marks runnable a gate item sourced from a Done Design task with no merge commit', () => {
+  it('marks runnable a gate item sourced from a Done Design task with no merge commit', async () => {
     const item = makeItem({
       sources: [
         {
@@ -465,14 +465,14 @@ describe('reconcileGateRunnability', () => {
       JSON.stringify({ type: '📐 Design', status: '✅ Done' }),
     );
 
-    const result = reconcileGateRunnability('sha1', {
+    const result = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
     expect(result.markedRunnable).toEqual([item.id]);
     expect(getGateItem(item.id)?.state).toBe('runnable');
   });
 
-  it('stays open while its Design source is still Ready', () => {
+  it('stays open while its Design source is still Ready', async () => {
     const item = makeItem({
       sources: [
         {
@@ -486,14 +486,14 @@ describe('reconcileGateRunnability', () => {
       JSON.stringify({ type: '📐 Design', status: '🗂️ Ready' }),
     );
 
-    const result = reconcileGateRunnability('sha1', {
+    const result = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
     expect(result.markedRunnable).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('open');
   });
 
-  it('stays open for a Code source with no merge commit, even when its cached type is Code', () => {
+  it('stays open for a Code source with no merge commit, even when its cached type is Code', async () => {
     const item = makeItem({
       sources: [
         { sourceTaskId: 'notion:code-1', sourceTaskTitle: 'Add env var' },
@@ -504,14 +504,14 @@ describe('reconcileGateRunnability', () => {
       JSON.stringify({ type: '💻 Code', status: '✅ Done' }),
     );
 
-    const result = reconcileGateRunnability('sha1', {
+    const result = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
     expect(result.markedRunnable).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('open');
   });
 
-  it('marks runnable a Code source whose merge commit is an ancestor of the deployed sha', () => {
+  it('marks runnable a Code source whose merge commit is an ancestor of the deployed sha', async () => {
     const item = makeItem({
       sources: [
         { sourceTaskId: 'notion:code-2', sourceTaskTitle: 'Add env var' },
@@ -520,14 +520,14 @@ describe('reconcileGateRunnability', () => {
     upsertTaskCache('notion:code-2', JSON.stringify({ type: '💻 Code' }));
     mergeSource(item.id, 'sha3', new Date(1).toISOString(), 'notion:code-2');
 
-    const result = reconcileGateRunnability('sha3', {
+    const result = await reconcileGateRunnability('sha3', {
       ancestrySource: orderedAncestry,
     });
     expect(result.markedRunnable).toEqual([item.id]);
     expect(getGateItem(item.id)?.state).toBe('runnable');
   });
 
-  it('falls back to the strict merge-commit test and stays open when the source Type cannot be resolved from cache', () => {
+  it('falls back to the strict merge-commit test and stays open when the source Type cannot be resolved from cache', async () => {
     const item = makeItem({
       sources: [
         { sourceTaskId: 'notion:unknown-1', sourceTaskTitle: 'Uncached task' },
@@ -535,14 +535,14 @@ describe('reconcileGateRunnability', () => {
     });
     // No task_cache row for notion:unknown-1 — getCachedType returns null.
 
-    const result = reconcileGateRunnability('sha1', {
+    const result = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
     expect(result.markedRunnable).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('open');
   });
 
-  it('stays open for a multi-source item mixing a Done non-Code source and an unmerged Code source', () => {
+  it('stays open for a multi-source item mixing a Done non-Code source and an unmerged Code source', async () => {
     const item = makeItem({
       sources: [
         {
@@ -559,17 +559,17 @@ describe('reconcileGateRunnability', () => {
     upsertTaskCache('notion:code-3', JSON.stringify({ type: '💻 Code' }));
     // notion:code-3 has no merge commit set.
 
-    const result = reconcileGateRunnability('sha1', {
+    const result = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
     expect(result.markedRunnable).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('open');
   });
 
-  it('stamps min_deployed_commit_at_fail server-side even when the caller passes a plain string evidence, matching the documented /gate skill contract', () => {
+  it('stamps min_deployed_commit_at_fail server-side even when the caller passes a plain string evidence, matching the documented /gate skill contract', async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
 
     appendGateItemEvent(item.id, {
       disposition: 'fail',
@@ -586,17 +586,17 @@ describe('reconcileGateRunnability', () => {
     expect(events.at(-1)?.minDeployedCommitAtFail).toBe('sha1');
   });
 
-  it('does not auto-reopen a string-evidence fail on the very next tick when min_deployed_commit is unchanged', () => {
+  it('does not auto-reopen a string-evidence fail on the very next tick when min_deployed_commit is unchanged', async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'observed broken behaviour',
     });
     expect(getGateItem(item.id)?.state).toBe('fail');
 
-    const result = reconcileGateRunnability('sha1', {
+    const result = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
 
@@ -606,17 +606,17 @@ describe('reconcileGateRunnability', () => {
     expect(events.filter((e) => e.disposition === 'reopened')).toEqual([]);
   });
 
-  it('reopens a string-evidence fail exactly once, fail -> open -> runnable, once min_deployed_commit genuinely advances', () => {
+  it('reopens a string-evidence fail exactly once, fail -> open -> runnable, once min_deployed_commit genuinely advances', async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: 'observed broken behaviour',
     });
 
     setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
-    const result = reconcileGateRunnability('sha2', {
+    const result = await reconcileGateRunnability('sha2', {
       ancestrySource: orderedAncestry,
     });
 
@@ -626,7 +626,7 @@ describe('reconcileGateRunnability', () => {
     expect(events.filter((e) => e.disposition === 'reopened')).toHaveLength(1);
   });
 
-  it('does not auto-reopen a fail item whose min_deployed_commit is null', () => {
+  it('does not auto-reopen a fail item whose min_deployed_commit is null', async () => {
     const item = makeItem({ sources: [] });
     appendGateItemEvent(item.id, {
       disposition: 'fail',
@@ -635,17 +635,44 @@ describe('reconcileGateRunnability', () => {
     expect(getGateItem(item.id)?.minDeployedCommit).toBeUndefined();
     expect(getGateItem(item.id)?.state).toBe('fail');
 
-    const result = reconcileGateRunnability('sha1', {
+    const result = await reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
 
     expect(result.reopened).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('fail');
   });
+
+  it('yields to the event loop between items, mirroring TaskCacheRefresher', async () => {
+    const items = Array.from({ length: 5 }, (_, i) =>
+      makeItem({ text: `item ${i}` }),
+    );
+    for (const item of items) {
+      mergeSource(item.id, 'sha1', new Date(1).toISOString());
+    }
+
+    const events: string[] = [];
+    setImmediate(() => {
+      events.push('sentinel');
+    });
+
+    const tick = reconcileGateRunnability('sha1', {
+      ancestrySource: orderedAncestry,
+    }).then(() => {
+      events.push('tick-complete');
+    });
+    await tick;
+
+    // A macrotask scheduled at tick start only gets a chance to run before
+    // the tick's own promise resolves if the tick itself yields to the
+    // event loop at least once per item processed — a same-tick,
+    // all-microtask pass would starve the sentinel and resolve first.
+    expect(events).toEqual(['sentinel', 'tick-complete']);
+  });
 });
 
 describe('nextRunnableGateItems', () => {
-  it('returns a bounded batch scoped to a single classification tier', () => {
+  it('returns a bounded batch scoped to a single classification tier', async () => {
     const items = Array.from({ length: 3 }, (_, i) =>
       makeItem({ text: `read-only ${i}`, classification: 'Read-Only' }),
     );
@@ -656,7 +683,7 @@ describe('nextRunnableGateItems', () => {
     for (const it of [...items, prodItem]) {
       mergeSource(it.id, 'sha1', new Date(1).toISOString());
     }
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
 
     const batch = nextRunnableGateItems('polimarket-analyser', 'M12', {
       classification: 'Read-Only',
@@ -666,7 +693,7 @@ describe('nextRunnableGateItems', () => {
     expect(batch.every((it) => it.classification === 'Read-Only')).toBe(true);
   });
 
-  it("never returns another project's items under the same milestone display name", () => {
+  it("never returns another project's items under the same milestone display name", async () => {
     const own = makeItem({
       project: 'claude-dashboard',
       milestone: 'M13',
@@ -680,7 +707,7 @@ describe('nextRunnableGateItems', () => {
     for (const it of [own, other]) {
       mergeSource(it.id, 'sha1', new Date(1).toISOString());
     }
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
 
     const batch = nextRunnableGateItems('claude-dashboard', 'M13', {
       classification: 'Read-Only',
@@ -689,23 +716,23 @@ describe('nextRunnableGateItems', () => {
     expect(batch.map((it) => it.id)).not.toContain(other.id);
   });
 
-  it('never returns the full runnable set across tiers when classification is omitted', () => {
+  it('never returns the full runnable set across tiers when classification is omitted', async () => {
     const readOnly = makeItem({ text: 'ro', classification: 'Read-Only' });
     const prod = makeItem({ text: 'pm', classification: 'Prod-Mutating' });
     for (const it of [readOnly, prod]) {
       mergeSource(it.id, 'sha1', new Date(1).toISOString());
     }
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
 
     const batch = nextRunnableGateItems('polimarket-analyser', 'M12');
     const tiers = new Set(batch.map((it) => it.classification));
     expect(tiers.size).toBe(1);
   });
 
-  it('skips a runnable item whose latest event is needs-setup', () => {
+  it('skips a runnable item whose latest event is needs-setup', async () => {
     const item = makeItem({ classification: 'Read-Only' });
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     appendGateItemEvent(item.id, {
       disposition: 'needs-setup',
       evidence: { reason: 'budget exceeded' },
@@ -718,10 +745,10 @@ describe('nextRunnableGateItems', () => {
     expect(batch.map((it) => it.id)).not.toContain(item.id);
   });
 
-  it('pulls a previously needs-setup item again once a reclassify supersedes it as the latest event', () => {
+  it('pulls a previously needs-setup item again once a reclassify supersedes it as the latest event', async () => {
     const item = makeItem({ classification: 'Read-Only' });
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     appendGateItemEvent(item.id, {
       disposition: 'needs-setup',
       evidence: { reason: 'budget exceeded' },
@@ -1156,7 +1183,7 @@ describe('rejectGateItem', () => {
 });
 
 describe('reopenGateItem', () => {
-  it('returns a pass item to open, appends a reopened event, and re-surfaces after reconcile', () => {
+  it('returns a pass item to open, appends a reopened event, and re-surfaces after reconcile', async () => {
     const item = makeItem({ classification: 'Read-Only' });
     appendGateItemEvent(item.id, { disposition: 'pass' });
     expect(getGateItem(item.id)?.state).toBe('pass');
@@ -1174,7 +1201,7 @@ describe('reopenGateItem', () => {
     );
 
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     expect(getGateItem(item.id)?.state).toBe('runnable');
     expect(
       nextRunnableGateItems('polimarket-analyser', 'M12', {
@@ -1183,7 +1210,7 @@ describe('reopenGateItem', () => {
     ).toContain(item.id);
   });
 
-  it('returns a deferred item to open and re-surfaces after reconcile', () => {
+  it('returns a deferred item to open and re-surfaces after reconcile', async () => {
     const item = makeItem({ classification: 'Read-Only' });
     appendGateItemEvent(item.id, { disposition: 'deferred' });
     expect(getGateItem(item.id)?.state).toBe('deferred');
@@ -1192,7 +1219,7 @@ describe('reopenGateItem', () => {
     expect(reopened.state).toBe('open');
 
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     expect(getGateItem(item.id)?.state).toBe('runnable');
   });
 
@@ -1214,10 +1241,10 @@ describe('reopenGateItem', () => {
     expect(() => reopenGateItem(item.id)).toThrow();
   });
 
-  it('rejects reopening an already runnable item', () => {
+  it('rejects reopening an already runnable item', async () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     expect(getGateItem(item.id)?.state).toBe('runnable');
 
     expect(() => reopenGateItem(item.id)).toThrow();
@@ -1372,7 +1399,7 @@ describe('getGateItemDetail', () => {
 });
 
 describe('listGateItems', () => {
-  it('filters by project, milestone, state, classification, and runnable', () => {
+  it('filters by project, milestone, state, classification, and runnable', async () => {
     const a = makeItem({
       project: 'polimarket-analyser',
       milestone: 'M12',
@@ -1391,7 +1418,7 @@ describe('listGateItems', () => {
     mergeSource(a.id, 'sha1', new Date(1).toISOString());
     mergeSource(b.id, 'sha2', new Date(1).toISOString());
     mergeSource(c.id, 'sha2', new Date(1).toISOString());
-    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
 
     expect(
       listGateItems({ project: 'polimarket-analyser' }).items.map((i) => i.id),

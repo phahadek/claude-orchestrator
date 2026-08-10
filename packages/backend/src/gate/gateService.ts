@@ -12,6 +12,7 @@ import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
 import { normalizeTaskId } from '../tasks/taskId';
 import { getCachedType, getCachedStatus } from '../tasks/TaskWriteCommands';
+import { yieldToEventLoop } from '../utils/concurrency';
 
 /**
  * Recomputes whether a deploy contains a given commit. This is the git-ancestry
@@ -276,10 +277,10 @@ function isSourceCovered(
   );
 }
 
-export function reconcileGateRunnability(
+export async function reconcileGateRunnability(
   deploySha: string,
   options: ReconcileOptions = {},
-): ReconcileGateRunnabilityResult {
+): Promise<ReconcileGateRunnabilityResult> {
   const ancestry = options.ancestrySource ?? gitAncestrySource;
   const now = new Date().toISOString();
   const markedRunnable: string[] = [];
@@ -290,6 +291,13 @@ export function reconcileGateRunnability(
     : gateStore.listAll();
 
   for (const item of items) {
+    // The dominant blocking cost of this loop: isSourceCovered calls
+    // execFileSync('git', ['merge-base', ...]) once per source, still
+    // synchronous, but yielding between items lets pending HTTP/WS request
+    // handling interleave rather than starving for the tick's full duration
+    // (mirroring TaskCacheRefresher's per-milestone yield).
+    await yieldToEventLoop();
+
     // Covered only once every source is live — see isSourceCovered for the
     // per-source, Type-dependent test. An item with no sources at all has no
     // dependency, so it's trivially covered.

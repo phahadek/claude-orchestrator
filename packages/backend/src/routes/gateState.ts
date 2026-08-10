@@ -77,7 +77,7 @@ export function createGateStateRouter(): Router {
   });
 
   // POST /api/gate/reconcile  { deploySha }
-  router.post('/gate/reconcile', (req: Request, res: Response) => {
+  router.post('/gate/reconcile', async (req: Request, res: Response) => {
     const body = req.body as { deploySha?: unknown };
     const deploySha =
       typeof body.deploySha === 'string' ? body.deploySha : null;
@@ -85,7 +85,7 @@ export function createGateStateRouter(): Router {
       res.status(400).json({ error: 'deploySha is required' });
       return;
     }
-    res.json(reconcileGateRunnability(deploySha));
+    res.json(await reconcileGateRunnability(deploySha));
   });
 
   // GET /api/gate/next?project=P&milestone=M12&classification=Read-Only&limit=5
