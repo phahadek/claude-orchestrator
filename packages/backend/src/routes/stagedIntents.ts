@@ -2923,6 +2923,50 @@ function assertCompletenessRequiresDecision(
 }
 
 /**
+ * Thrown at stage time when a design session stages a `task.create` whose
+ * payload carries no `priority` — the cause behind every design-filed
+ * follow-on Code task sampled off the M14 board landing with a blank
+ * Priority property (6 of 6, across 5 different design tasks): the
+ * instruction to set one was never enforced, only asked for in prose. Named
+ * so the staging session can self-correct in-turn, mirroring
+ * CompletenessRequiresDecisionError's phrasing.
+ */
+class DesignTaskCreatePriorityRequiredError extends Error {
+  constructor() {
+    super(
+      '[stagedIntents] "task.create" staged by a design session must carry a "priority" in its ' +
+        'payload (e.g. "🔴 High", "🟡 Medium", "🟢 Low") — a follow-on Code task filed without one ' +
+        'lands on the board with a blank Priority property. Re-stage with a priority set.',
+    );
+    this.name = 'DesignTaskCreatePriorityRequiredError';
+  }
+}
+
+/**
+ * Stage-time enforcement that a design session's follow-on `task.create`
+ * always carries a Priority, mirroring assertCompletenessApproval /
+ * assertCompletenessRequiresDecision's own session_type-scoped guard shape:
+ * scoped to a `design` session only (see isReadyPathKind-adjacent guards
+ * above) — a non-design session (groom, ops, split) or a human-staged intent
+ * with no originating session is not checked here, since those workflows
+ * either already set priority through their own path or are not the source
+ * of the blank-Priority gap this closes.
+ */
+function assertDesignTaskCreateHasPriority(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'task.create' || !sessionId) return;
+  const session = getSession(sessionId);
+  if (session?.session_type !== 'design') return;
+  const priority = (payload as { priority?: unknown } | null)?.priority;
+  if (typeof priority !== 'string' || priority.trim() === '') {
+    throw new DesignTaskCreatePriorityRequiredError();
+  }
+}
+
+/**
  * The two terminal-artifact kinds a design session's completeness approval
  * unblocks — deliberately excludes `task.create` from COMPLETENESS_GATED_KINDS:
  * a follow-on task set can already exist before the disposition that gates it
@@ -3290,6 +3334,7 @@ export function stageIntent(
   assertNotSessionStagedDone(kind, payload, sessionId);
   assertCompletenessApproval(kind, sessionId);
   assertCompletenessRequiresDecision(kind, sessionId);
+  assertDesignTaskCreateHasPriority(kind, payload, sessionId);
   assertNoOutstandingCapabilityRequest(kind, sessionId);
   assertExpectedTerminalKinds(kind, payload, sessionId);
   assertTaskCreateGrouped(kind, sessionId, groupId);

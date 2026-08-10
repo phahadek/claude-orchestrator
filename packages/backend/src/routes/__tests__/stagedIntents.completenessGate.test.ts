@@ -173,7 +173,7 @@ describe('completeness-approval gate on design terminal artifacts', () => {
     expect(() =>
       stageIntent(
         'task.create',
-        { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+        { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code', priority: '🔴 High' },
         PROJECT_ID,
         null,
         SESSION_ID,
@@ -191,7 +191,7 @@ describe('completeness-approval gate on design terminal artifacts', () => {
     expect(() =>
       stageIntent(
         'task.create',
-        { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+        { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code', priority: '🔴 High' },
         PROJECT_ID,
         null,
         SESSION_ID,
@@ -229,7 +229,7 @@ describe('completeness-approval gate on design terminal artifacts', () => {
     // XOR gate below.
     stageIntent(
       'task.create',
-      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code', priority: '🔴 High' },
       PROJECT_ID,
       null,
       SESSION_ID,
@@ -443,7 +443,7 @@ describe('expected-terminal-kind XOR gate on the design closing synthesis', () =
 
     stageIntent(
       'task.create',
-      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code', priority: '🔴 High' },
       PROJECT_ID,
       null,
       SESSION_ID,
@@ -476,7 +476,7 @@ describe('expected-terminal-kind XOR gate on the design closing synthesis', () =
     );
     stageIntent(
       'task.create',
-      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code', priority: '🔴 High' },
       PROJECT_ID,
       null,
       SESSION_ID,
@@ -535,7 +535,7 @@ describe('expected-terminal-kind XOR gate on the design closing synthesis', () =
 
     stageIntent(
       'task.create',
-      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code', priority: '🔴 High' },
       PROJECT_ID,
       null,
       SESSION_ID,
@@ -640,7 +640,7 @@ describe('expected-terminal-kind XOR gate on the design closing synthesis', () =
     );
     stageIntent(
       'task.create',
-      { databaseId: 'db-1', title: 'Build the widget', type: '💻 Code' },
+      { databaseId: 'db-1', title: 'Build the widget', type: '💻 Code', priority: '🔴 High' },
       PROJECT_ID,
       null,
       SESSION_ID,
@@ -717,7 +717,7 @@ describe('sessionOwesGatedDesignArtifacts', () => {
 
     stageIntent(
       'task.create',
-      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code', priority: '🔴 High' },
       PROJECT_ID,
       null,
       SESSION_ID,
@@ -820,7 +820,7 @@ describe('post-approval terminal-artifact grouping', () => {
     );
     stageIntent(
       'task.create',
-      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code', priority: '🔴 High' },
       PROJECT_ID,
       GROUP_ID,
       SESSION_ID,

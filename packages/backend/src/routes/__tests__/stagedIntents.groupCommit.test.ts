@@ -3179,7 +3179,11 @@ describe('a groom session staging task.create against its own Design/Planning su
 
     const create = stageIntent(
       'task.create',
-      { title: 'Locked-decision follow-on', type: '💻 Code' },
+      {
+        title: 'Locked-decision follow-on',
+        type: '💻 Code',
+        priority: '🔴 High',
+      },
       'proj-design-df',
       'g-design-df-1',
       'design-df-1',
