@@ -129,6 +129,7 @@ import type {
   DepthReviewService,
   DepthReviewResult,
 } from './DepthReviewService';
+import { pauseReasonFromCanonical, serializePauseReason } from '../db/pauseReason';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -876,6 +877,200 @@ describe('ReviewOrchestrator — depth review fails open', () => {
       'depth_review_escalation',
     );
     expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+  });
+});
+
+describe('ReviewOrchestrator — depth review hold: clears depth_review_pending and re-drives merge', () => {
+  const depthReviewPendingRow = {
+    ...basePRRow,
+    pause_reason: serializePauseReason(
+      pauseReasonFromCanonical('depth_review_pending'),
+    ),
+  };
+
+  function makeMockAutoMerger() {
+    return { attempt: vi.fn() };
+  }
+
+  it('replaces the hold with depth_review_escalation and does not re-attempt the merge on hasNonSizeFailure', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        hasNonSizeFailure: true,
+        dimensions: [
+          { name: 'Security', passed: false, notes: 'Unsanitized input.' },
+        ],
+        summary: 'Found a security defect.',
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_escalation',
+    );
+    expect(autoMerger.attempt).not.toHaveBeenCalled();
+  });
+
+  it('clears the hold and re-attempts the merge on a null depth result (error/timeout fail-open)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(null);
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      null,
+    );
+    expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
+  });
+
+  it('clears the hold, calls enqueueFeedback, and sets no escalation on a sizeOnlyFailure result', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        sizeOnlyFailure: true,
+        dimensions: [
+          {
+            name: 'Size proportionality',
+            passed: false,
+            notes: 'Diff is far larger than the task scope demands.',
+          },
+        ],
+        summary: 'Scope creep detected.',
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_escalation',
+    );
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      null,
+    );
+    expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
+  });
+
+  it('clears the hold when dispatchDepthReview throws during the service call (stuck-hold regression)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn(() => {
+      throw new Error('unexpected synchronous failure');
+    });
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      null,
+    );
+    expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
+  });
+
+  it('clears the hold and re-attempts the merge when the depth pass exceeds the dispatch ceiling', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+
+      const sm = makeMockSessionManager();
+      const rs = makeMockReviewService({
+        prNumber: 1,
+        repo: 'owner/repo',
+        verdict: 'approved',
+        dimensions: [],
+        summary: 'All good.',
+        reviewedAt: new Date().toISOString(),
+      });
+      // A session that never returns — models a depth_review session that
+      // never reaches a terminal status (the scenario the ceiling backstops).
+      const runDepthReview = vi.fn(() => new Promise(() => {}));
+      const orch = new ReviewOrchestrator(rs, sm as any, true);
+      orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+      const autoMerger = makeMockAutoMerger();
+      orch.setAutoMerger(autoMerger as any);
+
+      sm.emit('pr_opened', baseJob);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+
+      expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+        1,
+        'owner/repo',
+        null,
+      );
+      expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

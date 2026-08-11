@@ -45,6 +45,7 @@ export type CanonicalPauseReason =
   | 'review_rules_escalation'
   | 'baseline_escalation_floor'
   | 'depth_review_escalation'
+  | 'depth_review_pending'
   | 'planning_crashed'
   | 'planning_first_turn_empty'
   | 'planning_terminal_no_decision'
@@ -242,6 +243,17 @@ export const PAUSE_REASON_REGISTRY: Record<
     source: 'review',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
+  },
+  // Holds auto-merge while the depth review pass is in flight, so a depth
+  // finding can still gate the merge instead of only annotating an
+  // already-merged PR. An in-flight pass is not an operator action item —
+  // it clears itself (escalation, feedback-enqueue, or fail-open) within
+  // dispatchDepthReview's timeout ceiling — so this is 'recoverable', not
+  // 'needs_attention' like depth_review_escalation above.
+  depth_review_pending: {
+    source: 'review',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
   },
   planning_crashed: {
     source: 'session',

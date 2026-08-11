@@ -1097,6 +1097,55 @@ describe('PRReviewService.handleApprovedVerdict()', () => {
       undefined,
     );
   });
+
+  it('sets depth_review_pending before autoMerger.attempt() when a depth review service is configured', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getCachedType).mockReturnValue('💻 Code');
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    service.setDepthReviewService({} as any);
+
+    const callOrder: string[] = [];
+    vi.mocked(setPauseReason).mockImplementation(() => {
+      callOrder.push('setPauseReason');
+    });
+    const autoMergerAttempt = vi.fn(() => {
+      callOrder.push('autoMerger.attempt');
+    });
+    service.setAutoMerger({ attempt: autoMergerAttempt } as any);
+
+    await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'depth_review_pending',
+    );
+    expect(callOrder).toEqual(['setPauseReason', 'autoMerger.attempt']);
+  });
+
+  it('does NOT set depth_review_pending when no depth review service is configured', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getCachedType).mockReturnValue('💻 Code');
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+  });
 });
 
 // ── reviewPR() — approved verdict triggers handleApprovedVerdict ──────────────

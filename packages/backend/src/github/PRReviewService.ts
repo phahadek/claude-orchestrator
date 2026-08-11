@@ -30,6 +30,7 @@ import type { ServerMessage } from '../ws/types';
 import type { SessionEvent } from '../db/types';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { AutoMerger } from './AutoMerger';
+import type { DepthReviewService } from './DepthReviewService';
 
 const RETRY_DELAYS = [250, 500, 1000] as const;
 const defaultSleep = (ms: number): Promise<void> =>
@@ -271,6 +272,17 @@ export class PRReviewService {
 
   setAutoMerger(merger: AutoMerger): void {
     this.autoMerger = merger;
+  }
+
+  // Optional reference to DepthReviewService — presence (not the service
+  // itself) gates the depth_review_pending hold below: only projects with a
+  // depth pass actually dispatched should acquire a hold something will
+  // clear. Set via setDepthReviewService() after both services are
+  // constructed (server.ts), mirroring mergeWatcher/autoMerger.
+  private depthReviewService?: DepthReviewService;
+
+  setDepthReviewService(service: DepthReviewService): void {
+    this.depthReviewService = service;
   }
 
   private resolveBackend(projectId: string): TaskBackend {
@@ -698,6 +710,17 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           ? JSON.stringify(manualItemsForHuman)
           : undefined,
       );
+    } else if (this.depthReviewService) {
+      // Hold auto-merge while the depth review pass is in flight, so a depth
+      // finding can gate the merge instead of only annotating an
+      // already-merged PR. Gated on depthReviewService being configured — a
+      // project without depth review would otherwise acquire a hold nothing
+      // clears. `else if` so this never clobbers manual_verification_pending
+      // above — that hold takes precedence and dispatchDepthReview's
+      // unconditional clear must not race it closed early.
+      // dispatchDepthReview (ReviewOrchestrator) clears this on every exit
+      // path (escalation, feedback-enqueue, fail-open, or timeout).
+      setPauseReason(prNumber, repo, 'depth_review_pending');
     }
     // Kick off the auto-merger (per-project opt-in; AutoMerger guards on the
     // project toggle and on pause_reason). Fire-and-forget — the polling loop
