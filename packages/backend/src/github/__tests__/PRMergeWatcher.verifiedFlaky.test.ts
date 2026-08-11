@@ -17,7 +17,7 @@ vi.mock('../../db/queries', () => ({
   setLastReviewedSha: vi.fn(),
   setPRReviewResult: vi.fn(),
   setPendingPush: vi.fn(),
-  getTestResult: vi.fn().mockReturnValue(undefined),
+  getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
   markSessionDone: vi.fn(),
   updateSessionStatus: vi.fn(),
   setPreReviewStage: vi.fn(),

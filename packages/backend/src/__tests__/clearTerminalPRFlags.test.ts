@@ -21,7 +21,7 @@ const mockQueries = vi.hoisted(() => ({
   setLastReviewedSha: vi.fn(),
   setPRReviewResult: vi.fn(),
   setPendingPush: vi.fn(),
-  getTestResult: vi.fn().mockReturnValue(null),
+  getLatestTestRequestRun: vi.fn().mockReturnValue(null),
   markSessionDone: vi.fn(),
   setPreReviewStage: vi.fn(),
   clearTerminalPRFlags: vi.fn(),

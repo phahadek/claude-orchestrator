@@ -4844,95 +4844,15 @@ export function getAllActiveMerges(): ActiveMergeRow[] {
   return db.prepare(`SELECT * FROM active_merges`).all() as ActiveMergeRow[];
 }
 
-// ─── orchestrator_test_results ────────────────────────────────────────────────
-
-export interface TestResultRow {
-  pr_number: number;
-  repo: string;
-  sha: string;
-  passed: number;
-  output: string;
-  ran_at: string;
-}
-
-export function hasTestResultForSha(
-  prNumber: number,
-  repo: string,
-  sha: string,
-): boolean {
-  const row = db
-    .prepare<{
-      pr_number: number;
-      repo: string;
-      sha: string;
-    }>(
-      `SELECT 1 FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
-    )
-    .get({ pr_number: prNumber, repo, sha });
-  return row != null;
-}
-
-export function upsertTestResult(
-  prNumber: number,
-  repo: string,
-  sha: string,
-  passed: boolean,
-  output: string,
-): void {
-  db.prepare<{
-    pr_number: number;
-    repo: string;
-    sha: string;
-    passed: number;
-    output: string;
-    ran_at: string;
-  }>(
-    `INSERT OR REPLACE INTO orchestrator_test_results (pr_number, repo, sha, passed, output, ran_at)
-     VALUES (@pr_number, @repo, @sha, @passed, @output, @ran_at)`,
-  ).run({
-    pr_number: prNumber,
-    repo,
-    sha,
-    passed: passed ? 1 : 0,
-    output,
-    ran_at: new Date().toISOString(),
-  });
-}
-
-export function getTestResult(
-  prNumber: number,
-  repo: string,
-  sha: string,
-): TestResultRow | undefined {
-  return db
-    .prepare<{
-      pr_number: number;
-      repo: string;
-      sha: string;
-    }>(
-      `SELECT * FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
-    )
-    .get({ pr_number: prNumber, repo, sha }) as TestResultRow | undefined;
-}
-
-/**
- * Invalidate the permanent per-(pr,repo,sha) F2 test result row so a
- * verified-flaky disposition can trigger a same-SHA re-run. Callers must
- * audit this via recordEvent — deletion alone is silent.
- */
-export function deleteTestResult(
-  prNumber: number,
-  repo: string,
-  sha: string,
-): void {
-  db.prepare<{
-    pr_number: number;
-    repo: string;
-    sha: string;
-  }>(
-    `DELETE FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
-  ).run({ pr_number: prNumber, repo, sha });
-}
+// ─── orchestrator_test_results (legacy) ─────────────────────────────────────
+//
+// orchestrator_test_results (the legacy (pr_number, repo, sha)-keyed table)
+// has no remaining production readers/writers — F2 (the orchestrator-run
+// test gate) is fully migrated onto the shared test_request_runs
+// content-hash cache (see the test_request_runs section below, and
+// getLatestTestRequestRun / deleteTestRequestRunsForContentHash). The table
+// itself is left in schema.ts as historical data; only its query functions
+// were removed.
 
 // ─── orchestrator_analyze_results ───────────────────────────────────────────
 
@@ -6746,6 +6666,45 @@ export function listRunningTestRequestRuns(): TestRequestRunRow[] {
        FROM test_request_runs WHERE state = 'running'`,
     )
     .all() as TestRequestRunRow[];
+}
+
+/**
+ * F2's (the orchestrator-run test gate) shared-cache read: the most
+ * recently finished (non-`running`) run for (project_id, content_hash). A
+ * hit means an identical whole-tree content hash already ran under this
+ * project's test commands — F2 downgrades to cache-hit-only and skips
+ * re-execution; a miss falls through to a real run via runProjectTestRequest,
+ * which durably records into this same table.
+ */
+export function getLatestTestRequestRun(
+  projectId: string,
+  contentHash: string,
+): TestRequestRunRow | undefined {
+  return db
+    .prepare<{ project_id: string; content_hash: string }>(
+      `SELECT id, project_id, content_hash, state, output, started_at, finished_at
+       FROM test_request_runs
+       WHERE project_id = @project_id AND content_hash = @content_hash AND state != 'running'
+       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get({ project_id: projectId, content_hash: contentHash }) as
+    | TestRequestRunRow
+    | undefined;
+}
+
+/**
+ * Invalidate every recorded run for (project_id, content_hash) — F2's
+ * flaky.confirm actuation path. Callers must audit this via recordEvent —
+ * deletion alone is silent. The subsequent rerun (via runProjectTestRequest)
+ * repopulates the cache with a fresh row.
+ */
+export function deleteTestRequestRunsForContentHash(
+  projectId: string,
+  contentHash: string,
+): void {
+  db.prepare<{ project_id: string; content_hash: string }>(
+    `DELETE FROM test_request_runs WHERE project_id = @project_id AND content_hash = @content_hash`,
+  ).run({ project_id: projectId, content_hash: contentHash });
 }
 
 // ─── session_test_request_cycles ───────────────────────────────────────────
