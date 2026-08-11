@@ -4988,9 +4988,7 @@ const TEST_REQUEST_DELIVERY_OUTPUT_CAP = 8_000;
  * that must strand the intent structurally (see maybeAutoApproveTestRequest)
  * can report exactly why instead of returning silently.
  */
-function resolveTestRequestExecutionInputs(
-  intent: StagedIntent,
-):
+function resolveTestRequestExecutionInputs(intent: StagedIntent):
   | {
       ok: true;
       worktreePath: string;

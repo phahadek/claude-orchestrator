@@ -52,7 +52,8 @@ vi.mock('../../orchestration/testRequestLane', () => ({
 }));
 
 vi.mock('../../tasks/TaskBackend', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../tasks/TaskBackend')>();
+  const actual =
+    await importOriginal<typeof import('../../tasks/TaskBackend')>();
   return { ...actual, getTaskBackend: mockGetTaskBackend };
 });
 
@@ -196,7 +197,8 @@ describe('test.request stage-time auto-grant (routeStageTimeBlock)', () => {
       JSON.stringify({
         intentId: intent.id,
         passed: false,
-        output: 'test.request declined: originating session has no resolvable worktree',
+        output:
+          'test.request declined: originating session has no resolvable worktree',
       }),
     );
     expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -242,7 +244,7 @@ describe('test.request stage-time auto-grant (routeStageTimeBlock)', () => {
     expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
   });
 
-  it('a structurally-declined test.request never appears among a project\'s active staged intents', async () => {
+  it("a structurally-declined test.request never appears among a project's active staged intents", async () => {
     setUpSession('session-no-worktree-2', false);
     const intent = stageTestRequest('session-no-worktree-2');
     const sessionManager = makeSessionManager();
