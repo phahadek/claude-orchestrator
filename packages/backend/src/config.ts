@@ -183,6 +183,13 @@ export const ALLOWED_TOOLS = [
   orchestratorMcpToolName('health'),
   orchestratorMcpToolName('review.disposition'),
   orchestratorMcpToolName('flaky.confirm'),
+  // test.request — the injected Pre-PR Gate / Flaky-CI procedure text
+  // (session/orchestrator-claudemd.ts) mandates calling this tool by its
+  // CLI-exposed underscore name (mcp__orchestrator__test_request); it must
+  // be allow-listed here or every call is denied at the CLI permission
+  // layer before it ever reaches the MCP server (see
+  // allowedToolsConsistency.test.ts's injected-text-vs-allow-list guard).
+  orchestratorMcpToolName('test.request'),
   ...TIER_B_READ_MCP_TOOLS,
 ];
 
