@@ -14,6 +14,7 @@ import type { SessionManager } from '../../session/SessionManager';
 import {
   taskTypeSchema,
   taskStatusSchema,
+  taskPrioritySchema,
   gateContributionDecisionSchema,
   seedContributionDecisionSchema,
   opsStateSchema,
@@ -135,11 +136,11 @@ export function registerStageProposalTools(
     {
       title: 'Stage a new task',
       description:
-        'Stages a task.create intent — lands a new task at Backlog once a human applies it. Pass the full page body (raw markdown, the authoring-standard section format) via `body` — it is written verbatim at create time. task.updateBody is for revising a task that already exists, not for a task being staged now.',
+        'Stages a task.create intent — lands a new task at Backlog once a human applies it. Pass the full page body (raw markdown, the authoring-standard section format) via `body` — it is written verbatim at create time. task.updateBody is for revising a task that already exists, not for a task being staged now. `priority` is required — one of "🔴 High", "🟡 Medium", "🟢 Low".',
       inputSchema: envelope({
         title: z.string(),
         type: taskTypeSchema.optional(),
-        priority: z.string().optional(),
+        priority: taskPrioritySchema,
         dependsOn: z.array(z.string()).optional(),
         databaseId: z.string().optional(),
         milestone: z.string().optional(),

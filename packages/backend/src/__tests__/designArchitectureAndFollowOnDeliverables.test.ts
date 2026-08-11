@@ -185,4 +185,17 @@ describe('assembled design procedure — architecture and follow-on task deliver
       /far more often than it implies a split/i,
     );
   });
+
+  it('instructs every session type to supply a priority when staging task.create', () => {
+    const followOnStep = ORDERED_STEPS.find(
+      (s) => s.id === 'file-follow-on-tasks',
+    )!;
+    for (const skill of ['groom', 'design', 'ops'] as const) {
+      const text = stepSummaryFor(followOnStep, skill);
+      expect(text).toMatch(/`priority`/);
+      expect(text).toMatch(/🔴 High/);
+      expect(text).toMatch(/🟡 Medium/);
+      expect(text).toMatch(/🟢 Low/);
+    }
+  });
 });

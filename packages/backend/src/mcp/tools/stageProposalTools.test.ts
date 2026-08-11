@@ -148,7 +148,7 @@ describe('stage-proposal MCP tools — delegation', () => {
     const { client, close } = await connectedClient();
     const result = await client.callTool({
       name: 'task.create',
-      arguments: { payload: { title: 'New task' } },
+      arguments: { payload: { title: 'New task', priority: '🔴 High' } },
     });
     const intent = parseIntentResult(
       result as { content: Array<{ type: string; text?: string }> },
@@ -157,6 +157,34 @@ describe('stage-proposal MCP tools — delegation', () => {
     expect(intent.projectId).toBe(PROJECT_ID);
     expect(intent.sessionId).toBe(SESSION_ID);
     expect(getStagedIntent(intent.id as string)).toBeTruthy();
+    await close();
+  });
+
+  it('task.create rejects a payload with no priority, naming the accepted values', async () => {
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'task.create',
+      arguments: { payload: { title: 'New task' } },
+    })) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+    expect(result.isError).toBe(true);
+    const text = result.content[0]?.text ?? '';
+    expect(text).toMatch(/priority/);
+    expect(text).toMatch(/🔴 High/);
+    expect(text).toMatch(/🟡 Medium/);
+    expect(text).toMatch(/🟢 Low/);
+    await close();
+  });
+
+  it('task.create rejects a priority outside the board\'s option set', async () => {
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'task.create',
+      arguments: { payload: { title: 'New task', priority: 'P1' } },
+    })) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+    expect(result.isError).toBe(true);
+    const text = result.content[0]?.text ?? '';
+    expect(text).toMatch(/priority/);
+    expect(text).toMatch(/🔴 High/);
     await close();
   });
 
@@ -370,7 +398,7 @@ describe('stage-proposal MCP tools — schema validation', () => {
     const body = '## Summary\nDo the thing.';
     const result = await client.callTool({
       name: 'task.create',
-      arguments: { payload: { title: 'New task', body } },
+      arguments: { payload: { title: 'New task', body, priority: '🟡 Medium' } },
     });
     const intent = parseIntentResult(
       result as { content: Array<{ type: string; text?: string }> },
@@ -453,7 +481,7 @@ describe('stage-proposal MCP tools — schema validation', () => {
     const { client, close } = await connectedClient();
     const created = await client.callTool({
       name: 'task.create',
-      arguments: { payload: { title: 'A mistaken proposal' } },
+      arguments: { payload: { title: 'A mistaken proposal', priority: '🟢 Low' } },
     });
     const intent = parseIntentResult(
       created as { content: Array<{ type: string; text?: string }> },
@@ -486,7 +514,9 @@ describe('stage-proposal MCP tools — schema validation', () => {
     const { client, close } = await connectedClient();
     const created = await client.callTool({
       name: 'task.create',
-      arguments: { payload: { title: "Someone else's proposal" } },
+      arguments: {
+        payload: { title: "Someone else's proposal", priority: '🔴 High' },
+      },
     });
     const intent = parseIntentResult(
       created as { content: Array<{ type: string; text?: string }> },
@@ -628,7 +658,7 @@ describe('stage-proposal MCP tools — envelope fields misplaced inside payload'
 
   it('every tool registered through envelope() rejects an unknown payload key', async () => {
     const ENVELOPE_TOOL_PAYLOADS: Record<string, Record<string, unknown>> = {
-      'task.create': { title: 'New task' },
+      'task.create': { title: 'New task', priority: '🔴 High' },
       'task.setStatus': { taskId: 't-1', status: 'Ready' },
       'task.setDependsOn': { taskId: 't-1', dependsOn: [] },
       'task.updateBody': {
