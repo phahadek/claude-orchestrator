@@ -348,6 +348,22 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'device-auth action that performs the transition.',
   },
   {
+    id: 'declared-writes-auto-approve',
+    title: 'A declared write can auto-approve — check the task body first',
+    appliesTo: ['ops'],
+    text:
+      "Before staging `session.requestCapability` for a write, check the task's own body " +
+      'for a `## Declared writes` section — a bullet there naming this exact capability, ' +
+      'tagged Non-Prod-Mutating, is pre-authorized at grooming/Ready time and this session\'s ' +
+      'matching `session.requestCapability` call auto-approves instead of parking for a human ' +
+      'decision. The match is exact: the capability string in the request must equal the ' +
+      "declared one verbatim, never a prefix or a near-match. A write that isn't declared " +
+      'there, or is declared but tagged/defaulted Prod-Mutating, gets no auto-approval — it ' +
+      'still routes through the normal request → wait-for-grant path above, same as any ' +
+      'undeclared write. This never changes what to request or when: it only changes how fast ' +
+      'a correctly-declared one clears.',
+  },
+  {
     id: 'ask-permission-not-speculative',
     title: 'Ask for what you need — never fabricate',
     appliesTo: ['groom', 'design', 'ops', 'docs'],

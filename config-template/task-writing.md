@@ -153,6 +153,47 @@ scope creep into other files.
 > **Deliverables** instead of this section — see the `🔧 Operational & 🔎 Investigation`
 > section below.
 
+### Declared writes *(🔧 Operational tasks only)*
+Optional, but the only way a write a dispatched ops session performs can ever be
+**auto-approved** rather than parked for a human `session.requestCapability` decision (see the
+architecture unit "A task-settled write auto-approves a capability request only when declared,
+exact-matched, and not Prod-Mutating"). Today only `🔧 Operational` tasks reach this path — only
+a dispatched ops session issues write-shaped capability requests, so a Code/Design/Investigation
+task gains nothing from carrying this section, even though the parser and the Ready-transition
+validator run over every Type unconditionally.
+
+The heading text the parser matches — case-insensitively, emoji/punctuation-stripped, any
+`#`–`######` level (`readinessGate.ts`'s `normalizeHeadingText`) — must normalize to exactly:
+
+```
+Declared writes
+```
+
+Each bullet is `- ` or `* ` (or a numbered `1.`/`1)` line) followed by the capability string
+**backtick-quoted**, then optionally a separator (` — `, ` - `, `--`, or `|`) and a
+classification tag:
+
+```
+## Declared writes
+- `Bash(npm ci:*)` — Non-Prod-Mutating
+- `Bash(git push origin HEAD:*)` — Prod-Mutating
+- `mcp__github__merge_pull_request`
+```
+
+- The **capability string** must be the exact string a later `session.requestCapability` call
+  will send — this is an exact match, never a prefix or pattern.
+- The **classification tag** must unambiguously say "Non-Prod-Mutating" / "Not-Prod-Mutating"
+  (case/punctuation/whitespace-insensitive) to clear the entry for auto-approval. **Any other
+  tag — a bare "Prod-Mutating", an empty tag, or an unrecognized string — defaults to
+  Prod-Mutating.** This default is fail-closed by design: a **Prod-Mutating entry is never
+  auto-approved**, it always waits for a human decision, same as an undeclared write.
+- `None.` (the default when nothing accretes) is treated as empty, not malformed.
+- The section is **validated at the Backlog → Ready transition**: a bullet with no discernible
+  capability (an empty backtick span, or a tag with no capability before it) is malformed and
+  **blocks the Ready-flip** — the declaration must be durable and well-formed before any session
+  carrying it is ever dispatched. A missing/ambiguous Prod-Mutating tag is *not* a validation
+  failure — it just means that entry is fail-closed to manual approval.
+
 ### Implementation notes
 Always present, always created empty: `> To be filled in during/after task completion.`
 The implementing session fills it — workarounds, deviations, PR link (Code), final
@@ -423,6 +464,10 @@ uncertainty is **breadth / source / mechanics**, never *whether* or *what*.
   in the Code task's PR; only data/config seeds accrete.
 - Use a **Targets / surfaces affected** section (config categories / catalog entries / entities /
   hosts) in place of *Files / paths affected*.
+- **Optionally add a `## Declared writes` section** (see § Declared writes above) to
+  pre-authorize the exact write capabilities the dispatched ops session will need, so those
+  requests auto-approve instead of parking for a human decision. Leave it off (or `None.`) when
+  the writes aren't known ahead of time, or are all Prod-Mutating anyway.
 
 ### 🔎 Investigation — produce a defensible decision from live data
 The deliverable is a **decision** (diagnosis, disposition, go/no-go spike) plus **filed
