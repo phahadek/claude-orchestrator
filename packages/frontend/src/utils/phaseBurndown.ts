@@ -27,6 +27,7 @@ type GateState =
   | 'open'
   | 'runnable'
   | 'pendingApproval'
+  | 'pending'
   | 'pass'
   | 'fail'
   | 'deferred'
@@ -35,10 +36,11 @@ type GateState =
 export type SegmentState = BurndownState | GroomingState | GateState;
 
 /** Maps a gate item's raw state string (gateService.ts) to its SegmentState key. */
-const GATE_STATE_KEY: Record<string, GateState> = {
+export const GATE_STATE_KEY: Record<string, GateState> = {
   open: 'open',
   runnable: 'runnable',
   'pending-approval': 'pendingApproval',
+  pending: 'pending',
   pass: 'pass',
   fail: 'fail',
   deferred: 'deferred',
@@ -67,6 +69,7 @@ export const PHASE_SEGMENT_ORDER: Record<PhaseKey, readonly SegmentState[]> = {
     'open',
     'runnable',
     'pendingApproval',
+    'pending',
     'pass',
     'fail',
     'deferred',

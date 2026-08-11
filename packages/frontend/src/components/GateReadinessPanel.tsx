@@ -46,18 +46,25 @@ const CLASSIFICATION_OPTIONS: GateItemClassification[] = [
   'Human-Observation',
 ];
 
-const GATE_STATE_ORDER = [
+export const GATE_STATE_ORDER = [
   'open',
   'runnable',
   'pass',
   'fail',
   'deferred',
   'pending-approval',
+  'pending',
+  'discarded',
 ];
-const GATE_DONE_STATES = ['pass', 'deferred'];
+export const GATE_DONE_STATES = ['pass', 'deferred', 'discarded'];
 
 /** Mirrors the backend's reopenGateItem guard (gateService.ts) — reopen only applies to a resolved item. */
-const REOPEN_BLOCKED_STATES = new Set(['open', 'runnable', 'pending-approval']);
+export const REOPEN_BLOCKED_STATES = new Set([
+  'open',
+  'runnable',
+  'pending-approval',
+  'pending',
+]);
 
 const SEED_STATE_ORDER = ['pending', 'applied', 'confirmed', 'blocked'];
 const SEED_DONE_STATES = ['confirmed'];
