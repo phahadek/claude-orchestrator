@@ -13,8 +13,12 @@ import type {
 } from './SessionRunner';
 import { logger } from '../logger';
 import { placeSessionPid } from './sessionCgroup';
-import { isPlanningSession } from './sessionPredicates';
-import { getSessionAddDirs } from './orchestrator-config';
+import { isPlanningSession, isCodeSession } from './sessionPredicates';
+import {
+  getSessionAddDirs,
+  getTestCommandDenyPatterns,
+  loadOrchestratorConfig,
+} from './orchestrator-config';
 import {
   createScratchDir,
   removeScratchDir,
@@ -114,6 +118,22 @@ export class CliSessionRunner implements ISessionRunner {
       granted ?? [],
       worktreePath,
     );
+
+    // Code sessions must not be able to run the project's test commands
+    // directly — they're denied at the SDK permission layer (via the CLI's
+    // --settings flag, the settings.json-based route to the same
+    // `permissions.deny` field the Agent SDK exposes) and routed through
+    // test.request instead (see the Flaky/CI section of orchestrator-claudemd.ts).
+    const testDenyPatterns =
+      sessionType && isCodeSession(sessionType)
+        ? getTestCommandDenyPatterns(loadOrchestratorConfig(worktreePath).test)
+        : [];
+    const settingsOverrides: Record<string, unknown> = {};
+    if (disableAutoCompact) settingsOverrides.autoCompactEnabled = false;
+    if (testDenyPatterns.length) {
+      settingsOverrides.permissions = { deny: testDenyPatterns };
+    }
+
     const spawnArgs = [
       ...(resumeSessionId
         ? ['--resume', resumeSessionId]
@@ -128,8 +148,8 @@ export class CliSessionRunner implements ISessionRunner {
       permissionMode,
       ...(model ? ['--model', model] : []),
       ...(effort ? ['--effort', effort] : []),
-      ...(disableAutoCompact
-        ? ['--settings', '{"autoCompactEnabled":false}']
+      ...(Object.keys(settingsOverrides).length
+        ? ['--settings', JSON.stringify(settingsOverrides)]
         : []),
       ...(mcpConfigPath
         ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']

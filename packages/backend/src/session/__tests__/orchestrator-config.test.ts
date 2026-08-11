@@ -6,6 +6,7 @@ import {
   loadOrchestratorConfig,
   getSessionAllowedTools,
   getSessionAddDirs,
+  getTestCommandDenyPatterns,
   isGrantable,
   sessionRecordReadCapability,
   parseSessionRecordReadCapability,
@@ -613,6 +614,31 @@ describe('getSessionAddDirs', () => {
       projectDir,
     );
     expect(dirs).toEqual([grantedPath]);
+  });
+});
+
+describe('getTestCommandDenyPatterns', () => {
+  it('returns an empty list when no test commands are configured', () => {
+    expect(getTestCommandDenyPatterns([])).toEqual([]);
+  });
+
+  it('turns each configured test command into a Bash(<command>:*) deny rule', () => {
+    expect(
+      getTestCommandDenyPatterns(['npm test', 'npm run test:unit']),
+    ).toEqual(['Bash(npm test:*)', 'Bash(npm run test:unit:*)']);
+  });
+
+  it('dedupes and trims whitespace', () => {
+    expect(getTestCommandDenyPatterns([' npm test ', 'npm test', ''])).toEqual([
+      'Bash(npm test:*)',
+    ]);
+  });
+
+  it('never denies the coarse install/build/typecheck prefixes', () => {
+    const denies = getTestCommandDenyPatterns(['npm test']);
+    expect(denies).not.toContain('Bash(npm:*)');
+    expect(denies).not.toContain('Bash(npx:*)');
+    expect(denies).not.toContain('Bash(tsc:*)');
   });
 });
 

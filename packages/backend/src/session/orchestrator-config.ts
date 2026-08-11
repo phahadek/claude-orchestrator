@@ -635,6 +635,35 @@ export function getSessionAllowedTools(
 }
 
 /**
+ * Argument-level SDK `permissions.deny` rules for a code session, derived
+ * from the project's configured `test:` commands (OrchestratorConfig.test —
+ * the same list test.request/testRequestLane.ts runs as the authoritative
+ * test gate). A code session must not be able to run the project's tests
+ * directly (see the "Flaky / Transient CI or F2 Gate Failures" section of
+ * orchestrator-claudemd.ts, which routes it through test.request instead) —
+ * this is what actually enforces that at the tool layer, rather than relying
+ * on the injected instructions alone.
+ *
+ * Each command becomes a `Bash(<command>:*)` prefix rule so trailing args
+ * (`-- --run`, extra flags) are still caught. Deliberately narrow: it only
+ * denies the exact configured invocations, leaving the coarse
+ * `Bash(npm:*)`/`Bash(npx:*)`/`Bash(node:*)`/`Bash(tsc:*)` allow entries in
+ * ALLOWED_TOOLS untouched, so install/build/typecheck commands keep working.
+ * Only meaningful for `sessionType === 'standard'` (see isCodeSession) —
+ * callers should gate on that before calling this with a non-empty list.
+ */
+export function getTestCommandDenyPatterns(testCommands: string[]): string[] {
+  return [
+    ...new Set(
+      testCommands
+        .map((cmd) => cmd.trim())
+        .filter(Boolean)
+        .map((cmd) => `Bash(${cmd}:*)`),
+    ),
+  ];
+}
+
+/**
  * Per-session-type baseline for the filesystem read envelope beyond a
  * dispatched session's own worktree — the `--add-dir` list passed to the CLI
  * (Docker mode: the matching set of read-only bind mounts on the `docker

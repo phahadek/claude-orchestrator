@@ -7,8 +7,12 @@ import type {
   SessionRunnerOptions,
 } from './SessionRunner';
 import { logger } from '../logger';
-import { isPlanningSession } from './sessionPredicates';
-import { getSessionAddDirs } from './orchestrator-config';
+import { isPlanningSession, isCodeSession } from './sessionPredicates';
+import {
+  getSessionAddDirs,
+  getTestCommandDenyPatterns,
+  loadOrchestratorConfig,
+} from './orchestrator-config';
 import { createScratchDir, removeScratchDir } from './planningScratchDir';
 
 function log(sessionId: string, ...args: unknown[]) {
@@ -194,6 +198,16 @@ export class DockerSessionRunner implements ISessionRunner {
     // Build claude command arguments (same as CliSessionRunner)
     const permissionMode = isPlanning ? 'default' : 'acceptEdits';
 
+    // Code sessions must not be able to run the project's test commands
+    // directly — they're denied at the SDK permission layer (via the CLI's
+    // --settings flag, the settings.json-based route to the same
+    // `permissions.deny` field the Agent SDK exposes) and routed through
+    // test.request instead (see the Flaky/CI section of orchestrator-claudemd.ts).
+    const testDenyPatterns =
+      sessionType && isCodeSession(sessionType)
+        ? getTestCommandDenyPatterns(loadOrchestratorConfig(worktreePath).test)
+        : [];
+
     const claudeArgs = [
       ...(resumeSessionId
         ? ['--resume', resumeSessionId]
@@ -207,6 +221,12 @@ export class DockerSessionRunner implements ISessionRunner {
       '--permission-mode',
       permissionMode,
       ...(model ? ['--model', model] : []),
+      ...(testDenyPatterns.length
+        ? [
+            '--settings',
+            JSON.stringify({ permissions: { deny: testDenyPatterns } }),
+          ]
+        : []),
       ...(mcpConfigPath
         ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']
         : []),

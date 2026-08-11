@@ -65,6 +65,8 @@ vi.mock('../planningScratchDir', () => ({
 }));
 
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
 import { CliSessionRunner } from '../CliSessionRunner';
 
 const SESSION_ID = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff';
@@ -415,5 +417,99 @@ describe('CliSessionRunner --add-dir (filesystem read envelope)', () => {
     expect(addDirValues(capturedSpawnArgs).sort()).toEqual(
       [...CONFIG_BASELINE, grantedPath].sort(),
     );
+  });
+});
+
+describe('CliSessionRunner test-command deny patterns', () => {
+  let worktreeDir: string;
+
+  beforeEach(() => {
+    worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-deny-test-'));
+    fs.writeFileSync(
+      path.join(worktreeDir, '.claude-orchestrator.yml'),
+      'test:\n  - npm test\n  - npm run test:unit\n',
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(worktreeDir, { recursive: true, force: true });
+  });
+
+  it('denies the configured test commands for a standard (code) session', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, worktreePath: worktreeDir, sessionType: 'standard' },
+      () => {},
+    );
+
+    const settingsIdx = capturedSpawnArgs.indexOf('--settings');
+    expect(settingsIdx).not.toBe(-1);
+    const settings = JSON.parse(capturedSpawnArgs[settingsIdx + 1]);
+    expect(settings.permissions.deny).toEqual([
+      'Bash(npm test:*)',
+      'Bash(npm run test:unit:*)',
+    ]);
+  });
+
+  it('merges the test-command deny list with autoCompactEnabled into one --settings JSON', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      {
+        ...defaultOptions,
+        worktreePath: worktreeDir,
+        sessionType: 'standard',
+        disableAutoCompact: true,
+      },
+      () => {},
+    );
+
+    const settingsIdx = capturedSpawnArgs.indexOf('--settings');
+    const settings = JSON.parse(capturedSpawnArgs[settingsIdx + 1]);
+    expect(settings.autoCompactEnabled).toBe(false);
+    expect(settings.permissions.deny).toEqual([
+      'Bash(npm test:*)',
+      'Bash(npm run test:unit:*)',
+    ]);
+  });
+
+  it('does not deny test commands for a non-code session (e.g. review)', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, worktreePath: worktreeDir, sessionType: 'review' },
+      () => {},
+    );
+
+    expect(capturedSpawnArgs).not.toContain('--settings');
+  });
+
+  it('leaves the coarse npm/npx/node/tsc allow entries in --allowed-tools untouched', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      {
+        ...defaultOptions,
+        worktreePath: worktreeDir,
+        sessionType: 'standard',
+        allowedTools: [
+          'Bash(npm:*)',
+          'Bash(npx:*)',
+          'Bash(node:*)',
+          'Bash(tsc:*)',
+        ],
+      },
+      () => {},
+    );
+
+    expect(capturedSpawnArgs).toContain('Bash(npm:*)');
+    expect(capturedSpawnArgs).toContain('Bash(npx:*)');
+    expect(capturedSpawnArgs).toContain('Bash(node:*)');
+    expect(capturedSpawnArgs).toContain('Bash(tsc:*)');
   });
 });
