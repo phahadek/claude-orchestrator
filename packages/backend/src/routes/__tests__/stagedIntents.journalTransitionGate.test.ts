@@ -36,8 +36,8 @@ vi.mock('../../projects/ProjectService', () => ({
 }));
 
 import { db } from '../../db/db';
-import { createStagedIntentsRouter } from '../stagedIntents';
-import { upsertOpsJournalEntry } from '../../db/queries';
+import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
+import { upsertOpsJournalEntry, insertSession } from '../../db/queries';
 import { isValidOpsTransition, type OpsState } from '../../ops/opsJournal';
 
 function buildApp() {
@@ -532,6 +532,173 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
       expect(
         JSON.parse((secondMirrors[0] as any).payload).fields.findingOrProposal,
       ).toEqual({ summary: 'second pass' });
+    });
+  });
+
+  /**
+   * AC: an ops session's journal.setState -> "blocked" is refused unless the
+   * session has staged at least one session.requestCapability, or the intent
+   * carries a substantive standDownReason — see
+   * assertOpsBlockedClosureRequestedCapability in ../stagedIntents. This
+   * runs through stageIntent() directly (rather than via HTTP) because the
+   * check keys on `sessionId`, and the POST /staged-intents route is the
+   * device/human-authed surface, which never carries one (see
+   * SESSION_TASK_BINDING_KINDS's sibling comment on that route) — a
+   * dispatched ops session only ever stages through the MCP tool surface
+   * (stageProposalTools.ts's `stage()`), which threads `ctx.sessionId`
+   * through to this exact `stageIntent()` call.
+   */
+  describe('ops session journal.setState -> "blocked" capability-request gate', () => {
+    const PROJECT_ID = 'proj-1';
+    const OPS_SESSION_ID = 'ops-session-blocked-gate-1';
+    const TASK_ID = 'task-blocked-gate-1';
+
+    function stageBlocked(
+      sessionId: string | null,
+      extra: Record<string, unknown> = {},
+    ) {
+      return stageIntent(
+        'journal.setState',
+        { taskId: TASK_ID, state: 'blocked', ...extra },
+        PROJECT_ID,
+        null,
+        sessionId,
+      );
+    }
+
+    function stageCapabilityRequest(sessionId: string) {
+      return stageIntent(
+        'session.requestCapability',
+        {
+          capability: 'Bash(curl:*)',
+          plan: 'reach the endpoint the task needs',
+          evidence: 'no other sanctioned tool reaches it',
+        },
+        PROJECT_ID,
+        null,
+        sessionId,
+      );
+    }
+
+    beforeEach(() => {
+      db.prepare('DELETE FROM sessions').run();
+      db.prepare('DELETE FROM audit_log').run();
+      seedEntry(TASK_ID, 'candidate');
+      insertSession({
+        session_id: OPS_SESSION_ID,
+        task_id: TASK_ID,
+        task_url: null,
+        project_context_url: null,
+        project_id: PROJECT_ID,
+        status: 'running',
+        started_at: 1,
+        session_type: 'ops',
+      } as any);
+    });
+
+    it('refuses blocked with no capability request and no standDownReason, naming the escalation', () => {
+      expect(() => stageBlocked(OPS_SESSION_ID)).toThrow(
+        /session\.requestCapability/,
+      );
+      expect(() => stageBlocked(OPS_SESSION_ID)).toThrow(
+        /"payload":\{"capability":"<the exact tool or capability>","plan":"<what you will do once granted>","evidence":"<why this write is needed>"\}/,
+      );
+    });
+
+    it('accepts blocked once the session has staged a session.requestCapability, in any state', () => {
+      const req = stageCapabilityRequest(OPS_SESSION_ID);
+      db.prepare(`UPDATE staged_intent SET state = 'rejected' WHERE id = @id`).run(
+        { id: req.id },
+      );
+      expect(() => stageBlocked(OPS_SESSION_ID)).not.toThrow();
+    });
+
+    it('accepts blocked with a substantive standDownReason and no capability request', () => {
+      expect(() =>
+        stageBlocked(OPS_SESSION_ID, {
+          standDownReason:
+            'This is a design decision only a human can make, not a capability gap.',
+        }),
+      ).not.toThrow();
+    });
+
+    it.each([
+      ['empty string', ''],
+      ['whitespace only', '   '],
+      ['a bare boolean', true],
+    ])('does not accept standDownReason that is %s', (_label, value) => {
+      expect(() =>
+        stageBlocked(OPS_SESSION_ID, { standDownReason: value }),
+      ).toThrow(/session\.requestCapability/);
+    });
+
+    it('leaves candidate, staged-proposal and resolved transitions unaffected', () => {
+      seedEntry('task-blocked-gate-regression', 'pending');
+      expect(() =>
+        stageIntent(
+          'journal.setState',
+          { taskId: 'task-blocked-gate-regression', state: 'candidate' },
+          PROJECT_ID,
+          null,
+          OPS_SESSION_ID,
+        ),
+      ).not.toThrow();
+      expect(() =>
+        stageIntent(
+          'journal.setState',
+          { taskId: TASK_ID, state: 'staged-proposal' },
+          PROJECT_ID,
+          null,
+          OPS_SESSION_ID,
+        ),
+      ).not.toThrow();
+      expect(() =>
+        stageIntent(
+          'journal.setState',
+          { taskId: TASK_ID, state: 'resolved' },
+          PROJECT_ID,
+          'group-blocked-gate-regression',
+          OPS_SESSION_ID,
+        ),
+      ).not.toThrow();
+    });
+
+    it('leaves a non-ops session unaffected', () => {
+      insertSession({
+        session_id: 'design-session-blocked-gate-1',
+        task_id: TASK_ID,
+        task_url: null,
+        project_context_url: null,
+        project_id: PROJECT_ID,
+        status: 'running',
+        started_at: 1,
+        session_type: 'design',
+      } as any);
+      expect(() => stageBlocked('design-session-blocked-gate-1')).not.toThrow();
+    });
+
+    it('leaves a human-staged intent with no sessionId unaffected', () => {
+      expect(() => stageBlocked(null)).not.toThrow();
+    });
+
+    it('surfaces through POST /staged-intents as a structured 400, not an unhandled throw', async () => {
+      const app = buildApp();
+      // The device/human REST surface never carries a sessionId, so the gate
+      // itself never fires here — this proves the same
+      // OpsJournalTransitionRejectedError instance the gate throws is wired
+      // into that route's error-to-status mapping (see the second `catch` in
+      // the POST /staged-intents handler), by exercising the illegal-
+      // transition form of the same error class through the real route.
+      seedEntry('task-blocked-gate-http', 'resolved');
+      const res = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-blocked-gate-http', state: 'blocked' },
+          projectId: PROJECT_ID,
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('"resolved" -> "blocked"');
     });
   });
 });

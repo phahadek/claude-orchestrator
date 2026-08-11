@@ -1689,6 +1689,17 @@ interface JournalSetStatePayload {
    * journal.setState target.
    */
   reconciliation?: OpsReconciliationAssertion;
+  /**
+   * Required on a transition to "blocked" staged by an ops session that has
+   * never staged a session.requestCapability intent — a substantive
+   * attestation naming why no capability request could unblock the task
+   * (a design decision, a change ops must not make itself, an external
+   * dependency with no sanctioned request path). See
+   * assertOpsBlockedClosureRequestedCapability. Absent on every other
+   * journal.setState target, and unread when the session did request a
+   * capability.
+   */
+  standDownReason?: string;
 }
 /**
  * Payload for the gate.verify staged intent — a gate-verify session's
@@ -2462,16 +2473,38 @@ function findActiveStagedOpsTransitionForState(
  * first), so apply time remains the sole hard authority.
  */
 class OpsJournalTransitionRejectedError extends Error {
-  constructor(taskId: string, from: OpsState, to: OpsState) {
-    const legalTargets = ALLOWED_TRANSITIONS[from];
-    const legalTargetsText = legalTargets.length
-      ? legalTargets.map((s) => `"${s}"`).join(', ')
-      : `(none — "${from}" is terminal)`;
-    super(
-      `[stagedIntents] journal.setState rejected for task "${taskId}": "${from}" -> "${to}" ` +
-        `is not a legal ops_journal transition. Current state is "${from}"; legal targets are: ` +
-        `${legalTargetsText}.`,
-    );
+  constructor(taskId: string, from: OpsState, to: OpsState);
+  constructor(taskId: string, reason: 'blocked-without-capability-request');
+  constructor(
+    taskId: string,
+    fromOrReason: OpsState | 'blocked-without-capability-request',
+    to?: OpsState,
+  ) {
+    if (to !== undefined) {
+      const from = fromOrReason as OpsState;
+      const legalTargets = ALLOWED_TRANSITIONS[from];
+      const legalTargetsText = legalTargets.length
+        ? legalTargets.map((s) => `"${s}"`).join(', ')
+        : `(none — "${from}" is terminal)`;
+      super(
+        `[stagedIntents] journal.setState rejected for task "${taskId}": "${from}" -> "${to}" ` +
+          `is not a legal ops_journal transition. Current state is "${from}"; legal targets are: ` +
+          `${legalTargetsText}.`,
+      );
+    } else {
+      super(
+        `[stagedIntents] journal.setState rejected for task "${taskId}": a transition to ` +
+          '"blocked" staged by an ops session that has never staged a session.requestCapability ' +
+          'intent this session is refused — the sandbox is never the boundary of what a ' +
+          'capability can reach, so an unmet read/write always routes to ' +
+          'session.requestCapability first. Stage session.requestCapability with ' +
+          '`{"payload":{"capability":"<the exact tool or capability>","plan":"<what you will do ' +
+          'once granted>","evidence":"<why this write is needed>"}}` and wait for the grant, or, ' +
+          'if no capability could unblock this task (a design decision, a change ops must not ' +
+          'make itself, a genuine external blocker), stage this journal.setState again with a ' +
+          'non-empty "standDownReason" naming why.',
+      );
+    }
     this.name = 'OpsJournalTransitionRejectedError';
   }
 }
@@ -2516,6 +2549,51 @@ function assertReconciliationAssertionPresent(
   ) {
     throw new OpsReconciliationAssertionMissingError(taskId);
   }
+}
+
+/**
+ * Stage-time enforcement of the ask-permission-not-speculative rule
+ * (procedureCore.ts's "ask-permission-not-speculative" principle) against an
+ * ops session's own conduct, not just the injected guidance text
+ * (findRecordAccessStandDownViolations lints that input; this lints the
+ * behaviour it governs). An ops session staging journal.setState -> "blocked"
+ * that has never staged a single session.requestCapability intent — in any
+ * state; the ask itself satisfies this, not its disposition — is refused
+ * unless the intent carries a substantive `standDownReason` naming why no
+ * capability request could have unblocked it. Scoped to `blocked` only:
+ * `candidate` and `staged-proposal` are non-terminal waypoints where more
+ * work is expected, so a session parking at one has not yet claimed it is
+ * stuck. Non-ops sessions, and journal.setState with no session_id, are
+ * untouched. Deliberately placed in stageIntent (which already receives
+ * sessionId) rather than validateAndNormalizeTaskReferences (which does
+ * not) — see OpsJournalTransitionRejectedError's second constructor form,
+ * reused here rather than a parallel error class so the existing
+ * `err instanceof OpsJournalTransitionRejectedError` handling in the route
+ * catch block picks up this case with no route change.
+ */
+function assertOpsBlockedClosureRequestedCapability(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'journal.setState' || !sessionId) return;
+  const p = payload as Partial<JournalSetStatePayload> | null;
+  if (p?.state !== 'blocked' || typeof p.taskId !== 'string') return;
+  const session = getSession(sessionId);
+  if (session?.session_type !== 'ops') return;
+
+  const requestedCapability = listStagedIntentsBySession(sessionId).some(
+    (row) => row.kind === 'session.requestCapability',
+  );
+  if (requestedCapability) return;
+
+  const standDownReason = p.standDownReason;
+  if (typeof standDownReason === 'string' && standDownReason.trim()) return;
+
+  throw new OpsJournalTransitionRejectedError(
+    p.taskId,
+    'blocked-without-capability-request',
+  );
 }
 
 /**
@@ -3536,6 +3614,7 @@ export function stageIntent(
   assertCompletenessRequiresDecision(kind, sessionId);
   assertDesignTaskCreateHasPriority(kind, payload, sessionId);
   assertNoOutstandingCapabilityRequest(kind, sessionId);
+  assertOpsBlockedClosureRequestedCapability(kind, payload, sessionId);
   assertExpectedTerminalKinds(kind, payload, sessionId);
   assertTaskCreateGrouped(kind, sessionId, groupId);
   assertGroomTaskCreateNotDesignFollowOn(kind, sessionId);
@@ -6760,7 +6839,8 @@ export function createStagedIntentsRouter(
         if (
           err instanceof ReadyPathMissingGroupError ||
           err instanceof UnknownMilestoneError ||
-          err instanceof GateVerifyPayloadValidationError
+          err instanceof GateVerifyPayloadValidationError ||
+          err instanceof OpsJournalTransitionRejectedError
         ) {
           res.status(400).json({ error: err.message });
           return;
