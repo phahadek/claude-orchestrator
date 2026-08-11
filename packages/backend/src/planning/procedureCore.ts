@@ -1494,7 +1494,10 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       "When the mandate calls for follow-on work — an Investigation's decision plus " +
       'filed follow-on tasks, a /design "🔲 Backlog" split, or a /groom split-off — ' +
       'stage each one as a `task.create` intent (landing at 🔲 Backlog) rather than ' +
-      'describing the task spec in chat for the operator to create by hand. The ' +
+      'describing the task spec in chat for the operator to create by hand. DO set ' +
+      '`priority` on every `task.create` — one of `"🔴 High"`, `"🟡 Medium"`, ' +
+      '`"🟢 Low"` — it is required at the tool boundary and the call is rejected, ' +
+      'naming the accepted values, if it is missing or set to anything else. The ' +
       'operator disposes the staged task like any other intent; never treat handing ' +
       'a task spec back in chat as an acceptable substitute for staging it.',
     summaryOverrides: {
@@ -1507,8 +1510,11 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'decisions imply no implementation work beyond themselves, stage a ' +
         '`planning.noOp` naming `skippedKind: "task.create"` rather than leaving ' +
         'the deliverable unaddressed — the closing synthesis is refused at stage ' +
-        'time until this is staged or the follow-on task itself is. The operator ' +
-        'disposes ' +
+        'time until this is staged or the follow-on task itself is. DO set ' +
+        '`priority` on every `task.create` — one of `"🔴 High"`, `"🟡 Medium"`, ' +
+        '`"🟢 Low"` — it is required at the tool boundary and the call is rejected, ' +
+        'naming the accepted values, if it is missing or set to anything else. ' +
+        'The operator disposes ' +
         'each staged task like any other intent; never treat handing a task spec ' +
         'back in chat as an acceptable substitute for staging it. ' +
         DESIGN_TERMINAL_ARTIFACTS_ORDERING,
@@ -1516,7 +1522,11 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'When the mandate calls for follow-on work — including an operational ' +
         'change that turns out to need a code change — stage it as a ' +
         '`task.create` intent (landing at 🔲 Backlog, typed 💻 Code) carrying the ' +
-        'spec, rather than describing it in chat. This session has no worktree or ' +
+        'spec, rather than describing it in chat. DO set `priority` on every ' +
+        '`task.create` — one of `"🔴 High"`, `"🟡 Medium"`, `"🟢 Low"` — it is ' +
+        'required at the tool boundary and the call is rejected, naming the ' +
+        'accepted values, if it is missing or set to anything else. This session ' +
+        'has no worktree or ' +
         'branch and must never create a PR or author code directly: a code ' +
         'change is categorically routed through a staged 💻 Code task, never ' +
         'applied by ops itself — stage the task and continue driving the rest of ' +

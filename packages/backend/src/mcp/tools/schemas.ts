@@ -29,6 +29,9 @@ export const taskStatusSchema = z.enum([
   'Done',
 ]);
 
+/** Canonical Priority vocabulary — the board's actual Priority select options. */
+export const taskPrioritySchema = z.enum(['🔴 High', '🟡 Medium', '🟢 Low']);
+
 /** GateItemClassification, plus the two non-classifying accretion dispositions. */
 export const gateContributionDecisionSchema = z
   .enum([
