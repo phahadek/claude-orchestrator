@@ -607,9 +607,9 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
 
     it('accepts blocked once the session has staged a session.requestCapability, in any state', () => {
       const req = stageCapabilityRequest(OPS_SESSION_ID);
-      db.prepare(`UPDATE staged_intent SET state = 'rejected' WHERE id = @id`).run(
-        { id: req.id },
-      );
+      db.prepare(
+        `UPDATE staged_intent SET state = 'rejected' WHERE id = @id`,
+      ).run({ id: req.id });
       expect(() => stageBlocked(OPS_SESSION_ID)).not.toThrow();
     });
 
