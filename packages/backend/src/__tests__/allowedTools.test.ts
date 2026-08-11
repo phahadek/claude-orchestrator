@@ -40,6 +40,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'flaky.confirm',
   'gate.verify',
   'ops.prIntent',
+  'test.request',
   'completeness.disposition',
   'completeness.traceCoverage',
   'groom.precheck',

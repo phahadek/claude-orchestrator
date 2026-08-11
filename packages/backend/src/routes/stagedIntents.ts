@@ -2227,14 +2227,18 @@ class TestRequestValidationError extends Error {
 
 /**
  * A code session's request to run the project's `test:` commands. Refuses
- * at stage time — before the row ever reaches `staged` — the one case that
- * would otherwise strand it: staging inside a group. Like review.dispute,
- * this applies via a direct mechanical auto-grant + execution, never a
- * group commit.
+ * at stage time — before the row ever reaches `staged` — the cases that
+ * would otherwise strand it: staging inside a group, and staging against a
+ * project with no `test:` commands configured (the auto-grant can never
+ * succeed, so refusing here keeps the correction loop inside the requesting
+ * session's own turn instead of parking an intent that can never take
+ * effect). Like review.dispute, this applies via a direct mechanical
+ * auto-grant + execution, never a group commit.
  */
 function validateTestRequestPayload(
   payload: unknown,
   groupId: string | null | undefined,
+  projectId: string,
 ): asserts payload is TestRequestPayload {
   if (groupId) {
     throw new TestRequestValidationError(
@@ -2248,6 +2252,16 @@ function validateTestRequestPayload(
   }
   if (typeof p.reason !== 'string' || !p.reason.trim()) {
     throw new TestRequestValidationError('payload.reason is required');
+  }
+  const project = getProjectById(projectId);
+  if (project) {
+    const config = loadOrchestratorConfig(project.projectDir);
+    if (!config.test?.length) {
+      throw new TestRequestValidationError(
+        `project "${projectId}" has no test: commands configured — a ` +
+          'test.request can never auto-grant here',
+      );
+    }
   }
 }
 
@@ -3599,7 +3613,7 @@ export function stageIntent(
     validateReviewDisputePayload(payload, groupId, decisionProposal);
   }
   if (kind === 'test.request') {
-    validateTestRequestPayload(payload, groupId);
+    validateTestRequestPayload(payload, groupId, projectId);
   }
   if (kind === 'gate.verify') {
     validateGateVerifyPayload(payload);
@@ -4062,6 +4076,23 @@ class HumanApplyOnlyError extends Error {
   }
 }
 
+/**
+ * Defence-in-depth for a kind whose own validator refuses grouping (and so
+ * should never reach applyIntent's switch via a group commit) — names the
+ * failure instead of falling through to the generic unknown-kind throw, so
+ * a stranded row from any future path is at least dispositionable with a
+ * legible reason rather than wedging the whole group.
+ */
+class NotOperatorAppliableError extends Error {
+  constructor(kind: string) {
+    super(
+      `[stagedIntents] "${kind}" is not operator-appliable — it applies only via its own ` +
+        'mechanical auto-grant, never an operator apply or group commit',
+    );
+    this.name = 'NotOperatorAppliableError';
+  }
+}
+
 /** The operator's pick for a Human-Observation mirror intent's disposition — see GateVerifyIntentPayload.origin. */
 interface GateVerifyMirrorDisposition {
   disposition: 'pass' | 'fail' | 'needs-setup' | 'deferred';
@@ -4468,6 +4499,8 @@ async function applyIntent(
         nextVersion: result.next.version,
       };
     }
+    case 'test.request':
+      throw new NotOperatorAppliableError(intent.kind);
     default:
       throw new Error(`[stagedIntents] unknown intent kind "${intent.kind}"`);
   }
@@ -4550,11 +4583,13 @@ async function rejectStagedIntentRow(
   reason: string,
   sessionManager: SessionManager | undefined,
   planningOrchestrator: PlanningOrchestrator | undefined,
+  provenance: 'auto' | 'operator' = 'operator',
 ): Promise<StagedIntent> {
   const { intent: rejectedIntent, row: rejected } = transitionRejectedIntent(
     row,
     outcome,
     reason,
+    provenance,
   );
 
   // Removes the underlying completeness_disposition row outright — not just
@@ -4947,26 +4982,46 @@ const TEST_REQUEST_DELIVERY_OUTPUT_CAP = 8_000;
 /**
  * Resolves the project's `test:` command config and the requesting
  * session's live worktree path for a test.request intent — the two things
- * both the auto-grant check and the actual execution need. Returns null on
- * any missing piece (no project, no configured test commands, session has
- * no worktree) — none of these throw; they just mean this intent cannot run.
+ * both the auto-grant check and the actual execution need. Returns a typed
+ * failure (naming the reason) on any missing piece — no project, no
+ * configured test commands, or the session has no worktree — so a caller
+ * that must strand the intent structurally (see maybeAutoApproveTestRequest)
+ * can report exactly why instead of returning silently.
  */
-function resolveTestRequestExecutionInputs(intent: StagedIntent): {
-  worktreePath: string;
-  commands: string[];
-  timeoutSec: number;
-  maxRssMb: number;
-  failFast: boolean;
-} | null {
-  if (!intent.sessionId) return null;
+function resolveTestRequestExecutionInputs(intent: StagedIntent):
+  | {
+      ok: true;
+      worktreePath: string;
+      commands: string[];
+      timeoutSec: number;
+      maxRssMb: number;
+      failFast: boolean;
+    }
+  | { ok: false; reason: string } {
+  if (!intent.sessionId) {
+    return { ok: false, reason: 'no originating session' };
+  }
   const project = getProjectById(intent.projectId);
-  if (!project) return null;
+  if (!project) {
+    return { ok: false, reason: `unknown project "${intent.projectId}"` };
+  }
   const config = loadOrchestratorConfig(project.projectDir);
-  if (!config.test?.length) return null;
+  if (!config.test?.length) {
+    return {
+      ok: false,
+      reason: 'project has no test: commands configured',
+    };
+  }
   const session = getSession(intent.sessionId);
   const worktreePath = session?.worktree_path;
-  if (!worktreePath) return null;
+  if (!worktreePath) {
+    return {
+      ok: false,
+      reason: 'originating session has no resolvable worktree',
+    };
+  }
   return {
+    ok: true,
     worktreePath,
     commands: config.test,
     timeoutSec: config.test_timeout_sec,
@@ -4989,11 +5044,10 @@ async function triggerTestRequestExecution(
 ): Promise<void> {
   const inputs = resolveTestRequestExecutionInputs(intent);
   let result: TestCommandResult;
-  if (!inputs) {
+  if (!inputs.ok) {
     result = {
       passed: false,
-      output:
-        "[test.request] could not resolve this project's test: commands or the requesting session's worktree",
+      output: `[test.request] ${inputs.reason}`,
     };
   } else {
     let contentHash: string | null = null;
@@ -5083,11 +5137,47 @@ async function triggerTestRequestExecution(
  * (test_request_cycle_exceeded) instead of auto-running further requests,
  * so an iterate-on-red loop cannot run unbounded.
  */
+/**
+ * Declines a test.request's auto-grant for a structural reason (no
+ * originating session, no configured test: commands, no resolvable
+ * worktree, no content hash) rather than leaving it stranded at `staged` —
+ * the surface it can never be dispositioned from (see the module-level
+ * comment on validateTestRequestPayload). Logs the reason against the
+ * intent id and reuses the existing reject-and-report path so the
+ * originating session learns immediately via the feedback inbox, exactly as
+ * an operator decline would.
+ */
+async function declineTestRequestAutoGrant(
+  intent: StagedIntent,
+  reason: string,
+  sessionManager: SessionManager | undefined,
+): Promise<StagedIntent> {
+  logger.warn(
+    `[stagedIntents] test.request auto-grant declined for ${intent.id}: ${reason}`,
+  );
+  const row = getStagedIntentRow(intent.id);
+  if (!row) return intent;
+  return rejectStagedIntentRow(
+    row,
+    'decline',
+    reason,
+    sessionManager,
+    undefined,
+    'auto',
+  );
+}
+
 async function maybeAutoApproveTestRequest(
   intent: StagedIntent,
   sessionManager: SessionManager | undefined,
 ): Promise<StagedIntent> {
-  if (!intent.sessionId) return intent;
+  if (!intent.sessionId) {
+    return declineTestRequestAutoGrant(
+      intent,
+      'no originating session',
+      sessionManager,
+    );
+  }
 
   const priorCount = getSessionTestRequestCycleCount(intent.sessionId);
   incrementSessionTestRequestCycleCount(intent.sessionId);
@@ -5097,18 +5187,27 @@ async function maybeAutoApproveTestRequest(
   }
 
   const inputs = resolveTestRequestExecutionInputs(intent);
-  if (!inputs) return intent;
+  if (!inputs.ok) {
+    return declineTestRequestAutoGrant(intent, inputs.reason, sessionManager);
+  }
 
   let contentHash: string | null;
   try {
     contentHash = await computeWholeTreeContentHash(inputs.worktreePath);
   } catch (err) {
-    logger.error(
-      `[stagedIntents] worktree hash failed for test.request auto-grant on ${intent.id}: ${err}`,
+    return declineTestRequestAutoGrant(
+      intent,
+      `worktree content hash failed: ${err instanceof Error ? err.message : String(err)}`,
+      sessionManager,
     );
-    return intent;
   }
-  if (!contentHash) return intent;
+  if (!contentHash) {
+    return declineTestRequestAutoGrant(
+      intent,
+      'worktree content hash unavailable',
+      sessionManager,
+    );
+  }
 
   const row = getStagedIntentRow(intent.id);
   if (!row) return intent;
@@ -6573,6 +6672,17 @@ export async function commitGroupIntents(
           },
         };
       }
+      if (err instanceof NotOperatorAppliableError) {
+        return {
+          status: 409,
+          body: {
+            error: err.message,
+            committed,
+            failedId: intent.id,
+            remaining,
+          },
+        };
+      }
       if (
         err instanceof DependsOnCompletenessError ||
         err instanceof ManualVerificationStripCompletenessError
@@ -6985,6 +7095,10 @@ export function createStagedIntentsRouter(
         }
         if (err instanceof HumanApplyOnlyError) {
           res.status(403).json({ error: err.message });
+          return;
+        }
+        if (err instanceof NotOperatorAppliableError) {
+          res.status(409).json({ error: err.message });
           return;
         }
         if (
