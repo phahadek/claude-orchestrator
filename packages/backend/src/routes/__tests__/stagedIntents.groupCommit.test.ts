@@ -65,6 +65,7 @@ import {
   getStagedIntent,
   insertSession,
   transitionStagedIntent,
+  upsertTaskCache,
 } from '../../db/queries';
 import {
   createStagedIntentsRouter,
@@ -103,7 +104,16 @@ beforeEach(() => {
   db.prepare('DELETE FROM staged_intent_group').run();
   db.prepare('DELETE FROM gate_accretion').run();
   db.prepare('DELETE FROM seed_accretion').run();
+  db.prepare("DELETE FROM task_cache WHERE task_id LIKE 'board:%'").run();
 });
+
+/** Seeds a single board-cache blob (getAllBoardCacheTasks reads every board:* row). */
+function seedBoardCache(
+  key: string,
+  tasks: Array<{ id: string; status: string; dependsOn: string[] }>,
+) {
+  upsertTaskCache(`board:${key}`, JSON.stringify(tasks));
+}
 
 async function stageGroup(
   agent: ReturnType<typeof supertest>,
@@ -1034,6 +1044,284 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
     expect(commit.status).toBe(409);
     expect(commit.body.reasons.join(' ')).toContain(patch.body.id);
     expect(commit.body.reasons.join(' ')).toContain('did not compose');
+  });
+});
+
+describe('task.setStatus -> Deferred blocked while a non-terminal dependent is not re-pointed', () => {
+  it('refuses when the group carries no companion task.setDependsOn for the dependent, surfacing a structured 409 with the blocking task ids', async () => {
+    seedBoardCache('k1', [
+      { id: 't-defer-1', status: '🗂️ Ready', dependsOn: [] },
+      { id: 't-dependent-1', status: '🗂️ Ready', dependsOn: ['t-defer-1'] },
+    ]);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-1',
+      groupId: 'g-defer-1',
+      payload: { taskId: 't-defer-1', status: 'Deferred' },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-defer-1/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).toContain('t-dependent-1');
+    expect(commit.body.dependentTaskIds).toEqual(['t-dependent-1']);
+  });
+
+  it('succeeds when the same group also carries a task.setDependsOn re-pointing the dependent', async () => {
+    seedBoardCache('k2', [
+      { id: 't-defer-2', status: '🗂️ Ready', dependsOn: [] },
+      { id: 't-dependent-2', status: '🗂️ Ready', dependsOn: ['t-defer-2'] },
+    ]);
+    const updateStatus = vi.fn();
+    const setDependsOn = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-2',
+      groupId: 'g-defer-2',
+      payload: { taskId: 't-defer-2', status: 'Deferred' },
+    });
+    const repoint = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-defer-2',
+      groupId: 'g-defer-2',
+      payload: { taskId: 't-dependent-2', dependsOn: ['t-successor'] },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+    await agent
+      .post(`/api/staged-intents/${repoint.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-defer-2/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(updateStatus).toHaveBeenCalled();
+    expect(setDependsOn).toHaveBeenCalledWith(
+      'notion:t-dependent-2',
+      ['notion:t-successor'],
+      expect.anything(),
+    );
+  });
+
+  it('a companion task.setDependsOn committed in an earlier apply of the same group still satisfies the guard', async () => {
+    seedBoardCache('k3', [
+      { id: 't-defer-3', status: '🗂️ Ready', dependsOn: [] },
+      { id: 't-dependent-3', status: '🗂️ Ready', dependsOn: ['t-defer-3'] },
+    ]);
+    const updateStatus = vi.fn();
+    const setDependsOn = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    // First apply of the group: only the re-point commits.
+    const repoint = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-defer-3',
+      groupId: 'g-defer-3',
+      payload: { taskId: 't-dependent-3', dependsOn: ['t-successor'] },
+    });
+    await agent
+      .post(`/api/staged-intents/${repoint.body.id}/approve`)
+      .send({});
+    const firstCommit = await agent
+      .post('/api/staged-intents/group/g-defer-3/commit')
+      .send({});
+    expect(firstCommit.status).toBe(200);
+
+    // Second apply, same groupId: the setStatus->Deferred intent is staged
+    // later, against the durable store where the re-point already committed.
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-3',
+      groupId: 'g-defer-3',
+      payload: { taskId: 't-defer-3', status: 'Deferred' },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+    const secondCommit = await agent
+      .post('/api/staged-intents/group/g-defer-3/commit')
+      .send({});
+
+    expect(secondCommit.status).toBe(200);
+    expect(updateStatus).toHaveBeenCalled();
+  });
+
+  it('is unaffected when the task has no dependents — no companion intent required', async () => {
+    seedBoardCache('k4', [{ id: 't-defer-4', status: '🗂️ Ready', dependsOn: [] }]);
+    const updateStatus = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-4',
+      groupId: 'g-defer-4',
+      payload: { taskId: 't-defer-4', status: 'Deferred' },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-defer-4/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(updateStatus).toHaveBeenCalled();
+  });
+
+  it('is unaffected when the only dependents are already terminal (Done or Deferred)', async () => {
+    seedBoardCache('k5', [
+      { id: 't-defer-5', status: '🗂️ Ready', dependsOn: [] },
+      { id: 't-dependent-done', status: '✅ Done', dependsOn: ['t-defer-5'] },
+      {
+        id: 't-dependent-deferred',
+        status: '⏭️ Deferred',
+        dependsOn: ['t-defer-5'],
+      },
+    ]);
+    const updateStatus = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-5',
+      groupId: 'g-defer-5',
+      payload: { taskId: 't-defer-5', status: 'Deferred' },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-defer-5/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(updateStatus).toHaveBeenCalled();
+  });
+
+  it('a companion task.setDependsOn naming the deferred task itself rather than its dependent does not satisfy the guard', async () => {
+    seedBoardCache('k6', [
+      { id: 't-defer-6', status: '🗂️ Ready', dependsOn: [] },
+      { id: 't-dependent-6', status: '🗂️ Ready', dependsOn: ['t-defer-6'] },
+    ]);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-6',
+      groupId: 'g-defer-6',
+      payload: { taskId: 't-defer-6', status: 'Deferred' },
+    });
+    // Mirror-semantics trap: names the deferred task itself, not the dependent.
+    const mirror = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-defer-6',
+      groupId: 'g-defer-6',
+      payload: { taskId: 't-defer-6', dependsOn: [] },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+    await agent
+      .post(`/api/staged-intents/${mirror.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-defer-6/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.dependentTaskIds).toEqual(['t-dependent-6']);
+  });
+
+  it('the existing DependsOnCompletenessError Ready-flip guard is unchanged', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-ready-regress',
+      groupId: 'g-ready-regress',
+      payload: {
+        taskId: 't-ready-regress',
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+        },
+      },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-ready-regress/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).toContain('its intent group has no task.setDependsOn');
   });
 });
 
