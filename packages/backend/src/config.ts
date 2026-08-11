@@ -183,6 +183,14 @@ export const ALLOWED_TOOLS = [
   orchestratorMcpToolName('health'),
   orchestratorMcpToolName('review.disposition'),
   orchestratorMcpToolName('flaky.confirm'),
+  // The injected Pre-PR Gate tells a code session that test commands are
+  // blocked at the permission layer and must run via `test.request`. Without
+  // this entry that instruction is unsatisfiable: the tool is registered
+  // server-side but unlisted here, so every call is denied by the CLI before
+  // it reaches the MCP server — no intent is staged and the lane's mechanical
+  // auto-grant can never fire. Named through orchestratorMcpToolName so it
+  // emits the underscore CLI form the model actually calls.
+  orchestratorMcpToolName('test.request'),
   ...TIER_B_READ_MCP_TOOLS,
 ];
 
