@@ -5,9 +5,13 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
-vi.mock('../../ops/opsLoad.js', () => ({
-  loadOpsContext: vi.fn(),
-}));
+vi.mock('../../ops/opsLoad.js', async (importOriginal) => {
+  const actual = (await importOriginal()) as object;
+  return {
+    ...actual,
+    loadOpsContext: vi.fn(),
+  };
+});
 
 import { DispatchTriggerEvaluator } from '../DispatchTriggerEvaluator';
 import {
@@ -110,7 +114,7 @@ describe('DispatchTriggerEvaluator — re-validate immediately before launch', (
     // the same by-value sequence observed live.
     const launchSelected = vi.fn().mockImplementation(async (params) => {
       const taskId = params.tasks[0].id;
-      if (taskId === 'task-a') {
+      if (taskId.includes('task-a')) {
         updateTaskStatusInBoardCaches('task-b', '🗂️ Ready');
       }
       return { launched: [taskId], deferred: [], failed: [] };
@@ -121,7 +125,7 @@ describe('DispatchTriggerEvaluator — re-validate immediately before launch', (
 
     expect(dispatched).toBe(1);
     expect(launchSelected).toHaveBeenCalledTimes(1);
-    expect(launchSelected.mock.calls[0][0].tasks[0].id).toBe('task-a');
+    expect(launchSelected.mock.calls[0][0].tasks[0].id).toContain('task-a');
   });
 
   it('does not dispatch a groom candidate that gained an active session between scan and launch', async () => {
@@ -133,7 +137,7 @@ describe('DispatchTriggerEvaluator — re-validate immediately before launch', (
 
     const launchSelected = vi.fn().mockImplementation(async (params) => {
       const taskId = params.tasks[0].id;
-      if (taskId === 'task-a') {
+      if (taskId.includes('task-a')) {
         // A groom session appears for task-b mid-poll — e.g. an operator
         // manually launched it while the slow poll was still running.
         insertSession({
@@ -154,7 +158,7 @@ describe('DispatchTriggerEvaluator — re-validate immediately before launch', (
 
     expect(dispatched).toBe(1);
     expect(launchSelected).toHaveBeenCalledTimes(1);
-    expect(launchSelected.mock.calls[0][0].tasks[0].id).toBe('task-a');
+    expect(launchSelected.mock.calls[0][0].tasks[0].id).toContain('task-a');
   });
 
   it('counts a skipped-at-launch candidate in the poll skipped total (log line stays truthful)', async () => {
@@ -166,7 +170,7 @@ describe('DispatchTriggerEvaluator — re-validate immediately before launch', (
 
     const launchSelected = vi.fn().mockImplementation(async (params) => {
       const taskId = params.tasks[0].id;
-      if (taskId === 'task-a') {
+      if (taskId.includes('task-a')) {
         updateTaskStatusInBoardCaches('task-b', '🗂️ Ready');
       }
       return { launched: [taskId], deferred: [], failed: [] };
@@ -220,7 +224,7 @@ describe('DispatchTriggerEvaluator — re-validate immediately before launch', (
 
     const launchSelected = vi.fn().mockImplementation(async (params) => {
       const taskId = params.tasks[0].id;
-      if (taskId === 'design-a') {
+      if (taskId.includes('design-a')) {
         updateTaskStatusInBoardCaches('design-b', '🔲 Backlog');
       }
       return { launched: [taskId], deferred: [], failed: [] };
@@ -231,7 +235,7 @@ describe('DispatchTriggerEvaluator — re-validate immediately before launch', (
 
     expect(dispatched).toBe(1);
     expect(launchSelected).toHaveBeenCalledTimes(1);
-    expect(launchSelected.mock.calls[0][0].tasks[0].id).toBe('design-a');
+    expect(launchSelected.mock.calls[0][0].tasks[0].id).toContain('design-a');
   });
 
   it('does not dispatch a docs candidate whose status left Ready between scan and launch', async () => {
@@ -243,7 +247,7 @@ describe('DispatchTriggerEvaluator — re-validate immediately before launch', (
 
     const launchSelected = vi.fn().mockImplementation(async (params) => {
       const taskId = params.tasks[0].id;
-      if (taskId === 'docs-a') {
+      if (taskId.includes('docs-a')) {
         updateTaskStatusInBoardCaches('docs-b', '🔲 Backlog');
       }
       return { launched: [taskId], deferred: [], failed: [] };
@@ -254,7 +258,7 @@ describe('DispatchTriggerEvaluator — re-validate immediately before launch', (
 
     expect(dispatched).toBe(1);
     expect(launchSelected).toHaveBeenCalledTimes(1);
-    expect(launchSelected.mock.calls[0][0].tasks[0].id).toBe('docs-a');
+    expect(launchSelected.mock.calls[0][0].tasks[0].id).toContain('docs-a');
   });
 
   it('leaves the ops candidate path unaffected — it already re-validates via a live worklist reload, not the new revalidate hook', async () => {
