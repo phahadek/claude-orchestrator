@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import {
   checkReadiness,
   parseManualVerificationItems,
@@ -6,6 +8,8 @@ import {
   checkAccretionContentMatch,
   extractDeclaredWrites,
 } from '../readinessGate';
+
+const repoRoot = join(__dirname, '..', '..', '..', '..', '..');
 
 describe('checkReadiness — Tier 1 (structural)', () => {
   it('flags a body with a non-empty Open Questions section', () => {
@@ -485,5 +489,32 @@ describe('checkReadiness — Declared writes section', () => {
     const body = '## Declared writes\nNone\n';
     expect(extractDeclaredWrites(body)).toEqual([]);
     expect(checkReadiness(body)).toHaveLength(0);
+  });
+
+  it('documents the exact heading text the parser normalizes against, so the doc and the parser cannot drift', () => {
+    const taskWritingMd = readFileSync(
+      join(repoRoot, 'config-template', 'task-writing.md'),
+      'utf8',
+    );
+    expect(taskWritingMd).toContain('## Declared writes');
+    const parserHeadingLiteral = 'declared writes';
+    expect(taskWritingMd.toLowerCase()).toContain(parserHeadingLiteral);
+    expect(
+      extractDeclaredWrites(`## Declared writes\n- \`Bash(ls:*)\`\n`),
+    ).toEqual([{ capability: 'Bash(ls:*)', prodMutating: true }]);
+  });
+
+  it('round-trips the documented authoring format into the expected {capability, prodMutating}[] shape', () => {
+    const body =
+      '## Declared writes\n' +
+      '- `Bash(npm ci:*)` — Non-Prod-Mutating\n' +
+      '- `Bash(git push origin HEAD:*)` — Prod-Mutating\n' +
+      '- `mcp__github__merge_pull_request`\n';
+    expect(checkReadiness(body)).toHaveLength(0);
+    expect(extractDeclaredWrites(body)).toEqual([
+      { capability: 'Bash(npm ci:*)', prodMutating: false },
+      { capability: 'Bash(git push origin HEAD:*)', prodMutating: true },
+      { capability: 'mcp__github__merge_pull_request', prodMutating: true },
+    ]);
   });
 });

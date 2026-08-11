@@ -370,6 +370,23 @@ shows `None.` — both are correct post-groom states, not a gap.
 
 Confirm the accretion in chat before the Ready-flip.
 
+**Declared writes validation (🔧 Operational tasks):** Before flipping a 🔧 Operational task
+to Ready, check its body for a `## Declared writes` section (see `task-writing.md` §
+Declared writes for the authoring format). It is optional — most Operational tasks carry none,
+and that is fine — but when present it is **load-bearing**: it is what lets a dispatched ops
+session's `session.requestCapability` calls auto-approve instead of parking for a human
+decision, so a malformed entry silently strands the session on writes that should have sailed
+through. Validate each bullet parses to a non-empty, backtick-quoted capability string; an
+empty or tag-only bullet is malformed and **blocks the Ready-flip** the same way an unresolved
+`## Open Questions` line does — send it back for correction rather than promoting around it.
+Do not invent a classification tag the author didn't write: an entry with no tag, or an
+ambiguous one, is left as-is (it still promotes — `readinessGate.ts` treats a missing/ambiguous
+tag as a valid, fail-closed Prod-Mutating entry, never a validation failure) — only flag
+entries where no capability could be parsed at all. This check runs automatically at
+stage-time too (`checkReadiness` runs unconditionally on every promotion), so a missed
+malformed entry is caught server-side regardless — but catching it in review avoids a bounced
+flip.
+
 2. **Then**, stage the write per task through the sanctioned device-authed
    staged-intents CLI client (`node ~/.claude/scripts/staged-intents-client.mjs
    create <kind> <json-payload> <projectId> [groupId]` — see

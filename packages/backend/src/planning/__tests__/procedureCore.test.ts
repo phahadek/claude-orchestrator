@@ -102,7 +102,7 @@ describe('procedureCore', () => {
     > = {
       groom: { principles: 14, steps: 8 },
       design: { principles: 23, steps: 7 },
-      ops: { principles: 16, steps: 5 },
+      ops: { principles: 17, steps: 5 },
       split: { principles: 6, steps: 4 },
     };
     for (const skill of Object.keys(expected) as Array<keyof typeof expected>) {
@@ -1183,6 +1183,16 @@ describe('procedureCore', () => {
       expect(rendered).toMatch(
         /the session stages the `journal\.setState` → `resolved` transition, it never applies it/,
       );
+    });
+
+    it('the declared-writes-auto-approve principle names the ## Declared writes section so a dispatched ops session knows where its auto-approved writes come from', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'declared-writes-auto-approve',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/## Declared writes/);
+      expect(rendered).toMatch(/Non-Prod-Mutating/);
+      expect(rendered).toMatch(/auto-approves/);
     });
   });
 });
