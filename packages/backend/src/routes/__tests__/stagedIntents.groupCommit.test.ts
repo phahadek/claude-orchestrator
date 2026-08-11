@@ -1112,9 +1112,7 @@ describe('task.setStatus -> Deferred blocked while a non-terminal dependent is n
     await agent
       .post(`/api/staged-intents/${setStatus.body.id}/approve`)
       .send({});
-    await agent
-      .post(`/api/staged-intents/${repoint.body.id}/approve`)
-      .send({});
+    await agent.post(`/api/staged-intents/${repoint.body.id}/approve`).send({});
 
     const commit = await agent
       .post('/api/staged-intents/group/g-defer-2/commit')
@@ -1152,9 +1150,7 @@ describe('task.setStatus -> Deferred blocked while a non-terminal dependent is n
       groupId: 'g-defer-3',
       payload: { taskId: 't-dependent-3', dependsOn: ['t-successor'] },
     });
-    await agent
-      .post(`/api/staged-intents/${repoint.body.id}/approve`)
-      .send({});
+    await agent.post(`/api/staged-intents/${repoint.body.id}/approve`).send({});
     const firstCommit = await agent
       .post('/api/staged-intents/group/g-defer-3/commit')
       .send({});
@@ -1180,7 +1176,9 @@ describe('task.setStatus -> Deferred blocked while a non-terminal dependent is n
   });
 
   it('is unaffected when the task has no dependents — no companion intent required', async () => {
-    seedBoardCache('k4', [{ id: 't-defer-4', status: '🗂️ Ready', dependsOn: [] }]);
+    seedBoardCache('k4', [
+      { id: 't-defer-4', status: '🗂️ Ready', dependsOn: [] },
+    ]);
     const updateStatus = vi.fn();
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
@@ -1277,9 +1275,7 @@ describe('task.setStatus -> Deferred blocked while a non-terminal dependent is n
     await agent
       .post(`/api/staged-intents/${setStatus.body.id}/approve`)
       .send({});
-    await agent
-      .post(`/api/staged-intents/${mirror.body.id}/approve`)
-      .send({});
+    await agent.post(`/api/staged-intents/${mirror.body.id}/approve`).send({});
 
     const commit = await agent
       .post('/api/staged-intents/group/g-defer-6/commit')
@@ -1321,7 +1317,9 @@ describe('task.setStatus -> Deferred blocked while a non-terminal dependent is n
       .send({});
 
     expect(commit.status).toBe(409);
-    expect(commit.body.error).toContain('its intent group has no task.setDependsOn');
+    expect(commit.body.error).toContain(
+      'its intent group has no task.setDependsOn',
+    );
   });
 });
 
