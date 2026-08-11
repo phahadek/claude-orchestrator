@@ -1,10 +1,18 @@
 import type { NotionTask } from './types';
 import type { ResolvedTask } from '../tasks/types';
+import { normalizeBoardId } from '../tasks/taskId';
 
 /** Strip hyphens so both dashed and dashless Notion UUIDs match. */
 function stripHyphens(id: string): string {
   return id.replace(/-/g, '');
 }
+
+/**
+ * Statuses a dependent can't be silently wedged out of — it's already done,
+ * or it isn't going anywhere itself, so surfacing it as a stranded dependent
+ * would be noise.
+ */
+const TERMINAL_DEPENDENT_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
 
 export class DependencyResolver {
   resolve(
@@ -59,6 +67,29 @@ export class DependencyResolver {
     const wave = maxDepWave + 1;
     cache.set(normId, wave);
     return wave;
+  }
+
+  /**
+   * Reverse of findBlockers: every task in `tasks` whose Depends On names
+   * `taskId`, excluding taskId itself and dependents already at a terminal
+   * status. Used to surface who gets silently wedged when a task is moved to
+   * a permanently-unsatisfiable status (⏭️ Deferred) — the blocking predicate
+   * in findBlockers/computeWave is unchanged; this only adds visibility.
+   *
+   * Ids compare via normalizeBoardId, which strips the `source:` prefix and
+   * hyphenation on both sides, so a `notion:`-prefixed dependsOn entry still
+   * matches a bare-uuid task id and vice versa.
+   */
+  findDependents<T extends Pick<NotionTask, 'id' | 'status' | 'dependsOn'>>(
+    taskId: string,
+    tasks: T[],
+  ): T[] {
+    const normTarget = normalizeBoardId(taskId);
+    return tasks.filter((t) => {
+      if (normalizeBoardId(t.id) === normTarget) return false;
+      if (TERMINAL_DEPENDENT_STATUSES.has(t.status)) return false;
+      return t.dependsOn.some((depId) => normalizeBoardId(depId) === normTarget);
+    });
   }
 
   private findBlockers(

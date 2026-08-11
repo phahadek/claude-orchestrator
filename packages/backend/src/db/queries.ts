@@ -1923,6 +1923,65 @@ export function updateTaskStatusInBoardCaches(
   }
 }
 
+/** Minimal shape read out of cached board blobs — just enough for reverse-dependency lookup. */
+export interface CachedBoardTaskEntry {
+  id: string;
+  status: string;
+  dependsOn: string[];
+}
+
+/**
+ * Every task entry across all cached `board:*` blobs, deduped by normalized
+ * id (last write wins). This is the same cache `updateTaskStatusInBoardCaches`
+ * patches in place, so it reflects the latest known status/dependsOn without
+ * a live Notion round-trip. Best-effort: an unparseable row is skipped rather
+ * than failing the caller.
+ */
+export function getAllBoardCacheTasks(): CachedBoardTaskEntry[] {
+  let rows: Array<{ task_id: string; fetched_at: number; raw_json: string }>;
+  try {
+    rows = stmtGetBoardCacheRows.all() as Array<{
+      task_id: string;
+      fetched_at: number;
+      raw_json: string;
+    }>;
+  } catch {
+    return [];
+  }
+  const byId = new Map<string, CachedBoardTaskEntry>();
+  for (const row of rows) {
+    let tasks: unknown;
+    try {
+      tasks = JSON.parse(row.raw_json);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(tasks)) continue;
+    for (const entry of tasks) {
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        typeof (entry as { id?: unknown }).id === 'string' &&
+        typeof (entry as { status?: unknown }).status === 'string'
+      ) {
+        const e = entry as {
+          id: string;
+          status: string;
+          dependsOn?: unknown;
+        };
+        byId.set(normalizeTaskId(e.id), {
+          id: e.id,
+          status: e.status,
+          dependsOn: Array.isArray(e.dependsOn)
+            ? e.dependsOn.filter((d): d is string => typeof d === 'string')
+            : [],
+        });
+      }
+    }
+  }
+  return [...byId.values()];
+}
+
 export function incrementTokens(
   sessionId: string,
   inputTokens: number,

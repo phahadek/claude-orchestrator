@@ -86,6 +86,7 @@ type EventType =
   | 'task_archived'
   | 'task_moved'
   | 'readiness_override'
+  | 'task_deferred_blocks_dependents'
   | 'staged_intent_disposition'
   | 'staged_intent_create_supersede_noop'
   | 'capability_revoked'
