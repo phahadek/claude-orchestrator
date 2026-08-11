@@ -24,6 +24,11 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { SessionState } from '../hooks/useSessionStore';
 import { SessionPanel } from './SessionPanel';
 import styles from './GateReadinessPanel.module.css';
+import {
+  GATE_STATE_ORDER,
+  GATE_DONE_STATES,
+  REOPEN_BLOCKED_STATES,
+} from './gateStateVocabulary';
 
 interface Props {
   activeProjectId: string | null;
@@ -45,26 +50,6 @@ const CLASSIFICATION_OPTIONS: GateItemClassification[] = [
   'Prod-Mutating',
   'Human-Observation',
 ];
-
-export const GATE_STATE_ORDER = [
-  'open',
-  'runnable',
-  'pass',
-  'fail',
-  'deferred',
-  'pending-approval',
-  'pending',
-  'discarded',
-];
-export const GATE_DONE_STATES = ['pass', 'deferred', 'discarded'];
-
-/** Mirrors the backend's reopenGateItem guard (gateService.ts) — reopen only applies to a resolved item. */
-export const REOPEN_BLOCKED_STATES = new Set([
-  'open',
-  'runnable',
-  'pending-approval',
-  'pending',
-]);
 
 const SEED_STATE_ORDER = ['pending', 'applied', 'confirmed', 'blocked'];
 const SEED_DONE_STATES = ['confirmed'];

@@ -3,7 +3,7 @@ import {
   GATE_STATE_ORDER,
   GATE_DONE_STATES,
   REOPEN_BLOCKED_STATES,
-} from '../GateReadinessPanel';
+} from '../gateStateVocabulary';
 
 /** The backend's resolved-state vocabulary (gate/gateService.ts RESOLVED_STATES). */
 const BACKEND_RESOLVED_STATES = ['pass', 'deferred', 'discarded'];
