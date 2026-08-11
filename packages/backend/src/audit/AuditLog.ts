@@ -333,6 +333,38 @@ export function hasStrandedOpsSurfacedEvent(
   });
 }
 
+/**
+ * True when a task_deferred_blocks_dependents event already names
+ * `dependentTaskId` among its `dependentTaskIds` for the given
+ * `deferredTaskId` — the sweep-cycle dedup for DeferredBlockerSweep,
+ * mirroring hasStrandedOpsSurfacedEvent. Matches events recorded by either
+ * the write-path hook (TaskWriteCommands.surfaceDependentsOfDeferredTask)
+ * or a prior sweep pass, since both write this event type with `task_id`
+ * set to the deferred task and the blocked task listed in
+ * `dependentTaskIds`.
+ */
+export function hasDeferredBlockerSurfacedEvent(
+  deferredTaskId: string,
+  dependentTaskId: string,
+): boolean {
+  const rows = db
+    .prepare<[string], { payload: string }>(
+      `SELECT payload FROM audit_log
+       WHERE task_id = ? AND event_type = 'task_deferred_blocks_dependents'`,
+    )
+    .all(deferredTaskId);
+  return rows.some((r) => {
+    try {
+      const payload = JSON.parse(r.payload) as {
+        dependentTaskIds?: string[];
+      };
+      return payload.dependentTaskIds?.includes(dependentTaskId) ?? false;
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** Returns the most recent audit_log row of the given event type, or undefined. */
 export function getLatestEventByType(eventType: string): AuditRow | undefined {
   return db

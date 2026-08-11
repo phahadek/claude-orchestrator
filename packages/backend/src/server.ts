@@ -71,6 +71,7 @@ import { PlanUsagePoller } from './orchestration/PlanUsagePoller';
 import { registerUsagePoller } from './orchestration/usageAdmission';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { StrandedOpsTaskMonitor } from './orchestration/StrandedOpsTaskMonitor';
+import { DeferredBlockerSweep } from './orchestration/DeferredBlockerSweep';
 import { CapabilityDispositionMiner } from './orchestration/CapabilityDispositionMiner';
 import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
@@ -540,6 +541,12 @@ const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
 // exemption for such tasks otherwise leaves permanently unobserved.
 const strandedOpsTaskMonitor = new StrandedOpsTaskMonitor();
 
+// Deferred-blocker sweep: periodic catch-all for a Ready (or other
+// non-terminal) task whose Depends On names an already-⏭️-Deferred task —
+// catches the pre-existing backlog and any case the write-path hook
+// (TaskWriteCommands.surfaceDependentsOfDeferredTask) misses.
+const deferredBlockerSweep = new DeferredBlockerSweep();
+
 // Capability-disposition-trail miner: files a 🔎 Investigation task (never a
 // ready denylist decision) for any capability with 5+ operator denials
 // across 2+ tasks and zero approvals ever recorded — see
@@ -574,6 +581,7 @@ opsSessionLauncher.register(scheduler);
 autoMerger.register(scheduler);
 orphanedTaskSweeper.register(scheduler);
 strandedOpsTaskMonitor.register(scheduler);
+deferredBlockerSweep.register(scheduler);
 capabilityDispositionMiner.register(scheduler);
 stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
