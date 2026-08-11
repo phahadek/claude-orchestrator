@@ -28,8 +28,25 @@ vi.mock('../../db/queries', () =>
     setSessionTags: vi.fn(),
     resetTaskCrashCount: vi.fn(),
     getSession: vi.fn().mockReturnValue(null),
+    getLatestTestRequestRun: vi.fn().mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    }),
   }),
 );
+
+vi.mock('../analyzeGating', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzeGating')>();
+  return {
+    ...actual,
+    computeWholeTreeContentHash: vi.fn().mockResolvedValue('hash'),
+  };
+});
 
 vi.mock('../../config/corporateMode', () => ({
   getCorporateMode: vi.fn(() => ({
@@ -126,12 +143,14 @@ import {
   markSessionIdle,
   setPauseReason,
   getSession,
+  getLatestTestRequestRun,
 } from '../../db/queries';
 import { validatePRBody } from '../../github/PRBodyValidator';
 import { recordEvent } from '../../audit/AuditLog';
 import { execSync } from 'child_process';
 import { runtimeSettings } from '../../config';
 import { getCorporateMode } from '../../config/corporateMode';
+import { computeWholeTreeContentHash } from '../analyzeGating';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -304,6 +323,96 @@ describe('<pr-body> marker — createPR path', () => {
     // createPR only called once; second emission hits the updatePR path
     expect(ghClient.createPR).toHaveBeenCalledTimes(1);
     expect(ghClient.updatePR).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('<pr-body> marker — test.request cache gate', () => {
+  beforeEach(() => {
+    vi.mocked(upsertPullRequest).mockClear();
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getSession).mockReturnValue(null);
+    vi.mocked(recordEvent).mockClear();
+    vi.mocked(execSync).mockClear();
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git symbolic-ref refs/remotes/origin/HEAD')
+        return 'refs/remotes/origin/dev\n';
+      if (cmd === 'git push -u origin feature/my-task') return '';
+      throw new Error(`unexpected execSync: ${cmd}`);
+    });
+    vi.mocked(computeWholeTreeContentHash).mockResolvedValue('hash');
+  });
+
+  it('blocks push/PR-open when there is no passing cache entry for the tree', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(
+      vi
+        .mocked(execSync)
+        .mock.calls.some((c) => c[0] === 'git push -u origin feature/my-task'),
+    ).toBe(false);
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_creation_failed',
+        payload: expect.objectContaining({ stage: 'test_request_gate' }),
+      }),
+    );
+  });
+
+  it('blocks push/PR-open when the latest cache entry for the tree failed', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'failed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+  });
+
+  it('proceeds to open the PR when a passing cache entry exists for the tree', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        head: 'feature/my-task',
+        base: 'dev',
+      }),
+    );
   });
 });
 

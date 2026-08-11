@@ -61,8 +61,26 @@ vi.mock('../db/queries', () =>
     getSession: vi.fn(() => null),
     getProjectRowById: vi.fn(() => null),
     insertLocalBranch: vi.fn(),
+    getLatestTestRequestRun: vi.fn(() => ({
+      id: 'run-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    })),
   }),
 );
+
+vi.mock('../session/analyzeGating', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../session/analyzeGating')>();
+  return {
+    ...actual,
+    computeWholeTreeContentHash: vi.fn(() => Promise.resolve('hash')),
+  };
+});
 
 // ── Mock config — getProjectById controlled per test ──────────────────────────
 
