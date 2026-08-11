@@ -129,7 +129,10 @@ import type {
   DepthReviewService,
   DepthReviewResult,
 } from './DepthReviewService';
-import { pauseReasonFromCanonical, serializePauseReason } from '../db/pauseReason';
+import {
+  pauseReasonFromCanonical,
+  serializePauseReason,
+} from '../db/pauseReason';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

@@ -36,7 +36,10 @@ import type {
   WorkItem,
 } from './PRReviewService';
 import { FetchRetryExhaustedError } from './PRReviewService';
-import type { DepthReviewService, DepthReviewResult } from './DepthReviewService';
+import type {
+  DepthReviewService,
+  DepthReviewResult,
+} from './DepthReviewService';
 import { SIZE_DIMENSION_NAME as DEPTH_SIZE_DIMENSION_NAME } from './DepthReviewService';
 import type { AutoMerger } from './AutoMerger';
 import { parsePauseReason } from '../db/pauseReason';
@@ -1350,7 +1353,10 @@ export class ReviewOrchestrator {
    */
   private clearDepthReviewHoldAndRemerge(job: ReviewJob): void {
     const row = getPRByNumber(job.prNumber, job.repo);
-    if (parsePauseReason(row?.pause_reason ?? null)?.reason === 'depth_review_pending') {
+    if (
+      parsePauseReason(row?.pause_reason ?? null)?.reason ===
+      'depth_review_pending'
+    ) {
       setPauseReason(job.prNumber, job.repo, null);
     }
     if (this.autoMerger) {
