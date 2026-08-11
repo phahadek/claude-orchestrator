@@ -165,7 +165,10 @@ describe('stage-proposal MCP tools — delegation', () => {
     const result = (await client.callTool({
       name: 'task.create',
       arguments: { payload: { title: 'New task' } },
-    })) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+    })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
     expect(result.isError).toBe(true);
     const text = result.content[0]?.text ?? '';
     expect(text).toMatch(/priority/);
@@ -175,12 +178,15 @@ describe('stage-proposal MCP tools — delegation', () => {
     await close();
   });
 
-  it('task.create rejects a priority outside the board\'s option set', async () => {
+  it("task.create rejects a priority outside the board's option set", async () => {
     const { client, close } = await connectedClient();
     const result = (await client.callTool({
       name: 'task.create',
       arguments: { payload: { title: 'New task', priority: 'P1' } },
-    })) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+    })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
     expect(result.isError).toBe(true);
     const text = result.content[0]?.text ?? '';
     expect(text).toMatch(/priority/);
@@ -398,7 +404,9 @@ describe('stage-proposal MCP tools — schema validation', () => {
     const body = '## Summary\nDo the thing.';
     const result = await client.callTool({
       name: 'task.create',
-      arguments: { payload: { title: 'New task', body, priority: '🟡 Medium' } },
+      arguments: {
+        payload: { title: 'New task', body, priority: '🟡 Medium' },
+      },
     });
     const intent = parseIntentResult(
       result as { content: Array<{ type: string; text?: string }> },
@@ -481,7 +489,9 @@ describe('stage-proposal MCP tools — schema validation', () => {
     const { client, close } = await connectedClient();
     const created = await client.callTool({
       name: 'task.create',
-      arguments: { payload: { title: 'A mistaken proposal', priority: '🟢 Low' } },
+      arguments: {
+        payload: { title: 'A mistaken proposal', priority: '🟢 Low' },
+      },
     });
     const intent = parseIntentResult(
       created as { content: Array<{ type: string; text?: string }> },
