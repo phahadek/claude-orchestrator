@@ -6,6 +6,7 @@ import {
 } from '../db/queries';
 import { isPlanningSession } from './sessionPredicates';
 import { revokeStageCredential } from '../auth/SessionStageAuth';
+import { revokeRouteCredential } from '../auth/SessionRouteAuth';
 import { recordEvent } from '../audit/AuditLog';
 import { runtimeSettings } from '../config';
 import { isSessionProcessAlive } from './processLiveness';
@@ -104,6 +105,10 @@ function runLivenessSweep(
     updateSessionStatus(row.session_id, 'killed', now);
     evictSessionMapEntry(row.session_id);
     revokeStageCredential(
+      row.session_id,
+      'liveness_reconciler_process_not_found',
+    );
+    revokeRouteCredential(
       row.session_id,
       'liveness_reconciler_process_not_found',
     );

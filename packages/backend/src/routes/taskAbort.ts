@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { requireDeviceAuth } from '../auth/DeviceAuth';
+import { requireDeviceOrSessionRouteAuth } from '../auth/SessionRouteAuth';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
 import { toCanonicalStatus } from '../tasks/statusCanonical';
@@ -16,14 +16,15 @@ const DEFAULT_ABORT_NOTE =
   'Aborted: mis-filed Backlog task returned to Deferred via the abort route.';
 
 /**
- * Device-authed-only remedy for a mis-filed 🔲 Backlog task: flips it to
+ * Device-authed remedy for a mis-filed 🔲 Backlog task: flips it to
  * ⏭️ Deferred and, if a groom session is actively bound to it, kills that
  * session with reason `user_kill` (reused verbatim so
  * isPlanningKillSuppressed keeps working unmodified). Restricted to
- * Backlog-status tasks only — a dispatched session never holds a device
- * token (only ORCHESTRATOR_STAGE_TOKEN, see AgentSession.ts), so gating this
- * on requireDeviceAuth structurally limits it to the operator + RC sessions,
- * never a session acting on its own task.
+ * Backlog-status tasks only. Reachable by the operator, an RC session's
+ * device token, or a dispatched session holding both a per-session route
+ * credential (see SessionRouteAuth.ts) and an operator-granted
+ * `Bash(node packages/backend/scripts/task-abort-client.mjs ...)` capability —
+ * never a session acting on its own task without that explicit grant.
  *
  * Order matters: status flips to Deferred first, then the session is
  * killed. If the request fails between the two steps, the task is already
@@ -38,7 +39,7 @@ export function createTaskAbortRouter(
   // POST /api/tasks/:id/abort
   router.post(
     '/tasks/:id/abort',
-    requireDeviceAuth,
+    requireDeviceOrSessionRouteAuth,
     asyncHandler(async (req: Request, res: Response) => {
       const taskId = String(req.params.id);
       const body = req.body as { projectId?: unknown; note?: unknown };

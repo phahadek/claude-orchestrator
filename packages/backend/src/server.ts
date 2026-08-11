@@ -33,11 +33,8 @@ import { TaskCacheRefresher } from './orchestration/TaskCacheRefresher';
 import { ConvergenceSnapshotJob } from './orchestration/ConvergenceSnapshotJob';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
-import {
-  requireDeviceAuth,
-  validateWsToken,
-  isLoopbackIp,
-} from './auth/DeviceAuth';
+import { validateWsToken, isLoopbackIp } from './auth/DeviceAuth';
+import { requireDeviceOrSessionRouteAuth } from './auth/SessionRouteAuth';
 import {
   createPublicEnrollmentRouter,
   createGatedEnrollmentRouter,
@@ -260,7 +257,7 @@ app.use('/api', createSetupModeGuard());
 // localStorage, with no cookie/service-worker), so gating the shell globally
 // returned JSON instead of the app on every fresh load/reload once a device was
 // enrolled — locking all devices out. The API/WS stay gated.
-app.use('/api', requireDeviceAuth);
+app.use('/api', requireDeviceOrSessionRouteAuth);
 // Auth-gated enrollment routes (approve, devices) — valid enrolled-device token required
 app.use('/api/enrollment', createGatedEnrollmentRouter());
 app.use('/api/permission-denials', permissionDenialsRouter);

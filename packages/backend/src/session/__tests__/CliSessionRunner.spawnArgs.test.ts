@@ -103,6 +103,61 @@ afterEach(() => {
   delete process.env.ORCHESTRATOR_CONFIG_DIR;
 });
 
+describe('CliSessionRunner env stripping', () => {
+  afterEach(() => {
+    delete process.env.DB_PATH;
+    delete process.env.ORCHESTRATOR_DEVICE_TOKEN;
+  });
+
+  it('strips DB_PATH from the child env', async () => {
+    process.env.DB_PATH = '/fake/production.db';
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    const env = capturedSpawnOptions.env as Record<string, string>;
+    expect(env.DB_PATH).toBeUndefined();
+  });
+
+  it('strips the shared ORCHESTRATOR_DEVICE_TOKEN from the child env even when set on the backend process', async () => {
+    process.env.ORCHESTRATOR_DEVICE_TOKEN = 'shared-device-token';
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    const env = capturedSpawnOptions.env as Record<string, string>;
+    expect(env.ORCHESTRATOR_DEVICE_TOKEN).toBeUndefined();
+  });
+
+  it('does not strip unrelated env vars (e.g. PROJECT_DIR)', async () => {
+    process.env.PROJECT_DIR = '/fake/project';
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    const env = capturedSpawnOptions.env as Record<string, string>;
+    expect(env.PROJECT_DIR).toBe('/fake/project');
+    delete process.env.PROJECT_DIR;
+  });
+
+  it('a session-scoped extraEnv credential file path passes through untouched', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      {
+        ...defaultOptions,
+        extraEnv: {
+          ORCHESTRATOR_ROUTE_CREDENTIAL_FILE: '/fake/data/session.token',
+        },
+      },
+      () => {},
+    );
+
+    const env = capturedSpawnOptions.env as Record<string, string>;
+    expect(env.ORCHESTRATOR_ROUTE_CREDENTIAL_FILE).toBe(
+      '/fake/data/session.token',
+    );
+  });
+});
+
 describe('CliSessionRunner spawn args', () => {
   it('initial spawn includes --session-id <sessionId> and not --resume', async () => {
     const runner = new CliSessionRunner(SESSION_ID);

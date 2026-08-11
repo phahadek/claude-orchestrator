@@ -7,6 +7,7 @@ import { getCorporateMode } from '../config/corporateMode';
 import type { GateItemClassification } from '../db/types';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';
+import { routeCredentialFilePath } from '../auth/SessionRouteAuth';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -884,6 +885,17 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             // mcpConfigPath above), authenticated by this same per-session
             // stage credential.
             ORCHESTRATOR_STAGE_TOKEN: stageToken,
+            // Path to this session's route-client credential file (see
+            // SessionRouteAuth.ts) — the sanctioned route-client scripts
+            // (ops-client.mjs, gate-state-client.mjs, staged-intents-client.mjs,
+            // etc.) read their bearer token from this file instead of the
+            // shared $ORCHESTRATOR_DEVICE_TOKEN, so a granted
+            // Bash(node packages/backend/scripts/<x>-client.mjs ...)
+            // capability can actually authenticate. A path, never the secret
+            // itself, crosses into the child's env.
+            ORCHESTRATOR_ROUTE_CREDENTIAL_FILE: routeCredentialFilePath(
+              this.sessionId,
+            ),
           },
         },
         (event) => {

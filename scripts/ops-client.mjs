@@ -23,7 +23,16 @@
  * store of record.
  *
  * Auth / addressing:
- *   ORCHESTRATOR_DEVICE_TOKEN   required — a valid enrolled device token
+ *   ORCHESTRATOR_DEVICE_TOKEN            an enrolled device token — how an
+ *                                        operator/RC session authenticates.
+ *   ORCHESTRATOR_ROUTE_CREDENTIAL_FILE   a dispatched session's per-session
+ *                                        route credential file, injected at
+ *                                        spawn (see SessionRouteAuth.ts).
+ *                                        Read only when ORCHESTRATOR_DEVICE_TOKEN
+ *                                        is unset — a session authorizes only
+ *                                        the operations its operator-granted
+ *                                        Bash(node scripts/ops-client.mjs ...)
+ *                                        capability named.
  *   ORCHESTRATOR_BACKEND_PORT   optional — default 3000 (matches
  *                                CONFIG_DEFAULTS.server.port)
  *   ORCHESTRATOR_BACKEND_HOST   optional — default 127.0.0.1 (loopback only;
@@ -42,6 +51,26 @@
  * Every subcommand prints the route's JSON response to stdout and exits 0, or
  * prints an error to stderr and exits non-zero.
  */
+
+import { readFileSync } from 'node:fs';
+
+/**
+ * Resolves the bearer token: prefer the shared operator device token
+ * (RC-session usage), falling back to the dispatched session's own
+ * per-session route credential file when no device token is set.
+ */
+function resolveRouteToken() {
+  if (process.env.ORCHESTRATOR_DEVICE_TOKEN) {
+    return process.env.ORCHESTRATOR_DEVICE_TOKEN;
+  }
+  const credFile = process.env.ORCHESTRATOR_ROUTE_CREDENTIAL_FILE;
+  if (!credFile) return undefined;
+  try {
+    return readFileSync(credFile, 'utf-8').trim();
+  } catch {
+    return undefined;
+  }
+}
 
 const args = process.argv.slice(2);
 function option(name) {
@@ -67,11 +96,11 @@ if (!command || !['context', 'journal', 'set-state'].includes(command)) {
 
 const host = process.env.ORCHESTRATOR_BACKEND_HOST ?? '127.0.0.1';
 const port = process.env.ORCHESTRATOR_BACKEND_PORT ?? '3000';
-const token = process.env.ORCHESTRATOR_DEVICE_TOKEN;
+const token = resolveRouteToken();
 if (!token)
   fail(
-    'ORCHESTRATOR_DEVICE_TOKEN is not set — /api/ops-context and /api/ops-journal are ' +
-      'device-authed. Set it to an enrolled device token before running the /ops skill.',
+    'Neither ORCHESTRATOR_DEVICE_TOKEN nor a readable ORCHESTRATOR_ROUTE_CREDENTIAL_FILE ' +
+      'is set — /api/ops-context and /api/ops-journal are device-authed.',
   );
 
 const baseUrl = `http://${host}:${port}`;
