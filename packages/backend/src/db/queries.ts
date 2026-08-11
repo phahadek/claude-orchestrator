@@ -110,59 +110,32 @@ export function isUnreconstructable(
 
 // ─── sessions ──────────────────────────────────────────────────────────────
 
-const stmtInsertSession = db.prepare<NewSession>(`
-  INSERT INTO sessions
-    (session_id, task_id, task_url, project_context_url,
-     project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
-  VALUES
-    (@session_id, @task_id, @task_url, @project_context_url,
-     @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
-`);
+let _stmtInsertSession: Database.Statement | null = null;
+let _stmtUpdateSessionStatus: Database.Statement | null = null;
+let _stmtUpdateSessionWorktreePath: Database.Statement | null = null;
+let _stmtGetSession: Database.Statement | null = null;
+let _stmtGetAllSessionIds: Database.Statement | null = null;
+let _stmtDeleteSession: Database.Statement | null = null;
+let _stmtInsertSessionOrIgnore: Database.Statement | null = null;
 
-const stmtUpdateSessionStatus = db.prepare<{
-  session_id: string;
-  status: string;
-  ended_at: number | null;
-  terminalized_at: number | null;
-}>(`
-  UPDATE sessions
-  SET status = @status, ended_at = @ended_at,
-      terminalized_at = COALESCE(terminalized_at, @terminalized_at)
-  WHERE session_id = @session_id
-`);
-
-const stmtUpdateSessionWorktreePath = db.prepare<{
-  session_id: string;
-  worktree_path: string;
-}>(`
-  UPDATE sessions
-  SET worktree_path = @worktree_path
-  WHERE session_id = @session_id
-`);
-
-const stmtGetSession = db.prepare<{ session_id: string }>(`
-  SELECT * FROM sessions WHERE session_id = @session_id
-`);
-
-const stmtGetAllSessionIds = db.prepare(`
-  SELECT session_id FROM sessions
-`);
-
-const stmtDeleteSession = db.prepare<{ session_id: string }>(`
-  DELETE FROM sessions WHERE session_id = @session_id
-`);
-
-const stmtInsertSessionOrIgnore = db.prepare<NewSession>(`
-  INSERT OR IGNORE INTO sessions
-    (session_id, task_id, task_url, project_context_url,
-     project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
-  VALUES
-    (@session_id, @task_id, @task_url, @project_context_url,
-     @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
-`);
+/** Lazily-prepared `sessions` row lookup by id — shared across many functions below. */
+function getStmtGetSession(): Database.Statement {
+  _stmtGetSession ??= db.prepare<{ session_id: string }>(`
+    SELECT * FROM sessions WHERE session_id = @session_id
+  `);
+  return _stmtGetSession;
+}
 
 export function insertSession(s: NewSession): void {
-  stmtInsertSession.run({
+  _stmtInsertSession ??= db.prepare<NewSession>(`
+    INSERT INTO sessions
+      (session_id, task_id, task_url, project_context_url,
+       project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
+    VALUES
+      (@session_id, @task_id, @task_url, @project_context_url,
+       @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
+  `);
+  _stmtInsertSession.run({
     ended_at: null,
     pr_url: null,
     worktree_path: null,
@@ -178,10 +151,21 @@ export function updateSessionStatus(
   status: string,
   endedAt?: number,
 ): void {
-  const current = stmtGetSession.get({ session_id: sessionId }) as
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: string; task_id: string | null }
     | undefined;
-  stmtUpdateSessionStatus.run({
+  _stmtUpdateSessionStatus ??= db.prepare<{
+    session_id: string;
+    status: string;
+    ended_at: number | null;
+    terminalized_at: number | null;
+  }>(`
+    UPDATE sessions
+    SET status = @status, ended_at = @ended_at,
+        terminalized_at = COALESCE(terminalized_at, @terminalized_at)
+    WHERE session_id = @session_id
+  `);
+  _stmtUpdateSessionStatus.run({
     session_id: sessionId,
     status,
     ended_at: endedAt ?? null,
@@ -204,7 +188,15 @@ export function updateSessionWorktreePath(
   sessionId: string,
   worktreePath: string,
 ): void {
-  stmtUpdateSessionWorktreePath.run({
+  _stmtUpdateSessionWorktreePath ??= db.prepare<{
+    session_id: string;
+    worktree_path: string;
+  }>(`
+    UPDATE sessions
+    SET worktree_path = @worktree_path
+    WHERE session_id = @session_id
+  `);
+  _stmtUpdateSessionWorktreePath.run({
     session_id: sessionId,
     worktree_path: worktreePath,
   });
@@ -225,17 +217,23 @@ export function setSessionLastErrorDetail(
   ).run({ session_id: sessionId, last_error_detail: detail });
 }
 
-const stmtMarkSessionDone = db.prepare<{
-  session_id: string;
-  ended_at: number;
-  pr_url: string | null;
-  terminalized_at: number;
-}>(`
-  UPDATE sessions
-  SET status = 'done', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url),
-      terminalized_at = COALESCE(terminalized_at, @terminalized_at)
-  WHERE session_id = @session_id
-`);
+let _stmtMarkSessionDone: Database.Statement | null = null;
+
+/** Lazily-prepared done-transition write — shared by markSessionDone and applyPendingDone. */
+function getStmtMarkSessionDone(): Database.Statement {
+  _stmtMarkSessionDone ??= db.prepare<{
+    session_id: string;
+    ended_at: number;
+    pr_url: string | null;
+    terminalized_at: number;
+  }>(`
+    UPDATE sessions
+    SET status = 'done', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url),
+        terminalized_at = COALESCE(terminalized_at, @terminalized_at)
+    WHERE session_id = @session_id
+  `);
+  return _stmtMarkSessionDone;
+}
 
 // pending_done_* are prepared lazily (inline, per-call) rather than as
 // module-level consts — unlike the sessions table's long-standing columns,
@@ -335,24 +333,8 @@ export function getSessionsWithPendingApproveTerminal(): Session[] {
     .all() as Session[];
 }
 
-const stmtMarkSessionIdle = db.prepare<{
-  session_id: string;
-  ended_at: number;
-  pr_url: string | null;
-}>(`
-  UPDATE sessions
-  SET status = 'idle', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url)
-  WHERE session_id = @session_id
-`);
-
-const stmtMarkSessionSuperseded = db.prepare<{
-  session_id: string;
-  ended_at: number;
-}>(`
-  UPDATE sessions
-  SET status = 'superseded', ended_at = @ended_at
-  WHERE session_id = @session_id
-`);
+let _stmtMarkSessionIdle: Database.Statement | null = null;
+let _stmtMarkSessionSuperseded: Database.Statement | null = null;
 
 /**
  * Mark a session as superseded — used when sendOrResume creates a continuation
@@ -364,10 +346,18 @@ export function markSessionSuperseded(
   sessionId: string,
   endedAt: number,
 ): void {
-  const current = stmtGetSession.get({ session_id: sessionId }) as
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: string; task_id: string | null }
     | undefined;
-  stmtMarkSessionSuperseded.run({ session_id: sessionId, ended_at: endedAt });
+  _stmtMarkSessionSuperseded ??= db.prepare<{
+    session_id: string;
+    ended_at: number;
+  }>(`
+    UPDATE sessions
+    SET status = 'superseded', ended_at = @ended_at
+    WHERE session_id = @session_id
+  `);
+  _stmtMarkSessionSuperseded.run({ session_id: sessionId, ended_at: endedAt });
   if (current && current.status !== 'superseded') {
     recordEvent({
       event_type: 'session_status_changed',
@@ -444,7 +434,7 @@ export function markSessionDone(
   callSite?: string,
   opts?: { skipInFlightGuard?: boolean },
 ): void {
-  const current = stmtGetSession.get({ session_id: sessionId }) as
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: string; task_id: string | null }
     | undefined;
   if (current?.status === 'running' && !opts?.skipInFlightGuard) {
@@ -461,7 +451,7 @@ export function markSessionDone(
     setPendingDone(sessionId, endedAt, prUrl ?? null, callSite ?? 'unknown');
     return;
   }
-  stmtMarkSessionDone.run({
+  getStmtMarkSessionDone().run({
     session_id: sessionId,
     ended_at: endedAt,
     pr_url: prUrl ?? null,
@@ -499,7 +489,7 @@ export function markSessionDone(
  * Returns true if a deferred done-transition was applied.
  */
 export function applyPendingDone(sessionId: string): boolean {
-  const current = stmtGetSession.get({ session_id: sessionId }) as
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
     | {
         status: string;
         task_id: string | null;
@@ -513,7 +503,7 @@ export function applyPendingDone(sessionId: string): boolean {
     clearPendingDone(sessionId);
     return false;
   }
-  stmtMarkSessionDone.run({
+  getStmtMarkSessionDone().run({
     session_id: sessionId,
     ended_at: current.pending_done_ended_at,
     pr_url: current.pending_done_pr_url,
@@ -593,14 +583,7 @@ const BASE_TERMINAL_STATUS_SQL_LIST = [...TERMINAL_SESSION_STATUSES]
   .map((s) => `'${s}'`)
   .join(', ');
 
-const stmtBackfillPrUrlIfNull = db.prepare<{
-  session_id: string;
-  pr_url: string | null;
-}>(`
-  UPDATE sessions
-  SET pr_url = COALESCE(pr_url, @pr_url)
-  WHERE session_id = @session_id
-`);
+let _stmtBackfillPrUrlIfNull: Database.Statement | null = null;
 
 /**
  * Atomically mark a session as idle (process exited, PR open, waiting for
@@ -625,7 +608,7 @@ export function markSessionIdle(
   endedAt: number,
   prUrl?: string | null,
 ): SessionStatus {
-  const current = stmtGetSession.get({ session_id: sessionId }) as
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: SessionStatus; task_id: string | null }
     | undefined;
   if (current && TERMINAL_SESSION_STATUSES.has(current.status)) {
@@ -637,11 +620,28 @@ export function markSessionIdle(
       payload: { status_before: current.status },
     });
     if (prUrl) {
-      stmtBackfillPrUrlIfNull.run({ session_id: sessionId, pr_url: prUrl });
+      _stmtBackfillPrUrlIfNull ??= db.prepare<{
+        session_id: string;
+        pr_url: string | null;
+      }>(`
+        UPDATE sessions
+        SET pr_url = COALESCE(pr_url, @pr_url)
+        WHERE session_id = @session_id
+      `);
+      _stmtBackfillPrUrlIfNull.run({ session_id: sessionId, pr_url: prUrl });
     }
     return current.status;
   }
-  stmtMarkSessionIdle.run({
+  _stmtMarkSessionIdle ??= db.prepare<{
+    session_id: string;
+    ended_at: number;
+    pr_url: string | null;
+  }>(`
+    UPDATE sessions
+    SET status = 'idle', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url)
+    WHERE session_id = @session_id
+  `);
+  _stmtMarkSessionIdle.run({
     session_id: sessionId,
     ended_at: endedAt,
     pr_url: prUrl ?? null,
@@ -752,7 +752,9 @@ export function getRunningSessionsWithMergedOrClosedPR(): StuckResultSessionRow[
 }
 
 export function getSession(sessionId: string): Session | undefined {
-  return stmtGetSession.get({ session_id: sessionId }) as Session | undefined;
+  return getStmtGetSession().get({ session_id: sessionId }) as
+    | Session
+    | undefined;
 }
 
 const SESSION_STATUS_UNRECONSTRUCTABLE_REASON =
@@ -783,7 +785,10 @@ export function getSessionAsOf(
 }
 
 export function getAllSessionIds(): string[] {
-  return (stmtGetAllSessionIds.all() as { session_id: string }[]).map(
+  _stmtGetAllSessionIds ??= db.prepare(`
+    SELECT session_id FROM sessions
+  `);
+  return (_stmtGetAllSessionIds.all() as { session_id: string }[]).map(
     (r) => r.session_id,
   );
 }
@@ -820,7 +825,15 @@ export function setCacheTokensAbsolute(
 }
 
 export function insertSessionOrIgnore(s: NewSession): void {
-  stmtInsertSessionOrIgnore.run({
+  _stmtInsertSessionOrIgnore ??= db.prepare<NewSession>(`
+    INSERT OR IGNORE INTO sessions
+      (session_id, task_id, task_url, project_context_url,
+       project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
+    VALUES
+      (@session_id, @task_id, @task_url, @project_context_url,
+       @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
+  `);
+  _stmtInsertSessionOrIgnore.run({
     ended_at: null,
     pr_url: null,
     worktree_path: null,
@@ -832,7 +845,10 @@ export function insertSessionOrIgnore(s: NewSession): void {
 }
 
 export function deleteSession(sessionId: string): boolean {
-  const result = stmtDeleteSession.run({ session_id: sessionId });
+  _stmtDeleteSession ??= db.prepare<{ session_id: string }>(`
+    DELETE FROM sessions WHERE session_id = @session_id
+  `);
+  const result = _stmtDeleteSession.run({ session_id: sessionId });
   return result.changes > 0;
 }
 
@@ -1534,31 +1550,21 @@ function capEventPayload(payload: string): string {
   return JSON.stringify(truncated);
 }
 
-const stmtInsertEvent = db.prepare<
-  NewSessionEvent & { message_id: string | null }
->(`
-  INSERT INTO session_events (session_id, event_type, payload, timestamp, message_id)
-  VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
-`);
+let _stmtInsertEvent: Database.Statement | null = null;
+let _stmtInsertEventOrIgnore: Database.Statement | null = null;
+let _stmtUpdateEventPayload: Database.Statement | null = null;
+let _stmtGetEventsBySession: Database.Statement | null = null;
 
-const stmtInsertEventOrIgnore = db.prepare<
-  NewSessionEvent & { message_id: string | null }
->(`
-  INSERT OR IGNORE INTO session_events (session_id, event_type, payload, timestamp, message_id)
-  VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
-`);
-
-const stmtUpdateEventPayload = db.prepare<{
-  id: number;
-  payload: string;
-  timestamp: number;
-}>(`
-  UPDATE session_events SET payload = @payload, timestamp = @timestamp WHERE id = @id
-`);
-
-const stmtGetEventsBySession = db.prepare<{ session_id: string }>(`
-  SELECT * FROM session_events WHERE session_id = @session_id ORDER BY id ASC
-`);
+/** Lazily-prepared session_events insert — shared by insertEvent and upsertSessionEvent. */
+function getStmtInsertEvent(): Database.Statement {
+  _stmtInsertEvent ??= db.prepare<
+    NewSessionEvent & { message_id: string | null }
+  >(`
+    INSERT INTO session_events (session_id, event_type, payload, timestamp, message_id)
+    VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
+  `);
+  return _stmtInsertEvent;
+}
 
 /**
  * Epoch ms of the most recent session_events row for the session, or null
@@ -1576,7 +1582,7 @@ export function getSessionLastActivityMs(sessionId: string): number | null {
 }
 
 export function insertEvent(e: NewSessionEvent): void {
-  stmtInsertEvent.run({
+  getStmtInsertEvent().run({
     message_id: null,
     ...e,
     payload: capEventPayload(e.payload),
@@ -1584,7 +1590,13 @@ export function insertEvent(e: NewSessionEvent): void {
 }
 
 export function insertEventOrIgnore(e: NewSessionEvent): void {
-  stmtInsertEventOrIgnore.run({
+  _stmtInsertEventOrIgnore ??= db.prepare<
+    NewSessionEvent & { message_id: string | null }
+  >(`
+    INSERT OR IGNORE INTO session_events (session_id, event_type, payload, timestamp, message_id)
+    VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
+  `);
+  _stmtInsertEventOrIgnore.run({
     message_id: null,
     ...e,
     payload: capEventPayload(e.payload),
@@ -1606,21 +1618,28 @@ export function upsertSessionEvent(
 ): number {
   const cappedPayload = capEventPayload(e.payload);
   if (existingId != null) {
-    stmtUpdateEventPayload.run({
+    _stmtUpdateEventPayload ??= db.prepare<{
+      id: number;
+      payload: string;
+      timestamp: number;
+    }>(`
+      UPDATE session_events SET payload = @payload, timestamp = @timestamp WHERE id = @id
+    `);
+    _stmtUpdateEventPayload.run({
       id: existingId,
       payload: cappedPayload,
       timestamp: e.timestamp,
     });
     return existingId;
   }
-  const sessionRow = stmtGetSession.get({ session_id: e.session_id });
+  const sessionRow = getStmtGetSession().get({ session_id: e.session_id });
   if (!sessionRow) {
     logger.error(
       `[upsertSessionEvent] no sessions row for ${e.session_id} — dropping event (type=${e.event_type})`,
     );
     return -1;
   }
-  const result = stmtInsertEvent.run({
+  const result = getStmtInsertEvent().run({
     message_id: null,
     ...e,
     payload: cappedPayload,
@@ -1629,7 +1648,10 @@ export function upsertSessionEvent(
 }
 
 export function getEventsBySession(sessionId: string): SessionEvent[] {
-  return stmtGetEventsBySession.all({
+  _stmtGetEventsBySession ??= db.prepare<{ session_id: string }>(`
+    SELECT * FROM session_events WHERE session_id = @session_id ORDER BY id ASC
+  `);
+  return _stmtGetEventsBySession.all({
     session_id: sessionId,
   }) as SessionEvent[];
 }
@@ -1748,29 +1770,33 @@ export function querySessionEventsByProjectRows(
     .all(projectId, ...params, cappedLimit);
 }
 
-const stmtClearPermissionDenials = db.prepare(`DELETE FROM permission_denials`);
+let _stmtClearPermissionDenials: Database.Statement | null = null;
 
 export function clearPermissionDenials(): void {
-  stmtClearPermissionDenials.run();
+  _stmtClearPermissionDenials ??= db.prepare(
+    `DELETE FROM permission_denials`,
+  );
+  _stmtClearPermissionDenials.run();
 }
 
 // ─── permission_denials ─────────────────────────────────────────────────────
 
-const stmtInsertPermissionDenial = db.prepare<NewPermissionDenialRow>(`
-  INSERT INTO permission_denials (session_id, tool_name, tool_use_id, tool_input, timestamp)
-  VALUES (@session_id, @tool_name, @tool_use_id, @tool_input, @timestamp)
-`);
-
-const stmtGetDenialsBySession = db.prepare<{ session_id: string }>(`
-  SELECT * FROM permission_denials WHERE session_id = @session_id ORDER BY id ASC
-`);
+let _stmtInsertPermissionDenial: Database.Statement | null = null;
+let _stmtGetDenialsBySession: Database.Statement | null = null;
 
 export function insertPermissionDenial(d: NewPermissionDenialRow): void {
-  stmtInsertPermissionDenial.run(d);
+  _stmtInsertPermissionDenial ??= db.prepare<NewPermissionDenialRow>(`
+    INSERT INTO permission_denials (session_id, tool_name, tool_use_id, tool_input, timestamp)
+    VALUES (@session_id, @tool_name, @tool_use_id, @tool_input, @timestamp)
+  `);
+  _stmtInsertPermissionDenial.run(d);
 }
 
 export function getDenialsBySession(sessionId: string): PermissionDenialRow[] {
-  return stmtGetDenialsBySession.all({
+  _stmtGetDenialsBySession ??= db.prepare<{ session_id: string }>(`
+    SELECT * FROM permission_denials WHERE session_id = @session_id ORDER BY id ASC
+  `);
+  return _stmtGetDenialsBySession.all({
     session_id: sessionId,
   }) as PermissionDenialRow[];
 }
@@ -1797,21 +1823,24 @@ export function getRecentPermissionDenials(
 
 // ─── task_cache ────────────────────────────────────────────────────────────
 
-const stmtUpsertTaskCache = db.prepare<{
-  task_id: string;
-  fetched_at: number;
-  raw_json: string;
-}>(`
-  INSERT INTO task_cache (task_id, fetched_at, raw_json)
-  VALUES (@task_id, @fetched_at, @raw_json)
-  ON CONFLICT(task_id) DO UPDATE SET
-    fetched_at = excluded.fetched_at,
-    raw_json   = excluded.raw_json
-`);
+let _stmtUpsertTaskCache: Database.Statement | null = null;
+let _stmtGetTaskCache: Database.Statement | null = null;
 
-const stmtGetTaskCache = db.prepare<{ task_id: string }>(`
-  SELECT * FROM task_cache WHERE task_id = @task_id
-`);
+/** Lazily-prepared task_cache upsert — shared by updateTaskCacheStatus, upsertTaskCache, and updateTaskStatusInBoardCaches. */
+function getStmtUpsertTaskCache(): Database.Statement {
+  _stmtUpsertTaskCache ??= db.prepare<{
+    task_id: string;
+    fetched_at: number;
+    raw_json: string;
+  }>(`
+    INSERT INTO task_cache (task_id, fetched_at, raw_json)
+    VALUES (@task_id, @fetched_at, @raw_json)
+    ON CONFLICT(task_id) DO UPDATE SET
+      fetched_at = excluded.fetched_at,
+      raw_json   = excluded.raw_json
+  `);
+  return _stmtUpsertTaskCache;
+}
 
 export function updateTaskCacheStatus(taskId: string, status: string): void {
   const row = getTaskCache(taskId);
@@ -1824,7 +1853,7 @@ export function updateTaskCacheStatus(taskId: string, status: string): void {
     } else if (parsed?.properties?.Status?.select) {
       parsed.properties.Status.select.name = status;
     }
-    stmtUpsertTaskCache.run({
+    getStmtUpsertTaskCache().run({
       task_id: row.task_id,
       fetched_at: row.fetched_at,
       raw_json: JSON.stringify(parsed),
@@ -1835,7 +1864,7 @@ export function updateTaskCacheStatus(taskId: string, status: string): void {
 }
 
 export function upsertTaskCache(taskId: string, rawJson: string): void {
-  stmtUpsertTaskCache.run({
+  getStmtUpsertTaskCache().run({
     task_id: taskId,
     fetched_at: Date.now(),
     raw_json: rawJson,
@@ -1843,7 +1872,10 @@ export function upsertTaskCache(taskId: string, rawJson: string): void {
 }
 
 export function getTaskCache(taskId: string): TaskCache | undefined {
-  return stmtGetTaskCache.get({ task_id: taskId }) as TaskCache | undefined;
+  _stmtGetTaskCache ??= db.prepare<{ task_id: string }>(`
+    SELECT * FROM task_cache WHERE task_id = @task_id
+  `);
+  return _stmtGetTaskCache.get({ task_id: taskId }) as TaskCache | undefined;
 }
 
 export function getCacheAge(taskId: string): number {
@@ -1856,9 +1888,15 @@ export function deleteTaskCacheRow(taskId: string): void {
   db.prepare(`DELETE FROM task_cache WHERE task_id = ?`).run(taskId);
 }
 
-const stmtGetBoardCacheRows = db.prepare(
-  `SELECT task_id, fetched_at, raw_json FROM task_cache WHERE task_id LIKE 'board:%'`,
-);
+let _stmtGetBoardCacheRows: Database.Statement | null = null;
+
+/** Lazily-prepared board:* cache read — shared by updateTaskStatusInBoardCaches and getAllBoardCacheTasks. */
+function getStmtGetBoardCacheRows(): Database.Statement {
+  _stmtGetBoardCacheRows ??= db.prepare(
+    `SELECT task_id, fetched_at, raw_json FROM task_cache WHERE task_id LIKE 'board:%'`,
+  );
+  return _stmtGetBoardCacheRows;
+}
 
 /**
  * Write-through for a status change: patches the `status` field of the
@@ -1882,7 +1920,7 @@ export function updateTaskStatusInBoardCaches(
   const normalized = normalizeTaskId(taskId);
   let rows: Array<{ task_id: string; fetched_at: number; raw_json: string }>;
   try {
-    rows = stmtGetBoardCacheRows.all() as Array<{
+    rows = getStmtGetBoardCacheRows().all() as Array<{
       task_id: string;
       fetched_at: number;
       raw_json: string;
@@ -1912,7 +1950,7 @@ export function updateTaskStatusInBoardCaches(
     }
     if (!changed) continue;
     try {
-      stmtUpsertTaskCache.run({
+      getStmtUpsertTaskCache().run({
         task_id: row.task_id,
         fetched_at: row.fetched_at,
         raw_json: JSON.stringify(tasks),
@@ -1940,7 +1978,7 @@ export interface CachedBoardTaskEntry {
 export function getAllBoardCacheTasks(): CachedBoardTaskEntry[] {
   let rows: Array<{ task_id: string; fetched_at: number; raw_json: string }>;
   try {
-    rows = stmtGetBoardCacheRows.all() as Array<{
+    rows = getStmtGetBoardCacheRows().all() as Array<{
       task_id: string;
       fetched_at: number;
       raw_json: string;
@@ -4725,7 +4763,7 @@ export function insertPauseInterval(
   sessionId: string,
   pauseReason: CanonicalPauseReason,
 ): void {
-  if (!stmtGetSession.get({ session_id: sessionId })) {
+  if (!getStmtGetSession().get({ session_id: sessionId })) {
     // Parent row is gone — inserting would violate the FK on session_pause_intervals.
     logger.warn(
       `[insertPauseInterval] skipped — session ${sessionId} no longer exists`,
@@ -5350,27 +5388,28 @@ export interface SchedulerAuditStats {
   errorCount24h: number;
 }
 
-const stmtSchedulerAuditStats = db.prepare(`
-  WITH ranked AS (
-    SELECT
-      job,
-      status,
-      duration_ms,
-      started_at,
-      ROW_NUMBER() OVER (PARTITION BY job ORDER BY started_at DESC) AS rn
-    FROM scheduler_audit
-  )
-  SELECT
-    job,
-    MAX(CASE WHEN rn = 1 THEN duration_ms END) AS last_duration_ms,
-    SUM(CASE WHEN status IN ('ok', 'failed') AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS run_count_24h,
-    SUM(CASE WHEN status = 'failed' AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS error_count_24h
-  FROM ranked
-  GROUP BY job
-`);
+let _stmtSchedulerAuditStats: Database.Statement | null = null;
 
 export function getSchedulerAuditStats(): SchedulerAuditStats[] {
-  const rows = stmtSchedulerAuditStats.all() as Array<{
+  _stmtSchedulerAuditStats ??= db.prepare(`
+    WITH ranked AS (
+      SELECT
+        job,
+        status,
+        duration_ms,
+        started_at,
+        ROW_NUMBER() OVER (PARTITION BY job ORDER BY started_at DESC) AS rn
+      FROM scheduler_audit
+    )
+    SELECT
+      job,
+      MAX(CASE WHEN rn = 1 THEN duration_ms END) AS last_duration_ms,
+      SUM(CASE WHEN status IN ('ok', 'failed') AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS run_count_24h,
+      SUM(CASE WHEN status = 'failed' AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS error_count_24h
+    FROM ranked
+    GROUP BY job
+  `);
+  const rows = _stmtSchedulerAuditStats.all() as Array<{
     job: string;
     last_duration_ms: number | null;
     run_count_24h: number;
