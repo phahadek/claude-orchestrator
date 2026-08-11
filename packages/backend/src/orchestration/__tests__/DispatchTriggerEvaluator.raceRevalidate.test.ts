@@ -178,8 +178,8 @@ describe('DispatchTriggerEvaluator — re-validate immediately before launch', (
 
     await evaluator.tickOnce();
 
-    const [message] = infoSpy.mock.calls.find(([m]) =>
-      typeof m === 'string' && m.includes('poll complete'),
+    const [message] = infoSpy.mock.calls.find(
+      ([m]) => typeof m === 'string' && m.includes('poll complete'),
     ) as [string];
     expect(message).toContain('eligible=2');
     expect(message).toContain('launched=1');
@@ -190,7 +190,10 @@ describe('DispatchTriggerEvaluator — re-validate immediately before launch', (
 
   it('dispatches a candidate that is still eligible at launch, unchanged from today', async () => {
     upsertArm(MILESTONE, 'groom', true, Date.now());
-    upsertTaskCache(`board:${MILESTONE}`, JSON.stringify([backlogTask('task-a')]));
+    upsertTaskCache(
+      `board:${MILESTONE}`,
+      JSON.stringify([backlogTask('task-a')]),
+    );
 
     const launchSelected = vi.fn().mockResolvedValue({
       launched: ['task-a'],
