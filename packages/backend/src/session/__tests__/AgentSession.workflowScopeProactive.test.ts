@@ -24,8 +24,25 @@ vi.mock('../../db/queries', () =>
     setPauseReason: vi.fn(),
     setSessionPauseReason: vi.fn(),
     insertPauseInterval: vi.fn(),
+    getLatestTestRequestRun: vi.fn().mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    }),
   }),
 );
+
+vi.mock('../analyzeGating', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzeGating')>();
+  return {
+    ...actual,
+    computeWholeTreeContentHash: vi.fn().mockResolvedValue('hash'),
+  };
+});
 
 vi.mock('../../config', () => ({
   ALLOWED_TOOLS: [],

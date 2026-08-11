@@ -40,6 +40,7 @@ import {
   getGrantedCapabilities,
   setTaskPauseReason,
   setHumanMergeOnly,
+  getLatestTestRequestRun,
 } from '../db/queries';
 import { groomSessionConcludedWithDecision } from '../orchestration/planningDecisionKinds';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
@@ -51,6 +52,7 @@ import {
   buildValidationComment,
 } from '../github/PRBodyValidator';
 import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
+import { computeWholeTreeContentHash } from './analyzeGating';
 import {
   loadOrchestratorConfig,
   getSessionAllowedTools,
@@ -1995,6 +1997,46 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         `The worktree is in detached HEAD state — there is no current branch, so I cannot open a PR.\n\n` +
           `Please run \`git checkout -b feature/<task-name>\` to create a branch, then re-emit the ` +
           `\`<pr-body>\` marker so I can push and open the PR.`,
+      );
+      return;
+    }
+
+    // Gate: require a passing test.request cache entry for this exact tree
+    // before pushing/opening a PR. This is the sole path that pushes a
+    // branch and opens a PR for a standard coding session — create_pull_request
+    // itself is never in a standard session's tool allowlist — so this is
+    // the one place that needs to enforce it.
+    let contentHash: string | null = null;
+    try {
+      contentHash = await computeWholeTreeContentHash(this.worktreePath);
+    } catch (e) {
+      logger.warn(
+        `[AgentSession] worktree content hash failed for PR gate: ${(e as Error).message}`,
+      );
+    }
+    const latestRun = contentHash
+      ? getLatestTestRequestRun(this.projectId, contentHash)
+      : undefined;
+    if (!latestRun || latestRun.state !== 'passed') {
+      sessionLog(
+        this.sessionId,
+        'PR creation blocked: no passing test.request cache entry for the current tree',
+      );
+      recordEvent({
+        event_type: 'pr_creation_failed',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: {
+          stage: 'test_request_gate',
+          error: 'no passing test.request cache entry for the current tree',
+        },
+      });
+      this.sendMessage(
+        `I can't open a PR yet — there's no passing test.request result recorded for the current ` +
+          `tree. Please request a test run (test.request) for this tree, wait for it to pass, then ` +
+          `re-emit the \`<pr-body>\` marker so I can push and open the PR.`,
       );
       return;
     }
