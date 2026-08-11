@@ -7,7 +7,10 @@ import { getDataDir } from '../config/dataDir';
 import { recordEvent } from '../audit/AuditLog';
 import type { AuditEvent } from '../audit/types';
 import { getGrantedCapabilities } from '../db/queries';
-import { isGrantable, isToolShapedCapability } from '../session/orchestrator-config';
+import {
+  isGrantable,
+  isToolShapedCapability,
+} from '../session/orchestrator-config';
 
 /**
  * Instrumentation must never fail the request it observes — mirrors

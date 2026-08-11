@@ -29,15 +29,14 @@ function buildApp() {
   app.get('/api/gate/readiness', requireDeviceOrSessionRouteAuth, (_req, res) =>
     res.json({ ok: true }),
   );
-  app.get(
-    '/api/staged-intents',
-    requireDeviceOrSessionRouteAuth,
-    (_req, res) => res.json({ ok: true }),
+  app.get('/api/staged-intents', requireDeviceOrSessionRouteAuth, (_req, res) =>
+    res.json({ ok: true }),
   );
   return app;
 }
 
-const GATE_GRANT = 'Bash(node packages/backend/scripts/gate-state-client.mjs *)';
+const GATE_GRANT =
+  'Bash(node packages/backend/scripts/gate-state-client.mjs *)';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -178,21 +177,17 @@ describe('SessionRouteAuth — isRouteAuthorizedForSession scope', () => {
     vi.mocked(queries.getGrantedCapabilities).mockReturnValue([
       'Bash(node packages/backend/scripts/task-abort-client.mjs *)',
     ]);
-    expect(
-      isRouteAuthorizedForSession('s', '/api/tasks/task-1/abort'),
-    ).toBe(true);
-    expect(isRouteAuthorizedForSession('s', '/api/staged-intents')).toBe(
-      false,
+    expect(isRouteAuthorizedForSession('s', '/api/tasks/task-1/abort')).toBe(
+      true,
     );
+    expect(isRouteAuthorizedForSession('s', '/api/staged-intents')).toBe(false);
   });
 
   it('a wildcard denylisted capability (containing "apply") never authorizes anything', () => {
     vi.mocked(queries.getGrantedCapabilities).mockReturnValue([
       'Bash(node packages/backend/scripts/staged-intents-client.mjs apply *)',
     ]);
-    expect(isRouteAuthorizedForSession('s', '/api/staged-intents')).toBe(
-      false,
-    );
+    expect(isRouteAuthorizedForSession('s', '/api/staged-intents')).toBe(false);
   });
 
   it('the ops-client.mjs grant never authorizes the retired write path', () => {
@@ -209,8 +204,6 @@ describe('SessionRouteAuth — isRouteAuthorizedForSession scope', () => {
     vi.mocked(queries.getGrantedCapabilities).mockReturnValue([
       'read:path:/srv/orchestrator/data',
     ]);
-    expect(isRouteAuthorizedForSession('s', '/api/gate/readiness')).toBe(
-      false,
-    );
+    expect(isRouteAuthorizedForSession('s', '/api/gate/readiness')).toBe(false);
   });
 });
