@@ -11,7 +11,10 @@ const css = fs.readFileSync(
 function ruleBodyFor(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
-  expect(match, `expected a ${selector} rule in SessionControls.module.css`).not.toBeNull();
+  expect(
+    match,
+    `expected a ${selector} rule in SessionControls.module.css`,
+  ).not.toBeNull();
   return match![1];
 }
 
