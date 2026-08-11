@@ -499,9 +499,9 @@ describe('checkReadiness — Declared writes section', () => {
     expect(taskWritingMd).toContain('## Declared writes');
     const parserHeadingLiteral = 'declared writes';
     expect(taskWritingMd.toLowerCase()).toContain(parserHeadingLiteral);
-    expect(extractDeclaredWrites(`## Declared writes\n- \`Bash(ls:*)\`\n`)).toEqual(
-      [{ capability: 'Bash(ls:*)', prodMutating: true }],
-    );
+    expect(
+      extractDeclaredWrites(`## Declared writes\n- \`Bash(ls:*)\`\n`),
+    ).toEqual([{ capability: 'Bash(ls:*)', prodMutating: true }]);
   });
 
   it('round-trips the documented authoring format into the expected {capability, prodMutating}[] shape', () => {

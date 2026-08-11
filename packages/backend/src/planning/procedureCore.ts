@@ -354,7 +354,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     text:
       "Before staging `session.requestCapability` for a write, check the task's own body " +
       'for a `## Declared writes` section — a bullet there naming this exact capability, ' +
-      'tagged Non-Prod-Mutating, is pre-authorized at grooming/Ready time and this session\'s ' +
+      "tagged Non-Prod-Mutating, is pre-authorized at grooming/Ready time and this session's " +
       'matching `session.requestCapability` call auto-approves instead of parking for a human ' +
       'decision. The match is exact: the capability string in the request must equal the ' +
       "declared one verbatim, never a prefix or a near-match. A write that isn't declared " +
