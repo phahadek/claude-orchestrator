@@ -51,6 +51,8 @@ describe('config-template/procedures.md gate-item classification parity', () => 
     expect(procedures).toContain('not-yet-triggerable');
     expect(procedures).toContain('pending');
     expect(procedures.toLowerCase()).toContain('non-blocking');
-    expect(procedures).toMatch(/not-yet-triggerable.*evidence|evidence.*not-yet-triggerable/s);
+    expect(procedures).toMatch(
+      /not-yet-triggerable.*evidence|evidence.*not-yet-triggerable/s,
+    );
   });
 });
