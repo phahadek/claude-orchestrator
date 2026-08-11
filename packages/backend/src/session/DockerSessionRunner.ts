@@ -205,9 +205,7 @@ export class DockerSessionRunner implements ISessionRunner {
     // test.request instead (see the Flaky/CI section of orchestrator-claudemd.ts).
     const testDenyPatterns =
       sessionType && isCodeSession(sessionType)
-        ? getTestCommandDenyPatterns(
-            loadOrchestratorConfig(worktreePath).test,
-          )
+        ? getTestCommandDenyPatterns(loadOrchestratorConfig(worktreePath).test)
         : [];
 
     const claudeArgs = [

@@ -497,7 +497,12 @@ describe('CliSessionRunner test-command deny patterns', () => {
         ...defaultOptions,
         worktreePath: worktreeDir,
         sessionType: 'standard',
-        allowedTools: ['Bash(npm:*)', 'Bash(npx:*)', 'Bash(node:*)', 'Bash(tsc:*)'],
+        allowedTools: [
+          'Bash(npm:*)',
+          'Bash(npx:*)',
+          'Bash(node:*)',
+          'Bash(tsc:*)',
+        ],
       },
       () => {},
     );

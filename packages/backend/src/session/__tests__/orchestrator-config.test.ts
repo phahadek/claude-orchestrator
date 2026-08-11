@@ -629,9 +629,9 @@ describe('getTestCommandDenyPatterns', () => {
   });
 
   it('dedupes and trims whitespace', () => {
-    expect(
-      getTestCommandDenyPatterns([' npm test ', 'npm test', '']),
-    ).toEqual(['Bash(npm test:*)']);
+    expect(getTestCommandDenyPatterns([' npm test ', 'npm test', ''])).toEqual([
+      'Bash(npm test:*)',
+    ]);
   });
 
   it('never denies the coarse install/build/typecheck prefixes', () => {
