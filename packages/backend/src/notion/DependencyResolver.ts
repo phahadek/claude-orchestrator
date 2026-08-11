@@ -88,7 +88,9 @@ export class DependencyResolver {
     return tasks.filter((t) => {
       if (normalizeBoardId(t.id) === normTarget) return false;
       if (TERMINAL_DEPENDENT_STATUSES.has(t.status)) return false;
-      return t.dependsOn.some((depId) => normalizeBoardId(depId) === normTarget);
+      return t.dependsOn.some(
+        (depId) => normalizeBoardId(depId) === normTarget,
+      );
     });
   }
 
