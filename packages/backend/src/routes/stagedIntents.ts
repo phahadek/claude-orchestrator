@@ -80,8 +80,10 @@ import {
   setPRReviewResult,
   getSessionDeclaredWrites,
   getLatestOpsSessionByTaskId,
+  getAllBoardCacheTasks,
 } from '../db/queries';
 import type { OpsReconciliationAssertion } from '../db/types';
+import { DependencyResolver } from '../notion/DependencyResolver';
 import { parseTaskId, normalizeTaskId } from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
 import { recordEvent } from '../audit/AuditLog';
@@ -530,6 +532,79 @@ class DependsOnCompletenessError extends Error {
     );
     this.name = 'DependsOnCompletenessError';
   }
+}
+
+/**
+ * The Deferred twin of DependsOnCompletenessError, but about *other* tasks
+ * rather than the subject itself: a task.setStatus -> Deferred apply is only
+ * allowed, when the task still has non-terminal dependents
+ * (DependencyResolver.findDependents — anything not already ✅ Done/⏭️
+ * Deferred whose Depends On names this task), if the same intent group also
+ * carries a live task.setDependsOn for *each* of those dependent task ids
+ * re-pointing it — forcing an explicit re-point decision instead of letting
+ * a Deferred blocker silently wedge a Ready dependent forever (see
+ * DependencyResolver.findBlockers, which treats Deferred as never-satisfied).
+ * Unlike DependsOnCompletenessError, the companion intents name the
+ * dependents, never the task being deferred — a task.setDependsOn for the
+ * deferred task itself does not satisfy this. Fires only when at least one
+ * non-terminal dependent actually exists; deferring a task nothing depends
+ * on (or whose dependents are already terminal) needs no companion intent.
+ */
+class DeferralOrphansDependentsError extends Error {
+  constructor(
+    public readonly taskId: string,
+    public readonly dependentTaskIds: string[],
+  ) {
+    super(
+      `[stagedIntents] task.setStatus -> Deferred for task "${taskId}" is blocked: ` +
+        `it still has non-terminal dependent(s) (${dependentTaskIds.join(', ')}) that ` +
+        'would be permanently wedged. Stage a task.setDependsOn for each dependent, ' +
+        're-pointing it away from this task, in the same group before deferring.',
+    );
+    this.name = 'DeferralOrphansDependentsError';
+  }
+}
+
+/**
+ * Every still-live (non-Done, non-Deferred) task whose Depends On names
+ * `taskId`, read off the board cache the same way
+ * TaskWriteCommands.surfaceDependentsOfDeferredTask does — best-effort: an
+ * empty/unavailable cache yields no dependents rather than failing the
+ * guard open or closed on stale data.
+ */
+function findNonTerminalDependents(taskId: string): string[] {
+  const boardTasks = getAllBoardCacheTasks();
+  if (boardTasks.length === 0) return [];
+  return new DependencyResolver()
+    .findDependents(taskId, boardTasks)
+    .map((t) => t.id);
+}
+
+/**
+ * Commit-time/apply-time enforcement of the guard DeferralOrphansDependentsError
+ * describes: null when the task has no non-terminal dependents, or when the
+ * group already carries a live task.setDependsOn for each one (checked
+ * against the durable store via hasGroupDependsOn, so a companion committed
+ * in an earlier apply of the same group still satisfies it).
+ */
+function checkDeferralDependentsRepointed(
+  groupId: string | null | undefined,
+  taskId: string,
+): DeferralOrphansDependentsError | null {
+  // Board-cache ids are the raw Notion ids the board API returns, while a
+  // staged task.setDependsOn's payload.taskId is always normalized to
+  // "source:externalId" (see normalizeOrRejectTaskId) — the same
+  // representation mismatch DependencyResolver.findDependents bridges
+  // internally via normalizeBoardId, but hasGroupDependsOn's lookup does a
+  // plain string match against the stored payload, so each dependent id
+  // must be normalized the same way before that lookup.
+  const dependentIds = findNonTerminalDependents(taskId);
+  if (dependentIds.length === 0) return null;
+  const missing = dependentIds.filter(
+    (id) => !groupId || !hasGroupDependsOn(groupId, normalizeTaskId(id)),
+  );
+  if (missing.length === 0) return null;
+  return new DeferralOrphansDependentsError(taskId, missing);
 }
 
 /**
@@ -4087,6 +4162,13 @@ async function applyIntent(
       ) {
         throw new ManualVerificationStripCompletenessError(payload.taskId);
       }
+      if (payload.status === 'Deferred') {
+        const deferralFailure = checkDeferralDependentsRepointed(
+          intent.groupId,
+          payload.taskId,
+        );
+        if (deferralFailure) throw deferralFailure;
+      }
       // approve-by-standard (planning/triage.ts): a task.setStatus intent
       // carrying a recorded triage verdict is eligible for the standard
       // readiness_override reason instead of an operator-authored one — see
@@ -6426,6 +6508,18 @@ export async function commitGroupIntents(
           },
         };
       }
+      if (err instanceof DeferralOrphansDependentsError) {
+        return {
+          status: 409,
+          body: {
+            error: err.message,
+            dependentTaskIds: err.dependentTaskIds,
+            committed,
+            failedId: intent.id,
+            remaining,
+          },
+        };
+      }
       if (
         err instanceof StaleArchUnitVersionError ||
         err instanceof ArchUnitAlreadySupersededError
@@ -6819,6 +6913,13 @@ export function createStagedIntentsRouter(
           err instanceof SessionIncompleteError
         ) {
           res.status(409).json({ error: err.message });
+          return;
+        }
+        if (err instanceof DeferralOrphansDependentsError) {
+          res.status(409).json({
+            error: err.message,
+            dependentTaskIds: err.dependentTaskIds,
+          });
           return;
         }
         if (
