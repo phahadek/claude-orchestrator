@@ -357,7 +357,11 @@ describe('<pr-body> marker — test.request cache gate', () => {
 
     await new Promise((r) => setImmediate(r));
 
-    expect(vi.mocked(execSync).mock.calls.some((c) => c[0] === 'git push -u origin feature/my-task')).toBe(false);
+    expect(
+      vi
+        .mocked(execSync)
+        .mock.calls.some((c) => c[0] === 'git push -u origin feature/my-task'),
+    ).toBe(false);
     expect(ghClient.createPR).not.toHaveBeenCalled();
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
