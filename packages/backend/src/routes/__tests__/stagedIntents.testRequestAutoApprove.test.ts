@@ -198,7 +198,7 @@ describe('test.request stage-time auto-grant (routeStageTimeBlock)', () => {
         intentId: intent.id,
         passed: false,
         output:
-          'test.request declined: originating session has no resolvable worktree',
+          'test.request decline: originating session has no resolvable worktree',
       }),
     );
     expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -223,7 +223,7 @@ describe('test.request stage-time auto-grant (routeStageTimeBlock)', () => {
       JSON.stringify({
         intentId: intent.id,
         passed: false,
-        output: 'test.request declined: worktree content hash unavailable',
+        output: 'test.request decline: worktree content hash unavailable',
       }),
     );
   });
