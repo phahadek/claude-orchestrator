@@ -12,6 +12,7 @@ import { stageJournalDecision, STAGED_PROPOSAL_STATE } from './stagedIntents';
 import { getLatestOpsSessionByTaskId } from '../db/queries';
 import { closeDeferredOpsTask } from '../orchestration/PlanningOrchestrator';
 import { logger } from '../logger';
+import { asyncHandler } from './asyncHandler';
 
 /**
  * Read/operator-write surface for the Ops(N) staged-intent view: exposes
@@ -48,7 +49,7 @@ export function createOpsJournalRouter(): Router {
   router.post(
     '/ops-journal/:taskId/state',
     requireDeviceAuth,
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const taskId = String(req.params.taskId);
 
       const body = req.body as {
@@ -137,7 +138,7 @@ export function createOpsJournalRouter(): Router {
             err instanceof Error ? err.message : 'ops-journal write failed',
         });
       }
-    },
+    }),
   );
 
   return router;

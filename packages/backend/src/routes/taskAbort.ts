@@ -6,6 +6,7 @@ import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
 import { toCanonicalStatus } from '../tasks/statusCanonical';
 import { getActivePlanningSessionForTask } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
+import { asyncHandler } from './asyncHandler';
 
 interface SessionManagerLike {
   kill(sessionId: string): Promise<void>;
@@ -38,7 +39,7 @@ export function createTaskAbortRouter(
   router.post(
     '/tasks/:id/abort',
     requireDeviceAuth,
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const taskId = String(req.params.id);
       const body = req.body as { projectId?: unknown; note?: unknown };
       const projectId =
@@ -94,7 +95,7 @@ export function createTaskAbortRouter(
           error: err instanceof Error ? err.message : 'abort failed',
         });
       }
-    },
+    }),
   );
 
   return router;

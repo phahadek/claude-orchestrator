@@ -29,6 +29,7 @@ import { eventKind } from '../session/eventKind';
 import type { SessionManager } from '../session/SessionManager';
 import { deriveCapabilityProvenance } from '../audit/capabilityProvenance';
 import type { Session } from '../db/types';
+import { asyncHandler } from './asyncHandler';
 
 /** Attaches lastActivityAgeMs — ms since the session's last session_events row, null when unknown (none recorded, or pruned). */
 function withActivityAge<T extends Session>(
@@ -237,7 +238,7 @@ sessionsRouter.patch('/:id/tags', (req: Request, res: Response) => {
 // PATCH /api/sessions/:id/capabilities/revoke
 sessionsRouter.patch(
   '/:id/capabilities/revoke',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const sessionId = String(req.params.id);
     const existing = getSession(sessionId);
     if (!existing) {
@@ -264,79 +265,85 @@ sessionsRouter.patch(
 
     _broadcast({ type: 'session_updated', sessionId, grantedCapabilities });
     res.json({ ok: true, grantedCapabilities });
-  },
+  }),
 );
 
 // POST /api/sessions/:id/mark-merged
 // For local-only projects: mark the task as Done (mirrors the merge step for GitHub projects).
-sessionsRouter.post('/:id/mark-merged', async (req: Request, res: Response) => {
-  const sessionId = String(req.params.id);
-  const session = getSession(sessionId);
-  if (!session) {
-    res.status(404).json({ error: 'Session not found' });
-    return;
-  }
+sessionsRouter.post(
+  '/:id/mark-merged',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = String(req.params.id);
+    const session = getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
 
-  const projectId = session.project_id ?? '';
-  const project = getProjectById(projectId);
-  if (!project) {
-    res.status(400).json({ error: 'Session has no associated project' });
-    return;
-  }
-  if (project.gitMode !== 'local-only') {
-    res
-      .status(400)
-      .json({ error: 'mark-merged is only available for local-only projects' });
-    return;
-  }
+    const projectId = session.project_id ?? '';
+    const project = getProjectById(projectId);
+    if (!project) {
+      res.status(400).json({ error: 'Session has no associated project' });
+      return;
+    }
+    if (project.gitMode !== 'local-only') {
+      res.status(400).json({
+        error: 'mark-merged is only available for local-only projects',
+      });
+      return;
+    }
 
-  const notionTaskId = session.task_id;
-  if (!notionTaskId) {
-    res.status(400).json({ error: 'Session has no associated task' });
-    return;
-  }
+    const notionTaskId = session.task_id;
+    if (!notionTaskId) {
+      res.status(400).json({ error: 'Session has no associated task' });
+      return;
+    }
 
-  try {
-    await getTaskBackend(projectId).updateStatus(notionTaskId, '✅ Done', {
-      source: 'human',
-    });
-    _broadcast({
-      type: 'task_status_changed',
-      notionTaskId,
-      newStatus: '✅ Done',
-    });
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({
-      error:
-        err instanceof Error ? err.message : 'Failed to update task status',
-    });
-  }
-});
+    try {
+      await getTaskBackend(projectId).updateStatus(notionTaskId, '✅ Done', {
+        source: 'human',
+      });
+      _broadcast({
+        type: 'task_status_changed',
+        notionTaskId,
+        newStatus: '✅ Done',
+      });
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({
+        error:
+          err instanceof Error ? err.message : 'Failed to update task status',
+      });
+    }
+  }),
+);
 
 // POST /api/sessions/:id/abort
 // Kill the session and reset the task to Ready for a fresh launch.
 // Unlike Kill, abort pre-marks the session as killed in the DB before sending
 // the kill signal, so a server restart cannot resume the aborted session.
-sessionsRouter.post('/:id/abort', async (req: Request, res: Response) => {
-  const sessionId = String(req.params.id);
-  const session = getSession(sessionId);
-  if (!session) {
-    res.status(404).json({ error: 'Session not found' });
-    return;
-  }
+sessionsRouter.post(
+  '/:id/abort',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = String(req.params.id);
+    const session = getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
 
-  if (!_sessionManager) {
-    res.status(503).json({ error: 'Session manager not available' });
-    return;
-  }
+    if (!_sessionManager) {
+      res.status(503).json({ error: 'Session manager not available' });
+      return;
+    }
 
-  try {
-    await _sessionManager.abortSession(sessionId);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({
-      error: err instanceof Error ? err.message : 'Failed to abort session',
-    });
-  }
-});
+    try {
+      await _sessionManager.abortSession(sessionId);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to abort session',
+      });
+    }
+  }),
+);
