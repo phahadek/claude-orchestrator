@@ -193,6 +193,7 @@ const prReviewService = new PRReviewService(
   sessionManager,
 );
 const depthReviewService = new DepthReviewService(sessionManager, undefined);
+prReviewService.setDepthReviewService(depthReviewService);
 // Retained so push_detected handler can call consumeAutofixSha() to detect
 // autofix-only pushes and suppress iteration-counter increments for them.
 const reviewOrchestrator = new ReviewOrchestrator(
@@ -288,6 +289,7 @@ prMergeWatcher.setReviewOrchestrator(reviewOrchestrator);
 // Gate consumes the merge-completion signal; PRMergeWatcher stays unaware of gate state.
 registerGateMergeConsumer(prMergeWatcher);
 prReviewService.setAutoMerger(autoMerger);
+reviewOrchestrator.setAutoMerger(autoMerger);
 setAutoMerger(autoMerger);
 const reviewerCommentsWatcher = new ReviewerCommentsWatcher(
   githubClient,

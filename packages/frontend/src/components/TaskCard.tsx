@@ -108,6 +108,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Escalated by the baseline escalation floor — diff touches CI/workflow config, migrations, auth, or secrets — see the review summary for details and resolve manually.',
   depth_review_escalation:
     'Depth review found a security/concurrency/reliability/data-integrity defect beyond spec-conformance — see the review summary for details and resolve manually.',
+  depth_review_pending:
+    'Depth review pass is in flight — auto-merge is held until it completes or times out. No action needed.',
   planning_crashed:
     'Planning session crashed repeatedly — review the session and redispatch planning when ready.',
   planning_first_turn_empty:

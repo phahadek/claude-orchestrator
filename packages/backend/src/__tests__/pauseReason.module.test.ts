@@ -13,8 +13,19 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 41 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(41);
+  it('contains exactly 42 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(42);
+  });
+
+  it('includes depth_review_pending as a recoverable, automatic reason, distinct from depth_review_escalation', () => {
+    expect(PAUSE_REASON_REGISTRY.depth_review_pending).toEqual({
+      source: 'review',
+      severity: 'recoverable',
+      retry_strategy: 'automatic',
+    });
+    expect(PAUSE_REASON_REGISTRY.depth_review_pending).not.toEqual(
+      PAUSE_REASON_REGISTRY.depth_review_escalation,
+    );
   });
 
   it('includes manual_verification_pending as a needs_attention, manual_action reason', () => {

@@ -267,6 +267,21 @@ describe('AutoMerger.attempt() — guards', () => {
     expect(github.mergePR).not.toHaveBeenCalled();
   });
 
+  it('skips when PR is paused with depth_review_pending (depth pass in flight)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ pause_reason: 'depth_review_pending' }),
+    );
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.fetchPRStatusConditional).not.toHaveBeenCalled();
+    expect(github.mergePR).not.toHaveBeenCalled();
+  });
+
   it('proceeds into polling loop when bypassToggle=true and autoMergeEnabled=false', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
     const github = makeMockGitHub([

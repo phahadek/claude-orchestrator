@@ -36,11 +36,17 @@ import type {
   WorkItem,
 } from './PRReviewService';
 import { FetchRetryExhaustedError } from './PRReviewService';
-import type { DepthReviewService } from './DepthReviewService';
+import type {
+  DepthReviewService,
+  DepthReviewResult,
+} from './DepthReviewService';
 import { SIZE_DIMENSION_NAME as DEPTH_SIZE_DIMENSION_NAME } from './DepthReviewService';
+import type { AutoMerger } from './AutoMerger';
+import { parsePauseReason } from '../db/pauseReason';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob, FlakeRecoveryOutcome } from './types';
+import type { DiffSource } from './DiffSource';
 import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
 import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import type { DispositionsParsedPayload } from './types';
@@ -76,6 +82,9 @@ type QueuedJob = (ReviewJob & { type?: 'pr' }) | LocalBranchJob;
 
 const STALL_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const STALL_CHECK_INTERVAL_MS = 5 * 60 * 1000; // check every 5 minutes
+// Backstop ceiling on the depth-review dispatch, above DepthReviewService's
+// own 15-minute internal timeout — see runDepthReviewWithCeiling().
+const DEPTH_REVIEW_DISPATCH_CEILING_MS = 20 * 60 * 1000; // 20 minutes
 
 export class ReviewOrchestrator {
   private queue: QueuedJob[] = [];
@@ -104,6 +113,19 @@ export class ReviewOrchestrator {
 
   setDepthReviewService(service: DepthReviewService): void {
     this.depthReviewService = service;
+  }
+
+  /**
+   * Optional reference to AutoMerger, used to re-drive the merge after
+   * dispatchDepthReview clears the depth_review_pending hold it inherits
+   * from PRReviewService.handleApprovedVerdict. Set via setAutoMerger()
+   * after both services are constructed (server.ts), mirroring
+   * PRReviewService's own autoMerger wiring.
+   */
+  private autoMerger?: AutoMerger;
+
+  setAutoMerger(merger: AutoMerger): void {
+    this.autoMerger = merger;
   }
 
   constructor(
@@ -1169,15 +1191,20 @@ export class ReviewOrchestrator {
         );
       }
     } else if (result.verdict === 'approved') {
-      // Depth review runs only after conformance is approved, and never
-      // blocks merge — handleApprovedVerdict (inside reviewService.reviewPR,
-      // already called above) has already transitioned the PR and kicked
-      // off auto-merge. Fire-and-forget: an error/timeout in the depth pass
-      // must not delay or block anything already in flight.
+      // Depth review runs only after conformance is approved. Auto-merge is
+      // held on depth_review_pending (set by PRReviewService.
+      // handleApprovedVerdict, before autoMerger.attempt()) for the
+      // duration of this dispatch, so a depth finding can still gate the
+      // merge. Fire-and-forget from the caller's perspective — dispatch
+      // itself clears the hold and re-drives the merge on every exit path;
+      // the .catch() here is a last-resort guard against a throw before or
+      // during the service call (e.g. getPRByNumber, diff-source
+      // construction) so the hold can never strand the PR unmerged.
       this.dispatchDepthReview(job, project.id).catch((e) => {
         logger.warn(
           `[ReviewOrchestrator] depth review dispatch failed for PR #${job.prNumber} (${job.repo}) — failing open: ${e}`,
         );
+        this.clearDepthReviewHoldAndRemerge(job);
       });
     }
 
@@ -1194,7 +1221,10 @@ export class ReviewOrchestrator {
    * verdict uses — preserving today's scope-creep auto-fix behavior now that
    * size lives in this pass instead of conformance. DepthReviewService
    * itself fails open (returns null on any error/timeout), so a null result
-   * here is a silent no-op — never an escalation, never a merge block.
+   * here clears the depth_review_pending hold and re-drives the merge —
+   * never an escalation, never a merge block. Every exit path below clears
+   * the hold except the escalation path, which replaces it with
+   * depth_review_escalation instead.
    */
   private async dispatchDepthReview(
     job: ReviewJob,
@@ -1211,15 +1241,16 @@ export class ReviewOrchestrator {
           },
         };
 
-    const result = await this.depthReviewService.runDepthReview(
-      job.prNumber,
-      job.repo,
-      diffSource,
+    const result = await this.runDepthReviewWithCeiling(
+      job,
       projectId,
-      job.contextUrl,
+      diffSource,
       prRow?.task_id ?? null,
     );
-    if (!result) return;
+    if (!result) {
+      this.clearDepthReviewHoldAndRemerge(job);
+      return;
+    }
 
     if (result.hasNonSizeFailure) {
       const failing = result.dimensions.filter(
@@ -1232,6 +1263,8 @@ export class ReviewOrchestrator {
         ...failing.map((d) => `- **${d.name}**: ${d.notes}`),
       ].join('\n');
       logger.warn(`[ReviewOrchestrator] ${message}`);
+      // Replaces the depth_review_pending hold — the PR stays paused, now on
+      // an escalation reason, not merged.
       setPauseReason(job.prNumber, job.repo, 'depth_review_escalation');
       this.sessionManager.emit('message', {
         type: 'review_escalated',
@@ -1255,6 +1288,79 @@ export class ReviewOrchestrator {
         'ai-reviewer',
         message,
       );
+    }
+    this.clearDepthReviewHoldAndRemerge(job);
+  }
+
+  /**
+   * Races the depth-review service call against a backstop ceiling well
+   * above DepthReviewService's own internal timeout (15 min), so a session
+   * that never reaches a terminal status there (see the depth_review
+   * terminal-status fixes this mirrors) still cannot hold a merge
+   * indefinitely. DepthReviewService.runDepthReview() itself never rejects
+   * (it fails open to null internally) — this is a second, independent
+   * backstop, not a replacement for that contract.
+   */
+  private runDepthReviewWithCeiling(
+    job: ReviewJob,
+    projectId: string,
+    diffSource: DiffSource,
+    taskId: string | null,
+  ): Promise<DepthReviewResult | null> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const ceiling = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        logger.warn(
+          `[ReviewOrchestrator] depth review for PR #${job.prNumber} (${job.repo}) exceeded the ${Math.round(DEPTH_REVIEW_DISPATCH_CEILING_MS / 60000)}-minute dispatch ceiling — failing open`,
+        );
+        resolve(null);
+      }, DEPTH_REVIEW_DISPATCH_CEILING_MS);
+
+      this.depthReviewService!.runDepthReview(
+        job.prNumber,
+        job.repo,
+        diffSource,
+        projectId,
+        job.contextUrl,
+        taskId,
+      ).then(
+        (result) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(ceiling);
+          resolve(result);
+        },
+        () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(ceiling);
+          resolve(null);
+        },
+      );
+    });
+  }
+
+  /**
+   * Clears the depth_review_pending hold and re-attempts the merge — used
+   * on every dispatchDepthReview exit path that doesn't escalate. Only
+   * clears when the current pause_reason is still depth_review_pending, so
+   * an unrelated hold set in the meantime (e.g. manual_verification_pending,
+   * review_rules_escalation) is never clobbered — attempt() is still called
+   * either way since AutoMerger re-checks pause_reason itself and no-ops if
+   * one remains.
+   */
+  private clearDepthReviewHoldAndRemerge(job: ReviewJob): void {
+    const row = getPRByNumber(job.prNumber, job.repo);
+    if (
+      parsePauseReason(row?.pause_reason ?? null)?.reason ===
+      'depth_review_pending'
+    ) {
+      setPauseReason(job.prNumber, job.repo, null);
+    }
+    if (this.autoMerger) {
+      this.autoMerger.attempt(job.prNumber, job.repo);
     }
   }
 }
