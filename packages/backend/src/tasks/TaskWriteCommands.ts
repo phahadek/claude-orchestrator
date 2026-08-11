@@ -10,7 +10,9 @@ import {
   getTaskCache,
   deleteTaskCacheRow,
   getMergeCommitForTask,
+  getAllBoardCacheTasks,
 } from '../db/queries';
+import { DependencyResolver } from '../notion/DependencyResolver';
 import {
   checkReadiness,
   ReadinessGateError,
@@ -562,7 +564,42 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
         });
       }
     }
+    if (status === 'Deferred') {
+      this.surfaceDependentsOfDeferredTask(taskId, options);
+    }
     await this.backend.updateStatus(taskId, STATUS_DISPLAY[status], options);
+  }
+
+  /**
+   * A Deferred task never reaches ✅ Done, so it is a permanent blocker for
+   * anything that depends on it (see DependencyResolver.findBlockers) — but
+   * nothing else makes that block operator-visible. Record an audit event
+   * naming every still-live dependent so a Ready task doesn't sit
+   * undispatchable forever with no signal. Detection only: dependsOn is never
+   * rewritten here, since choosing a replacement blocker is a judgement call.
+   */
+  private surfaceDependentsOfDeferredTask(
+    taskId: string,
+    options?: TaskWriteOptions,
+  ): void {
+    const boardTasks = getAllBoardCacheTasks();
+    if (boardTasks.length === 0) return;
+    const dependents = new DependencyResolver().findDependents(
+      taskId,
+      boardTasks,
+    );
+    if (dependents.length === 0) return;
+    recordEvent({
+      event_type: 'task_deferred_blocks_dependents',
+      actor_type: options?.source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId ?? null,
+      task_id: taskId,
+      payload: {
+        deferredTaskId: taskId,
+        dependentTaskIds: dependents.map((d) => d.id),
+      },
+    });
   }
 
   async setDependsOn(

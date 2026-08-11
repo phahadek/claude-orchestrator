@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockGetTaskCache = vi.fn();
 const mockGetMergeCommitForTask = vi.fn();
 const mockDeleteTaskCacheRow = vi.fn();
+const mockGetAllBoardCacheTasks = vi.fn();
 const mockRecordEvent = vi.fn();
 const mockInsertItem = vi.fn();
 const mockRecordAccretionMarker = vi.fn();
@@ -18,6 +19,8 @@ vi.mock('../../db/queries', () => ({
   getMergeCommitForTask: (...args: unknown[]) =>
     mockGetMergeCommitForTask(...args),
   deleteTaskCacheRow: (...args: unknown[]) => mockDeleteTaskCacheRow(...args),
+  getAllBoardCacheTasks: (...args: unknown[]) =>
+    mockGetAllBoardCacheTasks(...args),
 }));
 
 vi.mock('../../audit/AuditLog', () => ({
@@ -112,6 +115,8 @@ beforeEach(() => {
   mockGetMergeCommitForTask.mockReset();
   mockGetMergeCommitForTask.mockReturnValue(null);
   mockDeleteTaskCacheRow.mockReset();
+  mockGetAllBoardCacheTasks.mockReset();
+  mockGetAllBoardCacheTasks.mockReturnValue([]);
   mockRecordEvent.mockReset();
   mockInsertItem.mockReset();
   mockRecordAccretionMarker.mockReset();
@@ -269,6 +274,117 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
     });
 
     expect(mockDeleteTaskCacheRow).not.toHaveBeenCalled();
+  });
+});
+
+describe('TaskWriteCommands.setStatus — Deferred surfaces dependents', () => {
+  it('emits an audit event naming the deferred task and its dependent when the dependent is Ready', async () => {
+    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Ready));
+    mockGetAllBoardCacheTasks.mockReturnValue([
+      { id: 'notion:blocker', status: '🗂️ Ready', dependsOn: [] },
+      {
+        id: 'notion:dependent',
+        status: '🗂️ Ready',
+        dependsOn: ['notion:blocker'],
+      },
+    ]);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:blocker', 'Deferred');
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'task_deferred_blocks_dependents',
+        task_id: 'notion:blocker',
+        payload: expect.objectContaining({
+          deferredTaskId: 'notion:blocker',
+          dependentTaskIds: ['notion:dependent'],
+        }),
+      }),
+    );
+  });
+
+  it('emits no such event when the deferred task has no dependents', async () => {
+    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Ready));
+    mockGetAllBoardCacheTasks.mockReturnValue([
+      { id: 'notion:blocker', status: '🗂️ Ready', dependsOn: [] },
+      { id: 'notion:unrelated', status: '🗂️ Ready', dependsOn: [] },
+    ]);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:blocker', 'Deferred');
+
+    expect(mockRecordEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not report a dependent already at a terminal status', async () => {
+    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Ready));
+    mockGetAllBoardCacheTasks.mockReturnValue([
+      { id: 'notion:blocker', status: '🗂️ Ready', dependsOn: [] },
+      {
+        id: 'notion:done-dependent',
+        status: '✅ Done',
+        dependsOn: ['notion:blocker'],
+      },
+    ]);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:blocker', 'Deferred');
+
+    expect(mockRecordEvent).not.toHaveBeenCalled();
+  });
+
+  it('leaves the dependent untouched — no setDependsOn write is issued', async () => {
+    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Ready));
+    mockGetAllBoardCacheTasks.mockReturnValue([
+      { id: 'notion:blocker', status: '🗂️ Ready', dependsOn: [] },
+      {
+        id: 'notion:dependent',
+        status: '🗂️ Ready',
+        dependsOn: ['notion:blocker'],
+      },
+    ]);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:blocker', 'Deferred');
+
+    expect(backend.setDependsOn).not.toHaveBeenCalled();
+  });
+
+  it('matches a dependent whose dependsOn uses the notion:-prefixed form against a bare-uuid task row', async () => {
+    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Ready));
+    mockGetAllBoardCacheTasks.mockReturnValue([
+      {
+        id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        status: '🗂️ Ready',
+        dependsOn: [],
+      },
+      {
+        id: 'notion:dependent',
+        status: '🗂️ Ready',
+        dependsOn: ['notion:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
+      },
+    ]);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus(
+      'notion:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      'Deferred',
+    );
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'task_deferred_blocks_dependents',
+        payload: expect.objectContaining({
+          dependentTaskIds: ['notion:dependent'],
+        }),
+      }),
+    );
   });
 });
 

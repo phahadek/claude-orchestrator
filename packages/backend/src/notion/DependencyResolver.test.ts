@@ -149,4 +149,65 @@ describe('DependencyResolver', () => {
     const task = resolved.find((r) => r.task.id === 'task')!;
     expect(task.wave).toBe(dep.wave + 1);
   });
+
+  describe('findDependents', () => {
+    it('returns tasks whose dependsOn names the given task id', () => {
+      const tasks = [
+        makeTask({ id: 'blocker', status: '⏭️ Deferred' }),
+        makeTask({ id: 'dependent', dependsOn: ['blocker'] }),
+        makeTask({ id: 'unrelated' }),
+      ];
+      const dependents = resolver.findDependents('blocker', tasks);
+      expect(dependents.map((t) => t.id)).toEqual(['dependent']);
+    });
+
+    it('excludes a dependent already at a terminal status', () => {
+      const tasks = [
+        makeTask({ id: 'blocker', status: '⏭️ Deferred' }),
+        makeTask({
+          id: 'done-dependent',
+          status: '✅ Done',
+          dependsOn: ['blocker'],
+        }),
+        makeTask({
+          id: 'deferred-dependent',
+          status: '⏭️ Deferred',
+          dependsOn: ['blocker'],
+        }),
+        makeTask({
+          id: 'live-dependent',
+          status: '🗂️ Ready',
+          dependsOn: ['blocker'],
+        }),
+      ];
+      const dependents = resolver.findDependents('blocker', tasks);
+      expect(dependents.map((t) => t.id)).toEqual(['live-dependent']);
+    });
+
+    it('matches ids across the notion: prefix and hyphenation on both sides', () => {
+      const tasks = [
+        makeTask({
+          id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+          status: '⏭️ Deferred',
+        }),
+        makeTask({
+          id: 'dependent',
+          dependsOn: ['notion:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
+        }),
+      ];
+      const dependents = resolver.findDependents(
+        'notion:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        tasks,
+      );
+      expect(dependents.map((t) => t.id)).toEqual(['dependent']);
+    });
+
+    it('returns no dependents when nothing depends on the task', () => {
+      const tasks = [
+        makeTask({ id: 'blocker', status: '⏭️ Deferred' }),
+        makeTask({ id: 'unrelated' }),
+      ];
+      expect(resolver.findDependents('blocker', tasks)).toHaveLength(0);
+    });
+  });
 });
