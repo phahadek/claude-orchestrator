@@ -3,6 +3,34 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SessionControls } from '../SessionControls';
 import type { SessionState } from '../../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import cssStyles from '../SessionControls.module.css';
+
+// Mirrors the shrink/no-shrink rules declared in SessionControls.module.css
+// for .capabilityChip / .capabilityText / .capabilityRemove, scoped to the
+// real hashed class names so jsdom's computed style reflects them. The CSS
+// module source itself is asserted separately (SessionControls.css.test.ts).
+function installCapabilityChipStyles() {
+  const styleEl = document.createElement('style');
+  styleEl.innerHTML = `
+    .${cssStyles.capabilityChip} {
+      display: inline-flex;
+      max-width: 220px;
+      overflow: hidden;
+    }
+    .${(cssStyles as Record<string, string>).capabilityText} {
+      min-width: 0;
+      flex: 1 1 auto;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .${cssStyles.capabilityRemove} {
+      flex-shrink: 0;
+    }
+  `;
+  document.head.appendChild(styleEl);
+  return () => styleEl.remove();
+}
 
 const fetchMock = vi.fn();
 
@@ -887,6 +915,143 @@ describe('SessionControls — granted capability provenance', () => {
       expect(fetchMock).toHaveBeenCalled();
     });
     expect(screen.queryByText('Bash(psql:*)')).toBeNull();
+  });
+
+  it('keeps the provenance label and revoke button reachable for a capability string long enough to overflow the chip', async () => {
+    const uninstall = installCapabilityChipStyles();
+    const longCapability =
+      'Bash(node packages/backend/scripts/gate-state-client.mjs reclassify:*)';
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/capabilities')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              capabilities: [
+                { capability: longCapability, provenance: 'operator' },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 200 }));
+    });
+
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('operator')).toBeTruthy();
+    });
+
+    const revokeButton = screen.getByLabelText(
+      `Revoke capability ${longCapability}`,
+    );
+    expect(revokeButton).toBeTruthy();
+
+    const chip = revokeButton.closest(`.${cssStyles.capabilityChip}`);
+    expect(chip).not.toBeNull();
+    expect(chip!.contains(revokeButton)).toBe(true);
+
+    const textEl = chip!.querySelector(
+      `.${(cssStyles as Record<string, string>).capabilityText}`,
+    );
+    expect(textEl).not.toBeNull();
+    expect(textEl!.textContent).toBe(longCapability);
+
+    const textComputed = getComputedStyle(textEl!);
+    expect(textComputed.minWidth).toBe('0');
+    expect(textComputed.overflow).toBe('hidden');
+    expect(textComputed.textOverflow).toBe('ellipsis');
+
+    const removeComputed = getComputedStyle(revokeButton);
+    expect(removeComputed.flexShrink).toBe('0');
+
+    expect(chip!.getAttribute('title')).toBe(longCapability);
+
+    uninstall();
+  });
+
+  it('revokes a long capability via the existing endpoint, unaffected by truncation', async () => {
+    const longCapability =
+      'Bash(node packages/backend/scripts/gate-state-client.mjs reclassify:*)';
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/capabilities/revoke')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, grantedCapabilities: [] }), {
+            status: 200,
+          }),
+        );
+      }
+      if (url.includes('/capabilities')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              capabilities: [
+                { capability: longCapability, provenance: 'operator' },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 200 }));
+    });
+
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(longCapability)).toBeTruthy();
+    });
+
+    fireEvent.click(
+      screen.getByLabelText(`Revoke capability ${longCapability}`),
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/sessions/sess-1/capabilities/revoke',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ capability: longCapability }),
+        }),
+      );
+      expect(screen.queryByText(longCapability)).toBeNull();
+    });
+  });
+
+  it('renders a short capability unchanged, with no ellipsis applied', async () => {
+    const uninstall = installCapabilityChipStyles();
+    const shortCapability = 'read:audit-log:<project>';
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/capabilities')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              capabilities: [
+                { capability: shortCapability, provenance: 'operator' },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 200 }));
+    });
+
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(shortCapability)).toBeTruthy();
+    });
+    expect(screen.getByText('operator')).toBeTruthy();
+    expect(
+      screen.getByLabelText(`Revoke capability ${shortCapability}`),
+    ).toBeTruthy();
+
+    uninstall();
   });
 });
 

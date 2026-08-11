@@ -400,7 +400,7 @@ export function SessionControls({
                 className={`${styles.capabilityChip} ${provenance === 'auto' ? styles['capabilityChip--auto'] : styles['capabilityChip--operator']}`}
                 title={capability}
               >
-                {capability}
+                <span className={styles.capabilityText}>{capability}</span>
                 <span className={styles.capabilityProvenance}>
                   {provenance === 'auto' ? 'auto' : 'operator'}
                 </span>
