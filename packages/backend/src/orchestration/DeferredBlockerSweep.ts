@@ -3,7 +3,10 @@ import type { Scheduler } from './Scheduler';
 import { getAllBoardCacheTasks } from '../db/queries';
 import type { CachedBoardTaskEntry } from '../db/queries';
 import { normalizeBoardId } from '../tasks/taskId';
-import { recordEvent, hasDeferredBlockerSurfacedEvent } from '../audit/AuditLog';
+import {
+  recordEvent,
+  hasDeferredBlockerSurfacedEvent,
+} from '../audit/AuditLog';
 
 const TERMINAL_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
 const DEFERRED_STATUS = '⏭️ Deferred';
