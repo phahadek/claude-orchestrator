@@ -172,7 +172,7 @@ function validateRouteCredential(token: string): { sessionId: string } | null {
  * CliSessionRunner's deliberate production-env stripping intact — only the
  * file *path* crosses into the child's env, never the secret itself.
  */
-export function routeCredentialDir(): string {
+function routeCredentialDir(): string {
   return path.join(
     process.env.MCP_CONFIG_DIR || getDataDir(),
     'session-route-credentials',
