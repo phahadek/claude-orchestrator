@@ -113,6 +113,14 @@ const TIER_B_READ_MCP_TOOLS = [
   orchestratorMcpToolName('sessionEvents.query'),
 ];
 
+// The coarse `Bash(npm:*)`/`Bash(npx:*)`/`Bash(node:*)`/`Bash(tsc:*)` allow
+// entries below are intentionally left broad — install/build/typecheck
+// commands must keep working. A code session is instead narrowed by an
+// argument-level SDK `permissions.deny` layer built from each project's
+// configured `test:` commands (see getTestCommandDenyPatterns in
+// session/orchestrator-config.ts, applied in CliSessionRunner/
+// DockerSessionRunner), which blocks test-invocation commands specifically
+// without touching this allowlist.
 export const ALLOWED_TOOLS = [
   'Bash(git:*)',
   'Bash(npm:*)',

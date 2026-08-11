@@ -58,6 +58,8 @@ vi.mock('../planningScratchDir', () => ({
 }));
 
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
 import { execSync } from 'child_process';
 import { DockerSessionRunner } from '../DockerSessionRunner';
 
@@ -373,5 +375,50 @@ describe('DockerSessionRunner --mcp-config / --append-system-prompt-file', () =>
 
     const claudeArgs = capturedDockerArgs.slice(4);
     expect(claudeArgs).not.toContain('--append-system-prompt-file');
+  });
+});
+
+describe('DockerSessionRunner test-command deny patterns', () => {
+  let worktreeDir: string;
+
+  beforeEach(() => {
+    worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docker-deny-test-'));
+    fs.writeFileSync(
+      path.join(worktreeDir, '.claude-orchestrator.yml'),
+      'test:\n  - npm test\n',
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(worktreeDir, { recursive: true, force: true });
+  });
+
+  it('denies the configured test commands for a standard (code) session', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, worktreePath: worktreeDir, sessionType: 'standard' },
+      () => {},
+    );
+
+    const claudeArgs = capturedDockerArgs.slice(4);
+    const settingsIdx = claudeArgs.indexOf('--settings');
+    expect(settingsIdx).not.toBe(-1);
+    const settings = JSON.parse(claudeArgs[settingsIdx + 1]);
+    expect(settings.permissions.deny).toEqual(['Bash(npm test:*)']);
+  });
+
+  it('does not deny test commands for a non-code session (e.g. review)', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, worktreePath: worktreeDir, sessionType: 'review' },
+      () => {},
+    );
+
+    const claudeArgs = capturedDockerArgs.slice(4);
+    expect(claudeArgs).not.toContain('--settings');
   });
 });

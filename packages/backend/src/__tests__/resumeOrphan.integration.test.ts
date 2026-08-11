@@ -157,6 +157,7 @@ vi.mock('../session/orchestrator-config', () => ({
   })),
   getSessionAllowedTools: vi.fn(() => []),
   getSessionAddDirs: vi.fn(() => []),
+  getTestCommandDenyPatterns: vi.fn(() => []),
 }));
 
 vi.mock('../session/orchestrator-claudemd', () => ({

@@ -6,7 +6,10 @@ export interface OrchestratorClaudeMdParams {
   /** Absolute path to the worktree directory. Injected into Git Isolation rules. */
   worktreePath: string;
   /**
-   * Verify commands the session runs before opening the PR (typecheck, build, tests).
+   * Verify commands the session runs before opening the PR (typecheck, build).
+   * The authoritative test gate (OrchestratorConfig.test) is separate and
+   * only reachable via the test.request intent — see the rendered
+   * "Pre-PR Gate" and "Flaky / Transient CI or F2 Gate Failures" sections.
    * Format and lint are handled by orchestrator autofix — not included here.
    * Rendered from the project's `.claude-orchestrator.yml` verify list.
    * When empty or omitted, the gate shows a "no local verify" fallback.
@@ -257,10 +260,10 @@ The supervisor's "Pause your work" message isn't a nudge in this sense: stopping
 
 When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
 
-Only disposition a failure as flaky after clearing this verification bar, in order:
+Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Only disposition a failure as flaky after clearing this bar, in order:
 
-1. Run the failing test in isolation and confirm it fails or passes inconsistently on its own.
-2. Run the full test suite once more end-to-end and confirm it passes clean.
+1. Call \`test_request\`; confirm it reproduces there, not just in the CI log.
+2. Call \`test_request\` again after any fix; confirm it passes clean.
 3. Confirm the failure is unrelated to your diff (e.g. infra contention, test-ordering/parallelism interference, a timing race) — not a real regression you introduced.
 
 If all three hold, call the \`mcp__orchestrator__flaky_confirm\` tool instead of pushing a commit, with:
@@ -380,7 +383,9 @@ Run in order — all must pass before opening the PR:
 
 1. Rebase onto \`${targetBranch}\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
 ${verifySteps}
-${stageNum}. Stage only your implementation files for commit.`;
+${stageNum}. Stage only your implementation files for commit.
+
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`.`;
 })()}
 
 ---
