@@ -5,6 +5,7 @@ import {
   phaseTotal,
   flaggedTasksForPhase,
   isGatePhase,
+  GATE_STATE_KEY,
 } from '../phaseBurndown';
 import type { TaskView } from '../../types/taskView';
 import type { MilestoneConvergence } from '@claude-orchestrator/backend/src/convergence/convergenceService';
@@ -296,6 +297,53 @@ describe('computePhaseBurndown', () => {
     ];
     const result = computePhaseBurndown(tasks, null);
     expect(result.code.blockerCount).toBe(1);
+  });
+
+  it('maps pending gate counts to the pending segment, not open', () => {
+    const convergence = makeConvergence({
+      axes: {
+        tasks: { status: 'blocked', open: 1, closed: 0, blocking: [] },
+        gate: {
+          status: 'blocked',
+          blockingCount: 121,
+          parkedCount: 7,
+          bespokeCount: 3,
+          counts: {
+            open: 100,
+            runnable: 20,
+            'pending-approval': 1,
+            pending: 7,
+            pass: 200,
+            fail: 5,
+            deferred: 3,
+          },
+          blocking: [],
+        },
+        seed: { status: 'green', blockingCount: 0, blocking: [] },
+        ops: { status: 'green', blockingCount: 0, blocking: [] },
+      },
+    });
+
+    const result = computePhaseBurndown([], convergence);
+
+    expect(result.gate.counts.pending).toBe(7);
+    expect(result.gate.counts.open).toBe(100);
+  });
+
+  it('has a GATE_STATE_KEY entry for every state in the backend gate vocabulary', () => {
+    const BACKEND_GATE_STATES = [
+      'open',
+      'runnable',
+      'pass',
+      'fail',
+      'deferred',
+      'pending-approval',
+      'pending',
+      'discarded',
+    ];
+    for (const state of BACKEND_GATE_STATES) {
+      expect(GATE_STATE_KEY[state]).toBeDefined();
+    }
   });
 });
 
