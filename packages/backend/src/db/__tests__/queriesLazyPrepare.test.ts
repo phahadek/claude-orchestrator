@@ -24,9 +24,9 @@ const QUERIES_SOURCE = readFileSync(
 
 describe('queries.ts prepares every statement lazily', () => {
   it('contains zero top-level `const stmtX = db.prepare(...)` declarations', () => {
-    const offenders = QUERIES_SOURCE
-      .split('\n')
-      .filter((line) => /^const\s+\w*[Ss]tmt\w*\s*=\s*db\.prepare/.test(line));
+    const offenders = QUERIES_SOURCE.split('\n').filter((line) =>
+      /^const\s+\w*[Ss]tmt\w*\s*=\s*db\.prepare/.test(line),
+    );
     expect(offenders).toEqual([]);
   });
 
@@ -53,9 +53,8 @@ describe('lazily-prepared statements are cached, not re-prepared', () => {
 
   it('reuses the same Statement instance across repeated calls (stmtUpdateSessionStatus)', async () => {
     vi.resetModules();
-    const { setupTestDb } = await import(
-      '../../../test/helpers/setupTestDb.js'
-    );
+    const { setupTestDb } =
+      await import('../../../test/helpers/setupTestDb.js');
     const testDb = setupTestDb();
     vi.doMock('../db.js', () => ({ db: testDb }));
 

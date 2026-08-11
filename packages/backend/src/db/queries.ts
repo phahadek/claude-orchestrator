@@ -1773,9 +1773,7 @@ export function querySessionEventsByProjectRows(
 let _stmtClearPermissionDenials: Database.Statement | null = null;
 
 export function clearPermissionDenials(): void {
-  _stmtClearPermissionDenials ??= db.prepare(
-    `DELETE FROM permission_denials`,
-  );
+  _stmtClearPermissionDenials ??= db.prepare(`DELETE FROM permission_denials`);
   _stmtClearPermissionDenials.run();
 }
 
