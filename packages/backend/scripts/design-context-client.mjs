@@ -21,9 +21,30 @@
 //   ORCHESTRATOR_BACKEND_PORT backend loopback port (default 3000; the same
 //                             pair the other sanctioned session clients use)
 //   ORCHESTRATOR_DEVICE_TOKEN device bearer token authorizing the read
+//   ORCHESTRATOR_ROUTE_CREDENTIAL_FILE dispatched-session credential file,
+//                             read only when ORCHESTRATOR_DEVICE_TOKEN is unset
 
 import http from 'node:http';
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+
+/**
+ * Resolves the bearer token: prefer the shared operator device token
+ * (RC-session usage), falling back to a dispatched session's own
+ * per-session route credential file when no device token is set.
+ */
+function resolveRouteToken() {
+  if (process.env.ORCHESTRATOR_DEVICE_TOKEN) {
+    return process.env.ORCHESTRATOR_DEVICE_TOKEN;
+  }
+  const credFile = process.env.ORCHESTRATOR_ROUTE_CREDENTIAL_FILE;
+  if (!credFile) return undefined;
+  try {
+    return readFileSync(credFile, 'utf-8').trim();
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Fetch the DesignLoadResult bundle over loopback HTTP. Exported (rather than
@@ -96,11 +117,11 @@ async function main() {
 
   const host = process.env.ORCHESTRATOR_BACKEND_HOST ?? '127.0.0.1';
   const port = process.env.ORCHESTRATOR_BACKEND_PORT ?? '3000';
-  const token = process.env.ORCHESTRATOR_DEVICE_TOKEN;
+  const token = resolveRouteToken();
   if (!token) {
     fail(
-      'ORCHESTRATOR_DEVICE_TOKEN not set — this script must be run with a ' +
-        'device credential available.',
+      'Neither ORCHESTRATOR_DEVICE_TOKEN nor a readable ORCHESTRATOR_ROUTE_CREDENTIAL_FILE ' +
+        'is set — this script must be run with a device credential available.',
     );
     return;
   }

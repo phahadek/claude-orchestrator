@@ -180,7 +180,25 @@ export class CliSessionRunner implements ISessionRunner {
     // DB_PATH pointing at the live orchestrator database must never be
     // forwarded, or a `vitest run` inside the session would open and write
     // to production data. Session code has no legitimate need for this var.
-    const { DB_PATH: _productionDbPath, ...inheritedEnv } = process.env;
+    //
+    // ORCHESTRATOR_DEVICE_TOKEN is stripped for a different reason: it's the
+    // shared, human-operator credential the sanctioned route-client scripts
+    // (gate-state-client.mjs, staged-intents-client.mjs, etc.) read when run
+    // from an interactive Remote-Control session. Handing it to a dispatched
+    // session would authorize everything those routes allow, forever, for
+    // every device — the wrong shape for a scoped, revocable grant. A
+    // dispatched session instead gets its own per-session, capability-scoped
+    // credential via ORCHESTRATOR_ROUTE_CREDENTIAL_FILE (see extraEnv below
+    // and SessionRouteAuth.ts). This backend process has no legitimate need
+    // to hold ORCHESTRATOR_DEVICE_TOKEN in its own env either — device
+    // tokens are validated against the DB, not an env var — so stripping it
+    // here is a no-op for any expected deployment and pure defense-in-depth
+    // against a misconfigured environment forwarding it.
+    const {
+      DB_PATH: _productionDbPath,
+      ORCHESTRATOR_DEVICE_TOKEN: _sharedDeviceToken,
+      ...inheritedEnv
+    } = process.env;
 
     this.proc = spawn(config.claudePath, spawnArgs, {
       cwd: worktreePath,

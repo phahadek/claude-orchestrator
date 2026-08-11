@@ -36,6 +36,10 @@ import {
   mintStageCredential,
 } from '../auth/SessionStageAuth';
 import {
+  revokeRouteCredential,
+  writeRouteCredentialFile,
+} from '../auth/SessionRouteAuth';
+import {
   buildOrchestratorMcpServerEntry,
   ORCHESTRATOR_MCP_SERVER_NAME,
 } from '../mcp/orchestratorMcpServer';
@@ -294,6 +298,13 @@ export function writeMcpConfig(
   taskSource?: 'notion' | 'yaml' | 'jira' | 'github',
 ): string {
   const stageToken = mintStageCredential(sessionId);
+  // Mint (idempotent) and deliver this session's route-client credential
+  // alongside the stage token, at the same spawn/resume call sites — see
+  // SessionRouteAuth.ts for what this authorizes. The delivery file path
+  // itself is deterministic (routeCredentialFilePath) and threaded to the
+  // child via extraEnv in AgentSession.ts; nothing further is needed here
+  // beyond ensuring the file is (re)written before spawn.
+  writeRouteCredentialFile(sessionId);
   const port = resolveBackendPort();
   const merged = {
     ...mcpServers,
@@ -3081,6 +3092,7 @@ export class SessionManager extends EventEmitter {
 
     this.sessions.delete(sessionId);
     revokeStageCredential(sessionId, 'session_teardown');
+    revokeRouteCredential(sessionId, 'session_teardown');
 
     // Guard: never run destructive teardown (git worktree remove / fs.rmSync)
     // on anything but a real per-session worktree — never the project checkout
@@ -4555,6 +4567,7 @@ export class SessionManager extends EventEmitter {
         ? `terminal_status:${row.status}`
         : 'missing_db_row';
       revokeStageCredential(sessionId, revocationReason);
+      revokeRouteCredential(sessionId, revocationReason);
       if (row) {
         // The row reached a terminal status through some path other than
         // this session's own clean-exit (an external actor, per this

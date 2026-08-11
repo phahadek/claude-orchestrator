@@ -20,6 +20,14 @@
 // spawn time (see SessionStageAuth.ts), never the static device token, and
 // can never apply an intent, only stage one.
 //
+// A dispatched (non-RC) session can also run this script directly, but only
+// when an operator has explicitly granted it a matching
+// `Bash(node packages/backend/scripts/staged-intents-client.mjs ...)`
+// capability — see SessionRouteAuth.ts. That grant is authenticated by the
+// session's own per-session route credential (delivered via
+// $ORCHESTRATOR_ROUTE_CREDENTIAL_FILE, read below only when
+// $ORCHESTRATOR_DEVICE_TOKEN is unset), never the shared device token.
+//
 // Usage:
 //   node staged-intents-client.mjs create <kind> <json-payload> <projectId> [groupId]
 //   node staged-intents-client.mjs apply <intentId> [--override <reason>] [--actorType human|session]
@@ -55,9 +63,30 @@
 //   ORCHESTRATOR_BACKEND_PORT backend loopback port (default 3000; shared
 //                             with the other sanctioned session clients)
 //   ORCHESTRATOR_DEVICE_TOKEN device bearer token authorizing the request
+//   ORCHESTRATOR_ROUTE_CREDENTIAL_FILE dispatched-session credential file,
+//                             read only when ORCHESTRATOR_DEVICE_TOKEN is unset
 
 import http from 'node:http';
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+
+/**
+ * Resolves the bearer token: prefer the shared operator device token
+ * (RC-session usage), falling back to a dispatched session's own
+ * per-session route credential file when no device token is set.
+ */
+function resolveRouteToken() {
+  if (process.env.ORCHESTRATOR_DEVICE_TOKEN) {
+    return process.env.ORCHESTRATOR_DEVICE_TOKEN;
+  }
+  const credFile = process.env.ORCHESTRATOR_ROUTE_CREDENTIAL_FILE;
+  if (!credFile) return undefined;
+  try {
+    return readFileSync(credFile, 'utf-8').trim();
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Issues one loopback HTTP request against the staged-intents API and
@@ -264,11 +293,11 @@ async function main() {
 
   const host = process.env.ORCHESTRATOR_BACKEND_HOST ?? '127.0.0.1';
   const port = process.env.ORCHESTRATOR_BACKEND_PORT ?? '3000';
-  const token = process.env.ORCHESTRATOR_DEVICE_TOKEN;
+  const token = resolveRouteToken();
   if (!token) {
     fail(
-      'ORCHESTRATOR_DEVICE_TOKEN not set — this script must be run with a ' +
-        'device credential available.',
+      'Neither ORCHESTRATOR_DEVICE_TOKEN nor a readable ORCHESTRATOR_ROUTE_CREDENTIAL_FILE ' +
+        'is set — this script must be run with a device credential available.',
     );
     return;
   }

@@ -54,6 +54,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'session.getRecord',
   'auditLog.query',
   'sessionEvents.query',
+  'test.request',
 ];
 
 const REGISTERED_TOOL_NAMES = new Set(
