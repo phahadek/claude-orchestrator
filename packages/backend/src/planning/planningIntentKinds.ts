@@ -47,6 +47,12 @@ export const PLANNING_INTENT_KINDS: Record<
     'intent.withdraw',
     'planning.noOp',
   ],
+  // gate.reclassify (mcp/tools/gateReclassifyTool.ts) and
+  // intent.dispositionStranded (mcp/tools/strandedIntentTool.ts) are
+  // deliberately not listed here — like gateSeed.getState/deploy.verdict,
+  // they act immediately rather than staging an intent for operator
+  // disposition, so they're added explicitly to OPS_MCP_TOOLS in config.ts
+  // instead of through this kind-per-tool list.
   ops: [
     'journal.setState',
     'task.setStatus',

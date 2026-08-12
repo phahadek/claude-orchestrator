@@ -4010,6 +4010,112 @@ export function withdrawIntent(
 }
 
 /**
+ * Thrown by dispositionStrandedIntent when the disposition cannot be
+ * honoured — never silently dropped, mirroring IntentWithdrawError above.
+ */
+export class StrandedIntentDispositionError extends Error {
+  constructor(message: string) {
+    super(`[stagedIntents] ${message}`);
+    this.name = 'StrandedIntentDispositionError';
+  }
+}
+
+/** States a stranded intent may still be dispositioned from — the withdrawable states plus the two dispatched-group-verify transients (see StagedIntentState's doc comment). */
+const STRANDED_DISPOSITIONABLE_STATES: StagedIntentState[] = [
+  'staged',
+  'approved',
+  'pending_verification',
+  'needs_revision',
+];
+
+/**
+ * An ops session's disposition of an intent left stranded by a *different*
+ * session that has since terminated — the gap withdrawIntent doesn't cover
+ * (that one only ever reaches the calling session's own intents). This is
+ * the opposite authorization shape: it is authorized *because* the owning
+ * session is no longer live, not because the caller staged the row itself,
+ * so it deliberately does not reuse withdrawIntent's `row.session_id !==
+ * sessionId` ownership predicate — copying that check would reject every
+ * intent this verb exists to handle, since a stranded intent's owner is by
+ * definition someone other than the (live) caller.
+ *
+ * expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions (see
+ * db/queries.ts) already reap `staged`/`approved` rows automatically once
+ * their owning session terminates; this verb exists for the residual they
+ * don't touch — a row wedged in the transient `pending_verification` /
+ * `needs_revision` states (a dispatched group's verify pass never resolved
+ * before its session died) — plus a manual escape hatch for the automatic
+ * cases. Moves the intent to the terminal `superseded` state (not
+ * `withdrawn` — that state is reserved for a session's own self-correction)
+ * with the supplied reason recorded as its `dispositionReason`.
+ */
+export function dispositionStrandedIntent(
+  intentId: string,
+  reason: string,
+  callerSessionId: string,
+): StagedIntent {
+  const trimmedReason = reason.trim();
+  if (!trimmedReason) {
+    throw new StrandedIntentDispositionError(
+      'a non-empty reason is required to disposition a stranded intent',
+    );
+  }
+
+  const row = getStagedIntentRow(intentId);
+  if (!row) {
+    throw new StrandedIntentDispositionError(
+      `staged intent "${intentId}" was not found`,
+    );
+  }
+  if (!row.session_id) {
+    throw new StrandedIntentDispositionError(
+      `staged intent "${intentId}" has no owning session and is not a stranded intent`,
+    );
+  }
+  const owningSession = getSession(row.session_id);
+  if (!owningSession || !TERMINAL_SESSION_STATUSES.has(owningSession.status)) {
+    throw new StrandedIntentDispositionError(
+      `staged intent "${intentId}" is owned by session "${row.session_id}", which is still live — only an intent stranded by a terminated session can be dispositioned this way`,
+    );
+  }
+  if (!STRANDED_DISPOSITIONABLE_STATES.includes(row.state)) {
+    throw new StrandedIntentDispositionError(
+      `staged intent "${intentId}" is in state "${row.state}" and cannot be dispositioned`,
+    );
+  }
+
+  // pending_verification has no direct edge to `superseded` (only to
+  // `staged` or `needs_revision`) — hop through needs_revision first, same
+  // precedent as transitionRejectedIntent's pending_verification -> rejected hop.
+  const current =
+    row.state === 'pending_verification'
+      ? transitionStagedIntent(intentId, 'needs_revision')
+      : row;
+  const dispositioned = transitionStagedIntent(current.id, 'superseded', {
+    dispositionReason: trimmedReason,
+  });
+  const dispositionedIntent = rowToApi(dispositioned);
+  broadcastIntentChange(dispositionedIntent);
+
+  recordEvent({
+    event_type: 'staged_intent_disposition',
+    actor_type: 'ai',
+    actor_id: callerSessionId,
+    project_id: dispositionedIntent.projectId,
+    task_id: row.task_id,
+    payload: {
+      intentId,
+      disposition: 'superseded',
+      reason: trimmedReason,
+      owningSessionId: row.session_id,
+      dispositionedBy: callerSessionId,
+    },
+  });
+
+  return dispositionedIntent;
+}
+
+/**
  * System-initiated retirement of a live Human-Observation mirror intent —
  * called from gateReconciler's level-triggered mirror scan
  * (reconcileHumanObservationMirrors, via the GateItemMirrorSink wired in

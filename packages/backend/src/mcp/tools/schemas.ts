@@ -439,6 +439,19 @@ export const gateVerifyResultSchema = z.object({
   milestone: z.string().nullable(),
 });
 
+/**
+ * gateService.ts's RECLASSIFY_TARGETS — the /gate skill's own triage
+ * vocabulary a human operator (and now the gate.reclassify MCP verb) may
+ * move a gate item to. Excludes 'needs-triage': that's an input state, never
+ * a reclassification target — reclassifyGateItem rejects it at runtime too,
+ * this schema just surfaces the same rule to the calling model up front.
+ */
+export const gateReclassifyClassificationSchema = z.enum([
+  'Read-Only',
+  'Prod-Mutating',
+  'Human-Observation',
+]);
+
 /** AgenticVerdict — see DeployOrchestrator.ts and AgentSession.ts's recordDeployAgenticVerdict. */
 export const deployAgenticVerdictSchema = z.enum([
   'approved',

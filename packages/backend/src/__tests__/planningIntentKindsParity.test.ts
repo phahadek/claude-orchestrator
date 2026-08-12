@@ -32,6 +32,13 @@ const GATESEED_GETSTATE_TOOL = orchestratorMcpToolName('gateSeed.getState');
 // never a staged intent, so it isn't in PLANNING_INTENT_KINDS.ops (see
 // config.ts's OPS_MCP_TOOLS comment).
 const DEPLOY_VERDICT_TOOL = orchestratorMcpToolName('deploy.verdict');
+// gate.reclassify / intent.dispositionStranded are also direct calls, never
+// staged intents (see config.ts's OPS_MCP_TOOLS comment) — same precedent as
+// deploy.verdict just above.
+const GATE_RECLASSIFY_TOOL = orchestratorMcpToolName('gate.reclassify');
+const STRANDED_INTENT_TOOL = orchestratorMcpToolName(
+  'intent.dispositionStranded',
+);
 // pullRequest.getByTaskId is the read-only PR lookup registered
 // unconditionally for any session resolving to a project — also a direct
 // read, not a staged-intent kind, so it isn't in PLANNING_INTENT_KINDS (see
@@ -121,6 +128,8 @@ const WORKFLOWS: {
     extraNonStagedTools: [
       GATESEED_GETSTATE_TOOL,
       DEPLOY_VERDICT_TOOL,
+      GATE_RECLASSIFY_TOOL,
+      STRANDED_INTENT_TOOL,
       PULLREQUEST_GETBYTASKID_TOOL,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
@@ -163,6 +172,17 @@ describe('planning workflow --allowed-tools parity with PLANNING_INTENT_KINDS', 
     const tool = orchestratorMcpToolName('gate.verify');
     expect(PLANNING_INTENT_KINDS.ops).toContain('gate.verify');
     expect(OPS_ALLOWED_TOOLS).toContain(tool);
+  });
+
+  it('gate.reclassify and intent.dispositionStranded are exposed to ops sessions under their CLI-sanitized underscore names', () => {
+    expect(GATE_RECLASSIFY_TOOL).toBe('mcp__orchestrator__gate_reclassify');
+    expect(STRANDED_INTENT_TOOL).toBe(
+      'mcp__orchestrator__intent_dispositionStranded',
+    );
+    expect(OPS_ALLOWED_TOOLS).toContain(GATE_RECLASSIFY_TOOL);
+    expect(OPS_ALLOWED_TOOLS).toContain(STRANDED_INTENT_TOOL);
+    expect(GROOM_ALLOWED_TOOLS).not.toContain(GATE_RECLASSIFY_TOOL);
+    expect(DESIGN_ALLOWED_TOOLS).not.toContain(GATE_RECLASSIFY_TOOL);
   });
 
   it('groom session allow-list grants the CLI-sanitized task_setType tool, and only groom', () => {

@@ -264,6 +264,8 @@ describe('buildMcpServer — tool surface per session type', () => {
         'pullRequest.getByTaskId',
         'gateSeed.getState',
         'deploy.verdict',
+        'gate.reclassify',
+        'intent.dispositionStranded',
         'session.getRecord',
         'auditLog.query',
         'sessionEvents.query',
@@ -271,6 +273,8 @@ describe('buildMcpServer — tool surface per session type', () => {
     );
     expect(names).toContain('session.requestCapability');
     expect(names).toContain('gate.verify');
+    expect(names).toContain('gate.reclassify');
+    expect(names).toContain('intent.dispositionStranded');
     expect(names).not.toContain('review.disposition');
     expect(names).not.toContain('flaky.confirm');
   });
@@ -293,6 +297,8 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).not.toContain('architecture.queryUnits');
     expect(names).not.toContain('task.getById');
     expect(names).not.toContain('gate.verify');
+    expect(names).not.toContain('gate.reclassify');
+    expect(names).not.toContain('intent.dispositionStranded');
     expect(names).toContain('pullRequest.getByTaskId');
     expect(names).toContain('gateSeed.getState');
   });
