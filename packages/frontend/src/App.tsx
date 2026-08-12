@@ -790,13 +790,13 @@ export default function App() {
 
   useEffect(() => {
     if (!lastReviewEscalation) return;
-    const { prNumber, receivedAt } = lastReviewEscalation;
+    const { prNumber, message, receivedAt } = lastReviewEscalation;
     const notifId = `escalation-${prNumber}-${receivedAt}`;
     setNotifications((prev) => [
       ...prev,
       {
         id: notifId,
-        message: `⚠️ PR #${prNumber} review loop hit max iterations — needs your attention`,
+        message: `⚠️ PR #${prNumber} needs your attention: ${message}`,
         status: 'review',
         onClick: () => setTopView('prs'),
       },

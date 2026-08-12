@@ -28,6 +28,8 @@ import type {
   NewPermissionDenialRow,
   TaskCache,
   PullRequestRow,
+  DepthReviewVerdictRow,
+  NewDepthReviewVerdictRow,
   PauseReason,
   CanonicalPauseReason,
   PauseReasonStruct,
@@ -2585,6 +2587,47 @@ export function setPRReviewResult(
       },
     });
   }
+}
+
+/**
+ * Persist a PR's latest depth-review verdict — the second, post-conformance
+ * review pass (see ReviewOrchestrator.dispatchDepthReview). Distinct from
+ * setPRReviewResult, which writes pull_requests.review_result (the
+ * conformance verdict only); this table is never read or written by that
+ * path. Upserted on (pr_number, repo) — a re-run overwrites the prior row.
+ */
+export function upsertDepthReviewVerdict(row: NewDepthReviewVerdictRow): void {
+  db.prepare<
+    NewDepthReviewVerdictRow & { recorded_at: string }
+  >(
+    `
+    INSERT INTO depth_review_verdicts
+      (pr_number, repo, head_sha, verdict, dimensions, summary, depth_session_id, recorded_at)
+    VALUES
+      (@pr_number, @repo, @head_sha, @verdict, @dimensions, @summary, @depth_session_id, @recorded_at)
+    ON CONFLICT(pr_number, repo) DO UPDATE SET
+      head_sha = excluded.head_sha,
+      verdict = excluded.verdict,
+      dimensions = excluded.dimensions,
+      summary = excluded.summary,
+      depth_session_id = excluded.depth_session_id,
+      recorded_at = excluded.recorded_at
+  `,
+  ).run({ ...row, recorded_at: new Date().toISOString() });
+}
+
+/** Read the latest depth-review verdict for a PR, if any depth pass has completed. */
+export function getDepthReviewVerdict(
+  prNumber: number,
+  repo: string,
+): DepthReviewVerdictRow | null {
+  return db
+    .prepare<{ pr_number: number; repo: string }>(
+      `
+    SELECT * FROM depth_review_verdicts WHERE pr_number = @pr_number AND repo = @repo
+  `,
+    )
+    .get({ pr_number: prNumber, repo }) as DepthReviewVerdictRow | null;
 }
 
 /**

@@ -1976,4 +1976,25 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // depth_review_verdicts: durable record of each PR's latest depth-review
+  // pass (the second, post-conformance review dispatched by
+  // ReviewOrchestrator.dispatchDepthReview) — separate from
+  // pull_requests.review_result, which carries only the conformance verdict.
+  // Keyed on (pr_number, repo) so "this PR's latest depth verdict" is a
+  // single-row read; a re-run overwrites the prior row rather than
+  // accumulating history.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS depth_review_verdicts (
+      pr_number        INTEGER NOT NULL,
+      repo             TEXT    NOT NULL,
+      head_sha         TEXT,
+      verdict          TEXT    NOT NULL,
+      dimensions       TEXT    NOT NULL,
+      summary          TEXT    NOT NULL,
+      depth_session_id TEXT,
+      recorded_at      TEXT    NOT NULL,
+      PRIMARY KEY (pr_number, repo)
+    );
+  `);
 }

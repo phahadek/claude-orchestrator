@@ -23,6 +23,7 @@ vi.mock('../db/queries.js', () => ({
   markSessionDone: vi.fn(),
   clearTerminalPRFlags: vi.fn(),
   lookupSessionByBranch: vi.fn().mockReturnValue(null),
+  getDepthReviewVerdict: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -1275,6 +1276,138 @@ describe('POST /api/prs/:prNumber/re-review', () => {
 
     // Reset broadcast to no-op
     setPRBroadcast(() => {});
+  });
+});
+
+// ── POST /api/prs/:prNumber/fix ─────────────────────────────────────────────
+
+describe('POST /api/prs/:prNumber/fix', () => {
+  it('sends the depth-review failing dimensions when conformance approved with 0 failing dimensions (PR #1630 shape)', async () => {
+    const prRow: PullRequestRow = {
+      ...mockPRRow,
+      review_result: JSON.stringify({
+        prNumber: 42,
+        repo: 'owner/repo',
+        verdict: 'approved',
+        dimensions: [
+          { name: 'Spec conformance', passed: true, notes: 'Matches spec.' },
+        ],
+        summary: 'Conformance approved.',
+        reviewedAt: '2024-01-01T00:00:00Z',
+      }),
+    };
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
+    vi.mocked(queries.getDepthReviewVerdict).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+      head_sha: 'sha-1',
+      verdict: 'fail',
+      dimensions: JSON.stringify([
+        {
+          name: 'Data integrity & parsing correctness',
+          passed: false,
+          notes: 'Duplicated planningSessionTypeLabel mapping docs/split to Ops.',
+        },
+      ]),
+      summary: 'Depth review found a data-integrity defect.',
+      depth_session_id: 'depth-session-1',
+      recorded_at: '2024-01-01T00:05:00Z',
+    });
+
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(buildApp(undefined, undefined, sessionManager))
+      .post('/api/prs/42/fix')
+      .query({ projectId: 'proj-1' });
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(sessionManager.sendOrResume)).toHaveBeenCalledOnce();
+    const [, message] = vi.mocked(sessionManager.sendOrResume).mock.calls[0];
+    expect(message).toContain('Data integrity & parsing correctness');
+    expect(message).toContain(
+      'Duplicated planningSessionTypeLabel mapping docs/split to Ops.',
+    );
+  });
+
+  it('sends the conformance failing dimensions unchanged when there is no depth verdict', async () => {
+    const prRow: PullRequestRow = {
+      ...mockPRRow,
+      review_result: JSON.stringify({
+        prNumber: 42,
+        repo: 'owner/repo',
+        verdict: 'needs_changes',
+        dimensions: [
+          { name: 'Tests', passed: false, notes: 'Missing test coverage.' },
+        ],
+        summary: 'Needs changes.',
+        reviewedAt: '2024-01-01T00:00:00Z',
+      }),
+    };
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
+    vi.mocked(queries.getDepthReviewVerdict).mockReturnValue(null);
+
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(buildApp(undefined, undefined, sessionManager))
+      .post('/api/prs/42/fix')
+      .query({ projectId: 'proj-1' });
+
+    expect(res.status).toBe(200);
+    const [, message] = vi.mocked(sessionManager.sendOrResume).mock.calls[0];
+    expect(message).toBe(
+      'PR #42 review findings — please address the following:\n\n' +
+        '❌ Tests: Missing test coverage.\n\nOverall: Needs changes.',
+    );
+  });
+
+  it('returns 422 when neither conformance nor depth has recorded a failure', async () => {
+    const prRow: PullRequestRow = {
+      ...mockPRRow,
+      review_result: JSON.stringify({
+        prNumber: 42,
+        repo: 'owner/repo',
+        verdict: 'approved',
+        dimensions: [
+          { name: 'Spec conformance', passed: true, notes: 'Matches spec.' },
+        ],
+        summary: 'Conformance approved.',
+        reviewedAt: '2024-01-01T00:00:00Z',
+      }),
+    };
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
+    vi.mocked(queries.getDepthReviewVerdict).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+      head_sha: 'sha-1',
+      verdict: 'pass',
+      dimensions: JSON.stringify([
+        { name: 'Security', passed: true, notes: 'Fine.' },
+      ]),
+      summary: 'Depth review passed.',
+      depth_session_id: 'depth-session-1',
+      recorded_at: '2024-01-01T00:05:00Z',
+    });
+
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(buildApp(undefined, undefined, sessionManager))
+      .post('/api/prs/42/fix')
+      .query({ projectId: 'proj-1' });
+
+    expect(res.status).toBe(422);
+    expect(vi.mocked(sessionManager.sendOrResume)).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 when there is no review of either kind', async () => {
+    const prRow: PullRequestRow = { ...mockPRRow, review_result: null };
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
+    vi.mocked(queries.getDepthReviewVerdict).mockReturnValue(null);
+
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(buildApp(undefined, undefined, sessionManager))
+      .post('/api/prs/42/fix')
+      .query({ projectId: 'proj-1' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/Run a review/);
+    expect(vi.mocked(sessionManager.sendOrResume)).not.toHaveBeenCalled();
   });
 });
 
