@@ -72,6 +72,7 @@ import {
   PLANNING_INTENT_KINDS,
   type PlanningWorkflow,
 } from './planningIntentKinds';
+import { TRIAGE_ELIGIBLE_TYPES } from './triage';
 import { isRepoFileTargetSurface } from '../docs/targetSurface';
 
 export type { PlanningWorkflow };
@@ -765,6 +766,9 @@ function renderSkeleton(
 ): string {
   const label = SKILL_LABELS[workflow];
   const kinds = PLANNING_INTENT_KINDS[workflow];
+  const triageEligibleTypesList = Array.from(TRIAGE_ELIGIBLE_TYPES).join(
+    ' / ',
+  );
   const docsRepoFileTarget =
     workflow === 'docs' && isRepoFileTargetSurface(docsTargetSurface ?? '');
   const lifecycle =
@@ -927,9 +931,26 @@ function renderSkeleton(
           'from the repo itself at promotion time, never taken from this payload), ' +
           'and `dependsOnTasks` ' +
           '(one `{"id": "<task-id>", "type": "<type>", "status": "<status>"}` per ' +
-          'declared Depends On edge — `[]` when there are none). A worked, ' +
-          'field-complete example for a 💻 Code task with one binding constraint, ' +
-          'one Files/paths entry, and no dependencies: call the ' +
+          'declared Depends On edge — `[]` when there are none). These seven ' +
+          'fields are required for every Type. An eighth, `groomingGate.triage`, ' +
+          `is required in addition for a triage-eligible Type (currently ${triageEligibleTypesList} ` +
+          '— derived from `TRIAGE_ELIGIBLE_TYPES` in `planning/triage.ts`, so this ' +
+          'list moves if that set does) and is rejected outright, not silently ' +
+          'ignored, for every other Type: `{"proposedVerdict": "clean"|"blocked"|' +
+          '"needs-attention", "hasOpenQuestionsHeading": true|false}`. ' +
+          '`proposedVerdict` is this session\'s judgment call on the task\'s own ' +
+          'required-heading section (`## Open Questions` for 📐 Design/📋 Planning, ' +
+          'that Type\'s own registry-defined heading otherwise — see ' +
+          '`planning/triage.ts`); `hasOpenQuestionsHeading` is the structural fact ' +
+          'of whether that heading is actually present in the body. A `clean` ' +
+          'verdict promotes the task without a further per-item human sign-off; ' +
+          '`blocked` or `needs-attention` keeps the task at its current status — ' +
+          'the server re-derives the verdict from hard facts (a non-Done blocking ' +
+          'Depends On, a routed constraint conflict) and can only downgrade a ' +
+          'proposed `clean`, never upgrade a lower one. A worked, field-complete ' +
+          'example for a 💻 Code task (not triage-eligible — no `triage` field) ' +
+          'with one binding constraint, one Files/paths entry, and no ' +
+          'dependencies: call the ' +
           `\`${orchestratorMcpToolName('task.setStatus')}\` tool with \`{"payload":` +
           '{"taskId":"<task-id>","status":"Ready","groomingGate":{' +
           '"size_check":{"decision":"no_split","files":1,"loc":40,"loc_method":"estimated"},' +
@@ -938,10 +959,25 @@ function renderSkeleton(
           '"regions":{"packages":["packages/backend"],"files":["packages/backend/src/foo.ts"]},' +
           '"constraintsDispositioned":{"constraint-a":{"disposition":"complies"}},' +
           '"filesPathsEntries":[{"raw":"packages/backend/src/foo.ts","isNew":false}],' +
-          '"dependsOnTasks":[]}}}` — omitting any one of these six `groomingGate` ' +
+          '"dependsOnTasks":[]}}}` — omitting any one of these seven `groomingGate` ' +
           'fields (even as an empty array/object where genuinely empty) is what ' +
           'blocks the Ready flip; fill every field from the digest above rather ' +
-          'than carrying only `type`.\n\n' +
+          'than carrying only `type`. A second worked example for a ' +
+          'triage-eligible 📐 Design task, triaged clean, with no binding ' +
+          'constraints, Files/paths entries, or dependencies: call the same ' +
+          `tool with \`{"payload":{"taskId":"<task-id>","status":"Ready",` +
+          '"groomingGate":{' +
+          '"size_check":{"decision":"n/a"},' +
+          '"type_check":{"decision":"none"},' +
+          '"type":"📐 Design",' +
+          '"regions":{"packages":[],"files":[]},' +
+          '"constraintsDispositioned":{},' +
+          '"filesPathsEntries":[],' +
+          '"dependsOnTasks":[],' +
+          '"triage":{"proposedVerdict":"clean","hasOpenQuestionsHeading":true}' +
+          '}}}` — the eighth field here, `triage`, is what a triage-eligible ' +
+          'Type adds; a 💻 Code (or other non-eligible) task must omit it ' +
+          'entirely rather than carry it as `null` or `false`.\n\n' +
           'When the pre-groom body carries a "### 👁️ Manual verification" ' +
           'section, its accreted/relocated content is stripped from the body as ' +
           'a `task.patchBodySection` (`operation: "remove"`) — never a ' +

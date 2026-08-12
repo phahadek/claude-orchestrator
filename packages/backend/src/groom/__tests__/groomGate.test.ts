@@ -70,7 +70,10 @@ import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
 import { BackendTaskWriteCommands } from '../../tasks/TaskWriteCommands';
 import type { TaskBackend } from '../../tasks/TaskBackend';
-import { INTERACTIVE_TASK_TYPES } from '../../planning/triage';
+import {
+  INTERACTIVE_TASK_TYPES,
+  TRIAGE_ELIGIBLE_TYPES,
+} from '../../planning/triage';
 
 /**
  * Every existing test in this file was written against the pre-fix
@@ -1540,6 +1543,57 @@ describe('checkGroomingPromotionGate — Operational/Investigation triage floor'
     expect(
       result.reasons.some((r) => r.includes('Targets / surfaces affected')),
     ).toBe(true);
+  });
+});
+
+describe('TRIAGE_ELIGIBLE_TYPES — approve-by-standard eligible set was not widened by this task', () => {
+  it('still contains exactly 📐 Design / 📋 Planning / 🔧 Operational / 🔎 Investigation', () => {
+    expect(new Set(TRIAGE_ELIGIBLE_TYPES)).toEqual(
+      new Set(['📐 Design', '📋 Planning', '🔧 Operational', '🔎 Investigation']),
+    );
+  });
+});
+
+describe('checkGroomingPromotionGate — triage refusal text is project-agnostic and in-band', () => {
+  it('the missing-triage refusal for a triage-eligible type names every eligible type in-band and carries no repo file path', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+        type: '📐 Design',
+      },
+      'notion:triage-missing-no-path',
+    );
+    expect(result.allowed).toBe(false);
+    const reason = result.reasons.find((r) =>
+      r.includes('requires a recorded triage verdict'),
+    );
+    expect(reason).toBeDefined();
+    expect(reason).not.toMatch(/\.ts\b/);
+    for (const type of TRIAGE_ELIGIBLE_TYPES) {
+      expect(reason).toContain(type);
+    }
+  });
+
+  it('the stray-triage refusal for an ineligible type names every eligible type in-band and carries no repo file path', async () => {
+    const result = await gate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+        type: '💻 Code',
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+      },
+      'notion:triage-stray-no-path',
+    );
+    expect(result.allowed).toBe(false);
+    const reason = result.reasons.find((r) =>
+      r.includes('groomingGate.triage was recorded'),
+    );
+    expect(reason).toBeDefined();
+    expect(reason).not.toMatch(/\.ts\b/);
+    for (const type of TRIAGE_ELIGIBLE_TYPES) {
+      expect(reason).toContain(type);
+    }
   });
 });
 

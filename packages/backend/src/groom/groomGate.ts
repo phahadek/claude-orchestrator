@@ -48,6 +48,7 @@ import {
   applyTriageFloorForType,
   isTriageEligibleType,
   INTERACTIVE_TASK_TYPES,
+  TRIAGE_ELIGIBLE_TYPES,
   type TriageVerdict,
 } from '../planning/triage';
 import { ProjectService } from '../projects/ProjectService';
@@ -60,6 +61,17 @@ const SIZE_CHECK_DECISIONS = new Set([
   'unsplittable',
   'n/a',
 ]);
+
+/**
+ * Prose rendering of `TRIAGE_ELIGIBLE_TYPES` for in-band refusal text — a
+ * single derivation point so the refusals below can never drift from the
+ * set that actually gates promotion (see the "six/seven groomingGate
+ * fields" completeness-claim drift this task fixes for the injected
+ * procedure's copy of the same list).
+ */
+const TRIAGE_ELIGIBLE_TYPES_LIST = Array.from(TRIAGE_ELIGIBLE_TYPES).join(
+  ' / ',
+);
 
 /** Task types that require a gate_contribution accretion marker before Ready. */
 const GATE_CONTRIBUTION_TYPES = new Set(['💻 Code']);
@@ -190,10 +202,11 @@ export interface GroomingGateEntry {
   /** This task's declared Depends On, resolved to type/status — drives FM3's Design/Planning liveness + cite-or-route signals. */
   dependsOnTasks?: DependsOnTaskRef[];
   /**
-   * Approve-by-standard triage input for an interactive (📐 Design /
-   * 📋 Planning) task — see planning/triage.ts. Required for those types
-   * before promotion; ignored for auto-dispatched types (💻 Code stays
-   * per-task-gated). `proposedVerdict` is the groomer's judgment-primary
+   * Approve-by-standard triage input for a triage-eligible task (see
+   * `isTriageEligibleType` / `TRIAGE_ELIGIBLE_TYPES` in planning/triage.ts).
+   * Required for those types before promotion; rejected outright for
+   * auto-dispatched/ineligible types (💻 Code stays per-task-gated).
+   * `proposedVerdict` is the groomer's judgment-primary
    * call; `hasOpenQuestionsHeading` is a structural fact groomLoad.ts
    * computes from the task body. The deterministic floor is re-applied here
    * from server-derived facts (hard-block Depends On, routed constraint
@@ -795,7 +808,7 @@ function isTriageEligibleForType(
     ok: false,
     reasons: [
       `groomingGate.triage was recorded for task type "${type ?? 'unknown'}" — approve-by-standard triage ` +
-        'applies only to triage-eligible types (📐 Design / 📋 Planning / 🔧 Operational / 🔎 Investigation); ' +
+        `applies only to triage-eligible types (${TRIAGE_ELIGIBLE_TYPES_LIST}); ` +
         'this type keeps the per-task human gate and must not carry a triage verdict. Re-stage without ' +
         'groomingGate.triage.',
     ],
@@ -823,7 +836,10 @@ function isInteractiveTriageClean(
     return {
       ok: false,
       reasons: [
-        `triage-eligible task type "${type}" requires a recorded triage verdict before promotion — see planning/triage.ts.`,
+        `triage-eligible task type "${type}" requires a recorded triage verdict before promotion — ` +
+          `types ${TRIAGE_ELIGIBLE_TYPES_LIST} require groomingGate.triage ` +
+          '(`{"proposedVerdict": "clean"|"blocked"|"needs-attention", "hasOpenQuestionsHeading": true|false}`); ' +
+          'promotion without a per-item human sign-off requires a clean verdict.',
       ],
     };
   }

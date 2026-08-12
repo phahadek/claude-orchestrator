@@ -15,6 +15,7 @@ import {
   deriveGroomDigestSlice,
 } from '../procedureAssembler';
 import { PLANNING_INTENT_KINDS } from '../planningIntentKinds';
+import { TRIAGE_ELIGIBLE_TYPES } from '../triage';
 import { GROOM_ALLOWED_TOOLS } from '../../config';
 import { orchestratorMcpToolName } from '../../mcp/toolNaming';
 import { buildMcpServer } from '../../mcp/orchestratorMcpServer';
@@ -194,5 +195,64 @@ describe('a decision.pickOne staged by a groom session', () => {
       chosenLabel: 'Widen scope',
       freeForm: null,
     });
+  });
+});
+
+describe('the assembled groom procedure documents groomingGate.triage', () => {
+  it('names groomingGate.triage and states which Types require it and which reject it', () => {
+    const output = assembleGroomOutput();
+    expect(output).toMatch(/`triage`/);
+    expect(output).toMatch(/groomingGate\.triage/);
+    expect(output).toMatch(/required in addition for a triage-eligible Type/);
+    expect(output).toMatch(/rejected outright.*for every other Type/);
+  });
+
+  it('carries a worked groomingGate example for a triage-eligible Type', () => {
+    const output = assembleGroomOutput();
+    expect(output).toMatch(/triage-eligible 📐 Design task, triaged clean/);
+    expect(output).toMatch(
+      /"triage":\{"proposedVerdict":"clean","hasOpenQuestionsHeading":true\}/,
+    );
+  });
+
+  it('derives the documented Type list from TRIAGE_ELIGIBLE_TYPES rather than a hard-coded prose list', async () => {
+    vi.resetModules();
+    vi.doMock('../triage', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../triage')>();
+      return {
+        ...actual,
+        TRIAGE_ELIGIBLE_TYPES: new Set([
+          ...actual.TRIAGE_ELIGIBLE_TYPES,
+          '🧪 Fixture Type',
+        ]),
+      };
+    });
+    try {
+      const mockedModule = await import('../procedureAssembler');
+      const output = mockedModule.assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
+        digest: {
+          workflow: 'groom',
+          data: mockedModule.deriveGroomDigestSlice(
+            fixtureGroomLoadResult(),
+            'task-1',
+          ),
+        },
+      });
+      expect(output).toContain('🧪 Fixture Type');
+    } finally {
+      vi.doUnmock('../triage');
+      vi.resetModules();
+    }
+  });
+
+  it("states the required-field count accurately: seven fields for every Type, an eighth (triage) for triage-eligible Types", () => {
+    const output = assembleGroomOutput();
+    expect(output).toMatch(/these seven `groomingGate`/);
+    expect(output).toMatch(/An eighth, `triage`, is required/);
+    expect(output).not.toMatch(/these six `groomingGate`/);
   });
 });
