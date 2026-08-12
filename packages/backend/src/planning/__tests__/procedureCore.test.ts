@@ -195,15 +195,19 @@ describe('procedureCore', () => {
     expect(principle).toBeDefined();
     expect(principle.appliesTo).toEqual(['groom']);
     const rendered = renderPrinciple(principle, 'groom');
-    expect(rendered).toContain('deliverable is a decision about the target task');
     expect(rendered).toContain(
-      "never the output the task itself exists to produce",
+      'deliverable is a decision about the target task',
+    );
+    expect(rendered).toContain(
+      'never the output the task itself exists to produce',
     );
     expect(rendered).toContain('📐 Design task');
-    expect(rendered).toContain("its own listed Open Questions are a /design session's deliverable");
+    expect(rendered).toContain(
+      "its own listed Open Questions are a /design session's deliverable",
+    );
   });
 
-  it("keeps decision.pickOne available to groom sessions for legitimate escalations even after the deliverable-boundary principle is added", () => {
+  it('keeps decision.pickOne available to groom sessions for legitimate escalations even after the deliverable-boundary principle is added', () => {
     const deliverablePrinciple = CORE_PRINCIPLES.find(
       (p) => p.id === 'groom-deliverable-is-a-decision-about-the-task',
     )!;

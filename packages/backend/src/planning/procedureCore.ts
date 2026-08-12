@@ -548,7 +548,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'and how it is ready: promote it, defer it, or raise a blocking question — ' +
       "never the output the task itself exists to produce. Whatever a task's Type " +
       "mandates producing belongs to that Type's own execution session, not to " +
-      '{skillLabel}: a 📐 Design task\'s locked answers to its own listed Open ' +
+      "{skillLabel}: a 📐 Design task's locked answers to its own listed Open " +
       "Questions are a /design session's deliverable; a 🔎 Investigation task's " +
       "root-cause finding is that Investigation session's deliverable; a 💻 Code " +
       "task's implementation is that Code session's deliverable. DO NOT stage a " +
@@ -556,9 +556,9 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       "Questions or otherwise produces the task's declared deliverable on the " +
       'theory that the acceptance criteria name the mechanism (e.g. "answers ' +
       'recorded as a committed decision.pickOne intent") — naming the mechanism ' +
-      "a later session will use is not an instruction for {skillLabel} to use it " +
+      'a later session will use is not an instruction for {skillLabel} to use it ' +
       'now. This does not restrict `decision.pickOne` itself: staging one to ' +
-      "raise a question {skillLabel} cannot resolve on its own authority — a " +
+      'raise a question {skillLabel} cannot resolve on its own authority — a ' +
       'scope doubt, an unconfirmed dependency, a spec/code contradiction — is a ' +
       'legitimate and common escalation. The distinction is whose question it ' +
       "is: an escalation asks the operator to unblock {skillLabel}'s own " +
@@ -588,7 +588,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'payload the task carries into execution: report it honestly in ' +
       'groomProposal.openQuestions and promote the task with it — never launder it ' +
       'into "None," and never hold the task at Backlog on the theory that an ' +
-      'unresolved question forbids Ready. Resolving a Design or Planning task\'s own ' +
+      "unresolved question forbids Ready. Resolving a Design or Planning task's own " +
       "listed Open Questions belongs to that task's own dispatched execution session " +
       "(a /design session) — see 'A groom session's deliverable is a decision about " +
       "the task' above for why a groom session reports and promotes instead of " +
