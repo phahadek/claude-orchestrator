@@ -42,9 +42,7 @@ export function collapseProgressRuns(text: string): string {
  * Below the cap, returns `output` unchanged.
  */
 export function truncateForDelivery(output: string, cap: number): string {
-  return output.length > cap
-    ? '[truncated]...\n' + output.slice(-cap)
-    : output;
+  return output.length > cap ? '[truncated]...\n' + output.slice(-cap) : output;
 }
 
 function killProcessTree(pid: number): void {
