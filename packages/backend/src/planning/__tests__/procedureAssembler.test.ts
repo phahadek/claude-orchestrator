@@ -277,6 +277,57 @@ describe('deriveDesignDigestSlice', () => {
     const slice = deriveDesignDigestSlice(fixtureDesignLoadResult({}));
     expect(slice.hasCodeMapGrounding).toBe(false);
   });
+
+  it('carries the task’s verbatim body markdown', () => {
+    const slice = deriveDesignDigestSlice(fixtureDesignLoadResult());
+    expect(slice.markdown).toBe('# Design the thing\n\nSome body.');
+  });
+});
+
+// ─── Design Investigation Slice — verbatim task body inclusion ─────────────
+
+describe('renderDesignDigest — verbatim task body', () => {
+  it('renders the task’s verbatim body under a Task body section, alongside the working explicit_heading Open Questions shape (regression)', () => {
+    const digest: PlanningDigest = {
+      workflow: 'design',
+      data: deriveDesignDigestSlice(fixtureDesignLoadResult()),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Design the thing',
+      taskUrl: 'https://notion.so/task-2',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output).toContain('### Task body');
+    expect(output).toContain('# Design the thing\n\nSome body.');
+    // the explicit_heading shape is untouched by adding the body section
+    expect(output).toContain('- Open questions (explicit_heading): 1');
+    expect(output).toContain('  - Should we do X or Y?');
+  });
+
+  it('renders the verbatim task body even when the digest lists zero Open Questions', () => {
+    const result = fixtureDesignLoadResult();
+    result.openQuestions = { items: [], source: 'none' };
+    result.markdown = '# Resolved already\n\nDesign (resolved): pick approach A.';
+    const digest: PlanningDigest = {
+      workflow: 'design',
+      data: deriveDesignDigestSlice(result),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Resolved already',
+      taskUrl: 'https://notion.so/task-2',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output).toContain('### Task body');
+    expect(output).toContain(
+      '# Resolved already\n\nDesign (resolved): pick approach A.',
+    );
+    // the none-source label is unchanged
+    expect(output).toContain('- Open questions (none): 0');
+  });
 });
 
 describe('deriveOpsDigestSlice', () => {

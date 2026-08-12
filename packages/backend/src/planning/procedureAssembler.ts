@@ -1361,6 +1361,7 @@ function renderDesignDigest(data: DesignDigestSlice): string {
       ? '_Code-map grounding is cached for this milestone — fetch it via GET /api/design-context on demand._'
       : '_No code-map grounding cached yet for this milestone._',
   );
+  lines.push('', '### Task body', '', data.markdown || '(empty)');
   return lines.join('\n');
 }
 
