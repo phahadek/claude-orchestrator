@@ -41,6 +41,7 @@ import {
   getStagedIntent,
   setStagedIntentAppliedTaskId,
   transitionStagedIntent,
+  listStagedIntentsByGroup,
 } from '../../db/queries';
 import {
   createStagedIntentsRouter,
@@ -48,6 +49,7 @@ import {
   translateApplyError,
   routeApplyTimeFailure,
   commitGroupIntents,
+  routeStageTimeBlock,
 } from '../stagedIntents';
 import { PlanningOrchestrator } from '../../orchestration/PlanningOrchestrator';
 import { NotionApiError } from '../../notion/types';
@@ -903,5 +905,90 @@ describe('routeApplyTimeFailure — idempotent on an already-blocked row', () =>
       expect(result.body.remaining).toEqual([]);
     }
     expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+  });
+});
+
+/**
+ * Sibling coverage for the commit-time precheck routing added alongside
+ * routeApplyTimeFailure/routeStageTimeBlock's own redrive paths: it shares
+ * routeStageTimeBlock's MAX_AUTO_REVISE_ROUNDS budget (keyed by groupId),
+ * not a fresh one, so a stage-time block already consumed for a group counts
+ * against a commit-time block discovered for the same group right after.
+ */
+describe("commit-time precheck routing shares routeStageTimeBlock's auto-revise budget", () => {
+  it('a group that already consumed a round at stage time escalates immediately on its next commit-time block instead of getting a fresh budget', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- Still unresolved?\n'),
+      updateStatus: vi.fn().mockResolvedValue(undefined),
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
+    });
+    const sm = makeSessionManager();
+    const groupId = 'group-shared-budget';
+    const taskId = 'notion:task-shared-budget';
+
+    // Round 1 — a stage-time block for this group, routed via
+    // routeStageTimeBlock (the same budget the commit-time path shares).
+    const staged = stageIntent(
+      'task.setStatus',
+      {
+        taskId,
+        status: 'Ready',
+        groomingGate: {
+          type: '💻 Code',
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+        },
+      },
+      'proj-1',
+      groupId,
+      'session-shared',
+    );
+    const checked = await routeStageTimeBlock(staged, sm as any);
+    expect(checked.state).toBe('needs_revision');
+    expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
+
+    // Clear the hidden member so it doesn't trip commitGroupIntents' own
+    // blocked-member guard (a separate 409 this task doesn't touch).
+    db.prepare('DELETE FROM staged_intent WHERE id = ?').run(checked.id);
+
+    // Round 2 — a fresh pair of members for the same group, blocked at
+    // commit time by the grooming promotion gate (missing size_check).
+    stageIntent(
+      'task.setDependsOn',
+      { taskId, dependsOn: [] },
+      'proj-1',
+      groupId,
+      'session-shared',
+    );
+    stageIntent(
+      'task.setStatus',
+      {
+        taskId,
+        status: 'Ready',
+        groomingGate: { type: '💻 Code', type_check: { decision: 'none' } },
+      },
+      'proj-1',
+      groupId,
+      'session-shared',
+    );
+    for (const row of listStagedIntentsByGroup(groupId)) {
+      transitionStagedIntent(row.id, 'approved');
+    }
+
+    const result = await commitGroupIntents(
+      groupId,
+      { override: false, reason: '', actorType: 'human' },
+      undefined,
+      sm as any,
+    );
+
+    expect(result.status).toBe(409);
+    // The group's budget was already spent by the stage-time block above —
+    // this 2nd consecutive failure for the same groupId escalates instead
+    // of enqueueing a 2nd feedback message.
+    expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
   });
 });

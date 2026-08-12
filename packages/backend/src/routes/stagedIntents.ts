@@ -6415,6 +6415,50 @@ function autoApproveAccretionRow(row: StagedIntentRow): void {
 }
 
 /**
+ * Commit-time twin of routeStageTimeBlock: precheckGroupCommit is the one
+ * gate evaluation that runs after a group has already been reviewed and
+ * approved, so a block discovered here is the one an operator actually has
+ * to relay to the session by hand today (the stage-time and turn-park
+ * evaluations already route their blocks — see routeStageTimeBlock and
+ * verifyGroup). Routes the block to the arming intent's originating session
+ * using the same enqueueFeedback mechanics and formatStageTimeBlockFeedback
+ * message shape those paths already use, sharing their groupRevisionRounds
+ * budget (keyed by groupId) so an operator repeatedly clicking commit on a
+ * still-blocked group cannot turn into an unbounded feedback loop into the
+ * session. No-ops — without affecting the precheck's own 409 — when the
+ * arming intent has no originating session, mirroring routeStageTimeBlock's
+ * own no-session bail-out.
+ */
+async function routePrecheckBlock(
+  groupId: string,
+  row: StagedIntentRow,
+  detail: string,
+  sessionManager: SessionManager | undefined,
+): Promise<void> {
+  if (!row.session_id || !sessionManager) return;
+
+  const round = (groupRevisionRounds.get(groupId) ?? 0) + 1;
+  const escalated = round >= MAX_AUTO_REVISE_ROUNDS;
+  if (escalated) {
+    groupRevisionRounds.delete(groupId);
+    return;
+  }
+  groupRevisionRounds.set(groupId, round);
+
+  try {
+    await sessionManager.enqueueFeedback(
+      row.session_id,
+      'verification-error',
+      formatStageTimeBlockFeedback(rowToApi(row), detail),
+    );
+  } catch (err) {
+    logger.error(
+      `[stagedIntents] resume failed for session ${row.session_id.slice(0, 8)} after commit-time precheck block: ${err}`,
+    );
+  }
+}
+
+/**
  * Whole-group pre-commit gate check: re-derives, for every arming
  * task.setStatus -> Ready intent in the group, the exact same gates
  * `applyIntent`'s task.setStatus case would hit (the DependsOn-completeness
@@ -6430,6 +6474,7 @@ async function precheckGroupCommit(
   groupId: string,
   ordered: StagedIntentRow[],
   opts: GroupCommitOptions,
+  sessionManager?: SessionManager,
 ): Promise<GroupCommitResult | null> {
   const opsTerminalFailure = checkOpsTerminalGroupCompleteness(groupId);
   if (opsTerminalFailure) {
@@ -6463,6 +6508,12 @@ async function precheckGroupCommit(
         JSON.stringify({ blocked: true, reasons: failure.reasons }),
       );
       broadcastIntentById(row.id);
+      await routePrecheckBlock(
+        groupId,
+        row,
+        describeGroupCompletenessFailure(failure),
+        sessionManager,
+      );
       return {
         status: 409,
         body: {
@@ -6498,6 +6549,12 @@ async function precheckGroupCommit(
           JSON.stringify({ blocked: true, violations }),
         );
         broadcastIntentById(row.id);
+        await routePrecheckBlock(
+          groupId,
+          row,
+          new ReadinessGateError(violations).message,
+          sessionManager,
+        );
         return {
           status: 409,
           body: {
@@ -6656,7 +6713,12 @@ export async function commitGroupIntents(
     ...live.filter((r) => isArmingReadyIntent(r)),
   ];
 
-  const precheckFailure = await precheckGroupCommit(groupId, ordered, opts);
+  const precheckFailure = await precheckGroupCommit(
+    groupId,
+    ordered,
+    opts,
+    sessionManager,
+  );
   if (precheckFailure) {
     return {
       status: precheckFailure.status,
