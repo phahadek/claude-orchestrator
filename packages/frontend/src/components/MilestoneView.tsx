@@ -7,17 +7,100 @@ import type { StagedIntent } from '../api/stagedIntents';
 import type { SessionState } from '../hooks/useSessionStore';
 import { useMilestoneConvergence } from '../hooks/useMilestoneConvergence';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { apiRequest } from '../api/projects';
 import { MilestoneBurndown } from './MilestoneBurndown';
 import { FlowArmToggle } from './FlowArmToggle';
 import {
   MilestoneDecisionStack,
   type MilestoneStackSelection,
 } from './MilestoneDecisionStack';
-import { MilestoneDrilldown, type DrilldownMode } from './MilestoneDrilldown';
+import {
+  MilestoneDrilldown,
+  type DrilldownMode,
+  type DepthReviewDisposition,
+} from './MilestoneDrilldown';
 import { GateReadinessPanel } from './GateReadinessPanel';
 import { isGatePhase } from '../utils/phaseBurndown';
 import type { PanelKeyboardDeclaration } from '../types/panelKeyboard';
 import styles from './MilestoneView.module.css';
+
+/** The subset of the GET /api/prs response item shape this view needs to build depth dispositions. */
+interface PrsApiItem {
+  prNumber: number;
+  prUrl: string;
+  repo: string;
+  depthVerdict: {
+    verdict: string;
+    dimensions: Array<{ name: string; passed: boolean; notes: string }>;
+    summary: string;
+    escalated: boolean;
+  } | null;
+}
+
+/**
+ * Fetches the project's PRs and reduces them to non-passing depth-review
+ * dispositions for the milestone's own PRs (matched against `tasks`, which
+ * the caller already scopes to the active milestone). Not milestone-scoped
+ * server-side — pull_requests carries no milestone column — so the match
+ * happens against the milestone's task set instead.
+ */
+function useMilestoneDepthDispositions(
+  projectId: string | null,
+  tasks: TaskView[],
+  invalidationKey: unknown,
+): DepthReviewDisposition[] {
+  const [dispositions, setDispositions] = useState<DepthReviewDisposition[]>(
+    [],
+  );
+
+  useEffect(() => {
+    if (!projectId) {
+      setDispositions([]);
+      return;
+    }
+    let cancelled = false;
+    apiRequest<PrsApiItem[]>(
+      `/api/prs?projectId=${encodeURIComponent(projectId)}`,
+    )
+      .then((items) => {
+        if (cancelled) return;
+        const prToTaskName = new Map<number, string>();
+        for (const t of tasks) {
+          if (t.pr) prToTaskName.set(t.pr.prNumber, t.taskName);
+        }
+        const next = items
+          .filter(
+            (item) =>
+              prToTaskName.has(item.prNumber) &&
+              item.depthVerdict &&
+              item.depthVerdict.verdict !== 'pass',
+          )
+          .map((item) => ({
+            prNumber: item.prNumber,
+            prUrl: item.prUrl,
+            repo: item.repo,
+            taskName: prToTaskName.get(item.prNumber) ?? null,
+            verdict: item.depthVerdict!.verdict,
+            summary: item.depthVerdict!.summary,
+            failingDimensions: item.depthVerdict!.dimensions
+              .filter((d) => !d.passed)
+              .map((d) => ({ name: d.name, notes: d.notes })),
+            escalated: item.depthVerdict!.escalated,
+          }));
+        setDispositions(next);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDispositions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, tasks, invalidationKey]);
+
+  return dispositions;
+}
 
 const MIN_MIDDLE_WIDTH_PCT = 30;
 const MAX_MIDDLE_WIDTH_PCT = 80;
@@ -124,6 +207,12 @@ export function MilestoneView({
   // (convergence.milestone), distinct from activeBoardId (the DB board id
   // used to scope /api/tasks/active).
   const milestoneKey = convergence?.milestone ?? null;
+
+  const depthDispositions = useMilestoneDepthDispositions(
+    activeProjectId,
+    tasks,
+    invalidationKey,
+  );
 
   const [middleWidthPct, setMiddleWidthPct] = useState(
     DEFAULT_MIDDLE_WIDTH_PCT,
@@ -265,6 +354,7 @@ export function MilestoneView({
       project={project}
       mode={drilldownMode}
       onModeChange={setDrilldownMode}
+      depthDispositions={depthDispositions}
     />
   );
 
