@@ -132,6 +132,7 @@ vi.mock('../../db/queries', () =>
     hasActivePlanningSessionForTask: vi.fn().mockReturnValue(false),
     incrementTaskCrashCount: vi.fn().mockReturnValue(1),
     getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
+    getTaskCache: vi.fn().mockReturnValue(undefined),
     setSessionPauseReason: vi.fn(),
     setSessionLastErrorDetail: vi.fn(),
     setTaskPauseReason: vi.fn(),
@@ -234,6 +235,7 @@ import {
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
   setSessionPauseReason,
+  getTaskCache,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
@@ -243,6 +245,7 @@ import { execSync, exec as execCb } from 'child_process';
 import { recordEvent } from '../../audit/AuditLog';
 import * as fsModule from 'fs';
 import { loadOrchestratorConfig } from '../orchestrator-config';
+import { getTaskBackend } from '../../tasks/TaskBackend';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -2108,6 +2111,134 @@ describe('terminal cleanup for idle sessions (not live)', () => {
       );
     expect(removeCalls).toHaveLength(1);
   });
+});
+
+// ── markSessionErrored: revert guard on the task's current status ────────────
+//
+// A dying standard session must never demote a task that already reached a
+// terminal state (Done/Deferred) — see UNCOUNTED_REASONS handling and the
+// crash-budget branch in markSessionErrored.
+
+describe('markSessionErrored — Notion status revert respects the task current status', () => {
+  let sm: SessionManager;
+
+  function taskCacheRow(status: string) {
+    return {
+      task_id: 'task-1',
+      fetched_at: 0,
+      raw_json: JSON.stringify({ status }),
+    } as any;
+  }
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  it('user_kill on a ✅ Done task performs no updateStatus call', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'killed',
+    });
+    vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('✅ Done'));
+
+    sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
+
+    const backend = vi.mocked(getTaskBackend)('');
+    expect(vi.mocked(backend.updateStatus)).not.toHaveBeenCalled();
+  });
+
+  it('user_kill on a ⏭️ Deferred task performs no updateStatus call', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'killed',
+    });
+    vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('⏭️ Deferred'));
+
+    sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
+
+    const backend = vi.mocked(getTaskBackend)('');
+    expect(vi.mocked(backend.updateStatus)).not.toHaveBeenCalled();
+  });
+
+  it('user_kill on a 🔄 In Progress task still reverts it to 🗂️ Ready (majority case)', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'killed',
+    });
+    vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('🔄 In Progress'));
+
+    sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
+
+    const backend = vi.mocked(getTaskBackend)('');
+    expect(vi.mocked(backend.updateStatus)).toHaveBeenCalledWith(
+      'task-1',
+      '🗂️ Ready',
+      expect.objectContaining({
+        source: 'orchestrator',
+        sessionId: SESSION_ID,
+      }),
+    );
+  });
+
+  it('a cache miss falls back to the existing revert behaviour rather than silently skipping it', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'killed',
+    });
+    vi.mocked(getTaskCache).mockReturnValue(undefined);
+
+    sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
+
+    const backend = vi.mocked(getTaskBackend)('');
+    expect(vi.mocked(backend.updateStatus)).toHaveBeenCalledWith(
+      'task-1',
+      '🗂️ Ready',
+      expect.objectContaining({
+        source: 'orchestrator',
+        sessionId: SESSION_ID,
+      }),
+    );
+  });
+
+  it('a counted reason (crash budget path) does not set 🚫 Blocked on an already ✅ Done task', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'error',
+    });
+    vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('✅ Done'));
+    vi.mocked(incrementTaskCrashCount).mockReturnValue(2);
+
+    sm.markSessionErrored(SESSION_ID, 'error', 'run_error');
+
+    const backend = vi.mocked(getTaskBackend)('');
+    expect(vi.mocked(backend.updateStatus)).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'user_kill',
+    'pr_closed',
+    'launch_failed',
+    'backend_spawn_degraded',
+  ])(
+    'handlePlanningSessionCrash still returns early for %s (UNCOUNTED_REASONS), unchanged',
+    (reason) => {
+      vi.mocked(getSession).mockReturnValue({
+        ...makeDeadRow(),
+        status: 'killed',
+        session_type: 'groom',
+      });
+      vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('🔄 In Progress'));
+
+      sm.markSessionErrored(SESSION_ID, 'killed', reason);
+
+      const backend = vi.mocked(getTaskBackend)('');
+      expect(vi.mocked(backend.updateStatus)).not.toHaveBeenCalled();
+      expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ── endSession: terminal-status guard + escalation delegation ────────────────
