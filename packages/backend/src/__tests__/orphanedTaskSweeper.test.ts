@@ -150,7 +150,13 @@ function makeDocsSession(
   archived = 0,
 ) {
   return {
-    ...makeSession(status, startedAtOffsetMs, endedAt, '/fake/worktree', archived),
+    ...makeSession(
+      status,
+      startedAtOffsetMs,
+      endedAt,
+      '/fake/worktree',
+      archived,
+    ),
     session_type: 'docs',
   };
 }
