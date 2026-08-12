@@ -766,9 +766,7 @@ function renderSkeleton(
 ): string {
   const label = SKILL_LABELS[workflow];
   const kinds = PLANNING_INTENT_KINDS[workflow];
-  const triageEligibleTypesList = Array.from(TRIAGE_ELIGIBLE_TYPES).join(
-    ' / ',
-  );
+  const triageEligibleTypesList = Array.from(TRIAGE_ELIGIBLE_TYPES).join(' / ');
   const docsRepoFileTarget =
     workflow === 'docs' && isRepoFileTargetSurface(docsTargetSurface ?? '');
   const lifecycle =
@@ -938,9 +936,9 @@ function renderSkeleton(
           'list moves if that set does) and is rejected outright, not silently ' +
           'ignored, for every other Type: `{"proposedVerdict": "clean"|"blocked"|' +
           '"needs-attention", "hasOpenQuestionsHeading": true|false}`. ' +
-          '`proposedVerdict` is this session\'s judgment call on the task\'s own ' +
+          "`proposedVerdict` is this session's judgment call on the task's own " +
           'required-heading section (`## Open Questions` for 📐 Design/📋 Planning, ' +
-          'that Type\'s own registry-defined heading otherwise — see ' +
+          "that Type's own registry-defined heading otherwise — see " +
           '`planning/triage.ts`); `hasOpenQuestionsHeading` is the structural fact ' +
           'of whether that heading is actually present in the body. A `clean` ' +
           'verdict promotes the task without a further per-item human sign-off; ' +

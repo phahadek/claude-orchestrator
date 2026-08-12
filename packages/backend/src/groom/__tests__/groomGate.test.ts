@@ -1549,7 +1549,12 @@ describe('checkGroomingPromotionGate — Operational/Investigation triage floor'
 describe('TRIAGE_ELIGIBLE_TYPES — approve-by-standard eligible set was not widened by this task', () => {
   it('still contains exactly 📐 Design / 📋 Planning / 🔧 Operational / 🔎 Investigation', () => {
     expect(new Set(TRIAGE_ELIGIBLE_TYPES)).toEqual(
-      new Set(['📐 Design', '📋 Planning', '🔧 Operational', '🔎 Investigation']),
+      new Set([
+        '📐 Design',
+        '📋 Planning',
+        '🔧 Operational',
+        '🔎 Investigation',
+      ]),
     );
   });
 });
