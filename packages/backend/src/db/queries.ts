@@ -2119,6 +2119,27 @@ export function getTaskTypeFromCache(taskId: string): string | null {
   }
 }
 
+/**
+ * Returns a cached task's display-format status string, or null if unknown.
+ * Mirrors updateTaskCacheStatus's read shape: NotionTask stores status at
+ * top-level; raw Notion API uses properties.Status.select.name.
+ */
+export function getTaskStatusFromCache(taskId: string): string | null {
+  const row = getTaskCache(taskId);
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.raw_json) as {
+      status?: unknown;
+      properties?: { Status?: { select?: { name?: unknown } } };
+    };
+    if (typeof parsed.status === 'string') return parsed.status;
+    const selectName = parsed.properties?.Status?.select?.name;
+    return typeof selectName === 'string' ? selectName : null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
 export function upsertPullRequest(

@@ -17,7 +17,11 @@ import {
 import { GitHubClient } from '../github/GitHubClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 import { recordEvent } from '../audit/AuditLog';
-import { upsertTaskCache, updateTaskStatusInBoardCaches } from '../db/queries';
+import {
+  upsertTaskCache,
+  updateTaskStatusInBoardCaches,
+  getTaskStatusFromCache,
+} from '../db/queries';
 
 /**
  * Per-project configuration that identifies where non-milestone tasks are sourced from.
@@ -308,6 +312,12 @@ export class AuditingTaskBackend implements TaskBackend {
     status: string,
     options?: UpdateStatusOptions,
   ): Promise<void> {
+    let priorStatus: string | null;
+    try {
+      priorStatus = getTaskStatusFromCache(taskId);
+    } catch {
+      priorStatus = null;
+    }
     await this.inner.updateStatus(taskId, status);
     updateTaskStatusInBoardCaches(taskId, status);
     const source = options?.source ?? 'orchestrator';
@@ -319,10 +329,12 @@ export class AuditingTaskBackend implements TaskBackend {
       project_id: this.projectId,
       task_id: taskId,
       payload: {
-        from: null,
+        from: priorStatus,
         to: status,
         source,
-        notes: 'previous status not captured',
+        ...(priorStatus === null
+          ? { notes: 'previous status not captured' }
+          : {}),
       },
     });
   }
