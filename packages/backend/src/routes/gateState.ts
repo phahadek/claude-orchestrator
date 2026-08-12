@@ -4,6 +4,7 @@ import {
   getGateReadiness,
   reconcileGateRunnability,
   nextRunnableGateItems,
+  nextPendingGateItems,
   getGateItem,
   getGateItemDetail,
   getVerifySessionsForGateItem,
@@ -121,6 +122,44 @@ export function createGateStateRouter(): Router {
             classification,
             limit: Number.isFinite(limit) ? limit : undefined,
           },
+        ),
+      );
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // GET /api/gate/pending-due?project=P&milestone=M12&limit=5
+  // Non-arm-gated read of backoff-elapsed `pending` items — the only route
+  // back for a parked item once its next_attempt_at has passed, independent
+  // of the (milestone, 'gate-verify') arm that gates auto-run's own pull of
+  // the same set. Purely a read: it never dispatches a verify session, so
+  // exposing it does not weaken the arm's suppression of unattended runs.
+  router.get('/gate/pending-due', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : null;
+    const milestone =
+      typeof req.query.milestone === 'string' ? req.query.milestone : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (!milestone) {
+      res.status(400).json({ error: 'milestone is required' });
+      return;
+    }
+    const limit =
+      typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+    try {
+      res.json(
+        nextPendingGateItems(
+          project,
+          resolveMilestoneForProject(project, milestone),
+          { limit: Number.isFinite(limit) ? limit : undefined },
         ),
       );
     } catch (err) {

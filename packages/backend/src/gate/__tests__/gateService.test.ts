@@ -19,7 +19,10 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { upsertTaskCache } from '../../db/queries.js';
+import {
+  upsertTaskCache,
+  getVerifySessionsForGateItems,
+} from '../../db/queries.js';
 import {
   insertItem,
   setMinDeployedCommit,
@@ -225,6 +228,49 @@ describe('getGateReadiness', () => {
     expect(readiness.blocking.map((b) => b.id)).toEqual([stillOpen.id]);
     expect(readiness.parked.map((p) => p.id)).toEqual([parked.id]);
     expect(readiness.status).toBe('blocked');
+  });
+
+  it('surfaces backoff due-ness (nextAttemptAt, pendingAttemptCount) on parked entries', () => {
+    const due = makeItem({
+      text: 'backoff elapsed',
+      classification: 'Read-Only',
+    });
+    const notDue = makeItem({
+      text: 'backoff not yet elapsed',
+      classification: 'Read-Only',
+    });
+    for (const item of [due, notDue]) {
+      appendGateItemEvent(item.id, {
+        disposition: 'not-yet-triggerable',
+        evidence: 'still waiting',
+      });
+    }
+    schedulePendingAttempt(
+      due.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+    schedulePendingAttempt(
+      notDue.id,
+      new Date(Date.now() + 3_600_000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+
+    const readiness = getGateReadiness('polimarket-analyser', 'M12');
+    const byId = new Map(readiness.parked.map((p) => [p.id, p]));
+    expect(byId.get(due.id)).toMatchObject({
+      pendingAttemptCount: 1,
+    });
+    expect(byId.get(due.id)?.nextAttemptAt).toBeDefined();
+    expect(byId.get(notDue.id)?.nextAttemptAt).toBeDefined();
+    expect(Date.parse(byId.get(due.id)!.nextAttemptAt!)).toBeLessThan(
+      Date.now(),
+    );
+    expect(Date.parse(byId.get(notDue.id)!.nextAttemptAt!)).toBeGreaterThan(
+      Date.now(),
+    );
   });
 
   it('is green when the only non-resolved items are parked', () => {
@@ -1039,6 +1085,42 @@ describe('nextPendingGateItems', () => {
       (i) => i.id,
     );
     expect(ids.sort()).toEqual([readOnly.id, prodMutating.id].sort());
+  });
+
+  it('excludes a not-yet-elapsed item from a batch mixed with an elapsed one, without arming or dispatching anything', () => {
+    const due = makeItem({ text: 'due', classification: 'Read-Only' });
+    const notDue = makeItem({ text: 'not due', classification: 'Read-Only' });
+    for (const item of [due, notDue]) {
+      appendGateItemEvent(item.id, {
+        disposition: 'not-yet-triggerable',
+        evidence: 'still waiting',
+      });
+    }
+    schedulePendingAttempt(
+      due.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+    schedulePendingAttempt(
+      notDue.id,
+      new Date(Date.now() + 3_600_000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+
+    // No flow_arm row exists for this milestone at all (DEFAULT_ARM is
+    // disarmed for every flow) — nextPendingGateItems is a pure read over
+    // gate_item and never consults the arm, so a disarmed gate-verify has no
+    // bearing on what it returns.
+    const ids = nextPendingGateItems(due.project, due.milestone).map(
+      (i) => i.id,
+    );
+    expect(ids).toEqual([due.id]);
+
+    // And it's read-only: no verify session was spawned for either item as
+    // a side effect of the pull.
+    expect(getVerifySessionsForGateItems([due.id, notDue.id])).toHaveLength(0);
   });
 });
 

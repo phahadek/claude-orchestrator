@@ -77,6 +77,10 @@ export interface GateItem {
   events: GateItemEvent[];
   /** True if this item currently has a non-terminal, unended verify session — set on the list read only. */
   verifyInFlight?: boolean;
+  /** Backoff schedule for a `pending` item — when it next becomes due for re-check. Undefined for a non-pending item. */
+  nextAttemptAt?: string;
+  /** How many not-yet-triggerable attempts have been scheduled for this item's current pending parking. */
+  pendingAttemptCount?: number;
 }
 
 export interface GateItemDetail {
@@ -94,6 +98,10 @@ interface GateBlockingItem {
   state: string;
   /** True when the item's latest event carries a non-resolving disposition (needs-setup/noted) — attempted but inconclusive. */
   nonResolving?: boolean;
+  /** Backoff schedule for a `pending` item — when it next becomes due for re-check. Undefined for a non-pending item. */
+  nextAttemptAt?: string;
+  /** How many not-yet-triggerable attempts have been scheduled for this item's current pending parking. */
+  pendingAttemptCount?: number;
 }
 
 export interface GateReadiness {
