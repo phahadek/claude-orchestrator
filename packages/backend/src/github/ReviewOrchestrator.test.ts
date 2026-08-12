@@ -29,6 +29,7 @@ vi.mock('../db/queries.js', () =>
     setLastReviewedSha: vi.fn(),
     enqueueFeedbackItem: vi.fn(),
     upsertDepthReviewVerdict: vi.fn(),
+    getDepthReviewVerdict: vi.fn().mockReturnValue(undefined),
   }),
 );
 
@@ -117,6 +118,7 @@ import {
   setLastReviewedSha,
   enqueueFeedbackItem,
   upsertDepthReviewVerdict,
+  getDepthReviewVerdict,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
@@ -157,12 +159,14 @@ const baseFreshPR: PullRequest = {
 
 function makeMockGitHubClient(
   fetchPRResolveWith?: Partial<PullRequest>,
+  diff = '',
 ): GitHubClient {
   return {
     markPRReady: vi.fn().mockResolvedValue(undefined),
     fetchPR: vi
       .fn()
       .mockResolvedValue({ ...baseFreshPR, ...fetchPRResolveWith }),
+    fetchDiff: vi.fn().mockResolvedValue({ diff }),
   } as unknown as GitHubClient;
 }
 
@@ -686,8 +690,9 @@ describe('ReviewOrchestrator — depth review dispatch gating', () => {
 });
 
 describe('ReviewOrchestrator — depth review finding routing', () => {
-  it('routes a security/concurrency/reliability/data-integrity finding to escalate + pause_reason, not enqueueFeedback', async () => {
+  it('routes a security/concurrency/reliability/data-integrity finding to the implementing session (enqueueFeedback), not escalate — PR #1630 regression', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService({
@@ -707,8 +712,171 @@ describe('ReviewOrchestrator — depth review finding routing', () => {
             passed: false,
             notes: 'Unsanitized input reaches a shell command.',
           },
+          {
+            name: 'Data integrity & parsing correctness',
+            passed: false,
+            notes: 'Duplicated label mapping.',
+          },
         ],
+        summary: 'Found real defects beyond spec-conformance.',
+        hasNonSizeFailure: true,
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    const messages: unknown[] = [];
+    sm.on('message', (m: unknown) => messages.push(m));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    // The PR must not be left parked on manual_action with no feedback sent.
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_escalation',
+      expect.anything(),
+    );
+    expect(
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
+    ).toBe(false);
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    const [sessionId, source, message] = vi.mocked(sm.enqueueFeedback).mock
+      .calls[0];
+    expect(sessionId).toBe('coding-session-id');
+    expect(source).toBe('ai-reviewer');
+    expect(message).toContain('Unsanitized input reaches a shell command.');
+    expect(message).toContain('Duplicated label mapping.');
+    expect(message).toContain('Security');
+    expect(message).toContain('Data integrity & parsing correctness');
+  });
+
+  it('escalates AND does not route when a PR with no linked session has a non-size finding, and the pause reason states routing was impossible', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      session_id: null,
+    } as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        verdict: 'fail',
+        dimensions: [{ name: 'Security', passed: false, notes: 'Bad.' }],
         summary: 'Found a security defect.',
+        hasNonSizeFailure: true,
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_escalation',
+      expect.stringContaining('no linked session'),
+    );
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['CI/workflow config', '.github/workflows/ci.yml'],
+    ['database migration', 'db/migrations/0042_add_column.sql'],
+    ['auth', 'src/auth/login.ts'],
+    ['secrets', 'src/config/credentials.ts'],
+  ])(
+    'still escalates a non-size finding touching a baseline-floor path (%s)',
+    async (_category, path) => {
+      vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+      vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+      const sm = makeMockSessionManager();
+      const rs = makeMockReviewService({
+        prNumber: 1,
+        repo: 'owner/repo',
+        verdict: 'approved',
+        dimensions: [],
+        summary: 'All good.',
+        reviewedAt: new Date().toISOString(),
+      });
+      const runDepthReview = vi.fn().mockResolvedValue(
+        makeDepthResult({
+          verdict: 'fail',
+          dimensions: [{ name: 'Security', passed: false, notes: 'Bad.' }],
+          summary: 'Found a security defect.',
+          hasNonSizeFailure: true,
+        }),
+      );
+      const gc = makeMockGitHubClient(
+        {},
+        `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -0,0 +1 @@\n+x\n`,
+      );
+      const orch = new ReviewOrchestrator(rs, sm as any, true, gc);
+      orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+      const messages: unknown[] = [];
+      sm.on('message', (m: unknown) => messages.push(m));
+
+      sm.emit('pr_opened', baseJob);
+      await new Promise((r) => setTimeout(r, 40));
+
+      expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+        1,
+        'owner/repo',
+        'depth_review_escalation',
+        expect.stringContaining('baseline floor'),
+      );
+      expect(
+        messages.some(
+          (m) => (m as { type: string }).type === 'review_escalated',
+        ),
+      ).toBe(true);
+      // Escalate AND route: the session still gets the finding's text.
+      expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('bounds re-routing the identical finding on an unchanged head SHA — escalates once the bound is hit', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    // Two prior routes already recorded against this same head_sha.
+    vi.mocked(getDepthReviewVerdict).mockReturnValue({
+      pr_number: 1,
+      repo: 'owner/repo',
+      head_sha: 'sha-abc',
+      verdict: 'fail',
+      dimensions: '[]',
+      summary: 'prior',
+      depth_session_id: 'depth-session-prior',
+      recorded_at: new Date().toISOString(),
+      route_count: 2,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        verdict: 'fail',
+        dimensions: [{ name: 'Security', passed: false, notes: 'Still bad.' }],
+        summary: 'Found a security defect, again.',
         hasNonSizeFailure: true,
       }),
     );
@@ -725,17 +893,110 @@ describe('ReviewOrchestrator — depth review finding routing', () => {
       1,
       'owner/repo',
       'depth_review_escalation',
+      expect.stringContaining('re-routed'),
     );
     expect(
-      messages.some(
-        (m) =>
-          (m as { type: string }).type === 'review_escalated' &&
-          (m as { message: string }).message.includes(
-            'Unsanitized input reaches a shell command.',
-          ),
-      ),
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
     ).toBe(true);
-    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+    // Still routes to the session even though the bound was hit.
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+  });
+
+  it('does not bound re-routing when the head SHA changed since the prior route', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue({
+      pr_number: 1,
+      repo: 'owner/repo',
+      head_sha: 'sha-old',
+      verdict: 'fail',
+      dimensions: '[]',
+      summary: 'prior',
+      depth_session_id: 'depth-session-prior',
+      recorded_at: new Date().toISOString(),
+      route_count: 5,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        verdict: 'fail',
+        dimensions: [
+          {
+            name: 'Security',
+            passed: false,
+            notes: 'New commit, new finding.',
+          },
+        ],
+        summary: 'Found a security defect.',
+        hasNonSizeFailure: true,
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_escalation',
+      expect.anything(),
+    );
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the depth_review_pending hold (auto-merge stays held) when routing a non-floor finding to the session', async () => {
+    const depthReviewPendingRow = {
+      ...basePRRow,
+      pause_reason: serializePauseReason(
+        pauseReasonFromCanonical('depth_review_pending'),
+      ),
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        verdict: 'fail',
+        dimensions: [{ name: 'Security', passed: false, notes: 'Bad.' }],
+        summary: 'Found a security defect.',
+        hasNonSizeFailure: true,
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = { attempt: vi.fn() };
+    orch.setAutoMerger(autoMerger as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    // Hold not cleared, merge not re-attempted — the finding is outstanding.
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      null,
+    );
+    expect(autoMerger.attempt).not.toHaveBeenCalled();
   });
 
   it('routes a size-proportionality-only finding to enqueueFeedback (auto-fix), not escalate', async () => {
@@ -861,6 +1122,7 @@ describe('ReviewOrchestrator — depth review verdict persistence', () => {
       ]),
       summary: 'Found a security defect.',
       depth_session_id: 'depth-session-42',
+      route_count: 1,
     });
     expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -904,7 +1166,7 @@ describe('ReviewOrchestrator — depth review verdict persistence', () => {
     expect(vi.mocked(setPRReviewResult)).not.toHaveBeenCalled();
   });
 
-  it('fails open on a depth-verdict storage error — escalation and pause_reason still occur', async () => {
+  it('fails open on a depth-verdict storage error — routing to the session still occurs', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
     vi.mocked(upsertDepthReviewVerdict).mockImplementationOnce(() => {
       throw new Error('disk full');
@@ -942,14 +1204,10 @@ describe('ReviewOrchestrator — depth review verdict persistence', () => {
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 40));
 
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
-      1,
-      'owner/repo',
-      'depth_review_escalation',
-    );
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
     expect(
       messages.some((m) => (m as { type: string }).type === 'review_escalated'),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 
@@ -1038,8 +1296,9 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
     return { attempt: vi.fn() };
   }
 
-  it('replaces the hold with depth_review_escalation and does not re-attempt the merge on hasNonSizeFailure', async () => {
+  it('routes hasNonSizeFailure to the session and keeps the hold — auto-merge is not re-attempted while the finding is outstanding', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService({
@@ -1067,10 +1326,54 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 40));
 
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      null,
+    );
+    expect(autoMerger.attempt).not.toHaveBeenCalled();
+  });
+
+  it('escalates a floor-touching hasNonSizeFailure and does not re-attempt the merge', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        hasNonSizeFailure: true,
+        dimensions: [
+          { name: 'Security', passed: false, notes: 'Unsanitized input.' },
+        ],
+        summary: 'Found a security defect.',
+      }),
+    );
+    const gc = makeMockGitHubClient(
+      {},
+      'diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\n--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n@@ -0,0 +1 @@\n+x\n',
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true, gc);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
     expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
       1,
       'owner/repo',
       'depth_review_escalation',
+      expect.stringContaining('baseline floor'),
     );
     expect(autoMerger.attempt).not.toHaveBeenCalled();
   });

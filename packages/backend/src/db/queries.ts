@@ -2597,21 +2597,28 @@ export function setPRReviewResult(
  * path. Upserted on (pr_number, repo) — a re-run overwrites the prior row.
  */
 export function upsertDepthReviewVerdict(row: NewDepthReviewVerdictRow): void {
-  db.prepare<NewDepthReviewVerdictRow & { recorded_at: string }>(
+  db.prepare<
+    NewDepthReviewVerdictRow & { recorded_at: string; route_count: number }
+  >(
     `
     INSERT INTO depth_review_verdicts
-      (pr_number, repo, head_sha, verdict, dimensions, summary, depth_session_id, recorded_at)
+      (pr_number, repo, head_sha, verdict, dimensions, summary, depth_session_id, recorded_at, route_count)
     VALUES
-      (@pr_number, @repo, @head_sha, @verdict, @dimensions, @summary, @depth_session_id, @recorded_at)
+      (@pr_number, @repo, @head_sha, @verdict, @dimensions, @summary, @depth_session_id, @recorded_at, @route_count)
     ON CONFLICT(pr_number, repo) DO UPDATE SET
       head_sha = excluded.head_sha,
       verdict = excluded.verdict,
       dimensions = excluded.dimensions,
       summary = excluded.summary,
       depth_session_id = excluded.depth_session_id,
-      recorded_at = excluded.recorded_at
+      recorded_at = excluded.recorded_at,
+      route_count = excluded.route_count
   `,
-  ).run({ ...row, recorded_at: new Date().toISOString() });
+  ).run({
+    ...row,
+    recorded_at: new Date().toISOString(),
+    route_count: row.route_count ?? 0,
+  });
 }
 
 /** Read the latest depth-review verdict for a PR, if any depth pass has completed. */

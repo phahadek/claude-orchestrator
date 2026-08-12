@@ -109,12 +109,18 @@ const BASELINE_ESCALATION_FLOOR_PATTERNS: Array<{
   },
 ];
 
-interface BaselineEscalationMatch {
+export interface BaselineEscalationMatch {
   category: string;
   path: string;
 }
 
-function matchBaselineEscalationFloor(
+/**
+ * Exported so the depth-review routing branch (ReviewOrchestrator's
+ * dispatchDepthReview) can reuse the same code-enforced floor patterns
+ * rather than duplicating them — one category list, checked against two
+ * separate review passes.
+ */
+export function matchBaselineEscalationFloor(
   filePaths: string[],
 ): BaselineEscalationMatch[] {
   const matches: BaselineEscalationMatch[] = [];
