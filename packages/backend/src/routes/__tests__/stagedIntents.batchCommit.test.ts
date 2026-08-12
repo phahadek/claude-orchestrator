@@ -496,7 +496,7 @@ describe('precheckGroupCommit routes its block to the originating session', () =
     expect(res.status).toBe(200);
   }
 
-  it('a group commit blocked by the grooming promotion gate enqueues feedback to the arming intent\'s originating session naming the gate reasons', async () => {
+  it("a group commit blocked by the grooming promotion gate enqueues feedback to the arming intent's originating session naming the gate reasons", async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.\n'),

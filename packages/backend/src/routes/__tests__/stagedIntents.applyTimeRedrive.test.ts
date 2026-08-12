@@ -915,7 +915,7 @@ describe('routeApplyTimeFailure — idempotent on an already-blocked row', () =>
  * not a fresh one, so a stage-time block already consumed for a group counts
  * against a commit-time block discovered for the same group right after.
  */
-describe('commit-time precheck routing shares routeStageTimeBlock\'s auto-revise budget', () => {
+describe("commit-time precheck routing shares routeStageTimeBlock's auto-revise budget", () => {
   it('a group that already consumed a round at stage time escalates immediately on its next commit-time block instead of getting a fresh budget', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
