@@ -771,9 +771,7 @@ describe('ReviewOrchestrator — depth review finding routing', () => {
     const runDepthReview = vi.fn().mockResolvedValue(
       makeDepthResult({
         verdict: 'fail',
-        dimensions: [
-          { name: 'Security', passed: false, notes: 'Bad.' },
-        ],
+        dimensions: [{ name: 'Security', passed: false, notes: 'Bad.' }],
         summary: 'Found a security defect.',
         hasNonSizeFailure: true,
       }),
@@ -816,9 +814,7 @@ describe('ReviewOrchestrator — depth review finding routing', () => {
       const runDepthReview = vi.fn().mockResolvedValue(
         makeDepthResult({
           verdict: 'fail',
-          dimensions: [
-            { name: 'Security', passed: false, notes: 'Bad.' },
-          ],
+          dimensions: [{ name: 'Security', passed: false, notes: 'Bad.' }],
           summary: 'Found a security defect.',
           hasNonSizeFailure: true,
         }),
@@ -932,7 +928,13 @@ describe('ReviewOrchestrator — depth review finding routing', () => {
     const runDepthReview = vi.fn().mockResolvedValue(
       makeDepthResult({
         verdict: 'fail',
-        dimensions: [{ name: 'Security', passed: false, notes: 'New commit, new finding.' }],
+        dimensions: [
+          {
+            name: 'Security',
+            passed: false,
+            notes: 'New commit, new finding.',
+          },
+        ],
         summary: 'Found a security defect.',
         hasNonSizeFailure: true,
       }),

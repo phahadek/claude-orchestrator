@@ -1335,7 +1335,8 @@ export class ReviewOrchestrator {
       }
       const boundExceeded = routeCount > MAX_DEPTH_REVIEW_ROUTE_ATTEMPTS;
       const noSession = !prRow?.session_id;
-      const mustEscalate = floorMatches.length > 0 || boundExceeded || noSession;
+      const mustEscalate =
+        floorMatches.length > 0 || boundExceeded || noSession;
 
       if (mustEscalate) {
         const detailParts: string[] = [];
