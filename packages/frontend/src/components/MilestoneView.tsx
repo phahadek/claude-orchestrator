@@ -96,7 +96,6 @@ function useMilestoneDepthDispositions(
     return () => {
       cancelled = true;
     };
-     
   }, [projectId, tasks, invalidationKey]);
 
   return dispositions;
