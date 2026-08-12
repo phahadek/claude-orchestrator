@@ -420,6 +420,20 @@ export function isOpsTerminalClosingSetMember(row: StagedIntentRow): boolean {
 }
 
 /**
+ * The non-terminal OpsState values that, when explicitly staged as a live
+ * journal.setState target in a group, count as the session honestly
+ * declaring the task still open — not as evidence the group is abandoning
+ * the journal by omission. `pending` is excluded: it is the journal's
+ * default source state, never a legitimate transition target.
+ */
+const OPS_JOURNAL_EXPLICIT_NON_TERMINAL_STATES: readonly OpsState[] = [
+  'candidate',
+  'blocked',
+  'incident-frozen',
+  'staged-proposal',
+];
+
+/**
  * True when this group already carries a live journal.setState closing
  * transition — the one member of the ops-terminal closing set that actually
  * closes the task: `resolved` directly (Investigation's no-change terminal),
@@ -433,43 +447,85 @@ export function isOpsTerminalClosingSetMember(row: StagedIntentRow): boolean {
  * gives task.setDependsOn.
  */
 function hasGroupOpsTerminalResolvedJournal(groupId: string): boolean {
-  return listStagedIntentsByGroup(groupId).some((row) => {
-    if (
-      row.kind !== 'journal.setState' ||
-      !GROUP_COMPLETENESS_ACTIVE.includes(row.state)
-    ) {
-      return false;
-    }
-    const payload = JSON.parse(row.payload) as JournalSetStatePayload;
-    return (
-      payload.state === 'resolved' ||
-      (payload.state === 'applied-pending-confirm' && !!payload.reconciliation)
-    );
-  });
+  return liveGroupJournalSetStateTargets(groupId).some(
+    (state) => state.terminal,
+  );
+}
+
+/**
+ * True when this group carries a live journal.setState explicitly targeting
+ * one of OPS_JOURNAL_EXPLICIT_NON_TERMINAL_STATES — the session honestly
+ * recording that the task stays open (e.g. `candidate`, blocked on unwritten
+ * follow-on work), as opposed to a closing group left incomplete by
+ * omission. This is the distinction the guard was missing: a follow-on
+ * task.create alongside a declared non-terminal state is not a closing
+ * group at all, and must not be forced into asserting `resolved`.
+ */
+function hasGroupOpsTerminalExplicitNonTerminalJournal(
+  groupId: string,
+): boolean {
+  return liveGroupJournalSetStateTargets(groupId).some(
+    (state) => state.explicitNonTerminal,
+  );
+}
+
+/**
+ * Shared scan over a group's live journal.setState members, classifying each
+ * staged target state once so hasGroupOpsTerminalResolvedJournal and
+ * hasGroupOpsTerminalExplicitNonTerminalJournal don't each re-derive it.
+ */
+function liveGroupJournalSetStateTargets(
+  groupId: string,
+): Array<{ terminal: boolean; explicitNonTerminal: boolean }> {
+  return listStagedIntentsByGroup(groupId)
+    .filter(
+      (row) =>
+        row.kind === 'journal.setState' &&
+        GROUP_COMPLETENESS_ACTIVE.includes(row.state),
+    )
+    .map((row) => {
+      const payload = JSON.parse(row.payload) as JournalSetStatePayload;
+      return {
+        terminal:
+          payload.state === 'resolved' ||
+          (payload.state === 'applied-pending-confirm' &&
+            !!payload.reconciliation),
+        explicitNonTerminal: (
+          OPS_JOURNAL_EXPLICIT_NON_TERMINAL_STATES as string[]
+        ).includes(payload.state),
+      };
+    });
 }
 
 /**
  * Group-completeness twin of DependsOnCompletenessError, for the ops-terminal
  * closing set: a group that carries any ops-terminal member (a task-body
  * write recording the finding, or a follow-on task.create) but never carries
- * the journal.setState transition that actually closes the task (`resolved`
- * for Investigation, or `applied-pending-confirm` with a reconciliation
- * assertion for Operational) is a group that can go terminal without ever
- * producing that transition — see the worked instance this guards against,
- * where a closing group contained only a task.create and the investigation's
- * journal was left stuck at `candidate` forever. Enforced at group-commit
- * time (checkOpsTerminalGroupCompleteness / precheckGroupCommit), not stage
- * time — an ops-terminal group is legitimately incomplete while the session
- * is still assembling it.
+ * ANY live journal.setState transition — closing (`resolved` for
+ * Investigation, or `applied-pending-confirm` with a reconciliation
+ * assertion for Operational) or an explicit non-terminal declaration
+ * (OPS_JOURNAL_EXPLICIT_NON_TERMINAL_STATES) — is a group that can go
+ * terminal without the session ever recording where the task's journal
+ * stands. See the worked instance this guards against, where a closing
+ * group contained only a task.create and the investigation's journal was
+ * left stuck at `candidate` by omission, never staged. A group that DOES
+ * carry a live journal.setState to one of the explicit non-terminal states
+ * is not that failure — it is the session honestly recording the task stays
+ * open, and must be allowed to commit (see ops/opsJournal.ts's `candidate`
+ * state, which exists precisely for a task blocked on unwritten follow-on
+ * work). Enforced at group-commit time (checkOpsTerminalGroupCompleteness /
+ * precheckGroupCommit), not stage time — an ops-terminal group is
+ * legitimately incomplete while the session is still assembling it.
  */
 class OpsTerminalGroupIncompleteError extends Error {
   constructor(groupId: string) {
     super(
       `[stagedIntents] group "${groupId}" is an ops-terminal closing group but has no live ` +
-        'journal.setState transitioning to "resolved", or to "applied-pending-confirm" with a ' +
-        "reconciliation assertion — an ops/investigation session's closing group must carry that " +
-        'transition, alongside any task-body write recording the finding and any follow-on ' +
-        'task.create, before it can commit.',
+        "journal.setState transition at all — an ops/investigation session's closing group must " +
+        'carry a journal.setState transitioning to "resolved", to "applied-pending-confirm" with a ' +
+        `reconciliation assertion, or to one of the acceptable non-terminal states (${OPS_JOURNAL_EXPLICIT_NON_TERMINAL_STATES.join(', ')}) ` +
+        'honestly recording the task stays open, alongside any task-body write recording the ' +
+        'finding and any follow-on task.create, before it can commit.',
     );
     this.name = 'OpsTerminalGroupIncompleteError';
   }
@@ -478,14 +534,17 @@ class OpsTerminalGroupIncompleteError extends Error {
 /**
  * Commit-time enforcement of the ops-terminal group-completeness invariant
  * (see OpsTerminalGroupIncompleteError): null when the group is not an
- * ops-terminal closing group at all, or when it already carries its
- * journal.setState -> "resolved" member.
+ * ops-terminal closing group at all, when it already carries its
+ * journal.setState -> "resolved" (or reconciled applied-pending-confirm)
+ * member, or when it carries a live journal.setState explicitly declaring
+ * one of the acceptable non-terminal states.
  */
 function checkOpsTerminalGroupCompleteness(
   groupId: string,
 ): OpsTerminalGroupIncompleteError | null {
   if (!groupHasOpsTerminalMember(groupId)) return null;
   if (hasGroupOpsTerminalResolvedJournal(groupId)) return null;
+  if (hasGroupOpsTerminalExplicitNonTerminalJournal(groupId)) return null;
   return new OpsTerminalGroupIncompleteError(groupId);
 }
 
