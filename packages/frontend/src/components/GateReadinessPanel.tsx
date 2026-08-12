@@ -98,6 +98,11 @@ function dispositionLabelFor(
   return item.latestDisposition ?? '—';
 }
 
+/** True once a parked item's backoff-scheduled next_attempt_at has elapsed — the same due-ness nextPendingGateItems uses server-side to decide what's pullable. */
+function isBackoffDue(nextAttemptAt: string | undefined, now: number): boolean {
+  return nextAttemptAt !== undefined && Date.parse(nextAttemptAt) <= now;
+}
+
 function formatEvidenceValue(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value;
@@ -209,6 +214,8 @@ interface RollupHeaderProps {
   onSelectAwaitingSetup?: () => void;
   /** Items parked at `pending` (backoff-scheduled) — rendered as a standalone badge, distinct from blocking and resolved, never folded into the progress bar/chip totals. */
   parkedCount?: number;
+  /** Of `parkedCount`, how many have an elapsed backoff (next_attempt_at in the past) and are due for re-check right now. */
+  parkedDueCount?: number;
   /** Clicking the parked badge drives the `pending` state list filter. */
   onSelectParked?: () => void;
 }
@@ -228,6 +235,7 @@ function RollupHeader({
   awaitingSetupCount,
   onSelectAwaitingSetup,
   parkedCount,
+  parkedDueCount,
   onSelectParked,
 }: RollupHeaderProps) {
   const total = stateOrder.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
@@ -272,9 +280,18 @@ function RollupHeader({
             className={styles.parkedBadge}
             data-testid={`${testId}-parked-count`}
             onClick={onSelectParked}
-            title="Items parked awaiting their next backoff-scheduled not-yet-triggerable re-check — non-blocking, excluded from the green/blocked status."
+            title="Items parked awaiting their next backoff-scheduled not-yet-triggerable re-check — non-blocking, excluded from the green/blocked status. Due = backoff has elapsed and the item is ready for a re-check."
           >
             Parked: {parkedCount}
+            {!!parkedDueCount && (
+              <span
+                className={styles.parkedDueCount}
+                data-testid={`${testId}-parked-due-count`}
+              >
+                {' '}
+                ({parkedDueCount} due)
+              </span>
+            )}
           </button>
         )}
       </div>
@@ -1285,6 +1302,11 @@ export function GateReadinessPanel({
             awaitingSetupCount={readiness?.awaitingSetupCount ?? 0}
             onSelectAwaitingSetup={selectAwaitingSetupFilter}
             parkedCount={readiness?.parked?.length ?? 0}
+            parkedDueCount={
+              readiness?.parked?.filter((p) =>
+                isBackoffDue(p.nextAttemptAt, Date.now()),
+              ).length ?? 0
+            }
             onSelectParked={() => selectGateChip('pending')}
           />
 
@@ -1469,6 +1491,29 @@ export function GateReadinessPanel({
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
                           {item.state}
+                          {item.state === 'pending' && (
+                            <span
+                              className={
+                                isBackoffDue(item.nextAttemptAt, Date.now())
+                                  ? styles.parkedDueIndicator
+                                  : styles.parkedNotDueIndicator
+                              }
+                              data-testid={`gate-item-pending-due-${item.id}`}
+                              title={
+                                item.nextAttemptAt
+                                  ? `Next backoff-scheduled re-check: ${new Date(
+                                      item.nextAttemptAt,
+                                    ).toLocaleString()} (attempt ${
+                                      item.pendingAttemptCount ?? 0
+                                    })`
+                                  : undefined
+                              }
+                            >
+                              {isBackoffDue(item.nextAttemptAt, Date.now())
+                                ? ' (due)'
+                                : ' (waiting)'}
+                            </span>
+                          )}
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
                           {dispositionLabelFor(item)}

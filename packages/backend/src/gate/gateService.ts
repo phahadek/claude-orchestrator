@@ -133,6 +133,10 @@ interface GateBlockingItem {
   bespoke?: boolean;
   /** True when the item's latest event carries a non-resolving disposition (needs-setup/noted) — attempted but inconclusive, distinct from an item that was never dispatched at all. */
   nonResolving?: boolean;
+  /** Backoff schedule for a `pending` item — when it next becomes due for re-check. Undefined for a non-pending item. */
+  nextAttemptAt?: string;
+  /** How many not-yet-triggerable attempts have been scheduled for this item's current pending parking. 0 for a non-pending item. */
+  pendingAttemptCount: number;
 }
 
 export interface GateReadiness {
@@ -185,6 +189,8 @@ export function getGateReadiness(
     nonResolving:
       item.latestDisposition !== undefined &&
       NON_TERMINAL_DISPOSITIONS.has(item.latestDisposition as GateDisposition),
+    nextAttemptAt: item.nextAttemptAt,
+    pendingAttemptCount: item.pendingAttemptCount,
   });
   const blocking = items
     .filter(

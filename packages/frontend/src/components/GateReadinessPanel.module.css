@@ -201,6 +201,26 @@
   background: rgba(203, 166, 247, 0.06);
 }
 
+.parkedDueCount {
+  font-weight: 700;
+  color: var(--red, #f38ba8);
+}
+
+.parkedDueIndicator {
+  margin-left: 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--red, #f38ba8);
+  white-space: nowrap;
+}
+
+.parkedNotDueIndicator {
+  margin-left: 8px;
+  font-size: 0.75rem;
+  color: var(--subtext, #a6adc8);
+  white-space: nowrap;
+}
+
 .filters {
   display: flex;
   align-items: center;
