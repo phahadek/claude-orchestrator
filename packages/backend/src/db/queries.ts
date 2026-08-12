@@ -1171,7 +1171,7 @@ export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
       `
     SELECT task_id FROM sessions
     WHERE status NOT IN (${TERMINAL_STATUS_SQL_LIST})
-      AND session_type IN ('groom', 'design', 'ops')
+      AND session_type IN ('groom', 'design', 'ops', 'docs')
       AND archived = 0
   `,
     )
@@ -3598,6 +3598,22 @@ export function getLatestOpsSessionByTaskId(
       `
     SELECT * FROM sessions
     WHERE task_id = @task_id AND session_type = 'ops'
+    ORDER BY started_at DESC
+    LIMIT 1
+  `,
+    )
+    .get({ task_id: taskId }) as Session | undefined;
+}
+
+/** Returns the most recent docs session for a given task ID — the docs-flow counterpart to getLatestOpsSessionByTaskId. */
+export function getLatestDocsSessionByTaskId(
+  taskId: string,
+): Session | undefined {
+  return db
+    .prepare<{ task_id: string }>(
+      `
+    SELECT * FROM sessions
+    WHERE task_id = @task_id AND session_type = 'docs'
     ORDER BY started_at DESC
     LIMIT 1
   `,
