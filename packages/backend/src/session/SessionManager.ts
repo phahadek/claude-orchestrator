@@ -1161,6 +1161,7 @@ export class SessionManager extends EventEmitter {
     status: 'error' | 'killed',
     reason: string,
     detail?: string,
+    opts?: { suppressReap?: boolean },
   ): void {
     const endedAt = Date.now();
 
@@ -1171,10 +1172,18 @@ export class SessionManager extends EventEmitter {
     // session can never resolve them, and a parked proposal (e.g. a
     // task.setStatus -> Ready) would otherwise sit forever on the decision
     // surface as if still live. See expireStagedIntentsForSession.
-    try {
-      expireStagedIntentsForSession(sessionId, `session_${status}`, endedAt);
-    } catch {
-      // Best-effort — DB may be unavailable or mocked without this function.
+    //
+    // Exception: a grant-respawn kill is not a real death — the same session
+    // id is about to come back with --resume, and its staged intents are
+    // exactly the work it will continue. That caller passes
+    // suppressReap:true for this single call only (never a persistent flag),
+    // so a genuine kill of the same session later still reaps normally.
+    if (!opts?.suppressReap) {
+      try {
+        expireStagedIntentsForSession(sessionId, `session_${status}`, endedAt);
+      } catch {
+        // Best-effort — DB may be unavailable or mocked without this function.
+      }
     }
 
     // Persist a concise reason so failures are diagnosable from the dashboard/DB
@@ -3575,9 +3584,13 @@ export class SessionManager extends EventEmitter {
       return false;
     }
 
+    // This kill is not a real death — the same session id is about to come
+    // back with --resume, so its staged intents must survive it. Suppress
+    // the reap for this single call only; if respawnSession below fails, the
+    // failure branch reaps explicitly instead (see comment there).
     const liveSession = this.sessions.get(sessionId);
     if (liveSession) {
-      await liveSession.kill();
+      await liveSession.kill({ suppressReap: true });
     }
     this.evictDeadSessionEntry(sessionId);
 
@@ -3615,14 +3628,23 @@ export class SessionManager extends EventEmitter {
       systemPromptFilePath,
     );
     if (!session) {
-      // The live session was already killed above for the grant to take
-      // effect. Deferred admission means nothing gets respawned in its
-      // place right now — same as the worktree-missing case above, the
-      // grant takes effect on the next resume (resumeOrphanSessions on
-      // this row once the deferral clears) instead.
+      // The live session (if any) was already killed above with the reap
+      // suppressed, or there was no live session to kill. Either way, no
+      // replacement session gets created here, so the grant respawn has
+      // definitively not happened and the session is genuinely down now —
+      // reap explicitly, mirroring abortSession's own explicit-call pattern,
+      // rather than relying solely on the periodic backstop sweep. Deferred
+      // admission means nothing gets respawned in its place right now — the
+      // grant takes effect on the next resume (resumeOrphanSessions on this
+      // row once the deferral clears) instead.
       logger.warn(
         `[SessionManager] respawnForCapabilityGrant: usage-admission deferred for ${sessionId.slice(0, 8)} — grant will take effect on next resume instead`,
       );
+      try {
+        expireStagedIntentsForSession(sessionId, 'session_killed', Date.now());
+      } catch {
+        // Best-effort — DB may be unavailable or mocked without this function.
+      }
       return false;
     }
     this.wireSession(sessionId, session, projectDir, recordedPath);

@@ -44,6 +44,10 @@ import {
   markSessionDone,
   applyPendingDone,
   updateSessionStatus,
+  insertStagedIntent,
+  getStagedIntent,
+  expireStagedIntentsForSession,
+  sweepStagedIntentsForTerminalSessions,
 } from '../db/queries';
 import { queryAuditLogByProject } from '../audit/AuditLog';
 import { db } from '../db/db.js';
@@ -115,10 +119,45 @@ function getAuditRows(
   }>;
 }
 
+let nextStagedIntentId = 0;
+
+function stageIntent(
+  sessionId: string,
+  overrides: Record<string, unknown> = {},
+): string {
+  const id = `intent-${++nextStagedIntentId}`;
+  insertStagedIntent({
+    id,
+    kind: 'task.setStatus',
+    payload: '{}',
+    payload_hash: 'hash',
+    task_id: null,
+    project_id: 'test-proj',
+    session_id: sessionId,
+    group_id: null,
+    milestone: null,
+    state: 'staged',
+    supersedes: null,
+    annotation: null,
+    decision_proposal: null,
+    investigation: null,
+    groom_proposal: null,
+    advisory: null,
+    disposition_reason: null,
+    answer: null,
+    applied_task_id: null,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    ...overrides,
+  } as never);
+  return id;
+}
+
 beforeEach(() => {
   db.prepare('DELETE FROM session_events').run();
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM audit_log').run();
+  db.prepare('DELETE FROM staged_intent').run();
   vi.clearAllMocks();
 });
 
@@ -318,6 +357,49 @@ describe('terminalized_at on error/killed transitions', () => {
 
     expect(getStatus('sess-running-term')).toBe('running');
     expect(getTimestamps('sess-running-term')?.terminalized_at).toBeNull();
+  });
+});
+
+// ── Terminal-path staged-intent reaping regression ───────────────────────────
+//
+// A genuine session death must still reap uncommitted staged intents —
+// expireStagedIntentsForSession exists to prevent a parked proposal from
+// sitting on the decision surface forever once its owning session can never
+// resolve it. This is the DB-level contract that SessionManager.markSessionErrored
+// relies on for every real terminal path (only the grant-respawn kill, which
+// is not a real death, suppresses it — see markSessionErrored.test.ts).
+
+describe('expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions — terminal-path reaping regression', () => {
+  it("expireStagedIntentsForSession supersedes a session's staged and approved intents", () => {
+    const staged = stageIntent('sess-dead', { state: 'staged' });
+    const approved = stageIntent('sess-dead', { state: 'approved' });
+    const otherSession = stageIntent('sess-alive', { state: 'staged' });
+
+    const changed = expireStagedIntentsForSession(
+      'sess-dead',
+      'session_killed',
+      Date.now(),
+    );
+
+    expect(changed).toBe(2);
+    expect(getStagedIntent(staged)?.state).toBe('superseded');
+    expect(getStagedIntent(staged)?.disposition_reason).toBe('session_killed');
+    expect(getStagedIntent(approved)?.state).toBe('superseded');
+    // A different session's staged intent is untouched.
+    expect(getStagedIntent(otherSession)?.state).toBe('staged');
+  });
+
+  it('sweepStagedIntentsForTerminalSessions (the periodic backstop) still reaps intents whose owning session already sits terminal in the DB', () => {
+    insertSession('sess-terminal-backstop', 'killed');
+    const staged = stageIntent('sess-terminal-backstop');
+
+    const changed = sweepStagedIntentsForTerminalSessions(
+      'session_killed',
+      Date.now(),
+    );
+
+    expect(changed).toBeGreaterThanOrEqual(1);
+    expect(getStagedIntent(staged)?.state).toBe('superseded');
   });
 });
 
