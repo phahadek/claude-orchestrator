@@ -312,7 +312,7 @@ export class AuditingTaskBackend implements TaskBackend {
     status: string,
     options?: UpdateStatusOptions,
   ): Promise<void> {
-    let priorStatus: string | null = null;
+    let priorStatus: string | null;
     try {
       priorStatus = getTaskStatusFromCache(taskId);
     } catch {
