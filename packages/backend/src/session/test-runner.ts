@@ -18,6 +18,35 @@ export interface TestRunOptions {
 
 const OUTPUT_CAP_CHARS = 50_000;
 
+/** Collapse a run of the same non-newline char repeated this many times or more. */
+const PROGRESS_RUN_THRESHOLD = 20;
+
+/**
+ * Test runners (pytest, vitest) print long runs of the same progress
+ * character (dots, F's) before their diagnosis at the end. Collapsing those
+ * runs frees up cap budget for the informative tail rather than burning it
+ * on noise.
+ */
+export function collapseProgressRuns(text: string): string {
+  return text.replace(
+    new RegExp(`([^\\n])\\1{${PROGRESS_RUN_THRESHOLD - 1},}`, 'g'),
+    (match, ch: string) =>
+      `${ch}[...${match.length - 1} more '${ch}' elided...]`,
+  );
+}
+
+/**
+ * Retains the tail of `output` for delivery into a session's feedback
+ * inbox — a test runner's failure diagnosis prints last, so keeping the
+ * head (a naive slice(0, cap)) discards exactly the informative part.
+ * Below the cap, returns `output` unchanged.
+ */
+export function truncateForDelivery(output: string, cap: number): string {
+  return output.length > cap
+    ? '[truncated]...\n' + output.slice(-cap)
+    : output;
+}
+
 function killProcessTree(pid: number): void {
   try {
     if (platform === 'win32') {
@@ -71,17 +100,33 @@ function runCommandWithTimeout(
         : { shell: true, cwd, env, detached: true };
 
     const proc = spawn(cmd, spawnOpts);
-    const chunks: Buffer[] = [];
+    let chunks: Buffer[] = [];
+    let headDroppedChars = 0;
     let settled = false;
-    let totalBytes = 0;
     let rssPoller: ReturnType<typeof setInterval> | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
+    // Retains the *tail* of the stream — a test runner's diagnosis (failure
+    // summary, traceback) always prints last, after uninformative progress
+    // output. Collapses progress-character runs first so the retained
+    // window isn't wasted on noise, then trims to the last OUTPUT_CAP_CHARS
+    // characters, recording how much was dropped from the head.
     function collect(d: Buffer) {
-      if (totalBytes < OUTPUT_CAP_CHARS) {
-        chunks.push(d);
-        totalBytes += d.length;
+      chunks.push(d);
+      let text = collapseProgressRuns(Buffer.concat(chunks).toString('utf8'));
+      if (text.length > OUTPUT_CAP_CHARS) {
+        const excess = text.length - OUTPUT_CAP_CHARS;
+        headDroppedChars += excess;
+        text = text.slice(excess);
       }
+      chunks = [Buffer.from(text, 'utf8')];
+    }
+
+    function collectedOutput(): string {
+      const text = Buffer.concat(chunks).toString('utf8');
+      return headDroppedChars > 0
+        ? `[test-runner] output truncated: ${headDroppedChars} char(s) elided from head\n${text}`
+        : text;
     }
 
     function settle(result: {
@@ -109,7 +154,7 @@ function runCommandWithTimeout(
           settle({
             exitCode: 1,
             output:
-              Buffer.concat(chunks).toString('utf8') +
+              collectedOutput() +
               `\n[test-runner] OOM_KILL: RSS ${rss.toFixed(0)} MB exceeded limit ${maxRssMb} MB`,
             timedOut: false,
             oomKilled: true,
@@ -122,8 +167,7 @@ function runCommandWithTimeout(
       if (proc.pid != null) killProcessTree(proc.pid);
       settle({
         exitCode: 1,
-        output:
-          Buffer.concat(chunks).toString('utf8') + '\n[test-runner] TIMEOUT',
+        output: collectedOutput() + '\n[test-runner] TIMEOUT',
         timedOut: true,
         oomKilled: false,
       });
@@ -132,7 +176,7 @@ function runCommandWithTimeout(
     proc.on('close', (code) => {
       settle({
         exitCode: code ?? 1,
-        output: Buffer.concat(chunks).toString('utf8'),
+        output: collectedOutput(),
         timedOut: false,
         oomKilled: false,
       });
