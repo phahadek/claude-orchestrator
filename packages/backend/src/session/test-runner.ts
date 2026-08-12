@@ -58,10 +58,17 @@ function runCommandWithTimeout(
   oomKilled: boolean;
 }> {
   return new Promise((resolve) => {
+    // Strip production data-plane env before the child spawns. A test
+    // command runs `vitest run` (or similar) in a worktree; DB_PATH pointing
+    // at the live orchestrator database must never reach it, or a test that
+    // reads DB_PATH before its own in-memory-DB guard runs (or a subprocess
+    // it spawns) could open and write to production data. See
+    // CliSessionRunner.ts's identical strip for the session-spawn path.
+    const { DB_PATH: _productionDbPath, ...env } = process.env;
     const spawnOpts =
       platform === 'win32'
-        ? { shell: true, cwd }
-        : { shell: true, cwd, detached: true };
+        ? { shell: true, cwd, env }
+        : { shell: true, cwd, env, detached: true };
 
     const proc = spawn(cmd, spawnOpts);
     const chunks: Buffer[] = [];

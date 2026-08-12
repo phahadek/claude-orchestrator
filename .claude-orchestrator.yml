@@ -28,7 +28,11 @@ autofix_skip_ci: false
 
 # Commands the orchestrator runs as authoritative tests per head-SHA.
 # Empty list = feature off (no-op). Each command is run with a per-command timeout.
-test: []
+# Two separate entries (matching CI's two "Test frontend"/"Test backend" steps)
+# so test_fail_fast stops at the first failing workspace and names it, same as CI.
+test:
+  - npm run test -w packages/frontend
+  - npm run test -w packages/backend
 
 # Per-command timeout in seconds for test commands. Default 300 (5 min).
 test_timeout_sec: 300
