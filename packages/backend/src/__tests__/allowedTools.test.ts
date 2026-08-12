@@ -77,7 +77,11 @@ const REGISTERED_TOOL_NAMES = new Set(
 // deploy.verdict) — those are registered by separate, non-stage-proposal
 // registrars with their own (partly deliberate, e.g. gateSeed.getState for
 // groom/design) allow-list asymmetries outside this guard's scope.
-const TIER_B_KINDS = ['session.getRecord', 'auditLog.query', 'sessionEvents.query'];
+const TIER_B_KINDS = [
+  'session.getRecord',
+  'auditLog.query',
+  'sessionEvents.query',
+];
 const CORE_KINDS = new Set([
   'health',
   ...Object.values(PLANNING_INTENT_KINDS).flat(),
@@ -88,9 +92,12 @@ const CORE_KINDS = new Set([
 ]);
 
 /** This session type's core stage-proposal + verdict + Tier-B kind vocabulary. */
-function coreRegisteredKinds(workflow: keyof typeof PLANNING_INTENT_KINDS | null): string[] {
+function coreRegisteredKinds(
+  workflow: keyof typeof PLANNING_INTENT_KINDS | null,
+): string[] {
   const kinds = workflow ? PLANNING_INTENT_KINDS[workflow] : CODE_INTENT_KINDS;
-  const verdictKinds = workflow === null ? ['review.disposition', 'flaky.confirm'] : [];
+  const verdictKinds =
+    workflow === null ? ['review.disposition', 'flaky.confirm'] : [];
   return ['health', ...kinds, ...verdictKinds, ...TIER_B_KINDS];
 }
 
@@ -209,7 +216,7 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     });
   }
 
-  it('ALLOWED_TOOLS contains the underscore form of review_dispute — a code session\'s route out of a needs_changes verdict it concludes is wrong, not the dotted registration name', () => {
+  it("ALLOWED_TOOLS contains the underscore form of review_dispute — a code session's route out of a needs_changes verdict it concludes is wrong, not the dotted registration name", () => {
     expect(ALLOWED_TOOLS).toContain('mcp__orchestrator__review_dispute');
     expect(ALLOWED_TOOLS).not.toContain('mcp__orchestrator__review.dispute');
   });
