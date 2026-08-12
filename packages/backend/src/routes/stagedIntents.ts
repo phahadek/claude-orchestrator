@@ -151,6 +151,7 @@ import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import type { TestCommandResult } from '../session/test-runner';
+import { truncateForDelivery } from '../session/test-runner';
 import { runProjectTestRequest } from '../orchestration/testRequestLane';
 import {
   getSessionTestRequestCycleCount,
@@ -5212,11 +5213,10 @@ async function triggerTestRequestExecution(
   });
 
   if (!intent.sessionId || !sessionManager) return;
-  const output =
-    result.output.length > TEST_REQUEST_DELIVERY_OUTPUT_CAP
-      ? result.output.slice(0, TEST_REQUEST_DELIVERY_OUTPUT_CAP) +
-        '\n...[truncated]'
-      : result.output;
+  const output = truncateForDelivery(
+    result.output,
+    TEST_REQUEST_DELIVERY_OUTPUT_CAP,
+  );
   try {
     await sessionManager.enqueueFeedback(
       intent.sessionId,
