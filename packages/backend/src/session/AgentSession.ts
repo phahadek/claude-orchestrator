@@ -3306,17 +3306,27 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     }
   }
 
-  async kill(): Promise<void> {
+  async kill(opts?: { suppressReap?: boolean }): Promise<void> {
     if (this.isKilling) return;
     this.isKilling = true;
     await this.runner.kill();
     if (!this.hasEnded) {
-      this.sessionManager?.markSessionErrored?.(
-        this.sessionId,
-        'killed',
-        'user_kill',
-        'killed by user request',
-      );
+      if (opts) {
+        this.sessionManager?.markSessionErrored?.(
+          this.sessionId,
+          'killed',
+          'user_kill',
+          'killed by user request',
+          opts,
+        );
+      } else {
+        this.sessionManager?.markSessionErrored?.(
+          this.sessionId,
+          'killed',
+          'user_kill',
+          'killed by user request',
+        );
+      }
       if (!this.hasEnded) {
         // Fallback when sessionManager is absent (e.g. unit tests without a manager)
         updateSessionStatus(this.sessionId, 'killed', Date.now());

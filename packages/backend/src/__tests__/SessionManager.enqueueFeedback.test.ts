@@ -74,6 +74,9 @@ function seedInbox(
 vi.mock('../db/queries', () => ({
   TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
   getGrantedCapabilities: vi.fn(() => []),
+  addGrantedCapability: vi.fn(() => []),
+  removeGrantedCapability: vi.fn(() => []),
+  expireStagedIntentsForSession: vi.fn(() => 0),
   insertSession: vi.fn(),
   updateSessionStatus: vi.fn(),
   updateSessionWorktreePath: vi.fn(),
@@ -139,6 +142,8 @@ vi.mock('../session/orchestrator-config', () => ({
     allowedTools: [],
     mcp_servers: undefined,
   }),
+  isGrantable: vi.fn().mockReturnValue(true),
+  isToolShapedCapability: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../session/ContextBuilder', () => ({
@@ -215,8 +220,12 @@ vi.mock('../config/corporateMode', () => ({
     .mockReturnValue({ gates: { dockerMandatory: false } }),
 }));
 
+import { EventEmitter } from 'events';
 import { SessionManager } from '../session/SessionManager';
 import * as queries from '../db/queries';
+import * as configModule from '../config';
+import fs from 'fs';
+import type { AgentSession } from '../session/AgentSession';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -565,5 +574,157 @@ describe('SessionManager.enqueueFeedback()', () => {
       expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
       expect(queries.listUndeliveredInboxItems('sess-idle-3')).toHaveLength(1);
     });
+  });
+});
+
+/**
+ * Grant-respawn staged-intent reap suppression: respawnForCapabilityGrant's
+ * kill (used by grantCapability/revokeCapability/respawnForTransientOverload
+ * to apply a widened/narrowed --allowed-tools to a live session) is not a
+ * real death — the same session id comes back with --resume — so it must
+ * not reap the session's staged intents the way a genuine kill does.
+ */
+describe('SessionManager grant-respawn: staged-intent reap suppression', () => {
+  function grantRow(overrides: Record<string, unknown> = {}) {
+    return {
+      session_id: 'sess-grant',
+      task_id: 'task-1',
+      task_url: 'https://notion.so/task',
+      project_context_url: 'https://notion.so/ctx',
+      project_id: 'proj-1',
+      status: 'running',
+      session_type: 'standard',
+      worktree_path: '/tmp/proj/.claude/worktrees/sess-grant',
+      pr_url: null,
+      task_name: 'Test task',
+      ...overrides,
+    };
+  }
+
+  function fakeSpawnedSession(): AgentSession {
+    const emitter = new EventEmitter() as unknown as AgentSession;
+    Object.assign(emitter, {
+      taskId: 'task-1',
+      sessionType: 'standard',
+      prUrl: null,
+      hasEnded: false,
+      run: vi.fn().mockReturnValue(new Promise(() => {})),
+    });
+    return emitter;
+  }
+
+  function withLiveSession(sm: SessionManager, killSpy: ReturnType<typeof vi.fn>) {
+    (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(
+      'sess-grant',
+      { kill: killSpy, hasActiveTurn: () => false },
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(queries.getSession).mockReturnValue(grantRow() as never);
+    vi.mocked(configModule.getProjectById).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp/proj',
+      taskSource: 'notion',
+      baseBranch: 'dev',
+      gitMode: 'worktree',
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+  });
+
+  it('grant applied to a live session with a staged intent leaves it in its prior state — no superseded/session_killed transition', async () => {
+    const killSpy = vi.fn().mockResolvedValue(undefined);
+    const sm = new SessionManager();
+    withLiveSession(sm, killSpy);
+    vi.spyOn(sm as never, 'respawnSession').mockReturnValue(
+      fakeSpawnedSession() as never,
+    );
+
+    await sm.grantCapability('sess-grant', 'Bash(find *)');
+
+    expect(killSpy).toHaveBeenCalledWith({ suppressReap: true });
+    expect(queries.expireStagedIntentsForSession).not.toHaveBeenCalled();
+  });
+
+  it('a sibling session.requestCapability staged by the same session survives the grant of a different capability (regression for live instance 2)', async () => {
+    const killSpy = vi.fn().mockResolvedValue(undefined);
+    const sm = new SessionManager();
+    withLiveSession(sm, killSpy);
+    vi.spyOn(sm as never, 'respawnSession').mockReturnValue(
+      fakeSpawnedSession() as never,
+    );
+
+    await sm.grantCapability('sess-grant', 'Bash(cat *)');
+
+    // The kill that applies this grant must never reap ANY of this
+    // session's staged intents, including a sibling capability request
+    // awaiting its own operator disposition.
+    expect(queries.expireStagedIntentsForSession).not.toHaveBeenCalled();
+  });
+
+  it('a grant respawn that fails at the worktree-missing exit never calls kill() and leaves the live session untouched', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    const killSpy = vi.fn().mockResolvedValue(undefined);
+    const sm = new SessionManager();
+    withLiveSession(sm, killSpy);
+
+    await sm.grantCapability('sess-grant', 'Bash(find *)');
+
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(queries.expireStagedIntentsForSession).not.toHaveBeenCalled();
+    expect(
+      (sm as unknown as { sessions: Map<string, unknown> }).sessions.has(
+        'sess-grant',
+      ),
+    ).toBe(true);
+  });
+
+  it('a grant respawn that fails at usage-admission-deferred (respawnSession returns null after a reap-suppressed kill) explicitly reaps via expireStagedIntentsForSession', async () => {
+    const killSpy = vi.fn().mockResolvedValue(undefined);
+    const sm = new SessionManager();
+    withLiveSession(sm, killSpy);
+    vi.spyOn(sm as never, 'respawnSession').mockReturnValue(null as never);
+
+    await sm.grantCapability('sess-grant', 'Bash(find *)');
+
+    expect(killSpy).toHaveBeenCalledWith({ suppressReap: true });
+    expect(queries.expireStagedIntentsForSession).toHaveBeenCalledWith(
+      'sess-grant',
+      'session_killed',
+      expect.any(Number),
+    );
+  });
+
+  it('a grant respawn where no live in-memory session exists (kill() never called) and the respawn attempt fails at usage-admission-deferred also reaps via the same failure-branch call', async () => {
+    const sm = new SessionManager();
+    // No entry in sessions map — this.sessions.get returns undefined.
+    vi.spyOn(sm as never, 'respawnSession').mockReturnValue(null as never);
+
+    const respawned = await sm.respawnForTransientOverload('sess-grant');
+
+    expect(respawned).toBe(false);
+    expect(queries.expireStagedIntentsForSession).toHaveBeenCalledWith(
+      'sess-grant',
+      'session_killed',
+      expect.any(Number),
+    );
+  });
+
+  it("intents belonging to a different session are untouched by a grant respawn", async () => {
+    const killSpy = vi.fn().mockResolvedValue(undefined);
+    const sm = new SessionManager();
+    withLiveSession(sm, killSpy);
+    vi.spyOn(sm as never, 'respawnSession').mockReturnValue(
+      fakeSpawnedSession() as never,
+    );
+
+    await sm.grantCapability('sess-grant', 'Bash(find *)');
+
+    expect(queries.expireStagedIntentsForSession).not.toHaveBeenCalledWith(
+      'other-session',
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(queries.expireStagedIntentsForSession).not.toHaveBeenCalled();
   });
 });

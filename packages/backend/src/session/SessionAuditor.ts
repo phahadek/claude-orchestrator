@@ -49,6 +49,7 @@ export interface ISessionManager {
     status: 'error' | 'killed',
     reason: string,
     detail?: string,
+    opts?: { suppressReap?: boolean },
   ): void;
   /** Deliver a message to a live session or resume a dead one and deliver it. */
   sendOrResume?(sessionId: string, text: string): Promise<string | null>;
