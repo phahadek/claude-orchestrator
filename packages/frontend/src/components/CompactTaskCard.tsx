@@ -24,6 +24,8 @@ const PRIORITY_ICONS: Record<string, string> = {
 function planningSessionTypeLabel(sessionType: string): string {
   if (sessionType === 'groom') return 'Grooming';
   if (sessionType === 'design') return 'Design';
+  if (sessionType === 'docs') return 'Docs';
+  if (sessionType === 'split') return 'Split';
   return 'Ops';
 }
 
