@@ -51,6 +51,12 @@ import {
 } from '../db/queries';
 import { queryAuditLogByProject } from '../audit/AuditLog';
 import { db } from '../db/db.js';
+import {
+  buildResumeMessage,
+  buildPlanningResumeMessage,
+  PLANNING_RESTART_RESUME_MESSAGE,
+} from '../session/SessionManager';
+import type { Session } from '../db/types';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -400,6 +406,77 @@ describe('expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions 
 
     expect(changed).toBeGreaterThanOrEqual(1);
     expect(getStagedIntent(staged)?.state).toBe('superseded');
+  });
+
+  it('expiring the notification path does not resurrect the expired intent — state stays superseded', () => {
+    const staged = stageIntent('sess-dead-2');
+
+    expireStagedIntentsForSession('sess-dead-2', 'session_killed', Date.now());
+    // Reading the row back (as the notification path does) must not mutate it.
+    expect(getStagedIntent(staged)?.state).toBe('superseded');
+    expect(getStagedIntent(staged)?.disposition_reason).toBe('session_killed');
+  });
+});
+
+// ── Resume message must not contradict a real expiry notice ────────────────
+
+function makePlanningSessionRow(overrides: Partial<Session> = {}): Session {
+  return {
+    session_id: 'sess-ops',
+    session_type: 'ops',
+    task_id: 'task-1',
+    task_url: 'https://notion.so/task',
+    project_context_url: 'https://notion.so/ctx',
+    project_id: 'test-proj',
+    status: 'running',
+    started_at: Date.now(),
+    ended_at: null,
+    pr_url: null,
+    worktree_path: null,
+    note: null,
+    tags: null,
+    model: null,
+    task_name: 'ops task',
+    archived: 0,
+    favorited: 0,
+    ...overrides,
+  } as Session;
+}
+
+describe('buildResumeMessage / buildPlanningResumeMessage — restart-resume vs. staged-intent expiry', () => {
+  it('a restart-caused resume with no expired intents still gets the unqualified reassurance', () => {
+    const row = makePlanningSessionRow();
+
+    expect(buildResumeMessage(row, 'restart')).toBe(
+      PLANNING_RESTART_RESUME_MESSAGE,
+    );
+  });
+
+  it('a restart-caused resume with an expired staged intent does NOT get the false "nothing was decided or rejected" reassurance', () => {
+    const row = makePlanningSessionRow();
+    stageIntent(row.session_id);
+    expireStagedIntentsForSession(row.session_id, 'session_killed', Date.now());
+
+    const message = buildResumeMessage(row, 'restart');
+
+    expect(message).not.toBe(PLANNING_RESTART_RESUME_MESSAGE);
+    expect(message).not.toContain(
+      'Nothing was decided or rejected while you were gone',
+    );
+  });
+
+  it('a disposition-caused resume (not restart) is unaffected by expired intents — its own reject-state branch still wins', () => {
+    const row = makePlanningSessionRow();
+    stageIntent(row.session_id);
+    expireStagedIntentsForSession(row.session_id, 'session_killed', Date.now());
+
+    // No reject-state intent exists, so this falls to the plain fallback either way.
+    expect(buildPlanningResumeMessage(row, 'disposition')).toBe(
+      buildPlanningResumeMessage(row, 'disposition'),
+    );
+    expect(buildPlanningResumeMessage(row, 'disposition')).not.toContain(
+      'Nothing was decided or rejected while you were gone',
+    );
   });
 });
 
