@@ -251,7 +251,7 @@ describe('the assembled groom procedure documents groomingGate.triage', () => {
   it('states the required-field count accurately: seven fields for every Type, an eighth (triage) for triage-eligible Types', () => {
     const output = assembleGroomOutput();
     expect(output).toMatch(/these seven `groomingGate`/);
-    expect(output).toMatch(/An eighth, `triage`, is required/);
+    expect(output).toMatch(/An eighth, `groomingGate\.triage`, is required/);
     expect(output).not.toMatch(/these six `groomingGate`/);
   });
 });
