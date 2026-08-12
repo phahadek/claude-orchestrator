@@ -119,14 +119,64 @@ describe('sessionDidWork', () => {
 
   describe('stage-only sessions (groom/design/split)', () => {
     for (const sessionType of ['groom', 'design', 'split']) {
-      it(`${sessionType}: returns true once >=1 staged_intent row exists, in any state`, () => {
+      it(`${sessionType}: returns true once a staged intent exists`, () => {
+        vi.mocked(getSession).mockReturnValue(
+          session({ session_type: sessionType }),
+        );
+        vi.mocked(listStagedIntentsBySession).mockReturnValue([
+          { id: 'i1', state: 'staged' },
+        ] as never);
+        expect(sessionDidWork('sess-1')).toBe(true);
+      });
+
+      it(`${sessionType}: returns true once an approved intent exists`, () => {
+        vi.mocked(getSession).mockReturnValue(
+          session({ session_type: sessionType }),
+        );
+        vi.mocked(listStagedIntentsBySession).mockReturnValue([
+          { id: 'i1', state: 'approved' },
+        ] as never);
+        expect(sessionDidWork('sess-1')).toBe(true);
+      });
+
+      it(`${sessionType}: returns true once an intent has committed`, () => {
+        vi.mocked(getSession).mockReturnValue(
+          session({ session_type: sessionType }),
+        );
+        vi.mocked(listStagedIntentsBySession).mockReturnValue([
+          { id: 'i1', state: 'committed' },
+        ] as never);
+        expect(sessionDidWork('sess-1')).toBe(true);
+      });
+
+      it(`${sessionType}: returns false when the only intent was superseded`, () => {
+        vi.mocked(getSession).mockReturnValue(
+          session({ session_type: sessionType }),
+        );
+        vi.mocked(listStagedIntentsBySession).mockReturnValue([
+          { id: 'i1', state: 'superseded' },
+        ] as never);
+        expect(sessionDidWork('sess-1')).toBe(false);
+      });
+
+      it(`${sessionType}: returns false when the only intent was withdrawn`, () => {
+        vi.mocked(getSession).mockReturnValue(
+          session({ session_type: sessionType }),
+        );
+        vi.mocked(listStagedIntentsBySession).mockReturnValue([
+          { id: 'i1', state: 'withdrawn' },
+        ] as never);
+        expect(sessionDidWork('sess-1')).toBe(false);
+      });
+
+      it(`${sessionType}: returns false when the only intent was rejected`, () => {
         vi.mocked(getSession).mockReturnValue(
           session({ session_type: sessionType }),
         );
         vi.mocked(listStagedIntentsBySession).mockReturnValue([
           { id: 'i1', state: 'rejected' },
         ] as never);
-        expect(sessionDidWork('sess-1')).toBe(true);
+        expect(sessionDidWork('sess-1')).toBe(false);
       });
 
       it(`${sessionType}: returns false with no staged_intent rows`, () => {

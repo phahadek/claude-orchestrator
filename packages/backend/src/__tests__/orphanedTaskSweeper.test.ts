@@ -1304,6 +1304,61 @@ describe('OrphanedTaskSweeper', () => {
     );
   });
 
+  it('reverts an Investigation task whose only intents are superseded/withdrawn/rejected (nothing dispositionable)', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
+    ]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+    vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(
+      makeSession('done', 30 * 60 * 1000) as ReturnType<
+        typeof getLatestOpsSessionByTaskId
+      >,
+    );
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'sess-1',
+      session_type: 'ops',
+      task_id: 'notion:abc',
+    } as ReturnType<typeof getSession>);
+    // All rows exist but none are still on (or landed on) the decision
+    // surface — expired/superseded, withdrawn, and rejected respectively.
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      { id: 'intent-1', kind: 'task.updateBody', state: 'superseded' },
+      { id: 'intent-2', kind: 'task.updateBody', state: 'withdrawn' },
+      { id: 'intent-3', kind: 'task.updateBody', state: 'rejected' },
+    ] as ReturnType<typeof listStagedIntentsBySession>);
+    vi.mocked(getOpsJournalEntry).mockReturnValue({
+      task_id: 'notion:abc',
+      project: 'proj-1',
+      milestone: 'm1',
+      state: 'pending',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
   it('does not consult ops_journal for a Code task and still reverts a genuine orphan', async () => {
     const backend = makeBackend([
       makeTask('notion:abc', '🔄 In Progress', '💻 Code'),

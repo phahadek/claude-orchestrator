@@ -29,6 +29,7 @@ import {
 } from '../db/queries';
 import { isGateVerifySession } from './sessionPredicates';
 import type { SessionType } from './sessionPredicates';
+import type { StagedIntentState } from '../db/types';
 
 /**
  * True iff the session has emitted a session_events row more recently than
@@ -67,9 +68,27 @@ function hasOpenedPr(sessionId: string): boolean {
   );
 }
 
-/** True iff at least one staged_intent row exists for this session, in any state. */
+/**
+ * States that still count as "staged a decision": still on (or recoverable
+ * to) the operator-facing decision surface, or already landed. Excludes
+ * `superseded` (replaced by a later row, which is counted on its own
+ * merits), `withdrawn` (retracted by the staging session itself), and
+ * `rejected` (dispositioned away) — none leave anything for an operator to
+ * act on.
+ */
+const DECISION_SURFACE_STATES: ReadonlySet<StagedIntentState> = new Set([
+  'staged',
+  'pending_verification',
+  'approved',
+  'needs_revision',
+  'committed',
+]);
+
+/** True iff at least one staged_intent row for this session is still actionable or already landed. */
 function hasStagedAnything(sessionId: string): boolean {
-  return listStagedIntentsBySession(sessionId).length > 0;
+  return listStagedIntentsBySession(sessionId).some((intent) =>
+    DECISION_SURFACE_STATES.has(intent.state),
+  );
 }
 
 /** True iff the task's ops_journal entry has advanced past its initial 'pending' state. */
@@ -86,8 +105,9 @@ function opsJournalAdvancedPastPending(taskId: string): boolean {
  * - docs: PR/merge outcome if it opened one, else falls back to the
  *   staged-decision check — mirrors PlanningOrchestrator.completeDocsTask's
  *   existing fallback.
- * - groom / design / split: staged a decision (>=1 staged_intent row, any
- *   state).
+ * - groom / design / split: staged a decision (>=1 staged_intent row still
+ *   on the decision surface or already committed — see
+ *   DECISION_SURFACE_STATES).
  * - ops: staged a decision, OR (for a non gate-verify ops/investigation
  *   session) its ops_journal advanced past 'pending' — that category can do
  *   real recorded work without staging anything. A gate-verify session
