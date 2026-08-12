@@ -206,38 +206,61 @@ export function createPrsRouter(
         );
       }
 
-      const items = rows.map((pr) => ({
-        type: 'pr' as const,
-        prNumber: pr.pr_number,
-        prUrl: pr.pr_url,
-        title: pr.title,
-        headBranch: pr.head_branch,
-        branchName: pr.head_branch ?? '',
-        baseBranch: pr.base_branch ?? '',
-        state: reconciledStates.get(pr.pr_number) ?? pr.state,
-        notionTaskId: pr.task_id,
-        notionTaskTitle: pr.task_id ? getTaskTitleFromCache(pr.task_id) : null,
-        sessionId: pr.session_id ?? null,
-        reviewSessionId: pr.review_session_id ?? null,
-        repo: pr.repo,
-        reviewVerdict: pr.review_result
-          ? (JSON.parse(pr.review_result) as PRReviewResult).verdict
-          : null,
-        reviewedAt: pr.review_at,
-        createdAt: pr.created_at,
-        updatedAt: pr.updated_at,
-        reviewIteration: pr.review_iteration,
-        mergeState: pr.merge_state ?? null,
-        failingChecks: parseFailingChecks(pr.failing_checks),
-        pauseReason: pr.pause_reason ?? null,
-        preReviewStage: pr.pre_review_stage ?? null,
-        awaitingReReview:
-          (pr.pre_review_stage === 'blocked_autofix' ||
-            pr.pre_review_stage === 'blocked_verify') &&
-          (pr.pending_push === 1 ||
-            (!!pr.head_sha && pr.head_sha !== pr.last_reviewed_sha)),
-        autoMergeEnabled,
-      }));
+      const items = rows.map((pr) => {
+        const depthVerdictRow = getDepthReviewVerdict(pr.pr_number, pr.repo);
+        const depthVerdict = depthVerdictRow
+          ? {
+              verdict: depthVerdictRow.verdict,
+              dimensions: JSON.parse(
+                depthVerdictRow.dimensions,
+              ) as DepthReviewDimension[],
+              summary: depthVerdictRow.summary,
+              headSha: depthVerdictRow.head_sha,
+              recordedAt: depthVerdictRow.recorded_at,
+              // A depth verdict is only ever "escalated" while the PR is
+              // still paused on it — a size-only failure is routed to the
+              // session's feedback queue and the hold is cleared, so the
+              // same pause_reason check distinguishes the two dispositions
+              // without re-deriving findings from it.
+              escalated: pr.pause_reason === 'depth_review_escalation',
+            }
+          : null;
+        return {
+          type: 'pr' as const,
+          prNumber: pr.pr_number,
+          prUrl: pr.pr_url,
+          title: pr.title,
+          headBranch: pr.head_branch,
+          branchName: pr.head_branch ?? '',
+          baseBranch: pr.base_branch ?? '',
+          state: reconciledStates.get(pr.pr_number) ?? pr.state,
+          notionTaskId: pr.task_id,
+          notionTaskTitle: pr.task_id
+            ? getTaskTitleFromCache(pr.task_id)
+            : null,
+          sessionId: pr.session_id ?? null,
+          reviewSessionId: pr.review_session_id ?? null,
+          repo: pr.repo,
+          depthVerdict,
+          reviewVerdict: pr.review_result
+            ? (JSON.parse(pr.review_result) as PRReviewResult).verdict
+            : null,
+          reviewedAt: pr.review_at,
+          createdAt: pr.created_at,
+          updatedAt: pr.updated_at,
+          reviewIteration: pr.review_iteration,
+          mergeState: pr.merge_state ?? null,
+          failingChecks: parseFailingChecks(pr.failing_checks),
+          pauseReason: pr.pause_reason ?? null,
+          preReviewStage: pr.pre_review_stage ?? null,
+          awaitingReReview:
+            (pr.pre_review_stage === 'blocked_autofix' ||
+              pr.pre_review_stage === 'blocked_verify') &&
+            (pr.pending_push === 1 ||
+              (!!pr.head_sha && pr.head_sha !== pr.last_reviewed_sha)),
+          autoMergeEnabled,
+        };
+      });
       res.json(items);
     }),
   );

@@ -134,6 +134,109 @@ describe('MilestoneDrilldown', () => {
     expect(screen.getByTestId('milestone-drilldown-empty')).toBeTruthy();
   });
 
+  describe('depth-review dispositions', () => {
+    it('renders a failing depth verdict, naming the failing dimension(s) and the PR it belongs to', () => {
+      render(
+        <MilestoneDrilldown
+          selection={null}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="task"
+          onModeChange={noop}
+          depthDispositions={[
+            {
+              prNumber: 915,
+              prUrl: 'https://github.com/org/repo/pull/915',
+              repo: 'org/repo',
+              taskName: 'Fix the thing',
+              verdict: 'fail',
+              summary: 'Found a defect beyond spec-conformance',
+              failingDimensions: [
+                { name: 'reliability', notes: 'Retries are unbounded' },
+              ],
+              escalated: true,
+            },
+          ]}
+        />,
+      );
+
+      const entry = screen.getByTestId('depth-disposition-915');
+      expect(entry.textContent).toContain('915');
+      expect(entry.textContent).toContain('reliability');
+      expect(entry.textContent).toContain('Retries are unbounded');
+    });
+
+    it('renders a routed finding and an escalated finding distinguishably', () => {
+      render(
+        <MilestoneDrilldown
+          selection={null}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="task"
+          onModeChange={noop}
+          depthDispositions={[
+            {
+              prNumber: 915,
+              prUrl: 'https://github.com/org/repo/pull/915',
+              repo: 'org/repo',
+              taskName: 'Escalated task',
+              verdict: 'fail',
+              summary: 'Escalated',
+              failingDimensions: [{ name: 'reliability', notes: 'bad' }],
+              escalated: true,
+            },
+            {
+              prNumber: 918,
+              prUrl: 'https://github.com/org/repo/pull/918',
+              repo: 'org/repo',
+              taskName: 'Routed task',
+              verdict: 'fail',
+              summary: 'Routed',
+              failingDimensions: [
+                { name: 'size-proportionality', notes: 'too big' },
+              ],
+              escalated: false,
+            },
+          ]}
+        />,
+      );
+
+      const escalatedBadge = screen.getByTestId('depth-disposition-915-badge');
+      const routedBadge = screen.getByTestId('depth-disposition-918-badge');
+      expect(escalatedBadge.textContent).toContain('Escalated to operator');
+      expect(routedBadge.textContent).toContain('Routed to session');
+      expect(escalatedBadge.textContent).not.toBe(routedBadge.textContent);
+      expect(escalatedBadge.className).not.toBe(routedBadge.className);
+    });
+
+    it('renders no depth-disposition section when there are no depth verdicts', () => {
+      render(
+        <MilestoneDrilldown
+          selection={null}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="task"
+          onModeChange={noop}
+        />,
+      );
+
+      expect(screen.queryByTestId('milestone-depth-dispositions')).toBeNull();
+      expect(screen.getByTestId('milestone-drilldown-empty')).toBeTruthy();
+    });
+  });
+
   it('renders only the active view — task mode never renders a sibling session container that could crush its height', async () => {
     vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
     // A body far taller than any panel — the historical bug crushed the
