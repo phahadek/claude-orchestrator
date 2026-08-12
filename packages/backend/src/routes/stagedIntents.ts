@@ -521,7 +521,7 @@ class OpsTerminalGroupIncompleteError extends Error {
   constructor(groupId: string) {
     super(
       `[stagedIntents] group "${groupId}" is an ops-terminal closing group but has no live ` +
-        'journal.setState transition at all — an ops/investigation session\'s closing group must ' +
+        "journal.setState transition at all — an ops/investigation session's closing group must " +
         'carry a journal.setState transitioning to "resolved", to "applied-pending-confirm" with a ' +
         `reconciliation assertion, or to one of the acceptable non-terminal states (${OPS_JOURNAL_EXPLICIT_NON_TERMINAL_STATES.join(', ')}) ` +
         'honestly recording the task stays open, alongside any task-body write recording the ' +

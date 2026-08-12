@@ -1198,7 +1198,10 @@ describe('an ops-terminal closing group is refused at commit unless it actually 
       // staged-proposal is only reachable from candidate (not directly from
       // pending — see ALLOWED_TRANSITIONS), so seed the journal one step in
       // for that case; every other target here is reachable from pending.
-      await seedJournal(taskId, state === 'staged-proposal' ? 'candidate' : 'pending');
+      await seedJournal(
+        taskId,
+        state === 'staged-proposal' ? 'candidate' : 'pending',
+      );
       mockGetTaskBackend.mockReturnValue({
         type: 'notion',
         createTask: vi.fn().mockResolvedValue('notion:new-followon-nt'),
@@ -1212,7 +1215,8 @@ describe('an ops-terminal closing group is refused at commit unless it actually 
       // record unless it carries a standDownReason — see
       // assertOpsBlockedClosureRequestedCapability.
       if (state === 'blocked') {
-        payload.standDownReason = 'no capability could unblock this — design decision';
+        payload.standDownReason =
+          'no capability could unblock this — design decision';
       }
       stageIntent(
         'journal.setState',
@@ -1223,7 +1227,11 @@ describe('an ops-terminal closing group is refused at commit unless it actually 
       );
       stageIntent(
         'task.create',
-        { title: 'Follow-on from investigation', body: 'x', databaseId: 'db-1' },
+        {
+          title: 'Follow-on from investigation',
+          body: 'x',
+          databaseId: 'db-1',
+        },
         'proj-ops-commit',
         groupId,
         sessionId,
