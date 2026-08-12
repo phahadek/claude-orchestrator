@@ -347,6 +347,21 @@ describe('sendOrResume — dead session path', () => {
     expect(firstArg).toBe(SESSION_ID);
   });
 
+  it('delivers the fast-path text exactly once, even if the respawned session emits multiple messages', async () => {
+    await doResume('only-once');
+    // A second event from the same respawned session must not trigger a
+    // second send — the once('message', ...) gate only fires the first time.
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'assistant',
+      content: 'second event',
+    });
+
+    expect(capturedSessions[0].sendMessage).toHaveBeenCalledTimes(1);
+    expect(capturedSessions[0].sendMessage).toHaveBeenCalledWith('only-once');
+  });
+
   it('updates DB row to running (does not insert a new row)', async () => {
     await doResume();
     expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(

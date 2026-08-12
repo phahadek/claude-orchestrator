@@ -484,12 +484,17 @@ export class AgentSession extends EventEmitter {
   /**
    * True while a turn is in flight (from the moment input is sent — initial
    * prompt or a follow-up sendMessage — until the matching 'result' event is
-   * processed). Starts true: a freshly constructed session is always about
-   * to begin its first turn. Used by SessionManager.enqueueFeedback to decide
-   * whether a live in-map session can be woken immediately or must wait for
-   * the next turn boundary.
+   * processed). Starts true for a freshly constructed session that carries
+   * an initial prompt, since it is always about to begin its first turn.
+   * Exception: a prompt-less respawn (hasInitialPrompt=false — used by
+   * respawnSession for every respawn path, since the CLI/SDK is invoked with
+   * --resume and no prompt argument, see AgentSession.run()'s
+   * `resumeIdForSpawn ? undefined : initialPrompt`) starts false — no turn
+   * begins until something explicitly sends input. Used by
+   * SessionManager.enqueueFeedback to decide whether a live in-map session
+   * can be woken immediately or must wait for the next turn boundary.
    */
-  private _turnInFlight = true;
+  private _turnInFlight: boolean;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -550,9 +555,21 @@ export class AgentSession extends EventEmitter {
      */
     private readonly launchModel?: string,
     private readonly launchEffort?: string,
+    /**
+     * True when this construction carries an initial prompt that will
+     * actually be sent to the runner on the first spawn — i.e. a fresh
+     * start, not a --resume respawn (see AgentSession.run()'s
+     * `resumeIdForSpawn ? undefined : initialPrompt`). Every respawnSession
+     * call in SessionManager passes false here: it always constructs with
+     * resumeSessionId set, so the runner is invoked with --resume and no
+     * prompt, and no turn begins until something explicitly sends input.
+     * Defaults to true so existing fresh-start call sites are unaffected.
+     */
+    hasInitialPrompt: boolean = true,
   ) {
     super();
     this.runner = runner ?? new CliSessionRunner(sessionId);
+    this._turnInFlight = hasInitialPrompt;
   }
 
   /** Resolve the per-project task backend, preferring the test override when present. */

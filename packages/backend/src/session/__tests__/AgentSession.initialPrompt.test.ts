@@ -202,3 +202,41 @@ describe('AgentSession — initial prompt by session type', () => {
     expect(prompt).toMatch(/never merge your own pr/i);
   });
 });
+
+describe('AgentSession — _turnInFlight initialization (hasInitialPrompt)', () => {
+  it('has no active turn immediately after construction when hasInitialPrompt is false (prompt-less respawn)', () => {
+    const session = new AgentSession(
+      'test-session-no-prompt',
+      'https://notion.so/task',
+      'https://notion.so/project',
+      {
+        attachPR: vi.fn().mockResolvedValue(undefined),
+        getTask: vi.fn().mockResolvedValue(null),
+      } as never,
+      '/tmp/worktree',
+      'task-123',
+      'test-session-no-prompt', // resumeSessionId — this is a --resume respawn
+      undefined,
+      'standard',
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      '',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false, // hasInitialPrompt
+    );
+
+    expect(session.hasActiveTurn()).toBe(false);
+  });
+
+  it('has an active turn immediately after construction when an initial prompt is supplied (fresh start)', () => {
+    const session = makeSession('standard');
+
+    expect(session.hasActiveTurn()).toBe(true);
+  });
+});

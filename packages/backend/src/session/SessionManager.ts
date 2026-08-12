@@ -2435,6 +2435,12 @@ export class SessionManager extends EventEmitter {
       row.project_id ?? '',
       mcpConfigPath,
       systemPromptFilePath,
+      undefined,
+      undefined,
+      // hasInitialPrompt=false — every respawnSession call constructs with
+      // resumeSessionId set (--resume), so no prompt is ever actually sent
+      // at spawn; see AgentSession's hasInitialPrompt param.
+      false,
     );
     if (row.pr_url) session.prUrl = row.pr_url;
     this.sessions.set(row.session_id, session);
