@@ -309,7 +309,8 @@ describe('renderDesignDigest — verbatim task body', () => {
   it('renders the verbatim task body even when the digest lists zero Open Questions', () => {
     const result = fixtureDesignLoadResult();
     result.openQuestions = { items: [], source: 'none' };
-    result.markdown = '# Resolved already\n\nDesign (resolved): pick approach A.';
+    result.markdown =
+      '# Resolved already\n\nDesign (resolved): pick approach A.';
     const digest: PlanningDigest = {
       workflow: 'design',
       data: deriveDesignDigestSlice(result),
