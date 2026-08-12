@@ -457,6 +457,63 @@ describe('sendOrResume — dead session path', () => {
     },
   );
 
+  it('refuses to respawn an idle-but-archived session without allowTerminal — no AgentSession constructed', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'idle',
+      archived: 1,
+    } as any);
+
+    const result = await sm.sendOrResume(SESSION_ID, 'feedback');
+
+    expect(result).toBeNull();
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+  });
+
+  it('with allowTerminal, resumes an idle-but-archived session — recovery paths still work', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'idle',
+      archived: 1,
+    } as any);
+
+    const p = sm.sendOrResume(SESSION_ID, 're-open me', {
+      allowTerminal: true,
+    });
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    const result = await p;
+
+    expect(result).toBe(SESSION_ID);
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
+  });
+
+  it('an idle, unarchived session still resumes normally — idle is not reclassified as terminal', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'idle',
+      archived: 0,
+    } as any);
+
+    const p = sm.sendOrResume(SESSION_ID, 'feedback');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    const result = await p;
+
+    expect(result).toBe(SESSION_ID);
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
+  });
+
   it('with allowTerminal, respawns a terminal session and records session_terminal_reopened instead of silently writing running', async () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
@@ -595,6 +652,27 @@ describe('enqueueFeedback — terminal session behavior', () => {
       expect.any(String),
     );
     expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
+  });
+
+  it('dispositioning an intent whose session is idle-but-archived marks the inbox item delivered and spawns no process, even with attemptTerminalResume defaulted to true', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'idle',
+      archived: 1,
+    } as any);
+    const sendOrResumeSpy = vi.spyOn(sm, 'sendOrResume');
+
+    await sm.enqueueFeedback(
+      SESSION_ID,
+      'operator-disposition',
+      'staged intent declined',
+    );
+
+    expect(sendOrResumeSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
+      'item-1',
+    ]);
   });
 });
 
