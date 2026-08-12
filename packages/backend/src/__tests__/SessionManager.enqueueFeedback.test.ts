@@ -730,4 +730,71 @@ describe('SessionManager grant-respawn: staged-intent reap suppression', () => {
     );
     expect(queries.expireStagedIntentsForSession).not.toHaveBeenCalled();
   });
+
+  // ── grantCapability's returned respawn-applied outcome ──────────────────
+  // The notice the session receives (stagedIntents.ts's resumeCapabilityRequester)
+  // must be derived from whether the respawn actually applied the grant, not
+  // from the fact that a grant was requested. These assert grantCapability's
+  // own return value directly, independent of that call site.
+  it('returns respawnApplied: true when the underlying respawn resolves true', async () => {
+    vi.mocked(queries.addGrantedCapability).mockReturnValue([
+      'Bash(find *)',
+    ] as never);
+    const killSpy = vi.fn().mockResolvedValue(undefined);
+    const sm = new SessionManager();
+    withLiveSession(sm, killSpy);
+    vi.spyOn(sm as never, 'respawnSession').mockReturnValue(
+      fakeSpawnedSession() as never,
+    );
+
+    const result = await sm.grantCapability('sess-grant', 'Bash(find *)');
+
+    expect(result.respawnApplied).toBe(true);
+    expect(result.granted).toContain('Bash(find *)');
+  });
+
+  it('returns respawnApplied: false when respawnForCapabilityGrant returns false at the worktree-missing exit', async () => {
+    vi.mocked(queries.addGrantedCapability).mockReturnValue([
+      'Bash(find *)',
+    ] as never);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    const killSpy = vi.fn().mockResolvedValue(undefined);
+    const sm = new SessionManager();
+    withLiveSession(sm, killSpy);
+
+    const result = await sm.grantCapability('sess-grant', 'Bash(find *)');
+
+    expect(result.respawnApplied).toBe(false);
+    expect(result.granted).toContain('Bash(find *)');
+  });
+
+  it('returns respawnApplied: false when respawnForCapabilityGrant returns false at the usage-admission-deferred exit', async () => {
+    vi.mocked(queries.addGrantedCapability).mockReturnValue([
+      'Bash(find *)',
+    ] as never);
+    const killSpy = vi.fn().mockResolvedValue(undefined);
+    const sm = new SessionManager();
+    withLiveSession(sm, killSpy);
+    vi.spyOn(sm as never, 'respawnSession').mockReturnValue(null as never);
+
+    const result = await sm.grantCapability('sess-grant', 'Bash(find *)');
+
+    expect(result.respawnApplied).toBe(false);
+    expect(result.granted).toContain('Bash(find *)');
+  });
+
+  it('returns respawnApplied: false without attempting a respawn when the session is not live in the map', async () => {
+    vi.mocked(queries.addGrantedCapability).mockReturnValue([
+      'Bash(find *)',
+    ] as never);
+    const sm = new SessionManager();
+    // No withLiveSession() call — session is absent from the in-memory map.
+    const respawnSpy = vi.spyOn(sm as never, 'respawnSession');
+
+    const result = await sm.grantCapability('sess-grant', 'Bash(find *)');
+
+    expect(result.respawnApplied).toBe(false);
+    expect(result.granted).toContain('Bash(find *)');
+    expect(respawnSpy).not.toHaveBeenCalled();
+  });
 });

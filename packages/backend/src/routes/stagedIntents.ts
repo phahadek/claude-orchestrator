@@ -4834,13 +4834,19 @@ async function resumeCapabilityRequester(
 
   if (!sessionManager) return;
 
+  let respawnApplied = false;
   if (outcome === 'approved') {
-    await sessionManager.grantCapability(intent.sessionId, payload.capability);
+    ({ respawnApplied } = await sessionManager.grantCapability(
+      intent.sessionId,
+      payload.capability,
+    ));
   }
 
   const message =
     outcome === 'approved'
-      ? `Capability request approved: "${payload.capability}" has been granted for this session.`
+      ? respawnApplied
+        ? `Capability request approved: "${payload.capability}" has been granted for this session.`
+        : `Capability request approved: "${payload.capability}" has been recorded but is not yet active in this session — it will take effect on the next resume, not this turn. Do not attempt to use it now.`
       : outcome === 'pushback'
         ? `Capability request "${payload.capability}" was sent back for revision. Feedback: ${reason ?? ''}`
         : `Capability request "${payload.capability}" was declined. Reason: ${reason ?? ''}`;
