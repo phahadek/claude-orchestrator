@@ -689,6 +689,52 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'same session.',
   },
   {
+    id: 'design-zero-open-questions-reconstruct',
+    title:
+      'Zero listed Open Questions is a decision space to reconstruct, never a blocked state',
+    appliesTo: ['design'],
+    text:
+      'IS: a loaded digest whose Open Questions list is empty (`Open questions ' +
+      '(none): 0`, or an explicit-heading section with no items) is a normal ' +
+      'input to reconstruct, not a blocked state. A task most often arrives this ' +
+      'way because an upstream grooming pass folded the design into the body’s ' +
+      'own prose — a "Design (resolved): …" summary, a ratified rule, a "Ground ' +
+      'truth found" section — rather than filing it as this session’s own ' +
+      'deliverable, so nothing was ever locked as a `decision.pickOne`, no ' +
+      'architecture record exists, and (unless a groom session happened to run ' +
+      'one) no completeness critic has ever run against it either. DO read the ' +
+      'verbatim task body (the Design Investigation Slice’s "Task body" section) ' +
+      'and reconstruct the decision space it implies from scratch, exactly as if ' +
+      'the digest had listed the questions explicitly: every decision the body ' +
+      'records as already made becomes its own `decision.pickOne`, staged one at ' +
+      'a time in the order the body presents them (see "One Open Question per ' +
+      'turn" above), with the body’s recorded answer supplied as the ' +
+      'recommended `options[]` entry — a single confident-recommendation option, ' +
+      'never a distinct "confirm this" kind — so the operator’s disposition ' +
+      'surface is unchanged whether the answer was pre-settled or freshly ' +
+      'derived. DO verify each recorded decision against the current code before ' +
+      'recommending it back, the same as any other Open Question resolution (see ' +
+      '"Verify the task body’s premises" below) — a body-recorded decision is a ' +
+      'claim to re-derive, not a given to rubber-stamp; if it does not hold up, ' +
+      'stage the corrected answer as the recommendation instead. DO NOT treat an ' +
+      'empty Open Questions list as license to end the turn: the ' +
+      '"missing-or-empty-digest is a blocked state" rule (see "Deterministic ' +
+      'load" above) governs a digest that never loaded — a task lookup failure, ' +
+      'an unreachable loader — never a digest that loaded cleanly and simply ' +
+      'lists no Open Questions; reaching for that rule here is exactly the wrong ' +
+      'turn this principle exists to close off. DO run the completeness critic ' +
+      'and stage the closing synthesis, the architecture write(s), and the ' +
+      'follow-on `task.create` set on every reconstructed decision exactly as on ' +
+      'any other design pass — a re-derived settled decision still counts as a ' +
+      'locked decision for "Architecture pages and follow-on Code tasks are ' +
+      'required deliverables" below, it does not exempt the task from it. ' +
+      '`planning.noOp` is the terminal action ONLY when the task body genuinely ' +
+      'carries no decision space at all — no resolved-looking prose, no ' +
+      'ratified rule, nothing to reconstruct — and even then it must be staged, ' +
+      'naming why nothing needs reconstructing, never replaced by a prose ' +
+      'write-up in chat.',
+  },
+  {
     id: 'design-decision-pickone-payload-shape',
     title:
       'decision.pickOne payload shape mirrors the 5-part question presentation',
@@ -1147,6 +1193,21 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'fetch or reverse-engineer context by hand. A missing or empty digest is a ' +
       'blocked state to report (end the turn and surface it), not a cue to go ' +
       'looking for context yourself.',
+    summaryOverrides: {
+      design:
+        'For an injected/dispatched design session, the task context and worklist ' +
+        'digest are already injected into this prompt — there is no loader to run ' +
+        'and no device-authed client this session can authenticate as, so never ' +
+        'attempt to fetch or reverse-engineer context by hand. A digest that ' +
+        'genuinely fails to load — the task lookup errors, the loader throws, no ' +
+        'digest section is present at all — is still a blocked state to report ' +
+        '(end the turn and surface it), not a cue to go looking for context ' +
+        'yourself. A digest that loads successfully but lists zero Open Questions ' +
+        'is NOT that case — a loaded digest with an empty Open Questions list is a ' +
+        'decision space to reconstruct from the task body, never a blocked state; ' +
+        'see "Zero listed Open Questions is a decision space to reconstruct, never ' +
+        'a blocked state" below.',
+    },
   },
   {
     id: 'investigate',

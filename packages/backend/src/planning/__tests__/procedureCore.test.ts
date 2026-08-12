@@ -101,7 +101,7 @@ describe('procedureCore', () => {
       { principles: number; steps: number }
     > = {
       groom: { principles: 15, steps: 8 },
-      design: { principles: 23, steps: 7 },
+      design: { principles: 24, steps: 7 },
       ops: { principles: 17, steps: 5 },
       split: { principles: 6, steps: 4 },
     };
