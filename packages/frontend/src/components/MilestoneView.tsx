@@ -82,8 +82,8 @@ function useMilestoneDepthDispositions(
             taskName: prToTaskName.get(item.prNumber) ?? null,
             verdict: item.depthVerdict!.verdict,
             summary: item.depthVerdict!.summary,
-            failingDimensions: item.depthVerdict!.dimensions
-              .filter((d) => !d.passed)
+            failingDimensions: item
+              .depthVerdict!.dimensions.filter((d) => !d.passed)
               .map((d) => ({ name: d.name, notes: d.notes })),
             escalated: item.depthVerdict!.escalated,
           }));
@@ -96,7 +96,7 @@ function useMilestoneDepthDispositions(
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [projectId, tasks, invalidationKey]);
 
   return dispositions;

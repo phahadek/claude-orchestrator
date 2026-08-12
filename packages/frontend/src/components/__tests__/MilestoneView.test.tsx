@@ -220,9 +220,7 @@ describe('MilestoneView', () => {
         repo: 'org/repo',
         depthVerdict: {
           verdict: 'fail',
-          dimensions: [
-            { name: 'reliability', passed: false, notes: 'bad' },
-          ],
+          dimensions: [{ name: 'reliability', passed: false, notes: 'bad' }],
           summary: 'Escalated',
           escalated: true,
         },
@@ -232,9 +230,9 @@ describe('MilestoneView', () => {
       <MilestoneView {...baseProps} tasks={[depthTask]} />,
     );
     await waitFor(() =>
-      expect(
-        screen.getByTestId('depth-disposition-915').textContent,
-      ).toContain('escalated'),
+      expect(screen.getByTestId('depth-disposition-915').textContent).toContain(
+        'escalated',
+      ),
     );
 
     vi.mocked(apiRequest).mockResolvedValueOnce([
@@ -254,9 +252,9 @@ describe('MilestoneView', () => {
     ]);
     rerender(<MilestoneView {...baseProps} tasks={[{ ...depthTask }]} />);
     await waitFor(() =>
-      expect(
-        screen.getByTestId('depth-disposition-915').textContent,
-      ).toContain('routed'),
+      expect(screen.getByTestId('depth-disposition-915').textContent).toContain(
+        'routed',
+      ),
     );
   });
 
