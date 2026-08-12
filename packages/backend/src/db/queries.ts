@@ -8,7 +8,11 @@ import {
   normalizeBoardId,
   toExternalId,
 } from '../tasks/taskId';
-import { isCodeSession, isPlanningSession } from '../session/sessionPredicates';
+import {
+  isCodeSession,
+  isPlanningSession,
+  PLANNING_SESSION_TYPES,
+} from '../session/sessionPredicates';
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
@@ -582,6 +586,17 @@ const TERMINAL_STATUS_SQL_LIST = [...TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED]
 const BASE_TERMINAL_STATUS_SQL_LIST = [...TERMINAL_SESSION_STATUSES]
   .map((s) => `'${s}'`)
   .join(', ');
+
+/**
+ * SQL `IN (...)`-ready literal list derived from PLANNING_SESSION_TYPES —
+ * the single source of truth for which session_type values count as
+ * "planning" (see session/sessionPredicates.ts's isPlanningSession).
+ * Interpolated rather than parameterized so query plans still use
+ * idx_sessions_notion_task_id_session_type.
+ */
+const PLANNING_SESSION_TYPE_SQL_LIST = PLANNING_SESSION_TYPES.map(
+  (t) => `'${t}'`,
+).join(', ');
 
 let _stmtBackfillPrUrlIfNull: Database.Statement | null = null;
 
@@ -1171,7 +1186,7 @@ export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
       `
     SELECT task_id FROM sessions
     WHERE status NOT IN (${TERMINAL_STATUS_SQL_LIST})
-      AND session_type IN ('groom', 'design', 'ops', 'docs')
+      AND session_type IN (${PLANNING_SESSION_TYPE_SQL_LIST})
       AND archived = 0
   `,
     )
@@ -3425,7 +3440,7 @@ export interface TaskAggregateRow {
   code_session_compaction_count: number | null;
   code_session_model: string | null;
   code_session_type: string | null;
-  // planning session (session_type IN ('groom', 'design', 'ops'))
+  // planning session (session_type IN PLANNING_SESSION_TYPES — see session/sessionPredicates.ts)
   planning_session_id: string | null;
   planning_session_status: string | null;
   planning_session_started_at: number | null;
@@ -3485,7 +3500,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
             ORDER BY started_at DESC
           ) AS rn
         FROM sessions
-        WHERE session_type IN ('groom', 'design', 'ops')
+        WHERE session_type IN (${PLANNING_SESSION_TYPE_SQL_LIST})
       ),
       ranked_review AS (
         SELECT *,
