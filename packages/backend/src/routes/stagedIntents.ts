@@ -668,6 +668,14 @@ function assertOwningSessionComplete(
  * by id at any time — it never vanishes from that surface, only from the
  * default listing.
  *
+ * A `test.request` intent is auto-granted mechanically
+ * (maybeAutoApproveTestRequest) and, per its own stage-time validator, never
+ * needs an operator — it applies via a direct auto-grant + execution, never
+ * a group commit. It is hidden for the entire `approved` phase (the lane run
+ * it triggers), so it never occupies a decision-inbox slot for a decision no
+ * operator makes. A rejected test.request (e.g. a structural decline) is
+ * unaffected and stays visible, since that outcome is operator-actionable.
+ *
  * Every other intent kind/state is unaffected — visibility for those is
  * unchanged.
  */
@@ -680,10 +688,21 @@ function assertOwningSessionComplete(
  */
 function isVisibleOnDecisionSurfaceCore(
   kind: string,
+  state: string,
   sessionId: string | null | undefined,
   isAutoRejected: boolean,
   sessionManager: SessionManager | undefined,
 ): boolean {
+  // A test.request is auto-granted mechanically (maybeAutoApproveTestRequest)
+  // and never needs an operator — see this function's module-level comment.
+  // It sits at `approved` for the whole duration of the lane run it
+  // triggers (up to the configured wall clock), so that state alone must be
+  // withheld here rather than relying on the caller to filter it; a rejected
+  // test.request (an operator-actionable outcome — see declineTestRequestAutoGrant)
+  // is unaffected, since it never reaches `approved`.
+  if (kind === 'test.request' && state === 'approved') {
+    return false;
+  }
   if (kind === 'session.requestCapability') {
     if (!sessionId) return true;
     const turnInFlight =
@@ -700,12 +719,14 @@ function isVisibleOnDecisionSurfaceCore(
   return true;
 }
 
-function isVisibleOnDecisionSurface(
+/** Exported for tests, alongside its API-shape twin below, so a test can assert the two never drift for an identical intent. */
+export function isVisibleOnDecisionSurface(
   row: StagedIntentRow,
   sessionManager: SessionManager | undefined,
 ): boolean {
   return isVisibleOnDecisionSurfaceCore(
     row.kind,
+    row.state,
     row.session_id,
     isAutoRejectedNeedsRevision(row),
     sessionManager,
@@ -717,7 +738,7 @@ function isVisibleOnDecisionSurface(
  * broadcast (broadcastIntentChange) against every call site's already-
  * converted StagedIntent rather than requiring a second DB read.
  */
-function isIntentVisibleOnDecisionSurface(
+export function isIntentVisibleOnDecisionSurface(
   intent: StagedIntent,
   sessionManager: SessionManager | undefined,
 ): boolean {
@@ -728,6 +749,7 @@ function isIntentVisibleOnDecisionSurface(
     intent.annotation.autoRejected === true;
   return isVisibleOnDecisionSurfaceCore(
     intent.kind,
+    intent.state,
     intent.sessionId,
     isAutoRejected,
     sessionManager,
