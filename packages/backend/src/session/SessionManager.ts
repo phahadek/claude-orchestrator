@@ -75,6 +75,7 @@ import {
   getSession,
   getSessionsByStatus,
   getPRByNotionTaskId,
+  getTaskCache,
   getEventsBySession,
   getPRByNumber,
   getPRBySessionId,
@@ -122,6 +123,7 @@ import {
 import { eventKind } from './eventKind';
 import type { Session } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
+import { STATUS_DISPLAY } from '../tasks/statusCanonical';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { ServerMessage } from '../ws/types';
 import { deriveDisplayStatusFromDb } from '../tasks/TaskStatusEngine';
@@ -512,6 +514,29 @@ const UNCOUNTED_REASONS = new Set([
   // this Set is constructed at module init, before that const exists.
   'backend_spawn_degraded',
 ]);
+
+/** Statuses a dying standard session must never demote from. */
+const TERMINAL_TASK_STATUSES = new Set<string>([
+  STATUS_DISPLAY.Done,
+  STATUS_DISPLAY.Deferred,
+]);
+
+/**
+ * Whether a Notion task's current cached status is terminal (Done/Deferred),
+ * read via the same task_cache the board caches use — no network round-trip.
+ * A cache miss or unparseable payload returns false so the caller falls back
+ * to the pre-existing revert behaviour rather than silently skipping it.
+ */
+function isTaskStatusTerminal(notionTaskId: string): boolean {
+  const cacheRow = getTaskCache(notionTaskId);
+  if (!cacheRow) return false;
+  try {
+    const task = JSON.parse(cacheRow.raw_json) as { status?: string };
+    return !!task.status && TERMINAL_TASK_STATUSES.has(task.status);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Delete the local session/<sessionId> branch if it exists and conditions are met:
@@ -1244,6 +1269,13 @@ export class SessionManager extends EventEmitter {
         } satisfies ServerMessage);
       }
     }
+
+    // A dying session must never demote a task that already reached a
+    // terminal state (Done/Deferred) — e.g. a user_kill arriving after the
+    // PR merged should not revert the task to Ready. A cache miss/parse
+    // failure falls back to the pre-existing revert behaviour so an
+    // unreadable cache can never strand a task at In Progress.
+    if (isTaskStatusTerminal(notionTaskId)) return;
 
     // Update Notion task status (fire-and-forget; failures logged, not thrown)
     getTaskBackend(projectId)
