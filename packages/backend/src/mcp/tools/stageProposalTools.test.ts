@@ -27,6 +27,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerStageProposalTools } from './stageProposalTools';
+import { CODE_INTENT_KINDS } from '../../planning/planningIntentKinds';
 import { getStagedIntent, listStagedIntentsByGroup } from '../../db/queries';
 import {
   gateContributionDecisionSchema,
@@ -106,6 +107,17 @@ describe('stage-proposal MCP tools — registration', () => {
         'test.request',
       ].sort(),
     );
+    await close();
+  });
+
+  it('a standard/review (code) session, scoped to CODE_INTENT_KINDS, registers exactly review.dispute and test.request — task.setStatus, arch.createUnit, and journal.setState are absent', async () => {
+    const { client, close } = await connectedClient(CODE_INTENT_KINDS);
+    const { tools } = await client.listTools();
+    const names = tools.map((t) => t.name).sort();
+    expect(names).toEqual([...CODE_INTENT_KINDS].sort());
+    expect(names).not.toContain('task.setStatus');
+    expect(names).not.toContain('arch.createUnit');
+    expect(names).not.toContain('journal.setState');
     await close();
   });
 

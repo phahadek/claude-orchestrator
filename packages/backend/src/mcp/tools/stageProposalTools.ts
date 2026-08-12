@@ -39,9 +39,12 @@ export interface StageProposalToolContext {
   sessionId: string;
   projectId: string;
   /**
-   * Restricts registration to this set of staged-intent kinds (e.g. a
-   * planning workflow's PLANNING_INTENT_KINDS entry). Undefined registers
-   * every kind — the code/review session behavior, unchanged.
+   * Restricts registration to this set of staged-intent kinds — a planning
+   * workflow's PLANNING_INTENT_KINDS entry, or a code/review session's
+   * CODE_INTENT_KINDS (see orchestratorMcpServer.ts's buildMcpServer, the
+   * sole caller). Undefined registers every kind; buildMcpServer never
+   * passes undefined, but direct callers (e.g. tests) may still opt into
+   * the full surface this way.
    */
   kinds?: readonly string[];
   /** Used to route a stage-time validation block back to this session in-turn, via enqueueFeedback. */

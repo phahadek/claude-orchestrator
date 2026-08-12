@@ -82,3 +82,19 @@ export const PLANNING_INTENT_KINDS: Record<
   // docs session must be able to request one in-band instead.
   docs: ['notion.pageEdit', 'session.requestCapability', 'intent.withdraw'],
 };
+
+/**
+ * Stage-proposal kinds a non-planning (standard/review, i.e. code) session
+ * may stage — registered on its MCP connection in place of the full
+ * stage-proposal vocabulary (see orchestratorMcpServer.ts's buildMcpServer
+ * and stageProposalTools.ts's registerStageProposalTools). review.dispute is
+ * a code session's route out of a needs_changes/incomplete PR review verdict
+ * it concludes is wrong (see db/types.ts). test.request is how it runs a
+ * test command blocked at the CLI permission layer. Consumed by config.ts to
+ * derive ALLOWED_TOOLS's matching entries, same precedent as
+ * PLANNING_INTENT_KINDS above.
+ */
+export const CODE_INTENT_KINDS: readonly string[] = [
+  'review.dispute',
+  'test.request',
+];

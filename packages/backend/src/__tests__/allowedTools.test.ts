@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
+import {
+  PLANNING_INTENT_KINDS,
+  CODE_INTENT_KINDS,
+} from '../planning/planningIntentKinds';
 import {
   ALLOWED_TOOLS,
   GROOM_ALLOWED_TOOLS,
@@ -41,6 +44,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'gate.verify',
   'ops.prIntent',
   'test.request',
+  'review.dispute',
   'completeness.disposition',
   'completeness.traceCoverage',
   'groom.precheck',
@@ -56,12 +60,86 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'session.getRecord',
   'auditLog.query',
   'sessionEvents.query',
-  'test.request',
 ];
 
 const REGISTERED_TOOL_NAMES = new Set(
   REGISTERED_ORCHESTRATOR_MCP_KINDS.map(orchestratorMcpToolName),
 );
+
+// The "core" registered surface a session's `--allowed-tools` gate must
+// track exactly: the health handshake, this session type's stage-proposal
+// kinds (PLANNING_INTENT_KINDS[workflow] or, for a standard/review session,
+// CODE_INTENT_KINDS — buildMcpServer's registerStageProposalTools call), the
+// verdict-delivery tools a non-planning session gets (registerVerdictTools,
+// workflow === null), and the always-on Tier-B reads. This is the exact
+// vocabulary the task-spec bug lives in: a kind registered here but missing
+// from the matching allow-list is denied on every call. Deliberately
+// excludes the always-on-but-read-only extras (architecture.*, task.getById,
+// pullRequest.getByTaskId, gateSeed.getState, groom.precheck, completeness.*,
+// deploy.verdict) — those are registered by separate, non-stage-proposal
+// registrars with their own (partly deliberate, e.g. gateSeed.getState for
+// groom/design) allow-list asymmetries outside this guard's scope.
+const TIER_B_KINDS = [
+  'session.getRecord',
+  'auditLog.query',
+  'sessionEvents.query',
+];
+const CORE_KINDS = new Set([
+  'health',
+  ...Object.values(PLANNING_INTENT_KINDS).flat(),
+  ...CODE_INTENT_KINDS,
+  'review.disposition',
+  'flaky.confirm',
+  ...TIER_B_KINDS,
+]);
+
+/** This session type's core stage-proposal + verdict + Tier-B kind vocabulary. */
+function coreRegisteredKinds(
+  workflow: keyof typeof PLANNING_INTENT_KINDS | null,
+): string[] {
+  const kinds = workflow ? PLANNING_INTENT_KINDS[workflow] : CODE_INTENT_KINDS;
+  const verdictKinds =
+    workflow === null ? ['review.disposition', 'flaky.confirm'] : [];
+  return ['health', ...kinds, ...verdictKinds, ...TIER_B_KINDS];
+}
+
+/** An allow-list's mcp__orchestrator__ entries, narrowed to the core vocabulary above. */
+function coreAllowListedKinds(list: readonly string[]): string[] {
+  return list.filter(
+    (t) =>
+      t.startsWith('mcp__orchestrator__') &&
+      [...CORE_KINDS].some((kind) => orchestratorMcpToolName(kind) === t),
+  );
+}
+
+describe('bidirectional guard — registered core kinds equal allow-listed core kinds', () => {
+  const cases: Array<
+    [string, keyof typeof PLANNING_INTENT_KINDS | null, readonly string[]]
+  > = [
+    ['standard', null, ALLOWED_TOOLS],
+    ['groom', 'groom', GROOM_ALLOWED_TOOLS],
+    ['design', 'design', DESIGN_ALLOWED_TOOLS],
+    ['ops', 'ops', OPS_ALLOWED_TOOLS],
+  ];
+
+  for (const [name, workflow, allowList] of cases) {
+    it(`${name} session: registered set equals allow-listed set`, () => {
+      const registered = new Set(
+        coreRegisteredKinds(workflow).map(orchestratorMcpToolName),
+      );
+      const allowed = new Set(coreAllowListedKinds(allowList));
+      expect(allowed).toEqual(registered);
+    });
+  }
+
+  it('adding a kind to CODE_INTENT_KINDS without a matching allow-list entry fails the guard', () => {
+    const registered = new Set(
+      [...coreRegisteredKinds(null), 'a.newKind'].map(orchestratorMcpToolName),
+    );
+    const allowed = new Set(coreAllowListedKinds(ALLOWED_TOOLS));
+    expect(allowed).not.toEqual(registered);
+  });
+});
 
 describe('PLANNING_DISALLOWED_TOOLS', () => {
   it('blocks self-scheduling/re-entry built-ins alongside the prior Skill/Write/Edit denylist', () => {
@@ -139,6 +217,11 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
       }
     });
   }
+
+  it("ALLOWED_TOOLS contains the underscore form of review_dispute — a code session's route out of a needs_changes verdict it concludes is wrong, not the dotted registration name", () => {
+    expect(ALLOWED_TOOLS).toContain('mcp__orchestrator__review_dispute');
+    expect(ALLOWED_TOOLS).not.toContain('mcp__orchestrator__review.dispute');
+  });
 
   it('design allow-list contains the underscore forms of completeness_disposition and completeness_traceCoverage', () => {
     expect(DESIGN_ALLOWED_TOOLS).toContain(
