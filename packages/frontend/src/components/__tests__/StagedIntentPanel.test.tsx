@@ -962,7 +962,9 @@ describe('StagedIntentPanel', () => {
     it("labels Defer as resolving, so it isn't mistaken for a postponement", () => {
       render(<StagedIntentPanel intent={makeMirrorIntent()} />);
 
-      const defer = screen.getByTestId('staged-intent-gate-verify-mirror-defer');
+      const defer = screen.getByTestId(
+        'staged-intent-gate-verify-mirror-defer',
+      );
       expect(defer.textContent).toMatch(/resolves/i);
     });
 
@@ -980,7 +982,11 @@ describe('StagedIntentPanel', () => {
 
       fireEvent.change(
         screen.getByTestId('staged-intent-gate-verify-mirror-park-evidence'),
-        { target: { value: 'not triggerable yet — waiting on the real-world event' } },
+        {
+          target: {
+            value: 'not triggerable yet — waiting on the real-world event',
+          },
+        },
       );
       expect(park.disabled).toBe(false);
 
@@ -991,7 +997,8 @@ describe('StagedIntentPanel', () => {
           override: false,
           reason: undefined,
           mirrorDisposition: 'not-yet-triggerable',
-          mirrorEvidence: 'not triggerable yet — waiting on the real-world event',
+          mirrorEvidence:
+            'not triggerable yet — waiting on the real-world event',
         }),
       );
     });

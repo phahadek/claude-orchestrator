@@ -960,7 +960,7 @@ describe('appendGateItemEvent — not-yet-triggerable pending lifecycle', () => 
     expect(updated.state).toBe('pending');
   });
 
-  it('parks a Human-Observation item to pending on the same not-yet-triggerable abstain — the mirror card\'s Park action', () => {
+  it("parks a Human-Observation item to pending on the same not-yet-triggerable abstain — the mirror card's Park action", () => {
     const item = makeItem({ classification: 'Human-Observation' });
     const updated = appendGateItemEvent(item.id, {
       disposition: 'not-yet-triggerable',

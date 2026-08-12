@@ -516,9 +516,9 @@ describe('gate.verify — Human-Observation mirror apply (operator-supplied disp
     const { nextPendingGateItems } = await import('../../gate/gateService.js');
 
     // Backoff hasn't elapsed yet — not returned.
-    expect(nextPendingGateItems('proj-a', 'M13').map((i) => i.id)).not.toContain(
-      item.id,
-    );
+    expect(
+      nextPendingGateItems('proj-a', 'M13').map((i) => i.id),
+    ).not.toContain(item.id);
 
     // Force the schedule into the past so it's due, mirroring how a real
     // backoff eventually elapses.
@@ -531,7 +531,7 @@ describe('gate.verify — Human-Observation mirror apply (operator-supplied disp
     );
   });
 
-  it('a parked mirror item is counted in gate readiness\'s parked bucket, not its blocking set', async () => {
+  it("a parked mirror item is counted in gate readiness's parked bucket, not its blocking set", async () => {
     const item = makeGateItem({
       classification: 'Human-Observation',
       milestone: 'M13',

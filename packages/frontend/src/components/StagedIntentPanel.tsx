@@ -1689,7 +1689,9 @@ export function StagedIntentPanel({
                 <button
                   type="button"
                   className={styles.approveButton}
-                  disabled={inFlight !== null || disabled || !parkEvidence.trim()}
+                  disabled={
+                    inFlight !== null || disabled || !parkEvidence.trim()
+                  }
                   data-testid="staged-intent-gate-verify-mirror-park"
                   title="Postpones this item — it stays open and is automatically re-attempted later."
                   onClick={() =>

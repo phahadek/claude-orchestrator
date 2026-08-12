@@ -4288,7 +4288,12 @@ class NotOperatorAppliableError extends Error {
 
 /** The operator's pick for a Human-Observation mirror intent's disposition — see GateVerifyIntentPayload.origin. */
 interface GateVerifyMirrorDisposition {
-  disposition: 'pass' | 'fail' | 'needs-setup' | 'deferred' | 'not-yet-triggerable';
+  disposition:
+    | 'pass'
+    | 'fail'
+    | 'needs-setup'
+    | 'deferred'
+    | 'not-yet-triggerable';
   evidence?: unknown;
 }
 
