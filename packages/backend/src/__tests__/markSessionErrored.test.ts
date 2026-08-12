@@ -895,7 +895,7 @@ describe('SessionManager.markSessionErrored() — staged-intent reap suppression
     setupFakeBackend();
   });
 
-  it('a genuine kill (no opts) still expires the session\'s uncommitted staged intents — regression for the original protection', () => {
+  it("a genuine kill (no opts) still expires the session's uncommitted staged intents — regression for the original protection", () => {
     const staged = stageIntent('test-session');
     const approved = stageIntent('test-session', { state: 'approved' });
 
@@ -909,7 +909,7 @@ describe('SessionManager.markSessionErrored() — staged-intent reap suppression
     expect(queries.getStagedIntent(approved)!.state).toBe('superseded');
   });
 
-  it('a genuine error still expires the session\'s uncommitted staged intents', () => {
+  it("a genuine error still expires the session's uncommitted staged intents", () => {
     const staged = stageIntent('test-session');
 
     const sm = new SessionManager();
@@ -925,13 +925,9 @@ describe('SessionManager.markSessionErrored() — staged-intent reap suppression
     const staged = stageIntent('test-session');
 
     const sm = new SessionManager();
-    sm.markSessionErrored(
-      'test-session',
-      'killed',
-      'user_kill',
-      undefined,
-      { suppressReap: true },
-    );
+    sm.markSessionErrored('test-session', 'killed', 'user_kill', undefined, {
+      suppressReap: true,
+    });
 
     expect(queries.getStagedIntent(staged)!.state).toBe('staged');
     expect(queries.getStagedIntent(staged)!.disposition_reason).toBeNull();
@@ -948,30 +944,22 @@ describe('SessionManager.markSessionErrored() — staged-intent reap suppression
     });
 
     const sm = new SessionManager();
-    sm.markSessionErrored(
-      'test-session',
-      'killed',
-      'user_kill',
-      undefined,
-      { suppressReap: true },
-    );
+    sm.markSessionErrored('test-session', 'killed', 'user_kill', undefined, {
+      suppressReap: true,
+    });
 
     expect(queries.getStagedIntent(requestA)!.state).toBe('staged');
     expect(queries.getStagedIntent(requestB)!.state).toBe('staged');
   });
 
-  it('opts.suppressReap on one session does not touch a different session\'s staged intents either way', () => {
+  it("opts.suppressReap on one session does not touch a different session's staged intents either way", () => {
     const own = stageIntent('test-session');
     const other = stageIntent('other-session');
 
     const sm = new SessionManager();
-    sm.markSessionErrored(
-      'test-session',
-      'killed',
-      'user_kill',
-      undefined,
-      { suppressReap: true },
-    );
+    sm.markSessionErrored('test-session', 'killed', 'user_kill', undefined, {
+      suppressReap: true,
+    });
 
     expect(queries.getStagedIntent(own)!.state).toBe('staged');
     expect(queries.getStagedIntent(other)!.state).toBe('staged');
@@ -981,13 +969,9 @@ describe('SessionManager.markSessionErrored() — staged-intent reap suppression
     const staged = stageIntent('test-session');
 
     const sm = new SessionManager();
-    sm.markSessionErrored(
-      'test-session',
-      'killed',
-      'user_kill',
-      undefined,
-      { suppressReap: true },
-    );
+    sm.markSessionErrored('test-session', 'killed', 'user_kill', undefined, {
+      suppressReap: true,
+    });
     expect(queries.getStagedIntent(staged)!.state).toBe('staged');
 
     // A subsequent, genuine kill (no suppressReap) must reap normally —

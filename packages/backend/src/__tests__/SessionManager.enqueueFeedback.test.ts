@@ -613,7 +613,10 @@ describe('SessionManager grant-respawn: staged-intent reap suppression', () => {
     return emitter;
   }
 
-  function withLiveSession(sm: SessionManager, killSpy: ReturnType<typeof vi.fn>) {
+  function withLiveSession(
+    sm: SessionManager,
+    killSpy: ReturnType<typeof vi.fn>,
+  ) {
     (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(
       'sess-grant',
       { kill: killSpy, hasActiveTurn: () => false },
@@ -710,7 +713,7 @@ describe('SessionManager grant-respawn: staged-intent reap suppression', () => {
     );
   });
 
-  it("intents belonging to a different session are untouched by a grant respawn", async () => {
+  it('intents belonging to a different session are untouched by a grant respawn', async () => {
     const killSpy = vi.fn().mockResolvedValue(undefined);
     const sm = new SessionManager();
     withLiveSession(sm, killSpy);

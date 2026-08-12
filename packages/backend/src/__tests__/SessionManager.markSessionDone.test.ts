@@ -370,7 +370,7 @@ describe('terminalized_at on error/killed transitions', () => {
 // is not a real death, suppresses it — see markSessionErrored.test.ts).
 
 describe('expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions — terminal-path reaping regression', () => {
-  it('expireStagedIntentsForSession supersedes a session\'s staged and approved intents', () => {
+  it("expireStagedIntentsForSession supersedes a session's staged and approved intents", () => {
     const staged = stageIntent('sess-dead', { state: 'staged' });
     const approved = stageIntent('sess-dead', { state: 'approved' });
     const otherSession = stageIntent('sess-alive', { state: 'staged' });
@@ -383,9 +383,7 @@ describe('expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions 
 
     expect(changed).toBe(2);
     expect(getStagedIntent(staged)?.state).toBe('superseded');
-    expect(getStagedIntent(staged)?.disposition_reason).toBe(
-      'session_killed',
-    );
+    expect(getStagedIntent(staged)?.disposition_reason).toBe('session_killed');
     expect(getStagedIntent(approved)?.state).toBe('superseded');
     // A different session's staged intent is untouched.
     expect(getStagedIntent(otherSession)?.state).toBe('staged');
