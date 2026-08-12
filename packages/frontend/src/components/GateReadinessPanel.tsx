@@ -389,6 +389,14 @@ export function GateReadinessPanel({
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(
     new Set(),
   );
+  // A render-safe clock for backoff due-ness — Date.now() may not be called
+  // during render (react-hooks/purity), so it's sampled in an effect instead.
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    setNow(Date.now());
+    const interval = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(interval);
+  }, []);
   const [verifyingIds, setVerifyingIds] = useState<Set<string>>(new Set());
   const [verifyBaseline, setVerifyBaseline] = useState<
     Record<string, string | undefined>
@@ -1304,7 +1312,7 @@ export function GateReadinessPanel({
             parkedCount={readiness?.parked?.length ?? 0}
             parkedDueCount={
               readiness?.parked?.filter((p) =>
-                isBackoffDue(p.nextAttemptAt, Date.now()),
+                isBackoffDue(p.nextAttemptAt, now),
               ).length ?? 0
             }
             onSelectParked={() => selectGateChip('pending')}
@@ -1494,7 +1502,7 @@ export function GateReadinessPanel({
                           {item.state === 'pending' && (
                             <span
                               className={
-                                isBackoffDue(item.nextAttemptAt, Date.now())
+                                isBackoffDue(item.nextAttemptAt, now)
                                   ? styles.parkedDueIndicator
                                   : styles.parkedNotDueIndicator
                               }
@@ -1509,7 +1517,7 @@ export function GateReadinessPanel({
                                   : undefined
                               }
                             >
-                              {isBackoffDue(item.nextAttemptAt, Date.now())
+                              {isBackoffDue(item.nextAttemptAt, now)
                                 ? ' (due)'
                                 : ' (waiting)'}
                             </span>
