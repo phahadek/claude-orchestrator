@@ -356,6 +356,30 @@ describe('gate.verify — Human-Observation mirror apply (operator-supplied disp
     expect(getItem(item.id)?.events).toHaveLength(0);
   });
 
+  it('rejects an unknown mirrorDisposition string — the widened union stays closed', async () => {
+    const item = makeGateItem({ classification: 'Human-Observation' });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${mirror.id}/apply`)
+      .send({ mirrorDisposition: 'parked' });
+    expect(applied.status).toBe(500);
+    expect(getItem(item.id)?.events).toHaveLength(0);
+  });
+
   it('a mirrorDisposition of "pass" produces the exact same gate_item state as a direct GateReadinessPanel pass for the same item/evidence', async () => {
     const directItem = makeGateItem({ classification: 'Human-Observation' });
     const mirroredItem = makeGateItem({ classification: 'Human-Observation' });
@@ -429,6 +453,112 @@ describe('gate.verify — Human-Observation mirror apply (operator-supplied disp
     expect(applied.status).toBe(200);
 
     expect(getItem(item.id)?.state).toBe('deferred');
+  });
+
+  it('a mirrorDisposition of "not-yet-triggerable" parks the gate_item at pending with a scheduled next_attempt_at, distinct from Defer\'s resolution', async () => {
+    const item = makeGateItem({
+      classification: 'Human-Observation',
+      milestone: 'M13',
+    });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    const applied = await agent
+      .post(`/api/staged-intents/${mirror.id}/apply`)
+      .send({
+        mirrorDisposition: 'not-yet-triggerable',
+        mirrorEvidence: { note: 'the trigger scenario has not occurred yet' },
+      });
+    expect(applied.status).toBe(200);
+
+    const updated = getItem(item.id);
+    expect(updated?.state).toBe('pending');
+    expect(updated?.state).not.toBe('deferred');
+    expect(updated?.nextAttemptAt).toBeDefined();
+    expect(updated?.pendingAttemptCount).toBe(1);
+  });
+
+  it('a parked mirror item is returned by nextPendingGateItems once its backoff elapses', async () => {
+    const item = makeGateItem({
+      classification: 'Human-Observation',
+      milestone: 'M13',
+    });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    await agent.post(`/api/staged-intents/${mirror.id}/apply`).send({
+      mirrorDisposition: 'not-yet-triggerable',
+      mirrorEvidence: { note: 'not yet triggerable' },
+    });
+
+    const { nextPendingGateItems } = await import('../../gate/gateService.js');
+
+    // Backoff hasn't elapsed yet — not returned.
+    expect(nextPendingGateItems('proj-a', 'M13').map((i) => i.id)).not.toContain(
+      item.id,
+    );
+
+    // Force the schedule into the past so it's due, mirroring how a real
+    // backoff eventually elapses.
+    db.prepare('UPDATE gate_item SET next_attempt_at = ? WHERE id = ?').run(
+      new Date(0).toISOString(),
+      item.id,
+    );
+    expect(nextPendingGateItems('proj-a', 'M13').map((i) => i.id)).toContain(
+      item.id,
+    );
+  });
+
+  it('a parked mirror item is counted in gate readiness\'s parked bucket, not its blocking set', async () => {
+    const item = makeGateItem({
+      classification: 'Human-Observation',
+      milestone: 'M13',
+    });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    await agent.post(`/api/staged-intents/${mirror.id}/apply`).send({
+      mirrorDisposition: 'not-yet-triggerable',
+      mirrorEvidence: { note: 'not yet triggerable' },
+    });
+
+    const { getGateReadiness } = await import('../../gate/gateService.js');
+    const readiness = getGateReadiness('proj-a', 'M13');
+    expect(readiness.parked.map((i) => i.id)).toContain(item.id);
+    expect(readiness.blocking.map((i) => i.id)).not.toContain(item.id);
   });
 
   it('a mirrorDisposition of "fail" re-opens the item via the same follow-up-filing path as a direct fail', async () => {

@@ -638,13 +638,16 @@ export interface AppendGateItemEventInput {
 /**
  * Classifications eligible for the `not-yet-triggerable` -> `pending` abstain
  * — the "when can this be verified" axis, orthogonal to "who can verify it".
- * Human-Observation and needs-triage are excluded: an item still awaiting
- * triage has no verifier to abstain in the first place, and Human-Observation
- * is never auto-run so there is no unattended dispatch to abstain from.
+ * needs-triage is excluded: an item still awaiting triage has no verifier to
+ * abstain in the first place. Human-Observation is included even though it
+ * is never auto-dispatched — an operator disposing of the Human-Observation
+ * mirror card can still park it via this same path (the "not now, try again
+ * later" abstain), not just an auto-run verifier.
  */
 const PENDING_ELIGIBLE_CLASSIFICATIONS = new Set<GateItemClassification>([
   'Read-Only',
   'Prod-Mutating',
+  'Human-Observation',
 ]);
 
 /** Prod-Mutating passes stop short of resolving — they wait for approveGateItem. A not-yet-triggerable result (Read-Only or Prod-Mutating) parks at `pending`, not a state literally named after the disposition. */
