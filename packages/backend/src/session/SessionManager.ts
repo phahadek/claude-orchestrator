@@ -627,9 +627,8 @@ const MAX_EXPIRED_INTENTS_LISTED = 10;
  * a plain statement of what happened plus the concrete next step, rather than
  * a second message dialect. Bounded to MAX_EXPIRED_INTENTS_LISTED individual
  * entries so a session with many staged intents gets a summary, not a dump.
- * Exported so tests can verify the exact wording without hardcoding it.
  */
-export function formatExpiredIntentsFeedback(
+function formatExpiredIntentsFeedback(
   expired: Array<Pick<StagedIntentRow, 'id' | 'kind' | 'group_id'>>,
 ): string {
   const shown = expired.slice(0, MAX_EXPIRED_INTENTS_LISTED);
