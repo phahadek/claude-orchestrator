@@ -3868,7 +3868,9 @@ export class SessionManager extends EventEmitter {
     if (!row) return;
 
     const isDoneErrorKilled =
-      row.status === 'done' || row.status === 'error' || row.status === 'killed';
+      row.status === 'done' ||
+      row.status === 'error' ||
+      row.status === 'killed';
     // archived=1 is an explicit operator signal the session is done (see
     // archiveAndEndSession) — unlike done/error/killed, it is never eligible
     // for the attemptTerminalResume resend path below, even when the caller

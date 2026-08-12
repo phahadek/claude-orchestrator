@@ -670,9 +670,7 @@ describe('enqueueFeedback — terminal session behavior', () => {
 
     expect(sendOrResumeSpy).not.toHaveBeenCalled();
     expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
-    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
-      'item-1',
-    ]);
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
   });
 });
 
