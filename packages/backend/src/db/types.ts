@@ -388,6 +388,8 @@ export interface DepthReviewVerdictRow {
   summary: string;
   depth_session_id: string | null;
   recorded_at: string;
+  /** How many times a non-size depth finding has been routed to the implementing session on this row's head_sha, unchanged. */
+  route_count: number;
 }
 
 export interface NewDepthReviewVerdictRow {
@@ -398,6 +400,7 @@ export interface NewDepthReviewVerdictRow {
   dimensions: string; // JSON
   summary: string;
   depth_session_id: string | null;
+  route_count?: number;
 }
 
 // ─── task_repo_assignments ──────────────────────────────────────────────────

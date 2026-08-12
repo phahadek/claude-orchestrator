@@ -1994,7 +1994,19 @@ export function runMigrations(target: Database.Database): void {
       summary          TEXT    NOT NULL,
       depth_session_id TEXT,
       recorded_at      TEXT    NOT NULL,
+      route_count      INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (pr_number, repo)
     );
   `);
+  // route_count: how many times a depth finding has been routed to the
+  // implementing session on an unchanged head SHA — bounds re-routing (see
+  // ReviewOrchestrator.dispatchDepthReview). Added after the table's initial
+  // creation, so existing rows need the column backfilled.
+  try {
+    target.exec(
+      `ALTER TABLE depth_review_verdicts ADD COLUMN route_count INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 }

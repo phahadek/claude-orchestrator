@@ -22,6 +22,7 @@ import {
   getAllPendingReviewSyncs,
   getLatestTestRequestRun,
   upsertDepthReviewVerdict,
+  getDepthReviewVerdict,
   hasAnalyzeResultForSha,
   upsertAnalyzeResult,
   getAnalyzeResult,
@@ -35,8 +36,12 @@ import type {
   PRReviewService,
   PRReviewResult,
   WorkItem,
+  BaselineEscalationMatch,
 } from './PRReviewService';
-import { FetchRetryExhaustedError } from './PRReviewService';
+import {
+  FetchRetryExhaustedError,
+  matchBaselineEscalationFloor,
+} from './PRReviewService';
 import type {
   DepthReviewService,
   DepthReviewResult,
@@ -46,6 +51,7 @@ import type { AutoMerger } from './AutoMerger';
 import { parsePauseReason } from '../db/pauseReason';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
+import { parseDiffFiles } from './GitHubClient';
 import type { ReviewJob, FlakeRecoveryOutcome } from './types';
 import type { DiffSource } from './DiffSource';
 import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
@@ -86,6 +92,11 @@ const STALL_CHECK_INTERVAL_MS = 5 * 60 * 1000; // check every 5 minutes
 // Backstop ceiling on the depth-review dispatch, above DepthReviewService's
 // own 15-minute internal timeout — see runDepthReviewWithCeiling().
 const DEPTH_REVIEW_DISPATCH_CEILING_MS = 20 * 60 * 1000; // 20 minutes
+// Bounds how many times a non-size depth finding can be routed to the
+// implementing session on an unchanged head SHA (see dispatchDepthReview's
+// routeCount tracking) — beyond this, a session that isn't fixing it
+// escalates instead of cycling forever.
+const MAX_DEPTH_REVIEW_ROUTE_ATTEMPTS = 2;
 
 export class ReviewOrchestrator {
   private queue: QueuedJob[] = [];
@@ -1214,18 +1225,25 @@ export class ReviewOrchestrator {
 
   /**
    * Dispatch the depth-review pass for a just-conformance-approved PR and
-   * route its result: a security/concurrency/reliability/data-integrity
-   * finding escalates (setPauseReason + review_escalated, same channel the
-   * conformance pass's review_rules_escalation uses), while a
-   * size-proportionality-only finding routes through the same
-   * enqueueFeedback auto-fix-iteration path a conformance needs_changes
-   * verdict uses — preserving today's scope-creep auto-fix behavior now that
-   * size lives in this pass instead of conformance. DepthReviewService
+   * route its result. Session-routing is the default for a depth finding:
+   * the composed finding is enqueued to the implementing session through
+   * enqueueFeedback — the same path the size-only branch already uses — so
+   * the PR re-enters the ordinary fix-and-re-review loop instead of stalling
+   * on a human. Operator escalation (setPauseReason + review_escalated, same
+   * channel the conformance pass's review_rules_escalation uses) is reserved
+   * for the baseline-floor categories the design locks (CI/workflow config,
+   * migrations, auth, secrets), for a PR with no linked session to route to,
+   * and for a finding that has been routed MAX_DEPTH_REVIEW_ROUTE_ATTEMPTS
+   * times on an unchanged head SHA without a fix landing. A floor finding on
+   * a PR that does have a session both escalates AND routes — the operator
+   * is informed and the session still gets the text. DepthReviewService
    * itself fails open (returns null on any error/timeout), so a null result
    * here clears the depth_review_pending hold and re-drives the merge —
    * never an escalation, never a merge block. Every exit path below clears
-   * the hold except the escalation path, which replaces it with
-   * depth_review_escalation instead.
+   * the hold except the routing and escalation paths, which keep the PR
+   * paused — routing keeps depth_review_pending (holding merge on the
+   * outstanding finding) rather than clearing it, and escalation replaces it
+   * with depth_review_escalation.
    */
   private async dispatchDepthReview(
     job: ReviewJob,
@@ -1253,6 +1271,14 @@ export class ReviewOrchestrator {
       return;
     }
 
+    const headSha = prRow?.head_sha ?? null;
+    const priorVerdict = getDepthReviewVerdict(job.prNumber, job.repo);
+    const priorRouteCount =
+      priorVerdict?.head_sha && priorVerdict.head_sha === headSha
+        ? (priorVerdict.route_count ?? 0)
+        : 0;
+    const routeCount = result.hasNonSizeFailure ? priorRouteCount + 1 : 0;
+
     // Persist the verdict and record its audit event — a storage failure
     // here must not block the merge path (same fail-open shape as dispatch
     // itself), so it's isolated in its own try/catch rather than allowed to
@@ -1261,11 +1287,12 @@ export class ReviewOrchestrator {
       upsertDepthReviewVerdict({
         pr_number: job.prNumber,
         repo: job.repo,
-        head_sha: prRow?.head_sha ?? null,
+        head_sha: headSha,
         verdict: result.verdict,
         dimensions: JSON.stringify(result.dimensions),
         summary: result.summary,
         depth_session_id: result.sessionId,
+        route_count: routeCount,
       });
       recordEvent({
         event_type: 'depth_review_completed',
@@ -1296,15 +1323,66 @@ export class ReviewOrchestrator {
         ...failing.map((d) => `- **${d.name}**: ${d.notes}`),
       ].join('\n');
       logger.warn(`[ReviewOrchestrator] ${message}`);
-      // Replaces the depth_review_pending hold — the PR stays paused, now on
-      // an escalation reason, not merged.
-      setPauseReason(job.prNumber, job.repo, 'depth_review_escalation');
-      this.sessionManager.emit('message', {
-        type: 'review_escalated',
-        prNumber: job.prNumber,
-        repo: job.repo,
-        message,
-      });
+
+      let floorMatches: BaselineEscalationMatch[] = [];
+      try {
+        const diffText = await diffSource.fetchDiff();
+        floorMatches = matchBaselineEscalationFloor(parseDiffFiles(diffText));
+      } catch (e) {
+        logger.warn(
+          `[ReviewOrchestrator] failed to re-fetch diff for PR #${job.prNumber} (${job.repo}) to check the baseline escalation floor — treating as no floor match: ${e}`,
+        );
+      }
+      const boundExceeded = routeCount > MAX_DEPTH_REVIEW_ROUTE_ATTEMPTS;
+      const noSession = !prRow?.session_id;
+      const mustEscalate = floorMatches.length > 0 || boundExceeded || noSession;
+
+      if (mustEscalate) {
+        const detailParts: string[] = [];
+        if (floorMatches.length > 0) {
+          const categories = [...new Set(floorMatches.map((m) => m.category))];
+          detailParts.push(`baseline floor: ${categories.join(', ')}`);
+        }
+        if (boundExceeded) {
+          detailParts.push(
+            `re-routed ${routeCount} times on unchanged head SHA without a fix`,
+          );
+        }
+        if (noSession) {
+          detailParts.push('no linked session — routing was impossible');
+        }
+        // Replaces the depth_review_pending hold — the PR stays paused, now
+        // on an escalation reason, not merged.
+        setPauseReason(
+          job.prNumber,
+          job.repo,
+          'depth_review_escalation',
+          detailParts.join('; '),
+        );
+        this.sessionManager.emit('message', {
+          type: 'review_escalated',
+          prNumber: job.prNumber,
+          repo: job.repo,
+          message,
+        });
+      }
+
+      // Session-routing is the default whenever a session is linked — even
+      // when the finding also escalated (floor / bound), so the session
+      // isn't left waiting on an operator with no feedback at all.
+      if (prRow?.session_id) {
+        await this.sessionManager.enqueueFeedback(
+          prRow.session_id,
+          'ai-reviewer',
+          message,
+        );
+      }
+
+      // Both exit paths leave the PR paused: escalation is on
+      // depth_review_escalation (set above); a plain route keeps the
+      // depth_review_pending hold already in place — do not clear it or
+      // re-drive the merge, or an unfixed defect could merge before the
+      // session's next push re-triggers conformance + depth review.
       return;
     }
 

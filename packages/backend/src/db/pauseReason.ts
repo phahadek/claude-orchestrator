@@ -234,11 +234,19 @@ export const PAUSE_REASON_REGISTRY: Record<
   // The depth review pass's own escalation — distinct from
   // review_rules_escalation (the conformance pass's project-review_rules
   // escalation) and from the code-enforced baseline_escalation_floor
-  // escalation above. Raised when the depth pass finds a security/
-  // concurrency/reliability/data-integrity defect; an ordinary
-  // size-proportionality-only finding does NOT raise this — it routes
-  // through the normal auto-fix feedback path instead (see
-  // ReviewOrchestrator's depth-review handling).
+  // escalation above. Session-routing (enqueueFeedback), not this reason, is
+  // the default outcome for a depth finding — including a
+  // security/concurrency/reliability/data-integrity one — so the
+  // implementing session gets a shot at fixing it. This reason is raised
+  // only for the cases a human must adjudicate: the finding touches a
+  // baseline-floor path (CI/workflow config, migrations, auth, secrets), the
+  // PR has no linked session to route to, or the same finding has already
+  // been routed MAX_DEPTH_REVIEW_ROUTE_ATTEMPTS times on an unchanged head
+  // SHA without a fix landing. `detail` names which of these applied. A
+  // floor finding on a PR that does have a session both escalates AND
+  // routes (see ReviewOrchestrator's dispatchDepthReview) — this reason
+  // doesn't mean the session was left uninformed, only that an operator was
+  // also looped in.
   depth_review_escalation: {
     source: 'review',
     severity: 'needs_attention',
