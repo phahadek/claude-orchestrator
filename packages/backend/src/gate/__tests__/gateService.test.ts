@@ -960,8 +960,17 @@ describe('appendGateItemEvent — not-yet-triggerable pending lifecycle', () => 
     expect(updated.state).toBe('pending');
   });
 
-  it('rejects not-yet-triggerable for a non-pending-eligible item', () => {
+  it("parks a Human-Observation item to pending on the same not-yet-triggerable abstain — the mirror card's Park action", () => {
     const item = makeItem({ classification: 'Human-Observation' });
+    const updated = appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'the trigger has not happened yet',
+    });
+    expect(updated.state).toBe('pending');
+  });
+
+  it('rejects not-yet-triggerable for a non-pending-eligible item (needs-triage)', () => {
+    const item = makeItem({ classification: 'needs-triage' });
     expect(() =>
       appendGateItemEvent(item.id, {
         disposition: 'not-yet-triggerable',
@@ -1017,8 +1026,12 @@ describe('appendGateItemEvent — not-yet-triggerable pending lifecycle', () => 
         .pendingAttemptCount,
     ).toBe(2);
 
-    reclassifyGateItem(item.id, 'Human-Observation', 'pedro');
-    reclassifyGateItem(item.id, 'Read-Only', 'pedro');
+    // Every reclassifyGateItem target (Read-Only, Prod-Mutating,
+    // Human-Observation) is pending-eligible, so reclassify can no longer
+    // force a pending item back to open — drive it out of pending directly
+    // via gateStore, the same denormalized transition reclassify's dead
+    // non-pending-eligible branch would have made.
+    advanceState(item.id, 'open', 'reopened', new Date(1).toISOString());
     expect(getGateItem(item.id)?.state).toBe('open');
 
     appendGateItemEvent(item.id, {
@@ -1125,24 +1138,33 @@ describe('nextPendingGateItems', () => {
 });
 
 describe('reclassifyGateItem — pending lifecycle', () => {
-  it('forces a pending item back to open when reclassified to a non-pending-eligible target', () => {
+  // Every reclassifyGateItem target — Read-Only, Prod-Mutating, and
+  // Human-Observation (pending-eligible since the mirror card's Park action
+  // reuses this same not-yet-triggerable -> pending path) — is now
+  // pending-eligible, so reclassifying a pending item never forces it back
+  // to open; it always preserves the pending state and its backoff.
+  it('preserves a pending item and its backoff schedule when reclassified to Human-Observation', () => {
     const item = makeItem({ classification: 'Read-Only' });
     appendGateItemEvent(item.id, {
       disposition: 'not-yet-triggerable',
       evidence: 'still waiting',
     });
     expect(getGateItem(item.id)?.state).toBe('pending');
-
-    const updated = reclassifyGateItem(item.id, 'Human-Observation', 'pedro');
-    expect(updated.state).toBe('open');
-    expect(updated.classification).toBe('Human-Observation');
-
-    const detail = getGateItemDetail(item.id)!.item as {
+    const before = getGateItemDetail(item.id)!.item as {
       nextAttemptAt?: string;
       pendingAttemptCount: number;
     };
-    expect(detail.nextAttemptAt).toBeUndefined();
-    expect(detail.pendingAttemptCount).toBe(0);
+
+    const updated = reclassifyGateItem(item.id, 'Human-Observation', 'pedro');
+    expect(updated.state).toBe('pending');
+    expect(updated.classification).toBe('Human-Observation');
+
+    const after = getGateItemDetail(item.id)!.item as {
+      nextAttemptAt?: string;
+      pendingAttemptCount: number;
+    };
+    expect(after.nextAttemptAt).toBe(before.nextAttemptAt);
+    expect(after.pendingAttemptCount).toBe(before.pendingAttemptCount);
   });
 
   it('preserves a pending item and its backoff schedule when reclassified between two pending-eligible tiers', () => {

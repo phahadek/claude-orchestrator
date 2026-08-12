@@ -174,8 +174,16 @@ export interface ApplyOptions {
    * mirror intent (payload.origin === 'mirror') — such an intent carries no
    * pre-set disposition, since no verifier ever observed anything, so the
    * operator supplies one here at apply time. Ignored for every other kind.
+   * `not-yet-triggerable` parks the item at `pending` for a scheduled
+   * backoff re-check instead of resolving it — distinct from `deferred`,
+   * which resolves the item permanently.
    */
-  mirrorDisposition?: 'pass' | 'fail' | 'needs-setup' | 'deferred';
+  mirrorDisposition?:
+    | 'pass'
+    | 'fail'
+    | 'needs-setup'
+    | 'deferred'
+    | 'not-yet-triggerable';
   mirrorEvidence?: string;
 }
 

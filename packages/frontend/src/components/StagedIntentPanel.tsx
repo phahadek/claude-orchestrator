@@ -1251,6 +1251,7 @@ export function StagedIntentPanel({
   const [showOverride, setShowOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
   const [consentRejectReason, setConsentRejectReason] = useState('');
+  const [parkEvidence, setParkEvidence] = useState('');
   const rejectReasonRef = useRef<HTMLTextAreaElement>(null);
 
   const blocked = Boolean(
@@ -1292,7 +1293,13 @@ export function StagedIntentPanel({
 
   const handleApply = async (
     override?: { reason: string },
-    mirrorDisposition?: 'pass' | 'fail' | 'needs-setup' | 'deferred',
+    mirrorDisposition?:
+      | 'pass'
+      | 'fail'
+      | 'needs-setup'
+      | 'deferred'
+      | 'not-yet-triggerable',
+    mirrorEvidence?: string,
   ) => {
     setInFlight(override ? 'override' : 'apply');
     setError(null);
@@ -1301,6 +1308,7 @@ export function StagedIntentPanel({
         override: !!override,
         reason: override?.reason,
         mirrorDisposition,
+        mirrorEvidence,
       });
       onApplied?.(intent, result);
     } catch (err) {
@@ -1666,9 +1674,35 @@ export function StagedIntentPanel({
                   className={styles.approveButton}
                   disabled={inFlight !== null || disabled}
                   data-testid="staged-intent-gate-verify-mirror-defer"
+                  title="Resolves this item permanently — it will not be re-attempted. Use Park to postpone instead."
                   onClick={() => void handleApply(undefined, 'deferred')}
                 >
-                  {inFlight === 'apply' ? 'Applying…' : 'Defer'}
+                  {inFlight === 'apply' ? 'Applying…' : 'Defer (resolves)'}
+                </button>
+                <textarea
+                  className={styles.feedbackInput}
+                  placeholder="Why can't this be verified right now? (required to park)"
+                  value={parkEvidence}
+                  onChange={(e) => setParkEvidence(e.target.value)}
+                  data-testid="staged-intent-gate-verify-mirror-park-evidence"
+                />
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={
+                    inFlight !== null || disabled || !parkEvidence.trim()
+                  }
+                  data-testid="staged-intent-gate-verify-mirror-park"
+                  title="Postpones this item — it stays open and is automatically re-attempted later."
+                  onClick={() =>
+                    void handleApply(
+                      undefined,
+                      'not-yet-triggerable',
+                      parkEvidence,
+                    )
+                  }
+                >
+                  {inFlight === 'apply' ? 'Applying…' : 'Park'}
                 </button>
               </>
             )}

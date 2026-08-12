@@ -933,6 +933,97 @@ describe('StagedIntentPanel', () => {
     });
   });
 
+  describe('gate.verify Human-Observation mirror (operator disposition)', () => {
+    function makeMirrorIntent(overrides: Partial<StagedIntent> = {}) {
+      return makeIntent({
+        kind: 'gate.verify',
+        payload: { gateItemId: 'gate-mirror-1', origin: 'mirror' },
+        ...overrides,
+      });
+    }
+
+    it('renders Pass, Fail, Defer, and Park actions', () => {
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      expect(
+        screen.getByTestId('staged-intent-gate-verify-mirror-pass'),
+      ).toBeTruthy();
+      expect(
+        screen.getByTestId('staged-intent-gate-verify-mirror-fail'),
+      ).toBeTruthy();
+      expect(
+        screen.getByTestId('staged-intent-gate-verify-mirror-defer'),
+      ).toBeTruthy();
+      expect(
+        screen.getByTestId('staged-intent-gate-verify-mirror-park'),
+      ).toBeTruthy();
+    });
+
+    it("labels Defer as resolving, so it isn't mistaken for a postponement", () => {
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      const defer = screen.getByTestId(
+        'staged-intent-gate-verify-mirror-defer',
+      );
+      expect(defer.textContent).toMatch(/resolves/i);
+    });
+
+    it('Park is disabled until evidence is entered, then applies with the not-yet-triggerable disposition', async () => {
+      const apply = vi
+        .spyOn(stagedIntentsApi, 'apply')
+        .mockResolvedValue({ ok: true, result: {} });
+
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      const park = screen.getByTestId(
+        'staged-intent-gate-verify-mirror-park',
+      ) as HTMLButtonElement;
+      expect(park.disabled).toBe(true);
+
+      fireEvent.change(
+        screen.getByTestId('staged-intent-gate-verify-mirror-park-evidence'),
+        {
+          target: {
+            value: 'not triggerable yet — waiting on the real-world event',
+          },
+        },
+      );
+      expect(park.disabled).toBe(false);
+
+      fireEvent.click(park);
+
+      await waitFor(() =>
+        expect(apply).toHaveBeenCalledWith('intent-1', {
+          override: false,
+          reason: undefined,
+          mirrorDisposition: 'not-yet-triggerable',
+          mirrorEvidence:
+            'not triggerable yet — waiting on the real-world event',
+        }),
+      );
+    });
+
+    it('pressing Defer still resolves the item via the deferred mirrorDisposition, unchanged from before Park existed', async () => {
+      const apply = vi
+        .spyOn(stagedIntentsApi, 'apply')
+        .mockResolvedValue({ ok: true, result: {} });
+
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+      fireEvent.click(
+        screen.getByTestId('staged-intent-gate-verify-mirror-defer'),
+      );
+
+      await waitFor(() =>
+        expect(apply).toHaveBeenCalledWith('intent-1', {
+          override: false,
+          reason: undefined,
+          mirrorDisposition: 'deferred',
+          mirrorEvidence: undefined,
+        }),
+      );
+    });
+  });
+
   describe('gate.verify consent mirror (Prod-Mutating pending-approval)', () => {
     function makeConsentIntent(overrides: Partial<StagedIntent> = {}) {
       return makeIntent({
@@ -955,6 +1046,23 @@ describe('StagedIntentPanel', () => {
       expect(screen.getByText(/Prod-Mutating — pending approval/)).toBeTruthy();
       expect(screen.getByText(/Basis: read-only dry run/)).toBeTruthy();
       expect(screen.getByText(/no rows would change/)).toBeTruthy();
+    });
+
+    it("renders no Pass/Fail/Defer/Park mirror controls — the consent card's Approve/Reject vocabulary is unchanged by the mirror card's Park addition", () => {
+      render(<StagedIntentPanel intent={makeConsentIntent()} />);
+
+      expect(
+        screen.queryByTestId('staged-intent-gate-verify-mirror-pass'),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId('staged-intent-gate-verify-mirror-fail'),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId('staged-intent-gate-verify-mirror-defer'),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId('staged-intent-gate-verify-mirror-park'),
+      ).toBeNull();
     });
 
     it('renders Approve and Reject controls instead of Commit/Pushback', () => {

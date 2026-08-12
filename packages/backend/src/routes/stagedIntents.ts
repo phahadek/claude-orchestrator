@@ -4288,7 +4288,12 @@ class NotOperatorAppliableError extends Error {
 
 /** The operator's pick for a Human-Observation mirror intent's disposition — see GateVerifyIntentPayload.origin. */
 interface GateVerifyMirrorDisposition {
-  disposition: 'pass' | 'fail' | 'needs-setup' | 'deferred';
+  disposition:
+    | 'pass'
+    | 'fail'
+    | 'needs-setup'
+    | 'deferred'
+    | 'not-yet-triggerable';
   evidence?: unknown;
 }
 
@@ -4599,9 +4604,12 @@ async function applyIntent(
       }
       // A mirror intent (Human-Observation, no verifier report behind it)
       // carries no pre-set disposition — the operator supplies pass/fail/
-      // deferred/needs-setup at apply time instead, via the same
-      // Pass/Fail/Defer-equivalent vocabulary GateReadinessPanel's direct
-      // path offers.
+      // deferred/needs-setup/not-yet-triggerable at apply time instead, via
+      // the same Pass/Fail/Defer/Park vocabulary GateReadinessPanel's direct
+      // path offers. `not-yet-triggerable` parks the item at `pending`
+      // (see nextStateForDisposition) rather than resolving it — the
+      // operator's "not now, try again later" choice, distinct from
+      // `deferred`'s permanent resolution.
       const disposition =
         payload.origin === 'mirror'
           ? mirrorDisposition?.disposition
@@ -4609,7 +4617,7 @@ async function applyIntent(
       if (!disposition) {
         throw new Error(
           payload.origin === 'mirror'
-            ? `[stagedIntents] gate.verify apply: a Human-Observation mirror for "${payload.gateItemId}" requires an operator-supplied disposition (pass/fail/deferred/needs-setup)`
+            ? `[stagedIntents] gate.verify apply: a Human-Observation mirror for "${payload.gateItemId}" requires an operator-supplied disposition (pass/fail/deferred/needs-setup/not-yet-triggerable)`
             : `[stagedIntents] gate.verify apply: intent carries no disposition`,
         );
       }
@@ -7292,6 +7300,7 @@ export function createStagedIntentsRouter(
         'fail',
         'needs-setup',
         'deferred',
+        'not-yet-triggerable',
       ]);
       const mirrorDisposition =
         typeof body?.mirrorDisposition === 'string' &&
@@ -7301,7 +7310,8 @@ export function createStagedIntentsRouter(
                 | 'pass'
                 | 'fail'
                 | 'needs-setup'
-                | 'deferred',
+                | 'deferred'
+                | 'not-yet-triggerable',
               evidence: body?.mirrorEvidence,
             }
           : undefined;
