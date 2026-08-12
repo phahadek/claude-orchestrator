@@ -2123,7 +2123,11 @@ describe('markSessionErrored — Notion status revert respects the task current 
   let sm: SessionManager;
 
   function taskCacheRow(status: string) {
-    return { task_id: 'task-1', fetched_at: 0, raw_json: JSON.stringify({ status }) } as any;
+    return {
+      task_id: 'task-1',
+      fetched_at: 0,
+      raw_json: JSON.stringify({ status }),
+    } as any;
   }
 
   beforeEach(() => {
@@ -2134,7 +2138,10 @@ describe('markSessionErrored — Notion status revert respects the task current 
   });
 
   it('user_kill on a ✅ Done task performs no updateStatus call', () => {
-    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'killed' });
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'killed',
+    });
     vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('✅ Done'));
 
     sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
@@ -2144,7 +2151,10 @@ describe('markSessionErrored — Notion status revert respects the task current 
   });
 
   it('user_kill on a ⏭️ Deferred task performs no updateStatus call', () => {
-    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'killed' });
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'killed',
+    });
     vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('⏭️ Deferred'));
 
     sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
@@ -2154,7 +2164,10 @@ describe('markSessionErrored — Notion status revert respects the task current 
   });
 
   it('user_kill on a 🔄 In Progress task still reverts it to 🗂️ Ready (majority case)', () => {
-    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'killed' });
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'killed',
+    });
     vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('🔄 In Progress'));
 
     sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
@@ -2163,12 +2176,18 @@ describe('markSessionErrored — Notion status revert respects the task current 
     expect(vi.mocked(backend.updateStatus)).toHaveBeenCalledWith(
       'task-1',
       '🗂️ Ready',
-      expect.objectContaining({ source: 'orchestrator', sessionId: SESSION_ID }),
+      expect.objectContaining({
+        source: 'orchestrator',
+        sessionId: SESSION_ID,
+      }),
     );
   });
 
   it('a cache miss falls back to the existing revert behaviour rather than silently skipping it', () => {
-    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'killed' });
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'killed',
+    });
     vi.mocked(getTaskCache).mockReturnValue(undefined);
 
     sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
@@ -2177,12 +2196,18 @@ describe('markSessionErrored — Notion status revert respects the task current 
     expect(vi.mocked(backend.updateStatus)).toHaveBeenCalledWith(
       'task-1',
       '🗂️ Ready',
-      expect.objectContaining({ source: 'orchestrator', sessionId: SESSION_ID }),
+      expect.objectContaining({
+        source: 'orchestrator',
+        sessionId: SESSION_ID,
+      }),
     );
   });
 
   it('a counted reason (crash budget path) does not set 🚫 Blocked on an already ✅ Done task', () => {
-    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'error' });
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'error',
+    });
     vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('✅ Done'));
     vi.mocked(incrementTaskCrashCount).mockReturnValue(2);
 
@@ -2192,7 +2217,12 @@ describe('markSessionErrored — Notion status revert respects the task current 
     expect(vi.mocked(backend.updateStatus)).not.toHaveBeenCalled();
   });
 
-  it.each(['user_kill', 'pr_closed', 'launch_failed', 'backend_spawn_degraded'])(
+  it.each([
+    'user_kill',
+    'pr_closed',
+    'launch_failed',
+    'backend_spawn_degraded',
+  ])(
     'handlePlanningSessionCrash still returns early for %s (UNCOUNTED_REASONS), unchanged',
     (reason) => {
       vi.mocked(getSession).mockReturnValue({
