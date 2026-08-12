@@ -87,7 +87,8 @@ vi.mock('child_process', () => ({
     if (cmd === 'git branch --show-current') return 'feature/my-task\n';
     if (cmd === 'git remote get-url origin')
       return 'https://github.com/owner/repo.git\n';
-    if (cmd === 'git diff --name-only dev...feature/my-task')
+    if (cmd === 'git fetch origin dev') return '';
+    if (cmd === 'git diff --name-only origin/dev...feature/my-task')
       return 'packages/backend/src/foo.ts\n';
     if (cmd === 'git push -u origin feature/my-task') return '';
     throw new Error(`unexpected: ${cmd}`);
@@ -202,7 +203,8 @@ describe('<pr-body> marker — proactive workflow-scope diff check', () => {
       if (cmd === 'git branch --show-current') return 'feature/my-task\n';
       if (cmd === 'git remote get-url origin')
         return 'https://github.com/owner/repo.git\n';
-      if (cmd === 'git diff --name-only dev...feature/my-task')
+      if (cmd === 'git fetch origin dev') return '';
+      if (cmd === 'git diff --name-only origin/dev...feature/my-task')
         return '.github/workflows/build.yml\n';
       if (cmd === 'git push -u origin feature/my-task')
         throw new Error('should not be called');
@@ -241,7 +243,8 @@ describe('<pr-body> marker — proactive workflow-scope diff check', () => {
       if (cmd === 'git branch --show-current') return 'feature/my-task\n';
       if (cmd === 'git remote get-url origin')
         return 'https://github.com/owner/repo.git\n';
-      if (cmd === 'git diff --name-only dev...feature/my-task')
+      if (cmd === 'git fetch origin dev') return '';
+      if (cmd === 'git diff --name-only origin/dev...feature/my-task')
         return 'packages/backend/src/foo.ts\n';
       if (cmd === 'git push -u origin feature/my-task') return '';
       throw new Error(`unexpected: ${cmd}`);
@@ -260,5 +263,114 @@ describe('<pr-body> marker — proactive workflow-scope diff check', () => {
       );
     expect(pushCalls.length).toBeGreaterThan(0);
     expect(ghClient.createPR).toHaveBeenCalled();
+
+    // The diff was computed against the fetched remote-tracking ref, not
+    // the bare local base branch name.
+    const fetchCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(([cmd]) => cmd === 'git fetch origin dev');
+    expect(fetchCalls.length).toBeGreaterThan(0);
+    const diffCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(([cmd]) =>
+        (cmd as string).startsWith('git diff --name-only'),
+      );
+    expect(diffCalls[0][0]).toBe(
+      'git diff --name-only origin/dev...feature/my-task',
+    );
+  });
+
+  it('proceeds to push and does not set workflow_scope_denied when the fetch throws', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(setSessionPauseReason).mockClear();
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git fetch origin dev')
+        throw new Error('fetch failed: base ref not fetched locally');
+      if (cmd === 'git push -u origin feature/my-task') return '';
+      throw new Error(`unexpected: ${cmd}`);
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    const pushCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(([cmd]) =>
+        (cmd as string).startsWith('git push -u origin'),
+      );
+    expect(pushCalls.length).toBeGreaterThan(0);
+    expect(ghClient.createPR).toHaveBeenCalled();
+    expect(setSessionPauseReason).not.toHaveBeenCalled();
+  });
+
+  it('proceeds to push and does not set workflow_scope_denied when the diff throws', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(setSessionPauseReason).mockClear();
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git fetch origin dev') return '';
+      if (cmd === 'git diff --name-only origin/dev...feature/my-task')
+        throw new Error('diff failed');
+      if (cmd === 'git push -u origin feature/my-task') return '';
+      throw new Error(`unexpected: ${cmd}`);
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    const pushCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(([cmd]) =>
+        (cmd as string).startsWith('git push -u origin'),
+      );
+    expect(pushCalls.length).toBeGreaterThan(0);
+    expect(ghClient.createPR).toHaveBeenCalled();
+    expect(setSessionPauseReason).not.toHaveBeenCalled();
+  });
+
+  it('pushes without pausing when a stale local base would falsely flag a workflow-scope path but the remote-tracking diff is clean (observed regression shape)', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(setSessionPauseReason).mockClear();
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git fetch origin dev') return '';
+      // Stale local base ref — if this were used directly, it would (wrongly)
+      // include a workflows path merged into dev by another PR in the gap.
+      if (cmd === 'git diff --name-only dev...feature/my-task')
+        return 'packages/backend/src/foo.ts\n.github/workflows/ci.yml\n';
+      // Correct remote-tracking diff — only the branch's real changes.
+      if (cmd === 'git diff --name-only origin/dev...feature/my-task')
+        return 'packages/backend/src/foo.ts\n';
+      if (cmd === 'git push -u origin feature/my-task') return '';
+      throw new Error(`unexpected: ${cmd}`);
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    const pushCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(([cmd]) =>
+        (cmd as string).startsWith('git push -u origin'),
+      );
+    expect(pushCalls.length).toBeGreaterThan(0);
+    expect(ghClient.createPR).toHaveBeenCalled();
+    expect(setSessionPauseReason).not.toHaveBeenCalled();
   });
 });

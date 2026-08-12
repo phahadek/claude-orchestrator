@@ -2057,10 +2057,18 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // the doomed push entirely if it touches a credential-ceiling path — the
     // reactive isWorkflowScopeDenied match below stays in place as a
     // backstop for whatever this diff-based check misses (e.g. base branch
-    // resolution failures upstream).
+    // resolution failures upstream). Fetch the base first: the worktree's
+    // local baseBranch ref only advances when someone merges/deploys into
+    // the shared repo it shares refs with, so a stale local ref can make a
+    // three-dot diff attribute other PRs' merged commits to this branch.
     try {
+      execSync(`git fetch origin ${baseBranch}`, {
+        cwd: this.worktreePath,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      });
       const changedFiles = execSync(
-        `git diff --name-only ${baseBranch}...${branch}`,
+        `git diff --name-only origin/${baseBranch}...${branch}`,
         { cwd: this.worktreePath, encoding: 'utf-8', stdio: 'pipe' },
       )
         .split('\n')
