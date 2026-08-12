@@ -129,8 +129,11 @@ function runCommandWithTimeout(
     // Set once escalation begins (timeout or OOM). Preserved so a graceful
     // exit during the grace period is still reported as timedOut/oomKilled
     // rather than misreported as a normal completion.
-    let escalation: { timedOut: boolean; oomKilled: boolean; marker: string } | null =
-      null;
+    let escalation: {
+      timedOut: boolean;
+      oomKilled: boolean;
+      marker: string;
+    } | null = null;
 
     // Retains the *tail* of the stream — a test runner's diagnosis (failure
     // summary, traceback) always prints last, after uninformative progress
