@@ -540,6 +540,32 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'on what the digest and the parts of the task reachable without it actually show.',
   },
   {
+    id: 'groom-deliverable-is-a-decision-about-the-task',
+    title: "A groom session's deliverable is a decision about the task",
+    appliesTo: ['groom'],
+    text:
+      "{skillLabel}'s deliverable is a decision about the target task — whether " +
+      'and how it is ready: promote it, defer it, or raise a blocking question — ' +
+      "never the output the task itself exists to produce. Whatever a task's Type " +
+      "mandates producing belongs to that Type's own execution session, not to " +
+      "{skillLabel}: a 📐 Design task's locked answers to its own listed Open " +
+      "Questions are a /design session's deliverable; a 🔎 Investigation task's " +
+      "root-cause finding is that Investigation session's deliverable; a 💻 Code " +
+      "task's implementation is that Code session's deliverable. DO NOT stage a " +
+      "decision.pickOne (or any other write) that answers a task's own Open " +
+      "Questions or otherwise produces the task's declared deliverable on the " +
+      'theory that the acceptance criteria name the mechanism (e.g. "answers ' +
+      'recorded as a committed decision.pickOne intent") — naming the mechanism ' +
+      'a later session will use is not an instruction for {skillLabel} to use it ' +
+      'now. This does not restrict `decision.pickOne` itself: staging one to ' +
+      'raise a question {skillLabel} cannot resolve on its own authority — a ' +
+      'scope doubt, an unconfirmed dependency, a spec/code contradiction — is a ' +
+      'legitimate and common escalation. The distinction is whose question it ' +
+      "is: an escalation asks the operator to unblock {skillLabel}'s own " +
+      "grooming judgment; answering a task's listed Open Questions imports that " +
+      "task's own deliverable into {skillLabel}'s.",
+  },
+  {
     id: 'investigate-before-resolving-no-deferral',
     title: 'Investigate before resolving — a defer is not a resolve',
     appliesTo: ['groom', 'design'],
@@ -557,13 +583,17 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'exempt from this check on their own open-question-space — see ' +
       "`readinessGate.ts`'s `OPEN_QUESTIONS_EXEMPT_TYPES` — because for those types " +
       'the open questions are the deliverable being scoped, not a precondition being ' +
-      'dodged. For an Investigation or observational Testing task specifically, the ' +
-      'unresolved question is the payload it carries into execution: report it ' +
-      'honestly in groomProposal.openQuestions and promote the task with it — never ' +
-      'launder it into "None," and never hold the task at Backlog on the theory that ' +
-      'an unresolved question forbids Ready. Every non-exempt type keeps the rule ' +
-      'above unchanged: a 💻 Code task with an unresolved trade-off still stays at ' +
-      'Backlog.)',
+      'dodged. For EVERY exempt type — 📋 Planning and 📐 Design included, not only ' +
+      '🔎 Investigation or observational 🧪 Testing — the unresolved question is the ' +
+      'payload the task carries into execution: report it honestly in ' +
+      'groomProposal.openQuestions and promote the task with it — never launder it ' +
+      'into "None," and never hold the task at Backlog on the theory that an ' +
+      "unresolved question forbids Ready. Resolving a Design or Planning task's own " +
+      "listed Open Questions belongs to that task's own dispatched execution session " +
+      "(a /design session) — see 'A groom session's deliverable is a decision about " +
+      "the task' above for why a groom session reports and promotes instead of " +
+      'answering them itself. Every non-exempt type keeps the rule above unchanged: ' +
+      'a 💻 Code task with an unresolved trade-off still stays at Backlog.)',
   },
   {
     id: 'decision-pickone-genuine-forks-only',

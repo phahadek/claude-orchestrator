@@ -100,7 +100,7 @@ describe('procedureCore', () => {
       'groom' | 'design' | 'ops' | 'split',
       { principles: number; steps: number }
     > = {
-      groom: { principles: 14, steps: 8 },
+      groom: { principles: 15, steps: 8 },
       design: { principles: 23, steps: 7 },
       ops: { principles: 17, steps: 5 },
       split: { principles: 6, steps: 4 },
@@ -172,6 +172,53 @@ describe('procedureCore', () => {
     expect(rendered).toContain('🔎 Investigation');
     expect(rendered).toContain('🧪 Testing');
     expect(rendered).toContain('OPEN_QUESTIONS_EXEMPT_TYPES');
+  });
+
+  it('gives the report-and-promote instruction ("report it honestly in groomProposal.openQuestions and promote") for every OPEN_QUESTIONS_EXEMPT_TYPES member, not only Investigation/Testing', () => {
+    const principle = CORE_PRINCIPLES.find(
+      (p) => p.id === 'investigate-before-resolving-no-deferral',
+    )!;
+    const rendered = renderPrinciple(principle, 'groom');
+    expect(rendered).toContain('For EVERY exempt type');
+    expect(rendered).toContain('📋 Planning and 📐 Design included');
+    expect(rendered).toContain(
+      'report it honestly in groomProposal.openQuestions and promote the task',
+    );
+    // Design/Planning's own Open Questions are not this session's to answer.
+    expect(rendered).toContain("that task's own dispatched execution session");
+  });
+
+  it("states that a groom session's deliverable is a decision about the task, never the task's own deliverable", () => {
+    const principle = CORE_PRINCIPLES.find(
+      (p) => p.id === 'groom-deliverable-is-a-decision-about-the-task',
+    )!;
+    expect(principle).toBeDefined();
+    expect(principle.appliesTo).toEqual(['groom']);
+    const rendered = renderPrinciple(principle, 'groom');
+    expect(rendered).toContain(
+      'deliverable is a decision about the target task',
+    );
+    expect(rendered).toContain(
+      'never the output the task itself exists to produce',
+    );
+    expect(rendered).toContain('📐 Design task');
+    expect(rendered).toContain(
+      "its own listed Open Questions are a /design session's deliverable",
+    );
+  });
+
+  it('keeps decision.pickOne available to groom sessions for legitimate escalations even after the deliverable-boundary principle is added', () => {
+    const deliverablePrinciple = CORE_PRINCIPLES.find(
+      (p) => p.id === 'groom-deliverable-is-a-decision-about-the-task',
+    )!;
+    const rendered = renderPrinciple(deliverablePrinciple, 'groom');
+    expect(rendered).toContain('does not restrict `decision.pickOne` itself');
+
+    const forksOnlyPrinciple = CORE_PRINCIPLES.find(
+      (p) => p.id === 'decision-pickone-genuine-forks-only',
+    )!;
+    expect(forksOnlyPrinciple).toBeDefined();
+    expect(forksOnlyPrinciple.appliesTo).toContain('groom');
   });
 
   it("states that a groom body edit must join its task's open decision group", () => {
