@@ -3867,10 +3867,16 @@ export class SessionManager extends EventEmitter {
     const row = getSession(sessionId);
     if (!row) return;
 
-    const isTerminal =
+    const isDoneErrorKilled =
       row.status === 'done' ||
       row.status === 'error' ||
       row.status === 'killed';
+    // archived=1 is an explicit operator signal the session is done (see
+    // archiveAndEndSession) — unlike done/error/killed, it is never eligible
+    // for the attemptTerminalResume resend path below, even when the caller
+    // (e.g. enqueueFeedback informing a session of a disposition) asks for it.
+    const isArchived = row.archived === 1;
+    const isTerminal = isDoneErrorKilled || isArchived;
 
     const items = listUndeliveredInboxItems(sessionId);
     if (items.length === 0) return;
@@ -3878,7 +3884,7 @@ export class SessionManager extends EventEmitter {
       .map((item) => `[${item.source}]\n${item.payload}`)
       .join('\n\n');
 
-    if (isTerminal && !opts.attemptTerminalResume) {
+    if (isTerminal && (isArchived || !opts.attemptTerminalResume)) {
       markInboxItemsDelivered(items.map((i) => i.id));
       return;
     }
@@ -4045,16 +4051,21 @@ export class SessionManager extends EventEmitter {
 
     // Refuse to respawn sessions that reached a terminal state — done/error/killed
     // sessions are intentionally finished and must not be revived by stale feedback.
-    // PR-scoped relaunches (relaunchFixerForPR) opt out via allowTerminal since a
-    // dead session is exactly the case they exist to recover from.
+    // archived=1 is included alongside the terminal statuses: archiveAndEndSession
+    // documents archival as "an explicit operator signal the session is done — reap
+    // any live subprocess", so an archived session (even one left `idle`, which is
+    // otherwise never terminal) must not be silently resumed either. PR-scoped
+    // relaunches (relaunchFixerForPR) opt out via allowTerminal since a dead session
+    // is exactly the case they exist to recover from.
     if (
       !opts.allowTerminal &&
       (row.status === 'done' ||
         row.status === 'error' ||
-        row.status === 'killed')
+        row.status === 'killed' ||
+        row.archived === 1)
     ) {
       logger.warn(
-        `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status})`,
+        `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status}, archived=${row.archived})`,
       );
       this.emit('message', {
         type: 'session_action_failed',
