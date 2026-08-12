@@ -375,11 +375,23 @@ const DESIGN_MCP_TOOLS = [
 // DeployOrchestrator.reportAgenticVerdict(), never a staged intent an
 // operator disposes on. Added here explicitly for the same reason as
 // gateSeed.getState above: it isn't in PLANNING_INTENT_KINDS.ops.
+//
+// Plus gate.reclassify (mcp/tools/gateReclassifyTool.ts) and
+// intent.dispositionStranded (mcp/tools/strandedIntentTool.ts) — an ops
+// session's authenticated MCP replacement for the device-authed
+// gate-state-client.mjs `reclassify` command and for clearing an intent
+// stranded by a different, terminated session, respectively. Both act
+// immediately (reclassifyGateItem / dispositionStrandedIntent write
+// durably on the call itself) rather than staging an intent an operator
+// later disposes on, so — same reasoning as gateSeed.getState/deploy.verdict
+// — neither belongs in PLANNING_INTENT_KINDS.ops; added here explicitly.
 const OPS_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
   ...PLANNING_INTENT_KINDS.ops.map(orchestratorMcpToolName),
   orchestratorMcpToolName('gateSeed.getState'),
   orchestratorMcpToolName('deploy.verdict'),
+  orchestratorMcpToolName('gate.reclassify'),
+  orchestratorMcpToolName('intent.dispositionStranded'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
   ...TASK_READ_MCP_TOOLS,
   ...PROJECT_READ_MCP_TOOLS,

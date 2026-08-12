@@ -51,6 +51,8 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'pullRequest.getByTaskId',
   'gateSeed.getState',
   'deploy.verdict',
+  'gate.reclassify',
+  'intent.dispositionStranded',
   'session.getRecord',
   'auditLog.query',
   'sessionEvents.query',
@@ -186,6 +188,23 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     expect(OPS_ALLOWED_TOOLS).toContain('mcp__orchestrator__journal_setState');
     expect(OPS_ALLOWED_TOOLS).toContain(
       'mcp__orchestrator__session_requestCapability',
+    );
+  });
+
+  it('ops allow-list contains the underscore forms of gate_reclassify and intent_dispositionStranded — hand-added entries, not staged-intent kinds, same precedent as gate_verify/deploy_verdict', () => {
+    expect(PLANNING_INTENT_KINDS.ops).not.toContain('gate.reclassify');
+    expect(PLANNING_INTENT_KINDS.ops).not.toContain(
+      'intent.dispositionStranded',
+    );
+    expect(OPS_ALLOWED_TOOLS).toContain('mcp__orchestrator__gate_reclassify');
+    expect(OPS_ALLOWED_TOOLS).toContain(
+      'mcp__orchestrator__intent_dispositionStranded',
+    );
+    expect(GROOM_ALLOWED_TOOLS).not.toContain(
+      'mcp__orchestrator__gate_reclassify',
+    );
+    expect(DESIGN_ALLOWED_TOOLS).not.toContain(
+      'mcp__orchestrator__gate_reclassify',
     );
   });
 });
