@@ -372,6 +372,34 @@ export interface PullRequestRow {
   pr_intent_id: string | null;
 }
 
+// ─── depth_review_verdicts ──────────────────────────────────────────────────
+
+/**
+ * Durable record of a PR's latest depth-review pass — separate from
+ * pull_requests.review_result, which carries only the conformance verdict.
+ * `dimensions` is a JSON-encoded array of { name, passed, notes }.
+ */
+export interface DepthReviewVerdictRow {
+  pr_number: number;
+  repo: string;
+  head_sha: string | null;
+  verdict: string;
+  dimensions: string; // JSON
+  summary: string;
+  depth_session_id: string | null;
+  recorded_at: string;
+}
+
+export interface NewDepthReviewVerdictRow {
+  pr_number: number;
+  repo: string;
+  head_sha: string | null;
+  verdict: string;
+  dimensions: string; // JSON
+  summary: string;
+  depth_session_id: string | null;
+}
+
 // ─── task_repo_assignments ──────────────────────────────────────────────────
 
 export interface TaskRepoAssignmentRow {

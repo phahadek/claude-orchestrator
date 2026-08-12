@@ -18,6 +18,7 @@ import {
   lookupSessionByBranch,
   clearTerminalPRFlags,
   setPauseReason,
+  getDepthReviewVerdict,
 } from '../db/queries';
 import { parsePauseReason } from '../db/pauseReason';
 import { recordEvent } from '../audit/AuditLog';
@@ -26,6 +27,7 @@ import type { MergeabilityCategory } from '../github/types';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { PRReviewService } from '../github/PRReviewService';
 import type { PRReviewResult } from '../github/PRReviewService';
+import type { DepthReviewDimension } from '../github/DepthReviewService';
 import { GitHubDiffSource } from '../github/DiffSource';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher';
 import type { AutoMerger } from '../github/AutoMerger';
@@ -939,18 +941,41 @@ export function createPrsRouter(
         res.status(422).json({ error: 'No session linked to this PR' });
         return;
       }
-      if (!prRow.review_result) {
+      const reviewResult = prRow.review_result
+        ? (JSON.parse(prRow.review_result) as PRReviewResult)
+        : null;
+      const depthVerdictRow = getDepthReviewVerdict(prNumber, repo);
+      const depthDimensions = depthVerdictRow
+        ? (JSON.parse(depthVerdictRow.dimensions) as DepthReviewDimension[])
+        : null;
+
+      if (!reviewResult && !depthDimensions) {
         res.status(422).json({ error: 'Run a review before sending a fix' });
         return;
       }
-      const reviewResult = JSON.parse(prRow.review_result) as PRReviewResult;
-      const failingDimensions = (reviewResult.dimensions ?? []).filter(
+
+      const failingDimensions = (reviewResult?.dimensions ?? []).filter(
         (d) => !d.passed,
       );
-      const lines = failingDimensions
+      const depthFailingDimensions = (depthDimensions ?? []).filter(
+        (d) => !d.passed,
+      );
+
+      if (
+        failingDimensions.length === 0 &&
+        depthFailingDimensions.length === 0
+      ) {
+        res.status(422).json({ error: 'No failing review findings to send' });
+        return;
+      }
+
+      const lines = [...failingDimensions, ...depthFailingDimensions]
         .map((d) => `❌ ${d.name}: ${d.notes}`)
         .join('\n');
-      const fixMessage = `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${reviewResult.summary}`;
+      const overall = [reviewResult?.summary, depthVerdictRow?.summary]
+        .filter((s): s is string => Boolean(s))
+        .join(' ');
+      const fixMessage = `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${overall}`;
       await sessionManager.sendOrResume(prRow.session_id, fixMessage);
       res.json({ sessionId: prRow.session_id });
     }),

@@ -28,6 +28,7 @@ vi.mock('../db/queries.js', () =>
     setPreReviewStage: vi.fn(),
     setLastReviewedSha: vi.fn(),
     enqueueFeedbackItem: vi.fn(),
+    upsertDepthReviewVerdict: vi.fn(),
   }),
 );
 
@@ -115,6 +116,7 @@ import {
   setPendingPush,
   setLastReviewedSha,
   enqueueFeedbackItem,
+  upsertDepthReviewVerdict,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
@@ -576,6 +578,7 @@ function makeDepthResult(
     summary: 'Nothing found.',
     hasNonSizeFailure: false,
     sizeOnlyFailure: false,
+    sessionId: 'depth-session-id',
     ...overrides,
   };
 }
@@ -810,6 +813,146 @@ describe('ReviewOrchestrator — depth review finding routing', () => {
   });
 });
 
+describe('ReviewOrchestrator — depth review verdict persistence', () => {
+  it('writes a durable verdict row and records an audit event when a depth review completes', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        verdict: 'fail',
+        dimensions: [
+          {
+            name: 'Security',
+            passed: false,
+            notes: 'Unsanitized input reaches a shell command.',
+          },
+        ],
+        summary: 'Found a security defect.',
+        hasNonSizeFailure: true,
+        sessionId: 'depth-session-42',
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(upsertDepthReviewVerdict)).toHaveBeenCalledWith({
+      pr_number: 1,
+      repo: 'owner/repo',
+      head_sha: 'sha-abc',
+      verdict: 'fail',
+      dimensions: JSON.stringify([
+        {
+          name: 'Security',
+          passed: false,
+          notes: 'Unsanitized input reaches a shell command.',
+        },
+      ]),
+      summary: 'Found a security defect.',
+      depth_session_id: 'depth-session-42',
+    });
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'depth_review_completed',
+        task_id: 'notion:task-abc',
+        payload: expect.objectContaining({
+          pr_number: 1,
+          repo: 'owner/repo',
+          verdict: 'fail',
+        }),
+      }),
+    );
+  });
+
+  it('does not touch pull_requests.review_result (setPRReviewResult) on a depth-review completion', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        verdict: 'fail',
+        dimensions: [{ name: 'Security', passed: false, notes: 'Bad.' }],
+        summary: 'Found a defect.',
+        hasNonSizeFailure: true,
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(setPRReviewResult)).not.toHaveBeenCalled();
+  });
+
+  it('fails open on a depth-verdict storage error — escalation and pause_reason still occur', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(upsertDepthReviewVerdict).mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        verdict: 'fail',
+        dimensions: [
+          {
+            name: 'Security',
+            passed: false,
+            notes: 'Unsanitized input reaches a shell command.',
+          },
+        ],
+        summary: 'Found a security defect.',
+        hasNonSizeFailure: true,
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    const messages: unknown[] = [];
+    sm.on('message', (m: unknown) => messages.push(m));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_escalation',
+    );
+    expect(
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
+    ).toBe(true);
+  });
+});
+
 describe('ReviewOrchestrator — depth review fails open', () => {
   it('does not escalate or block merge when the depth pass errors', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
@@ -1000,6 +1143,38 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
       'owner/repo',
       'depth_review_escalation',
     );
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      null,
+    );
+    expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
+  });
+
+  it('still clears the hold and re-attempts the merge when persisting the depth verdict throws (storage fail-open)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+    vi.mocked(upsertDepthReviewVerdict).mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
     expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
       1,
       'owner/repo',

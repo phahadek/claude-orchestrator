@@ -55,6 +55,8 @@ export interface DepthReviewResult {
   hasNonSizeFailure: boolean;
   /** True when the only failing dimension is size-proportionality — the caller should route to auto-fix feedback. */
   sizeOnlyFailure: boolean;
+  /** The depth-review session id this verdict was computed from — for durable persistence by the caller. */
+  sessionId: string;
 }
 
 const DEPTH_REVIEW_JSON_SCHEMA_BLOCK = `Respond ONLY with a JSON object — no preamble, no markdown fences.
@@ -166,7 +168,7 @@ export class DepthReviewService {
 
       const result = await verdictPromise;
       if (!result) return null;
-      return this.classify(result);
+      return this.classify(result, sessionId);
     } catch (e) {
       logger.warn(
         `[DepthReviewService] depth review failed for PR #${prNumber} (${repo}) — failing open (merge stays gated on conformance alone): ${e}`,
@@ -176,11 +178,14 @@ export class DepthReviewService {
   }
 
   /** Derive the escalate/auto-fix routing signals from the raw dimension list. */
-  private classify(parsed: {
-    verdict: string;
-    dimensions: DepthReviewDimension[];
-    summary: string;
-  }): DepthReviewResult {
+  private classify(
+    parsed: {
+      verdict: string;
+      dimensions: DepthReviewDimension[];
+      summary: string;
+    },
+    sessionId: string,
+  ): DepthReviewResult {
     const dimensions = parsed.dimensions;
     const failing = dimensions.filter((d) => !d.passed);
     const hasNonSizeFailure = failing.some((d) =>
@@ -202,6 +207,7 @@ export class DepthReviewService {
       summary: parsed.summary,
       hasNonSizeFailure,
       sizeOnlyFailure,
+      sessionId,
     };
   }
 

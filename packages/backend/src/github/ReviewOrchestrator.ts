@@ -21,6 +21,7 @@ import {
   deletePendingReviewSync,
   getAllPendingReviewSyncs,
   getLatestTestRequestRun,
+  upsertDepthReviewVerdict,
   hasAnalyzeResultForSha,
   upsertAnalyzeResult,
   getAnalyzeResult,
@@ -1250,6 +1251,38 @@ export class ReviewOrchestrator {
     if (!result) {
       this.clearDepthReviewHoldAndRemerge(job);
       return;
+    }
+
+    // Persist the verdict and record its audit event — a storage failure
+    // here must not block the merge path (same fail-open shape as dispatch
+    // itself), so it's isolated in its own try/catch rather than allowed to
+    // throw into the escalate/auto-fix/clear-hold branches below.
+    try {
+      upsertDepthReviewVerdict({
+        pr_number: job.prNumber,
+        repo: job.repo,
+        head_sha: prRow?.head_sha ?? null,
+        verdict: result.verdict,
+        dimensions: JSON.stringify(result.dimensions),
+        summary: result.summary,
+        depth_session_id: result.sessionId,
+      });
+      recordEvent({
+        event_type: 'depth_review_completed',
+        actor_type: 'system',
+        task_id: prRow?.task_id ?? null,
+        payload: {
+          pr_number: job.prNumber,
+          repo: job.repo,
+          verdict: result.verdict,
+          hasNonSizeFailure: result.hasNonSizeFailure,
+          sizeOnlyFailure: result.sizeOnlyFailure,
+        },
+      });
+    } catch (e) {
+      logger.warn(
+        `[ReviewOrchestrator] failed to persist depth review verdict for PR #${job.prNumber} (${job.repo}) — failing open: ${e}`,
+      );
     }
 
     if (result.hasNonSizeFailure) {
