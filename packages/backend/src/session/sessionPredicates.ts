@@ -72,15 +72,24 @@ export type SessionType =
   | 'docs'
   | 'depth_review';
 
-/** True for session types that plan (groom/design/ops/split): stage-only base profile, no worktree, no PR. */
+/**
+ * The canonical set of planning session types — the single source of truth
+ * isPlanningSession is built from. Anything that needs a SQL `IN` list of
+ * planning types (e.g. db/queries.ts's ranked_planning CTE and
+ * hasNonTerminalPlanningSessionForTask) must derive it from this constant
+ * rather than restating it, so the two enumerations cannot drift apart.
+ */
+export const PLANNING_SESSION_TYPES: readonly SessionType[] = [
+  'groom',
+  'design',
+  'ops',
+  'split',
+  'docs',
+] as const;
+
+/** True for session types that plan (groom/design/ops/split/docs): stage-only base profile, no worktree, no PR. */
 export function isPlanningSession(sessionType: string): boolean {
-  return (
-    sessionType === 'groom' ||
-    sessionType === 'design' ||
-    sessionType === 'ops' ||
-    sessionType === 'split' ||
-    sessionType === 'docs'
-  );
+  return (PLANNING_SESSION_TYPES as readonly string[]).includes(sessionType);
 }
 
 /** True only for sessions that write code and open their own PR. */

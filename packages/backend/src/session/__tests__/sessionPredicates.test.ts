@@ -6,8 +6,10 @@ import {
   isTaskTypeCompatibleWithSessionType,
   movesTargetInProgress,
   opensPr,
+  PLANNING_SESSION_TYPES,
   usesWorktree,
   writesTaskStatus,
+  type SessionType,
 } from '../sessionPredicates';
 
 describe('sessionPredicates', () => {
@@ -92,6 +94,28 @@ describe('sessionPredicates', () => {
 
   it('isCodeSession is false for docs', () => {
     expect(isCodeSession('docs')).toBe(false);
+  });
+
+  it('isPlanningSession is true for split', () => {
+    expect(isPlanningSession('split')).toBe(true);
+  });
+
+  it('isPlanningSession and PLANNING_SESSION_TYPES agree for every SessionType member', () => {
+    const ALL_SESSION_TYPES: SessionType[] = [
+      'standard',
+      'review',
+      'groom',
+      'design',
+      'ops',
+      'split',
+      'docs',
+      'depth_review',
+    ];
+    for (const type of ALL_SESSION_TYPES) {
+      expect(isPlanningSession(type)).toBe(
+        (PLANNING_SESSION_TYPES as readonly string[]).includes(type),
+      );
+    }
   });
 
   describe('isTaskTypeCompatibleWithSessionType', () => {
