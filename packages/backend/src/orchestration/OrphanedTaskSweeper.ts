@@ -10,6 +10,7 @@ import type { ServerMessage } from '../ws/types';
 import {
   getLatestCodeSessionByNotionTaskId,
   getLatestOpsSessionByTaskId,
+  getLatestDocsSessionByTaskId,
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
   isSessionAwaitingCapabilityDisposition,
@@ -35,6 +36,7 @@ const SWEEPABLE_TYPES = new Set([
   '💻 Code',
   '🔧 Operational',
   '🔎 Investigation',
+  '📝 Docs',
 ]);
 
 const IN_PROGRESS_STATUS = '🔄 In Progress';
@@ -166,7 +168,17 @@ export class OrphanedTaskSweeper {
     taskType: string,
     backend: TaskBackend,
   ): Promise<void> {
-    const latestSession = getLatestCodeSessionByNotionTaskId(taskId);
+    // Docs is the one non-Code sweepable type that opens its own session and
+    // can open a PR (human_merge_only) — resolve its own-type session here so
+    // the PR-exemption and idle-nudge logic below (written against 'standard'
+    // sessions) actually sees it, instead of always finding undefined via
+    // getLatestCodeSessionByNotionTaskId (which only ever resolves 'standard'
+    // sessions). Ops/Investigation never open a PR and are left as-is —
+    // their own-type session is resolved separately, further down.
+    const latestSession =
+      taskType === '📝 Docs'
+        ? getLatestDocsSessionByTaskId(taskId)
+        : getLatestCodeSessionByNotionTaskId(taskId);
 
     if (latestSession) {
       // error|killed sessions have no active presence — fall through to revert.
@@ -309,8 +321,14 @@ export class OrphanedTaskSweeper {
     // than silently returning it to the dispatch pool. Neither signal true
     // is still a genuine orphan.
     if (taskType !== '💻 Code') {
-      const opsSession = getLatestOpsSessionByTaskId(taskId);
-      if (opsSession && sessionDidWork(opsSession.session_id)) {
+      // Docs already resolved its own-type session into latestSession above;
+      // Ops/Investigation never open a PR, so their session is only ever
+      // looked up here, for this fallback judgment.
+      const nonCodeSession =
+        taskType === '📝 Docs'
+          ? latestSession
+          : getLatestOpsSessionByTaskId(taskId);
+      if (nonCodeSession && sessionDidWork(nonCodeSession.session_id)) {
         return;
       }
     }

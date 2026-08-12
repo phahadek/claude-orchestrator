@@ -122,4 +122,31 @@ describe('hasNonTerminalPlanningSessionForTask', () => {
       ),
     ).toBe(true);
   });
+
+  it('returns true for a live (non-terminal, unarchived) docs session', () => {
+    insertSession({
+      taskId: 'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      status: 'running',
+      sessionType: 'docs',
+      archived: false,
+    });
+    expect(
+      hasNonTerminalPlanningSessionForTask(
+        'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      ),
+    ).toBe(true);
+  });
+
+  it('returns false for a terminal (done) docs session', () => {
+    insertSession({
+      taskId: 'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      status: 'done',
+      sessionType: 'docs',
+    });
+    expect(
+      hasNonTerminalPlanningSessionForTask(
+        'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      ),
+    ).toBe(false);
+  });
 });
