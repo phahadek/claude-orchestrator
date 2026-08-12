@@ -44,14 +44,12 @@ vi.mock('../../gate/gateReconciler.js', () => gateReconcilerMock);
 vi.mock('../../projects/milestoneResolver.js', () => {
   class UnknownMilestoneError extends Error {}
   return {
-    resolveMilestoneForProject: vi.fn(
-      (project: string, milestone: string) => {
-        if (milestone === 'bogus') {
-          throw new UnknownMilestoneError(`unknown milestone: ${milestone}`);
-        }
-        return milestone;
-      },
-    ),
+    resolveMilestoneForProject: vi.fn((project: string, milestone: string) => {
+      if (milestone === 'bogus') {
+        throw new UnknownMilestoneError(`unknown milestone: ${milestone}`);
+      }
+      return milestone;
+    }),
     resolveMilestoneAnyProject: vi.fn((milestone: string) => milestone),
     UnknownMilestoneError,
   };
@@ -72,7 +70,11 @@ beforeEach(() => {
 
 describe('GET /api/gate/pending-due', () => {
   it('returns the backoff-elapsed pending items from gateService, excluding not-yet-elapsed ones', async () => {
-    const due = { id: 'gi-due', state: 'pending', nextAttemptAt: '2020-01-01T00:00:00Z' };
+    const due = {
+      id: 'gi-due',
+      state: 'pending',
+      nextAttemptAt: '2020-01-01T00:00:00Z',
+    };
     gateServiceMock.nextPendingGateItems.mockReturnValue([due]);
 
     const res = await request(makeApp()).get(
@@ -120,6 +122,8 @@ describe('GET /api/gate/pending-due', () => {
       '/api/gate/pending-due?project=proj-1&milestone=M12',
     );
 
-    expect(gateReconcilerMock.dispatchGateItemVerification).not.toHaveBeenCalled();
+    expect(
+      gateReconcilerMock.dispatchGateItemVerification,
+    ).not.toHaveBeenCalled();
   });
 });

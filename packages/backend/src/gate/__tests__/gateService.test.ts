@@ -19,7 +19,10 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { upsertTaskCache, getVerifySessionsForGateItems } from '../../db/queries.js';
+import {
+  upsertTaskCache,
+  getVerifySessionsForGateItems,
+} from '../../db/queries.js';
 import {
   insertItem,
   setMinDeployedCommit,
@@ -228,7 +231,10 @@ describe('getGateReadiness', () => {
   });
 
   it('surfaces backoff due-ness (nextAttemptAt, pendingAttemptCount) on parked entries', () => {
-    const due = makeItem({ text: 'backoff elapsed', classification: 'Read-Only' });
+    const due = makeItem({
+      text: 'backoff elapsed',
+      classification: 'Read-Only',
+    });
     const notDue = makeItem({
       text: 'backoff not yet elapsed',
       classification: 'Read-Only',
@@ -259,12 +265,12 @@ describe('getGateReadiness', () => {
     });
     expect(byId.get(due.id)?.nextAttemptAt).toBeDefined();
     expect(byId.get(notDue.id)?.nextAttemptAt).toBeDefined();
-    expect(
-      Date.parse(byId.get(due.id)!.nextAttemptAt!),
-    ).toBeLessThan(Date.now());
-    expect(
-      Date.parse(byId.get(notDue.id)!.nextAttemptAt!),
-    ).toBeGreaterThan(Date.now());
+    expect(Date.parse(byId.get(due.id)!.nextAttemptAt!)).toBeLessThan(
+      Date.now(),
+    );
+    expect(Date.parse(byId.get(notDue.id)!.nextAttemptAt!)).toBeGreaterThan(
+      Date.now(),
+    );
   });
 
   it('is green when the only non-resolved items are parked', () => {
@@ -1114,9 +1120,7 @@ describe('nextPendingGateItems', () => {
 
     // And it's read-only: no verify session was spawned for either item as
     // a side effect of the pull.
-    expect(
-      getVerifySessionsForGateItems([due.id, notDue.id]),
-    ).toHaveLength(0);
+    expect(getVerifySessionsForGateItems([due.id, notDue.id])).toHaveLength(0);
   });
 });
 
