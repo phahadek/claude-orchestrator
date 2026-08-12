@@ -3461,12 +3461,21 @@ export class SessionManager extends EventEmitter {
    * session is currently live — kill and respawn it in place via
    * respawnForCapabilityGrant, reusing the session id and --resume so the
    * transcript and staged intents survive.
+   *
+   * The returned `respawnApplied` reflects whether that respawn actually
+   * took effect — false whenever it was never attempted (capability not
+   * grantable/tool-shaped, or the session isn't live) or attempted and
+   * declined by respawnForCapabilityGrant's own exits (worktree missing,
+   * usage-admission deferred). Callers must not assume the grant is usable
+   * this turn just because the capability was persisted — `granted` records
+   * the persistence outcome, `respawnApplied` records whether it is live.
    */
   async grantCapability(
     sessionId: string,
     capability: string,
-  ): Promise<string[]> {
+  ): Promise<{ granted: string[]; respawnApplied: boolean }> {
     const granted = addGrantedCapability(sessionId, capability);
+    let respawnApplied = false;
 
     if (
       isGrantable(capability) &&
@@ -3474,7 +3483,7 @@ export class SessionManager extends EventEmitter {
       this.sessions.has(sessionId)
     ) {
       try {
-        await this.respawnForCapabilityGrant(sessionId);
+        respawnApplied = await this.respawnForCapabilityGrant(sessionId);
       } catch (err) {
         logger.error(
           `[SessionManager] grantCapability: respawn failed for ${sessionId.slice(0, 8)}: ${err}`,
@@ -3482,7 +3491,7 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    return granted;
+    return { granted, respawnApplied };
   }
 
   /**
