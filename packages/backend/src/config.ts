@@ -191,6 +191,15 @@ export const ALLOWED_TOOLS = [
   // auto-grant can never fire. Named through orchestratorMcpToolName so it
   // emits the underscore CLI form the model actually calls.
   orchestratorMcpToolName('test.request'),
+  // review.dispute is a code session's route out of a needs_changes/
+  // incomplete PR review verdict it concludes is wrong (see db/types.ts).
+  // Same failure mode as test.request above without this entry: the tool is
+  // registered server-side (CODE_INTENT_KINDS, see planningIntentKinds.ts)
+  // but unlisted here, so every call is denied by the CLI before it reaches
+  // the MCP server and the session parks waiting on a re-review nothing will
+  // trigger. Named through orchestratorMcpToolName so it emits the
+  // underscore CLI form the model actually calls.
+  orchestratorMcpToolName('review.dispute'),
   ...TIER_B_READ_MCP_TOOLS,
 ];
 

@@ -18,7 +18,10 @@ import { registerSessionRecordReadTool } from './tools/sessionRecordReadTool';
 import { registerAuditLogReadTools } from './tools/auditLogReadTools';
 import { registerSessionEventsReadTools } from './tools/sessionEventsReadTools';
 import type { SessionManager } from '../session/SessionManager';
-import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
+import {
+  PLANNING_INTENT_KINDS,
+  CODE_INTENT_KINDS,
+} from '../planning/planningIntentKinds';
 import type { PlanningWorkflow } from '../planning/planningIntentKinds';
 import { resolveMilestoneForSessionTask } from '../projects/milestoneResolver';
 import { normalizeTaskId, parseTaskId } from '../tasks/taskId';
@@ -231,8 +234,9 @@ export function buildMcpServer(
     registerStageProposalTools(server, {
       sessionId,
       projectId: session.project_id,
-      // undefined = register every kind (code/review sessions).
-      kinds: workflow ? PLANNING_INTENT_KINDS[workflow] : undefined,
+      // A null workflow (code/review sessions) registers CODE_INTENT_KINDS,
+      // not every kind — see planningIntentKinds.ts.
+      kinds: workflow ? PLANNING_INTENT_KINDS[workflow] : CODE_INTENT_KINDS,
       sessionManager,
       milestone,
     });
