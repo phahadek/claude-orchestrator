@@ -890,9 +890,7 @@ describe('ReviewOrchestrator — depth review verdict persistence', () => {
     const runDepthReview = vi.fn().mockResolvedValue(
       makeDepthResult({
         verdict: 'fail',
-        dimensions: [
-          { name: 'Security', passed: false, notes: 'Bad.' },
-        ],
+        dimensions: [{ name: 'Security', passed: false, notes: 'Bad.' }],
         summary: 'Found a defect.',
         hasNonSizeFailure: true,
       }),
@@ -950,9 +948,7 @@ describe('ReviewOrchestrator — depth review verdict persistence', () => {
       'depth_review_escalation',
     );
     expect(
-      messages.some(
-        (m) => (m as { type: string }).type === 'review_escalated',
-      ),
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
     ).toBe(true);
   });
 });

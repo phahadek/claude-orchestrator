@@ -2597,9 +2597,7 @@ export function setPRReviewResult(
  * path. Upserted on (pr_number, repo) — a re-run overwrites the prior row.
  */
 export function upsertDepthReviewVerdict(row: NewDepthReviewVerdictRow): void {
-  db.prepare<
-    NewDepthReviewVerdictRow & { recorded_at: string }
-  >(
+  db.prepare<NewDepthReviewVerdictRow & { recorded_at: string }>(
     `
     INSERT INTO depth_review_verdicts
       (pr_number, repo, head_sha, verdict, dimensions, summary, depth_session_id, recorded_at)

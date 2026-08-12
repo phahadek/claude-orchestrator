@@ -1306,7 +1306,8 @@ describe('POST /api/prs/:prNumber/fix', () => {
         {
           name: 'Data integrity & parsing correctness',
           passed: false,
-          notes: 'Duplicated planningSessionTypeLabel mapping docs/split to Ops.',
+          notes:
+            'Duplicated planningSessionTypeLabel mapping docs/split to Ops.',
         },
       ]),
       summary: 'Depth review found a data-integrity defect.',
