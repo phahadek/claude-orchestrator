@@ -68,8 +68,22 @@ export interface GateVerificationResult {
    * case) — no verifier ever proposes it. It matches GateReadinessPanel's
    * direct-path "Defer" action: the item resolves to the `deferred` state,
    * punting it to the next milestone, without filing follow-up work.
+   *
+   * `not-yet-triggerable` is the "the scenario hasn't occurred / the data
+   * doesn't exist yet" abstain — distinct from `needs-setup`'s "a human
+   * must perform a setup step" abstain. Unlike `needs-setup`, it advances
+   * state: appendGateItemEvent (gateService.ts) parks the item at `pending`
+   * with a backoff-scheduled next_attempt_at, which nextPendingGateItems /
+   * the reconciler tick re-pulls once elapsed — see routeVerificationResult
+   * below, which forwards it through the same generic disposition/evidence
+   * write the `pass` case uses.
    */
-  disposition: 'pass' | 'fail' | 'needs-setup' | 'deferred';
+  disposition:
+    | 'pass'
+    | 'fail'
+    | 'needs-setup'
+    | 'deferred'
+    | 'not-yet-triggerable';
   evidence?: unknown;
   /**
    * Set only when `disposition` is `needs-setup` and the session was never
@@ -229,7 +243,12 @@ export interface GateReconcilerOptions {
 interface ProcessedGateItem {
   itemId: string;
   classification: GateItemClassification;
-  disposition: 'pass' | 'fail' | 'needs-setup' | 'deferred';
+  disposition:
+    | 'pass'
+    | 'fail'
+    | 'needs-setup'
+    | 'deferred'
+    | 'not-yet-triggerable';
   /** Set when this run applied a verifier-proposed self-correction — `classification` above already reflects it. */
   reclassifiedTo?: GateItemClassification;
 }
@@ -506,10 +525,16 @@ export async function routeVerificationResult(
       unattended,
     });
   } else {
-    // pass — a verifier-originated auto-pass is provenance-tagged, never
-    // anonymous; an operator-supplied mirror pass carries passOperator
-    // (undefined) so isVerifierBlockedFromPassing doesn't mistake it for
-    // the verifier's own verdict.
+    // pass, or not-yet-triggerable — a verifier-originated auto-pass is
+    // provenance-tagged, never anonymous; an operator-supplied mirror pass
+    // carries passOperator (undefined) so isVerifierBlockedFromPassing
+    // doesn't mistake it for the verifier's own verdict. A
+    // not-yet-triggerable result rides the same generic
+    // disposition/evidence forward — appendGateItemEvent already parks it
+    // at `pending` with a scheduled next_attempt_at (nextStateForDisposition
+    // / computeNotYetTriggerableBackoffHours, gateService.ts); the
+    // `operator` tag has no effect on that path (isVerifierBlockedFromPassing
+    // only special-cases `pass`).
     appendGateItemEvent(item.id, {
       disposition: result.disposition,
       evidence: result.evidence,

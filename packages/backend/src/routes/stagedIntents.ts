@@ -1740,7 +1740,7 @@ interface GateVerifyIntentPayload {
    * /staged-intents/:id/apply's `mirrorDisposition` body field). Always
    * present for a normal verifier-originated report.
    */
-  disposition?: 'pass' | 'fail' | 'needs-setup' | 'deferred';
+  disposition?: 'pass' | 'fail' | 'needs-setup' | 'deferred' | 'not-yet-triggerable';
   evidence?: unknown;
   reclassify?: { to: GateItemClassification; reason: string };
   /**

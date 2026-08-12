@@ -616,6 +616,43 @@ describe('runGateReconcilerTick', () => {
     expect(second.processed).toEqual([]);
   });
 
+  it("a verifier's own not-yet-triggerable result parks the item at pending with next_attempt_at, not a plain pass", async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({
+        disposition: 'not-yet-triggerable',
+        evidence: { reason: 'the described job has not run yet' },
+      })),
+    };
+
+    const first = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(first.processed).toEqual([
+      {
+        itemId: item.id,
+        classification: 'Read-Only',
+        disposition: 'not-yet-triggerable',
+      },
+    ]);
+    const parked = getItem(item.id);
+    expect(parked?.state).toBe('pending');
+    expect(parked?.latestDisposition).toBe('not-yet-triggerable');
+    expect(parked?.nextAttemptAt).toBeTruthy();
+    expect(parked?.pendingAttemptCount).toBe(1);
+
+    // Still parked (backoff unelapsed) — the item does not re-enter the
+    // Read-Only auto-run tier on the very next tick.
+    const second = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).toHaveBeenCalledTimes(1);
+    expect(second.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('pending');
+  });
+
   it('a dispatch failure (dispatchFailed:true) leaves latest_disposition unchanged and the item still runnable on the next pull', async () => {
     const item = await makeRunnableItem({ classification: 'Read-Only' });
     upsertArm(m12Id, 'gate-verify', true, 1);

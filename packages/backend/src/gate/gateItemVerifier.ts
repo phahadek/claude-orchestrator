@@ -138,8 +138,26 @@ export function buildGateVerifyProcedure(item: GateItem): string {
     '',
     'Your job, in one line: validate the described behavior by its runtime ' +
       'trace. If there is no such trace, or you cannot read it, abstain ' +
-      '(`needs-setup`) or reclassify (`Human-Observation`) — never ' +
-      'substitute a precondition or source reading for it.',
+      '(`needs-setup` or `not-yet-triggerable`) or reclassify ' +
+      '(`Human-Observation`) — never substitute a precondition or source ' +
+      'reading for it.',
+    '',
+    '**Two abstains, not one — pick the one that actually fits.** ' +
+      '`needs-setup` means a human must perform some real setup step before ' +
+      'this item can be settled at all: a missing capability grant you were ' +
+      'refused, a permission you cannot obtain, an identifier you searched ' +
+      'for and could not find, or any other blocker a person has to clear. ' +
+      '`not-yet-triggerable` means there is no blocker to clear — the ' +
+      "scenario this item describes simply hasn't happened yet, or the data " +
+      'it would produce a trace from does not exist yet, and the item just ' +
+      'needs to be re-checked later once it has. Reporting `needs-setup` ' +
+      'for a not-yet-occurred scenario is wrong: it removes the item from ' +
+      'every future automated pull (nothing re-checks it), where ' +
+      '`not-yet-triggerable` instead parks it for an automatic scheduled ' +
+      'retry. When in doubt — "will re-checking this later, with no human ' +
+      'intervention, plausibly settle it?" — answer yes means ' +
+      '`not-yet-triggerable`; answer no (a human must act first) means ' +
+      '`needs-setup`.',
     '',
     'This is a bounded best-effort read: settle within your time/turn ' +
       'budget, or abstain. You hold no general write authority — no ' +
@@ -315,7 +333,7 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'on structural unverifiability:',
     '',
     '```json',
-    `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"expected": "...", "found": "...", "query": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
+    `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup"|"not-yet-triggerable", "evidence": {"expected": "...", "found": "...", "query": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
     '```',
     '',
     'On a `fail`, `evidence` may also carry `source` (admissible only on fail):',

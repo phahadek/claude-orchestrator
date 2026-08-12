@@ -202,6 +202,39 @@ describe('gate.verify', () => {
     await close();
   });
 
+  it('accepts a not-yet-triggerable disposition (the parking abstain)', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'not-yet-triggerable',
+        evidence: {
+          expected: 'The nightly backfill has run at least once.',
+          found: 'No audit_log entry for this job yet — it has not run.',
+          query: 'auditLog.query projectId=proj-1 action=nightly_backfill',
+        },
+      },
+    });
+    expect(resultOf(result as never)).toEqual({
+      status: 'ok',
+      id: 'staged-1',
+      milestone: 'M1',
+    });
+    expect(session.recordGateVerifyDisposition).toHaveBeenCalledWith({
+      gateItemId: 'item-1',
+      disposition: 'not-yet-triggerable',
+      evidence: {
+        expected: 'The nightly backfill has run at least once.',
+        found: 'No audit_log entry for this job yet — it has not run.',
+        query: 'auditLog.query projectId=proj-1 action=nightly_backfill',
+      },
+      reclassify: undefined,
+    });
+    await close();
+  });
+
   it('surfaces a not-found gateItemId (e.g. a short/truncated form) as an error, not a bare ok', async () => {
     const session = fakeSession();
     session.recordGateVerifyDisposition.mockImplementation(() => {
