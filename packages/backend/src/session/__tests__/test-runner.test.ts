@@ -201,8 +201,8 @@ describe('runTestCommands — timeout', () => {
     _spawnHook = () => makeProc(0, 'slow', '', 9999_000);
 
     const promise = runTestCommands('/worktree', ['slow-cmd'], 5, () => {});
-    // Advance past the 5s timeout
-    await vi.advanceTimersByTimeAsync(6_000);
+    // Advance past the 5s timeout plus the SIGINT grace period
+    await vi.advanceTimersByTimeAsync(11_000);
     const result = await promise;
 
     expect(result.passed).toBe(false);
@@ -216,7 +216,7 @@ describe('runTestCommands — timeout', () => {
     const promise = runTestCommands('/worktree', ['slow-cmd'], 2, (m) =>
       logs.push(m),
     );
-    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(8_000);
     await promise;
 
     expect(logs.some((l) => l.includes('TIMEOUT'))).toBe(true);
@@ -282,7 +282,7 @@ describe('runTestCommands — fail-fast', () => {
       () => {},
       { failFast: true },
     );
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(11_000);
     const result = await promise;
 
     expect(callCount).toBe(1);
@@ -318,8 +318,8 @@ describe('runTestCommands — RSS kill', () => {
     const promise = runTestCommands('/worktree', ['pytest'], 300, () => {}, {
       maxRssMb: 512,
     });
-    // Advance past the 2s RSS poll interval
-    await vi.advanceTimersByTimeAsync(3_000);
+    // Advance past the 2s RSS poll interval plus the SIGINT grace period
+    await vi.advanceTimersByTimeAsync(8_000);
     const result = await promise;
 
     expect(result.passed).toBe(false);
@@ -338,7 +338,7 @@ describe('runTestCommands — RSS kill', () => {
       (m) => logs.push(m),
       { maxRssMb: 256 },
     );
-    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(8_000);
     await promise;
 
     expect(logs.some((l) => l.includes('OOM_KILL'))).toBe(true);
@@ -375,12 +375,171 @@ describe('runTestCommands — RSS kill', () => {
       () => {},
       { maxRssMb: 512, failFast: true },
     );
-    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(8_000);
     const result = await promise;
 
     expect(callCount).toBe(1);
     expect(result.passed).toBe(false);
     expect(result.output).toContain('OOM_KILL');
+  });
+});
+
+describe('runTestCommands — SIGINT escalation', () => {
+  let killSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true as never);
+  });
+
+  afterEach(() => {
+    killSpy.mockRestore();
+  });
+
+  function makeControllableProc(): {
+    proc: MockProc;
+    emitData: (s: string) => void;
+    emitClose: (code: number | null) => void;
+  } {
+    const closeCbs: Array<(c: number | null) => void> = [];
+    const outCbs: Array<(d: Buffer) => void> = [];
+    const proc: MockProc = {
+      pid: 1234,
+      stdout: {
+        on: (e, cb) => {
+          if (e === 'data') outCbs.push(cb);
+        },
+      },
+      stderr: { on: () => {} },
+      on: (e, cb) => {
+        if (e === 'close') closeCbs.push(cb as (c: number | null) => void);
+      },
+    };
+    return {
+      proc,
+      emitData: (s: string) => outCbs.forEach((cb) => cb(Buffer.from(s))),
+      emitClose: (code: number | null) => closeCbs.forEach((cb) => cb(code)),
+    };
+  }
+
+  it('sends SIGINT before SIGKILL on timeout', async () => {
+    const { proc } = makeControllableProc();
+    _spawnHook = () => proc;
+
+    const promise = runTestCommands('/worktree', ['slow-cmd'], 5, () => {});
+    await vi.advanceTimersByTimeAsync(11_000);
+    await promise;
+
+    const signals = killSpy.mock.calls.map((c) => c[1]);
+    expect(signals).toEqual(['SIGINT', 'SIGKILL']);
+  });
+
+  it('includes output emitted during the grace period in the returned output', async () => {
+    const { proc, emitData } = makeControllableProc();
+    _spawnHook = () => proc;
+
+    const promise = runTestCommands('/worktree', ['slow-cmd'], 5, () => {});
+    await vi.advanceTimersByTimeAsync(5_000);
+    emitData('late output during grace period');
+    await vi.advanceTimersByTimeAsync(6_000);
+    const result = await promise;
+
+    expect(result.output).toContain('late output during grace period');
+  });
+
+  it('never sends SIGKILL to a child that exits cleanly on SIGINT', async () => {
+    const { proc, emitClose } = makeControllableProc();
+    _spawnHook = () => proc;
+
+    const promise = runTestCommands('/worktree', ['slow-cmd'], 5, () => {});
+    await vi.advanceTimersByTimeAsync(5_000);
+    emitClose(130);
+    const result = await promise;
+
+    const signals = killSpy.mock.calls.map((c) => c[1]);
+    expect(signals).toEqual(['SIGINT']);
+    expect(result.timedOut).toBe(true);
+  });
+
+  it('SIGKILLs a child that ignores SIGINT once the grace period elapses', async () => {
+    const { proc } = makeControllableProc();
+    _spawnHook = () => proc;
+
+    const promise = runTestCommands('/worktree', ['slow-cmd'], 5, () => {});
+    await vi.advanceTimersByTimeAsync(11_000);
+    await promise;
+
+    const signals = killSpy.mock.calls.map((c) => c[1]);
+    expect(signals).toEqual(['SIGINT', 'SIGKILL']);
+  });
+
+  it('reports timedOut:true when the child exits gracefully on SIGINT', async () => {
+    const { proc, emitClose } = makeControllableProc();
+    _spawnHook = () => proc;
+
+    const promise = runTestCommands('/worktree', ['slow-cmd'], 5, () => {});
+    await vi.advanceTimersByTimeAsync(5_000);
+    emitClose(130);
+    const result = await promise;
+
+    expect(result.timedOut).toBe(true);
+    expect(result.passed).toBe(false);
+  });
+
+  it('performs the same SIGINT escalation on OOM and still returns oomKilled:true', async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(
+      process,
+      'platform',
+    );
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+      writable: true,
+    });
+    vi.mocked(fsModule.readFileSync).mockReturnValue(
+      'VmRSS:\t999999 kB\n' as unknown as Buffer,
+    );
+
+    const { proc, emitClose } = makeControllableProc();
+    _spawnHook = () => proc;
+
+    const promise = runTestCommands('/worktree', ['pytest'], 300, () => {}, {
+      maxRssMb: 512,
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    emitClose(130);
+    const result = await promise;
+
+    if (originalPlatform) {
+      Object.defineProperty(process, 'platform', originalPlatform);
+    }
+
+    const signals = killSpy.mock.calls.map((c) => c[1]);
+    expect(signals).toEqual(['SIGINT']);
+    expect(result.oomKilled).toBe(true);
+    expect(result.passed).toBe(false);
+  });
+
+  it('resolves exactly once when close fires during the grace period', async () => {
+    const { proc, emitClose } = makeControllableProc();
+    _spawnHook = () => proc;
+
+    let resolveCount = 0;
+    const promise = runTestCommands(
+      '/worktree',
+      ['slow-cmd'],
+      5,
+      () => {},
+    ).then((r) => {
+      resolveCount++;
+      return r;
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    emitClose(130);
+    emitClose(130);
+    await vi.advanceTimersByTimeAsync(6_000);
+    await promise;
+
+    expect(resolveCount).toBe(1);
   });
 });
 
@@ -393,7 +552,7 @@ describe('runTestCommands — collection-cap tail retention', () => {
     _spawnHook = () => makeNonClosingStreamingProc(stdout);
 
     const promise = runTestCommands('/worktree', ['slow-cmd'], 5, () => {});
-    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(11_000);
     const result = await promise;
 
     expect(result.timedOut).toBe(true);
