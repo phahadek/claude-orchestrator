@@ -121,7 +121,7 @@ import {
   usesWorktree,
 } from './sessionPredicates';
 import { eventKind } from './eventKind';
-import type { Session } from '../db/types';
+import type { Session, StagedIntentRow } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { STATUS_DISPLAY } from '../tasks/statusCanonical';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -616,6 +616,59 @@ export const PLANNING_RESUME_FALLBACK_MESSAGE =
 export const PLANNING_RESTART_RESUME_MESSAGE =
   'Your backend process was restarted, interrupting this session mid-turn. Nothing was decided or rejected while you were gone — continue the work you were doing.';
 
+/** Cap on how many expired intents are individually listed in a single expiry notice — see formatExpiredIntentsFeedback. */
+const MAX_EXPIRED_INTENTS_LISTED = 10;
+
+/**
+ * Feedback delivered to a session's inbox when one or more of its staged
+ * intents were expired (superseded) by markSessionErrored rather than
+ * committed, rejected, or superseded through the normal disposition/verify
+ * flow. Mirrors formatStageTimeBlockFeedback's role for stage-time blocks:
+ * a plain statement of what happened plus the concrete next step, rather than
+ * a second message dialect. Bounded to MAX_EXPIRED_INTENTS_LISTED individual
+ * entries so a session with many staged intents gets a summary, not a dump.
+ */
+function formatExpiredIntentsFeedback(
+  expired: Array<Pick<StagedIntentRow, 'id' | 'kind' | 'group_id'>>,
+): string {
+  const shown = expired.slice(0, MAX_EXPIRED_INTENTS_LISTED);
+  const lines = shown.map((intent) => {
+    const groupSuffix = intent.group_id ? ` (group ${intent.group_id})` : '';
+    return `- ${intent.id} (${intent.kind})${groupSuffix}`;
+  });
+  const overflow = expired.length - shown.length;
+  const overflowLine =
+    overflow > 0 ? `\n...and ${overflow} more expired intent(s)` : '';
+  const plural = expired.length === 1 ? 'intent was' : 'intents were';
+  return (
+    `${expired.length} staged ${plural} expired while you were gone and are no ` +
+    `longer on the decision surface:\n` +
+    lines.join('\n') +
+    overflowLine +
+    `\nThey were not committed and will not be revived automatically — re-stage ` +
+    `any of them deliberately if the work is still wanted.`
+  );
+}
+
+/**
+ * True when the session has at least one staged_intent row expired by
+ * markSessionErrored's reap (state=superseded, disposition_reason starting
+ * "session_" — see expireStagedIntentsForSession's `session_${status}`
+ * reason string). Used by buildPlanningResumeMessage to avoid pairing a
+ * restart-resume with the false "nothing was decided or rejected" claim when
+ * something in fact was: the expiry itself. Deliberately does not
+ * distinguish delivered-vs-undelivered — even after the expiry notice has
+ * been delivered, PLANNING_RESTART_RESUME_MESSAGE's claim about *this*
+ * session's history remains false.
+ */
+function hasExpiredStagedIntents(sessionId: string): boolean {
+  return listStagedIntentsBySession(sessionId).some(
+    (intent) =>
+      intent.state === 'superseded' &&
+      (intent.disposition_reason ?? '').startsWith('session_'),
+  );
+}
+
 /**
  * Why a session is being resumed — threaded from the call site rather than
  * inferred from state, so buildResumeMessage never has to guess. 'restart'
@@ -685,6 +738,14 @@ export function buildPlanningResumeMessage(
     }
   }
   if (!mostRecentReject) {
+    // PLANNING_RESTART_RESUME_MESSAGE asserts nothing was decided or
+    // rejected while the session was gone — false whenever intents were
+    // expired (see hasExpiredStagedIntents). The expiry notice itself is
+    // delivered separately via the inbox (see markSessionErrored); this
+    // just avoids pairing it with a contradicting reassurance.
+    if (cause === 'restart' && hasExpiredStagedIntents(row.session_id)) {
+      return PLANNING_RESUME_FALLBACK_MESSAGE;
+    }
     return cause === 'restart'
       ? PLANNING_RESTART_RESUME_MESSAGE
       : PLANNING_RESUME_FALLBACK_MESSAGE;
@@ -1180,7 +1241,27 @@ export class SessionManager extends EventEmitter {
     // so a genuine kill of the same session later still reaps normally.
     if (!opts?.suppressReap) {
       try {
+        // Read the about-to-be-superseded rows before expiring them so the
+        // resumed session can be told exactly what it lost — expiry itself
+        // only flips state, it does not say who needs to know.
+        const expiring = listStagedIntentsBySession(sessionId).filter(
+          (intent) => intent.state === 'staged' || intent.state === 'approved',
+        );
         expireStagedIntentsForSession(sessionId, `session_${status}`, endedAt);
+        if (expiring.length > 0) {
+          // Persist to the inbox only — do not go through the full
+          // enqueueFeedback path here, which would attempt an immediate
+          // terminal resume. A session that just went error/killed is not
+          // necessarily coming back right now; the existing
+          // delivery-on-resume paths (reconcileInboxAtBoot after
+          // resumeOrphanSessions, redeliverUndeliveredFeedback) pick this up
+          // naturally once it actually resumes.
+          enqueueFeedbackItem(
+            sessionId,
+            'staged-intent-expiry',
+            formatExpiredIntentsFeedback(expiring),
+          );
+        }
       } catch {
         // Best-effort — DB may be unavailable or mocked without this function.
       }
