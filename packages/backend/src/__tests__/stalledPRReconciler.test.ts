@@ -520,6 +520,119 @@ describe('StalledPRReconciler', () => {
     expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
   });
 
+  it('skips a PR paused with depth_review_escalation (retry_strategy: manual_action) as a stalled-PR candidate', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      pause_reason: JSON.stringify({
+        reason: 'depth_review_escalation',
+        source: 'review',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+      }),
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+  });
+
+  it('leaves the pause reason of a manual-action-parked PR intact — no pause-reason mutation on a reconciler tick', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      pause_reason: JSON.stringify({
+        reason: 'depth_review_escalation',
+        source: 'review',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+      }),
+      stalled_pr_retry_count: 2, // would otherwise be at the escalation cap
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast, messages } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    // setPauseReason is the sole place a pr_pause_reason_changed audit event
+    // is emitted (in db/queries.ts) — asserting it's never called for this
+    // PR is the regression guard that its diagnostic reason is untouched.
+    expect(setPauseReason).not.toHaveBeenCalled();
+    expect(
+      messages.find((m) => m.type === 'pr_stalled_escalated'),
+    ).toBeUndefined();
+  });
+
+  it('does not record a stalled_pr_reconcile_attempt event for a manual-action-parked PR', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      pause_reason: JSON.stringify({
+        reason: 'depth_review_escalation',
+        source: 'review',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+      }),
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'stalled_pr_reconcile_attempt' }),
+    );
+  });
+
+  it('still processes a PR paused with depth_review_pending (automatic/recoverable) normally', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pause_reason: JSON.stringify({
+        reason: 'depth_review_pending',
+        source: 'review',
+        severity: 'recoverable',
+        retry_strategy: 'automatic',
+      }),
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(ro.enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42, repo: 'org/repo' }),
+    );
+    expect(incrementStalledPRRetryCount).toHaveBeenCalledWith(42, 'org/repo');
+  });
+
   it('skips PRs with a review already in-flight', async () => {
     const pr = makePR({
       review_result: JSON.stringify({ verdict: 'incomplete' }),
@@ -691,9 +804,9 @@ describe('StalledPRReconciler', () => {
     const pr = makePR({
       pause_reason: JSON.stringify({
         reason: 'analyze_failing',
-        source: 'review',
+        source: 'analyze',
         severity: 'needs_attention',
-        retry_strategy: 'manual_action',
+        retry_strategy: 'automatic',
       }),
       head_sha: 'sha1',
       review_result: JSON.stringify({ verdict: 'analyze_failed' }),

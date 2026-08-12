@@ -121,6 +121,13 @@ export class StalledPRReconciler {
       const existing = parsePauseReason(pr.pause_reason);
       if (existing?.reason === 'stalled_reconcile_cap') continue;
 
+      // A pause reason declaring retry_strategy: 'manual_action' (e.g.
+      // depth_review_escalation) is already an operator action item, parked
+      // the same way a human_merge_only PR is above — never re-drive it,
+      // and never clobber its diagnostic pause reason with a generic
+      // stalled classification.
+      if (existing?.retry_strategy === 'manual_action') continue;
+
       // Resolve review session status for the errored-session check
       const reviewSessionStatus = pr.review_session_id
         ? (getSession(pr.review_session_id)?.status ?? null)
