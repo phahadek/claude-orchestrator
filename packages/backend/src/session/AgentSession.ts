@@ -121,7 +121,7 @@ export interface GateVerifyReclassifyProposal {
 
 export interface GateVerifyDisposition {
   gateItemId: string;
-  disposition: 'pass' | 'fail' | 'needs-setup';
+  disposition: 'pass' | 'fail' | 'needs-setup' | 'not-yet-triggerable';
   evidence?: unknown;
   /** The session's self-correction: "this item is mis-classified" — see gateItemVerifier's report contract. */
   reclassify?: GateVerifyReclassifyProposal;

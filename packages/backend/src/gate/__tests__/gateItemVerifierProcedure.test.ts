@@ -52,4 +52,15 @@ describe('buildGateVerifyProcedure', () => {
       /never fabricate a pass\/fail to route around a permission denial/i,
     );
   });
+
+  it('names both abstains and the condition distinguishing them', () => {
+    const procedure = buildGateVerifyProcedure(makeItem());
+    expect(procedure).toMatch(/`needs-setup`/);
+    expect(procedure).toMatch(/`not-yet-triggerable`/);
+    // The distinguishing condition: needs-setup requires a human to act
+    // first; not-yet-triggerable is for a scenario/data that simply hasn't
+    // occurred yet and just needs a later re-check.
+    expect(procedure).toMatch(/a human must (act|perform)/i);
+    expect(procedure).toMatch(/hasn't happened yet|has not happened yet/i);
+  });
 });

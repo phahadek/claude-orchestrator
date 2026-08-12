@@ -362,6 +362,7 @@ export const gateVerifyDispositionSchema = z.enum([
   'pass',
   'fail',
   'needs-setup',
+  'not-yet-triggerable',
 ]);
 
 /** AgentSession.ts's VERIFIER_RECLASSIFY_TARGETS — the only reclassify targets a gate-verify session may propose. */
