@@ -34,7 +34,7 @@ export function registerStrandedIntentTool(
     {
       title: 'Disposition a stranded staged intent',
       description:
-        "Terminally dispositions (supersedes) a staged intent left behind by a different session that has since reached a terminal status (done/error/killed) — for a staged/approved/pending_verification/needs_revision intent an operator can no longer meaningfully act on because the session that would revise or explain it is gone. Refuses an intent whose owning session is still live. Call once per intent id; loop over this tool to clear more than one. Requires a substantive one-line reason, recorded on the intent for the decision surface.",
+        'Terminally dispositions (supersedes) a staged intent left behind by a different session that has since reached a terminal status (done/error/killed) — for a staged/approved/pending_verification/needs_revision intent an operator can no longer meaningfully act on because the session that would revise or explain it is gone. Refuses an intent whose owning session is still live. Call once per intent id; loop over this tool to clear more than one. Requires a substantive one-line reason, recorded on the intent for the decision surface.',
       inputSchema: {
         intentId: z.string(),
         reason: z.string(),

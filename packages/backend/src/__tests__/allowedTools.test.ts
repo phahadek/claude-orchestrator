@@ -193,7 +193,9 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
 
   it('ops allow-list contains the underscore forms of gate_reclassify and intent_dispositionStranded — hand-added entries, not staged-intent kinds, same precedent as gate_verify/deploy_verdict', () => {
     expect(PLANNING_INTENT_KINDS.ops).not.toContain('gate.reclassify');
-    expect(PLANNING_INTENT_KINDS.ops).not.toContain('intent.dispositionStranded');
+    expect(PLANNING_INTENT_KINDS.ops).not.toContain(
+      'intent.dispositionStranded',
+    );
     expect(OPS_ALLOWED_TOOLS).toContain('mcp__orchestrator__gate_reclassify');
     expect(OPS_ALLOWED_TOOLS).toContain(
       'mcp__orchestrator__intent_dispositionStranded',

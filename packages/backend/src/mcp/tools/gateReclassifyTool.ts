@@ -33,7 +33,7 @@ export function registerGateReclassifyTool(
     {
       title: 'Reclassify a gate item',
       description:
-        'Moves a gate item to a resolved classification (Read-Only, Prod-Mutating, or Human-Observation) — the same triage step the /gate skill\'s human operator performs, and the same state change gate-state-client.mjs\'s reclassify command makes, but reachable directly by this session over its own authenticated MCP connection. gateItemId must be the full gate item uuid, never a truncated short form. Applies immediately; there is no operator disposition step afterward.',
+        "Moves a gate item to a resolved classification (Read-Only, Prod-Mutating, or Human-Observation) — the same triage step the /gate skill's human operator performs, and the same state change gate-state-client.mjs's reclassify command makes, but reachable directly by this session over its own authenticated MCP connection. gateItemId must be the full gate item uuid, never a truncated short form. Applies immediately; there is no operator disposition step afterward.",
       inputSchema: {
         gateItemId: z.string(),
         classification: gateReclassifyClassificationSchema,
