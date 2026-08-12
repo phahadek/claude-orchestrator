@@ -23,9 +23,9 @@ describe('.claude-orchestrator.yml test: manifest', () => {
       path.join(REPO_ROOT, '.github', 'workflows', 'build.yml'),
       'utf-8',
     );
-    const ciTestCommands = [...workflow.matchAll(/run: (npm run test -w \S+)/g)].map(
-      (m) => m[1],
-    );
+    const ciTestCommands = [
+      ...workflow.matchAll(/run: (npm run test -w \S+)/g),
+    ].map((m) => m[1]);
 
     expect(ciTestCommands.length).toBeGreaterThan(0);
     expect(new Set(config.test)).toEqual(new Set(ciTestCommands));
