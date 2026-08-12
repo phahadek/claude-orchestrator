@@ -15,7 +15,6 @@ import {
   deriveGroomDigestSlice,
 } from '../procedureAssembler';
 import { PLANNING_INTENT_KINDS } from '../planningIntentKinds';
-import { TRIAGE_ELIGIBLE_TYPES } from '../triage';
 import { GROOM_ALLOWED_TOOLS } from '../../config';
 import { orchestratorMcpToolName } from '../../mcp/toolNaming';
 import { buildMcpServer } from '../../mcp/orchestratorMcpServer';
