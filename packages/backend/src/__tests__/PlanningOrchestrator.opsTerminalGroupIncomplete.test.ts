@@ -139,6 +139,32 @@ describe('PlanningOrchestrator — surface an ops session going terminal with an
     expect(paused?.detail).toContain('g-ops-close');
   });
 
+  it.each(['candidate', 'blocked', 'incident-frozen', 'staged-proposal'])(
+    'does not raise a pause reason when the group carries a live journal.setState explicitly targeting %s — the session honestly staying open, not an incomplete closing group',
+    (state) => {
+      seedSession();
+      seedJournal(TASK_ID, state);
+      stageRow({
+        kind: 'task.create',
+        group_id: 'g-ops-close',
+        state: 'committed',
+      });
+      stageRow({
+        kind: 'journal.setState',
+        payload: JSON.stringify({ taskId: TASK_ID, state }),
+        group_id: 'g-ops-close',
+        state: 'committed',
+        task_id: TASK_ID,
+      });
+      const sessionManager = makeSessionManager();
+      const orchestrator = new PlanningOrchestrator(sessionManager);
+
+      orchestrator.endSession(SESSION_ID);
+
+      expect(getTaskPauseReason(TASK_ID)).toBeNull();
+    },
+  );
+
   it('does not raise a pause reason when the group also carries the journal.setState -> resolved member', () => {
     seedSession();
     seedJournal(TASK_ID, 'resolved');

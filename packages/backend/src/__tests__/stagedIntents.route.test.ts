@@ -1183,6 +1183,101 @@ describe('an ops-terminal closing group is refused at commit unless it actually 
     expect(secondCommit.status).toBe(200);
     expect(secondCommit.body.committed).toHaveLength(1);
   });
+
+  it.each(['candidate', 'blocked', 'incident-frozen', 'staged-proposal'])(
+    'commits a group carrying a follow-on task.create and a live journal.setState to %s — the session honestly staying open, not a closing group',
+    async (state) => {
+      const sessionId = `ops-commit-nonterminal-${state}`;
+      const taskId = `notion:${sessionId}`;
+      seedOpsSession(sessionId, taskId);
+      // A transition landing on staged-proposal mirrors the decision onto
+      // the surface (mirrorJournalDecisionIfStagedProposal), which resolves
+      // the journal's milestone against a real project — seed one so that
+      // resolution succeeds for every state uniformly.
+      insertProjectWithMilestone('proj-ops-commit', 'M1');
+      // staged-proposal is only reachable from candidate (not directly from
+      // pending — see ALLOWED_TRANSITIONS), so seed the journal one step in
+      // for that case; every other target here is reachable from pending.
+      await seedJournal(taskId, state === 'staged-proposal' ? 'candidate' : 'pending');
+      mockGetTaskBackend.mockReturnValue({
+        type: 'notion',
+        createTask: vi.fn().mockResolvedValue('notion:new-followon-nt'),
+      });
+      const app = makeApp();
+      const agent = supertest(app);
+
+      const groupId = `group-${sessionId}`;
+      const payload: Record<string, unknown> = { taskId, state };
+      // blocked is refused for an ops session with no capability request on
+      // record unless it carries a standDownReason — see
+      // assertOpsBlockedClosureRequestedCapability.
+      if (state === 'blocked') {
+        payload.standDownReason = 'no capability could unblock this — design decision';
+      }
+      stageIntent(
+        'journal.setState',
+        payload,
+        'proj-ops-commit',
+        groupId,
+        sessionId,
+      );
+      stageIntent(
+        'task.create',
+        { title: 'Follow-on from investigation', body: 'x', databaseId: 'db-1' },
+        'proj-ops-commit',
+        groupId,
+        sessionId,
+      );
+
+      const result = await approveAndCommitGroup(agent, groupId);
+      expect(result.status).toBe(200);
+      expect(result.body.committed).toHaveLength(2);
+    },
+  );
+
+  it('refuses to commit a group carrying a task-body write and no journal.setState transition at all — regression for the abandonment case', async () => {
+    seedOpsSession('ops-commit-body-1', 'notion:ops-commit-body-1');
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const groupId = 'group-ops-commit-body-1';
+    stageIntent(
+      'task.updateBody',
+      { taskId: 'notion:ops-commit-body-1', sections: {} },
+      'proj-ops-commit',
+      groupId,
+      'ops-commit-body-1',
+    );
+
+    const result = await approveAndCommitGroup(agent, groupId);
+    expect(result.status).toBe(409);
+    expect(result.body.error).toContain('journal.setState');
+    expect(result.body.committed ?? []).toEqual([]);
+  });
+
+  it('the refusal message enumerates the acceptable non-terminal states, not just resolved / applied-pending-confirm', async () => {
+    seedOpsSession('ops-commit-msg-1', 'notion:ops-commit-msg-1');
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const groupId = 'group-ops-commit-msg-1';
+    stageIntent(
+      'task.create',
+      { title: 'Follow-on from investigation', body: 'x', databaseId: 'db-1' },
+      'proj-ops-commit',
+      groupId,
+      'ops-commit-msg-1',
+    );
+
+    const result = await approveAndCommitGroup(agent, groupId);
+    expect(result.status).toBe(409);
+    expect(result.body.error).toContain('candidate');
+    expect(result.body.error).toContain('blocked');
+    expect(result.body.error).toContain('incident-frozen');
+    expect(result.body.error).toContain('staged-proposal');
+  });
 });
 
 describe('POST /api/staged-intents — decision-proposal annotation', () => {
