@@ -3,13 +3,19 @@ import {
   listLiveSessionRows,
   getSessionLastActivityMs,
   updateSessionStatus,
+  getSession,
+  TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED,
 } from '../db/queries';
 import { isPlanningSession } from './sessionPredicates';
 import { revokeStageCredential } from '../auth/SessionStageAuth';
 import { revokeRouteCredential } from '../auth/SessionRouteAuth';
 import { recordEvent } from '../audit/AuditLog';
 import { runtimeSettings } from '../config';
-import { isSessionProcessAlive } from './processLiveness';
+import {
+  isSessionProcessAlive,
+  scanClaudeSessionProcesses,
+  type ClaudeSessionProcess,
+} from './processLiveness';
 import { logger } from '../logger';
 import type { Session } from '../db/types';
 
@@ -150,4 +156,121 @@ function runLivenessSweep(
   }
 
   return { reconciled, examined, alive };
+}
+
+export interface OrphanProcessReconcilerDeps {
+  /** Overridable for tests; defaults to the real `ps`-backed scan. */
+  scanProcesses?: () => ClaudeSessionProcess[];
+  /** Overridable for tests; defaults to the real DB row lookup. */
+  getSessionRow?: (sessionId: string) => Session | undefined;
+  /** Overridable for tests; defaults to a real `process.kill(pid, 'SIGTERM')`. */
+  killProcess?: (pid: number) => void;
+  /** Drops the session's stale in-memory entry, if any — SessionManager wires this to evictDeadSessionEntry. */
+  evictSessionMapEntry?: (sessionId: string) => void;
+  nowFn?: () => number;
+}
+
+export interface OrphanProcessReconcileResult {
+  /** Candidate processes examined — those carrying a resolvable session uuid. */
+  examined: number;
+  /** Processes terminated because their row was terminal/missing, past the grace floor. */
+  reaped: number;
+  /** Candidates that resolved to a reapable state but were held back by the grace floor. */
+  skippedByGrace: number;
+}
+
+function defaultKillProcess(pid: number): void {
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch (err) {
+    // ESRCH (already exited) is the expected/common case here — the sweep
+    // still counts the candidate as reaped, since the outcome (no such
+    // process) is what it was trying to achieve.
+    logger.warn(
+      `[sessionLivenessReconciler] kill(${pid}) failed (likely already exited): ${(err as Error).message}`,
+    );
+  }
+}
+
+/**
+ * OS → DB reconciliation sweep: the fourth cell in the reconciler coverage
+ * matrix. reconcileSessionsMap (memory → DB) only iterates in-memory map
+ * entries; the liveness sweeps above (DB → OS) only iterate non-terminal
+ * rows. A claude OS process whose session row is already terminal (or
+ * whose row is gone entirely) is invisible to all three — this sweep
+ * enumerates the OS process table directly and closes that gap.
+ *
+ * Deliberately writes no session status: the row (when one exists) is
+ * already terminal, so the only correct action is terminating the orphaned
+ * process and dropping any stale in-memory map entry — never
+ * re-terminalizing a row, which could stomp a status another path had
+ * legitimately written.
+ *
+ * A process with no resolvable `--session-id`/`--resume` uuid (e.g. `claude
+ * remote-control`, the operator's own console) is never a candidate, under
+ * any circumstance — there is nothing to resolve it against. A process
+ * whose uuid resolves to a non-terminal row is never reaped either; that
+ * case belongs to the liveness sweeps above, which reconcile the row
+ * instead of touching the process.
+ */
+export function reconcileOrphanProcesses(
+  deps: OrphanProcessReconcilerDeps = {},
+): OrphanProcessReconcileResult {
+  // API-mode sessions have no OS subprocess by design — see runLivenessSweep's
+  // identical guard above.
+  if (runtimeSettings.session_mode === 'api') {
+    return { examined: 0, reaped: 0, skippedByGrace: 0 };
+  }
+
+  const scanProcesses = deps.scanProcesses ?? scanClaudeSessionProcesses;
+  const getSessionRow = deps.getSessionRow ?? getSession;
+  const killProcess = deps.killProcess ?? defaultKillProcess;
+  const evictSessionMapEntry = deps.evictSessionMapEntry ?? (() => {});
+  const now = deps.nowFn ? deps.nowFn() : Date.now();
+
+  let examined = 0;
+  let reaped = 0;
+  let skippedByGrace = 0;
+
+  for (const proc of scanProcesses()) {
+    // Hard safety constraint: a process with no resolvable session uuid
+    // (e.g. `claude remote-control`) must never be a reap candidate.
+    if (!proc.sessionId) continue;
+    examined++;
+
+    const row = getSessionRow(proc.sessionId);
+    if (row && !TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(row.status)) {
+      // Belongs to the liveness sweeps (they reconcile the row); not ours.
+      continue;
+    }
+
+    // Grace floor: for a terminal row, measured from its own ended_at (the
+    // row may still be mid-teardown); for a process with no row at all,
+    // measured from the process's own start time.
+    const referenceMs = row?.ended_at ?? now - proc.etimeSeconds * 1000;
+    if (now - referenceMs < LIVENESS_RECONCILE_GRACE_MS) {
+      skippedByGrace++;
+      continue;
+    }
+
+    killProcess(proc.pid);
+    evictSessionMapEntry(proc.sessionId);
+    reaped++;
+    logger.warn(
+      `[sessionLivenessReconciler] reaped orphaned process pid=${proc.pid} for session ${proc.sessionId.slice(0, 8)} (${row ? `status=${row.status}` : 'no DB row'})`,
+    );
+  }
+
+  if (reaped > 0) {
+    recordEvent({
+      event_type: 'orphan_processes_reaped',
+      actor_type: 'system',
+      payload: { reaped_count: reaped, reason: 'terminal_or_missing_row' },
+    });
+    logger.info(
+      `[sessionLivenessReconciler] reaped ${reaped} orphaned process(es) with a terminal or missing session row`,
+    );
+  }
+
+  return { examined, reaped, skippedByGrace };
 }

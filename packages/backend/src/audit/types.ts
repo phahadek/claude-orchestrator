@@ -125,6 +125,7 @@ type EventType =
   | 'session_map_entry_dropped'
   | 'planning_sessions_liveness_reconciled'
   | 'non_planning_sessions_liveness_reconciled'
+  | 'orphan_processes_reaped'
   | 'staged_intent_group_committed'
   | 'manual_verification_cleared'
   | 'admission_stall_started'

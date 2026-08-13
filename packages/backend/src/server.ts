@@ -674,6 +674,29 @@ scheduler.register({
     };
   },
 });
+// Orphan-process reconciler: the OS → DB mirror of session_map_reconciler
+// and the fourth cell in the coverage matrix — a claude process whose
+// session row is already terminal (or missing) and whose in-memory map
+// entry is gone is invisible to session_map_reconciler (iterates the map)
+// and both liveness reconcilers above (iterate non-terminal rows). This
+// sweep enumerates the OS process table directly and reaps that process,
+// never writing a session status itself. Same cadence pattern.
+scheduler.register({
+  name: 'orphan_process_reconciler',
+  intervalMs: 10 * 60_000,
+  runOnBoot: true,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const { examined, reaped, skippedByGrace } =
+      sessionManager.reconcileOrphanProcesses();
+    return {
+      items_processed: reaped,
+      examined,
+      reaped,
+      skippedByGrace,
+    };
+  },
+});
 // Gate-verification reconciler: runnability/readiness reconcile on every
 // tick; auto-run verification drives the same wired verifier, gated by the
 // global gate_verification_enabled master switch and, per item, by that
