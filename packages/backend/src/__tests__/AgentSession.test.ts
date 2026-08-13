@@ -2013,4 +2013,43 @@ describe('deliverInboxItems', () => {
     );
     expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([5, 6]);
   });
+
+  it('leaves inbox rows undelivered when sendOrResume resolves null (declined/deferred respawn)', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      {
+        id: 7,
+        session_id: 'sess-inbox-null',
+        source: 'ai-reviewer',
+        payload: 'verdict text',
+        enqueued_at: 0,
+        delivered_at: null,
+      },
+    ] as never);
+
+    const sendOrResume = vi.fn().mockResolvedValue(null);
+    const sessionManager = { send: vi.fn(), sendOrResume };
+
+    const session = new AgentSession(
+      'sess-inbox-null',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      undefined,
+      undefined,
+      'standard',
+      sessionManager as never,
+    );
+
+    await getPrivateDeliverInboxItems(session)();
+
+    expect(sendOrResume).toHaveBeenCalledWith(
+      'sess-inbox-null',
+      expect.stringContaining('verdict text'),
+    );
+    expect(vi.mocked(markInboxItemsDelivered)).not.toHaveBeenCalled();
+  });
 });
