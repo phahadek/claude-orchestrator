@@ -60,7 +60,7 @@ interface SweepStats {
   failed: number;
 }
 
-export async function runDependencyCacheSweep(): Promise<SweepStats> {
+async function runDependencyCacheSweep(): Promise<SweepStats> {
   const stats: SweepStats = {
     evictedByAge: 0,
     evictedBySize: 0,
