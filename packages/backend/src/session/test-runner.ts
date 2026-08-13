@@ -359,7 +359,8 @@ function stripCData(text: string): string {
 }
 
 /** Matches every `name="value"`/`name='value'` pair in an XML start-tag's attribute source. */
-const XML_ATTR_RE = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*"([^"]*)"|([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*'([^']*)'/g;
+const XML_ATTR_RE =
+  /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*"([^"]*)"|([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*'([^']*)'/g;
 
 function parseXmlAttrs(attrsSrc: string): Record<string, string> {
   const attrs: Record<string, string> = {};
@@ -382,7 +383,11 @@ const CHILD_OUTCOME_RE =
 
 function extractChildOutcome(
   content: string,
-): { tag: 'failure' | 'error' | 'skipped'; message?: string; text?: string } | null {
+): {
+  tag: 'failure' | 'error' | 'skipped';
+  message?: string;
+  text?: string;
+} | null {
   const match = content.match(CHILD_OUTCOME_RE);
   if (!match) return null;
   const [, tag, childAttrs, rawText] = match;
