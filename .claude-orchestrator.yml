@@ -6,7 +6,7 @@
 # Both frontend and backend `npm run test -w ...` scripts now pass
 # --reporter=junit --outputFile=.test-reports/<pkg>.xml to vitest.
 test_report_format: junit-xml
-test_report_glob: ".test-reports/*.xml"
+test_report_glob: '.test-reports/*.xml'
 
 # Commands the orchestrator runs in the worktree after PR open, before review spawn.
 # Mechanical fixes only — failures are logged and review proceeds.
