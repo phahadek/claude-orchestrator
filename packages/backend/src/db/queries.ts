@@ -8734,6 +8734,13 @@ interface DurationPercentiles {
   sampleCount: number;
 }
 
+export interface RegressedTestSummary {
+  testId: string;
+  name: string;
+  medianDurationMs: number;
+  lastDurationMs: number;
+}
+
 export interface LaneHealthRollup {
   project: string;
   totalRuns: number;
@@ -8743,6 +8750,45 @@ export interface LaneHealthRollup {
   queueWaitMs: DurationPercentiles;
   /** finished_at - started_at — actual lane execution time. */
   executionTimeMs: DurationPercentiles;
+  /** Tests currently flagged is_regressed=1 (per-test median/MAD baseline) among this project's tests — display-only, per Open Question 5. */
+  regressedTests: RegressedTestSummary[];
+}
+
+/**
+ * Tests currently flagged `is_regressed` whose most recent test_run_results
+ * row belongs to this project — test_perf_baselines carries no project_id of
+ * its own (keyed by test_id, shared across the lane), so this joins through
+ * test_run_results/test_request_runs to scope it. SQLite resolves the bare
+ * `name`/`last_duration_ms`-adjacent columns to the max(created_at) row per
+ * the GROUP BY per its documented bare-column-with-MAX() behavior.
+ */
+function getRegressedTestsForProject(projectId: string): RegressedTestSummary[] {
+  const rows = db
+    .prepare<{ project_id: string }>(
+      `SELECT tpb.test_id AS test_id, trr.name AS name,
+              tpb.median_duration_ms AS median_duration_ms,
+              tpb.last_duration_ms AS last_duration_ms,
+              MAX(trr.created_at) AS created_at
+       FROM test_perf_baselines tpb
+       JOIN test_run_results trr ON trr.test_id = tpb.test_id
+       JOIN test_request_runs r ON r.id = trr.test_request_run_id
+       WHERE tpb.is_regressed = 1 AND r.project_id = @project_id
+       GROUP BY tpb.test_id
+       ORDER BY name ASC`,
+    )
+    .all({ project_id: projectId }) as Array<{
+    test_id: string;
+    name: string;
+    median_duration_ms: number;
+    last_duration_ms: number;
+  }>;
+
+  return rows.map((r) => ({
+    testId: r.test_id,
+    name: r.name,
+    medianDurationMs: r.median_duration_ms,
+    lastDurationMs: r.last_duration_ms,
+  }));
 }
 
 function percentilesOf(samples: number[]): DurationPercentiles {
@@ -8812,6 +8858,7 @@ export function getLaneHealthRollup(
     timeoutRate: totalRuns > 0 ? timedOut / totalRuns : null,
     queueWaitMs: percentilesOf(queueWaitSamples),
     executionTimeMs: percentilesOf(executionTimeSamples),
+    regressedTests: getRegressedTestsForProject(projectId),
   };
 }
 

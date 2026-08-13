@@ -72,6 +72,28 @@ export function LaneHealthPanel({ projectId, invalidationKey }: Props) {
           <p className={styles.sampleNote}>
             {rollup.totalRuns} run{rollup.totalRuns === 1 ? '' : 's'} considered
           </p>
+          {rollup.regressedTests.length > 0 && (
+            <div
+              className={styles.regressed}
+              data-testid="lane-health-regressed-tests"
+            >
+              <p className={styles.regressedTitle}>
+                {rollup.regressedTests.length} test
+                {rollup.regressedTests.length === 1 ? '' : 's'} regressed
+              </p>
+              <ul className={styles.regressedList}>
+                {rollup.regressedTests.map((test) => (
+                  <li key={test.testId} className={styles.regressedItem}>
+                    <span className={styles.regressedName}>{test.name}</span>
+                    <span className={styles.regressedDuration}>
+                      {formatMs(test.lastDurationMs)} (baseline{' '}
+                      {formatMs(test.medianDurationMs)})
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </div>
