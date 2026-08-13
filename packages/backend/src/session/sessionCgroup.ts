@@ -146,23 +146,83 @@ export function reapplySessionCgroupLimits(): void {
   }
 }
 
+function sanitizeSessionId(sessionId: string): string {
+  return sessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
 /**
- * Places a spawned session subprocess's PID into the sessions/ cgroup.
- * cgroup-v2 membership is inherited at fork, so the whole subtree (child
- * processes it spawns) is bounded. No-ops silently when the delegated
- * subtree was never set up — a spawn must never fail because of this.
+ * Absolute path of the per-session sub-cgroup for `sessionId`, nested under
+ * the delegated sessions/ leaf. Pure path derivation — callers must still
+ * check sessionsCgroupPath is non-null before using this.
  */
-export function placeSessionPid(pid: number): void {
+function sessionCgroupDir(sessionId: string): string {
+  return path.join(sessionsCgroupPath!, sanitizeSessionId(sessionId));
+}
+
+/**
+ * Places a spawned session subprocess's PID into a cgroup.
+ *
+ * When `sessionId` is given, the pid is placed into a per-session
+ * sub-cgroup (sessions/<sessionId>/), created on demand — this is what
+ * makes killSessionCgroup's cgroup-scoped kill possible later. cgroup-v2
+ * membership is inherited at fork, so the whole subtree (including
+ * grandchildren that call setsid() and escape the process group) stays in
+ * this cgroup regardless of process-group or parent-pid changes.
+ *
+ * Without `sessionId`, the pid is placed directly into the shared
+ * sessions/ leaf (legacy behavior, used for one-off subprocesses that
+ * don't have a session lifecycle to tear down against).
+ *
+ * No-ops silently when the delegated subtree was never set up — a spawn
+ * must never fail because of this.
+ */
+export function placeSessionPid(pid: number, sessionId?: string): void {
   if (!sessionsCgroupPath) return;
   try {
-    fs.writeFileSync(
-      path.join(sessionsCgroupPath, 'cgroup.procs'),
-      String(pid),
-    );
+    const dir = sessionId ? sessionCgroupDir(sessionId) : sessionsCgroupPath;
+    if (sessionId) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'cgroup.procs'), String(pid));
   } catch (err) {
     logger.warn(
-      `[sessionCgroup] failed to place pid ${pid} into sessions cgroup: ${(err as Error).message}`,
+      `[sessionCgroup] failed to place pid ${pid} into ${sessionId ? `session ${sessionId.slice(0, 8)}` : 'sessions'} cgroup: ${(err as Error).message}`,
     );
+  }
+}
+
+/**
+ * Kills every process in a session's sub-cgroup (sessions/<sessionId>/) and
+ * removes the directory — the backstop for the escape killProcessTree's
+ * process-group kill(-pid) can't reach: a grandchild that called setsid()
+ * (or was re-parented after its parent exited) stays a member of this
+ * cgroup regardless, because cgroup-v2 membership is orthogonal to process
+ * group and parent pid.
+ *
+ * Writing to cgroup.kill (not scanning for pids by name) is what keeps this
+ * scoped to exactly this session's own tree — it can never reach a sibling
+ * session's cgroup, main/, or anything outside sessions/<sessionId>/.
+ *
+ * No-ops when the delegated subtree was never set up, or when this
+ * session's sub-cgroup doesn't exist (already torn down, or never
+ * created) — idempotent by construction.
+ */
+export function killSessionCgroup(sessionId: string): void {
+  if (!sessionsCgroupPath) return;
+  const dir = sessionCgroupDir(sessionId);
+  if (!fs.existsSync(dir)) return;
+  try {
+    fs.writeFileSync(path.join(dir, 'cgroup.kill'), '1');
+  } catch (err) {
+    logger.warn(
+      `[sessionCgroup] failed to kill cgroup for session ${sessionId.slice(0, 8)}: ${(err as Error).message}`,
+    );
+    return;
+  }
+  try {
+    fs.rmdirSync(dir);
+  } catch {
+    // Non-fatal: the kill already reached every process. A zombie awaiting
+    // reap by its (now-dead) original parent can keep the dir non-empty
+    // briefly; the directory is otherwise harmless left behind.
   }
 }
 
