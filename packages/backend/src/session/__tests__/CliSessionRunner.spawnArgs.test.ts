@@ -68,6 +68,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { CliSessionRunner } from '../CliSessionRunner';
+import { getTestCommandDenyPatterns } from '../orchestrator-config';
 
 const SESSION_ID = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff';
 const RESUME_ID = 'bbbbcccc-dddd-eeee-ffff-aaaaaaaaaaaa';
@@ -502,10 +503,9 @@ describe('CliSessionRunner test-command deny patterns', () => {
     const settingsIdx = capturedSpawnArgs.indexOf('--settings');
     expect(settingsIdx).not.toBe(-1);
     const settings = JSON.parse(capturedSpawnArgs[settingsIdx + 1]);
-    expect(settings.permissions.deny).toEqual([
-      'Bash(npm test:*)',
-      'Bash(npm run test:unit:*)',
-    ]);
+    expect(settings.permissions.deny).toEqual(
+      getTestCommandDenyPatterns(['npm test', 'npm run test:unit']),
+    );
   });
 
   it('merges the test-command deny list with autoCompactEnabled into one --settings JSON', async () => {
@@ -525,10 +525,9 @@ describe('CliSessionRunner test-command deny patterns', () => {
     const settingsIdx = capturedSpawnArgs.indexOf('--settings');
     const settings = JSON.parse(capturedSpawnArgs[settingsIdx + 1]);
     expect(settings.autoCompactEnabled).toBe(false);
-    expect(settings.permissions.deny).toEqual([
-      'Bash(npm test:*)',
-      'Bash(npm run test:unit:*)',
-    ]);
+    expect(settings.permissions.deny).toEqual(
+      getTestCommandDenyPatterns(['npm test', 'npm run test:unit']),
+    );
   });
 
   it('does not deny test commands for a non-code session (e.g. review)', async () => {
