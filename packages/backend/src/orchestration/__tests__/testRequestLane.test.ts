@@ -47,8 +47,8 @@ beforeEach(() => {
   mockRunTestCommands.mockReset();
   mockHasAdmission.mockReset();
   mockHasAdmission.mockReturnValue(true);
-  db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_run_results').run();
+  db.prepare('DELETE FROM test_request_runs').run();
 });
 
 function baseSpec(
@@ -232,7 +232,16 @@ describe('concurrent_run_count', () => {
         `SELECT concurrent_run_count FROM test_request_runs WHERE content_hash IN ('hash-conc-1', 'hash-conc-2') ORDER BY concurrent_run_count`,
       )
       .all() as { concurrent_run_count: number }[];
-    expect(rows.map((r) => r.concurrent_run_count)).toEqual([1, 2]);
+    const counts = rows.map((r) => r.concurrent_run_count);
+    // Both runs are admitted concurrently (default per-project limit is 2),
+    // so each recorded occupancy must fall within [1, 2] — and since both
+    // were in flight together, the true concurrent occupancy of 2 must have
+    // been observed by at least one of them.
+    for (const count of counts) {
+      expect(count).toBeGreaterThanOrEqual(1);
+      expect(count).toBeLessThanOrEqual(2);
+    }
+    expect(Math.max(...counts)).toBe(2);
   });
 });
 
