@@ -381,9 +381,7 @@ const FAILURE_TRACE_EXCERPT_CAP = 2_000;
 const CHILD_OUTCOME_RE =
   /<(failure|error|skipped)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/;
 
-function extractChildOutcome(
-  content: string,
-): {
+function extractChildOutcome(content: string): {
   tag: 'failure' | 'error' | 'skipped';
   message?: string;
   text?: string;
