@@ -10,6 +10,7 @@ const mockRuntimeSettings = vi.hoisted(() => ({
   planning_session_model: '',
   ops_session_model: '',
   gate_verify_session_model: '',
+  investigate_session_model: '',
   groom_session_model: '',
   design_session_model: '',
   docs_session_model: '',
@@ -19,6 +20,7 @@ const mockRuntimeSettings = vi.hoisted(() => ({
   planning_session_effort: '',
   ops_session_effort: '',
   gate_verify_session_effort: '',
+  investigate_session_effort: '',
   groom_session_effort: '',
   design_session_effort: '',
   docs_session_effort: '',
@@ -185,6 +187,7 @@ beforeEach(() => {
   mockRuntimeSettings.planning_session_model = '';
   mockRuntimeSettings.ops_session_model = '';
   mockRuntimeSettings.gate_verify_session_model = '';
+  mockRuntimeSettings.investigate_session_model = '';
   mockRuntimeSettings.groom_session_model = '';
   mockRuntimeSettings.design_session_model = '';
   mockRuntimeSettings.docs_session_model = '';
@@ -194,6 +197,7 @@ beforeEach(() => {
   mockRuntimeSettings.planning_session_effort = '';
   mockRuntimeSettings.ops_session_effort = '';
   mockRuntimeSettings.gate_verify_session_effort = '';
+  mockRuntimeSettings.investigate_session_effort = '';
   mockRuntimeSettings.groom_session_effort = '';
   mockRuntimeSettings.design_session_effort = '';
   mockRuntimeSettings.docs_session_effort = '';
@@ -358,6 +362,65 @@ describe('AgentSession — per-class effort resolution', () => {
     expect(mockSetSessionEffortSettingKey).toHaveBeenCalledWith(
       'test-session-effort',
       'gate_verify_session_effort',
+    );
+  });
+
+  it('an investigate session resolves independently of groom/design/docs/ops settings', async () => {
+    mockRuntimeSettings.ops_session_model = 'claude-sonnet-5';
+    mockRuntimeSettings.ops_session_effort = 'high';
+    mockRuntimeSettings.groom_session_model = 'claude-haiku-4-5';
+    mockRuntimeSettings.design_session_model = 'claude-haiku-4-5';
+    mockRuntimeSettings.docs_session_model = 'claude-haiku-4-5';
+    mockRuntimeSettings.investigate_session_model = 'claude-opus-4-8';
+    mockRuntimeSettings.investigate_session_effort = 'xhigh';
+
+    const session = makeSession('ops', 'report-batch:abc123');
+    await session.run();
+
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0].options.model).toBe('claude-opus-4-8');
+    expect(runCalls[0].options.effort).toBe('xhigh');
+  });
+
+  it('investigate session records investigate_session_model rather than ops_session_model', async () => {
+    mockRuntimeSettings.ops_session_model = 'claude-sonnet-5';
+    mockRuntimeSettings.ops_session_effort = 'high';
+    mockRuntimeSettings.investigate_session_model = 'claude-sonnet-5';
+    mockRuntimeSettings.investigate_session_effort = 'high';
+
+    const session = makeSession('ops', 'report-batch:abc123');
+    await session.run();
+
+    expect(runCalls).toHaveLength(1);
+    expect(mockSetSessionModelSettingKey).toHaveBeenCalledWith(
+      'test-session-effort',
+      'investigate_session_model',
+    );
+    expect(mockSetSessionEffortSettingKey).toHaveBeenCalledWith(
+      'test-session-effort',
+      'investigate_session_effort',
+    );
+  });
+
+  it('an investigate session falls back to ops_session_model/effort when its own setting is unset', async () => {
+    mockRuntimeSettings.ops_session_model = 'claude-sonnet-5';
+    mockRuntimeSettings.ops_session_effort = 'high';
+    mockRuntimeSettings.investigate_session_model = '';
+    mockRuntimeSettings.investigate_session_effort = '';
+
+    const session = makeSession('ops', 'report-batch:abc123');
+    await session.run();
+
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0].options.model).toBe('claude-sonnet-5');
+    expect(runCalls[0].options.effort).toBe('high');
+    expect(mockSetSessionModelSettingKey).toHaveBeenCalledWith(
+      'test-session-effort',
+      'ops_session_model',
+    );
+    expect(mockSetSessionEffortSettingKey).toHaveBeenCalledWith(
+      'test-session-effort',
+      'ops_session_effort',
     );
   });
 

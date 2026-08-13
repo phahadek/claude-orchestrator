@@ -70,6 +70,7 @@ import {
   isCodeSession,
   isPlanningSession,
   isGateVerifySession,
+  isInvestigateSession,
   opensPr,
 } from './sessionPredicates';
 import { stageIntent, type StagedIntent } from '../routes/stagedIntents';
@@ -691,7 +692,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       (isGateVerifySession(this.taskId)
         ? runtimeSettings.gate_verify_session_model ||
           runtimeSettings.ops_session_model
-        : this.sessionType === 'ops'
+        : isInvestigateSession(this.taskId)
+          ? runtimeSettings.investigate_session_model ||
+            runtimeSettings.ops_session_model
+          : this.sessionType === 'ops'
           ? runtimeSettings.ops_session_model
           : this.sessionType === 'groom'
             ? runtimeSettings.groom_session_model ||
@@ -712,7 +716,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       (isGateVerifySession(this.taskId)
         ? runtimeSettings.gate_verify_session_effort ||
           runtimeSettings.ops_session_effort
-        : this.sessionType === 'ops'
+        : isInvestigateSession(this.taskId)
+          ? runtimeSettings.investigate_session_effort ||
+            runtimeSettings.ops_session_effort
+          : this.sessionType === 'ops'
           ? runtimeSettings.ops_session_effort
           : this.sessionType === 'groom'
             ? runtimeSettings.groom_session_effort ||
@@ -742,7 +749,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         ? runtimeSettings.gate_verify_session_model
           ? 'gate_verify_session_model'
           : 'ops_session_model'
-        : this.sessionType === 'ops'
+        : isInvestigateSession(this.taskId)
+          ? runtimeSettings.investigate_session_model
+            ? 'investigate_session_model'
+            : 'ops_session_model'
+          : this.sessionType === 'ops'
           ? 'ops_session_model'
           : this.sessionType === 'groom'
             ? runtimeSettings.groom_session_model
@@ -767,7 +778,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         ? runtimeSettings.gate_verify_session_effort
           ? 'gate_verify_session_effort'
           : 'ops_session_effort'
-        : this.sessionType === 'ops'
+        : isInvestigateSession(this.taskId)
+          ? runtimeSettings.investigate_session_effort
+            ? 'investigate_session_effort'
+            : 'ops_session_effort'
+          : this.sessionType === 'ops'
           ? 'ops_session_effort'
           : this.sessionType === 'groom'
             ? runtimeSettings.groom_session_effort

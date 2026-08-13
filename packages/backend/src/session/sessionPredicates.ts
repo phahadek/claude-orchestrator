@@ -226,3 +226,16 @@ export function isGateVerifySession(
 ): boolean {
   return typeof taskId === 'string' && taskId.startsWith('gate-item:');
 }
+
+/**
+ * True for an investigate session — a one-shot 'ops' session dispatched
+ * against a synthetic `report-batch:<batchId>` task_id rather than a real
+ * board task, always batched (even for a single report). No new SessionType
+ * literal is added for investigate — 'ops' is reused and this task_id-prefix
+ * predicate mirrors isGateVerifySession's own pattern above.
+ */
+export function isInvestigateSession(
+  taskId: string | null | undefined,
+): boolean {
+  return typeof taskId === 'string' && taskId.startsWith('report-batch:');
+}
