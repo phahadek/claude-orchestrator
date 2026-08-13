@@ -7146,6 +7146,28 @@ export function listTestRunResultsForRun(
     .all(testRequestRunId) as TestRunResultRow[];
 }
 
+/**
+ * Deletes raw test_run_results rows older than `retentionMs`, keyed off
+ * created_at (the extraction timestamp, not the underlying test run time).
+ * The per-test aggregate in test_perf_baselines is a separately-maintained
+ * table (recomputed, not derived from a join over test_run_results at read
+ * time) so it is untouched by this delete regardless of window.
+ *
+ * Safe against in-flight reads (ingestTestRunResults's insert transaction,
+ * listRecentValidTestDurations's baseline read) because better-sqlite3 runs
+ * every statement synchronously on a single connection — there is no
+ * interleaving of a DELETE with a read or write already in progress. The
+ * cutoff itself only ever touches rows well outside any read's window: reads
+ * pull the newest few dozen samples, and the window here is 30 days.
+ */
+export function pruneTestRunResults(retentionMs: number): number {
+  const cutoff = Date.now() - retentionMs;
+  const result = db
+    .prepare(`DELETE FROM test_run_results WHERE created_at < ?`)
+    .run(cutoff);
+  return result.changes;
+}
+
 // ─── test_perf_baselines ────────────────────────────────────────────────────
 
 /**

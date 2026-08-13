@@ -2138,6 +2138,8 @@ export function runMigrations(target: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_test_run_results_run_id
       ON test_run_results(test_request_run_id);
+    CREATE INDEX IF NOT EXISTS idx_test_run_results_created_at
+      ON test_run_results(created_at);
   `);
 
   // test_perf_baselines: one row per test_id holding the current rolling
