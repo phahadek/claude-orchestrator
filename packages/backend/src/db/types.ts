@@ -1003,6 +1003,26 @@ export interface TestRequestRunRow {
   failure_reason: TestRequestFailureReason | null;
 }
 
+// ─── dependency_cache_entries ───────────────────────────────────────────────
+
+/**
+ * One row per (project_id, lock_hash) dependency-cache build — see
+ * orchestration/dependencyCachePool.ts. A row is only a valid cache hit once
+ * it reaches `ready`; a crash mid-build leaves it `building`, recovered to
+ * `failed` by a boot-time sweep (recoverInterruptedDependencyCacheBuilds)
+ * mirroring recoverInterruptedTestRequestRuns.
+ */
+export type DependencyCacheEntryStatus = 'building' | 'ready' | 'failed';
+
+export interface DependencyCacheEntryRow {
+  id: number;
+  project_id: string;
+  lock_hash: string;
+  status: DependencyCacheEntryStatus;
+  created_at: number;
+  last_used_at: number;
+}
+
 // ─── arch_unit ────────────────────────────────────────────────────────────
 
 /** A single titled architecture statement. */

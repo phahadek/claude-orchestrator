@@ -112,6 +112,7 @@ import {
 } from './sessionLivenessReconciler';
 import { isUsageAdmitted } from '../orchestration/usageAdmission';
 import { CrashBudget } from '../orchestration/crashBudget';
+import { tryDependencyCachePool } from '../orchestration/dependencyCachePool';
 import {
   countsAgainstConcurrency,
   countsAgainstCodeSessionConcurrency,
@@ -1986,22 +1987,57 @@ export class SessionManager extends EventEmitter {
     const orchConfig = loadOrchestratorConfig(projectDir);
 
     if (worktreeEligible && orchConfig.bootstrap_script) {
-      try {
-        await exec(`bash "${orchConfig.bootstrap_script}" "${worktreePath}"`, {
-          cwd: projectDir,
-          timeout: 120_000,
-        });
+      const dependencyCachePoolConfigured =
+        (orchConfig.dependency_lock_paths?.length ?? 0) > 0 &&
+        (orchConfig.dependency_cache_dirs?.length ?? 0) > 0 &&
+        !!orchConfig.dependency_verify_command;
+
+      let handledByCachePool = false;
+      if (dependencyCachePoolConfigured) {
+        try {
+          handledByCachePool = await tryDependencyCachePool({
+            projectId,
+            projectDir,
+            worktreePath,
+            bootstrapScript: orchConfig.bootstrap_script,
+            lockPaths: orchConfig.dependency_lock_paths,
+            cacheDirs: orchConfig.dependency_cache_dirs,
+            verifyCommand: orchConfig.dependency_verify_command,
+            sessionId,
+          });
+        } catch (err) {
+          logger.warn(
+            `[SessionManager] dependency cache pool errored for ${sessionId.slice(0, 8)}, falling back to bootstrap_script: ${err}`,
+          );
+          handledByCachePool = false;
+        }
+      }
+
+      if (handledByCachePool) {
         logger.info(
-          `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,
+          `[SessionManager] dependency cache pool provisioned dependencies for ${sessionId.slice(0, 8)}`,
         );
-      } catch (err) {
-        const e = err as { stderr?: string | Buffer; message?: string };
-        const stderr = e.stderr ? e.stderr.toString().slice(0, 500) : '';
-        const detail = `bootstrap failed: ${stderr || String(err)}`;
-        logger.error(
-          `[SessionManager] ${detail} for ${sessionId.slice(0, 8)} — aborting launch`,
-        );
-        throw Object.assign(new Error(detail), { cause: err });
+      } else {
+        try {
+          await exec(
+            `bash "${orchConfig.bootstrap_script}" "${worktreePath}"`,
+            {
+              cwd: projectDir,
+              timeout: 120_000,
+            },
+          );
+          logger.info(
+            `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,
+          );
+        } catch (err) {
+          const e = err as { stderr?: string | Buffer; message?: string };
+          const stderr = e.stderr ? e.stderr.toString().slice(0, 500) : '';
+          const detail = `bootstrap failed: ${stderr || String(err)}`;
+          logger.error(
+            `[SessionManager] ${detail} for ${sessionId.slice(0, 8)} — aborting launch`,
+          );
+          throw Object.assign(new Error(detail), { cause: err });
+        }
       }
     }
 

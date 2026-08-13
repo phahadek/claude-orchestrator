@@ -47,6 +47,8 @@ import type {
   TestRequestRunRow,
   TestRequestRunState,
   TestRequestFailureReason,
+  DependencyCacheEntryRow,
+  DependencyCacheEntryStatus,
   OpsJournalRow,
   CapabilityDisqualificationRow,
   NewCapabilityDisqualificationRow,
@@ -6906,6 +6908,59 @@ export function deleteTestRequestRunsForContentHash(
   db.prepare<{ project_id: string; content_hash: string }>(
     `DELETE FROM test_request_runs WHERE project_id = @project_id AND content_hash = @content_hash`,
   ).run({ project_id: projectId, content_hash: contentHash });
+}
+
+// ─── dependency_cache_entries ───────────────────────────────────────────────
+
+/** Upserts a (project_id, lock_hash) row into `building` — the leader's durable claim before it runs the project's bootstrap_script. */
+export function insertBuildingDependencyCacheEntry(
+  projectId: string,
+  lockHash: string,
+): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO dependency_cache_entries (project_id, lock_hash, status, created_at, last_used_at)
+     VALUES (?, ?, 'building', ?, ?)
+     ON CONFLICT(project_id, lock_hash) DO UPDATE SET status = 'building', last_used_at = excluded.last_used_at`,
+  ).run(projectId, lockHash, now, now);
+}
+
+export function markDependencyCacheEntryStatus(
+  projectId: string,
+  lockHash: string,
+  status: DependencyCacheEntryStatus,
+): void {
+  db.prepare(
+    `UPDATE dependency_cache_entries SET status = ? WHERE project_id = ? AND lock_hash = ?`,
+  ).run(status, projectId, lockHash);
+}
+
+/** Only a `ready` row is a valid cache hit — see DependencyCacheEntryRow doc comment. */
+export function getReadyDependencyCacheEntry(
+  projectId: string,
+  lockHash: string,
+): DependencyCacheEntryRow | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM dependency_cache_entries WHERE project_id = ? AND lock_hash = ? AND status = 'ready'`,
+    )
+    .get(projectId, lockHash) as DependencyCacheEntryRow | undefined;
+}
+
+export function touchDependencyCacheEntryLastUsed(
+  projectId: string,
+  lockHash: string,
+): void {
+  db.prepare(
+    `UPDATE dependency_cache_entries SET last_used_at = ? WHERE project_id = ? AND lock_hash = ?`,
+  ).run(Date.now(), projectId, lockHash);
+}
+
+/** Rows still `building` — used by the boot-time crash-recovery sweep. */
+export function listBuildingDependencyCacheEntries(): DependencyCacheEntryRow[] {
+  return db
+    .prepare(`SELECT * FROM dependency_cache_entries WHERE status = 'building'`)
+    .all() as DependencyCacheEntryRow[];
 }
 
 // ─── session_test_request_cycles ───────────────────────────────────────────
