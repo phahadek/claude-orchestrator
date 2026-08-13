@@ -132,6 +132,36 @@ describe('GET /api/gate/trust-rate', () => {
     });
   });
 
+  it('accepts flow=investigate, returning the same shape as groom/design/ops', async () => {
+    queriesMock.getFlowRejectionRate.mockReturnValue({
+      flow: 'investigate',
+      project: 'proj-1',
+      milestone: 'M12',
+      total: 0,
+      rejected: 0,
+      rate: null,
+    });
+
+    const res = await request(makeApp()).get(
+      '/api/gate/trust-rate?project=proj-1&milestone=M12&flow=investigate',
+    );
+
+    expect(queriesMock.getFlowRejectionRate).toHaveBeenCalledWith(
+      'proj-1',
+      'M12',
+      'investigate',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      flow: 'investigate',
+      project: 'proj-1',
+      milestone: 'M12',
+      total: 0,
+      rejected: 0,
+      rate: null,
+    });
+  });
+
   it('400s a missing query param', async () => {
     const res = await request(makeApp()).get(
       '/api/gate/trust-rate?project=proj-1&milestone=M12',

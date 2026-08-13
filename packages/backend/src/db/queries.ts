@@ -8360,12 +8360,18 @@ export function incrementRouteBackCount(
 // ─── trust-precision signals ───────────────────────────────────────────────
 
 /** The auto-dispatch flows the trust-precision rejection/abstain-rate signal covers. */
-export type TrustPrecisionFlow = 'groom' | 'design' | 'ops' | 'gate-verify';
+export type TrustPrecisionFlow =
+  | 'groom'
+  | 'design'
+  | 'ops'
+  | 'investigate'
+  | 'gate-verify';
 
 const STAGED_INTENT_FLOWS: ReadonlySet<TrustPrecisionFlow> = new Set([
   'groom',
   'design',
   'ops',
+  'investigate',
 ]);
 
 /** A staged intent an operator sent back for revision or outright declined, vs one they approved through. */

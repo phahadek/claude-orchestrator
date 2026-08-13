@@ -4,6 +4,7 @@ import type {
   InvestigationReportState,
 } from '../api/reports';
 import { reportsApi } from '../api/reports';
+import { investigateApi } from '../api/investigate';
 import panelStyles from './DecisionPanel.module.css';
 import styles from './InvestigationReportSection.module.css';
 
@@ -64,6 +65,8 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
   const [createError, setCreateError] = useState<string | null>(null);
   const [actionInFlightId, setActionInFlightId] = useState<string | null>(null);
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
+  const [dispatching, setDispatching] = useState(false);
+  const [dispatchError, setDispatchError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     return reportsApi
@@ -178,6 +181,25 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
     });
   };
 
+  const dispatchSelected = () => {
+    const reportIds = [...selected];
+    if (reportIds.length === 0) return;
+    setDispatching(true);
+    setDispatchError(null);
+    investigateApi
+      .launch(reportIds)
+      .then(() => {
+        setSelected(new Set());
+        return refresh();
+      })
+      .catch((err) =>
+        setDispatchError(
+          err instanceof Error ? err.message : 'investigate dispatch failed',
+        ),
+      )
+      .finally(() => setDispatching(false));
+  };
+
   if (!loaded) return null;
 
   const filtered =
@@ -234,12 +256,26 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
           <span>{selected.size} selected for dispatch</span>
           <button
             type="button"
+            onClick={dispatchSelected}
+            disabled={dispatching}
+            data-testid="report-batch-dispatch"
+          >
+            {dispatching ? 'Launching…' : 'Investigate Selected'}
+          </button>
+          <button
+            type="button"
             className={styles.clearSelectionButton}
             onClick={() => setSelected(new Set())}
+            disabled={dispatching}
             data-testid="report-batch-clear"
           >
             Clear
           </button>
+          {dispatchError && (
+            <span className={styles.actionError} data-testid="report-batch-dispatch-error">
+              {dispatchError}
+            </span>
+          )}
         </div>
       )}
 

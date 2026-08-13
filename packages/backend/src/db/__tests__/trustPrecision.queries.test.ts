@@ -115,6 +115,20 @@ describe('getFlowRejectionRate — staging flows (groom/design/ops)', () => {
     expect(design).toMatchObject({ total: 1, rejected: 1, rate: 1 });
   });
 
+  it('joins the staged-intent flows for parity — investigate reads the same disposition-rejection rate', () => {
+    seedSession('s-investigate-1', 'investigate');
+    seedStagedIntent('s-investigate-1', 'approved');
+    seedStagedIntent('s-investigate-1', 'rejected'); // decline
+
+    const result = getFlowRejectionRate('proj-1', 'M12', 'investigate');
+    expect(result).toMatchObject({
+      flow: 'investigate',
+      total: 2,
+      rejected: 1,
+      rate: 0.5,
+    });
+  });
+
   it('returns a null rate when there is no denominator yet', () => {
     const result = getFlowRejectionRate('proj-1', 'M12', 'ops');
     expect(result).toMatchObject({ total: 0, rejected: 0, rate: null });
