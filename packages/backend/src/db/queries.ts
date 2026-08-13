@@ -8370,7 +8370,7 @@ export function getFlakeRecoveryMisclassificationRates(
 // ─── lane-health rollup ────────────────────────────────────────────────────
 
 /** p50/p90/p99 of a duration distribution, in ms. Null fields mean no samples were available. */
-export interface DurationPercentiles {
+interface DurationPercentiles {
   p50: number | null;
   p90: number | null;
   p99: number | null;
