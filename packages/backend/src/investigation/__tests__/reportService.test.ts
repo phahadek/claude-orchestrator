@@ -148,7 +148,12 @@ describe('updateDraftReport', () => {
 
 describe('listReports / getReportWithDerived', () => {
   it('filters by project/milestone/state and includes derived fields', () => {
-    createReport({ projectId: 'proj-1', milestoneId: 'm-1', title: 'a', symptomText: 's' });
+    createReport({
+      projectId: 'proj-1',
+      milestoneId: 'm-1',
+      title: 'a',
+      symptomText: 's',
+    });
     const other = createReport({
       projectId: 'proj-1',
       milestoneId: 'm-2',
@@ -156,7 +161,12 @@ describe('listReports / getReportWithDerived', () => {
       symptomText: 's',
     });
     commitReport(other.id);
-    createReport({ projectId: 'proj-2', milestoneId: 'm-1', title: 'c', symptomText: 's' });
+    createReport({
+      projectId: 'proj-2',
+      milestoneId: 'm-1',
+      title: 'c',
+      symptomText: 's',
+    });
 
     const result = listReports({ project: 'proj-1', milestone: 'm-2' });
     expect(result.total).toBe(1);

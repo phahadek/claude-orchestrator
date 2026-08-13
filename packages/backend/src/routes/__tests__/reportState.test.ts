@@ -44,13 +44,11 @@ describe('POST /api/reports', () => {
     const created = { id: 'r-1', state: 'draft' };
     reportServiceMock.createReport.mockReturnValue(created);
 
-    const res = await request(makeApp())
-      .post('/api/reports')
-      .send({
-        projectId: 'proj-1',
-        title: 'symptom title',
-        symptomText: 'things are broken',
-      });
+    const res = await request(makeApp()).post('/api/reports').send({
+      projectId: 'proj-1',
+      title: 'symptom title',
+      symptomText: 'things are broken',
+    });
 
     expect(res.status).toBe(201);
     expect(res.body).toEqual(created);
@@ -153,7 +151,9 @@ describe('POST /api/reports/:id/abandon', () => {
 
   it('400s when the service rejects abandoning an already-terminal report', async () => {
     reportServiceMock.abandonReport.mockImplementation(() => {
-      throw new Error('investigation report r-3 is already resolved — cannot abandon');
+      throw new Error(
+        'investigation report r-3 is already resolved — cannot abandon',
+      );
     });
 
     const res = await request(makeApp()).post('/api/reports/r-3/abandon');

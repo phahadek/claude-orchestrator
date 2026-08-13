@@ -88,7 +88,9 @@ export function createReportStateRouter(): Router {
   router.get('/reports/:id', (req: Request, res: Response) => {
     const report = getReportWithDerived(String(req.params.id));
     if (!report) {
-      res.status(404).json({ error: `no investigation report ${req.params.id}` });
+      res
+        .status(404)
+        .json({ error: `no investigation report ${req.params.id}` });
       return;
     }
     res.json(report);

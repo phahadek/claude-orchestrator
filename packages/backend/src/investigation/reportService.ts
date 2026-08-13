@@ -9,10 +9,7 @@ import {
   isResolveEligible,
   blocksMilestoneConvergence,
 } from './reportStore';
-import type {
-  InvestigationReportRow,
-  ReportFilter,
-} from './reportStore';
+import type { InvestigationReportRow, ReportFilter } from './reportStore';
 
 /**
  * Business logic for investigation_report — the state-machine guards and
