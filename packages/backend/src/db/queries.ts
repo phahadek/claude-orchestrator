@@ -7966,8 +7966,8 @@ export function expireStagedIntentsForSession(
   return result.changes;
 }
 
-let _stmtSweepStagedIntentsForTerminalSessions: Database.Statement | null =
-  null;
+let _stmtSelectSweepableStagedIntents: Database.Statement | null = null;
+let _stmtSupersedeStagedIntentById: Database.Statement | null = null;
 
 /**
  * Backstop sweep for expireStagedIntentsForSession: reaps `staged`/`approved`
@@ -7975,28 +7975,69 @@ let _stmtSweepStagedIntentsForTerminalSessions: Database.Statement | null =
  * (done/error/killed) but never went through the terminal-transition hook —
  * e.g. a process crash, or a write path that predates this reaper. Safe to
  * run repeatedly (idempotent: nothing left to reap after the first pass).
- * Returns the number of rows reaped.
+ * Returns the reaped rows grouped by session, so the caller can tell each
+ * swept session exactly what it lost (see SessionManager's
+ * reapStagedIntentsBackstopSweep, which reuses markSessionErrored's expiry
+ * notice with these rows).
  */
 export function sweepStagedIntentsForTerminalSessions(
   reason: string,
   now: number,
-): number {
-  _stmtSweepStagedIntentsForTerminalSessions ??= db.prepare<{
-    reason: string;
-    now: number;
-  }>(`
-    UPDATE staged_intent
-    SET state = 'superseded', disposition_reason = @reason, updated_at = @now
+): Array<{
+  sessionId: string;
+  expired: Array<Pick<StagedIntentRow, 'id' | 'kind' | 'group_id'>>;
+}> {
+  _stmtSelectSweepableStagedIntents ??= db.prepare(`
+    SELECT id, kind, group_id, session_id FROM staged_intent
     WHERE state IN ('staged', 'approved')
       AND session_id IN (
         SELECT session_id FROM sessions WHERE status IN ('done', 'error', 'killed')
       )
   `);
-  const result = _stmtSweepStagedIntentsForTerminalSessions.run({
-    reason,
-    now,
-  });
-  return result.changes;
+  const rows = _stmtSelectSweepableStagedIntents.all() as Array<{
+    id: string;
+    kind: string;
+    group_id: string | null;
+    session_id: string;
+  }>;
+  if (rows.length === 0) return [];
+
+  _stmtSupersedeStagedIntentById ??= db.prepare<{
+    id: string;
+    reason: string;
+    now: number;
+  }>(`
+    UPDATE staged_intent
+    SET state = 'superseded', disposition_reason = @reason, updated_at = @now
+    WHERE id = @id
+  `);
+  const stmt = _stmtSupersedeStagedIntentById;
+  const supersedeAll = db.transaction(
+    (items: typeof rows) => {
+      for (const item of items) {
+        stmt.run({ id: item.id, reason, now });
+      }
+    },
+  );
+  supersedeAll(rows);
+
+  const bySession = new Map<
+    string,
+    Array<Pick<StagedIntentRow, 'id' | 'kind' | 'group_id'>>
+  >();
+  for (const row of rows) {
+    const existing = bySession.get(row.session_id);
+    const entry = { id: row.id, kind: row.kind, group_id: row.group_id };
+    if (existing) {
+      existing.push(entry);
+    } else {
+      bySession.set(row.session_id, [entry]);
+    }
+  }
+  return Array.from(bySession.entries()).map(([sessionId, expired]) => ({
+    sessionId,
+    expired,
+  }));
 }
 
 /**

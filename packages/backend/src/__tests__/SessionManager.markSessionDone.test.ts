@@ -399,12 +399,15 @@ describe('expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions 
     insertSession('sess-terminal-backstop', 'killed');
     const staged = stageIntent('sess-terminal-backstop');
 
-    const changed = sweepStagedIntentsForTerminalSessions(
+    const swept = sweepStagedIntentsForTerminalSessions(
       'session_killed',
       Date.now(),
     );
 
-    expect(changed).toBeGreaterThanOrEqual(1);
+    const forSession = swept.find(
+      (s) => s.sessionId === 'sess-terminal-backstop',
+    );
+    expect(forSession?.expired.length).toBeGreaterThanOrEqual(1);
     expect(getStagedIntent(staged)?.state).toBe('superseded');
   });
 
