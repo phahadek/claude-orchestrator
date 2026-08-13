@@ -7293,7 +7293,7 @@ export function computeTestFlipRateFlag(
   };
 }
 
-export interface FlaggedFlakyTest {
+interface FlaggedFlakyTest {
   testId: string;
   name: string;
   sampleCount: number;
@@ -7309,7 +7309,7 @@ let _stmtDistinctProjectTestIds: Database.Statement | null = null;
  * test_run_results carries no project_id column, so scoping joins through
  * test_request_runs.
  */
-export function listFlaggedFlakyTests(
+function listFlaggedFlakyTests(
   projectId: string,
   windowN: number,
   thresholdK: number,
