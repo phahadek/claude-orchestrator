@@ -8002,6 +8002,12 @@ export function sweepStagedIntentsForTerminalSessions(
   }>;
   if (rows.length === 0) return [];
 
+  // Re-checks the same state/session-terminal predicate as the SELECT above
+  // at write time, so a row that changed state (or whose session left the
+  // terminal set) between the SELECT and this UPDATE — e.g. a concurrent
+  // disposition, or an overlapping sweep invocation — is left untouched
+  // rather than blindly forced to 'superseded'. This preserves the
+  // check-and-set atomicity of the single-statement UPDATE this replaced.
   _stmtSupersedeStagedIntentById ??= db.prepare<{
     id: string;
     reason: string;
@@ -8010,20 +8016,26 @@ export function sweepStagedIntentsForTerminalSessions(
     UPDATE staged_intent
     SET state = 'superseded', disposition_reason = @reason, updated_at = @now
     WHERE id = @id
+      AND state IN ('staged', 'approved')
+      AND session_id IN (
+        SELECT session_id FROM sessions WHERE status IN ('done', 'error', 'killed')
+      )
   `);
   const stmt = _stmtSupersedeStagedIntentById;
-  const supersedeAll = db.transaction((items: typeof rows) => {
+  const actuallySuperseded = db.transaction((items: typeof rows) => {
+    const reaped: typeof rows = [];
     for (const item of items) {
-      stmt.run({ id: item.id, reason, now });
+      const result = stmt.run({ id: item.id, reason, now });
+      if (result.changes > 0) reaped.push(item);
     }
-  });
-  supersedeAll(rows);
+    return reaped;
+  })(rows);
 
   const bySession = new Map<
     string,
     Array<Pick<StagedIntentRow, 'id' | 'kind' | 'group_id'>>
   >();
-  for (const row of rows) {
+  for (const row of actuallySuperseded) {
     const existing = bySession.get(row.session_id);
     const entry = { id: row.id, kind: row.kind, group_id: row.group_id };
     if (existing) {
