@@ -6848,17 +6848,18 @@ export function completeTestRequestRun(
   id: string,
   state: TestRequestRunState,
   output: string,
+  structuredResult?: string | null,
 ): void {
   db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ? WHERE id = ?`,
-  ).run(state, output, Date.now(), id);
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, structured_result = ? WHERE id = ?`,
+  ).run(state, output, Date.now(), structuredResult ?? null, id);
 }
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {
   return db
     .prepare(
-      `SELECT id, project_id, content_hash, state, output, started_at, finished_at
+      `SELECT id, project_id, content_hash, state, output, started_at, finished_at, structured_result
        FROM test_request_runs WHERE state = 'running'`,
     )
     .all() as TestRequestRunRow[];
@@ -6878,7 +6879,7 @@ export function getLatestTestRequestRun(
 ): TestRequestRunRow | undefined {
   return db
     .prepare<{ project_id: string; content_hash: string }>(
-      `SELECT id, project_id, content_hash, state, output, started_at, finished_at
+      `SELECT id, project_id, content_hash, state, output, started_at, finished_at, structured_result
        FROM test_request_runs
        WHERE project_id = @project_id AND content_hash = @content_hash AND state != 'running'
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,

@@ -2009,4 +2009,13 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  // Normalized test-result JSON (junit-xml parse), populated by the
+  // acquisition/parser follow-on — nullable, defaults to NULL for existing rows.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN structured_result TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
 }
