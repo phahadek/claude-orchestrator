@@ -5,11 +5,13 @@ import {
   fireEvent,
   within,
 } from '@testing-library/react';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MilestoneDecisionInbox } from '../MilestoneDecisionInbox';
 import { stagedIntentsApi } from '../../api/stagedIntents';
 import { gateApi } from '../../api/gate';
+import { reportsApi } from '../../api/reports';
 import type { StagedIntent } from '../../api/stagedIntents';
+import type { InvestigationReport } from '../../api/reports';
 import type { TaskView } from '../../types/taskView';
 
 vi.mock('../../hooks/stagedIntentBus', () => ({
@@ -38,7 +40,36 @@ function makeTask(overrides: Partial<TaskView> & { taskId: string }): TaskView {
   };
 }
 
+function makeReport(
+  overrides: Partial<InvestigationReport> & { id: string },
+): InvestigationReport {
+  return {
+    project_id: 'proj-1',
+    milestone_id: 'M1',
+    title: 'Untitled report',
+    symptom_text: 'Something looked wrong',
+    evidence_text: null,
+    state: 'draft',
+    source: 'operator',
+    origin_session_id: null,
+    origin_task_id: null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    inFlight: false,
+    resolveEligible: false,
+    ...overrides,
+  };
+}
+
 describe('MilestoneDecisionInbox', () => {
+  beforeEach(() => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -335,12 +366,10 @@ describe('MilestoneDecisionInbox', () => {
     );
   });
 
-  it('renders nothing when the milestone has no staged decisions', async () => {
+  it('renders no decision cards, but keeps the investigation-report section, when the milestone has no staged decisions', async () => {
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
 
-    const { container } = render(
-      <MilestoneDecisionInbox projectId="proj-1" milestone="M1" />,
-    );
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
 
     await waitFor(() =>
       expect(stagedIntentsApi.listByMilestone).toHaveBeenCalledWith(
@@ -348,7 +377,10 @@ describe('MilestoneDecisionInbox', () => {
         'M1',
       ),
     );
-    expect(container.firstChild).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByTestId('investigation-report-section')).toBeTruthy(),
+    );
+    expect(screen.queryByText(/^Decisions \(/)).toBeNull();
   });
 
   it('renders a partially-applied group as such — an already-committed sibling alongside the one member still blocked', async () => {
@@ -1146,5 +1178,186 @@ describe('MilestoneDecisionInbox', () => {
     await waitFor(() =>
       expect(onCardsRemoved).toHaveBeenCalledWith(['intent-1']),
     );
+  });
+
+  describe('investigation report section', () => {
+    it('lists reports by state, and lets the operator draft and commit one', async () => {
+      vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
+      const draftReport = makeReport({
+        id: 'report-draft',
+        title: 'Draft report',
+        state: 'draft',
+      });
+      const committedReport = makeReport({
+        id: 'report-committed',
+        title: 'Committed report',
+        state: 'committed',
+      });
+      vi.spyOn(reportsApi, 'list').mockResolvedValue({
+        items: [draftReport, committedReport],
+        total: 2,
+        page: 1,
+      });
+
+      render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+
+      await waitFor(() =>
+        expect(reportsApi.list).toHaveBeenCalledWith({
+          project: 'proj-1',
+          milestone: 'M1',
+          limit: 100,
+        }),
+      );
+
+      expect(
+        await screen.findByTestId('report-card-report-draft'),
+      ).toBeTruthy();
+      expect(screen.getByTestId('report-card-report-committed')).toBeTruthy();
+      expect(screen.getByTestId('report-filter-draft').textContent).toContain(
+        '(1)',
+      );
+      expect(
+        screen.getByTestId('report-filter-committed').textContent,
+      ).toContain('(1)');
+
+      // Filtering by state narrows the visible cards.
+      fireEvent.click(screen.getByTestId('report-filter-draft'));
+      expect(screen.getByTestId('report-card-report-draft')).toBeTruthy();
+      expect(screen.queryByTestId('report-card-report-committed')).toBeNull();
+      fireEvent.click(screen.getByTestId('report-filter-all'));
+
+      // Draft: title + symptom, save.
+      const created = makeReport({
+        id: 'report-new',
+        title: 'New symptom',
+        state: 'draft',
+      });
+      vi.spyOn(reportsApi, 'create').mockResolvedValue(created);
+      fireEvent.click(screen.getByTestId('report-start-draft'));
+      fireEvent.change(screen.getByTestId('report-draft-title'), {
+        target: { value: 'New symptom' },
+      });
+      fireEvent.change(screen.getByTestId('report-draft-symptom'), {
+        target: { value: 'It broke in prod' },
+      });
+      fireEvent.click(screen.getByTestId('report-draft-submit'));
+
+      await waitFor(() =>
+        expect(reportsApi.create).toHaveBeenCalledWith({
+          projectId: 'proj-1',
+          milestoneId: 'M1',
+          title: 'New symptom',
+          symptomText: 'It broke in prod',
+          source: 'operator',
+        }),
+      );
+      expect(await screen.findByTestId('report-card-report-new')).toBeTruthy();
+
+      // Commit the draft report.
+      const committed = { ...draftReport, state: 'committed' as const };
+      vi.spyOn(reportsApi, 'commit').mockResolvedValue(committed);
+      fireEvent.click(screen.getByTestId('report-commit-report-draft'));
+
+      await waitFor(() =>
+        expect(reportsApi.commit).toHaveBeenCalledWith('report-draft'),
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByTestId('report-state-report-draft').textContent,
+        ).toBe('Committed'),
+      );
+    });
+
+    it('marks a committed, unresolved report as convergence-blocking, but not a draft or a resolved one', async () => {
+      vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
+      vi.spyOn(reportsApi, 'list').mockResolvedValue({
+        items: [
+          makeReport({ id: 'r-draft', state: 'draft' }),
+          makeReport({ id: 'r-committed', state: 'committed' }),
+          makeReport({ id: 'r-resolved', state: 'resolved' }),
+        ],
+        total: 3,
+        page: 1,
+      });
+
+      render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+
+      await screen.findByTestId('report-card-r-committed');
+      expect(screen.getByTestId('report-blocking-r-committed')).toBeTruthy();
+      expect(screen.queryByTestId('report-blocking-r-draft')).toBeNull();
+      expect(screen.queryByTestId('report-blocking-r-resolved')).toBeNull();
+    });
+
+    it('is unaffected by the inbox’s known gate.verify mis-titling defect — a report’s title always comes from its own title field, never resolved through the gate-item-text lookup', async () => {
+      vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
+      const getGateItemDetail = vi.spyOn(gateApi, 'getGateItemDetail');
+      vi.spyOn(reportsApi, 'list').mockResolvedValue({
+        items: [
+          makeReport({
+            id: 'r-titled',
+            title: 'Checkout drops the discount code',
+            state: 'committed',
+          }),
+        ],
+        total: 1,
+        page: 1,
+      });
+
+      render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+
+      const card = await screen.findByTestId('report-card-r-titled');
+      expect(card.textContent).toContain('Checkout drops the discount code');
+      expect(card.textContent).not.toContain('Untitled decision');
+      // No gate-item lookup is ever issued for a report card — that fetch
+      // path (and its known mis-titling defect) is exclusive to gate.verify
+      // staged-intent cards.
+      expect(getGateItemDetail).not.toHaveBeenCalled();
+    });
+
+    it('is unaffected by the inbox’s staged-intent staleness handling — reports fetch and refresh through their own independent effect, not useDecisionQueue', async () => {
+      vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
+      const listReports = vi.spyOn(reportsApi, 'list').mockResolvedValue({
+        items: [makeReport({ id: 'r-1', state: 'committed', inFlight: true })],
+        total: 1,
+        page: 1,
+      });
+
+      render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+
+      await screen.findByTestId('report-card-r-1');
+      expect(screen.getByTestId('report-inflight-r-1')).toBeTruthy();
+      // The report section's own fetch is scoped to /api/reports and never
+      // touches stagedIntentsApi.listByMilestone's result at all.
+      expect(listReports).toHaveBeenCalledTimes(1);
+      expect(stagedIntentsApi.listByMilestone).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets the operator batch-select dispatch-eligible (committed, not in-flight) reports', async () => {
+      vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
+      vi.spyOn(reportsApi, 'list').mockResolvedValue({
+        items: [
+          makeReport({ id: 'r-eligible', state: 'committed', inFlight: false }),
+          makeReport({ id: 'r-inflight', state: 'committed', inFlight: true }),
+          makeReport({ id: 'r-draft', state: 'draft' }),
+        ],
+        total: 3,
+        page: 1,
+      });
+
+      render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+
+      await screen.findByTestId('report-card-r-eligible');
+      expect(screen.getByTestId('report-select-r-eligible')).toBeTruthy();
+      expect(screen.queryByTestId('report-select-r-inflight')).toBeNull();
+      expect(screen.queryByTestId('report-select-r-draft')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('report-select-r-eligible'));
+      expect(screen.getByTestId('report-batch-bar').textContent).toContain(
+        '1 selected',
+      );
+
+      fireEvent.click(screen.getByTestId('report-batch-clear'));
+      expect(screen.queryByTestId('report-batch-bar')).toBeNull();
+    });
   });
 });
