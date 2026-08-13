@@ -18,9 +18,7 @@ export function publishTestRequestRunStatus(
   for (const listener of listeners) listener(payload);
 }
 
-export function subscribeTestRequestRunStatus(
-  listener: Listener,
-): () => void {
+export function subscribeTestRequestRunStatus(listener: Listener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }

@@ -170,15 +170,10 @@ export function SessionPanel({
             {TEST_LANE_OUTCOME_LABELS[testLaneStatus.outcome]}
           </span>
           {testLaneStatus.outcome === 'failed' && testLaneStatus.output && (
-            <pre className={styles.testLaneOutput}>
-              {testLaneStatus.output}
-            </pre>
+            <pre className={styles.testLaneOutput}>{testLaneStatus.output}</pre>
           )}
           {testLaneStatus.note && (
-            <span
-              className={styles.testLaneNote}
-              data-testid="test-lane-note"
-            >
+            <span className={styles.testLaneNote} data-testid="test-lane-note">
               {testLaneStatus.note}
             </span>
           )}
