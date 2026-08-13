@@ -1988,8 +1988,8 @@ export class SessionManager extends EventEmitter {
 
     if (worktreeEligible && orchConfig.bootstrap_script) {
       const dependencyCachePoolConfigured =
-        orchConfig.dependency_lock_paths.length > 0 &&
-        orchConfig.dependency_cache_dirs.length > 0 &&
+        (orchConfig.dependency_lock_paths?.length ?? 0) > 0 &&
+        (orchConfig.dependency_cache_dirs?.length ?? 0) > 0 &&
         !!orchConfig.dependency_verify_command;
 
       let handledByCachePool = false;
