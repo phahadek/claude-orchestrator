@@ -2850,7 +2850,11 @@ export class SessionManager extends EventEmitter {
    * resetSessionPokeRetryCount clears the counter on the next successful
    * poke (see the respawnSession success paths in _doSendOrResume).
    */
-  private handlePokeFailure(row: Session, reason: string, detail: string): void {
+  private handlePokeFailure(
+    row: Session,
+    reason: string,
+    detail: string,
+  ): void {
     const count = incrementSessionPokeRetryCount(row.session_id);
     // Always broadcast the failure so the UI/operator sees it immediately,
     // whether or not this attempt exhausts the retry budget.

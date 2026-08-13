@@ -174,6 +174,21 @@ vi.mock('../../db/queries', () => ({
     grantedCapabilitiesStore.set(sessionId, next);
     return next;
   }),
+  insertCompletingSignal: vi.fn(),
+  listCompletingSignalsForSession: vi.fn().mockReturnValue([
+    {
+      id: 1,
+      session_id: 'unused',
+      task_id: null,
+      session_type: 'standard',
+      signal_class: 'resume_exhausted',
+      signal_value: 'resume_failed',
+      recorded_at: 1,
+    },
+  ]),
+  setSessionTerminalCompletionReason: vi.fn(),
+  incrementSessionPokeRetryCount: vi.fn().mockReturnValue(1),
+  resetSessionPokeRetryCount: vi.fn(),
 }));
 
 vi.mock('../../config', () => ({
