@@ -379,6 +379,14 @@
   font-family: monospace;
 }
 
+.deployPrLink {
+  color: var(--accent, #89b4fa);
+}
+
+.deployPrLink:hover {
+  color: var(--text-primary, #cdd6f4);
+}
+
 .eventList {
   margin: 0;
   padding-left: 18px;

@@ -1245,7 +1245,12 @@ export function GateReadinessPanel({
               {deployBehind.items.map((item, index) => (
                 <li key={`${item.kind}-${index}`}>
                   {item.kind === 'pr' ? (
-                    <a href={item.prUrl} target="_blank" rel="noreferrer">
+                    <a
+                      className={styles.deployPrLink}
+                      href={item.prUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       #{item.prNumber} {item.title ?? item.prUrl}
                     </a>
                   ) : (
