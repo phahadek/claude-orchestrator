@@ -8762,7 +8762,9 @@ export interface LaneHealthRollup {
  * `name`/`last_duration_ms`-adjacent columns to the max(created_at) row per
  * the GROUP BY per its documented bare-column-with-MAX() behavior.
  */
-function getRegressedTestsForProject(projectId: string): RegressedTestSummary[] {
+function getRegressedTestsForProject(
+  projectId: string,
+): RegressedTestSummary[] {
   const rows = db
     .prepare<{ project_id: string }>(
       `SELECT tpb.test_id AS test_id, trr.name AS name,
