@@ -4701,6 +4701,7 @@ async function applyIntent(
       };
     }
     case 'test.request':
+    case 'ops.prIntent':
       throw new NotOperatorAppliableError(intent.kind);
     default:
       throw new Error(`[stagedIntents] unknown intent kind "${intent.kind}"`);
@@ -7272,6 +7273,12 @@ export function createStagedIntentsRouter(
       if (row.kind === 'test.request') {
         res.status(409).json({
           error: `staged intent "${row.id}" is a test.request — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
+        });
+        return;
+      }
+      if (row.kind === 'ops.prIntent') {
+        res.status(409).json({
+          error: `staged intent "${row.id}" is an ops.prIntent — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
         });
         return;
       }
