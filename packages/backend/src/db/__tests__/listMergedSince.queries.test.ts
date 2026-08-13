@@ -28,15 +28,16 @@ function insertPR(overrides: {
   task_id?: string | null;
   title?: string | null;
   updated_at: string;
+  session_id?: string | null;
 }): void {
   db.prepare(
     `
     INSERT INTO pull_requests
       (pr_number, pr_url, repo, task_id, title, state, draft, review_result, review_at,
-       created_at, updated_at, synced_at)
+       created_at, updated_at, synced_at, session_id)
     VALUES
       (@pr_number, @pr_url, @repo, @task_id, @title, @state, 0, NULL, NULL,
-       @updated_at, @updated_at, @updated_at)
+       @updated_at, @updated_at, @updated_at, @session_id)
   `,
   ).run({
     pr_number: overrides.pr_number,
@@ -46,6 +47,7 @@ function insertPR(overrides: {
     title: overrides.title ?? null,
     state: overrides.state,
     updated_at: overrides.updated_at,
+    session_id: overrides.session_id ?? null,
   });
 }
 
@@ -180,5 +182,206 @@ describe('listMergedSince', () => {
     expect(() => listMergedSince('proj-3', null)).not.toThrow();
     const items = listMergedSince('proj-3', null);
     expect(items.map((i) => i.prNumber)).toEqual([20]);
+  });
+
+  it('dedupes a merged local branch against a merged PR sharing the same session_id, preferring the PR', () => {
+    insertProject({
+      id: 'proj-4',
+      name: 'Proj',
+      project_dir: '/repo/proj-4',
+      context_url: null,
+      github_repo: 'org/repo',
+      task_source: 'notion',
+    });
+    insertSession({
+      session_id: 'sess-shared',
+      task_id: 'task-shared',
+      task_url: null,
+      project_context_url: null,
+      status: 'done',
+      started_at: Date.parse('2026-07-20T00:00:00.000Z'),
+      task_name: 'Shared task',
+    } as never);
+    insertPR({
+      pr_number: 30,
+      pr_url: 'https://github.com/org/repo/pull/30',
+      repo: 'org/repo',
+      state: 'merged',
+      task_id: 'task-shared',
+      title: 'Shared change',
+      updated_at: '2026-07-21T00:00:00.000Z',
+      session_id: 'sess-shared',
+    });
+    insertLocalBranch({
+      project_id: 'proj-4',
+      session_id: 'sess-shared',
+      branch_name: 'feature/shared',
+      base_branch: 'dev',
+      status: 'merged',
+      review_result: null,
+      created_at: '2026-07-22T00:00:00.000Z',
+      updated_at: '2026-07-22T00:00:00.000Z',
+    });
+
+    const items = listMergedSince('proj-4', '2026-07-20T00:00:00.000Z');
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: 'pr', prNumber: 30 });
+  });
+
+  it('keeps a merged local branch whose session_id matches no merged PR', () => {
+    insertProject({
+      id: 'proj-5',
+      name: 'Proj',
+      project_dir: '/repo/proj-5',
+      context_url: null,
+      github_repo: 'org/repo',
+      task_source: 'notion',
+    });
+    insertSession({
+      session_id: 'sess-lonely',
+      task_id: 'task-lonely',
+      task_url: null,
+      project_context_url: null,
+      status: 'done',
+      started_at: Date.parse('2026-07-20T00:00:00.000Z'),
+      task_name: 'Lonely branch task',
+    } as never);
+    insertPR({
+      pr_number: 31,
+      pr_url: 'https://github.com/org/repo/pull/31',
+      repo: 'org/repo',
+      state: 'merged',
+      task_id: 'task-other',
+      title: 'Unrelated PR',
+      updated_at: '2026-07-21T00:00:00.000Z',
+      session_id: 'sess-other',
+    });
+    insertLocalBranch({
+      project_id: 'proj-5',
+      session_id: 'sess-lonely',
+      branch_name: 'feature/lonely',
+      base_branch: 'dev',
+      status: 'merged',
+      review_result: null,
+      created_at: '2026-07-22T00:00:00.000Z',
+      updated_at: '2026-07-22T00:00:00.000Z',
+    });
+
+    const items = listMergedSince('proj-5', '2026-07-20T00:00:00.000Z');
+
+    expect(items).toHaveLength(2);
+    const branch = items.find((i) => i.kind === 'local-branch');
+    expect(branch).toMatchObject({
+      kind: 'local-branch',
+      branchName: 'feature/lonely',
+    });
+  });
+
+  it('never collapses rows with a null session_id into one another', () => {
+    insertProject({
+      id: 'proj-6',
+      name: 'Proj',
+      project_dir: '/repo/proj-6',
+      context_url: null,
+      github_repo: 'org/repo',
+      task_source: 'notion',
+    });
+    // pull_requests.session_id is nullable and unpopulated for legacy rows;
+    // two such rows must both survive rather than being treated as sharing
+    // a "null" identity.
+    insertPR({
+      pr_number: 40,
+      pr_url: 'https://github.com/org/repo/pull/40',
+      repo: 'org/repo',
+      state: 'merged',
+      updated_at: '2026-07-21T00:00:00.000Z',
+      session_id: null,
+    });
+    insertPR({
+      pr_number: 41,
+      pr_url: 'https://github.com/org/repo/pull/41',
+      repo: 'org/repo',
+      state: 'merged',
+      updated_at: '2026-07-22T00:00:00.000Z',
+      session_id: null,
+    });
+
+    const items = listMergedSince('proj-6', '2026-07-20T00:00:00.000Z');
+
+    expect(items.map((i) => i.prNumber).sort()).toEqual([40, 41]);
+  });
+
+  it('remains sorted by mergedAt ascending after dedup', () => {
+    insertProject({
+      id: 'proj-7',
+      name: 'Proj',
+      project_dir: '/repo/proj-7',
+      context_url: null,
+      github_repo: 'org/repo',
+      task_source: 'notion',
+    });
+    insertSession({
+      session_id: 'sess-sort-shared',
+      task_id: 'task-sort-shared',
+      task_url: null,
+      project_context_url: null,
+      status: 'done',
+      started_at: Date.parse('2026-07-20T00:00:00.000Z'),
+      task_name: 'Shared task',
+    } as never);
+    insertPR({
+      pr_number: 50,
+      pr_url: 'https://github.com/org/repo/pull/50',
+      repo: 'org/repo',
+      state: 'merged',
+      title: 'Middle PR',
+      updated_at: '2026-07-22T00:00:00.000Z',
+      session_id: 'sess-sort-shared',
+    });
+    insertLocalBranch({
+      project_id: 'proj-7',
+      session_id: 'sess-sort-shared',
+      branch_name: 'feature/sort-shared',
+      base_branch: 'dev',
+      status: 'merged',
+      review_result: null,
+      created_at: '2026-07-23T00:00:00.000Z',
+      updated_at: '2026-07-23T00:00:00.000Z',
+    });
+    insertPR({
+      pr_number: 51,
+      pr_url: 'https://github.com/org/repo/pull/51',
+      repo: 'org/repo',
+      state: 'merged',
+      title: 'Last PR',
+      updated_at: '2026-07-24T00:00:00.000Z',
+    });
+    insertSession({
+      session_id: 'sess-sort-first',
+      task_id: 'task-sort-first',
+      task_url: null,
+      project_context_url: null,
+      status: 'done',
+      started_at: Date.parse('2026-07-20T00:00:00.000Z'),
+      task_name: 'First branch task',
+    } as never);
+    insertLocalBranch({
+      project_id: 'proj-7',
+      session_id: 'sess-sort-first',
+      branch_name: 'feature/sort-first',
+      base_branch: 'dev',
+      status: 'merged',
+      review_result: null,
+      created_at: '2026-07-21T00:00:00.000Z',
+      updated_at: '2026-07-21T00:00:00.000Z',
+    });
+
+    const items = listMergedSince('proj-7', '2026-07-20T00:00:00.000Z');
+
+    const mergedAts = items.map((i) => i.mergedAt);
+    const sorted = [...mergedAts].sort((a, b) => a.localeCompare(b));
+    expect(mergedAts).toEqual(sorted);
+    expect(items).toHaveLength(3);
   });
 });
