@@ -85,7 +85,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // ---- args -----------------------------------------------------------------
 function arg(name, fallback) {
   const i = process.argv.indexOf(name);
-  return i === -1 || i + 1 >= process.argv.length ? fallback : process.argv[i + 1];
+  return i === -1 || i + 1 >= process.argv.length
+    ? fallback
+    : process.argv[i + 1];
 }
 const flag = (name) => process.argv.includes(name);
 function fail(msg) {
@@ -95,7 +97,8 @@ function fail(msg) {
 
 const PROJECT = arg('--project', 'claude-dashboard');
 const DB_PATH =
-  arg('--db', process.env.ORCHESTRATOR_DB_PATH) || '/srv/orchestrator/data/dashboard.db';
+  arg('--db', process.env.ORCHESTRATOR_DB_PATH) ||
+  '/srv/orchestrator/data/dashboard.db';
 const LIMIT = Number(arg('--limit', '8')) || 8;
 const HOURS = Number(arg('--hours', '48')) || 48; // recentPlanningSessions look-back window
 const WANT_JSON = flag('--json');
@@ -126,7 +129,8 @@ function openDb() {
       `could not load better-sqlite3 (tried ${candidates.join(', ')}): ${lastErr?.message}. ` +
         'Set $ORCHESTRATOR_BETTER_SQLITE3 to its module path.',
     );
-  if (!existsSync(DB_PATH)) fail(`DB not found at ${DB_PATH} (override with --db).`);
+  if (!existsSync(DB_PATH))
+    fail(`DB not found at ${DB_PATH} (override with --db).`);
   try {
     return new Database(DB_PATH, { readonly: true, fileMustExist: true });
   } catch (e) {
@@ -179,7 +183,15 @@ function ghVerifyPr(repo, number) {
   try {
     const out = execFileSync(
       'gh',
-      ['-R', repo, 'pr', 'view', String(number), '--json', 'state,mergedAt,closedAt'],
+      [
+        '-R',
+        repo,
+        'pr',
+        'view',
+        String(number),
+        '--json',
+        'state,mergedAt,closedAt',
+      ],
       { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] },
     );
     const j = JSON.parse(out);
@@ -213,7 +225,11 @@ const deployedRow = one(
   PROJECT,
 );
 const deployed = deployedRow
-  ? { sha: deployedRow.sha, shortSha: short(deployedRow.sha), recordedAt: deployedRow.recordedAt }
+  ? {
+      sha: deployedRow.sha,
+      shortSha: short(deployedRow.sha),
+      recordedAt: deployedRow.recordedAt,
+    }
   : { sha: null, shortSha: null, recordedAt: null };
 
 let activeMilestone = null;
@@ -222,7 +238,13 @@ if (project.mid) {
     'SELECT id, name, canonical_short_id AS shortId, source_id AS boardId FROM milestones WHERE id = ?',
     project.mid,
   );
-  if (m) activeMilestone = { id: m.id, name: m.name, shortId: m.shortId, boardId: m.boardId };
+  if (m)
+    activeMilestone = {
+      id: m.id,
+      name: m.name,
+      shortId: m.shortId,
+      boardId: m.boardId,
+    };
 }
 
 // ---- health: errored sessions (+ their on-disk prompt files) --------------
@@ -237,12 +259,18 @@ const erroredSessions = q(
   PROJECT,
   LIMIT,
 ).map((s) => {
-  const promptFile = join(project.projectDir, '.claude', 'session-prompts', `${s.sessionId}.md`);
+  const promptFile = join(
+    project.projectDir,
+    '.claude',
+    'session-prompts',
+    `${s.sessionId}.md`,
+  );
   const err = s.lastErrorDetail || '';
   // Pre-assembly fail-loud: the session errored BEFORE its injected prompt was written, so no
   // prompt file exists — the diagnostic is last_error_detail + the launcher's journalctl line
   // ("[OpsSessionLauncher] failed to assemble planning procedure …"), NOT a prompt file.
-  const preAssemblyFailure = /injectedProcedureContent|assemble planning procedure/i.test(err);
+  const preAssemblyFailure =
+    /injectedProcedureContent|assemble planning procedure/i.test(err);
   return {
     ...s,
     endedAt: isoOf(s.endedAt),
@@ -277,7 +305,12 @@ const recentPlanningSessions = q(
   planningCutoff,
   LIMIT,
 ).map((s) => {
-  const promptFile = join(project.projectDir, '.claude', 'session-prompts', `${s.sessionId}.md`);
+  const promptFile = join(
+    project.projectDir,
+    '.claude',
+    'session-prompts',
+    `${s.sessionId}.md`,
+  );
   return {
     ...s,
     startedAt: isoOf(s.startedAt),
@@ -312,7 +345,11 @@ const recentDeploys = q(
     completedAt: isoOf(r.completedAt),
     completed: r.status === 'succeeded',
     lastEvent: lastEvent
-      ? { ...lastEvent, at: isoOf(lastEvent.at), detail: trunc(lastEvent.detail, 200) }
+      ? {
+          ...lastEvent,
+          at: isoOf(lastEvent.at),
+          detail: trunc(lastEvent.detail, 200),
+        }
       : null,
   };
 });
@@ -321,8 +358,13 @@ const recentDeploys = q(
 let deployHint;
 const latestDeploy = recentDeploys[0];
 if (!deployed.sha) {
-  deployHint = 'No deployed SHA recorded — cannot assert what is live. Do not diagnose against HEAD.';
-} else if (latestDeploy && !latestDeploy.completed && isoOf(latestDeploy.startedAt) > (deployed.recordedAt || '')) {
+  deployHint =
+    'No deployed SHA recorded — cannot assert what is live. Do not diagnose against HEAD.';
+} else if (
+  latestDeploy &&
+  !latestDeploy.completed &&
+  isoOf(latestDeploy.startedAt) > (deployed.recordedAt || '')
+) {
   deployHint =
     `Live SHA is still ${deployed.shortSha} (recorded ${deployed.recordedAt}). A LATER deploy attempt ` +
     `(${latestDeploy.shortSha}, ${latestDeploy.status} at step '${latestDeploy.currentStep}') did NOT complete — ` +
@@ -401,7 +443,9 @@ const recentAuditEvents = q(
       payloadSummary = trunc(
         Object.entries(p)
           .slice(0, 4)
-          .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`)
+          .map(
+            ([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`,
+          )
           .join(' '),
         160,
       );
@@ -422,15 +466,23 @@ const recentAuditEvents = q(
 db.close();
 
 // ---- board (authoritative non-Done, via the sanctioned enumerator) --------
-let board = { boardId: activeMilestone?.boardId ?? null, source: 'skipped', notDone: [], command: null, error: null };
+let board = {
+  boardId: activeMilestone?.boardId ?? null,
+  source: 'skipped',
+  notDone: [],
+  command: null,
+  error: null,
+};
 if (WANT_BOARD && activeMilestone?.boardId) {
   const boardId = activeMilestone.boardId;
-  const notionQuery = [join(HERE, 'notion-query.mjs'), join(process.env.HOME || '', '.claude/scripts/notion-query.mjs')].find(
-    existsSync,
-  );
+  const notionQuery = [
+    join(HERE, 'notion-query.mjs'),
+    join(process.env.HOME || '', '.claude/scripts/notion-query.mjs'),
+  ].find(existsSync);
   const envPath =
     arg('--env') ||
-    (project.projectDir && existsSync(join(project.projectDir, 'packages/backend/.env'))
+    (project.projectDir &&
+    existsSync(join(project.projectDir, 'packages/backend/.env'))
       ? join(project.projectDir, 'packages/backend/.env')
       : null);
   const cmdArgs = [boardId, '--no-done', '--json'];
@@ -440,10 +492,12 @@ if (WANT_BOARD && activeMilestone?.boardId) {
   const haveKey = !!envPath || !!process.env.NOTION_API_KEY;
   if (!notionQuery) {
     board.source = 'unavailable';
-    board.error = 'notion-query.mjs not found beside the loader or in ~/.claude/scripts — run the command by hand.';
+    board.error =
+      'notion-query.mjs not found beside the loader or in ~/.claude/scripts — run the command by hand.';
   } else if (!haveKey) {
     board.source = 'unavailable';
-    board.error = 'No NOTION_API_KEY (pass --env <path-to>/packages/backend/.env) — run the command by hand.';
+    board.error =
+      'No NOTION_API_KEY (pass --env <path-to>/packages/backend/.env) — run the command by hand.';
   } else {
     try {
       const out = execFileSync('node', [notionQuery, ...cmdArgs], {
@@ -452,7 +506,9 @@ if (WANT_BOARD && activeMilestone?.boardId) {
         env: process.env,
       });
       const parsed = JSON.parse(out);
-      const rows = Array.isArray(parsed) ? parsed : parsed.tasks || parsed.results || [];
+      const rows = Array.isArray(parsed)
+        ? parsed
+        : parsed.tasks || parsed.results || [];
       // notion-query --json emits raw Notion property names ("Task Name", "Status", "Type",
       // "Priority", "Depends On"). Normalize, tolerating the lowercase shape too.
       board.notDone = rows.map((t) => ({
@@ -480,11 +536,21 @@ if (WANT_BOARD && activeMilestone?.boardId) {
 const snapshot = {
   generatedAt: new Date().toISOString(),
   db: { path: DB_PATH, readonly: true },
-  project: { id: project.id, name: project.name, projectDir: project.projectDir },
+  project: {
+    id: project.id,
+    name: project.name,
+    projectDir: project.projectDir,
+  },
   deployed,
   activeMilestone,
   deployHint,
-  health: { erroredSessions, recentPlanningSessions, recentDeploys, needsAttentionPRs, recentAuditEvents },
+  health: {
+    erroredSessions,
+    recentPlanningSessions,
+    recentDeploys,
+    needsAttentionPRs,
+    recentAuditEvents,
+  },
   board,
 };
 
@@ -496,7 +562,9 @@ if (WANT_JSON) {
 // ---- human-readable report (+ trailing JSON block) ------------------------
 const L = [];
 L.push(`investigate live-health snapshot   ·   ${snapshot.generatedAt}`);
-L.push(`  project        : ${project.name}  [${project.id}]   dir=${project.projectDir}`);
+L.push(
+  `  project        : ${project.name}  [${project.id}]   dir=${project.projectDir}`,
+);
 L.push(`  DB (read-only) : ${DB_PATH}`);
 L.push(
   `  active milestone: ${activeMilestone ? `${activeMilestone.shortId} — ${activeMilestone.name}` : '(none)'}` +
@@ -504,13 +572,17 @@ L.push(
 );
 L.push('');
 L.push(`▎DEPLOYED (live truth — NOT the checkout HEAD)`);
-L.push(`  sha=${deployed.shortSha ?? '—'}   recorded=${deployed.recordedAt ?? '—'}`);
+L.push(
+  `  sha=${deployed.shortSha ?? '—'}   recorded=${deployed.recordedAt ?? '—'}`,
+);
 L.push(`  ⚠ ${deployHint}`);
 L.push('');
 L.push(`▎ERRORED SESSIONS  (${erroredSessions.length})`);
 for (const s of erroredSessions) {
   L.push(`  · ${s.sessionId}  [${s.sessionType}]  ${s.endedAt ?? ''}`);
-  L.push(`      task: ${s.taskName ?? '—'}${s.taskIdForms ? `   id=${s.taskIdForms.bare} | ${s.taskIdForms.notion}` : ''}`);
+  L.push(
+    `      task: ${s.taskName ?? '—'}${s.taskIdForms ? `   id=${s.taskIdForms.bare} | ${s.taskIdForms.notion}` : ''}`,
+  );
   if (s.lastErrorDetail) L.push(`      err : ${s.lastErrorDetail}`);
   if (s.promptFile) L.push(`      prompt-file: ${s.promptFile}`);
   else if (s.preAssemblyFailure)
@@ -523,11 +595,19 @@ for (const s of erroredSessions) {
 }
 if (!erroredSessions.length) L.push('  (none)');
 L.push('');
-L.push(`▎NON-DONE PLANNING SESSIONS  (groom/design/ops, last ${HOURS}h)  (${recentPlanningSessions.length})`);
-L.push(`  ⚠ idle/killed ≠ ok — a bungled planning session parks 'idle' and looks fine. Read its prompt-file + transcript.`);
+L.push(
+  `▎NON-DONE PLANNING SESSIONS  (groom/design/ops, last ${HOURS}h)  (${recentPlanningSessions.length})`,
+);
+L.push(
+  `  ⚠ idle/killed ≠ ok — a bungled planning session parks 'idle' and looks fine. Read its prompt-file + transcript.`,
+);
 for (const s of recentPlanningSessions) {
-  L.push(`  · ${s.sessionId}  [${s.sessionType}]  status=${s.status}  ${s.endedAt ?? s.startedAt ?? ''}`);
-  L.push(`      task: ${s.taskName ?? '—'}${s.taskIdForms ? `   id=${s.taskIdForms.bare} | ${s.taskIdForms.notion}` : ''}`);
+  L.push(
+    `  · ${s.sessionId}  [${s.sessionType}]  status=${s.status}  ${s.endedAt ?? s.startedAt ?? ''}`,
+  );
+  L.push(
+    `      task: ${s.taskName ?? '—'}${s.taskIdForms ? `   id=${s.taskIdForms.bare} | ${s.taskIdForms.notion}` : ''}`,
+  );
   if (s.pauseReason?.reason) L.push(`      pause: ${s.pauseReason.reason}`);
   if (s.lastErrorDetail) L.push(`      err : ${s.lastErrorDetail}`);
   if (s.promptFile) L.push(`      prompt-file: ${s.promptFile}`);
@@ -540,12 +620,17 @@ for (const r of recentDeploys) {
   L.push(
     `  · ${r.shortSha}  ${r.status}${r.completed ? '' : '  ⚠ did not complete'}  step='${r.currentStep}'  ${r.startedAt}`,
   );
-  if (r.lastEvent && r.lastEvent.detail) L.push(`      last: ${r.lastEvent.step} — ${r.lastEvent.detail}`);
+  if (r.lastEvent && r.lastEvent.detail)
+    L.push(`      last: ${r.lastEvent.step} — ${r.lastEvent.detail}`);
 }
 if (!recentDeploys.length) L.push('  (none)');
 L.push('');
-L.push(`▎NEEDS-ATTENTION PRs  (${needsAttentionPRs.length})  [gh verification: ${VERIFY_PRS ? 'on' : 'off (--no-verify-prs)'}]`);
-L.push(`  ⚠ db state is the orchestrator's BELIEF, not GitHub truth — a 'STALE' row is already merged/closed and is NOT a live symptom.`);
+L.push(
+  `▎NEEDS-ATTENTION PRs  (${needsAttentionPRs.length})  [gh verification: ${VERIFY_PRS ? 'on' : 'off (--no-verify-prs)'}]`,
+);
+L.push(
+  `  ⚠ db state is the orchestrator's BELIEF, not GitHub truth — a 'STALE' row is already merged/closed and is NOT a live symptom.`,
+);
 for (const p of needsAttentionPRs) {
   const ghState = p.github
     ? `gh=${p.github.state}${p.stale ? '  ⚠STALE — already merged/closed on GitHub, NOT a live symptom' : ''}`
@@ -561,13 +646,18 @@ if (!needsAttentionPRs.length) L.push('  (none)');
 L.push('');
 L.push(`▎RECENT INCIDENT-SHAPED AUDIT EVENTS  (${recentAuditEvents.length})`);
 for (const e of recentAuditEvents) {
-  L.push(`  · ${e.ts}  ${e.eventType}  ${e.taskId ?? ''}${e.payloadSummary ? `  — ${e.payloadSummary}` : ''}`);
+  L.push(
+    `  · ${e.ts}  ${e.eventType}  ${e.taskId ?? ''}${e.payloadSummary ? `  — ${e.payloadSummary}` : ''}`,
+  );
 }
 if (!recentAuditEvents.length) L.push('  (none)');
 L.push('');
-L.push(`▎ACTIVE BOARD (non-Done)  [${board.source}]  (${board.notDone.length})`);
+L.push(
+  `▎ACTIVE BOARD (non-Done)  [${board.source}]  (${board.notDone.length})`,
+);
 if (board.source === 'notion-query') {
-  for (const t of board.notDone) L.push(`  · ${t.status}  ${t.type ?? ''}  ${t.title}   [${t.id}]`);
+  for (const t of board.notDone)
+    L.push(`  · ${t.status}  ${t.type ?? ''}  ${t.title}   [${t.id}]`);
 } else {
   L.push(`  ${board.error ?? 'not fetched'}`);
   if (board.command) L.push(`  run: ${board.command}`);

@@ -639,7 +639,10 @@ describe('getTestCommandDenyPatterns', () => {
   });
 
   it('turns each configured test command into a Bash(<command>:*) deny rule', () => {
-    const denies = getTestCommandDenyPatterns(['npm test', 'npm run test:unit']);
+    const denies = getTestCommandDenyPatterns([
+      'npm test',
+      'npm run test:unit',
+    ]);
     expect(denies).toContain('Bash(npm test:*)');
     expect(denies).toContain('Bash(npm run test:unit:*)');
   });
@@ -683,12 +686,14 @@ describe('getTestCommandDenyPatterns', () => {
   describe('polimarket-shaped config (uv run pytest)', () => {
     const denies = getTestCommandDenyPatterns(['uv run pytest']);
 
-    it.each(['uv run pytest', 'uv run pytest tests/', 'pytest', 'python -m pytest'])(
-      'blocks the direct-runner invocation %s',
-      (command) => {
-        expect(isDeniedByPatterns(denies, command)).toBe(true);
-      },
-    );
+    it.each([
+      'uv run pytest',
+      'uv run pytest tests/',
+      'pytest',
+      'python -m pytest',
+    ])('blocks the direct-runner invocation %s', (command) => {
+      expect(isDeniedByPatterns(denies, command)).toBe(true);
+    });
 
     it('does not block other uv run subcommands', () => {
       expect(isDeniedByPatterns(denies, 'uv run ruff check')).toBe(false);
