@@ -1,6 +1,13 @@
 # Per-project orchestrator config. Read by packages/backend/src/session/orchestrator-config.ts.
 # Silent no-op if missing; defaults are empty arrays / empty string.
 
+# Structured test-result contract: format of the test report(s) produced by the
+# `test:` commands below, and a glob (relative to project root) locating them.
+# Both frontend and backend `npm run test -w ...` scripts now pass
+# --reporter=junit --outputFile=.test-reports/<pkg>.xml to vitest.
+test_report_format: junit-xml
+test_report_glob: ".test-reports/*.xml"
+
 # Commands the orchestrator runs in the worktree after PR open, before review spawn.
 # Mechanical fixes only — failures are logged and review proceeds.
 autofix:
