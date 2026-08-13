@@ -12,7 +12,10 @@ const ARCHITECTURE_READ_TOOLS = [
   orchestratorMcpToolName('architecture.getUnit'),
   orchestratorMcpToolName('architecture.queryUnits'),
 ];
-const TASK_READ_TOOLS = [orchestratorMcpToolName('task.getById')];
+const TASK_READ_TOOLS = [
+  orchestratorMcpToolName('task.getById'),
+  orchestratorMcpToolName('task.queryTasks'),
+];
 const TIER_B_READ_TOOLS = [
   orchestratorMcpToolName('session.getRecord'),
   orchestratorMcpToolName('auditLog.query'),

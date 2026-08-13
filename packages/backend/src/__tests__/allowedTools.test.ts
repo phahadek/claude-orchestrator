@@ -52,6 +52,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'architecture.getUnit',
   'architecture.queryUnits',
   'task.getById',
+  'task.queryTasks',
   'planning.noOp',
   'pullRequest.getByTaskId',
   'gateSeed.getState',

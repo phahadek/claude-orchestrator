@@ -322,11 +322,15 @@ const ARCHITECTURE_READ_MCP_TOOLS = [
   orchestratorMcpToolName('architecture.queryUnits'),
 ];
 
-// task.getById — the read-only task-summary ({title, type, status}) lookup
-// (mcp/tools/taskReadTools.ts), always-on for groom/design/ops by the same
-// precedent as ARCHITECTURE_READ_MCP_TOOLS above. Not a staged-intent kind,
-// so it isn't in PLANNING_INTENT_KINDS — added here explicitly.
-const TASK_READ_MCP_TOOLS = [orchestratorMcpToolName('task.getById')];
+// task.getById / task.queryTasks — the read-only task-summary
+// ({title, type, status}) lookup and board search (mcp/tools/taskReadTools.ts),
+// always-on for groom/design/ops by the same precedent as
+// ARCHITECTURE_READ_MCP_TOOLS above. Not staged-intent kinds, so neither is
+// in PLANNING_INTENT_KINDS — added here explicitly.
+const TASK_READ_MCP_TOOLS = [
+  orchestratorMcpToolName('task.getById'),
+  orchestratorMcpToolName('task.queryTasks'),
+];
 
 // pullRequest.getByTaskId — the read-only PR lookup
 // (mcp/tools/pullRequestReadTools.ts), registered unconditionally by

@@ -69,7 +69,10 @@ const ARCHITECTURE_READ_TOOLS = [
 // task.getById is a read-only task-summary lookup, not a staged-intent kind —
 // it isn't in PLANNING_INTENT_KINDS, so every workflow's guard below excludes
 // it too (see config.ts's TASK_READ_MCP_TOOLS comment).
-const TASK_READ_TOOLS = [orchestratorMcpToolName('task.getById')];
+const TASK_READ_TOOLS = [
+  orchestratorMcpToolName('task.getById'),
+  orchestratorMcpToolName('task.queryTasks'),
+];
 // session.getRecord / auditLog.query are the Tier-B capability-gated read
 // tools (mcp/tools/sessionRecordReadTool.ts, mcp/tools/auditLogReadTools.ts),
 // registered unconditionally like the tools above — not staged-intent kinds,
