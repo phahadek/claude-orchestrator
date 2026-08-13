@@ -381,7 +381,14 @@ describe('sweepStagedIntentsForTerminalSessions (backstop sweep)', () => {
       200,
     );
 
-    expect(reaped).toBe(1);
+    expect(reaped).toEqual([
+      {
+        sessionId: 'sess-crashed',
+        expired: [
+          { id: 'crashed-1', kind: 'task.setStatus', group_id: 'group-1' },
+        ],
+      },
+    ]);
     expect(getStagedIntent('crashed-1')!.state).toBe('superseded');
     expect(getStagedIntent('crashed-1')!.disposition_reason).toBe(
       'session_terminal_backstop_sweep',
@@ -402,7 +409,7 @@ describe('sweepStagedIntentsForTerminalSessions (backstop sweep)', () => {
     sweepStagedIntentsForTerminalSessions('sweep', 200);
     const secondPass = sweepStagedIntentsForTerminalSessions('sweep', 300);
 
-    expect(secondPass).toBe(0);
+    expect(secondPass).toEqual([]);
   });
 });
 
