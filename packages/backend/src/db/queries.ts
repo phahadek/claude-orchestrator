@@ -187,6 +187,45 @@ function recordLegacyStatusSignal(
   });
 }
 
+/** Session types whose terminal status is decided by a PR merge/close outcome — see completingSignalRegistry.ts. */
+const PR_ANCHORED_SESSION_TYPES: ReadonlySet<SessionType> = new Set([
+  'standard',
+  'review',
+]);
+
+/**
+ * Dual-write bridge for the PR-anchored session types (standard/code and
+ * review — see completingSignalRegistry.ts's registry comment; depth_review
+ * has no PR of its own to anchor to and is excluded here). Mirrors a PR
+ * merge/close outcome into completing_signal_ledger as an 'external_pr_event'
+ * signal, alongside the legacy markSessionDone/updateSessionStatus write it
+ * accompanies at the call site (PRMergeWatcher/AutoMerger/
+ * bootIdleReconciliation). Purely additive — never gates, alters, or is
+ * awaited by the legacy write it accompanies, so it can never change that
+ * write's observable behavior. No-ops for any other session type (docs/ops
+ * PR outcomes are the planning-family sibling migration task's scope).
+ */
+export function recordPrAnchoredCompletingSignal(
+  sessionId: string,
+  reason: 'pr_merged' | 'pr_closed_without_merge',
+  recordedAt: number,
+): void {
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
+    | { task_id: string | null; session_type: SessionType }
+    | undefined;
+  if (!current || !PR_ANCHORED_SESSION_TYPES.has(current.session_type)) {
+    return;
+  }
+  insertCompletingSignal({
+    session_id: sessionId,
+    task_id: current.task_id ?? null,
+    session_type: current.session_type,
+    signal_class: 'external_pr_event',
+    signal_value: reason,
+    recorded_at: recordedAt,
+  });
+}
+
 export function updateSessionStatus(
   sessionId: string,
   status: string,

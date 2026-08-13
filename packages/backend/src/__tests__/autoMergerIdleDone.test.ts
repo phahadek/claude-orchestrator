@@ -57,6 +57,7 @@ vi.mock('../db/queries.js', () => ({
   getAllActiveMerges: vi.fn().mockReturnValue([]),
   setConflictNudgeSha: vi.fn(),
   markSessionDone: vi.fn(),
+  recordPrAnchoredCompletingSignal: vi.fn(),
   archiveConcludedSessionsOlderThan: vi.fn().mockReturnValue([]),
 }));
 

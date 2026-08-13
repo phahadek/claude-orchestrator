@@ -44,6 +44,7 @@ vi.mock('../../db/queries', () => ({
   clearTerminalPRFlags: vi.fn(),
   clearSessionInitiatedPRClose: vi.fn(),
   updateSessionStatus: vi.fn(),
+  recordPrAnchoredCompletingSignal: vi.fn(),
 }));
 vi.mock('../../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));
 vi.mock('../reviewUtils', () => ({

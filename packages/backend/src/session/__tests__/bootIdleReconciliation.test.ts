@@ -6,6 +6,7 @@ vi.mock('../../db/queries', () => ({
   getIdleReviewSessionsWithTerminalCodingOrPR: vi.fn().mockReturnValue([]),
   markSessionDone: vi.fn(),
   updateSessionStatus: vi.fn(),
+  recordPrAnchoredCompletingSignal: vi.fn(),
 }));
 
 vi.mock('../../logger', () => ({

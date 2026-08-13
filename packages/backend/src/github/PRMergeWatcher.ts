@@ -50,6 +50,7 @@ import {
   getLatestTestRequestRun,
   markSessionDone,
   updateSessionStatus,
+  recordPrAnchoredCompletingSignal,
   clearTerminalPRFlags,
   setHeadBranch,
   clearSessionInitiatedPRClose,
@@ -423,7 +424,13 @@ export class PRMergeWatcher extends EventEmitter {
       }
       // Transition review session to error (terminal) then end it gracefully
       if (pr.review_session_id) {
-        updateSessionStatus(pr.review_session_id, 'error', Date.now());
+        const now = Date.now();
+        updateSessionStatus(pr.review_session_id, 'error', now);
+        recordPrAnchoredCompletingSignal(
+          pr.review_session_id,
+          'pr_closed_without_merge',
+          now,
+        );
         this.sessions.endSession(pr.review_session_id);
       }
       this.broadcast({
@@ -1611,11 +1618,17 @@ export class PRMergeWatcher extends EventEmitter {
     // endSession() below is what actually closes stdin and, if the process
     // doesn't honor that, forcefully reaps it.
     if (pr.session_id) {
+      const codeSessionDoneAt = Date.now();
       markSessionDone(
         pr.session_id,
-        Date.now(),
+        codeSessionDoneAt,
         pr.pr_url ?? null,
         'pr_merge_watcher',
+      );
+      recordPrAnchoredCompletingSignal(
+        pr.session_id,
+        'pr_merged',
+        codeSessionDoneAt,
       );
     }
 
@@ -1632,11 +1645,17 @@ export class PRMergeWatcher extends EventEmitter {
 
     // Mark the review session done — same terminal transition as the code session.
     if (pr.review_session_id) {
+      const reviewSessionDoneAt = Date.now();
       markSessionDone(
         pr.review_session_id,
-        Date.now(),
+        reviewSessionDoneAt,
         pr.pr_url ?? null,
         'pr_merge_watcher',
+      );
+      recordPrAnchoredCompletingSignal(
+        pr.review_session_id,
+        'pr_merged',
+        reviewSessionDoneAt,
       );
     }
 

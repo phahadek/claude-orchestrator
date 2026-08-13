@@ -22,6 +22,7 @@ import {
   deleteActiveMerge,
   getAllActiveMerges,
   markSessionDone,
+  recordPrAnchoredCompletingSignal,
   getTaskCache,
   getPendingRoutedCommentCount,
   markReviewerRequested,
@@ -849,6 +850,7 @@ export class AutoMerger {
     const now = Date.now();
     if (pr.session_id) {
       markSessionDone(pr.session_id, now, pr.pr_url ?? null, 'auto_merger');
+      recordPrAnchoredCompletingSignal(pr.session_id, 'pr_merged', now);
     }
     if (pr.review_session_id) {
       markSessionDone(
@@ -857,6 +859,7 @@ export class AutoMerger {
         pr.pr_url ?? null,
         'auto_merger',
       );
+      recordPrAnchoredCompletingSignal(pr.review_session_id, 'pr_merged', now);
     }
   }
 
