@@ -154,6 +154,155 @@ function checkDeferralPhrases(body: string): ReadinessViolation[] {
   return violations;
 }
 
+/**
+ * A single write capability a task declares — at grooming/Ready time — that
+ * a dispatched ops session is pre-authorized to auto-approve at request time
+ * (see the architecture unit "A task-settled write auto-approves a
+ * capability request only when declared, exact-matched, and not
+ * Prod-Mutating"). `capability` is the exact capability string a matching
+ * `session.requestCapability` must equal (never a prefix/pattern match).
+ * `prodMutating` mirrors the gate/deploy Prod-Mutating classification
+ * convention (see gateService.ts / playbookSchema.ts's `is_prod_mutating`):
+ * true means this write can still only be manually approved; false means it
+ * is eligible for auto-approval. An entry with no discernible tag, or a tag
+ * that doesn't unambiguously say "non-prod-mutating", defaults to
+ * `prodMutating: true` — fail-closed, never fail-open.
+ */
+export interface DeclaredWriteEntry {
+  capability: string;
+  prodMutating: boolean;
+}
+
+/**
+ * Normalizes a raw tag fragment (e.g. "Non-Prod-Mutating", "prod mutating")
+ * down to a bare lowercase letter run so punctuation/casing/whitespace
+ * variance doesn't defeat the match.
+ */
+function normalizeTagText(tag: string): string {
+  return tag.replace(/[^a-z]/gi, '').toLowerCase();
+}
+
+/**
+ * Classifies a declared-write's tag text as Prod-Mutating or not. Only an
+ * unambiguous "non-prod-mutating"/"not-prod-mutating" tag clears the write
+ * for auto-approval; a bare "prod-mutating" tag, an empty tag, or any other
+ * text defaults to Prod-Mutating (fail-closed) — see DeclaredWriteEntry.
+ */
+function classifyProdMutatingTag(tag: string): boolean {
+  const normalized = normalizeTagText(tag);
+  if (!normalized) return true;
+  if (
+    normalized.includes('nonprodmutating') ||
+    normalized.includes('notprodmutating')
+  ) {
+    return false;
+  }
+  return true;
+}
+
+const DECLARED_WRITE_LINE_RE = /^[-*]\s+(.*)$|^\d+[.)]\s+(.*)$/;
+
+/**
+ * Splits a single "## Declared writes" bullet into its capability string and
+ * classification tag. The capability is preferentially the first
+ * backtick-quoted span (`` `Bash(npm ci:*)` `` — Docs task-body convention
+ * mirrors backticking a literal value); absent one, it's the text before the
+ * first " — "/" - "/"|" separator. Returns a null capability when nothing
+ * usable could be parsed (a genuinely malformed entry, e.g. an empty bullet
+ * or one that is only a tag with no capability), which the readiness-gate
+ * check below treats as a violation.
+ */
+function parseDeclaredWriteLine(rawLine: string): DeclaredWriteEntry {
+  const m = DECLARED_WRITE_LINE_RE.exec(rawLine.trim());
+  const content = (m ? (m[1] ?? m[2] ?? '') : rawLine).trim();
+
+  const backtickMatch = content.match(/`([^`]+)`/);
+  let capability: string;
+  let rest: string;
+  if (backtickMatch && backtickMatch.index !== undefined) {
+    capability = backtickMatch[1].trim();
+    rest = content.slice(backtickMatch.index + backtickMatch[0].length);
+  } else {
+    const sepMatch = content.match(/\s[—|]\s|\s-{1,2}\s/);
+    if (sepMatch && sepMatch.index !== undefined) {
+      capability = content.slice(0, sepMatch.index).trim();
+      rest = content.slice(sepMatch.index + sepMatch[0].length);
+    } else {
+      capability = content;
+      rest = '';
+    }
+  }
+  capability = capability.replace(/^[`\s]+|[`\s]+$/g, '').trim();
+  const tag = rest.replace(/^[\s—|:-]+/, '').trim();
+
+  return { capability, prodMutating: classifyProdMutatingTag(tag) };
+}
+
+/**
+ * Extracts every declared write from a task body's "## Declared writes"
+ * section (any heading level, emoji-tolerant via normalizeHeadingText — same
+ * convention as Open Questions/Manual Verification). Lines that don't parse
+ * to a capability are silently dropped here — checkDeclaredWritesSection is
+ * the enforcement point that rejects those before Ready; this extractor is
+ * also called post-Ready (dispatch-time capture), where a malformed line
+ * must never crash the loader. Empty/absent section returns [].
+ */
+export function extractDeclaredWrites(body: string): DeclaredWriteEntry[] {
+  const entries: DeclaredWriteEntry[] = [];
+  const lines = body.split('\n');
+  let inSection = false;
+  for (const line of lines) {
+    const heading = line.match(/^#{1,6}\s*(.+)$/);
+    if (heading) {
+      inSection = normalizeHeadingText(heading[1]) === 'declared writes';
+      continue;
+    }
+    if (!inSection) continue;
+    const trimmed = line.trim();
+    if (!trimmed || /^none$/i.test(trimmed)) continue;
+    if (!/^[-*]\s+/.test(trimmed) && !/^\d+[.)]\s+/.test(trimmed)) continue;
+    const entry = parseDeclaredWriteLine(trimmed);
+    if (entry.capability) entries.push(entry);
+  }
+  return entries;
+}
+
+/**
+ * Ready-transition validator for the Declared writes section: a bullet under
+ * "## Declared writes" that carries no discernible capability (an empty
+ * entry, or one that is only a tag) is malformed and blocks Ready — the
+ * declaration must be durable and well-formed before any session carrying it
+ * is ever spawned. A bullet with a capability but no/ambiguous
+ * Prod-Mutating tag is NOT a violation: classifyProdMutatingTag already
+ * defaults it to Prod-Mutating (fail-closed), so it is safe to let through,
+ * just never auto-approvable.
+ */
+function checkDeclaredWritesSection(body: string): ReadinessViolation[] {
+  const violations: ReadinessViolation[] = [];
+  const lines = body.split('\n');
+  let inSection = false;
+  for (let i = 0; i < lines.length; i++) {
+    const heading = lines[i].match(/^#{1,6}\s*(.+)$/);
+    if (heading) {
+      inSection = normalizeHeadingText(heading[1]) === 'declared writes';
+      continue;
+    }
+    if (!inSection) continue;
+    const trimmed = lines[i].trim();
+    if (!trimmed || /^none$/i.test(trimmed)) continue;
+    if (!/^[-*]\s+/.test(trimmed) && !/^\d+[.)]\s+/.test(trimmed)) continue;
+    const entry = parseDeclaredWriteLine(trimmed);
+    if (!entry.capability) {
+      violations.push({
+        tier: 'structural',
+        detail: `Declared writes entry is malformed — no capability could be parsed ("${trimmed}")`,
+        location: `line ${i + 1}`,
+      });
+    }
+  }
+  return violations;
+}
+
 /** Tier 2 — leftover grooming-instruction residue found in prose. */
 function checkGroomingResidue(body: string): ReadinessViolation[] {
   const violations: ReadinessViolation[] = [];
@@ -172,6 +321,181 @@ function checkGroomingResidue(body: string): ReadinessViolation[] {
   });
   return violations;
 }
+
+/**
+ * Structural check: the named heading exists and is non-empty. A per-type
+ * floor fact — replaces the generic "## Open Questions" Tier-1 check for a
+ * type whose own authoring convention (config-template/task-writing.md
+ * § 🔧 Operational & 🔎 Investigation tasks) substitutes a different
+ * required section in place of Open Questions / Files-paths-affected.
+ */
+function checkRequiredHeadingSection(
+  body: string,
+  headingLabel: string,
+): ReadinessViolation[] {
+  const target = normalizeHeadingText(headingLabel);
+  const lines = stripNonProse(body);
+  let found = false;
+  let inSection = false;
+  let hasContent = false;
+  for (const line of lines) {
+    const heading = line.match(/^#{1,6}\s*(.+)$/);
+    if (heading) {
+      const normalized = normalizeHeadingText(heading[1]);
+      inSection = normalized === target;
+      if (inSection) found = true;
+      continue;
+    }
+    if (!inSection) continue;
+    const trimmed = line.trim();
+    if (!trimmed || /^none$/i.test(trimmed)) continue;
+    hasContent = true;
+  }
+  if (!found) {
+    return [
+      {
+        tier: 'structural',
+        detail: `required "${headingLabel}" section is missing`,
+        location: 'body',
+      },
+    ];
+  }
+  if (!hasContent) {
+    return [
+      {
+        tier: 'structural',
+        detail: `"${headingLabel}" section is empty`,
+        location: 'body',
+      },
+    ];
+  }
+  return [];
+}
+
+/**
+ * Extracts the prose (fenced/quoted content blanked, per stripNonProse) of
+ * the first heading (any level) matching `normalizedTarget`, up to the next
+ * heading. Returns `found: false` when no such heading exists.
+ */
+function extractSectionProse(
+  body: string,
+  normalizedTarget: string,
+): { found: boolean; text: string; hasList: boolean } {
+  const rawLines = body.split('\n');
+  const proseLines = stripNonProse(body);
+  let inSection = false;
+  let found = false;
+  let hasList = false;
+  let text = '';
+  for (let i = 0; i < rawLines.length; i++) {
+    const heading = rawLines[i].match(/^#{1,6}\s*(.+)$/);
+    if (heading) {
+      inSection = normalizeHeadingText(heading[1]) === normalizedTarget;
+      if (inSection) found = true;
+      continue;
+    }
+    if (!inSection) continue;
+    const trimmed = rawLines[i].trim();
+    if (/^[-*]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed)) hasList = true;
+    text += proseLines[i] + '\n';
+  }
+  return { found, text, hasList };
+}
+
+/**
+ * 🔧 Operational floor fact — a lexical scan for reconcile-and-capture
+ * language within "### 👁️ Manual verification" (config-template/
+ * task-writing.md: "the reconcile + capture check that proves the worker
+ * heard the change and a record landed"). Requires both stems present
+ * anywhere in the section's prose; order-agnostic, leniently matched.
+ */
+function checkOperationalReconcileCapture(body: string): ReadinessViolation[] {
+  const { found, text } = extractSectionProse(body, 'manual verification');
+  const hasReconcileAndCapture =
+    found && /reconcil/i.test(text) && /captur/i.test(text);
+  if (hasReconcileAndCapture) return [];
+  return [
+    {
+      tier: 'lexical',
+      detail:
+        'Manual verification section is missing reconcile-and-capture language',
+      location: '### 👁️ Manual verification',
+    },
+  ];
+}
+
+/**
+ * 🔎 Investigation floor fact — a structural scan for an enumerated
+ * decision-branch structure within Context (config-template/task-writing.md:
+ * "the decision space / branches (a/b/c → what each implies and what gets
+ * filed)"). Detected leniently: any list under Context, or clear if/then- or
+ * if/when-implies-style branch-to-consequence phrasing — not literal
+ * `(a)/(b)/(c)` lettering.
+ */
+function checkInvestigationDecisionBranchStructure(
+  body: string,
+): ReadinessViolation[] {
+  const { found, text, hasList } = extractSectionProse(body, 'context');
+  const branchPhrasing =
+    /\bif\b[^\n]{0,120}\bthen\b/i.test(text) ||
+    /\b(if|when)\b[^\n]{0,120}\b(implies|files|leads to|means)\b/i.test(text);
+  if (found && (hasList || branchPhrasing)) return [];
+  return [
+    {
+      tier: 'structural',
+      detail:
+        'Context section lacks an enumerated decision-branch structure (no list and no if/then branch phrasing)',
+      location: 'Context',
+    },
+  ];
+}
+
+/**
+ * Per-type clean-verdict floor facts (locked by the design task "Articulate
+ * the clean-verdict standard for 🔧 Operational and 🔎 Investigation
+ * promotion" — see its "Per-type clean-verdict standard and TriageVerdict
+ * eligibility registry" architecture unit). Deliberately decoupled from
+ * INTERACTIVE_TASK_TYPES (planning/triage.ts) — that set gates promotion
+ * eligibility, this registry gates what checkReadiness enforces structurally
+ * per type. `requiredHeading` replaces the generic Open Questions Tier-1
+ * check for that type (see checkReadiness); `scans` are additional per-type
+ * floor checks; `judgmentItems` mirrors the type's authoring-convention
+ * Manual verification checklist (documentation, not enforced here);
+ * `hardBlockGateEligible` mirrors whether the type's runtime/launch-and-
+ * observe items can legitimately accrete to the Manual Verification Gate
+ * (Operational: yes; Investigation: no — its Manual verification section
+ * self-verifies in-session and is never stripped).
+ */
+interface TypeFloorFacts {
+  requiredHeading: string;
+  scans: readonly ((body: string) => ReadinessViolation[])[];
+  judgmentItems: readonly string[];
+  hardBlockGateEligible: boolean;
+}
+
+const TYPE_FLOOR_FACTS: Readonly<Record<string, TypeFloorFacts>> = {
+  '🔧 Operational': {
+    requiredHeading: 'Targets / surfaces affected',
+    scans: [checkOperationalReconcileCapture],
+    judgmentItems: [
+      'seed present on prod',
+      'worker reconciled',
+      'correct breadth authored',
+      'Done ≠ deployed ≠ seeded ≠ working',
+    ],
+    hardBlockGateEligible: true,
+  },
+  '🔎 Investigation': {
+    requiredHeading: 'Deliverables',
+    scans: [checkInvestigationDecisionBranchStructure],
+    judgmentItems: [
+      'decision reached is defensible (falsification run)',
+      'evidence recorded with provenance',
+      'follow-on tasks filed with accurate priority',
+    ],
+    hardBlockGateEligible: false,
+  },
+};
 
 /**
  * Task types whose readiness is about their own scope/method being clear,
@@ -195,9 +519,17 @@ const OPEN_QUESTIONS_EXEMPT_TYPES: ReadonlySet<string> = new Set([
 /**
  * Run the deterministic tiers against a task page body. `type` is the
  * task's display-format Type (e.g. '💻 Code'); when it is 📐 Design,
- * 📋 Planning, 🔎 Investigation, or 🧪 Testing, the Open Questions and
- * deferral-phrase checks are skipped — see OPEN_QUESTIONS_EXEMPT_TYPES.
+ * 📋 Planning, 🔎 Investigation, or 🧪 Testing, the generic Open Questions
+ * and deferral-phrase checks are skipped — see OPEN_QUESTIONS_EXEMPT_TYPES.
  * checkGroomingResidue is type-agnostic.
+ *
+ * When `type` has an entry in TYPE_FLOOR_FACTS (🔧 Operational,
+ * 🔎 Investigation), the generic Open Questions structural check is replaced
+ * by that type's own required-heading check, and its additional per-type
+ * scans run too — independent of OPEN_QUESTIONS_EXEMPT_TYPES, which only
+ * governs the generic Open Questions / deferral-phrase pair. Notably,
+ * 🔧 Operational is not in OPEN_QUESTIONS_EXEMPT_TYPES, so it keeps the
+ * deferral-phrase check even though its Open Questions check is replaced.
  */
 export function checkReadiness(
   body: string | null | undefined,
@@ -205,10 +537,24 @@ export function checkReadiness(
 ): ReadinessViolation[] {
   const text = body ?? '';
   const exempt = type != null && OPEN_QUESTIONS_EXEMPT_TYPES.has(type);
+  const floorFacts = type != null ? TYPE_FLOOR_FACTS[type] : undefined;
+
+  const structuralViolations = floorFacts
+    ? checkRequiredHeadingSection(text, floorFacts.requiredHeading)
+    : exempt
+      ? []
+      : checkOpenQuestionsSection(text);
+
+  const floorFactScanViolations = floorFacts
+    ? floorFacts.scans.flatMap((scan) => scan(text))
+    : [];
+
   return [
-    ...(exempt ? [] : checkOpenQuestionsSection(text)),
+    ...structuralViolations,
     ...(exempt ? [] : checkDeferralPhrases(text)),
     ...checkGroomingResidue(text),
+    ...checkDeclaredWritesSection(text),
+    ...floorFactScanViolations,
   ];
 }
 
@@ -264,6 +610,41 @@ export function parseManualVerificationItems(body: string): string[] {
     if (!inSection) continue;
     const trimmed = line.trim();
     if (!trimmed || /^none$/i.test(trimmed)) continue;
+    if (/^[-*]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed)) {
+      items.push(
+        trimmed
+          .replace(/^[-*]\s+/, '')
+          .replace(/^\d+[.)]\s+/, '')
+          .trim(),
+      );
+    }
+  }
+  return items;
+}
+
+/**
+ * The seed_contribution twin of parseManualVerificationItems: parses the
+ * non-empty list items under an "Operational seed" heading (any level) from
+ * a task body — the pre-groom candidate set that stageSeedContribution's
+ * minted seed_item rows are supposed to account for. Same
+ * heading-normalization posture (normalizeHeadingText strips emoji), so
+ * "## Operational seed" and "### Operational Seed" both match; the "None."
+ * placeholder bodyRender.ts renders for an empty section is skipped the same
+ * way "none" is skipped under Manual verification.
+ */
+export function parseOperationalSeedItems(body: string): string[] {
+  const items: string[] = [];
+  const lines = body.split('\n');
+  let inSection = false;
+  for (const line of lines) {
+    const heading = line.match(/^#{1,6}\s*(.+)$/);
+    if (heading) {
+      inSection = normalizeHeadingText(heading[1]) === 'operational seed';
+      continue;
+    }
+    if (!inSection) continue;
+    const trimmed = line.trim();
+    if (!trimmed || /^none\.?$/i.test(trimmed)) continue;
     if (/^[-*]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed)) {
       items.push(
         trimmed

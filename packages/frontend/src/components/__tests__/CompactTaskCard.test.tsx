@@ -231,6 +231,56 @@ describe('CompactTaskCard', () => {
     expect(screen.queryByTestId('compact-planning-icon')).toBeNull();
   });
 
+  it('labels a docs planning session as "Docs" rather than falling through to "Ops"', () => {
+    render(
+      <CompactTaskCard
+        task={makeTask({
+          planningSession: {
+            sessionId: 'plan-docs',
+            status: 'idle',
+            sessionType: 'docs',
+            startedAt: 0,
+            endedAt: null,
+            inputTokens: 0,
+            outputTokens: 0,
+          },
+        })}
+        showCheckbox={false}
+        checked={false}
+        onCheckChange={vi.fn()}
+        onClick={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('compact-planning-icon').title).toBe(
+      'Held by Docs session (idle)',
+    );
+  });
+
+  it('labels a split planning session as "Split" rather than falling through to "Ops"', () => {
+    render(
+      <CompactTaskCard
+        task={makeTask({
+          planningSession: {
+            sessionId: 'plan-split',
+            status: 'running',
+            sessionType: 'split',
+            startedAt: 0,
+            endedAt: null,
+            inputTokens: 0,
+            outputTokens: 0,
+          },
+        })}
+        showCheckbox={false}
+        checked={false}
+        onCheckChange={vi.fn()}
+        onClick={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('compact-planning-icon').title).toBe(
+      'Held by Split session (running)',
+    );
+  });
+
   it('has data-status attribute matching the task displayStatus', () => {
     render(
       <CompactTaskCard

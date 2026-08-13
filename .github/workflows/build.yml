@@ -3,16 +3,17 @@ name: CI
 on:
   push:
     branches: [dev, main]
+    # Documentation is deliberately NOT ignored here. It used to be
+    # ('**/*.md' + 'docs/**'), which meant a docs-only change produced no
+    # workflow run at all — not a reduced one, none — so nothing ever
+    # verified it. '.git-blame-ignore-revs' stays ignored: it is not
+    # documentation and CI has no reason to run on a change touching only it.
     paths-ignore:
-      - '**/*.md'
       - '.git-blame-ignore-revs'
-      - 'docs/**'
   pull_request:
     branches: [dev, main]
     paths-ignore:
-      - '**/*.md'
       - '.git-blame-ignore-revs'
-      - 'docs/**'
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -56,6 +57,15 @@ jobs:
 
       - name: Format check
         run: npm run format:check
+
+      - name: Check markdown paths
+        # Validates that repo-relative paths referenced in tracked markdown
+        # resolve to tracked files, so a rename/delete cannot silently leave
+        # documentation pointing at nothing. Needs the full checkout the
+        # fetch-depth: 0 above already provides — the checker enumerates the
+        # tree with `git ls-files`. Exclusions (deployed/generated paths) and
+        # the `path-check:ignore` line marker live in the script itself.
+        run: npm run check:markdown-paths
 
       - name: Verify systemd unit
         run: |

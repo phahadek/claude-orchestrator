@@ -4,6 +4,7 @@ import type {
   MergeabilityCategory,
   FailingCheck,
   VerifiedFlakyDispositionPayload,
+  FlakeRecoveryOutcome,
 } from './types';
 import { GitHubRateLimitError } from './types';
 import type { SessionManager } from '../session/SessionManager';
@@ -14,6 +15,7 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
@@ -45,7 +47,7 @@ import {
   setLastReviewedSha,
   setPRReviewResult,
   setPendingPush,
-  getTestResult,
+  getLatestTestRequestRun,
   markSessionDone,
   updateSessionStatus,
   clearTerminalPRFlags,
@@ -225,6 +227,15 @@ export class PRMergeWatcher extends EventEmitter {
    * PRs), which would paginate thousands of unrelated PRs on a busy repo).
    * A row still open on GitHub (e.g. a PR that's genuinely stuck) is left
    * untouched by reconcileTerminalState.
+   *
+   * A row still open is also run through runMergeabilityCheck: this is the
+   * only place anything ever re-categorizes mergeability for an escalated
+   * row (poll() skips it via isTerminalStalePR), so without this a PR that
+   * became mergeable while escalated (e.g. #1449) would sit at a stale
+   * merge_state/mergeable forever. runMergeabilityCheck's own terminalPause
+   * handling still refreshes the observability columns without clearing the
+   * pause; the becomes-clean transition hook re-drives AutoMerger.attempt()
+   * to "consider" the row without clearing stalled_reconcile_cap itself.
    */
   async sweepEscalatedStalePRs(): Promise<number> {
     const escalated = getAllOpenPRs().filter(
@@ -239,7 +250,10 @@ export class PRMergeWatcher extends EventEmitter {
         );
         continue;
       }
-      await this.reconcileTerminalState(pr);
+      const state = await this.reconcileTerminalState(pr);
+      if (state === 'open') {
+        await this.runMergeabilityCheck(pr);
+      }
       items_processed++;
     }
     return items_processed;
@@ -570,20 +584,30 @@ export class PRMergeWatcher extends EventEmitter {
     const config = project ? loadOrchestratorConfig(project.projectDir) : null;
 
     // ── Orchestrator-run test gate (F2) ──────────────────────────────────────
-    // When test: commands are configured, the per-SHA test result is the
-    // authoritative CI signal — GitHub CI is disabled on private repos so
-    // GitHub reports the PR mergeable; we gate on F1's result instead.
-    // Skipped for terminally-paused PRs so we fall through to the read-only
-    // GitHub merge-state refresh below instead of remediating.
+    // When test: commands are configured, the shared content-hash cache
+    // (test_request_runs, keyed by (project_id, whole-tree content hash) —
+    // the same table buildTestsStage/runTestPipeline/the test.request lane
+    // write into) is the authoritative CI signal — GitHub CI is disabled on
+    // private repos so GitHub reports the PR mergeable; we gate on that
+    // cached verdict instead. Skipped for terminally-paused PRs so we fall
+    // through to the read-only GitHub merge-state refresh below instead of
+    // remediating.
     if (
       !terminalPause &&
       config &&
       config.test.length > 0 &&
       pr.head_sha &&
-      pr.session_id
+      pr.session_id &&
+      project
     ) {
-      const testResult = getTestResult(pr.pr_number, pr.repo, pr.head_sha);
-      if (testResult && !testResult.passed) {
+      const worktreePath = getSession(pr.session_id)?.worktree_path;
+      const contentHash = worktreePath
+        ? await computeWholeTreeContentHash(worktreePath)
+        : null;
+      const testResult = contentHash
+        ? getLatestTestRequestRun(project.id, contentHash)
+        : undefined;
+      if (testResult && testResult.state === 'failed') {
         if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
           setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
           setPauseReason(
@@ -736,6 +760,23 @@ export class PRMergeWatcher extends EventEmitter {
 
     if (!terminalPause) this.tryCIFailingRecovery(pr, category);
 
+    // Becomes-clean re-drive: the only other consumer of a clean transition
+    // (tryCIFailingRecovery) fires solely for CI-sourced pauses, so an
+    // approval that lands while CI is still in flight (pause_reason === null,
+    // category was 'unknown') never gets re-driven once GitHub settles to
+    // clean. Fire unconditionally on the transition — including for PRs
+    // carrying a non-CI pause — so those rows are considered too. This never
+    // clears pause_reason itself; run()'s pause_reason !== null guard still
+    // blocks the merge until an already-trusted channel clears the pause.
+    // Keyed off the transition (merge_state changing into 'clean'), not the
+    // level, so an already-clean PR isn't re-driven on every poll.
+    if (category.category === 'clean' && pr.merge_state !== 'clean') {
+      logger.info(
+        `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} became mergeable (clean) — re-driving AutoMerger`,
+      );
+      this.autoMerger?.attempt(pr.pr_number, pr.repo);
+    }
+
     if (stateChanged && category.category === 'blocked') {
       logger.info(
         `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} is blocked by branch protection`,
@@ -873,26 +914,54 @@ export class PRMergeWatcher extends EventEmitter {
     }
 
     const pauseStruct = parsePauseReason(pr.pause_reason);
-    if (pauseStruct?.reason !== 'ci_failing') return;
+    // Each gate fails under its own distinct pause reason — a disposition
+    // must match the reason the PR is actually paused on, otherwise an
+    // 'analyze' confirmation would silently no-op against a ci_failing pause
+    // (or vice versa) instead of actuating the right same-commit re-run.
+    const expectedPauseReason =
+      payload.disposition.gate === 'analyze' ? 'analyze_failing' : 'ci_failing';
+    if (pauseStruct?.reason !== expectedPauseReason) return;
+
+    const project = getProjectByGithubRepo(pr.repo);
+    const projectId = project?.id ?? null;
 
     const maxRetries = typedGetSetting('flake_recovery_max_retries');
     if (pr.flake_recovery_attempts >= maxRetries) {
       setPauseReason(
         pr.pr_number,
         pr.repo,
-        'ci_failing',
+        expectedPauseReason,
         'flake-recovery-exhausted',
       );
+      recordEvent({
+        event_type: 'flake_recovery_exhausted',
+        actor_type: 'system',
+        project_id: projectId,
+        task_id: pr.task_id ?? null,
+        payload: {
+          pr_number: pr.pr_number,
+          repo: pr.repo,
+          attempts: pr.flake_recovery_attempts,
+          max_retries: maxRetries,
+        },
+      });
+      this.broadcast({
+        type: 'pr_flake_recovery_exhausted',
+        prNumber: pr.pr_number,
+        repo: pr.repo,
+        attempts: pr.flake_recovery_attempts,
+        maxRetries,
+      });
       logger.warn(
         `[PRMergeWatcher] PR #${pr.pr_number}: flake recovery exhausted (${pr.flake_recovery_attempts}/${maxRetries}) — staying paused`,
       );
       return;
     }
-    incrementFlakeRecoveryAttempts(pr.pr_number, pr.repo);
 
     recordEvent({
       event_type: 'flake_recovery_attempted',
       actor_type: 'system',
+      project_id: projectId,
       task_id: pr.task_id ?? null,
       payload: {
         pr_number: pr.pr_number,
@@ -905,8 +974,7 @@ export class PRMergeWatcher extends EventEmitter {
     });
 
     if (!pr.head_sha) return;
-    const project = getProjectByGithubRepo(pr.repo);
-    let passed: boolean;
+    let outcome: FlakeRecoveryOutcome;
 
     if (payload.disposition.gate === 'f2') {
       if (!project || !pr.session_id || !this.reviewOrchestrator) return;
@@ -921,10 +989,28 @@ export class PRMergeWatcher extends EventEmitter {
         project,
       );
       if (!result) return;
-      passed = result.passed;
+      outcome = result.outcome;
+    } else if (payload.disposition.gate === 'analyze') {
+      if (!project || !pr.session_id || !this.reviewOrchestrator) return;
+      const session = getSession(pr.session_id);
+      const worktreePath = session?.worktree_path ?? '';
+      if (!worktreePath) return;
+      const result = await this.reviewOrchestrator.rerunFlakyAnalyze(
+        pr.pr_number,
+        pr.repo,
+        pr.head_sha,
+        worktreePath,
+        project,
+      );
+      if (!result) return;
+      outcome = result.outcome;
     } else {
+      let rerequestedIds: number[];
       try {
-        await this.github.rerunFailedJobs(pr.head_sha, pr.repo);
+        rerequestedIds = await this.github.rerunFailedJobs(
+          pr.head_sha,
+          pr.repo,
+        );
       } catch (err) {
         logger.warn(
           `[PRMergeWatcher] rerunFailedJobs failed for PR #${pr.pr_number}:`,
@@ -932,18 +1018,57 @@ export class PRMergeWatcher extends EventEmitter {
         );
         return;
       }
-      const ciCheckNames = project
-        ? loadOrchestratorConfig(project.projectDir).ci_check_name
-        : [];
-      const category = await this.github.categorizeMergeability(
-        pr.pr_number,
+      // Wait for the rerequested checks to reach a terminal state — reading
+      // categorizeMergeability right after rerequest would observe the
+      // freshly-queued check run's transient state, not its real outcome.
+      await this.github.waitForCheckRunsCompletion(
+        pr.head_sha,
         pr.repo,
-        ciCheckNames,
+        rerequestedIds,
       );
-      passed = category.category !== 'ci_failed';
+
+      // Re-verify head_sha immediately before recording the outcome — a push
+      // that landed mid-rerun means this result no longer speaks to the SHA
+      // the disposition was diagnosed against.
+      const current = await this.github.getPRState(pr.pr_number, pr.repo);
+      if (current.headSha !== pr.head_sha) {
+        outcome = 'inconclusive';
+      } else {
+        const ciCheckNames = project
+          ? loadOrchestratorConfig(project.projectDir).ci_check_name
+          : [];
+        const category = await this.github.categorizeMergeability(
+          pr.pr_number,
+          pr.repo,
+          ciCheckNames,
+        );
+        outcome = category.category !== 'ci_failed' ? 'passed' : 'failed';
+      }
+
+      recordEvent({
+        event_type: 'flake_recovery_ci_rerun',
+        actor_type: 'system',
+        project_id: projectId,
+        task_id: pr.task_id ?? null,
+        payload: {
+          pr_number: pr.pr_number,
+          repo: pr.repo,
+          sha: pr.head_sha,
+          outcome,
+        },
+      });
     }
 
-    if (passed) {
+    if (outcome === 'inconclusive') {
+      logger.info(
+        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run inconclusive (head_sha drifted) — not consuming retry budget`,
+      );
+      return;
+    }
+
+    incrementFlakeRecoveryAttempts(pr.pr_number, pr.repo);
+
+    if (outcome === 'passed') {
       resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
       setPauseReason(pr.pr_number, pr.repo, null);
       this.broadcast({
@@ -981,6 +1106,56 @@ export class PRMergeWatcher extends EventEmitter {
 
     const sessionId = prRow.session_id;
     if (!sessionId) return;
+
+    // Refresh head_sha from GitHub before any branch decision below — several
+    // paths (pending re-review guard, no review session yet) return early and
+    // must not leave pull_requests.head_sha stale for a push that already landed.
+    let headSha = prRow.head_sha;
+    {
+      let fetchError: unknown;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const freshPR = await this.github.fetchPR(
+            prRow.repo,
+            prRow.pr_number,
+          );
+          headSha = freshPR.headSha;
+          fetchError = undefined;
+          if (headSha !== prRow.head_sha) {
+            setHeadSha(prRow.pr_number, prRow.repo, headSha);
+            // A fix was actually pushed — the load-bearing signal that
+            // un-sticks a stalled_reconcile_cap escalation, independent of
+            // whatever verdict the re-review below produces.
+            if (
+              parsePauseReason(prRow.pause_reason)?.reason ===
+              'stalled_reconcile_cap'
+            ) {
+              clearTerminalPRFlags(
+                prRow.pr_number,
+                prRow.repo,
+                'head_sha_advance',
+              );
+            }
+            prRow = { ...prRow, head_sha: headSha };
+          }
+          break;
+        } catch (e) {
+          fetchError = e;
+          if (attempt === 0) {
+            logger.warn(
+              `[PRMergeWatcher] fetch PR #${prRow.pr_number} failed (attempt 1), retrying...`,
+            );
+            await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+          }
+        }
+      }
+      if (fetchError) {
+        logger.warn(
+          `[PRMergeWatcher] failed to fetch latest PR state for #${prRow.pr_number} after retry:`,
+          fetchError,
+        );
+      }
+    }
 
     if (this.pendingReReviews.has(sessionId)) {
       logger.info(
@@ -1069,50 +1244,6 @@ export class PRMergeWatcher extends EventEmitter {
 
     void (async () => {
       try {
-        let headSha = prRow.head_sha;
-        let fetchError: unknown;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            const freshPR = await this.github.fetchPR(
-              prRow.repo,
-              prRow.pr_number,
-            );
-            headSha = freshPR.headSha;
-            fetchError = undefined;
-            if (headSha !== prRow.head_sha) {
-              setHeadSha(prRow.pr_number, prRow.repo, headSha);
-              // A fix was actually pushed — the load-bearing signal that
-              // un-sticks a stalled_reconcile_cap escalation, independent of
-              // whatever verdict the re-review below produces.
-              if (
-                parsePauseReason(prRow.pause_reason)?.reason ===
-                'stalled_reconcile_cap'
-              ) {
-                clearTerminalPRFlags(
-                  prRow.pr_number,
-                  prRow.repo,
-                  'head_sha_advance',
-                );
-              }
-            }
-            break;
-          } catch (e) {
-            fetchError = e;
-            if (attempt === 0) {
-              logger.warn(
-                `[PRMergeWatcher] fetch PR #${prRow.pr_number} failed (attempt 1), retrying...`,
-              );
-              await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-            }
-          }
-        }
-        if (fetchError) {
-          logger.warn(
-            `[PRMergeWatcher] failed to fetch latest PR state for #${prRow.pr_number} after retry:`,
-            fetchError,
-          );
-        }
-
         // Skip re-review when the only push since the last review was the autofix
         // commit — the code at that SHA was already reviewed in executeReview().
         if (
@@ -1431,8 +1562,11 @@ export class PRMergeWatcher extends EventEmitter {
         );
     }
 
-    // Mark the code session done — it was idle (process exited, PR open) and
-    // the PR just merged, so this is the terminal done transition.
+    // Mark the code session done — it was idle (parked, PR open, subprocess
+    // still alive and waiting) and the PR just merged, so this is the
+    // terminal done transition. Idle never implies the process exited;
+    // endSession() below is what actually closes stdin and, if the process
+    // doesn't honor that, forcefully reaps it.
     if (pr.session_id) {
       markSessionDone(
         pr.session_id,
@@ -1442,7 +1576,8 @@ export class PRMergeWatcher extends EventEmitter {
       );
     }
 
-    // End coding session gracefully (stdin close → clean CLI exit).
+    // End coding session (stdin close, verified, escalates to a forceful
+    // kill if the process doesn't exit on its own).
     // Mark it for local branch deletion so cleanupWorktree removes the branch
     // even though a prUrl is set.
     if (pr.session_id) {
@@ -1462,7 +1597,8 @@ export class PRMergeWatcher extends EventEmitter {
       );
     }
 
-    // End review session gracefully (stdin close → clean CLI exit)
+    // End review session (stdin close, verified, escalates to a forceful
+    // kill if the process doesn't exit on its own).
     if (pr.review_session_id) {
       this.sessions.endSession(pr.review_session_id);
     }

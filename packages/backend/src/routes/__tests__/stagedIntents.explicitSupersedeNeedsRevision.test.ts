@@ -27,6 +27,7 @@ import {
   transitionStagedIntent,
   listStagedIntentsByGroup,
 } from '../../db/queries.js';
+import { logger } from '../../logger.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM staged_intent').run();
@@ -84,7 +85,7 @@ describe('stageIntent — explicit supersedes targeting a needs_revision intent'
     ).toBe(false);
   });
 
-  it('an explicit supersedes naming a staged intent still works (no regression)', () => {
+  it('an explicit supersedes naming a staged intent still works (no regression) — unblocked, so it only warns', () => {
     const first = stageIntent(
       'task.setStatus',
       { taskId: 't-2', status: 'Ready' },
@@ -94,6 +95,7 @@ describe('stageIntent — explicit supersedes targeting a needs_revision intent'
     );
     expect(getStagedIntent(first.id)!.state).toBe('staged');
 
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     const second = stageIntent(
       'task.setStatus',
       { taskId: 't-2', status: 'Backlog' },
@@ -107,9 +109,12 @@ describe('stageIntent — explicit supersedes targeting a needs_revision intent'
 
     expect(getStagedIntent(second.id)!.supersedes).toBe(first.id);
     expect(getStagedIntent(first.id)!.state).toBe('superseded');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toMatch(/is not blocked/);
+    warnSpy.mockRestore();
   });
 
-  it('an explicit supersedes naming an approved intent still works (no regression)', () => {
+  it('an explicit supersedes naming an approved intent still works (no regression) — unblocked, so it only warns', () => {
     const first = stageIntent(
       'task.setStatus',
       { taskId: 't-3', status: 'Ready' },
@@ -119,6 +124,7 @@ describe('stageIntent — explicit supersedes targeting a needs_revision intent'
     );
     transitionStagedIntent(first.id, 'approved');
 
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     const second = stageIntent(
       'task.setStatus',
       { taskId: 't-3', status: 'Backlog' },
@@ -132,6 +138,34 @@ describe('stageIntent — explicit supersedes targeting a needs_revision intent'
 
     expect(getStagedIntent(second.id)!.supersedes).toBe(first.id);
     expect(getStagedIntent(first.id)!.state).toBe('superseded');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
+  });
+
+  it('an explicit supersedes naming a needs_revision (blocked) intent does not warn', () => {
+    const blocked = stageIntent(
+      'task.setStatus',
+      { taskId: 't-blocked-no-warn', status: 'Ready' },
+      'proj-1',
+      'group-1',
+      'session-1',
+    );
+    moveToNeedsRevision(blocked.id);
+
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    stageIntent(
+      'task.setStatus',
+      { taskId: 't-blocked-no-warn', status: 'Backlog' },
+      'proj-1',
+      'group-1',
+      'session-1',
+      null,
+      null,
+      blocked.id,
+    );
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   it('an explicit supersedes naming an unknown id throws rather than silently persisting null', () => {

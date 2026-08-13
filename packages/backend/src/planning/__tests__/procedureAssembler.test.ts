@@ -277,6 +277,58 @@ describe('deriveDesignDigestSlice', () => {
     const slice = deriveDesignDigestSlice(fixtureDesignLoadResult({}));
     expect(slice.hasCodeMapGrounding).toBe(false);
   });
+
+  it('carries the task’s verbatim body markdown', () => {
+    const slice = deriveDesignDigestSlice(fixtureDesignLoadResult());
+    expect(slice.markdown).toBe('# Design the thing\n\nSome body.');
+  });
+});
+
+// ─── Design Investigation Slice — verbatim task body inclusion ─────────────
+
+describe('renderDesignDigest — verbatim task body', () => {
+  it('renders the task’s verbatim body under a Task body section, alongside the working explicit_heading Open Questions shape (regression)', () => {
+    const digest: PlanningDigest = {
+      workflow: 'design',
+      data: deriveDesignDigestSlice(fixtureDesignLoadResult()),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Design the thing',
+      taskUrl: 'https://notion.so/task-2',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output).toContain('### Task body');
+    expect(output).toContain('# Design the thing\n\nSome body.');
+    // the explicit_heading shape is untouched by adding the body section
+    expect(output).toContain('- Open questions (explicit_heading): 1');
+    expect(output).toContain('  - Should we do X or Y?');
+  });
+
+  it('renders the verbatim task body even when the digest lists zero Open Questions', () => {
+    const result = fixtureDesignLoadResult();
+    result.openQuestions = { items: [], source: 'none' };
+    result.markdown =
+      '# Resolved already\n\nDesign (resolved): pick approach A.';
+    const digest: PlanningDigest = {
+      workflow: 'design',
+      data: deriveDesignDigestSlice(result),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Resolved already',
+      taskUrl: 'https://notion.so/task-2',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output).toContain('### Task body');
+    expect(output).toContain(
+      '# Resolved already\n\nDesign (resolved): pick approach A.',
+    );
+    // the none-source label is unchanged
+    expect(output).toContain('- Open questions (none): 0');
+  });
 });
 
 describe('deriveOpsDigestSlice', () => {
@@ -394,6 +446,60 @@ describe('docs digest rendering', () => {
     const afterHeading = output.slice(hardRulesIndex + '### Hard rules'.length);
     expect(afterHeading).toMatch(/\n- \*\*.+\*\*:/);
     expect(output).toContain('The human is the gate');
+  });
+});
+
+describe('docs Target-surface-aware Session Lifecycle', () => {
+  it('a repo-file Target surface renders the worktree/branch + direct git/PR path, not just notion.pageEdit', () => {
+    const digest: PlanningDigest = {
+      workflow: 'docs',
+      data: deriveDocsDigestSlice(fixtureDocsLoadResult()), // targetSurface: 'docs/api/webhooks.md'
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Document the webhooks API',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output).toMatch(/real per-session worktree and feature branch/);
+    expect(output).toMatch(/draft PR/);
+    expect(output).toContain('GitHub MCP tools');
+    expect(output).not.toMatch(/There is no worktree and no feature branch/);
+  });
+
+  it('a Notion-page Target surface keeps the unchanged no-worktree, notion.pageEdit-only lifecycle text — regression guard', () => {
+    const result = fixtureDocsLoadResult();
+    result.targetSurface = '20a1b2c3-d4e5-4f60-8a1b-2c3d4e5f6071';
+    const digest: PlanningDigest = {
+      workflow: 'docs',
+      data: deriveDocsDigestSlice(result),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Document the webhooks API',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output).toMatch(/There is no worktree and no feature branch/);
+    expect(output).toContain(orchestratorMcpToolName('notion.pageEdit'));
+    expect(output).not.toMatch(/real per-session worktree and feature branch/);
+  });
+
+  it('an undeclared Target surface keeps the unchanged no-worktree lifecycle text', () => {
+    const digest: PlanningDigest = {
+      workflow: 'docs',
+      data: deriveDocsDigestSlice(fixtureDocsLoadResult({ blank: true })),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Undeclared docs task',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output).toMatch(/There is no worktree and no feature branch/);
   });
 });
 
@@ -1140,6 +1246,27 @@ describe('assemblePlanningProcedure', () => {
     expect(example).toContain('"constraintsDispositioned"');
     expect(example).toContain('"filesPathsEntries"');
     expect(example).toContain('"dependsOnTasks"');
+  });
+
+  it('shows the size_check example in its populated shape — files/loc/loc_method alongside decision, not decision-only', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    const exampleStart = output.indexOf('"groomingGate":{');
+    const example = output.slice(exampleStart, exampleStart + 600);
+    expect(example).toContain('"size_check":{"decision":"no_split"');
+    expect(example).toContain('"files"');
+    expect(example).toContain('"loc"');
+    expect(example).toContain('"loc_method"');
+    expect(example).not.toContain('"size_check":{"decision":"no_split"},');
   });
 
   it('states both the LoC and file-count size_check thresholds, and that exceeding either nominates a split', () => {

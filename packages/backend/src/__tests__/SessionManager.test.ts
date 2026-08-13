@@ -1368,24 +1368,26 @@ describe('SessionManager.completeStart() — planning sessions skip worktree', (
   );
   const block = source.slice(completeStartIdx, cleanupIdx);
 
-  it('derives isPlanning from isPlanningSession(sessionType)', () => {
-    expect(block).toMatch(/isPlanning\s*=\s*isPlanningSession\(sessionType\)/);
+  it('derives worktreeEligible from usesWorktree(sessionType, docsTargetSurface)', () => {
+    expect(block).toMatch(
+      /worktreeEligible\s*=\s*usesWorktree\(sessionType,\s*docsTargetSurface\)/,
+    );
   });
 
-  it('worktreePath falls back to projectDir for planning sessions', () => {
-    expect(block).toMatch(/isPlanning\s*\?\s*projectDir/);
+  it('worktreePath falls back to projectDir for checkout-only planning sessions', () => {
+    expect(block).toMatch(/worktreeEligible\s*\?[\s\S]*?:\s*projectDir/);
   });
 
-  it('git worktree add is guarded on !isPlanning', () => {
-    const guardIdx = block.indexOf('if (!isPlanning) {');
+  it('git worktree add is guarded on worktreeEligible', () => {
+    const guardIdx = block.indexOf('if (worktreeEligible) {');
     const worktreeAddIdx = block.indexOf('git worktree add');
     expect(guardIdx).toBeGreaterThan(-1);
     expect(worktreeAddIdx).toBeGreaterThan(guardIdx);
   });
 
-  it('bootstrap script is guarded on !isPlanning', () => {
+  it('bootstrap script is guarded on worktreeEligible', () => {
     expect(block).toMatch(
-      /if\s*\(!isPlanning\s*&&\s*orchConfig\.bootstrap_script\)/,
+      /if\s*\(worktreeEligible\s*&&\s*orchConfig\.bootstrap_script\)/,
     );
   });
 

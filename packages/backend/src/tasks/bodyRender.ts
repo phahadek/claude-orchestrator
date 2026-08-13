@@ -23,6 +23,18 @@ export interface TaskBodySections {
   filesAffected?: string[];
   notionPagesAffected?: string[];
   /**
+   * Declared operational data/config seeds (see task-writing.md § Milestone
+   * config-seed) — each item the same `spec` text a groomer's `groomProposal.
+   * operationalSeed` prose distills into discrete candidates. Rendered as its
+   * own '## Operational seed' heading, mirroring manualCriteria's '### 👁️
+   * Manual verification' — persisted into the task's real, stored body so
+   * seed.stage's stage-time content-match check has real ground truth to
+   * parse back out (see readinessGate.ts's parseOperationalSeedItems),
+   * instead of only the ephemeral groomProposal.operationalSeed field. Omitted
+   * (or empty) renders a "None." placeholder, same posture as Dependencies.
+   */
+  operationalSeedItems?: string[];
+  /**
    * Display-format Type (e.g. '💻 Code'). When '💻 Code' and manualCriteria is
    * empty, the manual-verification section is omitted entirely rather than
    * rendered with "Covered by the Manual Verification Gate" boilerplate — a
@@ -312,6 +324,16 @@ function renderAcceptanceCriteria(
   return blocks;
 }
 
+function renderOperationalSeed(items?: string[]): RenderedBlock[] {
+  const blocks: RenderedBlock[] = [heading2('Operational seed')];
+  if (!items?.length) {
+    blocks.push(paragraph('None.', italicRichText('None.')));
+  } else {
+    blocks.push(...items.map((s) => bulletedListItem(s)));
+  }
+  return blocks;
+}
+
 /** Renders the full task-writing.md section model into Notion block-write payloads. */
 export function renderTaskBody(sections: TaskBodySections): RenderedBlock[] {
   const blocks: RenderedBlock[] = [];
@@ -344,6 +366,8 @@ export function renderTaskBody(sections: TaskBodySections): RenderedBlock[] {
       ...sections.notionPagesAffected.map((p) => bulletedListItem(p)),
     );
   }
+
+  blocks.push(...renderOperationalSeed(sections.operationalSeedItems));
 
   blocks.push(heading2('Implementation notes'));
   blocks.push(
@@ -486,6 +510,13 @@ export function renderTaskBodyMarkdown(sections: TaskBodySections): string {
   if (sections.notionPagesAffected?.length) {
     lines.push('', '## Notion pages affected');
     lines.push(...sections.notionPagesAffected.map((p) => `- ${p}`));
+  }
+
+  lines.push('', '## Operational seed');
+  if (!sections.operationalSeedItems?.length) {
+    lines.push('None.');
+  } else {
+    lines.push(...sections.operationalSeedItems.map((s) => `- ${s}`));
   }
 
   lines.push(

@@ -3,11 +3,16 @@ import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import type { GateItemClassification } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
-import { getTaskCache, getVerifySessionsForGateItems } from '../db/queries';
+import {
+  getTaskCache,
+  getVerifySessionsForGateItems,
+  getLiveVerifySessionItemIds,
+} from '../db/queries';
 import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
 import { normalizeTaskId } from '../tasks/taskId';
 import { getCachedType, getCachedStatus } from '../tasks/TaskWriteCommands';
+import { yieldToEventLoop } from '../utils/concurrency';
 
 /**
  * Recomputes whether a deploy contains a given commit. This is the git-ancestry
@@ -65,7 +70,15 @@ export function createLocalGitAncestrySource(
  * gateReconciler.ts): it records a verification attempt without resolving
  * it, the same non-terminal shape as `noted` — the item stays runnable, but
  * nextRunnableGateItems skips it until a later event (reclassify/reopen/a
- * new fail) supersedes it as the item's latest.
+ * new fail) supersedes it as the item's latest. `not-yet-triggerable` is the
+ * "the real-world trigger hasn't happened yet" abstain — server-rejected
+ * unless the item's classification is pending-eligible (Read-Only or
+ * Prod-Mutating; mirroring approveGateItem's Prod-Mutating-only guard for
+ * approval). Unlike `noted`/`needs-setup`, it does advance state: to
+ * `pending`, with a backoff-scheduled next_attempt_at, so a near-certain
+ * repeat non-result doesn't get re-dispatched every tick (see
+ * nextStateForDisposition / computeNotYetTriggerableBackoffHours below). It
+ * also requires non-empty evidence, like `discarded`.
  */
 const GATE_DISPOSITIONS = [
   'pass',
@@ -74,6 +87,7 @@ const GATE_DISPOSITIONS = [
   'discarded',
   'noted',
   'needs-setup',
+  'not-yet-triggerable',
 ] as const;
 
 type GateDisposition = (typeof GATE_DISPOSITIONS)[number];
@@ -96,6 +110,7 @@ const GATE_STATES = new Set([
   'fail',
   'deferred',
   'pending-approval',
+  'pending',
   'discarded',
 ]);
 
@@ -118,17 +133,37 @@ interface GateBlockingItem {
   bespoke?: boolean;
   /** True when the item's latest event carries a non-resolving disposition (needs-setup/noted) — attempted but inconclusive, distinct from an item that was never dispatched at all. */
   nonResolving?: boolean;
+  /** Backoff schedule for a `pending` item — when it next becomes due for re-check. Undefined for a non-pending item. */
+  nextAttemptAt?: string;
+  /** How many not-yet-triggerable attempts have been scheduled for this item's current pending parking. 0 for a non-pending item. */
+  pendingAttemptCount: number;
 }
 
 export interface GateReadiness {
   status: 'green' | 'blocked';
   blocking: GateBlockingItem[];
+  /**
+   * Items parked at `pending` (backoff-scheduled for a later
+   * not-yet-triggerable re-check) — a sibling bucket to `blocking`, never a
+   * subset of it. Visible to every reader but never counted toward
+   * `blocking.length` or the green/blocked status.
+   */
+  parked: GateBlockingItem[];
   /** Subset of `blocking` sitting in a state outside the closed vocabulary — needs human re-disposition, not indefinite blocking. */
   bespokeStates: GateBlockingItem[];
   /** Subset of `blocking` whose latest disposition is non-resolving (needs-setup/noted) — attempted but inconclusive, not simply untouched. */
   nonResolvingItems: GateBlockingItem[];
   /** The milestone's full per-state item totals, independent of any table filter; sums to the milestone's item total. */
   counts: Record<string, number>;
+  /**
+   * Exact count of items whose latest_disposition is `needs-setup` — the
+   * same set the `awaitingSetup` list filter surfaces (queries.ts's
+   * buildGateItemWhereClause: `latest_disposition = 'needs-setup'`). Not the
+   * wider `nonResolvingItems` (needs-setup ∪ noted) — awaiting-setup items
+   * still count inside `counts[item.state]` (always `runnable`) exactly as
+   * before; this is an additive sibling field, not another counts key.
+   */
+  awaitingSetupCount: number;
 }
 
 /**
@@ -143,32 +178,43 @@ export function getGateReadiness(
   milestone: string,
 ): GateReadiness {
   const items = gateStore.listByMilestone(project, milestone);
+  const toBlockingItem = (item: GateItem): GateBlockingItem => ({
+    id: item.id,
+    project: item.project,
+    milestone: item.milestone,
+    text: item.text,
+    classification: item.classification,
+    state: item.state,
+    bespoke: isBespokeGateState(item.state),
+    nonResolving:
+      item.latestDisposition !== undefined &&
+      NON_TERMINAL_DISPOSITIONS.has(item.latestDisposition as GateDisposition),
+    nextAttemptAt: item.nextAttemptAt,
+    pendingAttemptCount: item.pendingAttemptCount,
+  });
   const blocking = items
-    .filter((item) => !RESOLVED_STATES.has(item.state))
-    .map((item) => ({
-      id: item.id,
-      project: item.project,
-      milestone: item.milestone,
-      text: item.text,
-      classification: item.classification,
-      state: item.state,
-      bespoke: isBespokeGateState(item.state),
-      nonResolving:
-        item.latestDisposition !== undefined &&
-        NON_TERMINAL_DISPOSITIONS.has(
-          item.latestDisposition as GateDisposition,
-        ),
-    }));
+    .filter(
+      (item) => !RESOLVED_STATES.has(item.state) && item.state !== 'pending',
+    )
+    .map(toBlockingItem);
+  const parked = items
+    .filter((item) => item.state === 'pending')
+    .map(toBlockingItem);
   const counts: Record<string, number> = {};
   for (const item of items) {
     counts[item.state] = (counts[item.state] ?? 0) + 1;
   }
+  const awaitingSetupCount = items.filter(
+    (item) => item.latestDisposition === 'needs-setup',
+  ).length;
   return {
     status: blocking.length === 0 ? 'green' : 'blocked',
     blocking,
+    parked,
     bespokeStates: blocking.filter((item) => item.bespoke),
     nonResolvingItems: blocking.filter((item) => item.nonResolving),
     counts,
+    awaitingSetupCount,
   };
 }
 
@@ -237,10 +283,10 @@ function isSourceCovered(
   );
 }
 
-export function reconcileGateRunnability(
+export async function reconcileGateRunnability(
   deploySha: string,
   options: ReconcileOptions = {},
-): ReconcileGateRunnabilityResult {
+): Promise<ReconcileGateRunnabilityResult> {
   const ancestry = options.ancestrySource ?? gitAncestrySource;
   const now = new Date().toISOString();
   const markedRunnable: string[] = [];
@@ -251,6 +297,13 @@ export function reconcileGateRunnability(
     : gateStore.listAll();
 
   for (const item of items) {
+    // The dominant blocking cost of this loop: isSourceCovered calls
+    // execFileSync('git', ['merge-base', ...]) once per source, still
+    // synchronous, but yielding between items lets pending HTTP/WS request
+    // handling interleave rather than starving for the tick's full duration
+    // (mirroring TaskCacheRefresher's per-milestone yield).
+    await yieldToEventLoop();
+
     // Covered only once every source is live — see isSourceCovered for the
     // per-source, Type-dependent test. An item with no sources at all has no
     // dependency, so it's trivially covered.
@@ -308,7 +361,6 @@ const DEFAULT_BATCH_LIMIT = 10;
 const TIER_ORDER: GateItemClassification[] = [
   'needs-triage',
   'Read-Only',
-  'Opportunistic',
   'Prod-Mutating',
 ];
 
@@ -357,8 +409,56 @@ export function nextRunnableGateItems(
     .slice(0, limit);
 }
 
+/**
+ * Pending-analog dispatch pull: mirrors nextRunnableGateItems, but over
+ * `pending` items — skipping one whose backoff (next_attempt_at) hasn't
+ * elapsed yet, the same way nextRunnableGateItems skips a `needs-setup`
+ * abstain via isAwaitingSetup. A `pending` item may be any pending-eligible
+ * classification (Read-Only or Prod-Mutating — see appendGateItemEvent's
+ * not-yet-triggerable guard), so there is no tier argument to mirror
+ * TIER_ORDER with; the caller pulls across tiers in one batch.
+ */
+function isBackoffPending(item: GateItem, now: string): boolean {
+  return item.nextAttemptAt !== undefined && item.nextAttemptAt > now;
+}
+
+export function nextPendingGateItems(
+  project: string,
+  milestone: string,
+  options: { limit?: number } = {},
+): GateItem[] {
+  const limit = options.limit ?? DEFAULT_BATCH_LIMIT;
+  const now = new Date().toISOString();
+  return gateStore
+    .listByMilestone(project, milestone)
+    .filter((item) => item.state === 'pending')
+    .filter((item) => !isBackoffPending(item, now))
+    .slice(0, limit);
+}
+
 export function getGateItem(id: string): GateItem | undefined {
   return gateStore.getItem(id);
+}
+
+/**
+ * Item-level re-home: copies a gate item to `targetMilestone` as a fresh
+ * open item, preserving its full sources array (including empty — the
+ * sourceless carry-forward case that `accreteGateContribution` cannot
+ * express, since it validates and requires a single owning taskId). The
+ * source item is left exactly as it was; see gateStore.carryForwardItem for
+ * the idempotency guard. `targetMilestone` must already be the canonical
+ * milestone display name — callers resolve it the same way accrete's route
+ * does.
+ */
+export function carryForwardGateItem(
+  gateItemId: string,
+  targetMilestone: string,
+): GateItem {
+  return gateStore.carryForwardItem(
+    gateItemId,
+    targetMilestone,
+    new Date().toISOString(),
+  );
 }
 
 /** The item's full detail: its denormalized fields plus its sources and event history, by value. */
@@ -366,6 +466,21 @@ export function getGateItemDetail(
   id: string,
 ): gateStore.GateItemDetail | undefined {
   return gateStore.getItemDetail(id);
+}
+
+/**
+ * The evidence attached to a gate item's most recent disposition-bearing
+ * event (skipping pure log entries with no disposition) — the read a
+ * pending-approval consent card surfaces alongside the item's text, since
+ * that's the evidence behind the held pass. Undefined when the item has no
+ * disposition-bearing event yet.
+ */
+export function latestDispositionEvidence(item: GateItem): unknown {
+  for (let i = item.events.length - 1; i >= 0; i--) {
+    const event = item.events[i];
+    if (event.disposition !== undefined) return event.evidence;
+  }
+  return undefined;
 }
 
 /** The verify sessions dispatched for a gate item, most recent first. */
@@ -392,8 +507,13 @@ export interface ListGateItemsOptions {
   order?: GateItemListOrder;
 }
 
+interface GateItemWithVerifyStatus extends GateItem {
+  /** True if this item currently has a non-terminal, unended verify session. */
+  verifyInFlight: boolean;
+}
+
 export interface ListGateItemsResult {
-  items: GateItem[];
+  items: GateItemWithVerifyStatus[];
   total: number;
   page: number;
 }
@@ -426,7 +546,15 @@ export function listGateItems(
     offset,
     options.order,
   );
-  return { items, total, page };
+  const liveItemIds = getLiveVerifySessionItemIds(items.map((item) => item.id));
+  return {
+    items: items.map((item) => ({
+      ...item,
+      verifyInFlight: liveItemIds.has(item.id),
+    })),
+    total,
+    page,
+  };
 }
 
 export interface MilestoneReadiness {
@@ -434,6 +562,8 @@ export interface MilestoneReadiness {
   milestone: string;
   status: 'green' | 'blocked';
   blockingCount: number;
+  /** Items parked at `pending` — never counted toward blockingCount or the green/blocked status. */
+  parkedCount: number;
 }
 
 export interface ListMilestoneReadinessOptions {
@@ -472,7 +602,10 @@ export function listMilestoneReadiness(
   return Array.from(groups.values())
     .map((group) => {
       const blockingCount = group.items.filter(
-        (item) => !RESOLVED_STATES.has(item.state),
+        (item) => !RESOLVED_STATES.has(item.state) && item.state !== 'pending',
+      ).length;
+      const parkedCount = group.items.filter(
+        (item) => item.state === 'pending',
       ).length;
       const status: 'green' | 'blocked' =
         blockingCount === 0 ? 'green' : 'blocked';
@@ -481,6 +614,7 @@ export function listMilestoneReadiness(
         milestone: group.milestone,
         status,
         blockingCount,
+        parkedCount,
       };
     })
     .sort(
@@ -501,7 +635,22 @@ export interface AppendGateItemEventInput {
   unattended?: boolean;
 }
 
-/** Prod-Mutating passes stop short of resolving — they wait for approveGateItem. */
+/**
+ * Classifications eligible for the `not-yet-triggerable` -> `pending` abstain
+ * — the "when can this be verified" axis, orthogonal to "who can verify it".
+ * needs-triage is excluded: an item still awaiting triage has no verifier to
+ * abstain in the first place. Human-Observation is included even though it
+ * is never auto-dispatched — an operator disposing of the Human-Observation
+ * mirror card can still park it via this same path (the "not now, try again
+ * later" abstain), not just an auto-run verifier.
+ */
+const PENDING_ELIGIBLE_CLASSIFICATIONS = new Set<GateItemClassification>([
+  'Read-Only',
+  'Prod-Mutating',
+  'Human-Observation',
+]);
+
+/** Prod-Mutating passes stop short of resolving — they wait for approveGateItem. A not-yet-triggerable result (Read-Only or Prod-Mutating) parks at `pending`, not a state literally named after the disposition. */
 function nextStateForDisposition(
   disposition: GateDisposition,
   classification: GateItemClassification,
@@ -509,7 +658,23 @@ function nextStateForDisposition(
   if (disposition === 'pass' && classification === 'Prod-Mutating') {
     return 'pending-approval';
   }
+  if (disposition === 'not-yet-triggerable') {
+    return 'pending';
+  }
   return disposition;
+}
+
+/** First re-check 3h after parking, doubling per consecutive not-yet-triggerable result, capped at 1 week. */
+const NOT_YET_TRIGGERABLE_BASE_BACKOFF_HOURS = 3;
+const NOT_YET_TRIGGERABLE_MAX_BACKOFF_HOURS = 168;
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/** attemptCount is 1-indexed: 1 -> 3h, 2 -> 6h, 3 -> 12h, ..., capped at 168h. */
+function computeNotYetTriggerableBackoffHours(attemptCount: number): number {
+  return Math.min(
+    NOT_YET_TRIGGERABLE_BASE_BACKOFF_HOURS * 2 ** (attemptCount - 1),
+    NOT_YET_TRIGGERABLE_MAX_BACKOFF_HOURS,
+  );
 }
 
 /**
@@ -563,6 +728,19 @@ export function appendGateItemEvent(
   if (event.disposition === 'discarded' && !event.evidence) {
     throw new Error(`gate_item_event: 'discarded' requires an evidence/reason`);
   }
+  if (
+    event.disposition === 'not-yet-triggerable' &&
+    !PENDING_ELIGIBLE_CLASSIFICATIONS.has(item.classification)
+  ) {
+    throw new Error(
+      `gate_item ${gateItemId}: not-yet-triggerable only applies to pending-eligible items (classification=${item.classification})`,
+    );
+  }
+  if (event.disposition === 'not-yet-triggerable' && !event.evidence) {
+    throw new Error(
+      `gate_item_event: 'not-yet-triggerable' requires an evidence/reason`,
+    );
+  }
   const now = new Date().toISOString();
   gateStore.appendEvent(gateItemId, { ...event, at: now });
 
@@ -580,6 +758,24 @@ export function appendGateItemEvent(
       item.classification,
     );
     gateStore.advanceState(gateItemId, nextState, event.disposition, now);
+  }
+
+  if (event.disposition === 'not-yet-triggerable') {
+    // Consecutive count: resumes from the item's own prior count only while
+    // it was already `pending` — any other prior state (e.g. a fresh `open`
+    // item, or one just reopened) starts the backoff over from 3h.
+    const attemptCount =
+      (item.state === 'pending' ? item.pendingAttemptCount : 0) + 1;
+    const backoffHours = computeNotYetTriggerableBackoffHours(attemptCount);
+    const nextAttemptAt = new Date(
+      Date.parse(now) + backoffHours * MS_PER_HOUR,
+    ).toISOString();
+    gateStore.schedulePendingAttempt(
+      gateItemId,
+      nextAttemptAt,
+      attemptCount,
+      now,
+    );
   }
 
   const updated = gateStore.getItem(gateItemId);
@@ -628,12 +824,73 @@ export function approveGateItem(
 }
 
 /**
+ * The Prod-Mutating consent gate's other exit: records withheld consent as a
+ * `fail` disposition on the item — no new state, since the readiness rollup
+ * already treats `fail` as unresolved (RESOLVED_STATES excludes it) and
+ * `fail` sits outside REOPEN_BLOCKED_STATES, so reject then reopen forms a
+ * complete loop back to re-verification, unlike the one-way
+ * `pending-approval` state itself. Mirrors approveGateItem's guards, plus a
+ * mandatory operator reason — withholding consent without a recorded reason
+ * would be indistinguishable from an item nobody has looked at yet.
+ */
+export function rejectGateItem(
+  gateItemId: string,
+  reason: string,
+  operator?: string,
+): GateItem {
+  const item = gateStore.getItem(gateItemId);
+  if (!item) {
+    throw new Error(`gate_item: no item ${gateItemId}`);
+  }
+  if (item.classification !== 'Prod-Mutating') {
+    throw new Error(
+      `gate_item ${gateItemId}: rejection only applies to Prod-Mutating items (classification=${item.classification})`,
+    );
+  }
+  if (item.state !== 'pending-approval') {
+    throw new Error(
+      `gate_item ${gateItemId}: not pending approval (state=${item.state})`,
+    );
+  }
+  if (!reason.trim()) {
+    throw new Error(
+      `gate_item ${gateItemId}: rejection requires an operator reason`,
+    );
+  }
+  const now = new Date().toISOString();
+  gateStore.appendEvent(gateItemId, {
+    disposition: 'fail',
+    operator,
+    evidence: { reason },
+    at: now,
+  });
+  gateStore.advanceState(gateItemId, 'fail', 'fail', now);
+
+  const updated = gateStore.getItem(gateItemId);
+  if (!updated) {
+    throw new Error(
+      `gate_item: failed to read back item ${gateItemId} after rejection`,
+    );
+  }
+  return updated;
+}
+
+/**
  * States a reopen may be applied from: any resolved/terminal state, including
  * the fail-trap left by a fail dispositioned outside the reconciler's
  * processItem path. `open`/`runnable`/`pending-approval` are already on a
  * sanctioned path back to resolution, so reopening them is a no-op we reject.
+ * `pending` joins them for the same reason — it already carries its own
+ * scheduled backoff re-check; an operator forces it back to `open` early via
+ * reclassifyGateItem (away from a pending-eligible tier) instead of this
+ * generic reopen.
  */
-const REOPEN_BLOCKED_STATES = new Set(['open', 'runnable', 'pending-approval']);
+const REOPEN_BLOCKED_STATES = new Set([
+  'open',
+  'runnable',
+  'pending-approval',
+  'pending',
+]);
 
 /**
  * Operator-attributed reopen: pulls a pass/deferred/fail-trapped item back to
@@ -677,11 +934,18 @@ export function reopenGateItem(
 const RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Read-Only',
   'Prod-Mutating',
-  'Opportunistic',
   'Human-Observation',
 ]);
 
-/** The /gate skill's triage step: moves a needs-triage (or any) item into a resolved classification. */
+/**
+ * The /gate skill's triage step: moves a needs-triage (or any) item into a
+ * resolved classification. Reclassifying a `pending` item to a target that
+ * is itself pending-eligible (Read-Only <-> Prod-Mutating) preserves the
+ * `pending` state and its backoff schedule — only a reclassify to a
+ * non-pending-eligible target (Human-Observation, needs-triage) forces it
+ * back to `open` in the same call, since advanceState clears
+ * next_attempt_at/pending_attempt_count on any transition out of `pending`.
+ */
 export function reclassifyGateItem(
   gateItemId: string,
   classification: GateItemClassification,
@@ -697,7 +961,26 @@ export function reclassifyGateItem(
     throw new Error(`gate_item: no item ${gateItemId}`);
   }
   const now = new Date().toISOString();
-  return gateStore.setClassification(gateItemId, classification, now, operator);
+  const updated = gateStore.setClassification(
+    gateItemId,
+    classification,
+    now,
+    operator,
+  );
+  if (
+    item.state === 'pending' &&
+    !PENDING_ELIGIBLE_CLASSIFICATIONS.has(classification)
+  ) {
+    gateStore.advanceState(gateItemId, 'open', 'reclassified', now);
+    const reopened = gateStore.getItem(gateItemId);
+    if (!reopened) {
+      throw new Error(
+        `gate_item: failed to read back item ${gateItemId} after reclassify-forced reopen`,
+      );
+    }
+    return reopened;
+  }
+  return updated;
 }
 
 /**
@@ -705,20 +988,13 @@ export function reclassifyGateItem(
  * (see gateItemVerifier's `reclassify` report field). Human-Observation and
  * needs-triage route the item *out* of auto-run, so they're applied here
  * with provenance regardless of how the verdict reached this function.
- * Opportunistic routes the item *into* auto-run, but that's no longer a
- * bare self-application: a gate.verify report is staged as a normal intent
- * and an operator disposes it before proposeGateItemReclassification ever
- * runs for it (see GateVerificationResult.awaitingDisposition), so an
- * Opportunistic proposal is already operator-approved by the time it lands
- * here — the "would need staging" bar this set otherwise enforces.
  * MAX_VERIFIER_RECLASSIFY_ATTEMPTS independently caps repeat proposals per
  * item. Read-Only and Prod-Mutating remain excluded — a verifier is never
- * allowed to propose either.
+ * allowed to propose either auto-run tier.
  */
 const VERIFIER_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Human-Observation',
   'needs-triage',
-  'Opportunistic',
 ]);
 
 /** Ping-pong guard: caps how many times a verifier may reclassify the same item before a human has to step in via /gate. */

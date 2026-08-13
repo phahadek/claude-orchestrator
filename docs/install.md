@@ -23,9 +23,6 @@ npm install
 cp packages/backend/.env.example packages/backend/.env
 # Edit packages/backend/.env — see the env var reference below
 
-cp .claude/local-context.md.example .claude/local-context.md
-# Edit .claude/local-context.md with your project's Notion URLs
-
 # Optional: Notion context page URL and board ID for the frontend
 cp packages/frontend/.env.example packages/frontend/.env
 
@@ -36,9 +33,9 @@ In dev mode, open `http://localhost:5173` in your browser — that's Vite's fron
 
 **LAN access (opt-in):** By default the backend and Vite dev server bind to `127.0.0.1` (localhost only). To expose the dashboard on your local network, set `ORCHESTRATOR_BIND_HOST=0.0.0.0` (or a specific LAN IP) in `packages/backend/.env` before starting. Corporate mode always ignores this override and forces `127.0.0.1`.
 
-### Local context (`.claude/local-context.md`)
+### Project context lives in the dashboard, not a tracked file
 
-`.claude/local-context.md` is **gitignored** and holds host-local references — Notion Project Context URL, board IDs, design-doc links — that should never be committed. Claude Code sessions opened directly in the repo read it as their first action; orchestrator-launched sessions get the same content auto-appended to their injected `CLAUDE.md` at session start.
+Notion Project Context URLs, board IDs, and other per-project references are entered once via **Settings → Projects → Add project** in the dashboard UI and persisted to its SQLite database — there is no host-local context file to create or gitignore. Orchestrator-launched sessions get this content injected into their session context at spawn time; nothing needs to live in the checkout.
 
 As an optional defense-in-depth, you can install a local pre-commit hook that rejects any commit containing a Notion workspace ID:
 
@@ -50,7 +47,7 @@ cat > .git/hooks/pre-commit <<'EOF'
 # all Notion page/database IDs but will also match unrelated UUIDs.
 if git diff --cached -p | grep -qE "[0-9a-f]{32}"; then
   echo "ERROR: commit contains what looks like a Notion ID." >&2
-  echo "Move it to .claude/local-context.md (gitignored), or use --no-verify if intentional." >&2
+  echo "Configure it via the dashboard's Settings UI instead of committing it, or use --no-verify if intentional." >&2
   exit 1
 fi
 EOF
@@ -117,23 +114,23 @@ The container mounts two host paths:
 
 All configuration lives in `packages/backend/.env`. See `packages/backend/.env.example` for a complete template.
 
-| Variable                  | Required                                 | Description                                                                                                                                                                                                                                    | Example              |
-| ------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| `NOTION_API_KEY`          | If any project's task source is `notion` | Notion integration token                                                                                                                                                                                                                       | `ntn_...`            |
-| `GITHUB_TOKEN`            | Yes                                      | GitHub PAT with `repo` scope                                                                                                                                                                                                                   | `ghp_...`            |
-| `GITHUB_REPO`             | No                                       | Fallback `owner/repo` used only when `GitHubClient` is called without a project context (e.g. CLI scripts). Each project's own `githubRepo` (set in **Settings → Projects**) takes precedence and is required for the dashboard's PR features. | `owner/repo`         |
-| `PORT`                    | No                                       | Backend HTTP port                                                                                                                                                                                                                              | `3000`               |
-| `ORCHESTRATOR_BIND_HOST`  | No                                       | Network interface the backend and Vite dev server bind to. Defaults to `127.0.0.1` (localhost only). Set to `0.0.0.0` or a specific LAN IP to expose the dashboard on the network. Ignored in corporate mode — always binds `127.0.0.1`.       | `0.0.0.0`            |
-| `DB_PATH`                 | No                                       | SQLite database file                                                                                                                                                                                                                           | `./dashboard.db`     |
-| `SESSIONS_DIR`            | No                                       | Claude CLI sessions directory                                                                                                                                                                                                                  | `~/.claude/projects` |
-| `AUTO_REVIEW`             | No                                       | Enable automated PR review                                                                                                                                                                                                                     | `true`               |
-| `AUTO_REVIEW_CONCURRENCY` | No                                       | Parallel review sessions                                                                                                                                                                                                                       | `1`                  |
+| Variable                  | Required                                 | Description                                                                                                                                                                                                                                    | Example                                     |
+| ------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `NOTION_API_KEY`          | If any project's task source is `notion` | Notion integration token                                                                                                                                                                                                                       | `ntn_...`                                   |
+| `GITHUB_TOKEN`            | Yes                                      | GitHub PAT with `repo` scope                                                                                                                                                                                                                   | `ghp_...`                                   |
+| `GITHUB_REPO`             | No                                       | Fallback `owner/repo` used only when `GitHubClient` is called without a project context (e.g. CLI scripts). Each project's own `githubRepo` (set in **Settings → Projects**) takes precedence and is required for the dashboard's PR features. | `owner/repo`                                |
+| `PORT`                    | No                                       | Backend HTTP port                                                                                                                                                                                                                              | `3000`                                      |
+| `ORCHESTRATOR_BIND_HOST`  | No                                       | Network interface the backend and Vite dev server bind to. Defaults to `127.0.0.1` (localhost only). Set to `0.0.0.0` or a specific LAN IP to expose the dashboard on the network. Ignored in corporate mode — always binds `127.0.0.1`.       | `0.0.0.0`                                   |
+| `DB_PATH`                 | No                                       | SQLite database file                                                                                                                                                                                                                           | `./dashboard.db` <!-- path-check:ignore --> |
+| `SESSIONS_DIR`            | No                                       | Claude CLI sessions directory                                                                                                                                                                                                                  | `~/.claude/projects`                        |
+| `AUTO_REVIEW`             | No                                       | Enable automated PR review                                                                                                                                                                                                                     | `true`                                      |
+| `AUTO_REVIEW_CONCURRENCY` | No                                       | Parallel review sessions                                                                                                                                                                                                                       | `1`                                         |
 
 ## Project & milestone configuration
 
 Projects and milestones are configured **in the dashboard UI**, not via env vars. Open **Settings → Projects → Add project**, choose a task source (`notion` or `yaml`), and add one milestone per task board.
 
-The configuration is persisted to the SQLite database (`DB_PATH`, default `./dashboard.db`) and survives restarts. For the full Notion workspace structure the dashboard expects, see [`notion-template.md`](notion-template.md). For YAML projects, see [`tasks.yaml.example`](../tasks.yaml.example) at the repo root — the Settings UI also offers a "Create empty tasks.yaml" affordance when no file exists.
+The configuration is persisted to the SQLite database (`DB_PATH`, default `./dashboard.db`) and survives restarts. <!-- path-check:ignore --> For the full Notion workspace structure the dashboard expects, see [`notion-template.md`](notion-template.md). For YAML projects, see [`tasks.yaml.example`](../tasks.yaml.example) at the repo root — the Settings UI also offers a "Create empty tasks.yaml" affordance when no file exists.
 
 ### Migrating from the legacy `PROJECTS` env var
 

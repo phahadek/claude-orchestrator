@@ -1,6 +1,7 @@
 import { logger } from '../logger';
 import type { SessionManager } from '../session/SessionManager';
 import { runtimeSettings } from '../config';
+import { recordEvent } from '../audit/AuditLog';
 import type { Scheduler } from './Scheduler';
 import {
   getPRBySessionId,
@@ -22,6 +23,7 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import { recoverSession } from '../session/sessionRecovery';
 import { getCurrentBranch, hasNonEmptyDiff } from './localBranchHelpers';
 import { submitLocalBranch } from './localBranchSubmission';
+import { sessionIsLive } from '../session/sessionLifecycle';
 
 interface TimerState {
   taskName: string;
@@ -45,11 +47,34 @@ interface TimerState {
    * does that.
    */
   suspended: boolean;
+  /** ms epoch of the last activity (or timer arm), used to compute the
+   * observed event-gap recorded alongside both the notify and the
+   * explicit did-not-notify audit rows. */
+  lastActivityAt: number;
 }
 
 const PAUSE_MESSAGE =
   'Pause your work — supervisor flagged this task as exceeding expected duration. ' +
   'Stop running tools and wait for further instructions.';
+
+/**
+ * Session statuses that mean the session has concluded for good, by any
+ * path — not just the session_ended broadcast clear() was previously keyed
+ * on exclusively. Mirrors db/queries.ts's TERMINAL_SESSION_STATUSES plus
+ * 'superseded'; defined locally (rather than imported) so this module's own
+ * terminal check doesn't depend on every test that mocks db/queries.js also
+ * re-exporting the constant.
+ */
+const TERMINAL_SESSION_STATUSES: ReadonlySet<string> = new Set([
+  'done',
+  'error',
+  'killed',
+  'superseded',
+]);
+
+function isSessionTerminal(status: string | null | undefined): boolean {
+  return status != null && TERMINAL_SESSION_STATUSES.has(status);
+}
 
 /**
  * Per-session timer that escalates when a session goes too long without any
@@ -101,9 +126,29 @@ export class StuckSessionMonitor {
       intervalMs: DEFAULT_SCAN_INTERVAL_MS,
       concurrency: 'skip-if-running',
       run: async () => {
+        this.reapTerminalTimers();
         await this.scanForStuckSessions();
       },
     });
+  }
+
+  /**
+   * Sweep every tracked timer and clear any whose session row has already
+   * reached a terminal status through a path other than the session_ended
+   * broadcast (a watcher-driven transition such as pr_merge_watcher /
+   * auto_merger, or an external actor writing the row directly) — clear()
+   * previously fired only on that one broadcast, so a session finishing by
+   * any other route kept a live timer indefinitely. Runs on the same
+   * cadence as scanForStuckSessions so a stray timer is cleared within one
+   * scan interval of the session going terminal.
+   */
+  private reapTerminalTimers(): void {
+    for (const sessionId of [...this.timers.keys()]) {
+      const session = getSession(sessionId);
+      if (isSessionTerminal(session?.status)) {
+        this.clear(sessionId);
+      }
+    }
   }
 
   /** Clear all per-session timers. Called on shutdown. */
@@ -263,6 +308,7 @@ export class StuckSessionMonitor {
         hardStopRemainingMs: row.hard_stop_remaining_ms,
         hardStopArmed: row.hard_stop_armed !== 0,
         suspended: row.suspended !== 0,
+        lastActivityAt: now,
       };
       this.timers.set(row.session_id, state);
 
@@ -433,6 +479,7 @@ export class StuckSessionMonitor {
       hardStopRemainingMs: null,
       hardStopArmed: false,
       suspended: false,
+      lastActivityAt: Date.now(),
     };
     this.timers.set(sessionId, state);
     this.scheduleNotifyAndPause(sessionId, state);
@@ -449,6 +496,27 @@ export class StuckSessionMonitor {
   private recordActivity(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state || state.suspended) return;
+    // A notify timer still pending means the session was inside the notify
+    // window and this activity arrived before it ever fired — the explicit
+    // did-not-flag counterpart to fireNotify's flagged row below, so the
+    // negative case ("still emitting events, not flagged") is checkable
+    // after the fact rather than being indistinguishable from no signal at
+    // all.
+    if (state.notifyTimer) {
+      const thresholdMs =
+        runtimeSettings.session_notify_threshold_seconds * 1000;
+      recordEvent({
+        event_type: 'stuck_session_notify_checked',
+        actor_type: 'system',
+        actor_id: sessionId,
+        payload: {
+          session_id: sessionId,
+          observed_gap_ms: Date.now() - state.lastActivityAt,
+          threshold_ms: thresholdMs,
+          flagged: false,
+        },
+      });
+    }
     if (state.notifyTimer) clearTimeout(state.notifyTimer);
     if (state.pauseTimer) clearTimeout(state.pauseTimer);
     state.notifyTimer = null;
@@ -457,6 +525,7 @@ export class StuckSessionMonitor {
     state.pauseDeadline = 0;
     state.notifyRemainingMs = null;
     state.pauseRemainingMs = null;
+    state.lastActivityAt = Date.now();
     this.scheduleNotifyAndPause(sessionId, state);
   }
 
@@ -591,9 +660,40 @@ export class StuckSessionMonitor {
   private fireNotify(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state) return;
+    const thresholdMs = runtimeSettings.session_notify_threshold_seconds * 1000;
+    const observedGapMs = Date.now() - state.lastActivityAt;
     state.notifyTimer = null;
     state.notifyDeadline = 0;
+    // Defense-in-depth: the canonical liveness check (sessionIsLive) should
+    // already agree with the timer here — recordActivity clears the pending
+    // timer synchronously on every session_event, so this only trips on a
+    // genuine race (e.g. a rehydrate landing between a persisted deadline
+    // and the activity that should have superseded it). Reschedule from
+    // "now" instead of notifying on stale state.
+    if (sessionIsLive(sessionId)) {
+      this.scheduleNotifyAndPause(sessionId, state);
+      return;
+    }
+    // Cheap guard mirroring the missing-row bail below: if the session
+    // already reached a terminal status via a path that didn't clear this
+    // timer in time (see reapTerminalTimers), degrade to silence instead of
+    // alerting on work that's already finished.
+    if (isSessionTerminal(getSession(sessionId)?.status)) {
+      this.clear(sessionId);
+      return;
+    }
     this.persistTimerState(sessionId);
+    recordEvent({
+      event_type: 'stuck_session_notify_checked',
+      actor_type: 'system',
+      actor_id: sessionId,
+      payload: {
+        session_id: sessionId,
+        observed_gap_ms: observedGapMs,
+        threshold_ms: thresholdMs,
+        flagged: true,
+      },
+    });
     const message = `⚠️ ${state.taskName} exceeding expected duration — possible grooming gap`;
     this.broadcast({
       type: 'stuck_session_notified',
@@ -606,15 +706,31 @@ export class StuckSessionMonitor {
   private firePause(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state) return;
-    if (!getSession(sessionId)) {
+    const session = getSession(sessionId);
+    if (!session) {
       // Parent row is gone (e.g. session deleted before the timer fired) —
       // nothing to pause. Clean up the orphaned timer state and bail before
       // any DB write, which would otherwise violate the FK to sessions.
       this.timers.delete(sessionId);
       return;
     }
+    // Same terminal-status guard as fireNotify: a session that already
+    // finished via a path that didn't clear this timer in time must not be
+    // paused as if it were still stuck.
+    if (isSessionTerminal(session.status)) {
+      this.clear(sessionId);
+      return;
+    }
     state.pauseTimer = null;
     state.pauseDeadline = 0;
+
+    // Same race guard as fireNotify — sessionIsLive should already agree
+    // with the timer; reschedule from "now" instead of pausing on stale
+    // state.
+    if (sessionIsLive(sessionId)) {
+      this.scheduleNotifyAndPause(sessionId, state);
+      return;
+    }
 
     const pr = getPRBySessionId(sessionId);
     if (pr) {
@@ -623,7 +739,18 @@ export class StuckSessionMonitor {
     insertPauseInterval(sessionId, 'stuck_timeout');
 
     try {
-      this.sessionManager.send(sessionId, PAUSE_MESSAGE);
+      const delivered = this.sessionManager.send(sessionId, PAUSE_MESSAGE);
+      if (!delivered) {
+        logger.warn(
+          `[StuckSessionMonitor] pause nudge not confirmed delivered for ${sessionId}`,
+        );
+        recordEvent({
+          event_type: 'stuck_session_pause_delivery_failed',
+          actor_type: 'system',
+          actor_id: sessionId,
+          payload: { session_id: sessionId },
+        });
+      }
     } catch (err) {
       logger.warn(
         `[StuckSessionMonitor] send failed for ${sessionId}: ${(err as Error).message}`,

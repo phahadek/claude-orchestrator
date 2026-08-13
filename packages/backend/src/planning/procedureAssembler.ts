@@ -72,6 +72,8 @@ import {
   PLANNING_INTENT_KINDS,
   type PlanningWorkflow,
 } from './planningIntentKinds';
+import { TRIAGE_ELIGIBLE_TYPES } from './triage';
+import { isRepoFileTargetSurface } from '../docs/targetSurface';
 
 export type { PlanningWorkflow };
 
@@ -349,6 +351,7 @@ export function deriveOpsDigestSlice(
 const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
   'task.setStatus': '{"taskId":"<task-id>","status":"Ready"}',
   'task.setProperties': '{"taskId":"<task-id>","properties":{"priority":"P1"}}',
+  'task.setType': '{"taskId":"<task-id>","type":"💻 Code"}',
   'task.setDependsOn': '{"taskId":"<task-id>","dependsOn":["<other-task-id>"]}',
   'gate.accrete':
     '{"project":"<project-id>","taskId":"<task-id>","title":"<title>",' +
@@ -469,13 +472,34 @@ export function renderOpsCapabilities(): string[] {
       'file is always a Code task, not something a capability grant hands to ops ' +
       '(see "Dispatch-eligibility boundary" below).',
     '',
-    'Never create a PR, and never author or land code yourself, no matter how small ' +
-      'the change looks: this session has no worktree or branch (see "Session ' +
-      'Lifecycle" above), and a code change is categorically a 💻 Code task. If ' +
-      'driving the operational change to `applied-pending-confirm` turns out to need ' +
-      'one, stage a `task.create` intent carrying the spec instead of opening a PR — ' +
-      'then continue driving the rest of the change, or park on it if the whole ' +
+    'Do not create a PR out of the box: this session starts with no worktree or ' +
+      'branch (see "Session Lifecycle" above). Most code needs stay a 💻 Code task — ' +
+      'if driving the operational change to `applied-pending-confirm` turns out to ' +
+      'need one, stage a `task.create` intent carrying the spec instead of opening a ' +
+      'PR, then continue driving the rest of the change, or park on it if the whole ' +
       'thing is now blocked on that Code task landing.',
+    '',
+    'Workflow-scope credential ceiling: before staging that `task.create`, check the ' +
+      "discovered fix's target file path(s) — as this session's own investigation " +
+      'names them, since there is no worktree to git-diff — against the workflow-scope ' +
+      'denylist (`.github/workflows/**`; see `session/workflowScopeDenylist.ts`). A ' +
+      'spun-off Code task hits the identical `workflow` OAuth scope ceiling later, ' +
+      'reactively, at its own push — filing one is a dead end, not an escape hatch. ' +
+      'On a match, do NOT stage `task.create`; instead stage an `ops.prIntent` intent ' +
+      `by calling the \`${orchestratorMcpToolName('ops.prIntent')}\` tool with the ` +
+      'payload carrying the verified change content itself (the fix, described in full ' +
+      '— never a branch reference, since this session cannot push one). On operator ' +
+      'approval this session is granted a real worktree and branch and re-dispatched ' +
+      'to make the change and open the PR itself.',
+    '',
+    'For a change small and ops-scoped enough to land directly from this session, ' +
+      'stage an Ops PR-intent declaration first — never open a PR speculatively. On ' +
+      'operator approval, this session is granted a real worktree, feature branch, ' +
+      'and the PR-open tools, and is re-dispatched to make the approved change, open ' +
+      'the PR, and wait for its automated review the same way a code session does ' +
+      '(push additional commits in response to feedback, never merge it yourself). ' +
+      "On rejection or pushback, the session resumes with the operator's feedback " +
+      'instead and falls back to the `task.create` path above.',
     '',
   ];
 }
@@ -738,15 +762,22 @@ function renderSkeleton(
   milestoneId: string,
   projectId: string,
   checkoutDir: string | null,
+  docsTargetSurface?: string,
 ): string {
   const label = SKILL_LABELS[workflow];
   const kinds = PLANNING_INTENT_KINDS[workflow];
+  const triageEligibleTypesList = Array.from(TRIAGE_ELIGIBLE_TYPES).join(' / ');
+  const docsRepoFileTarget =
+    workflow === 'docs' && isRepoFileTargetSurface(docsTargetSurface ?? '');
   const lifecycle =
     workflow === 'ops'
       ? `This is an injected, non-interactive ${label} session for a single target task ` +
-        `(${taskName} — ${taskUrl}). There is no worktree and no feature branch, and this ` +
-        'session never creates a PR — the worktree-branch-PR invariant holds for ops too ' +
-        '(see "Capabilities" below for what a code change routes through instead). Unlike ' +
+        `(${taskName} — ${taskUrl}). This session starts with no worktree and no feature ` +
+        'branch and must not create a PR out of the box (see "Capabilities" below for the ' +
+        'default no-code-change path). A worktree, branch, and the PR-open tools are only ' +
+        'earned once an operator approves a staged Ops PR-intent declaration — see ' +
+        '"Capabilities" for how to request it and, once opened, wait for review the same ' +
+        'way a code session does rather than ending the turn. Unlike ' +
         'groom/design, this session is write-capable, earning capabilities on request, and ' +
         'its job is to drive the operational change itself to completion, not to stage a ' +
         'proposal and hand execution back. The terminal state is the ops_journal ' +
@@ -757,12 +788,23 @@ function renderSkeleton(
         '— never at a "proposal staged" point when there is more of the change left to ' +
         'drive; the only operator/device-auth-only step is the final ' +
         '`applied-pending-confirm` → `resolved` confirmation, not anything before it.'
-      : `This is an injected, non-interactive ${label} session for a single target task ` +
-        `(${taskName} — ${taskUrl}). There is no worktree and no feature branch — this ` +
-        'session runs read-only/stage-only against the project checkout. When the ' +
-        'procedure below reaches a natural stopping point (every open item presented ' +
-        'and either staged or explicitly deferred), end the turn instead of waiting — ' +
-        'the session parks into idle rather than scraping for a PR.';
+      : docsRepoFileTarget
+        ? `This is an injected, non-interactive ${label} session for a single target task ` +
+          `(${taskName} — ${taskUrl}). The declared Target surface is a repo file, so this ` +
+          'session has a real per-session worktree and feature branch, the same as a Code ' +
+          'session — not the stage-only/no-worktree profile groom/design/split run with. ' +
+          'Author into the Target surface directly with the Write/Edit tools, then open a ' +
+          'draft PR against the base branch through the GitHub MCP tools (see the ' +
+          '"Docs Authoring Slice" section below for the exact path) — never stage a ' +
+          '`notion.pageEdit` intent for a repo-file Target surface, that path is for a ' +
+          'Notion-page Target surface only. Once the PR is open, wait for review the same ' +
+          'way a code session does instead of ending the turn.'
+        : `This is an injected, non-interactive ${label} session for a single target task ` +
+          `(${taskName} — ${taskUrl}). There is no worktree and no feature branch — this ` +
+          'session runs read-only/stage-only against the project checkout. When the ' +
+          'procedure below reaches a natural stopping point (every open item presented ' +
+          'and either staged or explicitly deferred), end the turn instead of waiting — ' +
+          'the session parks into idle rather than scraping for a PR.';
   return [
     '## Session Lifecycle',
     '',
@@ -861,12 +903,17 @@ function renderSkeleton(
           'required (checkGroomingPromotionGate in `groomGate.ts` blocks the Ready ' +
           'flip at commit time on anything missing, and the block is surfaced back to ' +
           'you at stage time, not silently dropped): `size_check` ' +
-          '(`{"decision": "no_split"|"split_now"|"unsplittable"|"n/a"}` — Code/Tooling ' +
+          '(`{"decision": "no_split"|"split_now"|"unsplittable"|"n/a", "files": <n>, ' +
+          '"loc": <n>, "loc_method": "estimated"}` — Code/Tooling ' +
           `tasks default to "no_split" under both the ${SIZE_TYPE_CHECK.locSplitThreshold}` +
           `-LoC-estimated threshold and the ${SIZE_TYPE_CHECK.fileSplitThreshold}-file ` +
           'threshold; exceeding either nominates a split (nominates, not forces — ' +
-          '"unsplittable" with a recorded reason remains valid above either one), "n/a" is ' +
-          'for Design/Planning types only), `type_check` (`{"decision": "none"|' +
+          '"unsplittable" with a recorded reason remains valid above either one). ' +
+          'Every decision but "n/a" also carries the estimate it rests on: `files` ' +
+          "from the digest's size_check seed, `loc` estimated from the code-map " +
+          'digest, `loc_method` naming how (e.g. "estimated") — the gate rejects a ' +
+          'numeric decision missing any of the three. "n/a" (Design/Planning types ' +
+          'only) carries no numbers. `type_check` (`{"decision": "none"|' +
           '"flagged"|"n/a"}`, plus `signals` naming the matched phrases when ' +
           '"flagged"), `type` (the task\'s display-format Type, e.g. `"💻 Code"`), ' +
           '`regions` (`{"packages": [...], "files": [...]}` — this task\'s resolved ' +
@@ -882,21 +929,53 @@ function renderSkeleton(
           'from the repo itself at promotion time, never taken from this payload), ' +
           'and `dependsOnTasks` ' +
           '(one `{"id": "<task-id>", "type": "<type>", "status": "<status>"}` per ' +
-          'declared Depends On edge — `[]` when there are none). A worked, ' +
-          'field-complete example for a 💻 Code task with one binding constraint, ' +
-          'one Files/paths entry, and no dependencies: call the ' +
+          'declared Depends On edge — `[]` when there are none). These seven ' +
+          'fields are required for every Type. An eighth, `groomingGate.triage`, ' +
+          `is required in addition for a triage-eligible Type (currently ${triageEligibleTypesList} ` +
+          '— derived from `TRIAGE_ELIGIBLE_TYPES` in `planning/triage.ts`, so this ' +
+          'list moves if that set does) and is rejected outright, not silently ' +
+          'ignored, for every other Type: `{"proposedVerdict": "clean"|"blocked"|' +
+          '"needs-attention", "hasOpenQuestionsHeading": true|false}`. ' +
+          "`proposedVerdict` is this session's judgment call on the task's own " +
+          'required-heading section (`## Open Questions` for 📐 Design/📋 Planning, ' +
+          "that Type's own registry-defined heading otherwise — see " +
+          '`planning/triage.ts`); `hasOpenQuestionsHeading` is the structural fact ' +
+          'of whether that heading is actually present in the body. A `clean` ' +
+          'verdict promotes the task without a further per-item human sign-off; ' +
+          '`blocked` or `needs-attention` keeps the task at its current status — ' +
+          'the server re-derives the verdict from hard facts (a non-Done blocking ' +
+          'Depends On, a routed constraint conflict) and can only downgrade a ' +
+          'proposed `clean`, never upgrade a lower one. A worked, field-complete ' +
+          'example for a 💻 Code task (not triage-eligible — no `triage` field) ' +
+          'with one binding constraint, one Files/paths entry, and no ' +
+          'dependencies: call the ' +
           `\`${orchestratorMcpToolName('task.setStatus')}\` tool with \`{"payload":` +
           '{"taskId":"<task-id>","status":"Ready","groomingGate":{' +
-          '"size_check":{"decision":"no_split"},' +
+          '"size_check":{"decision":"no_split","files":1,"loc":40,"loc_method":"estimated"},' +
           '"type_check":{"decision":"none"},' +
           '"type":"💻 Code",' +
           '"regions":{"packages":["packages/backend"],"files":["packages/backend/src/foo.ts"]},' +
           '"constraintsDispositioned":{"constraint-a":{"disposition":"complies"}},' +
           '"filesPathsEntries":[{"raw":"packages/backend/src/foo.ts","isNew":false}],' +
-          '"dependsOnTasks":[]}}}` — omitting any one of these six `groomingGate` ' +
+          '"dependsOnTasks":[]}}}` — omitting any one of these seven `groomingGate` ' +
           'fields (even as an empty array/object where genuinely empty) is what ' +
           'blocks the Ready flip; fill every field from the digest above rather ' +
-          'than carrying only `type`.\n\n' +
+          'than carrying only `type`. A second worked example for a ' +
+          'triage-eligible 📐 Design task, triaged clean, with no binding ' +
+          'constraints, Files/paths entries, or dependencies: call the same ' +
+          `tool with \`{"payload":{"taskId":"<task-id>","status":"Ready",` +
+          '"groomingGate":{' +
+          '"size_check":{"decision":"n/a"},' +
+          '"type_check":{"decision":"none"},' +
+          '"type":"📐 Design",' +
+          '"regions":{"packages":[],"files":[]},' +
+          '"constraintsDispositioned":{},' +
+          '"filesPathsEntries":[],' +
+          '"dependsOnTasks":[],' +
+          '"triage":{"proposedVerdict":"clean","hasOpenQuestionsHeading":true}' +
+          '}}}` — the eighth field here, `triage`, is what a triage-eligible ' +
+          'Type adds; a 💻 Code (or other non-eligible) task must omit it ' +
+          'entirely rather than carry it as `null` or `false`.\n\n' +
           'When the pre-groom body carries a "### 👁️ Manual verification" ' +
           'section, its accreted/relocated content is stripped from the body as ' +
           'a `task.patchBodySection` (`operation: "remove"`) — never a ' +
@@ -912,6 +991,38 @@ function renderSkeleton(
           '`gate.accrete` / `seed.stage` above. When the pre-groom body carries ' +
           'no such section, stage no strip intent at all — there is nothing to ' +
           'remove.\n\n' +
+          "Before accreting, classify each candidate line the pre-groom body's " +
+          '"## Operational seed" section carries as `operational-seed` (a ' +
+          "genuine data/config value kept out of this task's own PR), `in-pr` " +
+          '(mislabeled — it actually ships in the PR and does not accrete), or ' +
+          '`needs-triage` (unclear, deferred) — recorded as ' +
+          '`seedContributionCandidates` (`[{"spec":"<line text>",' +
+          '"classification":"operational-seed"|"in-pr"|"needs-triage"}]`) on ' +
+          'the same `groomingGate` object as `size_check`/`type_check` above; ' +
+          'accrete only the `operational-seed`-classified candidates via ' +
+          '`seed.stage`, never the `in-pr`/`needs-triage` ones.\n\n' +
+          "seed.stage's content-match check runs the opposite direction: the " +
+          'task body starts with a "## Operational seed" section already present ' +
+          '(every task body carries one, `None.` by default), and after a ' +
+          '`seed.stage` accretion this session fills it in with the same seed ' +
+          'spec(s), never leaves it at `None.`, and never packs it into the same ' +
+          '`groupId` as the arming `task.setStatus` — commit the fill-in as its ' +
+          `own \`${orchestratorMcpToolName('task.patchBodySection')}\` call ` +
+          '(`operation: "replace"`, `section: "Operational seed"`) FIRST, in its ' +
+          'own group, and confirm it lands before staging `task.setStatus` → ' +
+          "`Ready`. Staged in the same group instead, the arming intent's " +
+          'stage-time check re-derives the section from the still-unapplied ' +
+          '(still `None.`) stored body and finds nothing to cross-check — the ' +
+          'exact self-verifying gap this content-match exists to close. A ' +
+          'worked example: call the ' +
+          `\`${orchestratorMcpToolName('task.patchBodySection')}\` tool with ` +
+          '`{"payload":{"taskId":"<task-id>","section":"Operational seed",' +
+          '"operation":"replace","find":"None.","replaceWith":"- <seed 1>\\n' +
+          '- <seed 2>"}}` — no `groupId` field — then, once it has applied, ' +
+          'stage `seed.stage` and ' +
+          '`task.setStatus` under their own shared `groupId` as usual. When the ' +
+          'groomer\'s decision is "no operational seed", leave the section at ' +
+          'its `None.` default and stage no patch at all.\n\n' +
           `${GATE_ITEM_TIER_SELECTION_GUIDANCE} A \`gate.accrete\` batch is not ` +
           'forced to one tier: the top-level `classification` is the batch ' +
           'default, and any item that needs a different tier carries its own ' +
@@ -1250,6 +1361,7 @@ function renderDesignDigest(data: DesignDigestSlice): string {
       ? '_Code-map grounding is cached for this milestone — fetch it via GET /api/design-context on demand._'
       : '_No code-map grounding cached yet for this milestone._',
   );
+  lines.push('', '### Task body', '', data.markdown || '(empty)');
   return lines.join('\n');
 }
 
@@ -1296,6 +1408,16 @@ function renderSplitDigest(data: SplitDigestSlice): string {
  * hard rule is to stop and ask rather than guess when either is missing.
  */
 function renderDocsDigest(data: DocsDigestSlice): string {
+  const outputPath = !data.targetSurface
+    ? '(undeclared — cannot resolve an output path; stop and ask)'
+    : isRepoFileTargetSurface(data.targetSurface)
+      ? 'repo-file Target surface — this session has a real worktree and branch ' +
+        '(see "Session Lifecycle" above); author with the Write/Edit tools and open a ' +
+        'draft PR against the base branch through the GitHub MCP tools. Never stage a ' +
+        '`notion.pageEdit` intent for this target.'
+      : 'Notion-page Target surface — stage one or more `notion.pageEdit` intents ' +
+        `(\`${orchestratorMcpToolName('notion.pageEdit')}\`) for an operator to apply. ` +
+        'Never open a PR for this target.';
   const lines: string[] = [
     '## Docs Authoring Slice',
     '',
@@ -1303,6 +1425,7 @@ function renderDocsDigest(data: DocsDigestSlice): string {
     `- Task id: \`${data.task.id}\``,
     `- Target surface: ${data.targetSurface || '(not declared — stop and ask; do not guess a target surface)'}`,
     `- Source domains: ${data.sourceDomains.length ? data.sourceDomains.join(', ') : '(not declared — stop and ask; do not widen by inference)'}`,
+    `- Output path: ${outputPath}`,
     '',
     '### Task body',
     '',
@@ -1366,6 +1489,7 @@ export function assemblePlanningProcedure(
       milestoneId,
       projectId,
       checkoutDir,
+      digest.workflow === 'docs' ? digest.data.targetSurface : undefined,
     ),
     renderProcedureCore(digest.workflow),
     renderDigest(digest),

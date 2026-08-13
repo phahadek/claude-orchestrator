@@ -24,6 +24,7 @@ vi.mock('../../config/corporateMode', () => ({
 }));
 vi.mock('../../db/queries', () => ({
   getPRByNumber: vi.fn(),
+  setHeadSha: vi.fn(),
   setPauseReason: vi.fn(),
   updateMergeState: vi.fn(),
   getApprovedOpenPRs: vi.fn().mockReturnValue([]),

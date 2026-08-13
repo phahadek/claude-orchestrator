@@ -28,6 +28,9 @@ const defaultSettings = {
   review_session_effort: '',
   ops_session_effort: '',
   gate_verify_session_effort: '',
+  groom_session_effort: '',
+  design_session_effort: '',
+  docs_session_effort: '',
   session_mode: 'cli',
   auto_launch_concurrency: '1',
   auto_launch_poll_interval_ms: '60000',
@@ -441,12 +444,12 @@ describe('Settings — effort dropdowns', () => {
       );
   }
 
-  it('renders six effort selects, each listing Default first then the levels', async () => {
+  it('renders nine effort selects, each listing Default first then the levels', async () => {
     render(<Settings />);
     await screen.findByText('(off)');
 
     const effortSelects = findEffortSelects();
-    expect(effortSelects).toHaveLength(6);
+    expect(effortSelects).toHaveLength(9);
 
     for (const select of effortSelects) {
       const labels = Array.from((select as HTMLSelectElement).options).map(
@@ -523,13 +526,73 @@ describe('Settings — effort dropdowns', () => {
     });
   });
 
+  it('fires PATCH with groom_session_effort when the grooming effort select changes', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByText('(off)');
+
+    const [, , , , , groomEffortSelect] = findEffortSelects();
+    fireEvent.change(groomEffortSelect, { target: { value: 'medium' } });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).groom_session_effort === 'medium',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+
+  it('fires PATCH with design_session_effort when the design effort select changes', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByText('(off)');
+
+    const [, , , , , , designEffortSelect] = findEffortSelects();
+    fireEvent.change(designEffortSelect, { target: { value: 'high' } });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).design_session_effort === 'high',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+
+  it('fires PATCH with docs_session_effort when the docs effort select changes', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByText('(off)');
+
+    const [, , , , , , , docsEffortSelect] = findEffortSelects();
+    fireEvent.change(docsEffortSelect, { target: { value: 'low' } });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).docs_session_effort === 'low',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+
   it('fires PATCH with large_task_effort when the large-task effort select changes', async () => {
     const fetchMock = makeFetch();
     vi.stubGlobal('fetch', fetchMock);
     render(<Settings />);
     await screen.findByText('(off)');
 
-    const [, , , , , largeTaskEffortSelect] = findEffortSelects();
+    const [, , , , , , , , largeTaskEffortSelect] = findEffortSelects();
     fireEvent.change(largeTaskEffortSelect, { target: { value: 'max' } });
 
     await waitFor(() => {
@@ -560,6 +623,9 @@ describe('Settings — planning/ops model selectors', () => {
 
     expect(screen.getByText('Planning session model')).toBeDefined();
     expect(screen.getByText('Ops session model')).toBeDefined();
+    expect(screen.getByText(/^Grooming session model/)).toBeDefined();
+    expect(screen.getByText(/^Design session model/)).toBeDefined();
+    expect(screen.getByText(/^Docs session model/)).toBeDefined();
   });
 });
 

@@ -907,6 +907,42 @@ describe('TaskCard', () => {
     expect(screen.getByText(/Design:\s*running/)).toBeDefined();
   });
 
+  it('renders a planning-session indicator labeled by sessionType (docs, idle)', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          planningSession: makePlanningSession({
+            sessionType: 'docs',
+            status: 'idle',
+          }),
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText(/Docs:\s*idle/)).toBeDefined();
+  });
+
+  it('renders a planning-session indicator labeled by sessionType (split, running)', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          planningSession: makePlanningSession({
+            sessionType: 'split',
+            status: 'running',
+          }),
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText(/Split:\s*running/)).toBeDefined();
+  });
+
   it('does not render a planning-session indicator when planningSession is null', () => {
     render(
       <TaskCard

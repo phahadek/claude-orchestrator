@@ -40,8 +40,26 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
  * read-only verification session. The session never runs a vendored skill
  * to assemble this itself.
  */
+/**
+ * The timestamp the item's claim is actually about: the latest of its
+ * source PRs' merge times (gate_item_source.added_at), or the item's own
+ * updatedAt when it has no recorded sources. Reading current-state would
+ * silently answer "is X true right now" instead of "was X true once this
+ * merged" — a gate item dispatched for verification well after merge can
+ * have its underlying session/PR/ops_journal/gate_item rows move on in the
+ * meantime (a session redispatched, a PR's state changed post-merge), so
+ * the operational-record reads below must pin to this cutoff, not now.
+ */
+function claimAsOf(item: GateItem): string {
+  return item.sources.reduce(
+    (latest, s) => (s.addedAt > latest ? s.addedAt : latest),
+    item.updatedAt,
+  );
+}
+
 export function buildGateVerifyProcedure(item: GateItem): string {
   const isHumanObservation = item.classification === 'Human-Observation';
+  const asOf = claimAsOf(item);
   return [
     '## Session Lifecycle',
     '',
@@ -62,6 +80,23 @@ export function buildGateVerifyProcedure(item: GateItem): string {
     `- milestone: ${item.milestone}`,
     `- classification: ${item.classification}`,
     `- text: ${item.text}`,
+    `- claim asOf: ${asOf}`,
+    '',
+    `**This item's claim is about ${asOf}** — the point this item's ` +
+      'underlying change merged/deployed, not "right now". The record you ' +
+      'read may have moved on since (a session redispatched, a PR ' +
+      "reviewed again, an ops_journal entry re-transitioned) — that's a " +
+      "later fact, not evidence about whether this item's claim held at " +
+      'the time it describes. Wherever a tool below accepts an `asOf` ' +
+      `parameter, pass \`asOf: "${asOf}"\` explicitly — omitting it reads ` +
+      'current state, which answers a different question than the one ' +
+      'this item asks. This applies to `gateSeed.getState`, ' +
+      '`pullRequest.getByTaskId`, and `session.getRecord`; other tools ' +
+      '(e.g. `auditLog.query`) are already point-in-time by construction ' +
+      '(you filter their results by timestamp yourself). A field that ' +
+      'comes back as `{"__unreconstructable": true, "reason": "..."}` has ' +
+      'no historical record yet — treat it as unknown, never as if it were ' +
+      'the current value.',
     '',
     ...renderProjectRecordAccess('ops', item.project),
     ...renderOpsCapabilities(),
@@ -103,8 +138,26 @@ export function buildGateVerifyProcedure(item: GateItem): string {
     '',
     'Your job, in one line: validate the described behavior by its runtime ' +
       'trace. If there is no such trace, or you cannot read it, abstain ' +
-      '(`needs-setup`) or reclassify (`Human-Observation`) — never ' +
-      'substitute a precondition or source reading for it.',
+      '(`needs-setup` or `not-yet-triggerable`) or reclassify ' +
+      '(`Human-Observation`) — never substitute a precondition or source ' +
+      'reading for it.',
+    '',
+    '**Two abstains, not one — pick the one that actually fits.** ' +
+      '`needs-setup` means a human must perform some real setup step before ' +
+      'this item can be settled at all: a missing capability grant you were ' +
+      'refused, a permission you cannot obtain, an identifier you searched ' +
+      'for and could not find, or any other blocker a person has to clear. ' +
+      '`not-yet-triggerable` means there is no blocker to clear — the ' +
+      "scenario this item describes simply hasn't happened yet, or the data " +
+      'it would produce a trace from does not exist yet, and the item just ' +
+      'needs to be re-checked later once it has. Reporting `needs-setup` ' +
+      'for a not-yet-occurred scenario is wrong: it removes the item from ' +
+      'every future automated pull (nothing re-checks it), where ' +
+      '`not-yet-triggerable` instead parks it for an automatic scheduled ' +
+      'retry. When in doubt — "will re-checking this later, with no human ' +
+      'intervention, plausibly settle it?" — answer yes means ' +
+      '`not-yet-triggerable`; answer no (a human must act first) means ' +
+      '`needs-setup`.',
     '',
     'This is a bounded best-effort read: settle within your time/turn ' +
       'budget, or abstain. You hold no general write authority — no ' +
@@ -233,7 +286,7 @@ export function buildGateVerifyProcedure(item: GateItem): string {
             'mis-classified — most commonly, it actually describes ' +
             'UI/visual/interactive behavior that only a human observing the ' +
             'running app can judge, but it is tagged an auto-run tier ' +
-            '(Read-Only/Opportunistic/Prod-Mutating) so this session was ' +
+            '(Read-Only/Prod-Mutating) so this session was ' +
             'dispatched to headlessly verify something it structurally ' +
             'cannot observe — propose the correct classification instead ' +
             'of forcing a pass/fail, or abstaining to a bare needs-setup ' +
@@ -280,7 +333,7 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'on structural unverifiability:',
     '',
     '```json',
-    `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"expected": "...", "found": "...", "query": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
+    `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup"|"not-yet-triggerable", "evidence": {"expected": "...", "found": "...", "query": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
     '```',
     '',
     'On a `fail`, `evidence` may also carry `source` (admissible only on fail):',

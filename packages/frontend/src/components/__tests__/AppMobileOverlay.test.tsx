@@ -79,7 +79,7 @@ vi.mock('../../hooks/useWebSocket', () => ({
 }));
 
 vi.mock('../../hooks/useKeyboardShortcuts', () => ({
-  useKeyboardShortcuts: vi.fn(),
+  useKeyboardShortcuts: vi.fn(() => ({ highlightedItemId: null })),
 }));
 
 vi.mock('../Header', () => ({
@@ -119,7 +119,6 @@ vi.mock('../HistoryGrid', () => ({
 }));
 vi.mock('../Notifications', () => ({ Notifications: () => null }));
 vi.mock('../ShortcutHint', () => ({ ShortcutHint: () => null }));
-vi.mock('../DispatchModal', () => ({ DispatchModal: () => null }));
 vi.mock('../PermissionEventLog', () => ({ PermissionEventLog: () => null }));
 vi.mock('../SessionFilterBar', () => ({ SessionFilterBar: () => null }));
 
@@ -421,9 +420,10 @@ describe('App — keyboard dismiss', () => {
       await import('../../hooks/useKeyboardShortcuts');
     const mockImpl = vi.mocked(useKeyboardShortcuts);
 
-    let capturedDismiss: (() => void) | undefined;
+    let capturedDismiss: ((fromInputField: boolean) => void) | undefined;
     mockImpl.mockImplementation(({ onDismiss }) => {
       capturedDismiss = onDismiss;
+      return { highlightedItemId: null };
     });
 
     render(<App />);
@@ -431,7 +431,7 @@ describe('App — keyboard dismiss', () => {
     fireEvent.click(screen.getByTestId('task-list'));
     await waitFor(() => screen.getByTestId('task-detail'));
 
-    capturedDismiss?.();
+    capturedDismiss?.(false);
 
     await waitFor(() => expect(screen.queryByTestId('task-detail')).toBeNull());
   });
@@ -441,9 +441,10 @@ describe('App — keyboard dismiss', () => {
       await import('../../hooks/useKeyboardShortcuts');
     const mockImpl = vi.mocked(useKeyboardShortcuts);
 
-    let capturedDismiss: (() => void) | undefined;
+    let capturedDismiss: ((fromInputField: boolean) => void) | undefined;
     mockImpl.mockImplementation(({ onDismiss }) => {
       capturedDismiss = onDismiss;
+      return { highlightedItemId: null };
     });
 
     render(<App />);
@@ -453,10 +454,32 @@ describe('App — keyboard dismiss', () => {
     fireEvent.click(screen.getByTestId('session-grid'));
     await waitFor(() => screen.getByTestId('session-detail'));
 
-    capturedDismiss?.();
+    capturedDismiss?.(false);
 
     await waitFor(() =>
       expect(screen.queryByTestId('session-detail')).toBeNull(),
     );
+  });
+
+  it('onDismiss(true) from an input field does not navigate away from task detail', async () => {
+    const { useKeyboardShortcuts } =
+      await import('../../hooks/useKeyboardShortcuts');
+    const mockImpl = vi.mocked(useKeyboardShortcuts);
+
+    let capturedDismiss: ((fromInputField: boolean) => void) | undefined;
+    mockImpl.mockImplementation(({ onDismiss }) => {
+      capturedDismiss = onDismiss;
+      return { highlightedItemId: null };
+    });
+
+    render(<App />);
+    await waitFor(() => screen.getByTestId('task-list'));
+    fireEvent.click(screen.getByTestId('task-list'));
+    await waitFor(() => screen.getByTestId('task-detail'));
+
+    capturedDismiss?.(true);
+
+    expect(window.history.back).not.toHaveBeenCalled();
+    expect(screen.getByTestId('task-detail')).toBeDefined();
   });
 });

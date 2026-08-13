@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockRecordEvent = vi.fn();
 const mockUpdateTaskStatusInBoardCaches = vi.fn();
+const mockGetTaskStatusFromCache = vi.fn();
 
 vi.mock('../../audit/AuditLog', () => ({
   recordEvent: (...args: unknown[]) => mockRecordEvent(...args),
@@ -11,6 +12,8 @@ vi.mock('../../db/queries', () => ({
   upsertTaskCache: vi.fn(),
   updateTaskStatusInBoardCaches: (...args: unknown[]) =>
     mockUpdateTaskStatusInBoardCaches(...args),
+  getTaskStatusFromCache: (...args: unknown[]) =>
+    mockGetTaskStatusFromCache(...args),
 }));
 
 import { AuditingTaskBackend } from '../TaskBackend';
@@ -23,6 +26,7 @@ function makeInnerBackend(overrides: Partial<TaskBackend> = {}): TaskBackend {
     attachPR: vi.fn(),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     fetchTaskPage: vi.fn(),
+    fetchTaskSummary: vi.fn(),
     fetchNonMilestoneReadyTasks: vi.fn(),
     updateNotes: vi.fn(),
     appendImplementationNote: vi.fn(),
@@ -34,6 +38,7 @@ function makeInnerBackend(overrides: Partial<TaskBackend> = {}): TaskBackend {
 beforeEach(() => {
   mockRecordEvent.mockReset();
   mockUpdateTaskStatusInBoardCaches.mockReset();
+  mockGetTaskStatusFromCache.mockReset();
 });
 
 describe('AuditingTaskBackend.updateStatus', () => {
@@ -61,6 +66,112 @@ describe('AuditingTaskBackend.updateStatus', () => {
       expect.objectContaining({
         event_type: 'status_updated',
         task_id: 'notion:abc',
+      }),
+    );
+  });
+
+  it('records the cached prior status as from, not the value being written', async () => {
+    const inner = makeInnerBackend();
+    const backend = new AuditingTaskBackend(inner, 'proj-1');
+    mockGetTaskStatusFromCache.mockReturnValue('🗂️ Ready');
+
+    await backend.updateStatus('notion:abc', '🔄 In Progress', {
+      source: 'orchestrator',
+      sessionId: 'sess-1',
+    });
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          from: '🗂️ Ready',
+          to: '🔄 In Progress',
+        }),
+      }),
+    );
+    expect(mockRecordEvent.mock.calls[0][0].payload).not.toHaveProperty(
+      'notes',
+    );
+  });
+
+  it('records a different cached prior status for a second transition, proving from is not hardcoded to the write value', async () => {
+    const inner = makeInnerBackend();
+    const backend = new AuditingTaskBackend(inner, 'proj-1');
+    mockGetTaskStatusFromCache.mockReturnValue('🔄 In Progress');
+
+    await backend.updateStatus('notion:abc', '✅ Done', {
+      source: 'orchestrator',
+      sessionId: 'sess-1',
+    });
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          from: '🔄 In Progress',
+          to: '✅ Done',
+        }),
+      }),
+    );
+  });
+
+  it('records from: null with the explanatory note when there is no cached prior status', async () => {
+    const inner = makeInnerBackend();
+    const backend = new AuditingTaskBackend(inner, 'proj-1');
+    mockGetTaskStatusFromCache.mockReturnValue(null);
+
+    await backend.updateStatus('notion:abc', '🔄 In Progress', {
+      source: 'orchestrator',
+      sessionId: 'sess-1',
+    });
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          from: null,
+          notes: 'previous status not captured',
+        }),
+      }),
+    );
+  });
+
+  it('resolves the prior status from cache only, issuing no task-source fetch', async () => {
+    const inner = makeInnerBackend();
+    const backend = new AuditingTaskBackend(inner, 'proj-1');
+    mockGetTaskStatusFromCache.mockReturnValue('🗂️ Ready');
+
+    await backend.updateStatus('notion:abc', '🔄 In Progress', {
+      source: 'orchestrator',
+      sessionId: 'sess-1',
+    });
+
+    expect(mockGetTaskStatusFromCache).toHaveBeenCalledWith('notion:abc');
+    expect(inner.fetchTaskPage).not.toHaveBeenCalled();
+    expect(inner.fetchTaskSummary).not.toHaveBeenCalled();
+    expect(inner.fetchReadyTasks).not.toHaveBeenCalled();
+  });
+
+  it('still writes the status update and audit event when resolving the prior status throws', async () => {
+    const inner = makeInnerBackend();
+    const backend = new AuditingTaskBackend(inner, 'proj-1');
+    mockGetTaskStatusFromCache.mockImplementation(() => {
+      throw new Error('cache read failed');
+    });
+
+    await backend.updateStatus('notion:abc', '🔄 In Progress', {
+      source: 'orchestrator',
+      sessionId: 'sess-1',
+    });
+
+    expect(inner.updateStatus).toHaveBeenCalledWith(
+      'notion:abc',
+      '🔄 In Progress',
+    );
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          from: null,
+          to: '🔄 In Progress',
+          notes: 'previous status not captured',
+        }),
       }),
     );
   });

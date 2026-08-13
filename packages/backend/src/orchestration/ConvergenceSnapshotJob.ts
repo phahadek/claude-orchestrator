@@ -33,6 +33,7 @@ function sameSnapshot(
     latest.tasks_closed === next.tasks_closed &&
     latest.gate_open === next.gate_open &&
     latest.gate_closed === next.gate_closed &&
+    latest.gate_parked === next.gate_parked &&
     latest.seed_open === next.seed_open &&
     latest.seed_closed === next.seed_closed &&
     latest.ops_open === next.ops_open &&
@@ -108,7 +109,8 @@ export class ConvergenceSnapshotJob {
 
     const gateReadiness = getGateReadiness(projectId, key);
     const gateOpen = gateReadiness.blocking.length;
-    const gateClosed = sumCounts(gateReadiness.counts) - gateOpen;
+    const gateParked = gateReadiness.parked.length;
+    const gateClosed = sumCounts(gateReadiness.counts) - gateOpen - gateParked;
 
     const seedReadiness = getSeedReadiness(projectId, key);
     const seedOpen = seedReadiness.blocking.length;
@@ -129,6 +131,7 @@ export class ConvergenceSnapshotJob {
       tasksClosed +
       gateOpen +
       gateClosed +
+      gateParked +
       seedOpen +
       seedClosed +
       opsOpen +
@@ -141,6 +144,7 @@ export class ConvergenceSnapshotJob {
       tasks_closed: tasksClosed,
       gate_open: gateOpen,
       gate_closed: gateClosed,
+      gate_parked: gateParked,
       seed_open: seedOpen,
       seed_closed: seedClosed,
       ops_open: opsOpen,

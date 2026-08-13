@@ -23,4 +23,19 @@ describe('taskNameFromNotionUrl', () => {
     const url = 'not-a-url';
     expect(taskNameFromNotionUrl(url)).toBe(url);
   });
+
+  it('decodes percent-encoded non-ASCII characters (emoji, em-dash) instead of returning garbled bytes', () => {
+    const url =
+      'https://www.notion.so/' +
+      encodeURIComponent('fix-emoji-🎉-task—name') +
+      '-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+    expect(taskNameFromNotionUrl(url)).toBe('Fix emoji 🎉 task—name');
+  });
+
+  it('falls back gracefully without throwing on a malformed percent-sequence', () => {
+    const url =
+      'https://www.notion.so/fix-100%zz-done-ffffffffffffffffffffffffffffffff';
+    expect(() => taskNameFromNotionUrl(url)).not.toThrow();
+    expect(taskNameFromNotionUrl(url)).toBe('Fix 100%zz done');
+  });
 });

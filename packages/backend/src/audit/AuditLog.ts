@@ -1,5 +1,6 @@
 import { db } from '../db/db';
 import type { AuditEvent } from './types';
+import { normalizeBoardId } from '../tasks/taskId';
 
 export interface AuditRow {
   id: number;
@@ -332,6 +333,38 @@ export function hasStrandedOpsSurfacedEvent(
   });
 }
 
+/**
+ * True when a task_deferred_blocks_dependents event already names
+ * `dependentTaskId` among its `dependentTaskIds` for the given
+ * `deferredTaskId` — the sweep-cycle dedup for DeferredBlockerSweep,
+ * mirroring hasStrandedOpsSurfacedEvent. Matches events recorded by either
+ * the write-path hook (TaskWriteCommands.surfaceDependentsOfDeferredTask)
+ * or a prior sweep pass, since both write this event type with `task_id`
+ * set to the deferred task and the blocked task listed in
+ * `dependentTaskIds`.
+ */
+export function hasDeferredBlockerSurfacedEvent(
+  deferredTaskId: string,
+  dependentTaskId: string,
+): boolean {
+  const rows = db
+    .prepare<[string], { payload: string }>(
+      `SELECT payload FROM audit_log
+       WHERE task_id = ? AND event_type = 'task_deferred_blocks_dependents'`,
+    )
+    .all(deferredTaskId);
+  return rows.some((r) => {
+    try {
+      const payload = JSON.parse(r.payload) as {
+        dependentTaskIds?: string[];
+      };
+      return payload.dependentTaskIds?.includes(dependentTaskId) ?? false;
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** Returns the most recent audit_log row of the given event type, or undefined. */
 export function getLatestEventByType(eventType: string): AuditRow | undefined {
   return db
@@ -350,19 +383,27 @@ export function getLatestEventByType(eventType: string): AuditRow | undefined {
  * AuditingTaskBackend for every orchestrator-authored body/deps edit; a raw
  * break-glass Notion edit doesn't itself retire the suppression, only the
  * next orchestrator-authored write does.
+ *
+ * `taskId` and `audit_log.task_id` are compared via normalizeBoardId rather
+ * than literal equality — callers pass the bare board-cache id while
+ * audit_log rows for edit events are written with a `source:`-prefixed id
+ * (see TaskBackend.updateBody/updateBodyRaw/patchBodySection), so a literal
+ * match silently misses every edit.
  */
 export function hasTaskEditSinceTimestamp(
   taskId: string,
   sinceTs: number,
 ): boolean {
-  const row = db
-    .prepare<[string, number], { one: number }>(
-      `SELECT 1 AS one FROM audit_log
-       WHERE task_id = ? AND event_type IN ('task_body_updated', 'task_deps_updated') AND ts > ?
-       LIMIT 1`,
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare<[number], { task_id: string | null }>(
+      `SELECT task_id FROM audit_log
+       WHERE event_type IN ('task_body_updated', 'task_deps_updated') AND ts > ?`,
     )
-    .get(taskId, sinceTs);
-  return row !== undefined;
+    .all(sinceTs);
+  return rows.some(
+    (r) => r.task_id !== null && normalizeBoardId(r.task_id) === norm,
+  );
 }
 
 /**
@@ -388,4 +429,59 @@ export function hasPrBodyMarkerUpdateSinceTimestamp(
     )
     .get(taskId, sinceTs);
   return row !== undefined;
+}
+
+/** One capability_request_disposition row's mining-relevant fields, in emission order. */
+export interface CapabilityDispositionEvent {
+  id: number;
+  projectId: string;
+  capability: string;
+  disposition:
+    | 'auto_approved'
+    | 'operator_approved'
+    | 'operator_denied'
+    | 'declined';
+}
+
+/**
+ * Returns every capability_request_disposition audit_log row across all
+ * projects, oldest first — the evidence trail the auto-allow suggestion
+ * miner (routes/settings.ts) folds over to compute per-(project, capability)
+ * approval streaks. `task_id` is never read here: a capability request is
+ * session-scoped, not task-scoped (see resumeCapabilityRequester, the sole
+ * emission site — task_id is always null on these rows). Rows with no
+ * project_id or a payload missing `capability`/`disposition` are skipped —
+ * they carry nothing a (project_id, capability) key can be derived from.
+ */
+export function getCapabilityDispositionEvents(): CapabilityDispositionEvent[] {
+  const rows = db
+    .prepare<
+      [],
+      AuditRow
+    >(`SELECT * FROM audit_log WHERE event_type = 'capability_request_disposition' ORDER BY id ASC`)
+    .all();
+  const events: CapabilityDispositionEvent[] = [];
+  for (const r of rows) {
+    if (!r.project_id) continue;
+    const payload = JSON.parse(r.payload) as {
+      capability?: string;
+      disposition?: string;
+    };
+    if (!payload.capability) continue;
+    if (
+      payload.disposition !== 'auto_approved' &&
+      payload.disposition !== 'operator_approved' &&
+      payload.disposition !== 'operator_denied' &&
+      payload.disposition !== 'declined'
+    ) {
+      continue;
+    }
+    events.push({
+      id: r.id,
+      projectId: r.project_id,
+      capability: payload.capability,
+      disposition: payload.disposition,
+    });
+  }
+  return events;
 }

@@ -18,7 +18,7 @@ function buildNudgeMessage(
   cause: ConflictNudgeCause,
 ): string {
   const baseBranch = pr.base_branch ?? 'dev';
-  const headBranch = pr.head_branch ?? `feature/pr-${pr.pr_number}`;
+  const headBranch = pr.head_branch;
   switch (cause) {
     case 'behind':
       return formatBaseBranchModifiedFeedback({
@@ -65,7 +65,39 @@ export async function sendConflictNudge(
 
   const message = buildNudgeMessage(pr, cause);
   try {
-    await sessions.sendOrResume(pr.session_id, message);
+    const delivered = await sessions.sendOrResume(pr.session_id, message);
+    if (delivered) {
+      recordEvent({
+        event_type: 'conflict_nudge_sent',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: pr.task_id ?? null,
+        payload: {
+          pr_number: pr.pr_number,
+          repo: pr.repo,
+          session_id: pr.session_id,
+          head_sha: pr.head_sha,
+          cause,
+        },
+      });
+    } else {
+      recordEvent({
+        event_type: 'conflict_nudge_delivery_failed',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: pr.task_id ?? null,
+        payload: {
+          pr_number: pr.pr_number,
+          repo: pr.repo,
+          session_id: pr.session_id,
+          head_sha: pr.head_sha,
+          cause,
+          error: 'sendOrResume could not deliver the nudge',
+        },
+      });
+    }
   } catch (err) {
     recordEvent({
       event_type: 'conflict_nudge_delivery_failed',

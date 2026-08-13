@@ -60,7 +60,35 @@ only for a real decision that is the operator's to make, a genuinely blocked
 resource, or `Prod-Mutating` consent — never as a substitute for doing the
 observable work.
 
-The four disciplines below are how that rule is kept:
+> **Tier decides _how_ you close a hard-to-observe item — "stage it, never defer it" is not
+> tier-blind.** The push above is right, but it has been applied too flatly: staging a wedged-group
+> recovery drill was correct; staging a cgroup-OOM test on the live host was not. Read it as:
+>
+> - **`Prod-Mutating` → _simulate_, don't perform.** Reproduce the *condition* the item describes
+>   without mutating real state — a scratch object, a forced code path, a synthetic row. If the only
+>   way to observe it is to actually harm production, you do not stage it.
+> - **Trigger hasn't fired → _park_ it with a trace guide, via the `not-yet-triggerable`
+>   disposition.** Wait for the natural occurrence instead of forcing one. Parking is **not**
+>   deferral and **not** a hand-back — *provided* it carries the trace guide below. This is the
+>   legitimate third path between "stage it" and "defer it", and its absence is what made this
+>   doctrine read as all-or-nothing. *(This was the `Opportunistic` tier's job; that tier is retired
+>   and the disposition now carries it — the item parks at `pending` on a backoff clock.)*
+> - **`Human-Observation` → a person observes it.** No headless session can ever pass one; it
+>   surfaces to the operator through the Decision Inbox.
+> - **`Read-Only` → just go read it.** Unchanged — and it now also covers the bounded,
+>   cleanly-reversible scratch write.
+>
+> **The trace guide is what makes a park legitimate** — and it is no longer only convention: the
+> server **rejects** `not-yet-triggerable` without non-empty evidence naming the observable to
+> watch for. Every non-resolving disposition (`noted`,
+> `needs-setup`, a parked `not-yet-triggerable` item) records **the exact observables to capture when the
+> behavior fires**: which table or log, which field, which value separates pass from fail, and the
+> query that will settle it. A park with a trace guide is a *prepared* verification the next session
+> executes in one step; a park without one is a punt wearing better clothes. This pattern emerged
+> organically across a real run and earned its keep — treat it as the standard content of any
+> non-resolving disposition.
+
+The six disciplines below are how that rule is kept:
 
 - **Code ≠ verification.** A passing unit test does **not** close a gate item. A
   behavior lives in the gate precisely because it is rare / runtime and a
@@ -94,7 +122,32 @@ The four disciplines below are how that rule is kept:
 - **Verify before you claim.** Don't assert a state — "this was mis-accreted,"
   "there's no route for X" — until you've checked the source. Falsify the claim
   against the code / data first; an over-claim recorded as `evidence` pollutes the
-  durable event log.
+  durable event log. And **prefer the operator's account of what they did over an inference from
+  timing or logs** (`procedures.md` § Performance / host monitoring, rule 7) — a 26-second gap was
+  read as automation in one run when simply asking would have settled it.
+
+- **"Verified" is a word with a definition — don't narrate past your evidence.** The disposition
+  vocabulary is server-enforced; **your prose is not**, and prose is where this gate's central
+  distinction actually gets blurred. **"The code is deployed and the behavior never occurred" is not
+  verification** — it is deployment plus absence of contradiction, which is precisely the reasoning
+  *Code ≠ verification* exists to reject. Real run: an item was narrated as *"I verified that item
+  directly"* on exactly that basis. The recorded disposition was correctly `noted`, so the durable
+  record stayed clean — but the narration asserted the one thing this gate exists to police. **Say
+  what you observed, in the words of the observation.** *"Code deployed, no occurrence in the
+  record"* is an honest sentence; *"verified"* is a claim about a behavior you watched happen. **If
+  you cannot name the event you observed, you did not verify it.**
+
+- **Query defensively — a documented trap you have *read* is still a trap you will walk into.** A
+  wrong query here returns a **confident wrong answer**, not an error, and this skill's entire output
+  is built on such queries. Five vacuous reads in one run, three of them traps this project's own
+  `context.md` documents explicitly: a filter on `local_branches.task_id` (**no such column**);
+  `LIKE '%recover%'` matching 50 pushbacks containing the word "recovered"; a **truncated task-id
+  prefix** reading the wrong task as Done; grepping `projected free memory` when the emitted string
+  is `projected free host memory`; and concluding the memory gate emits nothing when **the log line
+  lives at the caller**. **Reading the warnings is not the same as querying defensively.** Before you
+  believe a result: confirm the column exists, print one raw row, check your match string against the
+  *emitted* string, match ids in full, and confirm the zero you got could have been non-zero. Every
+  count that will appear in your report is a claim to validate, not a fact.
 
 > ⚠️ **Two non-obvious staging constraints (both have bitten real runs):**
 > - **A remote-control session cannot mint a per-session stage credential.** Items
@@ -107,6 +160,21 @@ The four disciplines below are how that rule is kept:
 >   so any staging that flips a task to Ready has a live side-effect. Stage with
 >   **scratch tasks** and clean rollback (archive scratch, restore survivors); never
 >   flip a real task to Ready just to observe.
+> - **Filing a 🔲 Backlog task on an *armed* milestone is not inert.** The rule above covers a
+>   Ready-flip; this is its quieter sibling. Where auto-launch is armed, a task filed at **Backlog**
+>   can be groomed, implemented, reviewed and merged **unattended** — one filed task was merged
+>   **28 minutes later** while the session recorded "left at Backlog, not groomed" as the end state.
+>   *"I left it at Backlog"* describes what **you** did, not where the task ends up. When you file a
+>   follow-on mid-gate, say so, and re-read its state before reporting.
+
+> **Expect to hand off the final mutating step — that is the stable shape of an RC gate session, not
+> a failure.** The harness reliably permits the entire analysis path and blocks the last
+> state-changing action: a systemd write, a wrapped-marker `POST`, and a `group-commit` were all
+> blocked in one run while every read and diagnosis ran clean. **Plan for it: do the full analysis,
+> then stage the handoff as one paste-able command** with its expected output — rather than hitting
+> the block mid-step and improvising. This is *not* the `Prod-Mutating` consent gate (a deliberate
+> design feature); it is the harness permission boundary, and it lands on actions this skill
+> otherwise treats as routine.
 
 ---
 
@@ -139,7 +207,7 @@ node ~/.claude/scripts/gate-state-client.mjs next --milestone <M> [--classificat
 
 Returns up to `limit` (default 10) `runnable` items from **one** tier. Tier
 pull order, when `--classification` is omitted: `needs-triage` →
-`Read-Only` → `Opportunistic` → `Prod-Mutating` — untriaged items surface
+`Read-Only` → `Prod-Mutating` — untriaged items surface
 first, then increasing blast radius. Never request the full runnable set;
 always let the server pick or explicitly scope one tier.
 
@@ -173,23 +241,23 @@ For every item in the pulled batch:
 
 4. **Perform the active check** the item describes (only when reading history
    didn't settle it):
-   - **Read-Only / Opportunistic** — mechanical or low-risk checks you can
+   - **Read-Only** — mechanical or low-risk checks you can
      run and judge directly (read code, hit a read endpoint, inspect
      output).
+     - **Scratch-write convention:** a **self-contained scratch write with clean
+       rollback** (a throwaway scratch task you create and archive, restoring any
+       survivors) is **`Read-Only`**, not `Prod-Mutating` — its blast radius is
+       bounded and reversible. Reserve **`Prod-Mutating`** for a flip of **real**
+       state (a real task's status, a real config row). This removes the recurring
+       hesitation on staging checks that only ever touch scratch objects.
    - **Prod-Mutating** — do **not** self-grant a pass. These are
      non-mechanical: surface the exact action to the human, get their
      explicit go-ahead before performing anything that mutates production,
      and never mark one `pass` without a human present for it.
-     - **Scratch-write convention:** a **self-contained scratch write with clean
-       rollback** (a throwaway scratch task you create and archive, restoring any
-       survivors) is **`Opportunistic`**, not `Prod-Mutating` — its blast radius is
-       bounded and reversible. Reserve **`Prod-Mutating`** for a flip of **real**
-       state (a real task's status, a real config row). This removes the recurring
-       hesitation on staging checks that only ever touch scratch objects.
    - **needs-triage** — the item's classification isn't resolved yet, usually a
      **backfill artifact** (an entire milestone can land as `needs-triage` — M11
      did). Read `item.text` and judge which tier it belongs to (mechanical
-     read-only check → `Read-Only`; on-demand / low-risk → `Opportunistic`;
+     read-only check or bounded scratch write → `Read-Only`;
      anything that mutates production → `Prod-Mutating`). When you're confident,
      reclassify **before** dispositioning — **don't** guess a class or disposition
      the item blind:
@@ -198,7 +266,7 @@ For every item in the pulled batch:
      node ~/.claude/scripts/gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
      ```
 
-     `classification` must be one of `Read-Only`, `Prod-Mutating`, `Opportunistic`
+     `classification` must be one of `Read-Only`, `Prod-Mutating`, `Human-Observation`
      — the server rejects anything else, including `needs-triage` itself. Once
      reclassified, the item is picked up by its new tier on the next `next` pull
      (and by the continuous reconciler's auto-run path for
@@ -231,8 +299,15 @@ For every item in the pulled batch:
    | `fail` | ❌ stays blocking | behavior is **broken** — file the fix as a Code task (`filedFollowon: <taskId>`); the item stays unresolved, re-verified after the fix deploys. "Record `fail`" is not a resolution. |
    | `noted` | non-terminal (stays `runnable`) | "attempted, not yet resolved" — records the event + evidence without advancing state. The sanctioned home for a non-resolving attempt (or just omit `disposition`). |
    | `needs-setup` | non-terminal (stays `runnable`) | the verifier's bounded best-effort **abstain** — records the attempt; `next` skips the item until a later event supersedes it. |
+   | `not-yet-triggerable` | non-terminal (advances to `pending`) | **`Read-Only`/`Prod-Mutating`-only, and requires `evidence`** — the triggering condition genuinely hasn't happened yet (no occurrence in history, nothing to stage). Enters a backoff schedule; `next` skips it until the backoff clock elapses, then it resurfaces `runnable` for a fresh look. |
 
    **Rules the vocabulary encodes:**
+   - **"Hasn't happened yet" on a `Read-Only`/`Prod-Mutating` item is `not-yet-triggerable`, not
+     `deferred`.** `deferred` means punted to a *later milestone*; `not-yet-triggerable`
+     means the same milestone, waiting on its own backoff clock for the trigger to occur
+     naturally. Don't reach for `deferred` just because nothing has fired yet — that's
+     what `not-yet-triggerable` is for, and it keeps the item live in-milestone instead of
+     punting it.
    - **"Hard to observe" means _stage it_, not defer it.** Staging is the fallback for
      exactly the behaviors history can't show (Core doctrine). `deferred` is **not** a bin
      for "code-reasoned," "never-occurred-in-prod," or "too fiddly to set up" — those are
@@ -248,6 +323,20 @@ For every item in the pulled batch:
      is `discarded` — terminal and non-blocking, but audited.
    - **A compound item that won't isolate → split it** into atomic `gate_item`s
      (`task-writing.md` § atomic gate items), don't force a bespoke disposition.
+   - **Two known vocabulary gaps — name them in `evidence` rather than forcing a fit.**
+     - **Legitimate work that is genuinely unobservable and should _not_ carry forward** has no
+       disposition that fits. `deferred` says punted-to-a-later-milestone (it *will* carry forward);
+       `discarded` says void / never-real-work (it wasn't). One run used `deferred` plus a prose
+       exception — which works **exactly once**, and thereafter reads as an ordinary punt to everyone
+       downstream. Until the vocabulary gains a term, put the exception in the **first line** of
+       `evidence` and flag it in the report; never let the disposition quietly misrepresent the item.
+     - **`needs-setup` conflates "tried and couldn't" with "never got a session."** Because `next`
+       skips the item, a **transient** failure becomes **permanent invisibility** — a capacity error
+       silently shelved **28 items** in one run. Whenever you record `needs-setup`, state in
+       `evidence` which of the two it was and what would change it. **General rule for any
+       non-resolving disposition that hides an item from the pull: it must distinguish an attempt
+       that failed from an attempt that never happened**, or a transient fault becomes a permanent
+       one.
 
    **`deploySha` is load-bearing on a pass tied to a source commit — record it,
    don't treat it as optional.** It documents the exact SHA the behavior was
@@ -260,7 +349,16 @@ For every item in the pulled batch:
    transcript excerpt) and `filedFollowon` when a fix was filed rather than fixed
    in place.
 
-   For a `Read-Only` / `Opportunistic` item this resolves the item directly.
+   > **Resolve `deploySha` at the moment you write the event — never carry one across a session, and
+   > never back-correct in bulk.** On a live-deploying system production moves *during* the run (four
+   > times in one night), so a SHA resolved at session start is already stale when you use it, and
+   > chasing stamps is a treadmill: one run corrected **nine** and had **five more** go stale behind
+   > it. Re-resolve immediately before each `event` call. If stamps have already gone stale in bulk,
+   > **that is not yours to chase** — say so and move on. The durable fix is **server-side stamping at
+   > event-write time** rather than trusting a client that may be hours old; that is a finding to
+   > file, not a thing to hand-correct.
+
+   For a `Read-Only` item this resolves the item directly.
    For a `Prod-Mutating` item, a `pass` event parks the item at
    `pending-approval` — it does **not** resolve yet.
 
@@ -297,7 +395,15 @@ For a gate, *how* you report is part of the deliverable:
 - **Never groom or promote the fix tasks a gate surfaces.** Filing a follow-on Code
   task for a broken behavior is correct; bringing it to 🗂️ Ready is **not** this
   session's job — a gate session verifies, it does not groom. Leave filed fixes at
-  🔲 Backlog.
+  🔲 Backlog. *(But see the armed-milestone warning above — "left at Backlog" is not the same as
+  "inert.")*
+- **Never claim a sweep is complete without re-pulling it, and never do arithmetic in prose.** Two
+  overclaims in one run: a tier sweep (the then-live `Opportunistic` tier, since retired) was
+  reported finished while `ca637934` sat untouched,
+  and a "16 not yet runnable" count was simply wrong. Both were self-corrected — but the operator
+  should not have to audit your arithmetic. Before saying "all X are done", **re-run `next` for that
+  tier and paste what the API returns**; before quoting any number, derive it from a command's output
+  rather than from your memory of what you did. A completeness claim is a claim (§ Query defensively).
 
 ---
 

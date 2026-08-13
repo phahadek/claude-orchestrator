@@ -1,7 +1,23 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  act,
+} from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { StagedIntentPanel } from '../StagedIntentPanel';
+import { stagedIntentsApi } from '../../api/stagedIntents';
 import type { StagedIntent } from '../../api/stagedIntents';
+import { gateApi } from '../../api/gate';
+
+function fireKey(key: string, target?: EventTarget) {
+  const event = new KeyboardEvent('keydown', { key, bubbles: true });
+  if (target) {
+    Object.defineProperty(event, 'target', { value: target, writable: false });
+  }
+  window.dispatchEvent(event);
+}
 
 function makeIntent(overrides: Partial<StagedIntent> = {}): StagedIntent {
   return {
@@ -41,6 +57,26 @@ describe('StagedIntentPanel', () => {
 
     expect(screen.getByRole('button', { name: /^✓ Commit$/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /approve/i })).toBeNull();
+  });
+
+  it('renders an "auto-approved" badge for a gate.accrete intent tagged annotation.autoApproved', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'gate.accrete',
+          state: 'approved',
+          annotation: { autoApproved: true },
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('staged-intent-auto-approved')).toBeTruthy();
+  });
+
+  it('does not render the "auto-approved" badge for an ordinary staged intent', () => {
+    render(<StagedIntentPanel intent={makeIntent()} />);
+
+    expect(screen.queryByTestId('staged-intent-auto-approved')).toBeNull();
   });
 
   it('renders a completeness.disposition run — its questions, and Approve/Reject with no separate Commit', () => {
@@ -153,6 +189,59 @@ describe('StagedIntentPanel', () => {
     expect(summary.textContent).toContain('Not applicable here.');
     expect(summary.textContent).toContain('packages/frontend/src/a.ts');
     expect(summary.textContent).toContain('packages/frontend/src/b.ts');
+  });
+
+  it("renders the recorded LoC and changed-file count on the grooming summary's first line when size_check carries them", () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'task.setStatus',
+          payload: {
+            taskId: 'notion:abc',
+            status: 'Ready',
+            groomingGate: {
+              size_check: {
+                decision: 'no_split',
+                files: 3,
+                loc: 120,
+                loc_method: 'estimated',
+              },
+              type_check: { decision: 'none' },
+              type: '💻 Code',
+            },
+          },
+        })}
+      />,
+    );
+
+    const summary = screen.getByTestId('staged-intent-grooming-gate-summary');
+    expect(summary.textContent).toContain('no_split');
+    expect(summary.textContent).toContain('120 LoC');
+    expect(summary.textContent).toContain('estimated');
+    expect(summary.textContent).toContain('3 files');
+  });
+
+  it('renders a size_check missing the numbers exactly as today — no crash, no invented values', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'task.setStatus',
+          payload: {
+            taskId: 'notion:abc',
+            status: 'Ready',
+            groomingGate: {
+              size_check: { decision: 'no_split' },
+              type_check: { decision: 'none' },
+              type: '💻 Code',
+            },
+          },
+        })}
+      />,
+    );
+
+    const summary = screen.getByTestId('staged-intent-grooming-gate-summary');
+    expect(summary.textContent).toContain('Size: no_split');
+    expect(summary.textContent).not.toContain('LoC');
   });
 
   it('renders a task.setStatus -> Ready card with only the task id when the intent has no groomProposal, no decisionProposal, and no groomingGate', () => {
@@ -844,6 +933,207 @@ describe('StagedIntentPanel', () => {
     });
   });
 
+  describe('gate.verify Human-Observation mirror (operator disposition)', () => {
+    function makeMirrorIntent(overrides: Partial<StagedIntent> = {}) {
+      return makeIntent({
+        kind: 'gate.verify',
+        payload: { gateItemId: 'gate-mirror-1', origin: 'mirror' },
+        ...overrides,
+      });
+    }
+
+    it('renders Pass, Fail, Defer, and Park actions', () => {
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      expect(
+        screen.getByTestId('staged-intent-gate-verify-mirror-pass'),
+      ).toBeTruthy();
+      expect(
+        screen.getByTestId('staged-intent-gate-verify-mirror-fail'),
+      ).toBeTruthy();
+      expect(
+        screen.getByTestId('staged-intent-gate-verify-mirror-defer'),
+      ).toBeTruthy();
+      expect(
+        screen.getByTestId('staged-intent-gate-verify-mirror-park'),
+      ).toBeTruthy();
+    });
+
+    it("labels Defer as resolving, so it isn't mistaken for a postponement", () => {
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      const defer = screen.getByTestId(
+        'staged-intent-gate-verify-mirror-defer',
+      );
+      expect(defer.textContent).toMatch(/resolves/i);
+    });
+
+    it('Park is disabled until evidence is entered, then applies with the not-yet-triggerable disposition', async () => {
+      const apply = vi
+        .spyOn(stagedIntentsApi, 'apply')
+        .mockResolvedValue({ ok: true, result: {} });
+
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      const park = screen.getByTestId(
+        'staged-intent-gate-verify-mirror-park',
+      ) as HTMLButtonElement;
+      expect(park.disabled).toBe(true);
+
+      fireEvent.change(
+        screen.getByTestId('staged-intent-gate-verify-mirror-park-evidence'),
+        {
+          target: {
+            value: 'not triggerable yet — waiting on the real-world event',
+          },
+        },
+      );
+      expect(park.disabled).toBe(false);
+
+      fireEvent.click(park);
+
+      await waitFor(() =>
+        expect(apply).toHaveBeenCalledWith('intent-1', {
+          override: false,
+          reason: undefined,
+          mirrorDisposition: 'not-yet-triggerable',
+          mirrorEvidence:
+            'not triggerable yet — waiting on the real-world event',
+        }),
+      );
+    });
+
+    it('pressing Defer still resolves the item via the deferred mirrorDisposition, unchanged from before Park existed', async () => {
+      const apply = vi
+        .spyOn(stagedIntentsApi, 'apply')
+        .mockResolvedValue({ ok: true, result: {} });
+
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+      fireEvent.click(
+        screen.getByTestId('staged-intent-gate-verify-mirror-defer'),
+      );
+
+      await waitFor(() =>
+        expect(apply).toHaveBeenCalledWith('intent-1', {
+          override: false,
+          reason: undefined,
+          mirrorDisposition: 'deferred',
+          mirrorEvidence: undefined,
+        }),
+      );
+    });
+  });
+
+  describe('gate.verify consent mirror (Prod-Mutating pending-approval)', () => {
+    function makeConsentIntent(overrides: Partial<StagedIntent> = {}) {
+      return makeIntent({
+        kind: 'gate.verify',
+        payload: {
+          gateItemId: 'gate-consent-1',
+          origin: 'consent',
+          evidence: {
+            basis: 'read-only dry run',
+            note: 'no rows would change',
+          },
+        },
+        ...overrides,
+      });
+    }
+
+    it('renders the pending-approval headline and the evidence behind the held pass', () => {
+      render(<StagedIntentPanel intent={makeConsentIntent()} />);
+
+      expect(screen.getByText(/Prod-Mutating — pending approval/)).toBeTruthy();
+      expect(screen.getByText(/Basis: read-only dry run/)).toBeTruthy();
+      expect(screen.getByText(/no rows would change/)).toBeTruthy();
+    });
+
+    it("renders no Pass/Fail/Defer/Park mirror controls — the consent card's Approve/Reject vocabulary is unchanged by the mirror card's Park addition", () => {
+      render(<StagedIntentPanel intent={makeConsentIntent()} />);
+
+      expect(
+        screen.queryByTestId('staged-intent-gate-verify-mirror-pass'),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId('staged-intent-gate-verify-mirror-fail'),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId('staged-intent-gate-verify-mirror-defer'),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId('staged-intent-gate-verify-mirror-park'),
+      ).toBeNull();
+    });
+
+    it('renders Approve and Reject controls instead of Commit/Pushback', () => {
+      render(<StagedIntentPanel intent={makeConsentIntent()} />);
+
+      expect(
+        screen.getByTestId('staged-intent-gate-consent-approve'),
+      ).toBeTruthy();
+      expect(
+        screen.getByTestId('staged-intent-gate-consent-reject'),
+      ).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /^✓ Commit$/i })).toBeNull();
+      expect(screen.queryByRole('button', { name: /pushback/i })).toBeNull();
+    });
+
+    it('approving calls gateApi.approveItem for the gate item and removes the card via onApplied', async () => {
+      const approve = vi
+        .spyOn(gateApi, 'approveItem')
+        .mockResolvedValue({ id: 'gate-consent-1', state: 'pass' } as never);
+      const onApplied = vi.fn();
+      const intent = makeConsentIntent();
+
+      render(<StagedIntentPanel intent={intent} onApplied={onApplied} />);
+      fireEvent.click(screen.getByTestId('staged-intent-gate-consent-approve'));
+
+      await waitFor(() =>
+        expect(approve).toHaveBeenCalledWith('gate-consent-1'),
+      );
+      await waitFor(() =>
+        expect(onApplied).toHaveBeenCalledWith(
+          intent,
+          expect.objectContaining({ state: 'pass' }),
+        ),
+      );
+    });
+
+    it('the Reject button stays disabled until a reason is entered, then calls gateApi.rejectItem with it', async () => {
+      const reject = vi
+        .spyOn(gateApi, 'rejectItem')
+        .mockResolvedValue({ id: 'gate-consent-1', state: 'fail' } as never);
+      const onApplied = vi.fn();
+      const intent = makeConsentIntent();
+
+      render(<StagedIntentPanel intent={intent} onApplied={onApplied} />);
+      const rejectButton = screen.getByTestId(
+        'staged-intent-gate-consent-reject',
+      ) as HTMLButtonElement;
+      expect(rejectButton.disabled).toBe(true);
+
+      fireEvent.change(
+        screen.getByTestId('staged-intent-gate-consent-reject-reason'),
+        { target: { value: 'not comfortable mutating prod yet' } },
+      );
+      expect(rejectButton.disabled).toBe(false);
+
+      fireEvent.click(rejectButton);
+
+      await waitFor(() =>
+        expect(reject).toHaveBeenCalledWith('gate-consent-1', {
+          reason: 'not comfortable mutating prod yet',
+        }),
+      );
+      await waitFor(() =>
+        expect(onApplied).toHaveBeenCalledWith(
+          intent,
+          expect.objectContaining({ state: 'fail' }),
+        ),
+      );
+    });
+  });
+
   describe('session.requestCapability file-mutation advisory', () => {
     it('renders the file-write advisory when confersFileMutation is true', () => {
       render(
@@ -882,6 +1172,94 @@ describe('StagedIntentPanel', () => {
       expect(
         screen.queryByTestId('staged-intent-capability-file-mutation-warning'),
       ).toBeNull();
+    });
+  });
+
+  describe('keyboard ring bindings', () => {
+    it("'a' fires handleApprove for a highlighted grouped intent with no required input", async () => {
+      const approve = vi
+        .spyOn(stagedIntentsApi, 'approve')
+        .mockResolvedValue({ ...makeIntent({ groupId: 'group-1' }) });
+
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({ groupId: 'group-1' })}
+          highlighted
+        />,
+      );
+
+      act(() => fireKey('a'));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('intent-1'));
+    });
+
+    it("'a' is a no-op when the card isn't the ring's highlight", () => {
+      const approve = vi.spyOn(stagedIntentsApi, 'approve');
+
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({ groupId: 'group-1' })}
+          highlighted={false}
+        />,
+      );
+
+      fireKey('a');
+
+      expect(approve).not.toHaveBeenCalled();
+    });
+
+    it("'r' focuses the reason field and never submits by itself", () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({ groupId: 'group-1' })}
+          highlighted
+        />,
+      );
+
+      const reasonField = screen.getByPlaceholderText(
+        'What should the session revise?',
+      ) as HTMLTextAreaElement;
+      expect(document.activeElement).not.toBe(reasonField);
+
+      fireKey('r');
+
+      expect(document.activeElement).toBe(reasonField);
+      expect(
+        screen.getByRole('button', { name: /pushback|decline/i }),
+      ).toBeTruthy();
+      // Focusing the field alone must never fire a network call.
+      expect(reasonField.value).toBe('');
+    });
+
+    it("'a' fires the same Commit handler as clicking the primary button for a standalone (non-grouped) card", async () => {
+      const apply = vi
+        .spyOn(stagedIntentsApi, 'apply')
+        .mockResolvedValue({ ok: true, result: {} });
+
+      render(<StagedIntentPanel intent={makeIntent()} highlighted />);
+
+      act(() => fireKey('a'));
+
+      await waitFor(() =>
+        expect(apply).toHaveBeenCalledWith('intent-1', {
+          override: false,
+          reason: undefined,
+          mirrorDisposition: undefined,
+        }),
+      );
+    });
+
+    it('renders a distinct keyboard-highlight class when highlighted, absent otherwise', () => {
+      const { container, rerender } = render(
+        <StagedIntentPanel intent={makeIntent()} highlighted={false} />,
+      );
+      const panel = container.querySelector(
+        '[data-testid="staged-intent-panel"]',
+      ) as HTMLElement;
+      expect(panel.className).not.toMatch(/keyboardHighlighted/);
+
+      rerender(<StagedIntentPanel intent={makeIntent()} highlighted />);
+      expect(panel.className).toMatch(/keyboardHighlighted/);
     });
   });
 });

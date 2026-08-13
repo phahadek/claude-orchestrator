@@ -27,6 +27,12 @@ vi.mock('../db/queries.js', () => ({
   setLocalBranchReviewResult: vi.fn(),
   getLocalBranchById: vi.fn(),
   getSession: vi.fn().mockReturnValue(undefined),
+  getPRIntentForPR: vi.fn().mockReturnValue(null),
+  setPauseReason: vi.fn(),
+}));
+
+vi.mock('../tasks/TaskWriteCommands.js', () => ({
+  getCachedType: vi.fn().mockReturnValue('💻 Code'),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({

@@ -22,6 +22,7 @@ import { GitHubClient } from '../github/GitHubClient';
 import { JiraClient } from '../tasks/JiraClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 import { recordEvent } from '../audit/AuditLog';
+import { asyncHandler } from './asyncHandler';
 
 let _autoMerger: AutoMerger | null = null;
 export function setAutoMerger(merger: AutoMerger): void {
@@ -180,328 +181,340 @@ projectsRouter.get('/projects', (_req: Request, res: Response) => {
   res.json(ProjectService.list());
 });
 
-projectsRouter.post('/projects', async (req: Request, res: Response) => {
-  const body = req.body as Record<string, unknown> | undefined;
-  if (!body) {
-    res.status(400).json({ error: 'Request body is required' });
-    return;
-  }
-
-  const name = typeof body.name === 'string' ? body.name : '';
-  const projectDir = typeof body.projectDir === 'string' ? body.projectDir : '';
-  if (!name || !projectDir) {
-    res.status(400).json({ error: 'name and projectDir are required' });
-    return;
-  }
-
-  if (!isExistingDirectory(projectDir)) {
-    res
-      .status(400)
-      .json({ error: `projectDir '${projectDir}' does not exist on disk` });
-    return;
-  }
-
-  const rawTaskSource = body.taskSource;
-  if (
-    rawTaskSource !== undefined &&
-    rawTaskSource !== 'notion' &&
-    rawTaskSource !== 'yaml' &&
-    rawTaskSource !== 'github' &&
-    rawTaskSource !== 'jira'
-  ) {
-    res.status(400).json({
-      error: `taskSource must be 'notion', 'yaml', 'github', or 'jira'`,
-    });
-    return;
-  }
-  const taskSource =
-    rawTaskSource === 'yaml'
-      ? 'yaml'
-      : rawTaskSource === 'github'
-        ? 'github'
-        : rawTaskSource === 'jira'
-          ? 'jira'
-          : 'notion';
-
-  let taskSourceConfig: string | null = null;
-  if (taskSource === 'github') {
-    const parsed = parseGithubTaskSourceConfig(body.taskSourceConfig);
-    if (!parsed.ok) {
-      res.status(400).json({ error: parsed.error });
+projectsRouter.post(
+  '/projects',
+  asyncHandler(async (req: Request, res: Response) => {
+    const body = req.body as Record<string, unknown> | undefined;
+    if (!body) {
+      res.status(400).json({ error: 'Request body is required' });
       return;
     }
-    const repoError = await verifyGithubRepoAccess(
-      `${parsed.config.owner}/${parsed.config.repo}`,
-    );
-    if (repoError) {
-      res.status(400).json({ error: repoError });
+
+    const name = typeof body.name === 'string' ? body.name : '';
+    const projectDir =
+      typeof body.projectDir === 'string' ? body.projectDir : '';
+    if (!name || !projectDir) {
+      res.status(400).json({ error: 'name and projectDir are required' });
       return;
     }
-    taskSourceConfig = JSON.stringify(parsed.config);
-  }
 
-  const rawGitMode = body.gitMode;
-  if (
-    rawGitMode !== undefined &&
-    rawGitMode !== 'github' &&
-    rawGitMode !== 'local-only'
-  ) {
-    res.status(400).json({ error: `gitMode must be 'github' or 'local-only'` });
-    return;
-  }
-  const gitMode = rawGitMode === 'local-only' ? 'local-only' : 'github';
-  const id =
-    typeof body.id === 'string' && body.id ? body.id : crypto.randomUUID();
-
-  if (ProjectService.getById(id)) {
-    res.status(409).json({ error: `Project with id '${id}' already exists` });
-    return;
-  }
-
-  // derive github_repo from GitHub task source config when applicable
-  let githubRepo: string | null =
-    typeof body.githubRepo === 'string' ? body.githubRepo : null;
-  if (taskSource === 'github' && taskSourceConfig) {
-    const cfg = JSON.parse(taskSourceConfig) as {
-      owner?: string;
-      repo?: string;
-    };
-    if (cfg.owner && cfg.repo) {
-      githubRepo = `${cfg.owner}/${cfg.repo}`;
+    if (!isExistingDirectory(projectDir)) {
+      res
+        .status(400)
+        .json({ error: `projectDir '${projectDir}' does not exist on disk` });
+      return;
     }
-  }
 
-  const project = ProjectService.create({
-    id,
-    name,
-    projectDir,
-    contextUrl: typeof body.contextUrl === 'string' ? body.contextUrl : null,
-    githubRepo,
-    taskSource,
-    taskSourceConfig,
-    gitMode,
-    autoLaunchEnabled: body.autoLaunchEnabled === true,
-    autoLaunchMilestoneId:
-      typeof body.autoLaunchMilestoneId === 'string'
-        ? body.autoLaunchMilestoneId
-        : null,
-    autoMergeEnabled: body.autoMergeEnabled === true,
-    dataResidencyConfirmed: body.dataResidencyConfirmed === true,
-    baseBranch: typeof body.baseBranch === 'string' ? body.baseBranch : 'dev',
-  });
-  res.status(201).json(project);
-});
-
-projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
-  const id = String(req.params.id);
-  const body = (req.body as Record<string, unknown>) ?? {};
-
-  if (
-    typeof body.projectDir === 'string' &&
-    !isExistingDirectory(body.projectDir)
-  ) {
-    res.status(400).json({
-      error: `projectDir '${body.projectDir}' does not exist on disk`,
-    });
-    return;
-  }
-
-  const patch: ProjectPatch = {};
-  if (typeof body.name === 'string') patch.name = body.name;
-  if (typeof body.projectDir === 'string') patch.project_dir = body.projectDir;
-  if ('contextUrl' in body) {
-    patch.context_url =
-      typeof body.contextUrl === 'string' ? body.contextUrl : null;
-  }
-  if ('githubRepo' in body) {
-    patch.github_repo =
-      typeof body.githubRepo === 'string' ? body.githubRepo : null;
-  }
-  if (
-    body.taskSource === 'notion' ||
-    body.taskSource === 'yaml' ||
-    body.taskSource === 'github' ||
-    body.taskSource === 'jira'
-  ) {
-    patch.task_source = body.taskSource;
-  }
-  if ('autoLaunchEnabled' in body) {
-    patch.auto_launch_enabled = body.autoLaunchEnabled === true ? 1 : 0;
-  }
-  if ('autoLaunchMilestoneId' in body) {
-    patch.auto_launch_milestone_id =
-      typeof body.autoLaunchMilestoneId === 'string'
-        ? body.autoLaunchMilestoneId
-        : null;
-  }
-  if ('autoMergeEnabled' in body) {
-    patch.auto_merge_enabled = body.autoMergeEnabled === true ? 1 : 0;
-  }
-  if ('milestoneBranching' in body) {
+    const rawTaskSource = body.taskSource;
     if (
-      body.milestoneBranching === 'two_tier' ||
-      body.milestoneBranching === 'flat' ||
-      body.milestoneBranching === null
+      rawTaskSource !== undefined &&
+      rawTaskSource !== 'notion' &&
+      rawTaskSource !== 'yaml' &&
+      rawTaskSource !== 'github' &&
+      rawTaskSource !== 'jira'
     ) {
-      patch.milestone_branching = body.milestoneBranching as
-        | 'two_tier'
-        | 'flat'
-        | null;
-    } else if (body.milestoneBranching !== undefined) {
       res.status(400).json({
-        error: `milestoneBranching must be 'two_tier', 'flat', or null`,
+        error: `taskSource must be 'notion', 'yaml', 'github', or 'jira'`,
       });
       return;
     }
-  }
-  if ('nonMilestoneSourceConfig' in body) {
-    if (body.nonMilestoneSourceConfig === null) {
-      patch.non_milestone_source_config = null;
-    } else if (typeof body.nonMilestoneSourceConfig === 'string') {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(body.nonMilestoneSourceConfig);
-      } catch {
-        res
-          .status(400)
-          .json({ error: 'nonMilestoneSourceConfig is not valid JSON' });
+    const taskSource =
+      rawTaskSource === 'yaml'
+        ? 'yaml'
+        : rawTaskSource === 'github'
+          ? 'github'
+          : rawTaskSource === 'jira'
+            ? 'jira'
+            : 'notion';
+
+    let taskSourceConfig: string | null = null;
+    if (taskSource === 'github') {
+      const parsed = parseGithubTaskSourceConfig(body.taskSourceConfig);
+      if (!parsed.ok) {
+        res.status(400).json({ error: parsed.error });
         return;
       }
-      if (
-        typeof parsed !== 'object' ||
-        parsed === null ||
-        Array.isArray(parsed)
-      ) {
-        res
-          .status(400)
-          .json({ error: 'nonMilestoneSourceConfig must be a JSON object' });
-        return;
-      }
-      const obj = parsed as Record<string, unknown>;
-      if (
-        (obj.notionDatabaseId !== undefined &&
-          typeof obj.notionDatabaseId !== 'string') ||
-        (obj.milestoneId !== undefined && typeof obj.milestoneId !== 'string')
-      ) {
-        res.status(400).json({
-          error:
-            'nonMilestoneSourceConfig must have shape {notionDatabaseId?: string; milestoneId?: string}',
-        });
-        return;
-      }
-      patch.non_milestone_source_config = body.nonMilestoneSourceConfig;
-    } else if (typeof body.nonMilestoneSourceConfig === 'object') {
-      const obj = body.nonMilestoneSourceConfig as Record<string, unknown>;
-      if (
-        (obj.notionDatabaseId !== undefined &&
-          typeof obj.notionDatabaseId !== 'string') ||
-        (obj.milestoneId !== undefined && typeof obj.milestoneId !== 'string')
-      ) {
-        res.status(400).json({
-          error:
-            'nonMilestoneSourceConfig must have shape {notionDatabaseId?: string; milestoneId?: string}',
-        });
-        return;
-      }
-      patch.non_milestone_source_config = JSON.stringify(
-        body.nonMilestoneSourceConfig,
+      const repoError = await verifyGithubRepoAccess(
+        `${parsed.config.owner}/${parsed.config.repo}`,
       );
-    } else {
+      if (repoError) {
+        res.status(400).json({ error: repoError });
+        return;
+      }
+      taskSourceConfig = JSON.stringify(parsed.config);
+    }
+
+    const rawGitMode = body.gitMode;
+    if (
+      rawGitMode !== undefined &&
+      rawGitMode !== 'github' &&
+      rawGitMode !== 'local-only'
+    ) {
+      res
+        .status(400)
+        .json({ error: `gitMode must be 'github' or 'local-only'` });
+      return;
+    }
+    const gitMode = rawGitMode === 'local-only' ? 'local-only' : 'github';
+    const id =
+      typeof body.id === 'string' && body.id ? body.id : crypto.randomUUID();
+
+    if (ProjectService.getById(id)) {
+      res.status(409).json({ error: `Project with id '${id}' already exists` });
+      return;
+    }
+
+    // derive github_repo from GitHub task source config when applicable
+    let githubRepo: string | null =
+      typeof body.githubRepo === 'string' ? body.githubRepo : null;
+    if (taskSource === 'github' && taskSourceConfig) {
+      const cfg = JSON.parse(taskSourceConfig) as {
+        owner?: string;
+        repo?: string;
+      };
+      if (cfg.owner && cfg.repo) {
+        githubRepo = `${cfg.owner}/${cfg.repo}`;
+      }
+    }
+
+    const project = ProjectService.create({
+      id,
+      name,
+      projectDir,
+      contextUrl: typeof body.contextUrl === 'string' ? body.contextUrl : null,
+      githubRepo,
+      taskSource,
+      taskSourceConfig,
+      gitMode,
+      autoLaunchEnabled: body.autoLaunchEnabled === true,
+      autoLaunchMilestoneId:
+        typeof body.autoLaunchMilestoneId === 'string'
+          ? body.autoLaunchMilestoneId
+          : null,
+      autoMergeEnabled: body.autoMergeEnabled === true,
+      dataResidencyConfirmed: body.dataResidencyConfirmed === true,
+      baseBranch: typeof body.baseBranch === 'string' ? body.baseBranch : 'dev',
+    });
+    res.status(201).json(project);
+  }),
+);
+
+projectsRouter.patch(
+  '/projects/:id',
+  asyncHandler(async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const body = (req.body as Record<string, unknown>) ?? {};
+
+    if (
+      typeof body.projectDir === 'string' &&
+      !isExistingDirectory(body.projectDir)
+    ) {
       res.status(400).json({
-        error:
-          'nonMilestoneSourceConfig must be a JSON object, JSON string, or null',
+        error: `projectDir '${body.projectDir}' does not exist on disk`,
       });
       return;
     }
-  }
-  if ('taskSourceConfig' in body) {
-    if (body.taskSourceConfig === null) {
-      patch.task_source_config = null;
-    } else {
-      // Determine effective task_source: use the patched value if provided,
-      // otherwise look up the existing project's task_source.
-      const effectiveTaskSource =
-        patch.task_source ?? ProjectService.getById(id)?.taskSource;
-      if (effectiveTaskSource === 'jira') {
-        const result = parseJiraTaskSourceConfig(body.taskSourceConfig);
-        if (!result.ok) {
-          res.status(400).json({ error: result.error });
-          return;
-        }
-        patch.task_source_config = JSON.stringify(result.config);
-      } else {
-        const parsed = parseGithubTaskSourceConfig(body.taskSourceConfig);
-        if (!parsed.ok) {
-          res.status(400).json({ error: parsed.error });
-          return;
-        }
-        const repoError = await verifyGithubRepoAccess(
-          `${parsed.config.owner}/${parsed.config.repo}`,
-        );
-        if (repoError) {
-          res.status(400).json({ error: repoError });
-          return;
-        }
-        patch.task_source_config = JSON.stringify(parsed.config);
-        // derive github_repo from the validated GitHub task source config
-        patch.github_repo = `${parsed.config.owner}/${parsed.config.repo}`;
+
+    const patch: ProjectPatch = {};
+    if (typeof body.name === 'string') patch.name = body.name;
+    if (typeof body.projectDir === 'string')
+      patch.project_dir = body.projectDir;
+    if ('contextUrl' in body) {
+      patch.context_url =
+        typeof body.contextUrl === 'string' ? body.contextUrl : null;
+    }
+    if ('githubRepo' in body) {
+      patch.github_repo =
+        typeof body.githubRepo === 'string' ? body.githubRepo : null;
+    }
+    if (
+      body.taskSource === 'notion' ||
+      body.taskSource === 'yaml' ||
+      body.taskSource === 'github' ||
+      body.taskSource === 'jira'
+    ) {
+      patch.task_source = body.taskSource;
+    }
+    if ('autoLaunchEnabled' in body) {
+      patch.auto_launch_enabled = body.autoLaunchEnabled === true ? 1 : 0;
+    }
+    if ('autoLaunchMilestoneId' in body) {
+      patch.auto_launch_milestone_id =
+        typeof body.autoLaunchMilestoneId === 'string'
+          ? body.autoLaunchMilestoneId
+          : null;
+    }
+    if ('autoMergeEnabled' in body) {
+      patch.auto_merge_enabled = body.autoMergeEnabled === true ? 1 : 0;
+    }
+    if ('milestoneBranching' in body) {
+      if (
+        body.milestoneBranching === 'two_tier' ||
+        body.milestoneBranching === 'flat' ||
+        body.milestoneBranching === null
+      ) {
+        patch.milestone_branching = body.milestoneBranching as
+          | 'two_tier'
+          | 'flat'
+          | null;
+      } else if (body.milestoneBranching !== undefined) {
+        res.status(400).json({
+          error: `milestoneBranching must be 'two_tier', 'flat', or null`,
+        });
+        return;
       }
     }
-  }
+    if ('nonMilestoneSourceConfig' in body) {
+      if (body.nonMilestoneSourceConfig === null) {
+        patch.non_milestone_source_config = null;
+      } else if (typeof body.nonMilestoneSourceConfig === 'string') {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(body.nonMilestoneSourceConfig);
+        } catch {
+          res
+            .status(400)
+            .json({ error: 'nonMilestoneSourceConfig is not valid JSON' });
+          return;
+        }
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          Array.isArray(parsed)
+        ) {
+          res
+            .status(400)
+            .json({ error: 'nonMilestoneSourceConfig must be a JSON object' });
+          return;
+        }
+        const obj = parsed as Record<string, unknown>;
+        if (
+          (obj.notionDatabaseId !== undefined &&
+            typeof obj.notionDatabaseId !== 'string') ||
+          (obj.milestoneId !== undefined && typeof obj.milestoneId !== 'string')
+        ) {
+          res.status(400).json({
+            error:
+              'nonMilestoneSourceConfig must have shape {notionDatabaseId?: string; milestoneId?: string}',
+          });
+          return;
+        }
+        patch.non_milestone_source_config = body.nonMilestoneSourceConfig;
+      } else if (typeof body.nonMilestoneSourceConfig === 'object') {
+        const obj = body.nonMilestoneSourceConfig as Record<string, unknown>;
+        if (
+          (obj.notionDatabaseId !== undefined &&
+            typeof obj.notionDatabaseId !== 'string') ||
+          (obj.milestoneId !== undefined && typeof obj.milestoneId !== 'string')
+        ) {
+          res.status(400).json({
+            error:
+              'nonMilestoneSourceConfig must have shape {notionDatabaseId?: string; milestoneId?: string}',
+          });
+          return;
+        }
+        patch.non_milestone_source_config = JSON.stringify(
+          body.nonMilestoneSourceConfig,
+        );
+      } else {
+        res.status(400).json({
+          error:
+            'nonMilestoneSourceConfig must be a JSON object, JSON string, or null',
+        });
+        return;
+      }
+    }
+    if ('taskSourceConfig' in body) {
+      if (body.taskSourceConfig === null) {
+        patch.task_source_config = null;
+      } else {
+        // Determine effective task_source: use the patched value if provided,
+        // otherwise look up the existing project's task_source.
+        const effectiveTaskSource =
+          patch.task_source ?? ProjectService.getById(id)?.taskSource;
+        if (effectiveTaskSource === 'jira') {
+          const result = parseJiraTaskSourceConfig(body.taskSourceConfig);
+          if (!result.ok) {
+            res.status(400).json({ error: result.error });
+            return;
+          }
+          patch.task_source_config = JSON.stringify(result.config);
+        } else {
+          const parsed = parseGithubTaskSourceConfig(body.taskSourceConfig);
+          if (!parsed.ok) {
+            res.status(400).json({ error: parsed.error });
+            return;
+          }
+          const repoError = await verifyGithubRepoAccess(
+            `${parsed.config.owner}/${parsed.config.repo}`,
+          );
+          if (repoError) {
+            res.status(400).json({ error: repoError });
+            return;
+          }
+          patch.task_source_config = JSON.stringify(parsed.config);
+          // derive github_repo from the validated GitHub task source config
+          patch.github_repo = `${parsed.config.owner}/${parsed.config.repo}`;
+        }
+      }
+    }
 
-  if (body.gitMode === 'github' || body.gitMode === 'local-only') {
-    patch.git_mode = body.gitMode;
-  } else if ('gitMode' in body && body.gitMode !== undefined) {
-    res.status(400).json({ error: `gitMode must be 'github' or 'local-only'` });
-    return;
-  }
-  if (typeof body.baseBranch === 'string') {
-    patch.base_branch = body.baseBranch;
-  }
+    if (body.gitMode === 'github' || body.gitMode === 'local-only') {
+      patch.git_mode = body.gitMode;
+    } else if ('gitMode' in body && body.gitMode !== undefined) {
+      res
+        .status(400)
+        .json({ error: `gitMode must be 'github' or 'local-only'` });
+      return;
+    }
+    if (typeof body.baseBranch === 'string') {
+      patch.base_branch = body.baseBranch;
+    }
 
-  // dataResidencyConfirmed and archStoreAdopted each trigger audit logging via
-  // their own dedicated service methods, applied before the plain patch.
-  let auditedUpdate: Project | undefined;
-  if ('dataResidencyConfirmed' in body) {
-    auditedUpdate = ProjectService.setDataResidencyConfirmed(
-      id,
-      body.dataResidencyConfirmed === true,
-    );
-    if (!auditedUpdate) {
+    // dataResidencyConfirmed and archStoreAdopted each trigger audit logging via
+    // their own dedicated service methods, applied before the plain patch.
+    let auditedUpdate: Project | undefined;
+    if ('dataResidencyConfirmed' in body) {
+      auditedUpdate = ProjectService.setDataResidencyConfirmed(
+        id,
+        body.dataResidencyConfirmed === true,
+      );
+      if (!auditedUpdate) {
+        res.status(404).json({ error: `Project '${id}' not found` });
+        return;
+      }
+    }
+    if ('archStoreAdopted' in body) {
+      auditedUpdate = ProjectService.setArchStoreAdopted(
+        id,
+        body.archStoreAdopted === true,
+      );
+      if (!auditedUpdate) {
+        res.status(404).json({ error: `Project '${id}' not found` });
+        return;
+      }
+    }
+    if (auditedUpdate) {
+      // Apply any remaining patch fields on top (neither dataResidencyConfirmed
+      // nor archStoreAdopted is ever added to `patch` — both are handled solely
+      // through their dedicated, audited service methods above).
+      if (Object.keys(patch).length === 0) {
+        res.json(auditedUpdate);
+        return;
+      }
+      const final = ProjectService.update(id, patch);
+      res.json(final ?? auditedUpdate);
+      return;
+    }
+
+    const updated = ProjectService.update(id, patch);
+    if (!updated) {
       res.status(404).json({ error: `Project '${id}' not found` });
       return;
     }
-  }
-  if ('archStoreAdopted' in body) {
-    auditedUpdate = ProjectService.setArchStoreAdopted(
-      id,
-      body.archStoreAdopted === true,
-    );
-    if (!auditedUpdate) {
-      res.status(404).json({ error: `Project '${id}' not found` });
-      return;
-    }
-  }
-  if (auditedUpdate) {
-    // Apply any remaining patch fields on top (neither dataResidencyConfirmed
-    // nor archStoreAdopted is ever added to `patch` — both are handled solely
-    // through their dedicated, audited service methods above).
-    if (Object.keys(patch).length === 0) {
-      res.json(auditedUpdate);
-      return;
-    }
-    const final = ProjectService.update(id, patch);
-    res.json(final ?? auditedUpdate);
-    return;
-  }
-
-  const updated = ProjectService.update(id, patch);
-  if (!updated) {
-    res.status(404).json({ error: `Project '${id}' not found` });
-    return;
-  }
-  res.json(updated);
-});
+    res.json(updated);
+  }),
+);
 
 projectsRouter.delete('/projects/:id', (req: Request, res: Response) => {
   const id = String(req.params.id);
@@ -741,7 +754,7 @@ projectsRouter.post(
 
 projectsRouter.get(
   '/notion/validate-board',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const rawId = typeof req.query.id === 'string' ? req.query.id.trim() : '';
     if (!rawId) {
       res.status(400).json({ error: 'id query parameter is required' });
@@ -762,14 +775,14 @@ projectsRouter.get(
         err instanceof Error ? err.message : 'Notion validation failed';
       res.status(400).json({ error: message });
     }
-  },
+  }),
 );
 
 // ── GitHub milestone validation ──────────────────────────────────────────────
 
 projectsRouter.get(
   '/projects/:id/github/validate-milestone',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const projectId = String(req.params.id);
     const project = ProjectService.getById(projectId);
     if (!project) {
@@ -830,14 +843,14 @@ projectsRouter.get(
           : 'GitHub milestone validation failed';
       res.status(400).json({ error: message });
     }
-  },
+  }),
 );
 
 // ── Jira Epic validation ──────────────────────────────────────────────────────
 
 projectsRouter.get(
   '/projects/:id/jira/validate-epic',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const projectId = String(req.params.id);
     const project = ProjectService.getById(projectId);
     if (!project) {
@@ -901,7 +914,7 @@ projectsRouter.get(
         err instanceof Error ? err.message : 'Jira Epic validation failed';
       res.status(400).json({ error: message });
     }
-  },
+  }),
 );
 
 // ── Orchestrator config (read-only) ──────────────────────────────────────────
@@ -928,7 +941,7 @@ projectsRouter.get(
 
 projectsRouter.get(
   '/projects/:id/github-milestones',
-  async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const id = String(req.params.id);
     const project = ProjectService.getById(id);
     if (!project) {
@@ -970,7 +983,7 @@ projectsRouter.get(
           : 'Failed to fetch GitHub milestones';
       res.status(400).json({ error: message });
     }
-  },
+  }),
 );
 
 // ── Merge-Ready bulk merge ────────────────────────────────────────────────────

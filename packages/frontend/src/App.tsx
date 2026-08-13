@@ -12,6 +12,11 @@ import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useBootReconciliation } from './hooks/useBootReconciliation';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import type {
+  PanelKeyboardDeclaration,
+  PanelKeyboardRegistry,
+} from './types/panelKeyboard';
+import { resolvePanelKeyboardDeclaration } from './types/panelKeyboard';
 import { useNotifications } from './hooks/useNotifications';
 import { useMilestoneAttention } from './hooks/useMilestoneAttention';
 import { useIsMobile } from './hooks/useIsMobile';
@@ -23,7 +28,6 @@ import { SessionGrid } from './components/SessionGrid';
 import { HistoryGrid } from './components/HistoryGrid';
 import { SessionDetail } from './components/SessionDetail';
 import { PRPanel } from './components/PRPanel';
-import { DispatchModal } from './components/DispatchModal';
 import { PermissionEventLog } from './components/PermissionEventLog';
 import { TaskList } from './components/TaskList';
 import { BootLoadingBanner } from './components/BootLoadingBanner';
@@ -31,6 +35,10 @@ import { TaskDetail } from './components/TaskDetail';
 import { Settings } from './components/Settings';
 import { UpdateBanner } from './components/UpdateBanner';
 import { RateLimitBanner } from './components/RateLimitBanner';
+import {
+  AdmissionStallBanner,
+  type AdmissionBlockReason,
+} from './components/AdmissionStallBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { GateReadinessPanel } from './components/GateReadinessPanel';
 import { ArchitecturePanel } from './components/ArchitecturePanel';
@@ -176,13 +184,11 @@ export default function App() {
 
   const {
     sessions,
-    tasks,
     tasksReady,
     synced,
     readyCount,
     blockedCount,
     dispatch,
-    resetTasks,
     deleteSession,
     setSessionArchived,
     setSessionFavorited,
@@ -221,7 +227,6 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showModal, setShowModal] = useState(false);
   const [activeView, setActiveView] = useState<
     'sessions' | 'history' | 'denials'
   >('sessions');
@@ -235,6 +240,11 @@ export default function App() {
   } | null>(null);
   const [planUsage, setPlanUsage] = useState<PlanUsage | null>(null);
   const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
+  const [admissionStall, setAdmissionStall] = useState<{
+    reason: AdmissionBlockReason;
+    eligibleCount: number;
+  } | null>(null);
+  const [admissionStallDismissed, setAdmissionStallDismissed] = useState(false);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
@@ -278,6 +288,19 @@ export default function App() {
       if (msg.type === 'github_rate_limit_cleared') {
         setRateLimitInfo(null);
         setRateLimitDismissed(false);
+        return;
+      }
+      if (msg.type === 'admission_stalled') {
+        setAdmissionStall({
+          reason: msg.reason,
+          eligibleCount: msg.eligibleCount,
+        });
+        setAdmissionStallDismissed(false);
+        return;
+      }
+      if (msg.type === 'admission_stall_cleared') {
+        setAdmissionStall(null);
+        setAdmissionStallDismissed(false);
         return;
       }
       if (msg.type === 'plan_usage') {
@@ -359,6 +382,32 @@ export default function App() {
     });
   }, [connectionState, activeProjectId, activeBoardId, send]);
 
+  // Reconciliation fetch: a client that loads or reconnects while a stall is
+  // already in progress must reflect it immediately — the WS pair only fires
+  // on the onset/recovery transition, not on every tick, so a client that
+  // missed the transition would otherwise show nothing until the next one.
+  useEffect(() => {
+    if (connectionState !== 'connected') return;
+    apiRequest<{
+      stalled: boolean;
+      reason?: AdmissionBlockReason;
+      eligibleCount?: number;
+    }>('/api/diagnostics/admission-stall')
+      .then((data) => {
+        if (data.stalled && data.reason != null) {
+          setAdmissionStall({
+            reason: data.reason,
+            eligibleCount: data.eligibleCount ?? 0,
+          });
+        } else {
+          setAdmissionStall(null);
+        }
+      })
+      .catch(() => {
+        /* reconciliation is a best-effort backstop — the WS stream still updates live */
+      });
+  }, [connectionState]);
+
   useEffect(() => {
     if (connectionState === 'connected') {
       if (hasConnectedOnce) {
@@ -439,7 +488,7 @@ export default function App() {
         setActiveBoardId(boardId);
       })
       .catch(() => {
-        /* leave projects empty — DispatchModal handles the empty case */
+        /* leave projects empty */
       });
   }, []);
 
@@ -741,13 +790,13 @@ export default function App() {
 
   useEffect(() => {
     if (!lastReviewEscalation) return;
-    const { prNumber, receivedAt } = lastReviewEscalation;
+    const { prNumber, message, receivedAt } = lastReviewEscalation;
     const notifId = `escalation-${prNumber}-${receivedAt}`;
     setNotifications((prev) => [
       ...prev,
       {
         id: notifId,
-        message: `⚠️ PR #${prNumber} review loop hit max iterations — needs your attention`,
+        message: `⚠️ PR #${prNumber} needs your attention: ${message}`,
         status: 'review',
         onClick: () => setTopView('prs'),
       },
@@ -867,6 +916,26 @@ export default function App() {
   }, []);
 
   const [selectedSessionIndex, setSelectedSessionIndex] = useState(-1);
+
+  // The milestone decision-card ring's declaration — supplied once by
+  // MilestoneView/MilestoneDecisionStack via onDeclarationChange. Every
+  // other TopView has no ring today, so its registry entry is null.
+  const [milestonePanelDeclaration, setMilestonePanelDeclaration] =
+    useState<PanelKeyboardDeclaration | null>(null);
+  const panelKeyboardRegistry: PanelKeyboardRegistry = {
+    tasks: null,
+    sessions: null,
+    prs: null,
+    analytics: null,
+    gate: null,
+    architecture: null,
+    milestone: milestonePanelDeclaration,
+    settings: null,
+  };
+  const activePanel = resolvePanelKeyboardDeclaration(
+    topView,
+    panelKeyboardRegistry,
+  );
 
   // Reset keyboard selection index when active project changes
   useEffect(() => {
@@ -1069,6 +1138,8 @@ export default function App() {
             s.totalInputTokens ?? 0,
             s.totalOutputTokens ?? 0,
             s.model,
+            s.cache_read_tokens ?? 0,
+            s.cache_creation_tokens ?? 0,
           ),
         0,
       ),
@@ -1168,23 +1239,30 @@ export default function App() {
         setSelectedId(detail.sessionId);
       }
     }
+    function onSelectTask(e: Event) {
+      const detail = (e as CustomEvent<{ taskId: string }>).detail;
+      if (detail?.taskId) {
+        setTopView('tasks');
+        setSelectedTaskId(detail.taskId);
+      }
+    }
     function onNavigateToPRs() {
       setTopView('prs');
     }
     window.addEventListener('selectSession', onSelectSession);
+    window.addEventListener('selectTask', onSelectTask);
     window.addEventListener('navigateToPRs', onNavigateToPRs);
     return () => {
       window.removeEventListener('selectSession', onSelectSession);
+      window.removeEventListener('selectTask', onSelectTask);
       window.removeEventListener('navigateToPRs', onNavigateToPRs);
     };
   }, []);
 
-  useKeyboardShortcuts({
-    onOpenDispatch: () => setShowModal(true),
-    onDismiss: () => {
-      if (showModal) {
-        setShowModal(false);
-      } else if (selectedTaskId || selectedId) {
+  const { highlightedItemId: panelHighlightedItemId } = useKeyboardShortcuts({
+    activePanel,
+    onDismiss: (fromInputField) => {
+      if (!fromInputField && (selectedTaskId || selectedId)) {
         window.history.back();
       } else if (filtersActive) {
         clearFilters();
@@ -1213,15 +1291,19 @@ export default function App() {
       if (keyboardHighlightedId) setSelectedId(keyboardHighlightedId);
     },
     onSwitchView: (view) => {
-      if (view === 'tasks') setTopView('tasks');
+      if (view === 'milestone') setTopView('milestone');
+      else if (view === 'tasks') setTopView('tasks');
       else if (view === 'sessions') setTopView('sessions');
       else if (view === 'prs') setTopView('prs');
+      else if (view === 'gate') setTopView('gate');
+      else if (view === 'architecture') setTopView('architecture');
       else if (view === 'analytics') setTopView('analytics');
       else if (view === 'settings') setTopView('settings');
     },
     onFocusSearch: () => {
       searchInputRef.current?.focus();
     },
+    canFocusSearch: topView === 'sessions',
   });
 
   if (bootstrapLoopbackOnly) {
@@ -1297,6 +1379,13 @@ export default function App() {
         <RateLimitBanner
           resetAt={rateLimitInfo.resetAt}
           onDismiss={() => setRateLimitDismissed(true)}
+        />
+      )}
+      {admissionStall && !admissionStallDismissed && (
+        <AdmissionStallBanner
+          reason={admissionStall.reason}
+          eligibleCount={admissionStall.eligibleCount}
+          onDismiss={() => setAdmissionStallDismissed(true)}
         />
       )}
       <div className={styles.mainArea}>
@@ -1466,9 +1555,6 @@ export default function App() {
                     >
                       {activeView === 'denials' ? 'Hide Denials' : '📋 Denials'}
                     </button>
-                    <button type="button" onClick={() => setShowModal(true)}>
-                      + New Session
-                    </button>
                   </div>
                 </div>
 
@@ -1631,6 +1717,10 @@ export default function App() {
               setSessionArchived={setSessionArchived}
               setSessionFavorited={setSessionFavorited}
               project={activeProject}
+              keyboardHighlightedId={
+                topView === 'milestone' ? panelHighlightedItemId : null
+              }
+              onDeclarationChange={setMilestonePanelDeclaration}
             />
           </ErrorBoundary>
         )}
@@ -1647,25 +1737,14 @@ export default function App() {
         )}
       </div>
 
-      {showModal && activeProject && activeBoardId && (
-        <ErrorBoundary name="DispatchModal" onReset={() => setShowModal(false)}>
-          <DispatchModal
-            tasks={tasks}
-            tasksReady={tasksReady}
-            send={send}
-            resetTasks={resetTasks}
-            project={activeProject}
-            milestoneId={activeBoardId}
-            onClose={() => setShowModal(false)}
-          />
-        </ErrorBoundary>
-      )}
-
       <Notifications
         notifications={notifications}
         onDismiss={dismissNotification}
       />
-      <ShortcutHint />
+      <ShortcutHint
+        activePanel={activePanel}
+        canFocusSearch={topView === 'sessions'}
+      />
 
       {hasConnectedOnce && connectionState !== 'connected' && (
         <div className={styles.connectionBanner}>Reconnecting...</div>

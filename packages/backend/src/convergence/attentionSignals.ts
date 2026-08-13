@@ -79,13 +79,19 @@ function flatWindowMs(): number {
   );
 }
 
-/** Pure: which pending staged decisions have sat longer than `thresholdMs`. */
+/**
+ * Pure: which pending staged decisions have sat longer than `thresholdMs`.
+ * gate.verify rows are excluded — they're session-less mirrors of a gate
+ * item's own verify cadence, not staged planning intents left waiting on an
+ * operator, so the 24h planning-aging threshold doesn't apply to them.
+ */
 export function detectAgingSignals(
-  pending: { id: string; created_at: number }[],
+  pending: { id: string; created_at: number; kind: string }[],
   now: number,
   thresholdMs: number,
 ): AttentionTier2Signal[] {
   return pending
+    .filter((row) => row.kind !== 'gate.verify')
     .filter((row) => now - row.created_at > thresholdMs)
     .map((row) => {
       const ageHours = Math.round((now - row.created_at) / 3_600_000);

@@ -9,6 +9,8 @@ import {
   gateVerifyEvidenceSchema,
   gateVerifyReclassifySchema,
   gateVerifyPayloadSchema,
+  gateVerifyResultSchema,
+  deployAgenticVerdictSchema,
 } from './schemas';
 
 /** Per-connection context a verdict-delivery tool call is scoped to. */
@@ -96,7 +98,7 @@ export function registerVerdictTools(
       {
         title: 'Confirm a verified-flaky CI/gate failure',
         description:
-          'Reports that this session cleared the flake-verification bar (ran the failing test in isolation, re-ran the full suite, confirmed the failure is unrelated to its diff) instead of pushing an empty commit. gate is "ci" for a failing GitHub check or "f2" for the orchestrator-run test gate.',
+          'Reports that this session cleared the flake-verification bar (ran the failing check in isolation, re-ran the full suite/gate, confirmed the failure is unrelated to its diff) instead of pushing an empty commit. gate is "ci" for a failing GitHub check, "f2" for the orchestrator-run test gate, or "analyze" for the orchestrator-run static-analysis gate.',
         inputSchema: {
           gate: flakyGateSchema,
           reason: z.string(),
@@ -120,7 +122,7 @@ export function registerVerdictTools(
       {
         title: 'Stage a gate-item verification disposition',
         description:
-          "Stages this read-only gate-verify session's finding for the single gate item it was dispatched to verify — pass/fail/needs-setup, plus an optional self-correction reclassify proposal (Human-Observation or needs-triage only) — as a normal gate.verify intent for an operator to dispose on the decision surface, exactly like any other staged intent. The operator, never the session or the backend automatically, turns this into the gate_item_event write; a rejection resumes this session for a normal turn to revise and report again, with no limit on revisions.",
+          'Stages this read-only gate-verify session\'s finding for the single gate item it was dispatched to verify — pass/fail/needs-setup/not-yet-triggerable, plus an optional self-correction reclassify proposal (Human-Observation or needs-triage only) — as a normal gate.verify intent for an operator to dispose on the decision surface, exactly like any other staged intent. Use needs-setup only when a real setup step is missing that a human must perform; use not-yet-triggerable when the scenario simply has not occurred yet or the data does not exist yet — it parks the item for a scheduled retry instead of shelving it. gateItemId must be the FULL gate item uuid (e.g. "3b022f91-52f3-8173-b9b2-ada4fdb54c82"), never an 8-character short form — this project\'s ids share long structured prefixes, so a truncated id is rejected at stage time rather than resolved. The operator, never the session or the backend automatically, turns this into the gate_item_event write; a rejection resumes this session for a normal turn to revise and report again, with no limit on revisions.',
         inputSchema: {
           gateItemId: z.string(),
           disposition: gateVerifyDispositionSchema,
@@ -135,12 +137,48 @@ export function registerVerdictTools(
         if (!parsed.success) {
           return invalid(parsed.error.issues.map((i) => i.message).join('; '));
         }
-        session.recordGateVerifyDisposition({
-          gateItemId: args.gateItemId,
-          disposition: args.disposition,
-          evidence: args.evidence,
-          reclassify: args.reclassify,
-        });
+        let staged;
+        try {
+          staged = session.recordGateVerifyDisposition({
+            gateItemId: args.gateItemId,
+            disposition: args.disposition,
+            evidence: args.evidence,
+            reclassify: args.reclassify,
+          });
+        } catch (err) {
+          return invalid(err instanceof Error ? err.message : String(err));
+        }
+        const result: z.infer<typeof gateVerifyResultSchema> = {
+          status: 'ok',
+          id: staged.id,
+          milestone: staged.milestone ?? null,
+        };
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      },
+    );
+
+    server.registerTool(
+      'deploy.verdict',
+      {
+        title: 'Report a deploy agentic-step verdict',
+        description:
+          "Reports this dispatched deploy-agentic-step session's finding — approved/rejected/inconclusive — as your final action. Call exactly once, never as a chat block: the deploy engine gates the next playbook step directly on this report, with no operator disposition in between. The run/step this applies to is resolved from this session's own dispatch, not from any argument you pass — you cannot report for a step other than the one you were dispatched to validate.",
+        inputSchema: {
+          verdict: deployAgenticVerdictSchema,
+          detail: z.string().optional(),
+        },
+      },
+      async (args) => {
+        const session = ctx.getSession();
+        if (!session) return notLive();
+        try {
+          session.recordDeployAgenticVerdict({
+            verdict: args.verdict,
+            detail: args.detail,
+          });
+        } catch (err) {
+          return invalid(err instanceof Error ? err.message : String(err));
+        }
         return ok();
       },
     );

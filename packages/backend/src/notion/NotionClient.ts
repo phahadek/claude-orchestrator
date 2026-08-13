@@ -396,39 +396,32 @@ async function insertChildBlocks(
 }
 
 /**
- * Known top-level section keywords. A heading is considered a top-level
- * section boundary only when it matches one of these keywords. Sub-headings
- * like "### 🤖 Automated tests" that do not match any keyword are treated as
- * content within the current section.
+ * Extract the text content of a named heading section from a markdown string.
+ *
+ * The section is located by a loose keyword match against the heading text
+ * (so "## Files Changed" matches keyword "files"). Once found, the section
+ * terminates on the next heading at the same or shallower level (e.g. a `##`
+ * section ends at the next `##` or `#`), regardless of that heading's name —
+ * this lets "### Automated tests" nest inside "## Acceptance criteria" while
+ * still stopping at unrecognised sibling sections like "## Notion pages
+ * affected" instead of silently absorbing them.
  */
-const TOP_LEVEL_SECTIONS = [
-  'summary',
-  'dependencies',
-  'context',
-  'acceptance criteria',
-  'files',
-  'implementation notes',
-  'expected size',
-];
-
-/** Extract the text content of a named heading section from a markdown string. */
 export function parseSection(markdown: string, headingKeyword: string): string {
   const lines = markdown.split('\n');
   let inSection = false;
+  let sectionLevel = 0;
   const buf: string[] = [];
   for (const line of lines) {
-    const isHeading = /^#{1,3} /.test(line);
-    if (isHeading) {
+    const headingMatch = line.match(/^(#{1,3}) /);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
       const heading = line.replace(/^#+\s*/, '').toLowerCase();
-      if (heading.includes(headingKeyword.toLowerCase())) {
+      if (!inSection && heading.includes(headingKeyword.toLowerCase())) {
         inSection = true;
+        sectionLevel = level;
         continue;
       } else if (inSection) {
-        // Only break on a different known top-level section, not sub-headings
-        const isTopLevel = TOP_LEVEL_SECTIONS.some(
-          (s) => heading.includes(s) && s !== headingKeyword.toLowerCase(),
-        );
-        if (isTopLevel) {
+        if (level <= sectionLevel) {
           break;
         }
         buf.push(line);

@@ -4,6 +4,7 @@ import type {
   CanonicalPauseReason as _CanonicalPauseReason,
   PauseReasonStruct,
 } from './pauseReason';
+import type { SessionType } from '../session/sessionPredicates';
 /** Back-compat alias — canonical source of truth is CanonicalPauseReason in pauseReason.ts. */
 type PauseReason = _CanonicalPauseReason;
 export type { PauseReason };
@@ -28,18 +29,28 @@ export interface Session {
   status: SessionStatus;
   started_at: number;
   ended_at: number | null;
+  // Set only on a genuine terminal transition (status -> done/error/killed),
+  // never on a non-terminal write that happens to also set ended_at (e.g.
+  // the deferred-while-running path). NULL for historical rows. Unlike
+  // ended_at, this can answer "was this session terminal at time T".
+  terminalized_at: number | null;
   pr_url: string | null;
   worktree_path: string | null;
   archived: number; // 0 | 1 (SQLite boolean)
   favorited: number; // 0 | 1 (SQLite boolean)
-  session_type: string; // 'standard' | 'review' | 'groom' | 'design' | 'ops' | 'split'
+  session_type: SessionType;
   note: string | null;
   tags: string | null; // JSON array of strings, e.g. '["bugfix","auth"]'
   total_input_tokens: number;
   total_output_tokens: number;
   compaction_count: number;
   context_occupancy_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
   model?: string | null;
+  effort?: string | null; // resolved effort level used at session launch, e.g. "high"
+  model_setting_key?: string | null; // settings key the model was resolved from, e.g. "groom_session_model"
+  effort_setting_key?: string | null; // settings key the effort was resolved from, e.g. "groom_session_effort"
   task_name: string | null;
   metadata: string | null; // JSON blob for small session metadata (e.g. aiTitle)
   review_result: string | null; // JSON — verdict stored for local-only review sessions
@@ -56,6 +67,7 @@ export interface Session {
 export type NewSession = Omit<
   Session,
   | 'ended_at'
+  | 'terminalized_at'
   | 'pr_url'
   | 'worktree_path'
   | 'archived'
@@ -68,6 +80,8 @@ export type NewSession = Omit<
   | 'total_output_tokens'
   | 'compaction_count'
   | 'context_occupancy_tokens'
+  | 'cache_read_tokens'
+  | 'cache_creation_tokens'
   | 'task_name'
   | 'metadata'
   | 'review_result'
@@ -81,18 +95,21 @@ export type NewSession = Omit<
   | 'terminal_completion_reason'
 > & {
   ended_at?: number | null;
+  terminalized_at?: number | null;
   pr_url?: string | null;
   worktree_path?: string | null;
   archived?: number;
   favorited?: number;
   project_id?: string | null;
-  session_type?: string;
+  session_type?: SessionType;
   note?: string | null;
   tags?: string | null;
   total_input_tokens?: number;
   total_output_tokens?: number;
   compaction_count?: number;
   context_occupancy_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
   task_name?: string | null;
   metadata?: string | null;
   review_result?: string | null;
@@ -348,6 +365,42 @@ export interface PullRequestRow {
    *  classified stalled/orphaned by the sweepers. Waits indefinitely for a
    *  human to merge. */
   human_merge_only: number;
+  /** The approved ops.prIntent (staged_intent.id) this PR was opened for, if
+   *  any — set via db/queries.ts's linkPRToPRIntent at PR-open time. Null for
+   *  every non-Ops PR. One approved PR-intent authorizes exactly one PR:
+   *  linkPRToPRIntent rejects a second PR row claiming the same intent id. */
+  pr_intent_id: string | null;
+}
+
+// ─── depth_review_verdicts ──────────────────────────────────────────────────
+
+/**
+ * Durable record of a PR's latest depth-review pass — separate from
+ * pull_requests.review_result, which carries only the conformance verdict.
+ * `dimensions` is a JSON-encoded array of { name, passed, notes }.
+ */
+export interface DepthReviewVerdictRow {
+  pr_number: number;
+  repo: string;
+  head_sha: string | null;
+  verdict: string;
+  dimensions: string; // JSON
+  summary: string;
+  depth_session_id: string | null;
+  recorded_at: string;
+  /** How many times a non-size depth finding has been routed to the implementing session on this row's head_sha, unchanged. */
+  route_count: number;
+}
+
+export interface NewDepthReviewVerdictRow {
+  pr_number: number;
+  repo: string;
+  head_sha: string | null;
+  verdict: string;
+  dimensions: string; // JSON
+  summary: string;
+  depth_session_id: string | null;
+  route_count?: number;
 }
 
 // ─── task_repo_assignments ──────────────────────────────────────────────────
@@ -388,6 +441,57 @@ export interface OpsJournalRow {
   updated_at: string;
 }
 
+/**
+ * Reconciliation assertion carried by an Operational completing intent
+ * (`journal.setState` -> "applied-pending-confirm") — a declaration of what
+ * must be true once the change applies. The session performs the actual
+ * check itself (re-reading a config row, counting a backfill) and reports
+ * the outcome here; the orchestrator only acts on it, after apply: `passed`
+ * drives the journal to "resolved" automatically with no operator
+ * involvement, a failure stages an interrupting `journal.setState` ->
+ * "blocked" intent carrying `mismatch` for the operator to review.
+ */
+export interface OpsReconciliationAssertion {
+  description: string;
+  passed: boolean;
+  mismatch?: string;
+}
+
+// ─── capability_disqualification ────────────────────────────────────────────
+
+/**
+ * 'open': an Investigation task is filed and unresolved — the key is
+ * excluded from new denial-pattern mining while it's pending.
+ * 'hardened': the Investigation resolved confirming genuine capability-level
+ * risk — permanently excluded, no passive/time-based expiry.
+ * 'lifted': the Investigation resolved concluding the pattern was a
+ * task-quality defect, not a capability risk — the key is eligible again,
+ * with `lifted_at` marking the point after which denial evidence resumes
+ * accumulating (denials at or before it are never recounted).
+ */
+export type CapabilityDisqualificationState = 'open' | 'hardened' | 'lifted';
+
+/** One row per (project_id, capability) key ever disqualified by the capability-disposition-trail miner. */
+export interface CapabilityDisqualificationRow {
+  id: string;
+  project_id: string;
+  capability: string;
+  investigation_task_id: string;
+  state: CapabilityDisqualificationState;
+  created_at: string;
+  resolved_at: string | null;
+  lifted_at: string | null;
+  updated_at: string;
+}
+
+export type NewCapabilityDisqualificationRow = Omit<
+  CapabilityDisqualificationRow,
+  'id' | 'resolved_at' | 'lifted_at'
+> & {
+  resolved_at?: string | null;
+  lifted_at?: string | null;
+};
+
 // ─── convergence_snapshot ───────────────────────────────────────────────────
 
 /** A point-in-time sample of a milestone's live convergence, written by ConvergenceSnapshotJob only when it changes. */
@@ -401,6 +505,8 @@ export interface ConvergenceSnapshotRow {
   tasks_closed: number;
   gate_open: number;
   gate_closed: number;
+  /** Non-blocking `pending` gate items — never subtracted from gate_open/gate_closed. */
+  gate_parked: number;
   seed_open: number;
   seed_closed: number;
   ops_open: number;
@@ -417,7 +523,6 @@ export type NewConvergenceSnapshotRow = Omit<ConvergenceSnapshotRow, 'id'>;
 export type GateItemClassification =
   | 'Read-Only'
   | 'Prod-Mutating'
-  | 'Opportunistic'
   | 'Human-Observation'
   | 'needs-triage';
 
@@ -432,6 +537,10 @@ export interface GateItemRow {
   current_disposition: string | null;
   /** The disposition carried by the item's most recent event, regardless of whether it advanced state — distinct from current_disposition, which only moves on a terminal (state-advancing) disposition. */
   latest_disposition: string | null;
+  /** Earliest time a `pending` item is eligible for its next not-yet-triggerable re-check. NULL outside `pending`. */
+  next_attempt_at: string | null;
+  /** Consecutive not-yet-triggerable results so far — drives the doubling backoff. 0 outside `pending`. */
+  pending_attempt_count: number;
   updated_at: string;
 }
 
@@ -510,11 +619,26 @@ export type NewDeployRunEventRow = Omit<DeployRunEventRow, 'id'>;
 /** Single-field lifecycle: pending -> applied -> confirmed | blocked. */
 export type SeedItemState = 'pending' | 'applied' | 'confirmed' | 'blocked';
 
+/**
+ * Mirrors GateItemClassification's schema-vs-data split for a seed
+ * candidate, which is always a static data/config value (runtime-
+ * observability is categorically inapplicable here): 'operational-seed' is a
+ * genuine data/config row/default/flag correctly kept out of the PR;
+ * 'in-pr' is actually schema/DDL or code that ships in the task's own PR —
+ * the line was mislabeled and should not accrete; 'needs-triage' is unclear,
+ * deferred.
+ */
+export type SeedItemClassification =
+  | 'operational-seed'
+  | 'in-pr'
+  | 'needs-triage';
+
 export interface SeedItemRow {
   id: string;
   project: string;
   milestone: string;
   spec: string;
+  classification: SeedItemClassification | null;
   min_deployed_commit: string | null;
   state: SeedItemState;
   updated_at: string;
@@ -616,6 +740,17 @@ export interface StagedIntentRow {
   disposition_reason: string | null;
   /** The operator's answer to a decision.pickOne question-intent — JSON-serialized StagedIntentAnswer. Null until answered. */
   answer: string | null;
+  /**
+   * The id `applyIntent` minted for this intent's non-idempotent create
+   * (task.create's created task id / arch.createUnit's new unit id) — set the
+   * instant the backend write succeeds, independent of and prior to the
+   * row's own staged/approved -> committed transition, so it stays a
+   * reliable "has this create already applied" signal even when that
+   * transition later loses a race (see AlreadyAppliedCreateSupersedeError in
+   * routes/stagedIntents.ts). Null for every other kind, and for a create
+   * that hasn't applied yet.
+   */
+  applied_task_id?: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -662,6 +797,46 @@ export interface ReviewDisputePayload {
   prNumber: number;
   repo: string;
   rationale: string;
+}
+
+/**
+ * Payload for the test.request staged-intent kind — a code session's
+ * request to run the project's configured `test:` commands against its own
+ * worktree, mechanically auto-granted (see maybeAutoApproveTestRequest in
+ * routes/stagedIntents.ts) on a project-scoped whole-tree content-hash check
+ * rather than trusting the session's own claim. No operator disposition
+ * needed on the success path — this is a read-only, non-mutating request.
+ */
+export interface TestRequestPayload {
+  taskId: string;
+  reason: string;
+}
+
+/**
+ * Payload for the ops.prIntent staged-intent kind — a dispatched Ops
+ * session's mid-execution "I intend to open a PR for X, here's the diff
+ * scope and why" declaration. Unlike a Code task's task-body Files/paths
+ * affected list (written up front, before the work is scoped), an Ops
+ * session's PR content is a mid-execution decision the task body cannot
+ * declare in advance — so this carries the declaration itself, staged for
+ * operator approval before the session may open the PR. Deliberately not
+ * validated via isToolShapedCapability (session.requestCapability's
+ * Bash-prefix/MCP-verb shape) — this is a free-form change-and-reason
+ * declaration, not a tool grant. Once approved (see approve route's
+ * ops.prIntent branch, terminal like review.dispute/session.requestCapability
+ * above), PRReviewService resolves this declaration to build the Ops rubric
+ * variant's "changed files" dimension instead of a task-body section — see
+ * getPRIntentForPR / linkPRToPRIntent in db/queries.ts, which enforce that
+ * one approved PR-intent authorizes exactly one PR (fire-once).
+ */
+export interface OpsPrIntentPayload {
+  taskId: string;
+  /** Short PR title the operator is approving, e.g. "add retry to X poller". */
+  title: string;
+  /** The declared diff scope — files/areas expected to change, and why they're in scope. */
+  scope: string;
+  /** Why this PR is being opened now — the finding/decision driving it. */
+  reason: string;
 }
 
 /**
@@ -790,6 +965,27 @@ export interface FeedbackInboxRow {
   payload: string;
   enqueued_at: number;
   delivered_at: number | null;
+}
+
+// ─── test_request_runs ──────────────────────────────────────────────────────
+
+/**
+ * One row per test.request lane execution — keyed by (project_id,
+ * content_hash) for coalescing concurrent identical requests, and durable
+ * so a backend crash mid-run leaves a `running` row a boot-time sweep can
+ * recover (see recoverInterruptedTestRequestRuns in
+ * orchestration/testRequestLane.ts) rather than leaving it silently stuck.
+ */
+export type TestRequestRunState = 'running' | 'passed' | 'failed';
+
+export interface TestRequestRunRow {
+  id: string;
+  project_id: string;
+  content_hash: string;
+  state: TestRequestRunState;
+  output: string;
+  started_at: number;
+  finished_at: number | null;
 }
 
 // ─── arch_unit ────────────────────────────────────────────────────────────

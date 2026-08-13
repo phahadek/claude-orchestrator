@@ -37,7 +37,11 @@ interface SessionState {
   totalOutputTokens?: number;
   compaction_count?: number;
   context_occupancy_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
   model?: string | null;
+  /** Resolved effort level used at session launch (e.g. "high") — null for historical rows. */
+  effort?: string | null;
   /** PR URL linked to this session, resolved from the pull_requests join. */
   prUrl?: string;
   /** Notion task ID this session belongs to — enables targeted in-place task updates. */
@@ -58,6 +62,33 @@ export interface PlanUsage {
   weekly?: UsageWindow;
   /** True when this snapshot is a retained last-known-good value from before a transient poll failure. */
   stale?: boolean;
+}
+
+/**
+ * The reason an admission gate is blocking dispatch — shared across every
+ * gate (AutoLauncher's hasCapacity) so the sustained-block signal isn't
+ * memory-gate-specific. See AdmissionStallState below.
+ */
+export type AdmissionBlockReason =
+  | 'memory_admission'
+  | 'usage_deferral'
+  | 'usage_threshold_paused'
+  | 'capacity_exhausted';
+
+/**
+ * Current sustained-admission-block state, as reported by AutoLauncher and
+ * surfaced both over WS (admission_stalled / admission_stall_cleared) and via
+ * REST (GET /api/diagnostics/admission-stall) for reconnect reconciliation —
+ * the WS stream alone is not authoritative for a client that loads or
+ * reconnects mid-stall.
+ */
+export interface AdmissionStallState {
+  reason: AdmissionBlockReason;
+  /** Count of eligible candidates that went unadmitted on the tick the block was detected. */
+  eligibleCount: number;
+  /** ms epoch when the sustained block was first detected. */
+  since: number;
+  detail?: Record<string, unknown>;
 }
 
 /** Full live-state snapshot of a task, sent in task_updated WS messages. */
@@ -130,6 +161,8 @@ export interface TaskView {
   totalTokens: { input: number; output: number };
   /** Assigned target repo slug for multi-repo projects, e.g. "owner/repo". Null when unassigned. */
   assignedRepo: string | null;
+  /** True when this task has a staged intent in the decision-inbox visibility set (staged/approved/needs_revision/pending_verification) — the operator still owns a disposition for it. */
+  hasAwaitingDispositionIntent: boolean;
   /** Recovery action available for this task when paused. */
   recoveryDescriptor?: RecoveryDescriptor;
 }
@@ -189,6 +222,8 @@ export type ServerMessage =
       model?: string;
       contextOccupancyTokens?: number;
       contextOccupancyFraction?: number;
+      cacheReadTokens?: number;
+      cacheCreationTokens?: number;
     }
   | { type: 'tasks_ready'; tasks: ResolvedTask[] }
   | {
@@ -286,10 +321,18 @@ export type ServerMessage =
   | {
       /**
        * Streams staged-intent lifecycle changes (create/approve/reject/
-       * commit/supersede) for the SessionPanel decision panel — mirrors the
-       * REST-truth + WS-notification pattern of task_updated: the frontend
-       * treats `intent` as a live snapshot, never a delta, and REST
-       * (stagedIntentsApi) stays the source of truth for apply/reject.
+       * commit/supersede) for the SessionPanel decision panel and the
+       * milestone decision inbox — mirrors the REST-truth + WS-notification
+       * pattern of task_updated: the frontend treats `intent` as a live
+       * snapshot, never a delta, and REST (stagedIntentsApi) stays the
+       * source of truth for apply/reject. Only broadcast when
+       * isVisibleOnDecisionSurface(row) holds — an intent that route's
+       * decision-surface visibility gate would withhold (e.g. an
+       * auto-rejected needs_revision row whose owning session hasn't gone
+       * terminal) is never sent over this channel, so a subscriber never has
+       * to reimplement that (session-status-dependent) predicate itself. A
+       * subscriber must still compare `intent.projectId` against its own
+       * scope — this payload is not pre-filtered by project or milestone.
        */
       type: 'staged_intent_changed';
       intent: StagedIntent;
@@ -319,9 +362,18 @@ export type ServerMessage =
       used: number;
     }
   | { type: 'github_rate_limit_cleared' }
+  | ({ type: 'admission_stalled' } & AdmissionStallState)
+  | { type: 'admission_stall_cleared' }
   | { type: 'plan_usage'; usage: PlanUsage }
   | { type: 'error'; message: string }
   | { type: 'pr_pause_cleared'; prNumber: number; repo: string }
+  | {
+      type: 'pr_flake_recovery_exhausted';
+      prNumber: number;
+      repo: string;
+      attempts: number;
+      maxRetries: number;
+    }
   | { type: 'autofix_started'; prNumber: number; repo: string }
   | {
       type: 'autofix_complete';

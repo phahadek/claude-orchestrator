@@ -5,7 +5,9 @@ import {
   getMilestoneById,
   getProjectRowById,
   getTaskTitleFromCache,
+  getTaskTypeFromCache,
 } from '../db/queries';
+import { isTaskTypeCompatibleWithSessionType } from '../session/sessionPredicates';
 import type { MilestoneRow, ProjectRow } from '../db/types';
 import type {
   OpsLaunchResult,
@@ -16,6 +18,7 @@ import type {
 import { toExternalId, normalizeTaskId } from '../tasks/taskId';
 import { recordEvent } from '../audit/AuditLog';
 import type { PlanningDispatchLaunchedPayload } from '../audit/types';
+import { asyncHandler } from './asyncHandler';
 
 /**
  * Worklist entry ids from loadOpsContext are bare Notion UUIDs, but the
@@ -143,89 +146,111 @@ export function createPlanningLaunchRouter(
 ): Router {
   const router = Router();
 
-  router.post('/planning/launch', async (req: Request, res: Response) => {
-    const body = req.body as {
-      workflow?: unknown;
-      projectId?: unknown;
-      milestone?: unknown;
-      taskIds?: unknown;
-      model?: unknown;
-      effort?: unknown;
-    };
-    const workflow = typeof body.workflow === 'string' ? body.workflow : null;
-    const milestoneId =
-      typeof body.milestone === 'string' ? body.milestone : null;
-    const projectIdParam =
-      typeof body.projectId === 'string' ? body.projectId : null;
-    const taskIds =
-      Array.isArray(body.taskIds) &&
-      body.taskIds.every((t) => typeof t === 'string')
-        ? (body.taskIds as string[])
-        : null;
-    const model = typeof body.model === 'string' ? body.model : undefined;
-    const effort = typeof body.effort === 'string' ? body.effort : undefined;
+  router.post(
+    '/planning/launch',
+    asyncHandler(async (req: Request, res: Response) => {
+      const body = req.body as {
+        workflow?: unknown;
+        projectId?: unknown;
+        milestone?: unknown;
+        taskIds?: unknown;
+        model?: unknown;
+        effort?: unknown;
+      };
+      const workflow = typeof body.workflow === 'string' ? body.workflow : null;
+      const milestoneId =
+        typeof body.milestone === 'string' ? body.milestone : null;
+      const projectIdParam =
+        typeof body.projectId === 'string' ? body.projectId : null;
+      const taskIds =
+        Array.isArray(body.taskIds) &&
+        body.taskIds.every((t) => typeof t === 'string')
+          ? (body.taskIds as string[])
+          : null;
+      const model = typeof body.model === 'string' ? body.model : undefined;
+      const effort = typeof body.effort === 'string' ? body.effort : undefined;
 
-    if (!workflow || !milestoneId || !taskIds || taskIds.length === 0) {
-      res.status(400).json({
-        error: 'workflow, milestone, and a non-empty taskIds[] are required',
-      });
-      return;
-    }
+      if (!workflow || !milestoneId || !taskIds || taskIds.length === 0) {
+        res.status(400).json({
+          error: 'workflow, milestone, and a non-empty taskIds[] are required',
+        });
+        return;
+      }
 
-    const sessionType = resolveSessionType(workflow);
-    if (!sessionType) {
-      res.status(400).json({ error: `unsupported workflow "${workflow}"` });
-      return;
-    }
+      const sessionType = resolveSessionType(workflow);
+      if (!sessionType) {
+        res.status(400).json({ error: `unsupported workflow "${workflow}"` });
+        return;
+      }
 
-    const milestone = getMilestoneById(milestoneId);
-    if (!milestone) {
-      res.status(404).json({ error: `unknown milestone ${milestoneId}` });
-      return;
-    }
-    if (projectIdParam && projectIdParam !== milestone.project_id) {
-      res.status(400).json({
-        error: `milestone ${milestoneId} belongs to project ${milestone.project_id}, not ${projectIdParam}`,
-      });
-      return;
-    }
-    const project = getProjectRowById(milestone.project_id);
-    if (!project) {
-      res
-        .status(404)
-        .json({ error: `unknown project ${milestone.project_id}` });
-      return;
-    }
+      const incompatible = taskIds
+        .map((taskId) => ({
+          taskId,
+          taskType: getTaskTypeFromCache(normalizeTaskId(taskId)),
+        }))
+        .filter(
+          (t): t is { taskId: string; taskType: string } =>
+            typeof t.taskType === 'string' &&
+            !isTaskTypeCompatibleWithSessionType(t.taskType, sessionType),
+        );
+      if (incompatible.length > 0) {
+        res.status(400).json({
+          error: `workflow "${workflow}" (sessionType "${sessionType}") is incompatible with ${incompatible
+            .map((t) => `task ${t.taskId} (Type "${t.taskType}")`)
+            .join(', ')}`,
+        });
+        return;
+      }
 
-    try {
-      const result = await dispatchPlanningFlow(
-        launcher,
-        milestone,
-        project,
-        workflow,
-        taskIds,
-        { model, effort },
-      );
-      if (result.launched.length > 0) {
-        const payload: PlanningDispatchLaunchedPayload = {
-          trigger_source: 'operator',
-          flow: workflow,
-          milestone_id: milestone.id,
-        };
-        recordEvent({
-          event_type: 'planning_dispatch_launched',
-          actor_type: 'human',
-          project_id: project.id,
-          payload: { ...payload },
+      const milestone = getMilestoneById(milestoneId);
+      if (!milestone) {
+        res.status(404).json({ error: `unknown milestone ${milestoneId}` });
+        return;
+      }
+      if (projectIdParam && projectIdParam !== milestone.project_id) {
+        res.status(400).json({
+          error: `milestone ${milestoneId} belongs to project ${milestone.project_id}, not ${projectIdParam}`,
+        });
+        return;
+      }
+      const project = getProjectRowById(milestone.project_id);
+      if (!project) {
+        res
+          .status(404)
+          .json({ error: `unknown project ${milestone.project_id}` });
+        return;
+      }
+
+      try {
+        const result = await dispatchPlanningFlow(
+          launcher,
+          milestone,
+          project,
+          workflow,
+          taskIds,
+          { model, effort },
+        );
+        if (result.launched.length > 0) {
+          const payload: PlanningDispatchLaunchedPayload = {
+            trigger_source: 'operator',
+            flow: workflow,
+            milestone_id: milestone.id,
+          };
+          recordEvent({
+            event_type: 'planning_dispatch_launched',
+            actor_type: 'human',
+            project_id: project.id,
+            payload: { ...payload },
+          });
+        }
+        res.status(202).json(result);
+      } catch (err) {
+        res.status(500).json({
+          error: err instanceof Error ? err.message : 'planning launch failed',
         });
       }
-      res.status(202).json(result);
-    } catch (err) {
-      res.status(500).json({
-        error: err instanceof Error ? err.message : 'planning launch failed',
-      });
-    }
-  });
+    }),
+  );
 
   return router;
 }

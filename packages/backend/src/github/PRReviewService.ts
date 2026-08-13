@@ -11,21 +11,18 @@ import {
   setLocalBranchReviewResult,
   getLocalBranchById,
   getSession,
+  getPRIntentForPR,
+  setPauseReason,
 } from '../db/queries';
+import type { OpsPrIntentPayload } from '../db/types';
+import { getCachedType } from '../tasks/TaskWriteCommands';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
 import type { DiffSource } from './DiffSource';
 import { GitHubDiffSource } from './DiffSource';
-import {
-  computeSizeSignal,
-  isOversized,
-  SIZE_ABSOLUTE_FLOOR,
-  SIZE_FILE_RATIO_LIMIT,
-  type SizeSignal,
-} from './GitHubClient';
+import { parseDiffFiles } from './GitHubClient';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
-import { parseSection, parseExpectedSize } from '../notion/NotionClient';
 import type { SessionManager } from '../session/SessionManager';
 import { GitHubApiError } from './types';
 import type { PullRequest, PRDiff } from './types';
@@ -33,6 +30,7 @@ import type { ServerMessage } from '../ws/types';
 import type { SessionEvent } from '../db/types';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { AutoMerger } from './AutoMerger';
+import type { DepthReviewService } from './DepthReviewService';
 
 const RETRY_DELAYS = [250, 500, 1000] as const;
 const defaultSleep = (ms: number): Promise<void> =>
@@ -58,8 +56,84 @@ function isTransientFetchError(e: unknown): boolean {
   return false;
 }
 
-const SIZE_DIMENSION_NAME = 'Size proportionality';
+// Placeholder bodyRender.ts renders when a non-Code task has zero manual
+// criteria — not a genuine checklist item, so it must never be stored/shown.
+const MANUAL_VERIFICATION_SENTINEL =
+  'Covered by the Manual Verification Gate task.';
 
+function filterManualVerificationSentinel(
+  items: string[] | undefined,
+): string[] | undefined {
+  if (!items) return items;
+  return items.filter((item) => item !== MANUAL_VERIFICATION_SENTINEL);
+}
+
+/**
+ * Code-enforced baseline escalation floor: high-blast-radius path categories that
+ * always force escalate:true, independent of whether the project has any
+ * review_rules configured. Conservative, broadly-applicable path conventions —
+ * not project-tunable by design (see task: baseline escalation floor).
+ */
+const BASELINE_ESCALATION_FLOOR_PATTERNS: Array<{
+  category: string;
+  test: (path: string) => boolean;
+}> = [
+  {
+    category: 'CI/workflow config',
+    test: (path) => /(^|\/)\.github\/workflows\//.test(path),
+  },
+  {
+    category: 'database migration',
+    test: (path) => /(^|\/)(db\/)?migrations?\//i.test(path),
+  },
+  {
+    category: 'auth',
+    test: (path) => /(^|\/)auth[a-z0-9_-]*\.[a-z]+$/i.test(path),
+  },
+  {
+    category: 'auth',
+    test: (path) => /(^|\/)auth(\/|$)/i.test(path),
+  },
+  {
+    category: 'secrets',
+    test: (path) => /secret|credential/i.test(path),
+  },
+  {
+    category: 'secrets',
+    // basename check instead of a single regex to avoid a false-positive
+    // ReDoS flag on the optional-suffix + anchor combination.
+    test: (path) => {
+      const basename = path.slice(path.lastIndexOf('/') + 1).toLowerCase();
+      return basename === '.env' || basename.startsWith('.env.');
+    },
+  },
+];
+
+export interface BaselineEscalationMatch {
+  category: string;
+  path: string;
+}
+
+/**
+ * Exported so the depth-review routing branch (ReviewOrchestrator's
+ * dispatchDepthReview) can reuse the same code-enforced floor patterns
+ * rather than duplicating them — one category list, checked against two
+ * separate review passes.
+ */
+export function matchBaselineEscalationFloor(
+  filePaths: string[],
+): BaselineEscalationMatch[] {
+  const matches: BaselineEscalationMatch[] = [];
+  for (const path of filePaths) {
+    for (const { category, test } of BASELINE_ESCALATION_FLOOR_PATTERNS) {
+      if (test(path)) {
+        matches.push({ category, path });
+        break; // one match per file is enough to explain the escalation
+      }
+    }
+  }
+  return matches;
+}
 export interface ReviewDimension {
   name: string;
   passed: boolean;
@@ -85,6 +159,14 @@ export interface PRReviewResult {
   escalate?: boolean;
   /** Why the reviewer escalated. Present when escalate is true. */
   escalationReason?: string;
+  /**
+   * True when `escalate` was force-set by the code-level baseline escalation
+   * floor (CI/config, migrations, auth, or secrets paths touched) rather than
+   * by the project's review_rules or the LLM's own judgment. Distinguishes the
+   * unconditional floor from the project-configured trigger downstream so the
+   * two record different pause_reasons.
+   */
+  baselineEscalationFloor?: boolean;
 }
 
 export type WorkItem =
@@ -99,11 +181,32 @@ export type WorkItem =
     };
 
 /**
+ * Guidance for the "Changed files vs Files/paths affected list" dimension
+ * when reviewing against a Code task's task-body spec (the default rubric).
+ */
+const DEFAULT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.`;
+
+/**
+ * The Ops rubric variant of DEFAULT_FILES_DIMENSION_GUIDANCE: an Ops
+ * session's PR content is a mid-execution decision the task body never
+ * declared up front (see OpsPrIntentPayload in db/types.ts), so this
+ * dimension is evaluated against the operator-approved PR-intent's declared
+ * scope (rendered in the "## Approved PR Intent" prompt section) instead of
+ * a task-body Files/paths affected list.
+ */
+const OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths affected list" dimension: this PR was opened by an Ops session against an operator-approved "## Approved PR Intent" declaration above, not a task-body Files/paths affected list — compare the changed files against that declaration's scope instead. Pass if all changed files are either within the declared scope OR are necessary downstream updates it implies (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files outside that approved scope.`;
+
+/**
  * Shared review-instructions block: the JSON schema, verdict rules, and the
  * per-dimension guidance. Used by both the initial prompt and the re-review
- * follow-ups so the two stay in sync.
+ * follow-ups so the two stay in sync. `filesDimensionGuidance` is the only
+ * part that varies between the default (Code task, task-body spec) and Ops
+ * (approved PR-intent) rubrics — see buildPrompt's `prIntent` parameter.
  */
-const REVIEW_JSON_SCHEMA_BLOCK = `Respond ONLY with a JSON object — no preamble, no markdown fences.
+function buildReviewJsonSchemaBlock(
+  filesDimensionGuidance: string = DEFAULT_FILES_DIMENSION_GUIDANCE,
+): string {
+  return `Respond ONLY with a JSON object — no preamble, no markdown fences.
 
 ## Manual verification items — DO NOT evaluate
 
@@ -119,28 +222,30 @@ you MUST:
 - Never fail the verdict solely because manual verification items are not demonstrated in the PR.
 - List them verbatim in the "manualItemsForHuman" array so downstream tooling can surface them to a human.
 
-Evaluate the PR across exactly these 5 dimensions and respond with this JSON schema:
+Evaluate the PR across exactly these 4 dimensions and respond with this JSON schema:
 {
   "verdict": "approved" | "needs_changes" | "incomplete",
   "dimensions": [
     { "name": "Title and description vs task Summary",        "passed": bool, "notes": "..." },
     { "name": "Diff vs Context spec",                         "passed": bool, "notes": "..." },
     { "name": "Diff vs Acceptance Criteria",                  "passed": bool, "notes": "..." },
-    { "name": "Changed files vs Files/paths affected list",   "passed": bool, "notes": "..." },
-    { "name": "${SIZE_DIMENSION_NAME}",                          "passed": bool, "notes": "..." }
+    { "name": "Changed files vs Files/paths affected list",   "passed": bool, "notes": "..." }
   ],
   "summary": "2–4 sentence overall assessment",
   "manualItemsForHuman": ["verbatim item text", ...],
   "escalate": bool (optional, default false),
   "escalationReason": "..." (required when escalate is true)
 }
-verdict rules: "approved" = all 5 passed. "needs_changes" = 1–4 passed. "incomplete" = 0 passed.
+verdict rules: "approved" = all 4 passed. "needs_changes" = 1–3 passed. "incomplete" = 0 passed.
 
 Set "escalate": true only when your CLAUDE.md's "Project Review Criteria" section (if present) indicates this PR requires human/operator attention rather than another coding-session iteration — e.g. a policy violation only a human can adjudicate. Do not escalate for ordinary needs_changes findings a coding session can fix itself.
 
-For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.
+${filesDimensionGuidance}
 
-For the "${SIZE_DIMENSION_NAME}" dimension: Pass when the PR is within the size budget signaled above OR when any overflow is necessary corollary work — for example, deleting dead code or types that the listed changes leave unused, refactoring call sites the listed changes force to update, or test/fixture adjustments that follow from modified behavior. Fail only when the diff is materially larger than what the task scope (Summary + Acceptance Criteria + Files affected) demands, i.e. scope creep, unrelated cleanup, or speculative refactors. Note your reasoning in the "notes" field so a re-reviewer can audit the call.`;
+Note: size-proportionality is judged separately, by a distinct depth-review pass that runs only after this conformance verdict is approved — do not evaluate it here.`;
+}
+
+const REVIEW_JSON_SCHEMA_BLOCK = buildReviewJsonSchemaBlock();
 
 export class PRReviewService {
   constructor(
@@ -175,57 +280,19 @@ export class PRReviewService {
     this.autoMerger = merger;
   }
 
+  // Optional reference to DepthReviewService — presence (not the service
+  // itself) gates the depth_review_pending hold below: only projects with a
+  // depth pass actually dispatched should acquire a hold something will
+  // clear. Set via setDepthReviewService() after both services are
+  // constructed (server.ts), mirroring mergeWatcher/autoMerger.
+  private depthReviewService?: DepthReviewService;
+
+  setDepthReviewService(service: DepthReviewService): void {
+    this.depthReviewService = service;
+  }
+
   private resolveBackend(projectId: string): TaskBackend {
     return this.taskBackendOverride ?? getTaskBackend(projectId);
-  }
-
-  /**
-   * Resolve the task spec inputs needed for size-signal computation: the
-   * "Files / paths affected" section and the optional "Expected size" override.
-   * Returns empty/undefined when the task lookup fails so the signal still computes.
-   */
-  private async fetchSizeSignalInputs(
-    projectId: string,
-    taskId: string | null,
-  ): Promise<{ filesSection: string; expectedSize?: number }> {
-    if (!taskId) return { filesSection: '' };
-    try {
-      const body = await this.resolveBackend(projectId).fetchTaskPage(taskId);
-      return {
-        filesSection: parseSection(body, 'files'),
-        expectedSize: parseExpectedSize(body),
-      };
-    } catch (e) {
-      logger.warn(
-        `[PRReviewService] fetchTaskPage for size signal failed (task ${taskId}):`,
-        e,
-      );
-      return { filesSection: '' };
-    }
-  }
-
-  /** Render the size signal block shown in re-review follow-up messages. */
-  private renderSizeSignalForFollowUp(signal: SizeSignal): string {
-    const budgetLine =
-      signal.expectedSize !== undefined
-        ? `- Expected size override (task budget ${signal.expectedSize}): ${signal.linesAdded + signal.linesDeleted > signal.expectedSize ? 'EXCEEDED' : 'within budget'}`
-        : `- Absolute LOC floor (>${SIZE_ABSOLUTE_FLOOR}): ${signal.exceededAbsoluteFloor ? 'EXCEEDED' : 'within budget'}`;
-    const ratioLine =
-      signal.expectedSize !== undefined
-        ? `- filesTouched / specFileCount: ${signal.specFileCount > 0 ? signal.oversizeRatio.toFixed(2) : 'n/a'} (suppressed by Expected size override)`
-        : `- filesTouched / specFileCount: ${signal.specFileCount > 0 ? signal.oversizeRatio.toFixed(2) : 'n/a'}`;
-    return [
-      '',
-      '### Refreshed Size Signal',
-      `- Lines added: ${signal.linesAdded}`,
-      `- Lines deleted: ${signal.linesDeleted}`,
-      `- Files touched: ${signal.filesTouched}`,
-      `- Files listed in task spec: ${signal.specFileCount}`,
-      budgetLine,
-      ratioLine,
-      `- Oversized: ${isOversized(signal) ? `YES — re-evaluate ${SIZE_DIMENSION_NAME} and confirm any overflow is necessary corollary work` : 'no'}`,
-      '',
-    ].join('\n');
   }
 
   async reviewPR(
@@ -273,12 +340,6 @@ export class PRReviewService {
           () => diffSource.fetchDiff(),
           sleep,
         );
-        // Recompute size signal against the FULL refreshed diff each iteration.
-        const { filesSection, expectedSize } = await this.fetchSizeSignalInputs(
-          projectId,
-          prRow.task_id,
-        );
-        const sizeSignal = computeSizeSignal(diff, filesSection, expectedSize);
         const followUp = [
           `The code session has pushed new commits to PR #${prNumber}.`,
           `Please re-review the updated diff against the same task spec.`,
@@ -291,15 +352,30 @@ export class PRReviewService {
           '```',
           diff,
           '```',
-          this.renderSizeSignalForFollowUp(sizeSignal),
           REVIEW_JSON_SCHEMA_BLOCK,
         ].join('\n');
-        this.sessionManager.send(existingReviewSessionId, followUp);
-        const aiResult = await verdictPromise;
-        const finalResult = this.appendSizeProportionalityDimension(
-          aiResult,
-          sizeSignal,
+        const delivered = this.sessionManager.send(
+          existingReviewSessionId,
+          followUp,
         );
+        if (!delivered) {
+          logger.warn(
+            `[PRReviewService] follow-up not confirmed delivered to review session ${existingReviewSessionId} for PR #${prNumber}`,
+          );
+          recordEvent({
+            event_type: 'session_nudge_delivery_failed',
+            actor_type: 'system',
+            actor_id: existingReviewSessionId,
+            payload: {
+              session_id: existingReviewSessionId,
+              pr_number: prNumber,
+              repo,
+              reason: 'pr_review_followup',
+            },
+          });
+        }
+        const aiResult = await verdictPromise;
+        const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
         // Persist immediately after parse — before any side effects (GitHub/Notion).
         setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
         setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
@@ -309,6 +385,7 @@ export class PRReviewService {
             repo,
             prRow.task_id,
             projectId,
+            finalResult.manualItemsForHuman,
           );
         }
         return finalResult;
@@ -331,12 +408,11 @@ export class PRReviewService {
       const taskBody = await this.resolveBackend(projectId).fetchTaskPage(
         prRow.task_id,
       );
-      const prompt = this.buildPrompt(prData, diffData, taskBody);
-      const sizeSignal = computeSizeSignal(
-        diff,
-        parseSection(taskBody, 'files'),
-        parseExpectedSize(taskBody),
-      );
+      const prIntentRow = getPRIntentForPR(prNumber, repo);
+      const prIntent = prIntentRow
+        ? (JSON.parse(prIntentRow.payload) as OpsPrIntentPayload)
+        : null;
+      const prompt = this.buildPrompt(prData, diffData, taskBody, prIntent);
 
       // Guard: determine whether the stored session is still resumable before
       // entering Case 2. A session is resumable if its DB row exists and is not
@@ -374,10 +450,7 @@ export class PRReviewService {
             prNumber,
             repo,
           );
-          const finalResult = this.appendSizeProportionalityDimension(
-            aiResult,
-            sizeSignal,
-          );
+          const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
           // Persist immediately after parse — before any side effects (GitHub/Notion).
           setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
           setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
@@ -387,6 +460,7 @@ export class PRReviewService {
               repo,
               prRow.task_id,
               projectId,
+              finalResult.manualItemsForHuman,
             );
           }
           return finalResult;
@@ -442,10 +516,7 @@ export class PRReviewService {
       });
 
       const aiResult = await verdictPromise;
-      const finalResult = this.appendSizeProportionalityDimension(
-        aiResult,
-        sizeSignal,
-      );
+      const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
       // Persist immediately after parse — before any side effects (GitHub/Notion).
       // setLastReviewedSha was already called above the verdictPromise await for
       // the race-window guard; the verdict write here is the critical safety net.
@@ -456,6 +527,7 @@ export class PRReviewService {
           repo,
           prRow.task_id,
           projectId,
+          finalResult.manualItemsForHuman,
         );
       }
       return finalResult;
@@ -498,18 +570,11 @@ export class PRReviewService {
       }
     }
 
-    const sizeSignal = computeSizeSignal(
-      diff,
-      parseSection(taskBody, 'files'),
-      parseExpectedSize(taskBody),
-    );
-
     const prompt = this.buildLocalBranchPrompt(
       branchName,
       baseBranch,
       diff,
       taskBody,
-      sizeSignal,
     );
 
     // Use a synthetic prNumber/repo for the verdict listener (not a real PR)
@@ -533,13 +598,10 @@ export class PRReviewService {
     });
 
     const aiResult = await verdictPromise;
-    const sizedResult = this.appendSizeProportionalityDimension(
-      aiResult,
-      sizeSignal,
-    );
+    const result = this.applyBaselineEscalationFloor(aiResult, diff);
 
-    setLocalBranchReviewResult(localBranchId, JSON.stringify(sizedResult));
-    return sizedResult;
+    setLocalBranchReviewResult(localBranchId, JSON.stringify(result));
+    return result;
   }
 
   private buildLocalBranchPrompt(
@@ -547,7 +609,6 @@ export class PRReviewService {
     baseBranch: string,
     diff: string,
     taskBody: string,
-    sizeSignal: ReturnType<typeof computeSizeSignal>,
   ): string {
     return `You are a code reviewer. Compare the following local branch diff against its task specification.
 
@@ -560,8 +621,6 @@ ${diff}
 
 ## Task Specification
 ${taskBody || '(no task specification available)'}
-
-${this.formatSizeSignalSection(sizeSignal)}
 
 ## Your task
 ${REVIEW_JSON_SCHEMA_BLOCK}`;
@@ -577,6 +636,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     repo: string,
     taskId: string | null,
     projectId?: string,
+    manualItemsForHuman?: string[],
   ): Promise<boolean> {
     let draftTransitioned = false;
     const resolvedProjectId = projectId || this.defaultProjectId;
@@ -637,6 +697,36 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
             (err as Error).message,
           ),
         );
+    }
+    // Hold auto-merge when the task's cached Type is not 💻 Code — those
+    // tasks may carry manual-verification items that only a human can sign
+    // off on. A cache miss (getCachedType returns null) is treated as
+    // eligible for the hold — fail closed, matching getCachedType's own
+    // doc-comment precedent for checkGroomingPromotionGate. This re-derives
+    // on every approved verdict (initial review and re-review alike), so a
+    // fresh diff always re-arms the hold even if an operator cleared a prior
+    // round.
+    const cachedType = taskId ? getCachedType(taskId) : null;
+    if (cachedType !== '💻 Code') {
+      setPauseReason(
+        prNumber,
+        repo,
+        'manual_verification_pending',
+        manualItemsForHuman && manualItemsForHuman.length > 0
+          ? JSON.stringify(manualItemsForHuman)
+          : undefined,
+      );
+    } else if (this.depthReviewService) {
+      // Hold auto-merge while the depth review pass is in flight, so a depth
+      // finding can gate the merge instead of only annotating an
+      // already-merged PR. Gated on depthReviewService being configured — a
+      // project without depth review would otherwise acquire a hold nothing
+      // clears. `else if` so this never clobbers manual_verification_pending
+      // above — that hold takes precedence and dispatchDepthReview's
+      // unconditional clear must not race it closed early.
+      // dispatchDepthReview (ReviewOrchestrator) clears this on every exit
+      // path (escalation, feedback-enqueue, fail-open, or timeout).
+      setPauseReason(prNumber, repo, 'depth_review_pending');
     }
     // Kick off the auto-merger (per-project opt-in; AutoMerger guards on the
     // project toggle and on pause_reason). Fire-and-forget — the polling loop
@@ -705,18 +795,10 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       prData.baseBranch && prData.headBranch
         ? { base: prData.baseBranch, head: prData.headBranch }
         : undefined;
-    // Re-review uses the FULL PR diff (compare endpoint), not just the incremental
-    // delta, so the size signal reflects total churn across the lifetime of the PR.
+    // Re-review uses the FULL PR diff (compare endpoint), not just the
+    // incremental delta, so the diff always reflects total churn across the
+    // lifetime of the PR.
     const diffData = await this.github.fetchDiff(prNumber, repo, branches);
-    const { filesSection, expectedSize } = await this.fetchSizeSignalInputs(
-      projectId,
-      pr.task_id,
-    );
-    const sizeSignal = computeSizeSignal(
-      diffData.diff,
-      filesSection,
-      expectedSize,
-    );
 
     // Surface the prior incomplete reason so the reviewer knows what to focus on.
     const priorResult = (() => {
@@ -760,7 +842,6 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       '```',
       diffData.diff,
       '```',
-      this.renderSizeSignalForFollowUp(sizeSignal),
       REVIEW_JSON_SCHEMA_BLOCK,
     ].join('\n');
 
@@ -786,14 +867,20 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       prNumber,
       repo,
     );
-    const finalResult = this.appendSizeProportionalityDimension(
+    const finalResult = this.applyBaselineEscalationFloor(
       aiResult,
-      sizeSignal,
+      diffData.diff,
     );
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
     if (finalResult.verdict === 'approved') {
-      await this.handleApprovedVerdict(prNumber, repo, pr.task_id, projectId);
+      await this.handleApprovedVerdict(
+        prNumber,
+        repo,
+        pr.task_id,
+        projectId,
+        finalResult.manualItemsForHuman,
+      );
     }
     return finalResult;
   }
@@ -982,8 +1069,10 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         const summary =
           typeof parsed.summary === 'string' ? parsed.summary : '';
         const manualItems = Array.isArray(parsed.manualItemsForHuman)
-          ? (parsed.manualItemsForHuman as string[]).filter(
-              (item) => typeof item === 'string',
+          ? filterManualVerificationSentinel(
+              (parsed.manualItemsForHuman as string[]).filter(
+                (item) => typeof item === 'string',
+              ),
             )
           : undefined;
         const escalate = parsed.escalate === true;
@@ -1124,64 +1213,55 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
   }
 
   /**
-   * Normalize the Size proportionality dimension and re-derive the overall verdict.
-   * The LLM owns the pass/fail call (it sees the size signal in the prompt). When
-   * the LLM forgets to emit the dimension, we synthesize one from the heuristic:
-   *   - in budget → pass
-   *   - oversized → fail (no justification was offered)
-   * error/incomplete verdict inputs are preserved.
+   * Code-level escalation floor: force escalate:true when the diff touches a
+   * high-blast-radius path category (CI/workflow config, migrations, auth,
+   * secrets), regardless of the project's review_rules or the LLM's own
+   * "escalate" claim. Unconditional: does not affect verdict/dimensions, only
+   * the escalate/escalationReason fields.
    */
-  private appendSizeProportionalityDimension(
+  private applyBaselineEscalationFloor(
     result: PRReviewResult,
-    signal: SizeSignal,
+    diffText: string,
   ): PRReviewResult {
-    const existing = (result.dimensions ?? []).find(
-      (d) => d.name === SIZE_DIMENSION_NAME,
-    );
-    let sizeDim: ReviewDimension;
-    if (existing) {
-      sizeDim = existing;
-    } else {
-      const flagged = isOversized(signal);
-      sizeDim = {
-        name: SIZE_DIMENSION_NAME,
-        passed: !flagged,
-        notes: flagged
-          ? `PR exceeds size budget (added+deleted=${signal.linesAdded + signal.linesDeleted}, files=${signal.filesTouched}, spec files=${signal.specFileCount}) and reviewer did not address the overflow.`
-          : `PR is within size budget (added+deleted=${signal.linesAdded + signal.linesDeleted}, files=${signal.filesTouched}, spec files=${signal.specFileCount}).`,
-      };
-    }
+    const matches = matchBaselineEscalationFloor(parseDiffFiles(diffText));
+    if (matches.length === 0) return result;
 
-    const otherDims = (result.dimensions ?? []).filter(
-      (d) => d.name !== SIZE_DIMENSION_NAME,
-    );
-    const dimensions = [...otherDims, sizeDim];
-    const passedCount = dimensions.filter((d) => d.passed).length;
+    const byCategory = [...new Set(matches.map((m) => m.category))];
+    const paths = [...new Set(matches.map((m) => m.path))];
+    const floorReason = `Baseline escalation floor: diff touches ${byCategory.join(', ')} path(s): ${paths.join(', ')}`;
 
-    let verdict: PRReviewResult['verdict'];
-    if (result.verdict === 'error' || result.verdict === 'incomplete') {
-      verdict = result.verdict; // Never override error/incomplete
-    } else if (result.verdict === 'needs_changes' && otherDims.length === 0) {
-      // Reviewer explicitly declared needs_changes without providing dimension
-      // details (near-miss recovery). Size signal alone cannot upgrade this.
-      verdict = 'needs_changes';
-    } else if (passedCount === dimensions.length) {
-      verdict = 'approved';
-    } else if (passedCount === 0) {
-      verdict = 'incomplete';
-    } else {
-      verdict = 'needs_changes';
-    }
-
-    return { ...result, dimensions, verdict };
+    return {
+      ...result,
+      escalate: true,
+      escalationReason: result.escalationReason
+        ? `${result.escalationReason} | ${floorReason}`
+        : floorReason,
+      baselineEscalationFloor: true,
+    };
   }
 
-  buildPrompt(pr: PullRequest, diff: PRDiff, taskBody: string): string {
-    const sizeSignal = computeSizeSignal(
-      diff.diff,
-      parseSection(taskBody, 'files'),
-      parseExpectedSize(taskBody),
-    );
+  /**
+   * `prIntent`, when present, is the approved ops.prIntent this PR was
+   * opened for (see getPRIntentForPR in db/queries.ts) — the Ops rubric
+   * variant: the "Changed files" dimension is evaluated against its declared
+   * scope instead of the task specification's Files/paths affected section.
+   */
+  buildPrompt(
+    pr: PullRequest,
+    diff: PRDiff,
+    taskBody: string,
+    prIntent?: OpsPrIntentPayload | null,
+  ): string {
+    const prIntentSection = prIntent
+      ? `\n## Approved PR Intent (Ops)
+Title: ${prIntent.title}
+Declared scope: ${prIntent.scope}
+Reason: ${prIntent.reason}
+\nThis PR was opened by an Ops session against the operator-approved declaration above — evaluate the "Changed files" dimension against it, not the task specification's Files/paths section.\n`
+      : '';
+    const schemaBlock = prIntent
+      ? buildReviewJsonSchemaBlock(OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE)
+      : REVIEW_JSON_SCHEMA_BLOCK;
     return `You are a code reviewer. Compare the following GitHub PR against its task specification.
 
 ## PR Metadata
@@ -1194,62 +1274,10 @@ ${diff.diff}
 
 ## Task Specification
 ${taskBody}
-
-${this.formatSizeSignalSection(sizeSignal)}
+${prIntentSection}
 
 ## Your task
-${REVIEW_JSON_SCHEMA_BLOCK}`;
-  }
-
-  /** Render the size signal block for the reviewer prompt. */
-  private formatSizeSignalSection(signal: SizeSignal): string {
-    const ratio =
-      signal.specFileCount > 0
-        ? signal.oversizeRatio.toFixed(2)
-        : 'n/a (no spec file list)';
-    const flagged = isOversized(signal);
-    const totalLoc = signal.linesAdded + signal.linesDeleted;
-    const reasons: string[] = [];
-    if (signal.expectedSize !== undefined) {
-      if (totalLoc > signal.expectedSize) {
-        reasons.push(
-          `lines added+deleted (${totalLoc}) exceeds task-level Expected size budget of ${signal.expectedSize}`,
-        );
-      }
-    } else {
-      if (signal.exceededAbsoluteFloor) {
-        reasons.push(
-          `lines added+deleted (${totalLoc}) exceeds floor of ${SIZE_ABSOLUTE_FLOOR}`,
-        );
-      }
-      if (
-        signal.specFileCount > 0 &&
-        signal.oversizeRatio > SIZE_FILE_RATIO_LIMIT
-      ) {
-        reasons.push(
-          `filesTouched/specFileCount ratio (${signal.oversizeRatio.toFixed(2)}) exceeds ${SIZE_FILE_RATIO_LIMIT}×`,
-        );
-      }
-    }
-    const flag = flagged
-      ? `⚠️ OVERSIZED — ${reasons.join('; ')}. Review whether the overflow is necessary corollary work.`
-      : 'In budget vs. task spec.';
-    const budgetLine =
-      signal.expectedSize !== undefined
-        ? `- Expected size override (task budget ${signal.expectedSize}, added+deleted=${totalLoc}): ${totalLoc > signal.expectedSize ? 'EXCEEDED' : 'within budget'} — file-ratio default suppressed`
-        : `- Absolute LOC floor (added+deleted > ${SIZE_ABSOLUTE_FLOOR}): ${signal.exceededAbsoluteFloor ? 'EXCEEDED' : 'within budget'}`;
-    return [
-      '## Size Signal',
-      `- Lines added: ${signal.linesAdded}`,
-      `- Lines deleted: ${signal.linesDeleted}`,
-      `- Files touched: ${signal.filesTouched}`,
-      `- Files listed in task spec: ${signal.specFileCount}`,
-      `- filesTouched / specFileCount: ${ratio}`,
-      budgetLine,
-      `- Verdict: ${flag}`,
-      '',
-      'Generated-file diffs (package-lock.json, lockfiles, .snap, .svg) are excluded from the LOC count.',
-    ].join('\n');
+${schemaBlock}`;
   }
 
   parseReviewResult(

@@ -18,23 +18,24 @@ const standardParams = {
 
 describe('buildOrchestratorClaudeMd — size ceilings', () => {
   // Ceilings were bumped to track legitimate growth (Context Efficiency,
-  // Responding to Review Comments, Manual Verification Gate sections, etc.)
-  // added since these were first set; they still guard against unbounded
-  // creep, just at the current, larger baseline.
-  it('rendered standard fixture is ≤ 9,500 characters', () => {
+  // Responding to Review Comments, Manual Verification Gate sections, the
+  // Nudges section, the test.request hard-instruction in the Pre-PR Gate /
+  // Flaky-CI sections, etc.) added since these were first set; they still
+  // guard against unbounded creep, just at the current, larger baseline.
+  it('rendered standard fixture is ≤ 10,000 characters', () => {
     const output = buildOrchestratorClaudeMd(standardParams);
-    expect(output.length).toBeLessThanOrEqual(9500);
+    expect(output.length).toBeLessThanOrEqual(10000);
   });
 
-  it('rendered standard fixture is ≤ 1,600 words', () => {
+  it('rendered standard fixture is ≤ 1,700 words', () => {
     const output = buildOrchestratorClaudeMd(standardParams);
     const wordCount = output.trim().split(/\s+/).length;
-    expect(wordCount).toBeLessThanOrEqual(1600);
+    expect(wordCount).toBeLessThanOrEqual(1700);
   });
 
-  it('hard ceiling: rendered standard fixture is ≤ 9,750 characters', () => {
+  it('hard ceiling: rendered standard fixture is ≤ 10,250 characters', () => {
     const output = buildOrchestratorClaudeMd(standardParams);
-    expect(output.length).toBeLessThanOrEqual(9750);
+    expect(output.length).toBeLessThanOrEqual(10250);
   });
 });
 

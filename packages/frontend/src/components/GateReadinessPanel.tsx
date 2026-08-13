@@ -12,17 +12,23 @@ import type {
 import { seedApi } from '../api/seed';
 import type {
   SeedItem,
+  SeedItemClassification,
   SeedItemEventOutcome,
   SeedReadiness,
   SeedMilestoneReadiness,
 } from '../api/seed';
 import { deployApi } from '../api/deploy';
-import type { DeployRun, DeployRunEvent } from '../api/deploy';
+import type { DeployRun, DeployRunEvent, BehindItem } from '../api/deploy';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { SessionState } from '../hooks/useSessionStore';
 import { SessionPanel } from './SessionPanel';
 import styles from './GateReadinessPanel.module.css';
+import {
+  GATE_STATE_ORDER,
+  GATE_DONE_STATES,
+  REOPEN_BLOCKED_STATES,
+} from './gateStateVocabulary';
 
 interface Props {
   activeProjectId: string | null;
@@ -41,26 +47,18 @@ const PAGE_SIZE = 20;
 const CLASSIFICATION_OPTIONS: GateItemClassification[] = [
   'needs-triage',
   'Read-Only',
-  'Opportunistic',
   'Prod-Mutating',
   'Human-Observation',
 ];
 
-const GATE_STATE_ORDER = [
-  'open',
-  'runnable',
-  'pass',
-  'fail',
-  'deferred',
-  'pending-approval',
-];
-const GATE_DONE_STATES = ['pass', 'deferred'];
-
-/** Mirrors the backend's reopenGateItem guard (gateService.ts) — reopen only applies to a resolved item. */
-const REOPEN_BLOCKED_STATES = new Set(['open', 'runnable', 'pending-approval']);
-
 const SEED_STATE_ORDER = ['pending', 'applied', 'confirmed', 'blocked'];
 const SEED_DONE_STATES = ['confirmed'];
+
+const SEED_CLASSIFICATION_OPTIONS: SeedItemClassification[] = [
+  'operational-seed',
+  'in-pr',
+  'needs-triage',
+];
 
 /** Mirrors the outcomes the POST /seed/items/:id/events route accepts (seedService.ts). */
 const SEED_EVENT_OUTCOMES: SeedItemEventOutcome[] = [
@@ -78,6 +76,31 @@ function toMilestoneToken(boardMilestone: string | null | undefined) {
   if (!boardMilestone) return null;
   const match = boardMilestone.match(/^M\d+/i);
   return match ? match[0].toUpperCase() : boardMilestone;
+}
+
+/**
+ * A Human-Observation-tier item's `pass` disposition never actually resolves
+ * the item — isVerifierBlockedFromPassing (backend gateService.ts) keeps its
+ * state at `runnable` (and its mirrored staged_intent in the Human Decisions
+ * queue) pending an operator's own confirmation. Rendering bare "pass" here
+ * reads as resolved when it isn't, so this label distinguishes the two.
+ */
+function dispositionLabelFor(
+  item: Pick<GateItem, 'classification' | 'state' | 'latestDisposition'>,
+): string {
+  if (
+    item.latestDisposition === 'pass' &&
+    item.state !== 'pass' &&
+    item.classification === 'Human-Observation'
+  ) {
+    return 'pass (unconfirmed)';
+  }
+  return item.latestDisposition ?? '—';
+}
+
+/** True once a parked item's backoff-scheduled next_attempt_at has elapsed — the same due-ness nextPendingGateItems uses server-side to decide what's pullable. */
+function isBackoffDue(nextAttemptAt: string | undefined, now: number): boolean {
+  return nextAttemptAt !== undefined && Date.parse(nextAttemptAt) <= now;
 }
 
 function formatEvidenceValue(value: unknown): string {
@@ -183,6 +206,18 @@ interface RollupHeaderProps {
   doneStates: string[];
   activeState: string;
   onSelectState: (state: string) => void;
+  /** Count of items with a live verify session right now — rendered as a standalone badge, never a progress-bar segment (in-flight is not a gate_item state). */
+  inFlightCount?: number;
+  /** Exact count of items whose latest_disposition is needs-setup — rendered as a standalone, clickable badge (not a counts key: these items already sit inside the `runnable` chip and must stay there). */
+  awaitingSetupCount?: number;
+  /** Clicking the awaiting-setup badge drives the awaitingSetup list filter. */
+  onSelectAwaitingSetup?: () => void;
+  /** Items parked at `pending` (backoff-scheduled) — rendered as a standalone badge, distinct from blocking and resolved, never folded into the progress bar/chip totals. */
+  parkedCount?: number;
+  /** Of `parkedCount`, how many have an elapsed backoff (next_attempt_at in the past) and are due for re-check right now. */
+  parkedDueCount?: number;
+  /** Clicking the parked badge drives the `pending` state list filter. */
+  onSelectParked?: () => void;
 }
 
 function RollupHeader({
@@ -196,6 +231,12 @@ function RollupHeader({
   doneStates,
   activeState,
   onSelectState,
+  inFlightCount,
+  awaitingSetupCount,
+  onSelectAwaitingSetup,
+  parkedCount,
+  parkedDueCount,
+  onSelectParked,
 }: RollupHeaderProps) {
   const total = stateOrder.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
   const doneCount = doneStates.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
@@ -213,6 +254,45 @@ function RollupHeader({
           >
             {status === 'green' ? '✅ Green — ready' : '🚫 Blocked'}
           </div>
+        )}
+        {!!inFlightCount && (
+          <div
+            className={styles.inFlightBadge}
+            data-testid={`${testId}-inflight-count`}
+          >
+            Verifying: {inFlightCount}
+          </div>
+        )}
+        {!!awaitingSetupCount && (
+          <button
+            type="button"
+            className={styles.awaitingSetupBadge}
+            data-testid={`${testId}-awaiting-setup-count`}
+            onClick={onSelectAwaitingSetup}
+            title="Items whose latest verification attempt abstained with needs-setup — still runnable, but excluded from every automated pull until an operator resolves the setup gap."
+          >
+            Awaiting setup: {awaitingSetupCount}
+          </button>
+        )}
+        {!!parkedCount && (
+          <button
+            type="button"
+            className={styles.parkedBadge}
+            data-testid={`${testId}-parked-count`}
+            onClick={onSelectParked}
+            title="Items parked awaiting their next backoff-scheduled not-yet-triggerable re-check — non-blocking, excluded from the green/blocked status. Due = backoff has elapsed and the item is ready for a re-check."
+          >
+            Parked: {parkedCount}
+            {!!parkedDueCount && (
+              <span
+                className={styles.parkedDueCount}
+                data-testid={`${testId}-parked-due-count`}
+              >
+                {' '}
+                ({parkedDueCount} due)
+              </span>
+            )}
+          </button>
         )}
       </div>
 
@@ -288,6 +368,7 @@ export function GateReadinessPanel({
   const [stateFilter, setStateFilter] = useState('');
   const [classificationFilter, setClassificationFilter] = useState('');
   const [runnableFilter, setRunnableFilter] = useState('true');
+  const [awaitingSetupFilter, setAwaitingSetupFilter] = useState('');
   const [page, setPage] = useState(1);
 
   const [items, setItems] = useState<GateItem[]>([]);
@@ -308,6 +389,14 @@ export function GateReadinessPanel({
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(
     new Set(),
   );
+  // A render-safe clock for backoff due-ness — Date.now() may not be called
+  // during render (react-hooks/purity), so it's sampled in an effect instead.
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    setNow(Date.now());
+    const interval = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(interval);
+  }, []);
   const [verifyingIds, setVerifyingIds] = useState<Set<string>>(new Set());
   const [verifyBaseline, setVerifyBaseline] = useState<
     Record<string, string | undefined>
@@ -333,6 +422,7 @@ export function GateReadinessPanel({
   );
 
   const [seedStateFilter, setSeedStateFilter] = useState('');
+  const [seedClassificationFilter, setSeedClassificationFilter] = useState('');
   const [seedPage, setSeedPage] = useState(1);
 
   const [seedItems, setSeedItems] = useState<SeedItem[]>([]);
@@ -356,6 +446,14 @@ export function GateReadinessPanel({
   const [dismissedDeployRunId, setDismissedDeployRunId] = useState<
     string | null
   >(null);
+  const [deployedSha, setDeployedSha] = useState<string | null>(null);
+  const [deployBehind, setDeployBehind] = useState<{
+    count: number;
+    items: BehindItem[];
+  }>({ count: 0, items: [] });
+  // Plain ephemeral React state — no persistence. A reload must reset the
+  // gate back to requiring a fresh review rather than resuming pre-armed.
+  const [deployConfirmArmed, setDeployConfirmArmed] = useState(false);
 
   // Tracks the top-bar milestone selection without forcing a milestone-list
   // refetch whenever it changes (see the resync effect below).
@@ -495,12 +593,18 @@ export function GateReadinessPanel({
   // Reset to page 1 whenever the milestone or filters change.
   useEffect(() => {
     setPage(1);
-  }, [selectedMilestone, stateFilter, classificationFilter, runnableFilter]);
+  }, [
+    selectedMilestone,
+    stateFilter,
+    classificationFilter,
+    runnableFilter,
+    awaitingSetupFilter,
+  ]);
 
   // Reset seed items to page 1 whenever the milestone or seed filter changes.
   useEffect(() => {
     setSeedPage(1);
-  }, [selectedMilestone, seedStateFilter]);
+  }, [selectedMilestone, seedStateFilter, seedClassificationFilter]);
 
   // Load the filtered/paginated item list — never a full unbounded load.
   // Defaults to the run worklist: runnable items, not-done first.
@@ -521,6 +625,10 @@ export function GateReadinessPanel({
         classification:
           (classificationFilter as GateItemClassification) || undefined,
         runnable: runnableFilter === '' ? undefined : runnableFilter === 'true',
+        awaitingSetup:
+          awaitingSetupFilter === ''
+            ? undefined
+            : awaitingSetupFilter === 'true',
         order: stateFilter === '' ? 'not-done-first' : undefined,
         page,
         limit: PAGE_SIZE,
@@ -547,6 +655,7 @@ export function GateReadinessPanel({
     stateFilter,
     classificationFilter,
     runnableFilter,
+    awaitingSetupFilter,
     page,
   ]);
 
@@ -566,6 +675,7 @@ export function GateReadinessPanel({
         project: activeProjectId ?? undefined,
         milestone: selectedMilestone,
         state: seedStateFilter || undefined,
+        classification: seedClassificationFilter || undefined,
         order: seedStateFilter === '' ? 'not-done-first' : undefined,
         page: seedPage,
         limit: PAGE_SIZE,
@@ -586,7 +696,13 @@ export function GateReadinessPanel({
     return () => {
       cancelled = true;
     };
-  }, [activeProjectId, selectedMilestone, seedStateFilter, seedPage]);
+  }, [
+    activeProjectId,
+    selectedMilestone,
+    seedStateFilter,
+    seedClassificationFilter,
+    seedPage,
+  ]);
 
   const refreshDeployStatus = useCallback(() => {
     if (!activeProjectId) return;
@@ -595,6 +711,8 @@ export function GateReadinessPanel({
       .then((result) => {
         setDeployRun(result.run);
         setDeployEvents(result.events);
+        setDeployedSha(result.deployedSha ?? null);
+        setDeployBehind(result.behind ?? { count: 0, items: [] });
       })
       .catch(() => {
         /* transient poll failures don't clear the last-known run state */
@@ -606,6 +724,9 @@ export function GateReadinessPanel({
     if (!activeProjectId) {
       setDeployRun(null);
       setDeployEvents([]);
+      setDeployedSha(null);
+      setDeployBehind({ count: 0, items: [] });
+      setDeployConfirmArmed(false);
       return;
     }
     refreshDeployStatus();
@@ -617,6 +738,7 @@ export function GateReadinessPanel({
 
   const launchDeploy = useCallback(() => {
     if (!activeProjectId) return;
+    setDeployConfirmArmed(false);
     setDeployLaunching(true);
     setDeployLaunchError(null);
     deployApi
@@ -967,6 +1089,13 @@ export function GateReadinessPanel({
   const selectGateChip = useCallback((state: string) => {
     setStateFilter(state);
     setRunnableFilter('');
+    setAwaitingSetupFilter('');
+  }, []);
+
+  const selectAwaitingSetupFilter = useCallback(() => {
+    setStateFilter('');
+    setRunnableFilter('');
+    setAwaitingSetupFilter('true');
   }, []);
 
   const selectSeedChip = useCallback((state: string) => {
@@ -1003,7 +1132,8 @@ export function GateReadinessPanel({
             {milestones.map((m) => (
               <option key={`${m.project}:${m.milestone}`} value={m.milestone}>
                 {m.milestone} (
-                {m.status === 'green' ? '✅' : `🚫 ${m.blockingCount}`})
+                {m.status === 'green' ? '✅' : `🚫 ${m.blockingCount}`}
+                {m.parkedCount ? `, parked ${m.parkedCount}` : ''})
               </option>
             ))}
           </select>
@@ -1036,14 +1166,40 @@ export function GateReadinessPanel({
           data-testid="deploy-launch-section"
         >
           <div className={styles.deployRow}>
-            <button
-              className={styles.deployButton}
-              onClick={launchDeploy}
-              disabled={deployLaunching || deployRun?.status === 'running'}
-              data-testid="deploy-launch-button"
-            >
-              {deployRun?.status === 'running' ? 'Deploying…' : 'Launch Deploy'}
-            </button>
+            {deployConfirmArmed ? (
+              <>
+                <button
+                  className={styles.deployButton}
+                  onClick={launchDeploy}
+                  disabled={deployLaunching || deployRun?.status === 'running'}
+                  data-testid="deploy-launch-button"
+                >
+                  {deployRun?.status === 'running'
+                    ? 'Deploying…'
+                    : `Confirm & Deploy (${deployBehind.count} behind)`}
+                </button>
+                <button
+                  type="button"
+                  className={styles.deployButton}
+                  onClick={() => setDeployConfirmArmed(false)}
+                  disabled={deployLaunching || deployRun?.status === 'running'}
+                  data-testid="deploy-cancel-confirm-button"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                className={styles.deployButton}
+                onClick={() => setDeployConfirmArmed(true)}
+                disabled={deployLaunching || deployRun?.status === 'running'}
+                data-testid="deploy-review-button"
+              >
+                {deployRun?.status === 'running'
+                  ? 'Deploying…'
+                  : `Review Deploy (${deployBehind.count} behind)`}
+              </button>
+            )}
             {deployRun && deployRun.run_id !== dismissedDeployRunId && (
               <span
                 className={styles.deployRunStatus}
@@ -1066,6 +1222,32 @@ export function GateReadinessPanel({
                 </button>
               )}
           </div>
+          <p className={styles.muted} data-testid="deploy-behind-summary">
+            {deployedSha
+              ? `Deployed ${deployedSha.slice(0, 8)} — ${deployBehind.count} merged since`
+              : `Never deployed through this system — ${deployBehind.count} merged`}
+          </p>
+          {deployConfirmArmed && deployBehind.items.length > 0 && (
+            <ul
+              className={styles.deployEventList}
+              data-testid="deploy-behind-list"
+            >
+              {deployBehind.items.map((item, index) => (
+                <li key={`${item.kind}-${index}`}>
+                  {item.kind === 'pr' ? (
+                    <a href={item.prUrl} target="_blank" rel="noreferrer">
+                      #{item.prNumber} {item.title ?? item.prUrl}
+                    </a>
+                  ) : (
+                    <span>
+                      {item.branchName}
+                      {item.title ? ` — ${item.title}` : ''}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
           {deployLaunchError && (
             <p className={styles.error}>{deployLaunchError}</p>
           )}
@@ -1124,6 +1306,16 @@ export function GateReadinessPanel({
             doneStates={GATE_DONE_STATES}
             activeState={stateFilter}
             onSelectState={selectGateChip}
+            inFlightCount={items.filter((item) => item.verifyInFlight).length}
+            awaitingSetupCount={readiness?.awaitingSetupCount ?? 0}
+            onSelectAwaitingSetup={selectAwaitingSetupFilter}
+            parkedCount={readiness?.parked?.length ?? 0}
+            parkedDueCount={
+              readiness?.parked?.filter((p) =>
+                isBackoffDue(p.nextAttemptAt, now),
+              ).length ?? 0
+            }
+            onSelectParked={() => selectGateChip('pending')}
           />
 
           <div className={styles.filters}>
@@ -1165,6 +1357,18 @@ export function GateReadinessPanel({
                 <option value="">All</option>
                 <option value="true">Runnable only</option>
                 <option value="false">Not runnable</option>
+              </select>
+            </label>
+            <label className={styles.filterField}>
+              Awaiting setup
+              <select
+                value={awaitingSetupFilter}
+                onChange={(e) => setAwaitingSetupFilter(e.target.value)}
+                data-testid="gate-awaiting-setup-filter"
+              >
+                <option value="">All</option>
+                <option value="true">Awaiting setup only</option>
+                <option value="false">Not awaiting setup</option>
               </select>
             </label>
           </div>
@@ -1234,7 +1438,14 @@ export function GateReadinessPanel({
                 <tbody>
                   {items.map((item) => (
                     <Fragment key={item.id}>
-                      <tr key={item.id} className={styles.itemRow}>
+                      <tr
+                        key={item.id}
+                        className={`${styles.itemRow} ${
+                          item.latestDisposition === 'needs-setup'
+                            ? styles.awaitingSetupRow
+                            : ''
+                        }`}
+                      >
                         <td onClick={(e) => e.stopPropagation()}>
                           <input
                             type="checkbox"
@@ -1246,6 +1457,24 @@ export function GateReadinessPanel({
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
                           {item.text}
+                          {item.latestDisposition === 'needs-setup' && (
+                            <span
+                              className={styles.awaitingSetupIndicator}
+                              data-testid={`gate-item-awaiting-setup-${item.id}`}
+                              title="Latest verification attempt abstained with needs-setup"
+                            >
+                              ⚠ awaiting setup
+                            </span>
+                          )}
+                          {item.verifyInFlight && (
+                            <span
+                              className={styles.inFlightIndicator}
+                              data-testid={`gate-item-inflight-${item.id}`}
+                              title="A verify session is running right now"
+                            >
+                              ● verifying
+                            </span>
+                          )}
                         </td>
                         <td onClick={(e) => e.stopPropagation()}>
                           <select
@@ -1270,9 +1499,32 @@ export function GateReadinessPanel({
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
                           {item.state}
+                          {item.state === 'pending' && (
+                            <span
+                              className={
+                                isBackoffDue(item.nextAttemptAt, now)
+                                  ? styles.parkedDueIndicator
+                                  : styles.parkedNotDueIndicator
+                              }
+                              data-testid={`gate-item-pending-due-${item.id}`}
+                              title={
+                                item.nextAttemptAt
+                                  ? `Next backoff-scheduled re-check: ${new Date(
+                                      item.nextAttemptAt,
+                                    ).toLocaleString()} (attempt ${
+                                      item.pendingAttemptCount ?? 0
+                                    })`
+                                  : undefined
+                              }
+                            >
+                              {isBackoffDue(item.nextAttemptAt, now)
+                                ? ' (due)'
+                                : ' (waiting)'}
+                            </span>
+                          )}
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
-                          {item.latestDisposition ?? '—'}
+                          {dispositionLabelFor(item)}
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
                           {new Date(item.updatedAt).toLocaleString()}
@@ -1529,6 +1781,21 @@ export function GateReadinessPanel({
                 ))}
               </select>
             </label>
+            <label className={styles.filterField}>
+              Classification
+              <select
+                value={seedClassificationFilter}
+                onChange={(e) => setSeedClassificationFilter(e.target.value)}
+                data-testid="seed-classification-filter"
+              >
+                <option value="">All</option>
+                {SEED_CLASSIFICATION_OPTIONS.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           {seedItemsLoading && <p className={styles.muted}>Loading items…</p>}
@@ -1548,6 +1815,7 @@ export function GateReadinessPanel({
                 <thead>
                   <tr>
                     <th>Item</th>
+                    <th>Classification</th>
                     <th>State</th>
                     <th>Updated</th>
                     <th></th>
@@ -1557,6 +1825,7 @@ export function GateReadinessPanel({
                   {seedItems.map((item) => (
                     <tr key={item.id} className={styles.itemRow}>
                       <td>{item.spec}</td>
+                      <td>{item.classification ?? ''}</td>
                       <td>{item.state}</td>
                       <td>{new Date(item.updatedAt).toLocaleString()}</td>
                       <td className={styles.itemActions}>
@@ -1590,7 +1859,7 @@ export function GateReadinessPanel({
                   ))}
                   {seedItems.length === 0 && (
                     <tr>
-                      <td colSpan={4} className={styles.muted}>
+                      <td colSpan={5} className={styles.muted}>
                         No config-seed items match these filters.
                       </td>
                     </tr>

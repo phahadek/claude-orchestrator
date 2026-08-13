@@ -57,4 +57,34 @@ describe('scanTypeCheck', () => {
     expect(scanTypeCheck('💻 Code', null)).toEqual({ decision: 'none' });
     expect(scanTypeCheck('💻 Code', undefined)).toEqual({ decision: 'none' });
   });
+
+  it('does not flag a clean observational Testing body', () => {
+    const body =
+      '## Summary\nRun the live import against staging and observe the result.\n\n' +
+      'Mode: 🧪 Testing · observational\n\n' +
+      '### 👁️ Manual verification\nDisposition: pass — verified the import completed by value.\n';
+    expect(scanTypeCheck('🧪 Testing', body)).toEqual({ decision: 'none' });
+  });
+
+  it('flags a Testing body carrying a test-authoring mode marker', () => {
+    const body =
+      '## Summary\nWrite unit tests for the analyzer module.\n\n' +
+      'Mode: 🧪 Testing · authoring\n\n' +
+      '### 👁️ Manual verification\nDisposition: pass\n';
+    const result = scanTypeCheck('🧪 Testing', body);
+    expect(result.decision).toBe('flagged');
+    expect(result.signals).toContain('Mode: 🧪 Testing · authoring');
+  });
+
+  it('flags a Testing body whose Manual verification uses bare pass/fail language', () => {
+    const body =
+      '## Summary\nRun the live import against staging and observe the result.\n\n' +
+      'Mode: 🧪 Testing · observational\n\n' +
+      '### 👁️ Manual verification\nRan it live — the import passed and everything looked fine.\n';
+    const result = scanTypeCheck('🧪 Testing', body);
+    expect(result.decision).toBe('flagged');
+    expect(result.signals).toEqual([
+      'Manual verification section missing disposition vocabulary (pass / blocked-pending-fix / pass-with-caveat)',
+    ]);
+  });
 });

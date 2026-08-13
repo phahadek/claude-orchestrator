@@ -97,6 +97,9 @@ beforeEach(() => {
   db.prepare('DELETE FROM stuck_session_timers').run();
   db.prepare('DELETE FROM sessions').run();
   db.prepare(
+    `DELETE FROM audit_log WHERE event_type = 'stuck_session_notify_checked'`,
+  ).run();
+  db.prepare(
     `INSERT INTO sessions (session_id, status, started_at) VALUES (?, 'running', 0)`,
   ).run(SESSION_ID);
   runtimeSettings.session_notify_threshold_seconds = 60;
@@ -142,6 +145,89 @@ describe('StuckSessionMonitor', () => {
         taskName: TASK_NAME,
       }),
     );
+  });
+
+  it('writes a flagged audit row carrying the session id, observed gap and threshold when notify fires', () => {
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    new StuckSessionMonitor(sm, broadcast);
+
+    fireMessage(sm, sessionStarted());
+    vi.advanceTimersByTime(60_000);
+
+    const rows = db
+      .prepare(
+        `SELECT ts, event_type, payload FROM audit_log WHERE event_type = 'stuck_session_notify_checked' AND actor_id = ?`,
+      )
+      .all(SESSION_ID) as Array<{
+      ts: number;
+      event_type: string;
+      payload: string;
+    }>;
+    expect(rows).toHaveLength(1);
+    expect(Number.isInteger(rows[0].ts)).toBe(true);
+    const payload = JSON.parse(rows[0].payload);
+    expect(payload).toEqual({
+      session_id: SESSION_ID,
+      observed_gap_ms: 60_000,
+      threshold_ms: 60_000,
+      flagged: true,
+    });
+  });
+
+  it('writes an explicit did-not-flag audit row when activity arrives before the notify threshold', () => {
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    new StuckSessionMonitor(sm, broadcast);
+
+    fireMessage(sm, sessionStarted());
+    vi.advanceTimersByTime(30_000);
+    fireMessage(sm, {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'text',
+      content: 'still working',
+    } as ServerMessage);
+
+    const rows = db
+      .prepare(
+        `SELECT ts, event_type, payload FROM audit_log WHERE event_type = 'stuck_session_notify_checked' AND actor_id = ?`,
+      )
+      .all(SESSION_ID) as Array<{
+      ts: number;
+      event_type: string;
+      payload: string;
+    }>;
+    expect(rows).toHaveLength(1);
+    expect(Number.isInteger(rows[0].ts)).toBe(true);
+    const payload = JSON.parse(rows[0].payload);
+    expect(payload).toEqual({
+      session_id: SESSION_ID,
+      observed_gap_ms: 30_000,
+      threshold_ms: 60_000,
+      flagged: false,
+    });
+
+    // The did-not-flag case must be distinguishable from silence: it is a
+    // real row, not the absence of one — and it must never fire alongside
+    // (or in place of) the flagged broadcast for a session that is still
+    // emitting events.
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+
+    // Advancing past the (reset) notify threshold from here still fires the
+    // flagged path distinctly, proving the two rows are independently
+    // observable rather than one masking the other.
+    vi.advanceTimersByTime(60_000);
+    const allRows = db
+      .prepare(
+        `SELECT payload FROM audit_log WHERE event_type = 'stuck_session_notify_checked' AND actor_id = ? ORDER BY id ASC`,
+      )
+      .all(SESSION_ID) as Array<{ payload: string }>;
+    expect(allRows).toHaveLength(2);
+    expect(JSON.parse(allRows[0].payload).flagged).toBe(false);
+    expect(JSON.parse(allRows[1].payload).flagged).toBe(true);
   });
 
   it('resets the notify timer when a review verdict arrives', () => {

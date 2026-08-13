@@ -5,6 +5,7 @@ import { getProjectRowById } from '../db/queries';
 import { computeMergeCandidates } from '../orchestration/mergeCandidates';
 import { planMerge, type MergePlanInput } from '../orchestration/mergeSession';
 import { stageIntent } from './stagedIntents';
+import { asyncHandler } from './asyncHandler';
 
 /**
  * Read-only surface for the scope-overlap merge-candidate detector
@@ -25,46 +26,49 @@ export function createMergeCandidatesRouter(): Router {
   const router = Router();
 
   // GET /api/merge-candidates?milestone=M12&project=p1
-  router.get('/merge-candidates', async (req: Request, res: Response) => {
-    const milestone =
-      typeof req.query.milestone === 'string' ? req.query.milestone : null;
-    const project =
-      typeof req.query.project === 'string' ? req.query.project : null;
-    if (!milestone) {
-      res.status(400).json({ error: 'milestone is required' });
-      return;
-    }
-
-    let repoRoot: string | undefined;
-    if (project) {
-      const projectRow = getProjectRowById(project);
-      if (!projectRow) {
-        res.status(404).json({ error: `unknown project ${project}` });
+  router.get(
+    '/merge-candidates',
+    asyncHandler(async (req: Request, res: Response) => {
+      const milestone =
+        typeof req.query.milestone === 'string' ? req.query.milestone : null;
+      const project =
+        typeof req.query.project === 'string' ? req.query.project : null;
+      if (!milestone) {
+        res.status(400).json({ error: 'milestone is required' });
         return;
       }
-      repoRoot = projectRow.project_dir;
-    }
 
-    try {
-      const result = await loadGroomContext(
-        milestone,
-        repoRoot ? { repoRoot } : undefined,
-      );
-      const candidates = computeMergeCandidates(
-        result.targetTasks.map((t) => ({
-          id: t.id,
-          status: t.status,
-          regions: t.regions,
-        })),
-      );
-      res.json({ candidates });
-    } catch (err) {
-      res.status(500).json({
-        error:
-          err instanceof Error ? err.message : 'merge-candidates load failed',
-      });
-    }
-  });
+      let repoRoot: string | undefined;
+      if (project) {
+        const projectRow = getProjectRowById(project);
+        if (!projectRow) {
+          res.status(404).json({ error: `unknown project ${project}` });
+          return;
+        }
+        repoRoot = projectRow.project_dir;
+      }
+
+      try {
+        const result = await loadGroomContext(
+          milestone,
+          repoRoot ? { repoRoot } : undefined,
+        );
+        const candidates = computeMergeCandidates(
+          result.targetTasks.map((t) => ({
+            id: t.id,
+            status: t.status,
+            regions: t.regions,
+          })),
+        );
+        res.json({ candidates });
+      } catch (err) {
+        res.status(500).json({
+          error:
+            err instanceof Error ? err.message : 'merge-candidates load failed',
+        });
+      }
+    }),
+  );
 
   // POST /api/merge-candidates/confirm
   // Body: { projectId, milestoneTasks, mergeSet, survivorId? } — an

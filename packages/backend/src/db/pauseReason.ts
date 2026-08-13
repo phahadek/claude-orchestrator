@@ -43,13 +43,19 @@ export type CanonicalPauseReason =
   | 'workflow_scope_denied'
   | 'resume_failed'
   | 'review_rules_escalation'
+  | 'baseline_escalation_floor'
+  | 'depth_review_escalation'
+  | 'depth_review_pending'
   | 'planning_crashed'
   | 'planning_first_turn_empty'
   | 'planning_terminal_no_decision'
   | 'planning_terminal_blocked_members'
   | 'ops_terminal_group_incomplete'
+  | 'ops_journal_terminal_incomplete'
   | 'usage_limit_deferred'
-  | 'api_overloaded_exhausted';
+  | 'api_overloaded_exhausted'
+  | 'manual_verification_pending'
+  | 'test_request_cycle_exceeded';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -170,8 +176,12 @@ export const PAUSE_REASON_REGISTRY: Record<
   },
   analyze_failing: {
     source: 'analyze',
+    // Recovery is session-driven: a verified-flaky disposition from the
+    // session actuates a same-commit analyze-stage re-run via the
+    // orchestrator (rerunFlakyAnalyze) without human input, mirroring
+    // ci_failing's automatic recovery path.
     severity: 'needs_attention',
-    retry_strategy: 'manual_action',
+    retry_strategy: 'automatic',
   },
   rate_limit: {
     source: 'session',
@@ -213,6 +223,46 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
+  // Code-enforced baseline floor (CI/workflow config, migrations, auth,
+  // secrets) — always requires human sign-off regardless of review_rules, so
+  // it is deliberately not marked automatic/none like other review reasons.
+  baseline_escalation_floor: {
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // The depth review pass's own escalation — distinct from
+  // review_rules_escalation (the conformance pass's project-review_rules
+  // escalation) and from the code-enforced baseline_escalation_floor
+  // escalation above. Session-routing (enqueueFeedback), not this reason, is
+  // the default outcome for a depth finding — including a
+  // security/concurrency/reliability/data-integrity one — so the
+  // implementing session gets a shot at fixing it. This reason is raised
+  // only for the cases a human must adjudicate: the finding touches a
+  // baseline-floor path (CI/workflow config, migrations, auth, secrets), the
+  // PR has no linked session to route to, or the same finding has already
+  // been routed MAX_DEPTH_REVIEW_ROUTE_ATTEMPTS times on an unchanged head
+  // SHA without a fix landing. `detail` names which of these applied. A
+  // floor finding on a PR that does have a session both escalates AND
+  // routes (see ReviewOrchestrator's dispatchDepthReview) — this reason
+  // doesn't mean the session was left uninformed, only that an operator was
+  // also looped in.
+  depth_review_escalation: {
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // Holds auto-merge while the depth review pass is in flight, so a depth
+  // finding can still gate the merge instead of only annotating an
+  // already-merged PR. An in-flight pass is not an operator action item —
+  // it clears itself (escalation, feedback-enqueue, or fail-open) within
+  // dispatchDepthReview's timeout ceiling — so this is 'recoverable', not
+  // 'needs_attention' like depth_review_escalation above.
+  depth_review_pending: {
+    source: 'review',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
+  },
   planning_crashed: {
     source: 'session',
     severity: 'needs_attention',
@@ -238,6 +288,11 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
+  ops_journal_terminal_incomplete: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
   // Distinct death reasons for the two external-roadblock conditions the
   // orchestrator now recognizes: a usage-limit deferral (five_hour/seven_day
   // exhausted — auto-recovers at the recorded resets_at) and an exhausted
@@ -251,6 +306,27 @@ export const PAUSE_REASON_REGISTRY: Record<
     retry_strategy: 'automatic',
   },
   api_overloaded_exhausted: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // Holds auto-merge on an AI-approved PR whose task's cached Type is not
+  // 💻 Code, until an operator signs off on the manual-verification items.
+  // No entry in RECOVERY_ACTION_MAP — cleared only via the dedicated
+  // verify-manual-items route, matching awaiting_human_approval/max_reviews.
+  manual_verification_pending: {
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // The test.request lane's iterate-on-red bound (mirrors
+  // flake_recovery_max_retries): a session's staged test.request count within
+  // one session exceeded test_request_cycle_limit — the mechanical auto-grant
+  // stops auto-running further requests and leaves this for an operator to
+  // look at, rather than looping indefinitely. No RECOVERY_ACTION_MAP entry —
+  // same as awaiting_human_approval/max_reviews, this needs a human look, not
+  // a one-click redispatch/resume that would just resume the same loop.
+  test_request_cycle_exceeded: {
     source: 'session',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
@@ -329,6 +405,29 @@ export function pauseReasonFromCanonical(
 
 export function serializePauseReason(struct: PauseReasonStruct): string {
   return JSON.stringify(struct);
+}
+
+/**
+ * True while a 'needs_attention' + 'automatic' pause (ci_failing, analyze_failing
+ * today) is still within its bounded automatic-recovery budget — the caller should
+ * surface it as a lower-weight in-flight status instead of escalating to a human.
+ * Does not touch 'recoverable' + 'automatic' reasons (stuck_timeout, api_overloaded,
+ * rate_limit) — those keep surfacing as 'needs_attention' immediately, unchanged.
+ */
+export function isAutomaticRecoveryPending(
+  parsed:
+    | Pick<PauseReasonStruct, 'severity' | 'retry_strategy'>
+    | null
+    | undefined,
+  flakeRecoveryAttempts: number,
+  flakeRecoveryMaxRetries: number,
+): boolean {
+  if (!parsed) return false;
+  return (
+    parsed.severity === 'needs_attention' &&
+    parsed.retry_strategy === 'automatic' &&
+    flakeRecoveryAttempts < flakeRecoveryMaxRetries
+  );
 }
 
 export function parsePauseReason(raw: string | null): PauseReasonStruct | null {

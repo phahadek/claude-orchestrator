@@ -53,7 +53,7 @@ vi.mock('../../hooks/useSessionStore', () => ({
 }));
 
 vi.mock('../../hooks/useKeyboardShortcuts', () => ({
-  useKeyboardShortcuts: () => {},
+  useKeyboardShortcuts: () => ({ highlightedItemId: null }),
 }));
 
 vi.mock('../../hooks/useNotifications', () => ({
@@ -87,7 +87,6 @@ vi.mock('../PRPanel', () => ({ PRPanel: () => <div /> }));
 vi.mock('../HistoryGrid', () => ({ HistoryGrid: () => <div /> }));
 vi.mock('../Notifications', () => ({ Notifications: () => null }));
 vi.mock('../ShortcutHint', () => ({ ShortcutHint: () => null }));
-vi.mock('../DispatchModal', () => ({ DispatchModal: () => null }));
 // Capture onSelectTask so tests can simulate a user clicking a task
 let capturedOnSelectTask: ((taskId: string) => void) | null = null;
 

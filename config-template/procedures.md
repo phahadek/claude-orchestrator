@@ -428,6 +428,35 @@ authoritatively.
 > self-verify in-session) — 🔧 Operational tasks legitimately can (see the config-seed accretion
 > above).
 
+### Gate item classification
+
+Every `gate_item` carries a `classification`, one of four live values: **`Read-Only`**,
+**`Prod-Mutating`**, **`Human-Observation`**, **`needs-triage`**. (`Opportunistic` is a retired tier — it no
+longer exists in the schema; don't classify or reference items with it.) The
+tier-selection prose — how to tell them apart — lives in exactly one place,
+`packages/backend/src/gate/gateItemClassificationGuidance.ts`; it is shared verbatim by
+the `gate.accrete` tool schema, its tool description, and the injected planning prompt.
+Read it there rather than expecting the wording restated here — that parity (one prose
+source, several consumers) is the mechanism that keeps this doc and the tool guidance
+from drifting apart. `Read-Only` now also covers the bounded, cleanly-reversible
+scratch-write case (e.g. seeding one row purely to produce a trace to read back) that
+the retired tier used to own.
+
+`Human-Observation` is structurally different from the other three: it is excluded from
+both `TIER_ORDER` and `AUTO_RUN_TIERS`, so **no headless session can ever pass one**
+(`isVerifierBlockedFromPassing` enforces this server-side). It surfaces to the operator
+instead by being mirrored into the Decision Inbox.
+
+When the thing being checked hasn't happened yet, the disposition is
+**`not-yet-triggerable`** — never `deferred` (that means punted to a later milestone).
+It parks the item at the `pending` state on a backoff schedule (first re-check 3h out,
+doubling per consecutive `not-yet-triggerable` result, capped at 1 week) until the
+condition is re-checked. `pending` is **non-blocking** — it never counts toward a
+milestone's blocking/green status, and shows up in the gate readiness payload's own
+`parked` bucket, distinct from `blocking`. Reporting `not-yet-triggerable` **requires
+non-empty evidence** naming the specific observable to watch for (what would make the
+next re-check trigger) — the server rejects the disposition without it.
+
 Two consequences every session must internalize:
 
 - **Marking a 💻 Code task Ready is a live action, not a paper approval.** It _launches_
@@ -489,6 +518,24 @@ access) the repo doc deliberately leaves out.
 If a project has no such structured playbook, `/deploy` **stops** and says so — it does not
 improvise deploy steps. (Deploy runs the project's own documented entrypoint, which is
 in-scope; it is not a licence to touch any other session's git/worktree/PR — see § Hard rule.)
+
+---
+
+## Milestone-seed sessions
+
+**Trigger:** _"Let's start planning milestone X"_ / _"seed milestone X"_ — a human-driven
+session that stands up a **new milestone**: its charter, its board, and its seed set of
+Design tasks. Distinct from `/groom` and `/design`, which work an *existing* milestone's
+backlog.
+
+Procedure lives in the **`/milestone-seed` skill** (`skills/milestone-seed/`). It ends with <!-- path-check:ignore -->
+the board **seeded and inert** — registering and activating the milestone belongs to
+`/milestone-wrap`, which is what makes it safe to seed while the prior milestone is still
+running.
+
+> This section was previously the full procedure text, carried here because the skill was
+> local-only and unversioned — this file was its only backup. The skill now has a source
+> under `skills/`, so the procedure lives there and this is a pointer.
 
 ---
 

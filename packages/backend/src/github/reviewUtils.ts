@@ -464,14 +464,19 @@ export function formatBaseBranchModifiedFeedback(args: {
  * Asks the session to rebase onto the base branch and resolve conflicts.
  */
 export function formatMergeConflictFeedback(args: {
-  branchName: string;
+  branchName: string | null;
   baseBranch: string;
 }): string {
   const { branchName, baseBranch } = args;
+  const heading = branchName ? `\`${branchName}\`` : 'your branch';
+  const mergeLine = branchName
+    ? `The auto-merger detected conflicts when attempting to squash-merge ` +
+      `\`${branchName}\` into \`${baseBranch}\`.\n\n`
+    : `The auto-merger detected conflicts when attempting to squash-merge ` +
+      `this PR's branch into \`${baseBranch}\`.\n\n`;
   return (
-    `## Merge Conflict — \`${branchName}\`\n\n` +
-    `The auto-merger detected conflicts when attempting to squash-merge ` +
-    `\`${branchName}\` into \`${baseBranch}\`.\n\n` +
+    `## Merge Conflict — ${heading}\n\n` +
+    mergeLine +
     `### Action required:\n` +
     `1. Rebase your branch onto \`${baseBranch}\`: \`git rebase ${baseBranch}\`\n` +
     `2. Resolve any conflict markers in the affected files.\n` +

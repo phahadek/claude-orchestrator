@@ -8,6 +8,11 @@
   background: var(--bg-secondary);
 }
 
+.keyboardHighlighted {
+  outline: 2px solid var(--ctp-yellow, #f9e2af);
+  outline-offset: -1px;
+}
+
 .header {
   display: flex;
   align-items: center;
@@ -15,9 +20,9 @@
 }
 
 .kind {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--text-primary);
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-muted);
 }
 
 .groupBadge {
@@ -141,6 +146,13 @@
 .withdrawnBadge {
   font-size: 0.7rem;
   color: var(--ctp-yellow);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.autoApprovedBadge {
+  font-size: 0.7rem;
+  color: var(--ctp-green);
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }

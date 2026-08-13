@@ -5,6 +5,7 @@ import {
   phaseTotal,
   flaggedTasksForPhase,
   isGatePhase,
+  GATE_STATE_KEY,
 } from '../phaseBurndown';
 import type { TaskView } from '../../types/taskView';
 import type { MilestoneConvergence } from '@claude-orchestrator/backend/src/convergence/convergenceService';
@@ -28,6 +29,7 @@ function makeTask(overrides: Partial<TaskView> = {}): TaskView {
     review: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
+    hasAwaitingDispositionIntent: false,
     ...overrides,
   };
 }
@@ -45,6 +47,7 @@ function makeConvergence(
       gate: {
         status: 'blocked',
         blockingCount: 121,
+        parkedCount: 0,
         bespokeCount: 3,
         counts: {
           open: 100,
@@ -86,12 +89,13 @@ describe('computePhaseBurndown', () => {
         },
       }),
       makeTask({
-        taskId: 'untouched-1',
+        taskId: 'awaiting-disposition-1',
         displayStatus: 'backlog',
         blocked: false,
+        hasAwaitingDispositionIntent: true,
       }),
       makeTask({
-        taskId: 'untouched-2',
+        taskId: 'untouched-1',
         displayStatus: 'backlog',
         blocked: false,
       }),
@@ -102,7 +106,8 @@ describe('computePhaseBurndown', () => {
     expect(result.grooming.counts).toEqual({
       blocked: 1,
       inGrooming: 1,
-      untouched: 2,
+      awaitingDisposition: 1,
+      untouched: 1,
     });
     const states = Object.keys(result.grooming.counts).filter(
       (k) => (result.grooming.counts as Record<string, number>)[k] > 0,
@@ -114,6 +119,103 @@ describe('computePhaseBurndown', () => {
         0,
       ),
     ).toBe(4);
+  });
+
+  it('a task with staged intents awaiting disposition and no live groom session counts as awaitingDisposition, not untouched', () => {
+    const tasks = [
+      makeTask({
+        taskId: 'awaiting-1',
+        displayStatus: 'backlog',
+        blocked: false,
+        planningSession: {
+          sessionId: 's1',
+          status: 'done',
+          sessionType: 'groom',
+          startedAt: 1,
+          endedAt: 2,
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        hasAwaitingDispositionIntent: true,
+      }),
+    ];
+    const result = computePhaseBurndown(tasks, null);
+    expect(result.grooming.counts.awaitingDisposition).toBe(1);
+    expect(result.grooming.counts.untouched ?? 0).toBe(0);
+  });
+
+  it('a live groom session still counts as inGrooming even when the task also holds awaiting intents', () => {
+    const tasks = [
+      makeTask({
+        taskId: 'live-with-awaiting',
+        displayStatus: 'backlog',
+        blocked: false,
+        planningSession: {
+          sessionId: 's1',
+          status: 'running',
+          sessionType: 'groom',
+          startedAt: 1,
+          endedAt: null,
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        hasAwaitingDispositionIntent: true,
+      }),
+    ];
+    const result = computePhaseBurndown(tasks, null);
+    expect(result.grooming.counts.inGrooming).toBe(1);
+    expect(result.grooming.counts.awaitingDisposition ?? 0).toBe(0);
+  });
+
+  it('a blocked task still counts as blocked even when it also holds awaiting intents and a live groom session', () => {
+    const tasks = [
+      makeTask({
+        taskId: 'blocked-with-awaiting',
+        displayStatus: 'backlog',
+        blocked: true,
+        planningSession: {
+          sessionId: 's1',
+          status: 'running',
+          sessionType: 'groom',
+          startedAt: 1,
+          endedAt: null,
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        hasAwaitingDispositionIntent: true,
+      }),
+    ];
+    const result = computePhaseBurndown(tasks, null);
+    expect(result.grooming.counts.blocked).toBe(1);
+    expect(result.grooming.counts.awaitingDisposition ?? 0).toBe(0);
+    expect(result.grooming.counts.inGrooming ?? 0).toBe(0);
+  });
+
+  it('a task with only terminal intents (hasAwaitingDispositionIntent false) still counts as untouched', () => {
+    const tasks = [
+      makeTask({
+        taskId: 'terminal-only',
+        displayStatus: 'backlog',
+        blocked: false,
+        hasAwaitingDispositionIntent: false,
+      }),
+    ];
+    const result = computePhaseBurndown(tasks, null);
+    expect(result.grooming.counts.untouched).toBe(1);
+    expect(result.grooming.counts.awaitingDisposition ?? 0).toBe(0);
+  });
+
+  it('a task with no intents at all still counts as untouched', () => {
+    const tasks = [
+      makeTask({
+        taskId: 'no-intents',
+        displayStatus: 'backlog',
+        blocked: false,
+      }),
+    ];
+    const result = computePhaseBurndown(tasks, null);
+    expect(result.grooming.counts.untouched).toBe(1);
+    expect(result.grooming.counts.awaitingDisposition ?? 0).toBe(0);
   });
 
   it('a completed groom session (endedAt set) does not count as in grooming', () => {
@@ -195,6 +297,53 @@ describe('computePhaseBurndown', () => {
     ];
     const result = computePhaseBurndown(tasks, null);
     expect(result.code.blockerCount).toBe(1);
+  });
+
+  it('maps pending gate counts to the pending segment, not open', () => {
+    const convergence = makeConvergence({
+      axes: {
+        tasks: { status: 'blocked', open: 1, closed: 0, blocking: [] },
+        gate: {
+          status: 'blocked',
+          blockingCount: 121,
+          parkedCount: 7,
+          bespokeCount: 3,
+          counts: {
+            open: 100,
+            runnable: 20,
+            'pending-approval': 1,
+            pending: 7,
+            pass: 200,
+            fail: 5,
+            deferred: 3,
+          },
+          blocking: [],
+        },
+        seed: { status: 'green', blockingCount: 0, blocking: [] },
+        ops: { status: 'green', blockingCount: 0, blocking: [] },
+      },
+    });
+
+    const result = computePhaseBurndown([], convergence);
+
+    expect(result.gate.counts.pending).toBe(7);
+    expect(result.gate.counts.open).toBe(100);
+  });
+
+  it('has a GATE_STATE_KEY entry for every state in the backend gate vocabulary', () => {
+    const BACKEND_GATE_STATES = [
+      'open',
+      'runnable',
+      'pass',
+      'fail',
+      'deferred',
+      'pending-approval',
+      'pending',
+      'discarded',
+    ];
+    for (const state of BACKEND_GATE_STATES) {
+      expect(GATE_STATE_KEY[state]).toBeDefined();
+    }
   });
 });
 

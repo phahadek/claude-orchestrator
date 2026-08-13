@@ -24,6 +24,10 @@ const FAILING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
   'startup_failure',
 ]);
 
+/** Bounds for waitForCheckRunsCompletion's poll loop. */
+const CHECK_RUN_WAIT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const CHECK_RUN_POLL_INTERVAL_MS = 10_000; // 10 seconds
+
 export class GitHubClient {
   private readonly base = 'https://api.github.com';
   private readonly headers: HeadersInit;
@@ -556,6 +560,53 @@ export class GitHubClient {
       }
     }
     return rerequested;
+  }
+
+  /**
+   * Poll a commit's check-runs until every id in checkRunIds reaches
+   * status 'completed', or timeoutMs elapses. A freshly rerequested check
+   * run starts out queued/in_progress — reading pass/fail immediately after
+   * rerequest would observe that transient state rather than the rerun's
+   * actual result. Returns true once all runs are terminal, false on
+   * timeout (callers should then treat the outcome as unverified).
+   */
+  async waitForCheckRunsCompletion(
+    sha: string,
+    repo: string,
+    checkRunIds: number[],
+    opts: {
+      timeoutMs?: number;
+      pollIntervalMs?: number;
+      sleep?: (ms: number) => Promise<void>;
+    } = {},
+  ): Promise<boolean> {
+    if (checkRunIds.length === 0) return true;
+    const r = repo ?? GITHUB_REPO;
+    const timeoutMs = opts.timeoutMs ?? CHECK_RUN_WAIT_TIMEOUT_MS;
+    const pollIntervalMs = opts.pollIntervalMs ?? CHECK_RUN_POLL_INTERVAL_MS;
+    const sleep =
+      opts.sleep ??
+      ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    const pending = new Set(checkRunIds);
+    const deadline = Date.now() + timeoutMs;
+    while (pending.size > 0) {
+      const data = await this.request<{
+        check_runs: Array<{ id: number; status: string }>;
+      }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
+      for (const run of data.check_runs) {
+        if (pending.has(run.id) && run.status === 'completed') {
+          pending.delete(run.id);
+        }
+      }
+      if (pending.size === 0 || Date.now() >= deadline) break;
+      await sleep(pollIntervalMs);
+    }
+    if (pending.size > 0) {
+      logger.warn(
+        `[GitHubClient] waitForCheckRunsCompletion: timed out waiting for check runs [${[...pending].join(', ')}] on ${sha} in ${r}`,
+      );
+    }
+    return pending.size === 0;
   }
 
   /**
@@ -1557,7 +1608,7 @@ function tryParseRateLimitError(
   return new GitHubRateLimitError(message, resetAt, limit, used);
 }
 
-function parseDiffFiles(diff: string): string[] {
+export function parseDiffFiles(diff: string): string[] {
   const files: string[] = [];
   for (const line of diff.split('\n')) {
     if (line.startsWith('diff --git a/')) {

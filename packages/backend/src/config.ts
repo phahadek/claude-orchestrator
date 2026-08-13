@@ -113,6 +113,14 @@ const TIER_B_READ_MCP_TOOLS = [
   orchestratorMcpToolName('sessionEvents.query'),
 ];
 
+// The coarse `Bash(npm:*)`/`Bash(npx:*)`/`Bash(node:*)`/`Bash(tsc:*)` allow
+// entries below are intentionally left broad — install/build/typecheck
+// commands must keep working. A code session is instead narrowed by an
+// argument-level SDK `permissions.deny` layer built from each project's
+// configured `test:` commands (see getTestCommandDenyPatterns in
+// session/orchestrator-config.ts, applied in CliSessionRunner/
+// DockerSessionRunner), which blocks test-invocation commands specifically
+// without touching this allowlist.
 export const ALLOWED_TOOLS = [
   'Bash(git:*)',
   'Bash(npm:*)',
@@ -175,6 +183,23 @@ export const ALLOWED_TOOLS = [
   orchestratorMcpToolName('health'),
   orchestratorMcpToolName('review.disposition'),
   orchestratorMcpToolName('flaky.confirm'),
+  // The injected Pre-PR Gate tells a code session that test commands are
+  // blocked at the permission layer and must run via `test.request`. Without
+  // this entry that instruction is unsatisfiable: the tool is registered
+  // server-side but unlisted here, so every call is denied by the CLI before
+  // it reaches the MCP server — no intent is staged and the lane's mechanical
+  // auto-grant can never fire. Named through orchestratorMcpToolName so it
+  // emits the underscore CLI form the model actually calls.
+  orchestratorMcpToolName('test.request'),
+  // review.dispute is a code session's route out of a needs_changes/
+  // incomplete PR review verdict it concludes is wrong (see db/types.ts).
+  // Same failure mode as test.request above without this entry: the tool is
+  // registered server-side (CODE_INTENT_KINDS, see planningIntentKinds.ts)
+  // but unlisted here, so every call is denied by the CLI before it reaches
+  // the MCP server and the session parks waiting on a re-review nothing will
+  // trigger. Named through orchestratorMcpToolName so it emits the
+  // underscore CLI form the model actually calls.
+  orchestratorMcpToolName('review.dispute'),
   ...TIER_B_READ_MCP_TOOLS,
 ];
 
@@ -195,6 +220,42 @@ const PLANNING_READONLY_BASH_TOOLS = [
   'Bash(grep:*)',
   'Bash(sort:*)',
   'Bash(pwd:*)',
+];
+
+// groom-only Bash subset — narrower than PLANNING_READONLY_BASH_TOOLS above.
+// Grooming's task/context digest is already injected wholesale (see the
+// /groom skill and procedureAssembler.ts), so unlike design/ops it has no
+// legitimate reason to re-derive environment or repo context by hand.
+// Observed waste (session af76fa24, 70 Bash calls against an already-fully-
+// injected prompt) came specifically from an unscoped filesystem search
+// (`find` from repo root), a broad directory listing of the orchestrator
+// root (`ls` above the project root), and bare `git status`/`git branch`/
+// `git log` with no path argument. This list drops `find`/`ls` entirely and
+// adds only path-scoped git inspection (`git grep`, `git log <path>`,
+// `git show <sha>:<path>`) — the exact code-region exploration the /groom
+// skill is designed to do — never a bare git status/branch/log/ls-files.
+//
+// Post-deploy verification (the af76fa24 pattern shouldn't recur in a
+// subsequently dispatched groom session's Bash calls) is a session_events
+// read requiring the `read:session-events:<projectId>` capability, which is
+// human-approval gated — out of scope for an automated Code session to grant
+// itself. That check belongs to the Manual Verification Gate / the
+// GateItemVerifier auto-run flow (see ff290fc4), not to a code change here.
+const GROOM_READONLY_BASH_TOOLS = [
+  'Bash(cd:*)',
+  'Bash(which:*)',
+  'Bash(where:*)',
+  'Bash(cat:*)',
+  'Bash(echo:*)',
+  'Bash(head:*)',
+  'Bash(tail:*)',
+  'Bash(wc:*)',
+  'Bash(grep:*)',
+  'Bash(sort:*)',
+  'Bash(pwd:*)',
+  'Bash(git grep:*)',
+  'Bash(git log:*)',
+  'Bash(git show:*)',
 ];
 
 // Read-only Notion MCP tool names, exactly as the registered `notion` server
@@ -316,10 +377,30 @@ const DESIGN_MCP_TOOLS = [
 // require an explicit capability grant instead of living in this always-on
 // set. Not a staged-intent kind, so it isn't in PLANNING_INTENT_KINDS.ops —
 // added here explicitly.
+//
+// Plus deploy.verdict — the deploy-agentic-step spawner's verdict-reporting
+// tool (mcp/tools/verdictTools.ts), delivering an agentic deploy-playbook
+// step's approved/rejected/inconclusive finding straight to
+// DeployOrchestrator.reportAgenticVerdict(), never a staged intent an
+// operator disposes on. Added here explicitly for the same reason as
+// gateSeed.getState above: it isn't in PLANNING_INTENT_KINDS.ops.
+//
+// Plus gate.reclassify (mcp/tools/gateReclassifyTool.ts) and
+// intent.dispositionStranded (mcp/tools/strandedIntentTool.ts) — an ops
+// session's authenticated MCP replacement for the device-authed
+// gate-state-client.mjs `reclassify` command and for clearing an intent
+// stranded by a different, terminated session, respectively. Both act
+// immediately (reclassifyGateItem / dispositionStrandedIntent write
+// durably on the call itself) rather than staging an intent an operator
+// later disposes on, so — same reasoning as gateSeed.getState/deploy.verdict
+// — neither belongs in PLANNING_INTENT_KINDS.ops; added here explicitly.
 const OPS_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
   ...PLANNING_INTENT_KINDS.ops.map(orchestratorMcpToolName),
   orchestratorMcpToolName('gateSeed.getState'),
+  orchestratorMcpToolName('deploy.verdict'),
+  orchestratorMcpToolName('gate.reclassify'),
+  orchestratorMcpToolName('intent.dispositionStranded'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
   ...TASK_READ_MCP_TOOLS,
   ...PROJECT_READ_MCP_TOOLS,
@@ -346,14 +427,18 @@ export const PLANNING_DISALLOWED_TOOLS = [
 
 /**
  * groom session tool set: deterministic backlog grooming — stage-only/read-only.
- * The orchestrator MCP stage-proposal tools + light read-only code tools.
+ * The orchestrator MCP stage-proposal tools + a narrow read-only code-region
+ * exploration subset (GROOM_READONLY_BASH_TOOLS, above) — deliberately
+ * narrower than PLANNING_READONLY_BASH_TOOLS/design/ops: no `find`, no `ls`,
+ * and no bare git status/branch, since the task/context digest groom needs
+ * is already injected wholesale and must never be re-derived by hand.
  * Excludes Write/Edit, git-mutation, PR/github MCP, and Notion-write MCP.
  * NOTION_READ_MCP_TOOLS is merged in separately, only for Notion-task-source
  * projects (see orchestrator-config.ts#getSessionAllowedTools) — this base
  * constant stays task-source-agnostic.
  */
 export const GROOM_ALLOWED_TOOLS = [
-  ...PLANNING_READONLY_BASH_TOOLS,
+  ...GROOM_READONLY_BASH_TOOLS,
   ...GROOM_MCP_TOOLS,
 ];
 
@@ -373,6 +458,7 @@ export const DESIGN_ALLOWED_TOOLS = [
   'Bash(git ls-files:*)',
   'Bash(git rev-parse:*)',
   'Bash(git branch --list:*)',
+  'Bash(git grep:*)',
 ];
 
 /**
@@ -399,6 +485,7 @@ export const OPS_ALLOWED_TOOLS = [
   'Bash(git ls-files:*)',
   'Bash(git rev-parse:*)',
   'Bash(git branch --list:*)',
+  'Bash(git grep:*)',
 ];
 
 // The orchestrator MCP stage-proposal tools a docs session is allowed to
@@ -450,6 +537,40 @@ export const DOCS_ALLOWED_TOOLS = [
 export function docsWebFetchTools(sourceDomains: string[]): string[] {
   return sourceDomains.map((domain) => `WebFetch(domain:${domain})`);
 }
+
+// The orchestrator MCP tools a depth-review session is allowed to call — the
+// same always-on health/read surface every review-shaped session gets
+// (PROJECT_READ_MCP_TOOLS/TIER_B_READ_MCP_TOOLS), no staged-intent kinds of
+// its own since the depth pass never stages anything.
+const DEPTH_REVIEW_MCP_TOOLS = [
+  ORCHESTRATOR_MCP_HEALTH_TOOL,
+  ...PROJECT_READ_MCP_TOOLS,
+  ...TIER_B_READ_MCP_TOOLS,
+];
+
+/**
+ * depth-review session tool set: a distinct, restricted allowlist for the
+ * depth-review pass (session type 'depth_review', dispatched only after a
+ * PR's conformance verdict is approved — see PRReviewService/
+ * ReviewOrchestrator). Read-only git inspection (same as design/ops) plus
+ * the always-on read-only MCP surface above. Deliberately excludes
+ * Bash(git:*) (which would confer git push), Write/Edit, and every
+ * GitHub-write MCP tool in the base ALLOWED_TOOLS set — the depth pass
+ * evaluates a diff already embedded in its prompt and must never be able to
+ * push a commit or open/modify a PR itself.
+ */
+export const DEPTH_REVIEW_ALLOWED_TOOLS = [
+  ...PLANNING_READONLY_BASH_TOOLS,
+  ...DEPTH_REVIEW_MCP_TOOLS,
+  'Bash(git log:*)',
+  'Bash(git diff:*)',
+  'Bash(git show:*)',
+  'Bash(git status:*)',
+  'Bash(git blame:*)',
+  'Bash(git ls-files:*)',
+  'Bash(git rev-parse:*)',
+  'Bash(git branch --list:*)',
+];
 
 function hydrateProject(p: {
   id: string;
@@ -591,6 +712,12 @@ export interface RuntimeSettings {
   auto_archive_grace_minutes: number;
   /** ConcludedSessionArchiver: interval in minutes between archiver sweeps. */
   auto_archive_sweep_interval_minutes: number;
+  /** PlanningOrchestrator idle-terminal sweep: when true, the periodic sweep runs. */
+  idle_planning_terminal_sweep_enabled: boolean;
+  /** PlanningOrchestrator idle-terminal sweep: minutes an idle session must sit before being eligible — defense-in-depth backstop, not the trigger (the completeness predicate is). */
+  idle_planning_terminal_sweep_age_floor_minutes: number;
+  /** PlanningOrchestrator idle-terminal sweep: interval in minutes between sweeps. */
+  idle_planning_terminal_sweep_interval_minutes: number;
   /** Model used for large-context task escalation; empty string = feature off. */
   large_task_model: string;
   /** Reasoning effort for large-task/escalation spawns; empty string = model default. */
@@ -607,6 +734,18 @@ export interface RuntimeSettings {
   gate_verify_session_model: string;
   /** Reasoning effort for gate-verify sessions; empty string = fall back to ops_session_effort. */
   gate_verify_session_effort: string;
+  /** Model used for grooming sessions; empty string = fall back to planning_session_model. */
+  groom_session_model: string;
+  /** Reasoning effort for grooming sessions; empty string = fall back to planning_session_effort. */
+  groom_session_effort: string;
+  /** Model used for design sessions; empty string = fall back to planning_session_model. */
+  design_session_model: string;
+  /** Reasoning effort for design sessions; empty string = fall back to planning_session_effort. */
+  design_session_effort: string;
+  /** Model used for docs sessions; empty string = fall back to planning_session_model. */
+  docs_session_model: string;
+  /** Reasoning effort for docs sessions; empty string = fall back to planning_session_effort. */
+  docs_session_effort: string;
   /**
    * Shared concurrency cap across all planning session types (groom/design/ops).
    * One pool, not per-type caps — they compete for the same operator review
@@ -647,10 +786,24 @@ export interface RuntimeSettings {
    * editable from the Settings UI; empty by default.
    */
   capability_auto_approve_allowlist: string[];
+  /**
+   * Kill switch for the gate.accrete stage-time auto-grant policy (see
+   * routeStageTimeBlock's maybeAutoApproveGateAccrete, stagedIntents.ts):
+   * when true, a gate.accrete intent whose payload content-matches the
+   * task's stored "### 👁️ Manual verification" body items is transitioned
+   * staged -> approved immediately at stage time. Off by default — every
+   * gate.accrete intent parks in ordinary staged state for operator
+   * disposition, regardless of content-match, until an operator opts in.
+   */
+  gate_seed_auto_approve_enabled: boolean;
   /** Milestone view tier-2 attention: seconds a staged decision may sit before it's flagged aging. */
   milestone_attention_aging_threshold_seconds: number;
   /** Milestone view tier-2 attention: seconds of no distanceToGreen improvement before convergence is flagged flat. */
   milestone_attention_flat_convergence_window_seconds: number;
+  /** Soft-pause auto-launch when the polled five-hour usage percent reaches this threshold; '' = disabled. */
+  hourly_usage_pause_threshold_percent: string;
+  /** Soft-pause auto-launch when the polled weekly usage percent reaches this threshold; '' = disabled. */
+  weekly_usage_pause_threshold_percent: string;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -671,6 +824,12 @@ export const runtimeSettings: RuntimeSettings = {
   ops_session_effort: '',
   gate_verify_session_model: '',
   gate_verify_session_effort: '',
+  groom_session_model: '',
+  groom_session_effort: '',
+  design_session_model: '',
+  design_session_effort: '',
+  docs_session_model: '',
+  docs_session_effort: '',
   max_concurrent_planning_sessions: Number(
     process.env.MAX_CONCURRENT_PLANNING_SESSIONS ?? 5,
   ),
@@ -682,6 +841,8 @@ export const runtimeSettings: RuntimeSettings = {
   auto_launch_poll_interval_ms: Number(
     process.env.AUTO_LAUNCH_POLL_INTERVAL_MS ?? 60_000,
   ),
+  hourly_usage_pause_threshold_percent: '',
+  weekly_usage_pause_threshold_percent: '',
   min_host_free_memory_mb: Number(process.env.MIN_HOST_FREE_MEMORY_MB ?? 4096),
   per_session_reserve_mb: Number(process.env.PER_SESSION_RESERVE_MB ?? 3072),
   session_cgroup_prod_reserve_mb: Number(
@@ -727,6 +888,14 @@ export const runtimeSettings: RuntimeSettings = {
   auto_archive_sweep_interval_minutes: Number(
     process.env.AUTO_ARCHIVE_SWEEP_INTERVAL_MINUTES ?? 5,
   ),
+  idle_planning_terminal_sweep_enabled:
+    process.env.IDLE_PLANNING_TERMINAL_SWEEP_ENABLED !== 'false',
+  idle_planning_terminal_sweep_age_floor_minutes: Number(
+    process.env.IDLE_PLANNING_TERMINAL_SWEEP_AGE_FLOOR_MINUTES ?? 24 * 60,
+  ),
+  idle_planning_terminal_sweep_interval_minutes: Number(
+    process.env.IDLE_PLANNING_TERMINAL_SWEEP_INTERVAL_MINUTES ?? 30,
+  ),
   large_task_model: '',
   large_task_effort: '',
   task_cache_refresh_interval_ms: Number(
@@ -740,4 +909,6 @@ export const runtimeSettings: RuntimeSettings = {
   capability_auto_approve_enabled:
     process.env.CAPABILITY_AUTO_APPROVE_ENABLED !== 'false',
   capability_auto_approve_allowlist: [],
+  gate_seed_auto_approve_enabled:
+    process.env.GATE_SEED_AUTO_APPROVE_ENABLED === 'true',
 };

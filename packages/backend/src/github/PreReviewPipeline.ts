@@ -6,25 +6,39 @@ import {
   setLastReviewedSha,
   setPreReviewStage,
   setPauseReason,
-  hasTestResultForSha,
-  upsertTestResult,
-  deleteTestResult,
+  getLatestTestRequestRun,
+  deleteTestRequestRunsForContentHash,
   hasAnalyzeResultForSha,
   upsertAnalyzeResult,
   getAnalyzeResult,
+  deleteAnalyzeResult,
+  getAnalyzeContentCacheResult,
+  insertAnalyzeContentCacheResult,
   addAutofixSha,
 } from '../db/queries';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
-import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import {
+  loadAutofixCommands,
+  runAutofix,
+  getChangedFiles,
+} from '../session/autofix-runner';
+import {
+  normalizeAnalyzeCommand,
+  isAnalyzeCommandTriggered,
+  computeTriggerContentHash,
+  computeWholeTreeContentHash,
+  matchesTransientOutputPattern,
+} from '../session/analyzeGating';
 import { validateAndRepairGitConfig } from '../orchestration/gitConfigIntegrity';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { runTestCommands } from '../session/test-runner';
+import { runProjectTestRequest } from '../orchestration/testRequestLane';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { formatCIFailureFeedback } from './reviewUtils';
 import { recordEvent } from '../audit/AuditLog';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
-import type { ReviewJob } from './types';
+import type { ReviewJob, FlakeRecoveryOutcome } from './types';
 import type { ProjectConfig } from '../config';
 import type { PauseReason } from '../db/types';
 import { parsePauseReason } from '../db/pauseReason';
@@ -308,28 +322,100 @@ export class PreReviewPipeline {
           passed = cached?.passed === 1;
           output = cached?.output ?? '';
         } else {
-          const result = await runTestCommands(
+          const normalized = config.analyze.map(normalizeAnalyzeCommand);
+          const diffPaths = await getChangedFiles(
             ctx.worktreePath,
-            config.analyze,
-            config.analyze_timeout_sec,
-            (msg) =>
-              logger.info(
-                `[PreReviewPipeline] analyze PR #${ctx.prNumber}: ${msg}`,
-              ),
-            {
-              maxRssMb: config.analyze_max_rss_mb,
-              failFast: config.analyze_fail_fast,
-            },
+            ctx.project.baseBranch,
           );
-          passed = result.passed;
-          output = result.output;
+
+          const outputParts: string[] = [];
+          let allPassed = true;
+          let anyTimedOut = false;
+          let anyOomKilled = false;
+          let anyTransientOutputMatch = false;
+
+          for (const entry of normalized) {
+            if (!isAnalyzeCommandTriggered(entry, diffPaths)) {
+              logger.info(
+                `[PreReviewPipeline] analyze skipped (no trigger-path match) PR #${ctx.prNumber}: ${entry.command}`,
+              );
+              outputParts.push(
+                `$ ${entry.command}\n[skipped — no diff file matched trigger_paths]`,
+              );
+              continue;
+            }
+
+            const contentHash = entry.trigger_paths?.length
+              ? await computeTriggerContentHash(
+                  ctx.worktreePath,
+                  entry.trigger_paths,
+                )
+              : null;
+
+            if (contentHash) {
+              const cached = getAnalyzeContentCacheResult(
+                entry.command,
+                contentHash,
+              );
+              if (cached) {
+                logger.info(
+                  `[PreReviewPipeline] analyze content-cache hit PR #${ctx.prNumber}: ${entry.command}`,
+                );
+                outputParts.push(
+                  `$ ${entry.command}\n[cached]\n${cached.output}`,
+                );
+                if (cached.passed !== 1) allPassed = false;
+                if (!allPassed && config.analyze_fail_fast) break;
+                continue;
+              }
+            }
+
+            const result = await runTestCommands(
+              ctx.worktreePath,
+              [entry.command],
+              config.analyze_timeout_sec,
+              (msg) =>
+                logger.info(
+                  `[PreReviewPipeline] analyze PR #${ctx.prNumber}: ${msg}`,
+                ),
+              {
+                maxRssMb: config.analyze_max_rss_mb,
+                failFast: config.analyze_fail_fast,
+              },
+            );
+
+            outputParts.push(result.output);
+            if (!result.passed) allPassed = false;
+            if (result.timedOut) anyTimedOut = true;
+            if (result.oomKilled) anyOomKilled = true;
+            if (
+              !result.passed &&
+              matchesTransientOutputPattern(entry, result.output)
+            ) {
+              anyTransientOutputMatch = true;
+            }
+
+            if (contentHash) {
+              insertAnalyzeContentCacheResult(
+                entry.command,
+                contentHash,
+                result.passed,
+                result.output,
+              );
+            }
+
+            if (!allPassed && config.analyze_fail_fast) break;
+          }
+
+          passed = allPassed;
+          output = outputParts.join('\n');
           upsertAnalyzeResult(
             ctx.prNumber,
             ctx.repo,
             ctx.headSha,
             passed,
             output,
-            !!(result.timedOut || result.oomKilled),
+            anyTimedOut || anyOomKilled || anyTransientOutputMatch,
           );
         }
 
@@ -368,23 +454,40 @@ export class PreReviewPipeline {
         const config = loadOrchestratorConfig(ctx.project.projectDir);
         if (!config.test?.length) return;
 
-        if (hasTestResultForSha(ctx.prNumber, ctx.repo, ctx.headSha)) {
+        const contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
+        if (
+          contentHash &&
+          getLatestTestRequestRun(ctx.project.id, contentHash)
+        ) {
           logger.info(
-            `[PreReviewPipeline] tests already ran for PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
+            `[PreReviewPipeline] tests content-cache hit PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
           );
           return;
         }
 
-        const { passed, output } = await runTestCommands(
-          ctx.worktreePath,
-          config.test,
-          config.test_timeout_sec,
-          (msg) =>
-            logger.info(`[PreReviewPipeline] test PR #${ctx.prNumber}: ${msg}`),
-          { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
-        );
-
-        upsertTestResult(ctx.prNumber, ctx.repo, ctx.headSha, passed, output);
+        const { passed } = contentHash
+          ? await runProjectTestRequest({
+              projectId: ctx.project.id,
+              contentHash,
+              worktreePath: ctx.worktreePath,
+              commands: config.test,
+              timeoutSec: config.test_timeout_sec,
+              maxRssMb: config.test_max_rss_mb,
+              failFast: config.test_fail_fast,
+            })
+          : await runTestCommands(
+              ctx.worktreePath,
+              config.test,
+              config.test_timeout_sec,
+              (msg) =>
+                logger.info(
+                  `[PreReviewPipeline] test PR #${ctx.prNumber}: ${msg}`,
+                ),
+              {
+                maxRssMb: config.test_max_rss_mb,
+                failFast: config.test_fail_fast,
+              },
+            );
 
         logger.info(
           `[PreReviewPipeline] tests ${passed ? 'PASSED' : 'FAILED'} for PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)}`,
@@ -395,9 +498,10 @@ export class PreReviewPipeline {
 
   /**
    * Actuate a session's verified-flaky disposition on the F2 (orchestrator-run
-   * test) gate: audit + invalidate the permanent per-(pr,repo,sha) test result
-   * row, then re-run the same test commands against the same SHA — no new
-   * commit, no new SHA. Returns null when the project has no F2 tests configured.
+   * test) gate: audit + invalidate the shared content-hash cache entry
+   * (test_request_runs, keyed by (project_id, content_hash)), then re-run the
+   * same test commands against the same SHA — no new commit, no new SHA.
+   * Returns null when the project has no F2 tests configured.
    */
   async rerunFlakyTests(
     prNumber: number,
@@ -405,38 +509,181 @@ export class PreReviewPipeline {
     headSha: string,
     worktreePath: string,
     project: ProjectConfig,
-  ): Promise<{ passed: boolean; output: string } | null> {
+  ): Promise<{
+    outcome: FlakeRecoveryOutcome;
+    passed: boolean;
+    output: string;
+  } | null> {
     const config = loadOrchestratorConfig(project.projectDir);
     if (!config.test?.length) return null;
+
+    const contentHash = await computeWholeTreeContentHash(worktreePath);
 
     recordEvent({
       event_type: 'flake_recovery_f2_invalidated',
       actor_type: 'system',
+      project_id: project.id,
       task_id: null,
       payload: { prNumber, repo, sha: headSha },
     });
-    deleteTestResult(prNumber, repo, headSha);
+    if (contentHash) {
+      deleteTestRequestRunsForContentHash(project.id, contentHash);
+    }
 
-    const { passed, output } = await runTestCommands(
-      worktreePath,
-      config.test,
-      config.test_timeout_sec,
-      (msg) =>
-        logger.info(`[PreReviewPipeline] flaky-rerun PR #${prNumber}: ${msg}`),
-      { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
-    );
-    upsertTestResult(prNumber, repo, headSha, passed, output);
+    const { passed, output } = contentHash
+      ? await runProjectTestRequest({
+          projectId: project.id,
+          contentHash,
+          worktreePath,
+          commands: config.test,
+          timeoutSec: config.test_timeout_sec,
+          maxRssMb: config.test_max_rss_mb,
+          failFast: config.test_fail_fast,
+        })
+      : await runTestCommands(
+          worktreePath,
+          config.test,
+          config.test_timeout_sec,
+          (msg) =>
+            logger.info(
+              `[PreReviewPipeline] flaky-rerun PR #${prNumber}: ${msg}`,
+            ),
+          { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
+        );
+
+    // Re-verify head_sha immediately before recording the outcome — a push
+    // that landed mid-run means this result no longer speaks to the SHA the
+    // disposition was diagnosed against.
+    let outcome: FlakeRecoveryOutcome = passed ? 'passed' : 'failed';
+    if (this.github) {
+      const current = await this.github.getPRState(prNumber, repo);
+      if (current.headSha !== headSha) {
+        outcome = 'inconclusive';
+      }
+    }
 
     recordEvent({
       event_type: 'flake_recovery_f2_rerun',
       actor_type: 'system',
+      project_id: project.id,
       task_id: null,
-      payload: { prNumber, repo, sha: headSha, passed },
+      payload: { prNumber, repo, sha: headSha, outcome },
     });
     logger.info(
-      `[PreReviewPipeline] flaky re-run ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+      `[PreReviewPipeline] flaky re-run ${outcome} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
     );
-    return { passed, output };
+    return { outcome, passed, output };
+  }
+
+  /**
+   * Actuate a session's verified-flaky disposition on the analyze gate:
+   * audit + invalidate the permanent per-(pr,repo,sha) analyze result row,
+   * then re-run the same analyze commands (respecting trigger_paths, not the
+   * content-hash cache — this is an explicit re-run, not a fresh evaluation)
+   * against the same SHA — no new commit, no new SHA, and no full-pipeline
+   * retry. Returns null when the project has no analyze commands configured.
+   */
+  async rerunFlakyAnalyze(
+    prNumber: number,
+    repo: string,
+    headSha: string,
+    worktreePath: string,
+    project: ProjectConfig,
+  ): Promise<{
+    outcome: FlakeRecoveryOutcome;
+    passed: boolean;
+    output: string;
+  } | null> {
+    const config = loadOrchestratorConfig(project.projectDir);
+    if (!config.analyze?.length) return null;
+
+    recordEvent({
+      event_type: 'flake_recovery_analyze_invalidated',
+      actor_type: 'system',
+      project_id: project.id,
+      task_id: null,
+      payload: { prNumber, repo, sha: headSha },
+    });
+    deleteAnalyzeResult(prNumber, repo, headSha);
+
+    const normalized = config.analyze.map(normalizeAnalyzeCommand);
+    const diffPaths = await getChangedFiles(worktreePath, project.baseBranch);
+
+    const outputParts: string[] = [];
+    let allPassed = true;
+    let anyTimedOut = false;
+    let anyOomKilled = false;
+    let anyTransientOutputMatch = false;
+
+    for (const entry of normalized) {
+      if (!isAnalyzeCommandTriggered(entry, diffPaths)) {
+        outputParts.push(
+          `$ ${entry.command}\n[skipped — no diff file matched trigger_paths]`,
+        );
+        continue;
+      }
+
+      const result = await runTestCommands(
+        worktreePath,
+        [entry.command],
+        config.analyze_timeout_sec,
+        (msg) =>
+          logger.info(
+            `[PreReviewPipeline] flaky-rerun analyze PR #${prNumber}: ${msg}`,
+          ),
+        {
+          maxRssMb: config.analyze_max_rss_mb,
+          failFast: config.analyze_fail_fast,
+        },
+      );
+
+      outputParts.push(result.output);
+      if (!result.passed) allPassed = false;
+      if (result.timedOut) anyTimedOut = true;
+      if (result.oomKilled) anyOomKilled = true;
+      if (
+        !result.passed &&
+        matchesTransientOutputPattern(entry, result.output)
+      ) {
+        anyTransientOutputMatch = true;
+      }
+
+      if (!allPassed && config.analyze_fail_fast) break;
+    }
+
+    const passed = allPassed;
+    const output = outputParts.join('\n');
+    upsertAnalyzeResult(
+      prNumber,
+      repo,
+      headSha,
+      passed,
+      output,
+      anyTimedOut || anyOomKilled || anyTransientOutputMatch,
+    );
+
+    // Re-verify head_sha immediately before recording the outcome — a push
+    // that landed mid-run means this result no longer speaks to the SHA the
+    // disposition was diagnosed against.
+    let outcome: FlakeRecoveryOutcome = passed ? 'passed' : 'failed';
+    if (this.github) {
+      const current = await this.github.getPRState(prNumber, repo);
+      if (current.headSha !== headSha) {
+        outcome = 'inconclusive';
+      }
+    }
+
+    recordEvent({
+      event_type: 'flake_recovery_analyze_rerun',
+      actor_type: 'system',
+      project_id: project.id,
+      task_id: null,
+      payload: { prNumber, repo, sha: headSha, outcome },
+    });
+    logger.info(
+      `[PreReviewPipeline] flaky analyze re-run ${outcome} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+    );
+    return { outcome, passed, output };
   }
 
   /**

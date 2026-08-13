@@ -26,8 +26,18 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { insertItem, getItem } from '../../gate/gateStore.js';
-import { createStagedIntentsRouter } from '../stagedIntents';
+import {
+  insertItem,
+  getItem,
+  setMinDeployedCommit,
+  setSourceMergeCommit,
+} from '../../gate/gateStore.js';
+import { reconcileGateRunnability } from '../../gate/gateService.js';
+import {
+  configureGateItemMirrorSink,
+  reconcileHumanObservationMirrors,
+} from '../../gate/gateReconciler.js';
+import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
 import { PLANNING_INTENT_KINDS } from '../../planning/planningIntentKinds';
 import { KNOWN_INTENT_KINDS } from '../stagedIntents';
 import { ProjectService } from '../../projects/ProjectService.js';
@@ -228,6 +238,54 @@ describe('gate.verify — stage then apply', () => {
   });
 });
 
+describe('gate.verify — requires a full gate item id', () => {
+  it('rejects an 8-character short form at stage time, naming the expected full-uuid shape', async () => {
+    const item = makeGateItem();
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'gate.verify',
+      projectId: 'proj-a',
+      payload: {
+        gateItemId: item.id.slice(0, 8),
+        disposition: 'pass',
+        evidence: { basis: 'operational', note: 'checked audit_log' },
+      },
+    });
+
+    expect(staged.status).toBe(400);
+    expect(staged.body.error).toMatch(/full gate item id/i);
+    expect(staged.body.error).toMatch(/uuid/i);
+
+    // No gate state or staged-intent row was written for the rejected call.
+    expect(getItem(item.id)?.events).toHaveLength(0);
+    const rows = db
+      .prepare('SELECT COUNT(*) as n FROM staged_intent')
+      .get() as { n: number };
+    expect(rows.n).toBe(0);
+  });
+
+  it('accepts a full gate item uuid unchanged', async () => {
+    const item = makeGateItem();
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'gate.verify',
+      projectId: 'proj-a',
+      payload: {
+        gateItemId: item.id,
+        disposition: 'pass',
+        evidence: { basis: 'operational', note: 'checked audit_log' },
+      },
+    });
+
+    expect(staged.status).toBe(201);
+    expect(staged.body.state).toBe('staged');
+  });
+});
+
 describe('gate.verify — fail disposition files a follow-up task via resolveMilestoneDatabaseId', () => {
   it('applies cleanly and reaches appendGateItemEvent, with no routeApplyTimeFailure pushback (regression for the 2026-08-01 auto-rejections)', async () => {
     const item = makeGateItem({ milestone: 'M13' });
@@ -270,5 +328,381 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
       .prepare('SELECT state FROM staged_intent WHERE id = ?')
       .get(staged.body.id) as { state: string };
     expect(row.state).toBe('committed');
+  });
+});
+
+describe('gate.verify — Human-Observation mirror apply (operator-supplied disposition)', () => {
+  it('requires an operator-supplied mirrorDisposition — applying with none fails', async () => {
+    const item = makeGateItem({ classification: 'Human-Observation' });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${mirror.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(500);
+    expect(getItem(item.id)?.events).toHaveLength(0);
+  });
+
+  it('rejects an unknown mirrorDisposition string — the widened union stays closed', async () => {
+    const item = makeGateItem({ classification: 'Human-Observation' });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${mirror.id}/apply`)
+      .send({ mirrorDisposition: 'parked' });
+    expect(applied.status).toBe(500);
+    expect(getItem(item.id)?.events).toHaveLength(0);
+  });
+
+  it('a mirrorDisposition of "pass" produces the exact same gate_item state as a direct GateReadinessPanel pass for the same item/evidence', async () => {
+    const directItem = makeGateItem({ classification: 'Human-Observation' });
+    const mirroredItem = makeGateItem({ classification: 'Human-Observation' });
+    const evidence = { note: 'the banner renders in the correct brand blue' };
+
+    // The direct GateReadinessPanel path: POST /gate/items/:id/events — a
+    // human operator's freetext name (or none), never 'gate-verifier'
+    // (routes/gateState.ts passes through whatever operatorName the panel's
+    // input carries).
+    const { appendGateItemEvent } = await import('../../gate/gateService.js');
+    appendGateItemEvent(directItem.id, {
+      disposition: 'pass',
+      evidence,
+      operator: 'jane',
+    });
+
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: mirroredItem.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    const applied = await agent
+      .post(`/api/staged-intents/${mirror.id}/apply`)
+      .send({ mirrorDisposition: 'pass', mirrorEvidence: evidence });
+    expect(applied.status).toBe(200);
+
+    const direct = getItem(directItem.id);
+    const mirrored = getItem(mirroredItem.id);
+    expect(mirrored?.state).toBe(direct?.state);
+    expect(mirrored?.currentDisposition).toBe(direct?.currentDisposition);
+    expect(mirrored?.events.at(-1)).toMatchObject({
+      disposition: 'pass',
+      evidence,
+    });
+
+    const row = db
+      .prepare('SELECT state, group_id FROM staged_intent WHERE id = ?')
+      .get(mirror.id) as { state: string; group_id: string | null };
+    expect(row.state).toBe('committed');
+    expect(row.group_id).toBeNull();
+  });
+
+  it('a mirrorDisposition of "deferred" resolves the gate_item to deferred, matching GateReadinessPanel\'s direct-path Defer button', async () => {
+    const item = makeGateItem({ classification: 'Human-Observation' });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    const applied = await agent
+      .post(`/api/staged-intents/${mirror.id}/apply`)
+      .send({ mirrorDisposition: 'deferred' });
+    expect(applied.status).toBe(200);
+
+    expect(getItem(item.id)?.state).toBe('deferred');
+  });
+
+  it('a mirrorDisposition of "not-yet-triggerable" parks the gate_item at pending with a scheduled next_attempt_at, distinct from Defer\'s resolution', async () => {
+    const item = makeGateItem({
+      classification: 'Human-Observation',
+      milestone: 'M13',
+    });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    const applied = await agent
+      .post(`/api/staged-intents/${mirror.id}/apply`)
+      .send({
+        mirrorDisposition: 'not-yet-triggerable',
+        mirrorEvidence: { note: 'the trigger scenario has not occurred yet' },
+      });
+    expect(applied.status).toBe(200);
+
+    const updated = getItem(item.id);
+    expect(updated?.state).toBe('pending');
+    expect(updated?.state).not.toBe('deferred');
+    expect(updated?.nextAttemptAt).toBeDefined();
+    expect(updated?.pendingAttemptCount).toBe(1);
+  });
+
+  it('a parked mirror item is returned by nextPendingGateItems once its backoff elapses', async () => {
+    const item = makeGateItem({
+      classification: 'Human-Observation',
+      milestone: 'M13',
+    });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    await agent.post(`/api/staged-intents/${mirror.id}/apply`).send({
+      mirrorDisposition: 'not-yet-triggerable',
+      mirrorEvidence: { note: 'not yet triggerable' },
+    });
+
+    const { nextPendingGateItems } = await import('../../gate/gateService.js');
+
+    // Backoff hasn't elapsed yet — not returned.
+    expect(
+      nextPendingGateItems('proj-a', 'M13').map((i) => i.id),
+    ).not.toContain(item.id);
+
+    // Force the schedule into the past so it's due, mirroring how a real
+    // backoff eventually elapses.
+    db.prepare('UPDATE gate_item SET next_attempt_at = ? WHERE id = ?').run(
+      new Date(0).toISOString(),
+      item.id,
+    );
+    expect(nextPendingGateItems('proj-a', 'M13').map((i) => i.id)).toContain(
+      item.id,
+    );
+  });
+
+  it("a parked mirror item is counted in gate readiness's parked bucket, not its blocking set", async () => {
+    const item = makeGateItem({
+      classification: 'Human-Observation',
+      milestone: 'M13',
+    });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    await agent.post(`/api/staged-intents/${mirror.id}/apply`).send({
+      mirrorDisposition: 'not-yet-triggerable',
+      mirrorEvidence: { note: 'not yet triggerable' },
+    });
+
+    const { getGateReadiness } = await import('../../gate/gateService.js');
+    const readiness = getGateReadiness('proj-a', 'M13');
+    expect(readiness.parked.map((i) => i.id)).toContain(item.id);
+    expect(readiness.blocking.map((i) => i.id)).not.toContain(item.id);
+  });
+
+  it('a mirrorDisposition of "fail" re-opens the item via the same follow-up-filing path as a direct fail', async () => {
+    const item = makeGateItem({
+      classification: 'Human-Observation',
+      milestone: 'M13',
+    });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    const applied = await agent
+      .post(`/api/staged-intents/${mirror.id}/apply`)
+      .send({
+        mirrorDisposition: 'fail',
+        mirrorEvidence: { note: 'the banner is the wrong colour' },
+      });
+    expect(applied.status).toBe(200);
+
+    const updated = getItem(item.id);
+    expect(updated?.state).toBe('open');
+    expect(updated?.events.at(-1)).toMatchObject({ disposition: 'fail' });
+    expect(createTaskMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('advances state to pass (not runnable) and never tags the event operator "gate-verifier"', async () => {
+    const item = makeGateItem({ classification: 'Human-Observation' });
+    const mirror = stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'mirror' },
+      'proj-a',
+      null,
+      null,
+      'Human-Observation mirror',
+      null,
+      null,
+      'M13',
+      null,
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    const applied = await agent
+      .post(`/api/staged-intents/${mirror.id}/apply`)
+      .send({
+        mirrorDisposition: 'pass',
+        mirrorEvidence: { note: 'observed the correct rendering' },
+      });
+    expect(applied.status).toBe(200);
+
+    const updated = getItem(item.id);
+    expect(updated?.state).toBe('pass');
+    expect(updated?.state).not.toBe('runnable');
+    expect(updated?.currentDisposition).toBe('pass');
+    const lastEvent = updated?.events.at(-1) as { operator?: string };
+    expect(lastEvent.operator).not.toBe('gate-verifier');
+  });
+
+  it('a genuine verifier-originated pass (non-mirror gate.verify report, operator-approved) is still suppressed to advisory-only', async () => {
+    const item = makeGateItem({ classification: 'Human-Observation' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'gate.verify',
+      projectId: 'proj-a',
+      payload: {
+        gateItemId: item.id,
+        disposition: 'pass',
+        evidence: { basis: 'operational', note: 'headless check looks fine' },
+      },
+    });
+    expect(staged.status).toBe(201);
+
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(200);
+
+    const updated = getItem(item.id);
+    expect(updated?.state).toBe(item.state);
+    expect(updated?.currentDisposition).toBeUndefined();
+    const lastEvent = updated?.events.at(-1) as { operator?: string };
+    expect(lastEvent.operator).toBe('gate-verifier');
+  });
+
+  it('after an operator-supplied mirror pass, the reconciler does not re-stage a mirror for that item', async () => {
+    const item = makeGateItem({
+      classification: 'Human-Observation',
+      milestone: 'M13',
+    });
+    setSourceMergeCommit(item.id, 'notion:abc', 'sha1');
+    setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
+    await reconcileGateRunnability('sha1', { project: 'proj-a' });
+
+    const app = makeApp();
+    const agent = supertest(app);
+    configureGateItemMirrorSink({
+      stageMirror(mirrorItem) {
+        stageIntent(
+          'gate.verify',
+          { gateItemId: mirrorItem.id, origin: 'mirror' },
+          mirrorItem.project,
+          null,
+          null,
+          `Human-Observation: ${mirrorItem.text}`,
+          null,
+          null,
+          mirrorItem.milestone,
+          null,
+        );
+      },
+      retireMirror() {},
+    });
+
+    const staged = reconcileHumanObservationMirrors();
+    expect(staged.staged).toEqual([item.id]);
+    const mirrorRow = db
+      .prepare(
+        `SELECT id FROM staged_intent
+         WHERE kind = 'gate.verify' AND json_extract(payload, '$.gateItemId') = ?`,
+      )
+      .get(item.id) as { id: string };
+
+    const applied = await agent
+      .post(`/api/staged-intents/${mirrorRow.id}/apply`)
+      .send({
+        mirrorDisposition: 'pass',
+        mirrorEvidence: { note: 'observed the correct rendering' },
+      });
+    expect(applied.status).toBe(200);
+    expect(getItem(item.id)?.state).toBe('pass');
+
+    const second = reconcileHumanObservationMirrors();
+    expect(second.staged).toEqual([]);
   });
 });

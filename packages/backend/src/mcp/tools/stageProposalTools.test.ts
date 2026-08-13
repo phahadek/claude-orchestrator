@@ -27,6 +27,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerStageProposalTools } from './stageProposalTools';
+import { CODE_INTENT_KINDS } from '../../planning/planningIntentKinds';
 import { getStagedIntent, listStagedIntentsByGroup } from '../../db/queries';
 import {
   gateContributionDecisionSchema,
@@ -77,7 +78,7 @@ beforeEach(() => {
 });
 
 describe('stage-proposal MCP tools — registration', () => {
-  it('registers exactly the 18 stage-proposal tool names', async () => {
+  it('registers exactly the 21 stage-proposal tool names', async () => {
     const { client, close } = await connectedClient();
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -91,6 +92,7 @@ describe('stage-proposal MCP tools — registration', () => {
         'intent.withdraw',
         'journal.setState',
         'notion.pageEdit',
+        'ops.prIntent',
         'planning.noOp',
         'review.dispute',
         'seed.stage',
@@ -100,9 +102,22 @@ describe('stage-proposal MCP tools — registration', () => {
         'task.setDependsOn',
         'task.setProperties',
         'task.setStatus',
+        'task.setType',
         'task.updateBody',
+        'test.request',
       ].sort(),
     );
+    await close();
+  });
+
+  it('a standard/review (code) session, scoped to CODE_INTENT_KINDS, registers exactly review.dispute and test.request — task.setStatus, arch.createUnit, and journal.setState are absent', async () => {
+    const { client, close } = await connectedClient(CODE_INTENT_KINDS);
+    const { tools } = await client.listTools();
+    const names = tools.map((t) => t.name).sort();
+    expect(names).toEqual([...CODE_INTENT_KINDS].sort());
+    expect(names).not.toContain('task.setStatus');
+    expect(names).not.toContain('arch.createUnit');
+    expect(names).not.toContain('journal.setState');
     await close();
   });
 
@@ -145,7 +160,7 @@ describe('stage-proposal MCP tools — delegation', () => {
     const { client, close } = await connectedClient();
     const result = await client.callTool({
       name: 'task.create',
-      arguments: { payload: { title: 'New task' } },
+      arguments: { payload: { title: 'New task', priority: '🔴 High' } },
     });
     const intent = parseIntentResult(
       result as { content: Array<{ type: string; text?: string }> },
@@ -154,6 +169,40 @@ describe('stage-proposal MCP tools — delegation', () => {
     expect(intent.projectId).toBe(PROJECT_ID);
     expect(intent.sessionId).toBe(SESSION_ID);
     expect(getStagedIntent(intent.id as string)).toBeTruthy();
+    await close();
+  });
+
+  it('task.create rejects a payload with no priority, naming the accepted values', async () => {
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'task.create',
+      arguments: { payload: { title: 'New task' } },
+    })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(result.isError).toBe(true);
+    const text = result.content[0]?.text ?? '';
+    expect(text).toMatch(/priority/);
+    expect(text).toMatch(/🔴 High/);
+    expect(text).toMatch(/🟡 Medium/);
+    expect(text).toMatch(/🟢 Low/);
+    await close();
+  });
+
+  it("task.create rejects a priority outside the board's option set", async () => {
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'task.create',
+      arguments: { payload: { title: 'New task', priority: 'P1' } },
+    })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(result.isError).toBe(true);
+    const text = result.content[0]?.text ?? '';
+    expect(text).toMatch(/priority/);
+    expect(text).toMatch(/🔴 High/);
     await close();
   });
 
@@ -367,7 +416,9 @@ describe('stage-proposal MCP tools — schema validation', () => {
     const body = '## Summary\nDo the thing.';
     const result = await client.callTool({
       name: 'task.create',
-      arguments: { payload: { title: 'New task', body } },
+      arguments: {
+        payload: { title: 'New task', body, priority: '🟡 Medium' },
+      },
     });
     const intent = parseIntentResult(
       result as { content: Array<{ type: string; text?: string }> },
@@ -385,6 +436,43 @@ describe('stage-proposal MCP tools — schema validation', () => {
     expect(createTool!.description).not.toMatch(
       /set separately via task\.updateBody/i,
     );
+    await close();
+  });
+
+  it('task.setType stages a task.setType intent carrying taskId/type', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'task.setType',
+      arguments: { payload: { taskId: 't-1', type: '📐 Design' } },
+    });
+    const intent = parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(intent.kind).toBe('task.setType');
+    expect(getStagedIntent(intent.id as string)).toBeTruthy();
+    await close();
+  });
+
+  it('task.setType rejects a Type outside the closed vocabulary task.create validates against', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'task.setType',
+      arguments: { payload: { taskId: 't-1', type: 'Not-A-Type' } },
+    });
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    await close();
+  });
+
+  it('the task.setProperties tool description no longer claims Type has its own registered tool while none exists — it does now', async () => {
+    const { client, close } = await connectedClient();
+    const { tools } = await client.listTools();
+    const setPropertiesTool = tools.find(
+      (t) => t.name === 'task.setProperties',
+    );
+    const setTypeTool = tools.find((t) => t.name === 'task.setType');
+    expect(setPropertiesTool?.description).toBeDefined();
+    expect(setTypeTool).toBeDefined();
+    expect(setPropertiesTool!.description).toMatch(/Type have their own tools/);
     await close();
   });
 
@@ -413,7 +501,9 @@ describe('stage-proposal MCP tools — schema validation', () => {
     const { client, close } = await connectedClient();
     const created = await client.callTool({
       name: 'task.create',
-      arguments: { payload: { title: 'A mistaken proposal' } },
+      arguments: {
+        payload: { title: 'A mistaken proposal', priority: '🟢 Low' },
+      },
     });
     const intent = parseIntentResult(
       created as { content: Array<{ type: string; text?: string }> },
@@ -446,7 +536,9 @@ describe('stage-proposal MCP tools — schema validation', () => {
     const { client, close } = await connectedClient();
     const created = await client.callTool({
       name: 'task.create',
-      arguments: { payload: { title: "Someone else's proposal" } },
+      arguments: {
+        payload: { title: "Someone else's proposal", priority: '🔴 High' },
+      },
     });
     const intent = parseIntentResult(
       created as { content: Array<{ type: string; text?: string }> },
@@ -588,7 +680,7 @@ describe('stage-proposal MCP tools — envelope fields misplaced inside payload'
 
   it('every tool registered through envelope() rejects an unknown payload key', async () => {
     const ENVELOPE_TOOL_PAYLOADS: Record<string, Record<string, unknown>> = {
-      'task.create': { title: 'New task' },
+      'task.create': { title: 'New task', priority: '🔴 High' },
       'task.setStatus': { taskId: 't-1', status: 'Ready' },
       'task.setDependsOn': { taskId: 't-1', dependsOn: [] },
       'task.updateBody': {
@@ -602,6 +694,7 @@ describe('stage-proposal MCP tools — envelope fields misplaced inside payload'
         },
       },
       'task.setProperties': { taskId: 't-1', patch: {} },
+      'task.setType': { taskId: 't-1', type: '📐 Design' },
       'gate.accrete': {
         sourceTask: { id: 't-1', title: 'Task', project: 'p', milestone: 'm' },
         items: [{ text: 'an item' }],
@@ -661,14 +754,9 @@ describe('stage-proposal MCP tools — envelope fields misplaced inside payload'
 });
 
 describe('gate.accrete — classification tier guidance', () => {
-  const REAL_TIERS = [
-    'Read-Only',
-    'Prod-Mutating',
-    'Opportunistic',
-    'Human-Observation',
-  ];
+  const REAL_TIERS = ['Read-Only', 'Prod-Mutating', 'Human-Observation'];
 
-  it('the batch-level classification field exposes a non-empty description naming all four real tiers', () => {
+  it('the batch-level classification field exposes a non-empty description naming all three real tiers', () => {
     const description = gateContributionDecisionSchema.description;
     expect(description).toBeTruthy();
     for (const tier of REAL_TIERS) {

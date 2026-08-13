@@ -370,6 +370,31 @@ describe('SessionCard', () => {
   });
 });
 
+// ── model-badge ───────────────────────────────────────────────────────────
+describe('SessionCard model-badge', () => {
+  it('renders model and effort when effort is present', () => {
+    const session = makeSession({
+      model: 'claude-sonnet-5',
+      effort: 'high',
+    });
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
+    expect(screen.getByText('sonnet-5 · high')).toBeDefined();
+  });
+
+  it('falls back to model-only when effort is null', () => {
+    const session = makeSession({
+      model: 'claude-sonnet-5',
+      effort: null,
+    });
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
+    expect(screen.getByText('sonnet-5')).toBeDefined();
+  });
+});
+
 // ── StatusBadge — review sessionType ─────────────────────────────────────────
 describe('StatusBadge', () => {
   it('renders 🔍 Review badge when sessionType is review', () => {

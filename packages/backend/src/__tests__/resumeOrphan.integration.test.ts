@@ -156,6 +156,8 @@ vi.mock('../session/orchestrator-config', () => ({
     mcp_servers: {},
   })),
   getSessionAllowedTools: vi.fn(() => []),
+  getSessionAddDirs: vi.fn(() => []),
+  getTestCommandDenyPatterns: vi.fn(() => []),
 }));
 
 vi.mock('../session/orchestrator-claudemd', () => ({
@@ -213,6 +215,8 @@ vi.mock('../db/queries', () =>
     setContextOccupancy: vi.fn(),
     insertSessionAudit: vi.fn(),
     setSessionModel: vi.fn(),
+    setSessionModelSettingKey: vi.fn(),
+    setSessionEffortSettingKey: vi.fn(),
     getPRBySessionId: vi.fn(() => null),
     setHeadSha: vi.fn(),
     // Required by getCorporateMode() which is called unconditionally in resumeOrphanSessions().
@@ -614,9 +618,15 @@ describe('resumeOrphanSessions() — planning-session resumability pre-check', (
       worktree_path: null,
     });
     vi.mocked(queries.getSessionsByStatus).mockReturnValue([planning]);
-    // Only the project dir exists on disk (there is no worktree for this row).
+    // The project dir exists on disk (there is no worktree for this row), and
+    // so does the on-disk system-prompt file dispatch would have written —
+    // resume reuses it rather than rebuilding, see
+    // _buildAndWriteResumeSystemPrompt.
     vi.mocked(fs.existsSync).mockImplementation(
-      (p) => String(p) === '/fake/project',
+      (p) =>
+        String(p) === '/fake/project' ||
+        String(p) ===
+          '/fake/project/.claude/session-prompts/planning-session.md',
     );
     vi.mocked(execSync).mockReturnValue('');
 
@@ -660,9 +670,13 @@ describe('resumeOrphanSessions() — planning-session resumability pre-check', (
   });
 
   it('fails a planning session whose project directory is genuinely missing, distinguishing it from "no path recorded"', async () => {
+    // 'design' (checkout-only planning) — not 'ops', which now gets a real
+    // per-session worktree of its own (see usesWorktree in sessionPredicates.ts)
+    // and would resolve worktree_path: null through the standard-session
+    // branch instead of the projectDir fallback this test exercises.
     const planning = makeRunningSession({
       session_id: 'planning-no-project-dir',
-      session_type: 'ops',
+      session_type: 'design',
       worktree_path: null,
     });
     vi.mocked(queries.getSessionsByStatus).mockReturnValue([planning]);
@@ -746,8 +760,14 @@ describe('resumeOrphanSessions() — planning-session resumability pre-check', (
       planning,
       standard,
     ]);
+    // The on-disk system-prompt file dispatch would have written for the
+    // planning session must also exist, or _buildAndWriteResumeSystemPrompt
+    // fails loud rather than resuming — see the other test in this
+    // describe block.
     vi.mocked(fs.existsSync).mockImplementation(
-      (p) => String(p) === '/fake/project',
+      (p) =>
+        String(p) === '/fake/project' ||
+        String(p) === '/fake/project/.claude/session-prompts/mixed-planning.md',
     );
 
     const sm = new SessionManager();

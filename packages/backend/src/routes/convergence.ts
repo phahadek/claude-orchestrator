@@ -70,7 +70,9 @@ export function createConvergenceRouter(
 
         const limitParam = req.query.limit;
         const sinceParam = req.query.since;
-        const window: { limit?: number; sinceTs?: string } = {};
+        const untilParam = req.query.until;
+        const window: { limit?: number; sinceTs?: string; untilTs?: string } =
+          {};
         if (typeof limitParam === 'string' && limitParam.trim() !== '') {
           const parsedLimit = Number(limitParam);
           if (Number.isFinite(parsedLimit) && parsedLimit > 0) {
@@ -79,9 +81,21 @@ export function createConvergenceRouter(
         }
         if (typeof sinceParam === 'string' && sinceParam.trim() !== '') {
           window.sinceTs = sinceParam;
+        } else if (typeof row.createdAt === 'number') {
+          // Default the window to the milestone's own lifetime — from when
+          // it was added to Orchestrator to when it was wrapped (or now) —
+          // rather than an arbitrary fixed row count.
+          window.sinceTs = new Date(row.createdAt).toISOString();
+        }
+        if (typeof untilParam === 'string' && untilParam.trim() !== '') {
+          window.untilTs = untilParam;
+        } else if (typeof row.wrappedAt === 'number') {
+          window.untilTs = new Date(row.wrappedAt).toISOString();
         }
         const hasWindow =
-          window.limit !== undefined || window.sinceTs !== undefined;
+          window.limit !== undefined ||
+          window.sinceTs !== undefined ||
+          window.untilTs !== undefined;
 
         res.json(
           listConvergenceSnapshotHistory(

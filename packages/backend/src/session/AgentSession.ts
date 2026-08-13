@@ -7,6 +7,7 @@ import { getCorporateMode } from '../config/corporateMode';
 import type { GateItemClassification } from '../db/types';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';
+import { routeCredentialFilePath } from '../auth/SessionRouteAuth';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -18,7 +19,11 @@ import {
   incrementTokens,
   incrementCompactionCount,
   setContextOccupancy,
+  incrementCacheTokens,
   setSessionModel,
+  setSessionEffort,
+  setSessionModelSettingKey,
+  setSessionEffortSettingKey,
   setSessionMetadata,
   getPRBySessionId,
   setHeadSha,
@@ -36,6 +41,7 @@ import {
   getGrantedCapabilities,
   setTaskPauseReason,
   setHumanMergeOnly,
+  getLatestTestRequestRun,
 } from '../db/queries';
 import { groomSessionConcludedWithDecision } from '../orchestration/planningDecisionKinds';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
@@ -47,6 +53,7 @@ import {
   buildValidationComment,
 } from '../github/PRBodyValidator';
 import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
+import { computeWholeTreeContentHash } from './analyzeGating';
 import {
   loadOrchestratorConfig,
   getSessionAllowedTools,
@@ -65,8 +72,12 @@ import {
   isGateVerifySession,
   opensPr,
 } from './sessionPredicates';
-import { stageIntent } from '../routes/stagedIntents';
+import { stageIntent, type StagedIntent } from '../routes/stagedIntents';
 import { getGateItem } from '../gate/gateService';
+import {
+  parseDeployAgenticTaskId,
+  type AgenticVerdict,
+} from '../deploy/DeployOrchestrator';
 import {
   VALID_EVENT_TYPES,
   SILENT_SKIP_TYPES,
@@ -80,6 +91,7 @@ import {
   pauseReasonFromCanonical,
   serializePauseReason,
 } from '../db/pauseReason';
+import { matchesWorkflowScopeDenylist } from './workflowScopeDenylist';
 import type {
   ParsedDispositionItem,
   DispositionsParsedPayload,
@@ -93,18 +105,13 @@ const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 /**
  * Classifications a gate-verify session may propose reclassifying its item
  * to — a self-correction channel, not a free-form retag. Human-Observation
- * and needs-triage add oversight (route the item out of auto-run).
- * Opportunistic is also permitted: a gate.verify report is staged as a
- * normal intent and disposed by an operator, so a verifier proposing
- * Opportunistic is a proposal an operator approves, not a self-applied
- * escalation back into auto-run — and MAX_VERIFIER_RECLASSIFY_ATTEMPTS
- * independently bounds ping-pong. Read-Only and Prod-Mutating remain off
- * limits: a verifier can never propose those auto-run tiers.
+ * and needs-triage add oversight (route the item out of auto-run) and are
+ * the only targets a verifier may propose; Read-Only and Prod-Mutating
+ * remain off limits — a verifier can never propose either auto-run tier.
  */
 export const VERIFIER_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Human-Observation',
   'needs-triage',
-  'Opportunistic',
 ]);
 
 export interface GateVerifyReclassifyProposal {
@@ -114,7 +121,7 @@ export interface GateVerifyReclassifyProposal {
 
 export interface GateVerifyDisposition {
   gateItemId: string;
-  disposition: 'pass' | 'fail' | 'needs-setup';
+  disposition: 'pass' | 'fail' | 'needs-setup' | 'not-yet-triggerable';
   evidence?: unknown;
   /** The session's self-correction: "this item is mis-classified" — see gateItemVerifier's report contract. */
   reclassify?: GateVerifyReclassifyProposal;
@@ -123,6 +130,16 @@ export interface GateVerifyDisposition {
 export interface GateVerifyDispositionPayload {
   sessionId: string;
   disposition: GateVerifyDisposition;
+}
+
+/** Emitted by recordDeployAgenticVerdict — the deploy-agentic-step spawner's dispatch settlement signal. */
+export interface DeployAgenticVerdictPayload {
+  sessionId: string;
+  projectId: string;
+  runId: string;
+  stepId: string;
+  verdict: AgenticVerdict;
+  detail?: string;
 }
 
 /** Maximum number of rebase nudges sent to a session before escalating to needs_attention. */
@@ -467,12 +484,17 @@ export class AgentSession extends EventEmitter {
   /**
    * True while a turn is in flight (from the moment input is sent — initial
    * prompt or a follow-up sendMessage — until the matching 'result' event is
-   * processed). Starts true: a freshly constructed session is always about
-   * to begin its first turn. Used by SessionManager.enqueueFeedback to decide
-   * whether a live in-map session can be woken immediately or must wait for
-   * the next turn boundary.
+   * processed). Starts true for a freshly constructed session that carries
+   * an initial prompt, since it is always about to begin its first turn.
+   * Exception: a prompt-less respawn (hasInitialPrompt=false — used by
+   * respawnSession for every respawn path, since the CLI/SDK is invoked with
+   * --resume and no prompt argument, see AgentSession.run()'s
+   * `resumeIdForSpawn ? undefined : initialPrompt`) starts false — no turn
+   * begins until something explicitly sends input. Used by
+   * SessionManager.enqueueFeedback to decide whether a live in-map session
+   * can be woken immediately or must wait for the next turn boundary.
    */
-  private _turnInFlight = true;
+  private _turnInFlight: boolean;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -533,9 +555,21 @@ export class AgentSession extends EventEmitter {
      */
     private readonly launchModel?: string,
     private readonly launchEffort?: string,
+    /**
+     * True when this construction carries an initial prompt that will
+     * actually be sent to the runner on the first spawn — i.e. a fresh
+     * start, not a --resume respawn (see AgentSession.run()'s
+     * `resumeIdForSpawn ? undefined : initialPrompt`). Every respawnSession
+     * call in SessionManager passes false here: it always constructs with
+     * resumeSessionId set, so the runner is invoked with --resume and no
+     * prompt, and no turn begins until something explicitly sends input.
+     * Defaults to true so existing fresh-start call sites are unaffected.
+     */
+    hasInitialPrompt: boolean = true,
   ) {
     super();
     this.runner = runner ?? new CliSessionRunner(sessionId);
+    this._turnInFlight = hasInitialPrompt;
   }
 
   /** Resolve the per-project task backend, preferring the test override when present. */
@@ -553,8 +587,43 @@ export class AgentSession extends EventEmitter {
 
     const initialPrompt =
       this.customPrompt ??
-      (isPlanningSession(this.sessionType)
+      (this.sessionType === 'ops'
         ? `
+You are a Claude Code session managed by Claude Code Orchestrator, running a
+dispatched ops session.
+
+## Task
+Task page: ${this.taskUrl}
+
+The ops procedure, digest, and all rules are in your system prompt. Run the
+workflow it describes directly.
+
+## Lifecycle
+1. Follow the injected ops procedure end to end for this single task.
+2. Stage every proposed change via the staged-intent transport described in
+   your system prompt. Opening a PR requires first staging and getting an
+   operator-approved PR-intent declaration — see your system prompt for the
+   staged-intent kind. Never open a PR without one.
+3. If you hold the PR-open tool grant and open a PR, WAIT after opening it —
+   do not end the turn. The dashboard will send review feedback as
+   follow-up messages; address findings by pushing additional commits, then
+   wait again.
+4. Otherwise, when you reach a natural stopping point (every open item
+   presented and either staged or explicitly deferred), end the turn
+   instead of waiting.
+
+## What the dashboard handles (do NOT do these yourself)
+- Applying staged intents — a human reviews and applies them.
+- Task status updates — the backend manages these.
+- PR review — automated after you publish a PR.
+
+## Rules
+- One task per session. No scope creep.
+- Never commit to the base branch directly.
+- Never merge your own PR.
+`.trim()
+        : isPlanningSession(this.sessionType)
+          ? `
 You are a Claude Code session managed by Claude Code Orchestrator, running a
 dispatched planning session.
 
@@ -581,7 +650,7 @@ the workflow it describes directly.
 - This session has no worktree and no feature branch — never attempt to
   commit, branch, or open a PR.
 `.trim()
-        : `
+          : `
 You are a Claude Code session managed by Claude Code Orchestrator.
 
 ## Task
@@ -619,28 +688,110 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     const modelSetting =
       this.launchModel ||
-      (this.sessionType === 'ops'
-        ? isGateVerifySession(this.taskId)
-          ? runtimeSettings.gate_verify_session_model ||
-            runtimeSettings.ops_session_model
-          : runtimeSettings.ops_session_model
-        : isPlanningSession(this.sessionType)
-          ? runtimeSettings.planning_session_model
-          : isCodeSession(this.sessionType)
-            ? runtimeSettings.code_session_model
-            : runtimeSettings.review_session_model);
+      (isGateVerifySession(this.taskId)
+        ? runtimeSettings.gate_verify_session_model ||
+          runtimeSettings.ops_session_model
+        : this.sessionType === 'ops'
+          ? runtimeSettings.ops_session_model
+          : this.sessionType === 'groom'
+            ? runtimeSettings.groom_session_model ||
+              runtimeSettings.planning_session_model
+            : this.sessionType === 'design'
+              ? runtimeSettings.design_session_model ||
+                runtimeSettings.planning_session_model
+              : this.sessionType === 'docs'
+                ? runtimeSettings.docs_session_model ||
+                  runtimeSettings.planning_session_model
+                : this.sessionType === 'split'
+                  ? runtimeSettings.planning_session_model
+                  : isCodeSession(this.sessionType)
+                    ? runtimeSettings.code_session_model
+                    : runtimeSettings.review_session_model);
     const effortSetting =
       this.launchEffort ||
-      (this.sessionType === 'ops'
-        ? isGateVerifySession(this.taskId)
-          ? runtimeSettings.gate_verify_session_effort ||
-            runtimeSettings.ops_session_effort
-          : runtimeSettings.ops_session_effort
-        : isPlanningSession(this.sessionType)
-          ? runtimeSettings.planning_session_effort
-          : isCodeSession(this.sessionType)
-            ? runtimeSettings.code_session_effort
-            : runtimeSettings.review_session_effort);
+      (isGateVerifySession(this.taskId)
+        ? runtimeSettings.gate_verify_session_effort ||
+          runtimeSettings.ops_session_effort
+        : this.sessionType === 'ops'
+          ? runtimeSettings.ops_session_effort
+          : this.sessionType === 'groom'
+            ? runtimeSettings.groom_session_effort ||
+              runtimeSettings.planning_session_effort
+            : this.sessionType === 'design'
+              ? runtimeSettings.design_session_effort ||
+                runtimeSettings.planning_session_effort
+              : this.sessionType === 'docs'
+                ? runtimeSettings.docs_session_effort ||
+                  runtimeSettings.planning_session_effort
+                : this.sessionType === 'split'
+                  ? runtimeSettings.planning_session_effort
+                  : isCodeSession(this.sessionType)
+                    ? runtimeSettings.code_session_effort
+                    : runtimeSettings.review_session_effort);
+    if (effortSetting) {
+      setSessionEffort(this.sessionId, effortSetting);
+    }
+
+    // Which settings key each resolved value actually came from — dedicated
+    // key vs. shared fallback — so provenance is recoverable even when the
+    // resolved values happen to be identical across keys (see AgentSession
+    // model/effort resolution above; mirrors that same ternary structure).
+    const modelSettingKey = this.launchModel
+      ? null
+      : isGateVerifySession(this.taskId)
+        ? runtimeSettings.gate_verify_session_model
+          ? 'gate_verify_session_model'
+          : 'ops_session_model'
+        : this.sessionType === 'ops'
+          ? 'ops_session_model'
+          : this.sessionType === 'groom'
+            ? runtimeSettings.groom_session_model
+              ? 'groom_session_model'
+              : 'planning_session_model'
+            : this.sessionType === 'design'
+              ? runtimeSettings.design_session_model
+                ? 'design_session_model'
+                : 'planning_session_model'
+              : this.sessionType === 'docs'
+                ? runtimeSettings.docs_session_model
+                  ? 'docs_session_model'
+                  : 'planning_session_model'
+                : this.sessionType === 'split'
+                  ? 'planning_session_model'
+                  : isCodeSession(this.sessionType)
+                    ? 'code_session_model'
+                    : 'review_session_model';
+    const effortSettingKey = this.launchEffort
+      ? null
+      : isGateVerifySession(this.taskId)
+        ? runtimeSettings.gate_verify_session_effort
+          ? 'gate_verify_session_effort'
+          : 'ops_session_effort'
+        : this.sessionType === 'ops'
+          ? 'ops_session_effort'
+          : this.sessionType === 'groom'
+            ? runtimeSettings.groom_session_effort
+              ? 'groom_session_effort'
+              : 'planning_session_effort'
+            : this.sessionType === 'design'
+              ? runtimeSettings.design_session_effort
+                ? 'design_session_effort'
+                : 'planning_session_effort'
+              : this.sessionType === 'docs'
+                ? runtimeSettings.docs_session_effort
+                  ? 'docs_session_effort'
+                  : 'planning_session_effort'
+                : this.sessionType === 'split'
+                  ? 'planning_session_effort'
+                  : isCodeSession(this.sessionType)
+                    ? 'code_session_effort'
+                    : 'review_session_effort';
+    if (modelSettingKey) {
+      setSessionModelSettingKey(this.sessionId, modelSettingKey);
+    }
+    if (effortSettingKey) {
+      setSessionEffortSettingKey(this.sessionId, effortSettingKey);
+    }
 
     // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
     // Instance fields _escalationModel and _escalationDisableAutoCompact hold these
@@ -733,6 +884,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             resolveProjectTaskSource(this.projectId),
           ),
           sessionType: this.sessionType,
+          granted: getGrantedCapabilities(this.sessionId),
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
           systemPromptFilePath: this.systemPromptFilePath,
@@ -750,6 +902,17 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             // mcpConfigPath above), authenticated by this same per-session
             // stage credential.
             ORCHESTRATOR_STAGE_TOKEN: stageToken,
+            // Path to this session's route-client credential file (see
+            // SessionRouteAuth.ts) — the sanctioned route-client scripts
+            // (ops-client.mjs, gate-state-client.mjs, staged-intents-client.mjs,
+            // etc.) read their bearer token from this file instead of the
+            // shared $ORCHESTRATOR_DEVICE_TOKEN, so a granted
+            // Bash(node packages/backend/scripts/<x>-client.mjs ...)
+            // capability can actually authenticate. A path, never the secret
+            // itself, crosses into the child's env.
+            ORCHESTRATOR_ROUTE_CREDENTIAL_FILE: routeCredentialFilePath(
+              this.sessionId,
+            ),
           },
         },
         (event) => {
@@ -1124,7 +1287,24 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       'for manual attention.';
     if (this.sessionManager) {
       try {
-        this.sessionManager.send(this.sessionId, pauseMessage);
+        const delivered = this.sessionManager.send(
+          this.sessionId,
+          pauseMessage,
+        );
+        if (!delivered) {
+          logger.warn(
+            `[AgentSession] pause nudge not confirmed delivered for ${this.sessionId}`,
+          );
+          recordEvent({
+            event_type: 'session_nudge_delivery_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            payload: {
+              session_id: this.sessionId,
+              reason: 'api_overloaded_exhausted',
+            },
+          });
+        }
       } catch (err) {
         logger.warn(
           `[AgentSession] send failed for ${this.sessionId}: ${(err as Error).message}`,
@@ -1154,7 +1334,21 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     if (this.sessionManager) {
       try {
-        this.sessionManager.send(this.sessionId, pauseMessage);
+        const delivered = this.sessionManager.send(
+          this.sessionId,
+          pauseMessage,
+        );
+        if (!delivered) {
+          logger.warn(
+            `[AgentSession] pause nudge not confirmed delivered for ${this.sessionId}`,
+          );
+          recordEvent({
+            event_type: 'session_nudge_delivery_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            payload: { session_id: this.sessionId, reason: 'api_overloaded' },
+          });
+        }
       } catch (err) {
         logger.warn(
           `[AgentSession] send failed for ${this.sessionId}: ${(err as Error).message}`,
@@ -1455,7 +1649,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         // so the subprocess exits and runner.run() returns, allowing the escalation
         // path to fire.
         if (event.is_error === true) {
-          this.runner.endSession();
+          Promise.resolve(this.runner.endSession()).catch((err) => {
+            sessionLog(
+              this.sessionId,
+              `endSession (context-overflow close) failed: ${(err as Error).message}`,
+            );
+          });
         }
       }
     }
@@ -1559,6 +1758,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             contextOccupancyTokens: occupancy,
             contextOccupancyFraction:
               occupancy / AgentSession.contextWindowForModel(this.model),
+            cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+            cacheCreationTokens: usage.cache_creation_input_tokens ?? 0,
           });
         }
       }
@@ -1572,7 +1773,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // assistant-event handler above keeps context_occupancy_tokens correct.
     if (rawType === 'result') {
       const usageData = event.usage as
-        | { input_tokens?: number; output_tokens?: number }
+        | {
+            input_tokens?: number;
+            output_tokens?: number;
+            cache_read_input_tokens?: number;
+            cache_creation_input_tokens?: number;
+          }
         | undefined;
       const inputTokens = usageData?.input_tokens ?? 0;
       const outputTokens = usageData?.output_tokens ?? 0;
@@ -1580,6 +1786,15 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         this.totalInputTokens += inputTokens;
         this.totalOutputTokens += outputTokens;
         incrementTokens(this.sessionId, inputTokens, outputTokens);
+      }
+      const cacheReadTokens = usageData?.cache_read_input_tokens ?? 0;
+      const cacheCreationTokens = usageData?.cache_creation_input_tokens ?? 0;
+      if (cacheReadTokens > 0 || cacheCreationTokens > 0) {
+        incrementCacheTokens(
+          this.sessionId,
+          cacheReadTokens,
+          cacheCreationTokens,
+        );
       }
       this.broadcast({
         type: 'session_updated',
@@ -1815,6 +2030,91 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       return;
     }
 
+    // Gate: require a passing test.request cache entry for this exact tree
+    // before pushing/opening a PR. This is the sole path that pushes a
+    // branch and opens a PR for a standard coding session — create_pull_request
+    // itself is never in a standard session's tool allowlist — so this is
+    // the one place that needs to enforce it.
+    let contentHash: string | null = null;
+    try {
+      contentHash = await computeWholeTreeContentHash(this.worktreePath);
+    } catch (e) {
+      logger.warn(
+        `[AgentSession] worktree content hash failed for PR gate: ${(e as Error).message}`,
+      );
+    }
+    const latestRun = contentHash
+      ? getLatestTestRequestRun(this.projectId, contentHash)
+      : undefined;
+    if (!latestRun || latestRun.state !== 'passed') {
+      sessionLog(
+        this.sessionId,
+        'PR creation blocked: no passing test.request cache entry for the current tree',
+      );
+      recordEvent({
+        event_type: 'pr_creation_failed',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: {
+          stage: 'test_request_gate',
+          error: 'no passing test.request cache entry for the current tree',
+        },
+      });
+      this.sendMessage(
+        `I can't open a PR yet — there's no passing test.request result recorded for the current ` +
+          `tree. Please request a test run (test.request) for this tree, wait for it to pass, then ` +
+          `re-emit the \`<pr-body>\` marker so I can push and open the PR.`,
+      );
+      return;
+    }
+
+    // Proactive workflow-scope check: diff the branch against base and skip
+    // the doomed push entirely if it touches a credential-ceiling path — the
+    // reactive isWorkflowScopeDenied match below stays in place as a
+    // backstop for whatever this diff-based check misses (e.g. base branch
+    // resolution failures upstream). Fetch the base first: the worktree's
+    // local baseBranch ref only advances when someone merges/deploys into
+    // the shared repo it shares refs with, so a stale local ref can make a
+    // three-dot diff attribute other PRs' merged commits to this branch.
+    try {
+      execSync(`git fetch origin ${baseBranch}`, {
+        cwd: this.worktreePath,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      });
+      const changedFiles = execSync(
+        `git diff --name-only origin/${baseBranch}...${branch}`,
+        { cwd: this.worktreePath, encoding: 'utf-8', stdio: 'pipe' },
+      )
+        .split('\n')
+        .map((f) => f.trim())
+        .filter(Boolean);
+      if (matchesWorkflowScopeDenylist(changedFiles)) {
+        setSessionPauseReason(
+          this.sessionId,
+          serializePauseReason(
+            pauseReasonFromCanonical(
+              'workflow_scope_denied',
+              'This branch edits .github/workflows/ but the auto-dispatch PAT lacks the `workflow` scope. ' +
+                'Push requires a workflow-scoped credential; land this change via an interactive ' +
+                'remote-control session (its `gh` credential carries `workflow` scope), or once ' +
+                'available, stage the ops PR-creation intent path instead.',
+            ),
+          ),
+        );
+        return;
+      }
+    } catch (e) {
+      // Diff computation failed (e.g. base ref not fetched locally) — fall
+      // through to the push attempt; the reactive isWorkflowScopeDenied
+      // match below still catches an actual workflow-scope rejection.
+      logger.warn(
+        `[AgentSession] proactive workflow-scope diff check failed: ${(e as Error).message}`,
+      );
+    }
+
     // Push the branch to origin so GitHub can find it when createPR is called.
     // Re-pushing an already-current branch is a harmless fast-forward no-op.
     try {
@@ -1849,7 +2149,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             pauseReasonFromCanonical(
               'workflow_scope_denied',
               'This task edits .github/workflows/ but the auto-dispatch PAT lacks the `workflow` scope. ' +
-                'Push requires a workflow-scoped credential; such tasks should be typed as 🛠️ Tooling and landed interactively.',
+                'Push requires a workflow-scoped credential; land this change via an interactive ' +
+                'remote-control session (its `gh` credential carries `workflow` scope), or once ' +
+                'available, stage the ops PR-creation intent path instead.',
             ),
           ),
         );
@@ -2850,15 +3152,30 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * dedup is needed here — unlike recordReviewDisposition/
    * recordVerifiedFlakyDisposition above, a repeat call with the same
    * disposition after a rejection must be allowed to re-stage.
+   *
+   * gateItemId must exact-match an existing gate_item row — getGateItem does
+   * a plain `WHERE id = ?` lookup, so a truncated/short-form id (not
+   * guaranteed unique on these boards, whose ids share long structured
+   * prefixes) simply misses and is rejected here rather than silently
+   * staging with milestone null. Returns the staged intent so the
+   * gate.verify MCP tool can echo its id and recorded milestone back to the
+   * caller — the same shape journal.setState already echoes.
    */
-  recordGateVerifyDisposition(disposition: GateVerifyDisposition): void {
+  recordGateVerifyDisposition(
+    disposition: GateVerifyDisposition,
+  ): StagedIntent {
     const item = getGateItem(disposition.gateItemId);
+    if (!item) {
+      throw new Error(
+        `no gate item "${disposition.gateItemId}" — gateItemId must be the full gate_item id`,
+      );
+    }
     const summary =
       `Gate item ${disposition.gateItemId}: reported ${disposition.disposition}` +
       (disposition.reclassify
         ? ` (proposes reclassify -> ${disposition.reclassify.to})`
         : '');
-    stageIntent(
+    const staged = stageIntent(
       'gate.verify',
       disposition,
       this.projectId,
@@ -2867,7 +3184,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       summary,
       null,
       null,
-      item?.milestone ?? null,
+      item.milestone,
       null,
     );
     const payload: GateVerifyDispositionPayload = {
@@ -2875,6 +3192,41 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       disposition,
     };
     this.emit('gate_verify_disposition', payload);
+    return staged;
+  }
+
+  /**
+   * Record a deploy-agentic-step verdict delivered via the deploy.verdict
+   * MCP tool. Unlike recordGateVerifyDisposition, this never stages an
+   * intent for an operator to dispose on — the deploy engine gates its next
+   * step directly on this report, so the payload goes straight to the
+   * dispatching spawner (listening for `deploy_agentic_verdict`), which
+   * calls DeployOrchestrator.reportAgenticVerdict() itself. The run/step
+   * this session was dispatched for is recovered from this session's own
+   * `task_id` (`deploy-agentic:<runId>:<stepId>`, see
+   * DeployOrchestrator.buildDeployAgenticTaskId) rather than trusted from
+   * the tool call, so a session cannot report a verdict for any step but
+   * its own.
+   */
+  recordDeployAgenticVerdict(input: {
+    verdict: AgenticVerdict;
+    detail?: string;
+  }): void {
+    const parsed = parseDeployAgenticTaskId(this.taskId);
+    if (!parsed) {
+      throw new Error(
+        `recordDeployAgenticVerdict: session task_id "${this.taskId}" is not a deploy-agentic task`,
+      );
+    }
+    const payload: DeployAgenticVerdictPayload = {
+      sessionId: this.sessionId,
+      projectId: this.projectId,
+      runId: parsed.runId,
+      stepId: parsed.stepId,
+      verdict: input.verdict,
+      detail: input.detail,
+    };
+    this.emit('deploy_agentic_verdict', payload);
   }
 
   /** No-op — CLI does not support mid-session permission approval. */
@@ -2886,10 +3238,20 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   /**
    * Send a follow-up user message to the session.
    * Delegates to the underlying runner (stdin for CLI, message queue for API).
+   *
+   * @returns true if the runner confirmed the message reached the process
+   * (or was queued). _turnInFlight is only set on a confirmed send — a
+   * failed write (e.g. closed stdin on an already-exited process) must not
+   * leave hasActiveTurn() stuck true, or every downstream consumer that
+   * gates on it (enqueueFeedback, pendingApproveTerminal, the attention
+   * signal) would believe a turn is running forever.
    */
-  sendMessage(message: string): void {
-    this._turnInFlight = true;
-    this.runner.sendMessage(message);
+  sendMessage(message: string): boolean {
+    const delivered = this.runner.sendMessage(message);
+    if (delivered) {
+      this._turnInFlight = true;
+    }
+    return delivered;
   }
 
   /**
@@ -2902,23 +3264,69 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   }
 
   /**
-   * Signal a clean session end. Delegates to the underlying runner.
+   * Signal a clean session end. Delegates to the underlying runner, which
+   * verifies the process actually exits and escalates to a forceful kill
+   * if it does not — never touches DB status, only the OS process(es). A
+   * forced escalation is audited here (naming this session and that the
+   * graceful close failed) so a subprocess surviving its session leaves a
+   * trace instead of going unnoticed.
+   *
+   * If the session's row already carries a terminal_completion_reason (set
+   * by e.g. PlanningOrchestrator.markTerminal before it calls this), this
+   * *is* the sanctioned conclusion path — a forced kill that follows is the
+   * reap of a CLI that didn't honor stdin close, not a fault, and must not
+   * be classified as runner_killed_unexpected/session_errored by the run()
+   * loop's own exit handling. hasEnded is set synchronously, before any
+   * await, specifically to win that race: once runner.endSession() sends a
+   * kill signal, run()'s exit-handling continuation is queued as a
+   * microtask ahead of anything after this method's first await, so the
+   * guard has to already be in place before escalation starts, not after.
    */
-  endSession(): void {
-    this.runner.endSession();
+  async endSession(): Promise<void> {
+    const row = getSession(this.sessionId);
+    const concludedCleanly = !!row?.terminal_completion_reason;
+    if (concludedCleanly) {
+      this.hasEnded = true;
+    }
+    const escalated = await this.runner.endSession(concludedCleanly);
+    if (escalated) {
+      recordEvent({
+        event_type: 'session_teardown_escalated',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: null,
+        task_id: this.taskId ?? null,
+        payload: {
+          sessionId: this.sessionId,
+          reason: 'graceful_stdin_close_timed_out',
+          concludedCleanly,
+          terminalCompletionReason: row?.terminal_completion_reason ?? null,
+        },
+      });
+    }
   }
 
-  async kill(): Promise<void> {
+  async kill(opts?: { suppressReap?: boolean }): Promise<void> {
     if (this.isKilling) return;
     this.isKilling = true;
     await this.runner.kill();
     if (!this.hasEnded) {
-      this.sessionManager?.markSessionErrored?.(
-        this.sessionId,
-        'killed',
-        'user_kill',
-        'killed by user request',
-      );
+      if (opts) {
+        this.sessionManager?.markSessionErrored?.(
+          this.sessionId,
+          'killed',
+          'user_kill',
+          'killed by user request',
+          opts,
+        );
+      } else {
+        this.sessionManager?.markSessionErrored?.(
+          this.sessionId,
+          'killed',
+          'user_kill',
+          'killed by user request',
+        );
+      }
       if (!this.hasEnded) {
         // Fallback when sessionManager is absent (e.g. unit tests without a manager)
         updateSessionStatus(this.sessionId, 'killed', Date.now());

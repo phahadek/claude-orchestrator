@@ -169,6 +169,63 @@ describe('parseSection()', () => {
     expect(result).toContain('src/foo.ts');
     expect(result).not.toContain('Implementation Notes');
   });
+
+  it('stops Files at a following "## Notion pages affected" section, an unrecognised heading (task 3b522f91 repro)', () => {
+    const md = [
+      '## Files Changed',
+      '',
+      '- packages/backend/src/foo.ts (update)',
+      '',
+      '## Notion pages affected',
+      '',
+      '- 🏗️ Technical Architecture (already updated by the design task this implements)',
+    ].join('\n');
+    const result = parseSection(md, 'files');
+    expect(result).toContain('packages/backend/src/foo.ts');
+    expect(result).not.toContain('Notion pages affected');
+    expect(result).not.toContain('Technical Architecture');
+  });
+
+  it('stops Files at a following "## Operational seed" section (the renderer-emitted heading)', () => {
+    const md = [
+      '## Files Changed',
+      '',
+      '- packages/backend/src/foo.ts (update)',
+      '',
+      '## Operational seed',
+      '',
+      '- some seed content',
+    ].join('\n');
+    const result = parseSection(md, 'files');
+    expect(result).toContain('packages/backend/src/foo.ts');
+    expect(result).not.toContain('Operational seed');
+    expect(result).not.toContain('some seed content');
+  });
+
+  it('stops at a same-level heading with an invented, unrecognised name', () => {
+    const md = [
+      '## Summary',
+      '',
+      'This is the summary.',
+      '',
+      '## Some Invented Section Nobody Named',
+      '',
+      'unexpected content',
+    ].join('\n');
+    const result = parseSection(md, 'summary');
+    expect(result).toBe('This is the summary.');
+    expect(result).not.toContain('unexpected content');
+  });
+
+  it('matches a non-canonical heading via keyword ("## Files Changed" for keyword "files")', () => {
+    const md = [
+      '## Files Changed',
+      '',
+      '- packages/backend/src/foo.ts (update)',
+    ].join('\n');
+    const result = parseSection(md, 'files');
+    expect(result).toBe('- packages/backend/src/foo.ts (update)');
+  });
 });
 
 // ─── parseDependsOn unit tests ───────────────────────────────────────────────
@@ -367,6 +424,32 @@ describe('NotionClient — prefix stripping in public methods', () => {
     expect(body.properties['Depends On']).toEqual({
       rich_text: [{ text: { content: 'dep1|dep2' } }],
     });
+  });
+
+  it('createTask writes the priority field through as a Notion Priority select', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 'new-id',
+        url: 'https://notion.so/new-id',
+        properties: {
+          'Task Name': { type: 'title', title: [{ text: { content: 'X' } }] },
+          Status: { type: 'select', select: { name: '🔲 Backlog' } },
+          Type: { type: 'select', select: null },
+          'Depends On': { type: 'rich_text', rich_text: [] },
+          Notes: { type: 'rich_text', rich_text: [] },
+        },
+      }),
+    });
+
+    await client.createTask('db-1', {
+      title: 'New task',
+      priority: '🔴 High',
+    });
+
+    const [, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(options.body as string);
+    expect(body.properties.Priority).toEqual({ select: { name: '🔴 High' } });
   });
 
   it('setDependsOn writes a pipe-delimited Depends On rich_text at /pages/abc', async () => {

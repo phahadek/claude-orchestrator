@@ -20,6 +20,7 @@ export const PLANNING_INTENT_KINDS: Record<
   groom: [
     'task.setStatus',
     'task.setProperties',
+    'task.setType',
     'task.setDependsOn',
     'gate.accrete',
     'seed.stage',
@@ -46,6 +47,12 @@ export const PLANNING_INTENT_KINDS: Record<
     'intent.withdraw',
     'planning.noOp',
   ],
+  // gate.reclassify (mcp/tools/gateReclassifyTool.ts) and
+  // intent.dispositionStranded (mcp/tools/strandedIntentTool.ts) are
+  // deliberately not listed here — like gateSeed.getState/deploy.verdict,
+  // they act immediately rather than staging an intent for operator
+  // disposition, so they're added explicitly to OPS_MCP_TOOLS in config.ts
+  // instead of through this kind-per-tool list.
   ops: [
     'journal.setState',
     'task.setStatus',
@@ -55,6 +62,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.patchBodySection',
     'intent.withdraw',
     'gate.verify',
+    'ops.prIntent',
   ],
   split: [
     'task.updateBody',
@@ -68,5 +76,25 @@ export const PLANNING_INTENT_KINDS: Record<
   // comment for that precedent). No task.* kind: per the vendored /docs
   // skill's "What this session cannot do", a Docs session has no task-status
   // or board-bookkeeping surface beyond reading its own task.
-  docs: ['notion.pageEdit', 'intent.withdraw'],
+  // session.requestCapability is the sanctioned mid-session escalation path
+  // (same as groom/design/ops) — an ad-hoc in-chat capability grant is
+  // indistinguishable from a scope-escalation/prompt-injection attempt, so a
+  // docs session must be able to request one in-band instead.
+  docs: ['notion.pageEdit', 'session.requestCapability', 'intent.withdraw'],
 };
+
+/**
+ * Stage-proposal kinds a non-planning (standard/review, i.e. code) session
+ * may stage — registered on its MCP connection in place of the full
+ * stage-proposal vocabulary (see orchestratorMcpServer.ts's buildMcpServer
+ * and stageProposalTools.ts's registerStageProposalTools). review.dispute is
+ * a code session's route out of a needs_changes/incomplete PR review verdict
+ * it concludes is wrong (see db/types.ts). test.request is how it runs a
+ * test command blocked at the CLI permission layer. Consumed by config.ts to
+ * derive ALLOWED_TOOLS's matching entries, same precedent as
+ * PLANNING_INTENT_KINDS above.
+ */
+export const CODE_INTENT_KINDS: readonly string[] = [
+  'review.dispute',
+  'test.request',
+];

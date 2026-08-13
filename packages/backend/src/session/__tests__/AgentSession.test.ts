@@ -49,6 +49,8 @@ vi.mock('../../db/queries', () =>
     incrementCompactionCount: vi.fn(),
     setContextOccupancy: vi.fn(),
     setSessionModel: vi.fn(),
+    setSessionModelSettingKey: vi.fn(),
+    setSessionEffortSettingKey: vi.fn(),
     setSessionMetadata: vi.fn(),
     getPRBySessionId: vi.fn().mockReturnValue(null),
     setHeadSha: vi.fn(),
@@ -227,5 +229,44 @@ describe('AgentSession.handleCleanExit — broadcasts the real post-write status
         }),
       );
     });
+  });
+});
+
+describe('AgentSession.sendMessage — _turnInFlight only set on confirmed delivery', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function getRunnerMock(session: AgentSession) {
+    return (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+  }
+
+  it('returns true and marks a turn active when the runner confirms delivery', () => {
+    const session = makeSession('standard');
+    getRunnerMock(session).sendMessage.mockReturnValue(true);
+    // Start from a settled state — a freshly constructed session starts with
+    // _turnInFlight true (it's about to begin its first turn), which would
+    // mask whether sendMessage itself is what set it.
+    (session as unknown as { _turnInFlight: boolean })._turnInFlight = false;
+
+    const delivered = session.sendMessage('hello');
+
+    expect(delivered).toBe(true);
+    expect(session.hasActiveTurn()).toBe(true);
+  });
+
+  it('returns false and does not leave hasActiveTurn() stuck true when the runner reports a failed write', () => {
+    const session = makeSession('standard');
+    getRunnerMock(session).sendMessage.mockReturnValue(false);
+    (session as unknown as { _turnInFlight: boolean })._turnInFlight = false;
+
+    const delivered = session.sendMessage('hello');
+
+    expect(delivered).toBe(false);
+    expect(session.hasActiveTurn()).toBe(false);
   });
 });

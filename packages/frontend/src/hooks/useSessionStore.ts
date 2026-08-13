@@ -66,8 +66,11 @@ export interface SessionState {
   /** Session ID of the code session whose PR this review session is reviewing */
   codeSessionId?: string;
   model?: string | null;
+  effort?: string | null;
   compaction_count?: number;
   context_occupancy_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
   /**
    * True when the most recent session_status message that updated `status`
    * carried `replay: true` (sent during the WS reconnect burst). Set false
@@ -262,9 +265,12 @@ export function useSessionStore() {
             totalOutputTokens: msg.totalOutputTokens ?? 0,
             compaction_count: msg.compaction_count ?? 0,
             context_occupancy_tokens: msg.context_occupancy_tokens ?? 0,
+            cache_read_tokens: msg.cache_read_tokens ?? 0,
+            cache_creation_tokens: msg.cache_creation_tokens ?? 0,
             prNumber: msg.prNumber,
             codeSessionId: msg.codeSessionId,
             model: msg.model ?? null,
+            effort: msg.effort ?? null,
             prUrl: msg.prUrl,
           });
           break;
@@ -409,6 +415,12 @@ export function useSessionStore() {
               }),
               ...(msg.contextOccupancyTokens != null && {
                 context_occupancy_tokens: msg.contextOccupancyTokens,
+              }),
+              ...(msg.cacheReadTokens != null && {
+                cache_read_tokens: msg.cacheReadTokens,
+              }),
+              ...(msg.cacheCreationTokens != null && {
+                cache_creation_tokens: msg.cacheCreationTokens,
               }),
             });
           }

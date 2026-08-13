@@ -16,10 +16,16 @@ vi.mock('../db/queries.js', () => ({
   setLocalBranchReviewResult: vi.fn(),
   getLocalBranchById: vi.fn(),
   getSession: vi.fn().mockReturnValue(null),
+  getPRIntentForPR: vi.fn().mockReturnValue(null),
+  setPauseReason: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
+}));
+
+vi.mock('../tasks/TaskWriteCommands.js', () => ({
+  getCachedType: vi.fn().mockReturnValue('💻 Code'),
 }));
 
 import { PRReviewService, FetchRetryExhaustedError } from './PRReviewService';
@@ -35,8 +41,10 @@ import {
   getLocalBranchById,
   setLastReviewedSha,
   getSession,
+  setPauseReason,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
+import { getCachedType } from '../tasks/TaskWriteCommands';
 import type { GitHubClient } from './GitHubClient';
 import { GitHubApiError } from './types';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
@@ -370,6 +378,59 @@ describe('PRReviewService.buildPrompt()', () => {
 
     expect(prompt).toContain('A'.repeat(13000));
     expect(prompt).not.toContain('[diff truncated');
+  });
+
+  it('Ops rubric: resolves the "changed files" dimension against the approved PR-intent, not the task-body Files section', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const prIntent = {
+      taskId: 'task-1',
+      title: 'add retry to the poller',
+      scope: 'src/ops/poller.ts and its test — add exponential backoff retry',
+      reason: 'poller drops events under transient network errors',
+    };
+
+    const prompt = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      prIntent,
+    );
+
+    // The Ops-approved declaration is rendered in the prompt...
+    expect(prompt).toContain('## Approved PR Intent');
+    expect(prompt).toContain(prIntent.scope);
+    expect(prompt).toContain(prIntent.reason);
+    // ...and the "changed files" dimension's guidance points at it instead
+    // of the task-body Files/paths section.
+    expect(prompt).toContain(
+      "compare the changed files against that declaration's scope",
+    );
+    expect(prompt).not.toContain(
+      'necessary downstream updates caused by the listed changes',
+    );
+  });
+
+  it('without a prIntent, keeps the default Files/paths rubric unchanged', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+
+    expect(prompt).not.toContain('## Approved PR Intent');
+    expect(prompt).toContain(
+      'necessary downstream updates caused by the listed changes',
+    );
   });
 });
 
@@ -969,6 +1030,122 @@ describe('PRReviewService.handleApprovedVerdict()', () => {
 
     expect(vi.mocked(mockNotion.updateStatus)).not.toHaveBeenCalled();
   });
+
+  it('does NOT set manual_verification_pending when the cached task Type is 💻 Code', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getCachedType).mockReturnValue('💻 Code');
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+  });
+
+  it('sets manual_verification_pending when the cached task Type is not 💻 Code', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getCachedType).mockReturnValue('🔧 Operational');
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.handleApprovedVerdict(
+      42,
+      'owner/repo',
+      'task-abc123',
+      'proj-1',
+      ['Manually verify the migration ran cleanly.'],
+    );
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'manual_verification_pending',
+      JSON.stringify(['Manually verify the migration ran cleanly.']),
+    );
+  });
+
+  it('fails closed (sets manual_verification_pending) when getCachedType misses (returns null)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getCachedType).mockReturnValue(null);
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'manual_verification_pending',
+      undefined,
+    );
+  });
+
+  it('sets depth_review_pending before autoMerger.attempt() when a depth review service is configured', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getCachedType).mockReturnValue('💻 Code');
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    service.setDepthReviewService({} as any);
+
+    const callOrder: string[] = [];
+    vi.mocked(setPauseReason).mockImplementation(() => {
+      callOrder.push('setPauseReason');
+    });
+    const autoMergerAttempt = vi.fn(() => {
+      callOrder.push('autoMerger.attempt');
+    });
+    service.setAutoMerger({ attempt: autoMergerAttempt } as any);
+
+    await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'depth_review_pending',
+    );
+    expect(callOrder).toEqual(['setPauseReason', 'autoMerger.attempt']);
+  });
+
+  it('does NOT set depth_review_pending when no depth review service is configured', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getCachedType).mockReturnValue('💻 Code');
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+  });
 });
 
 // ── reviewPR() — approved verdict triggers handleApprovedVerdict ──────────────
@@ -1179,6 +1356,7 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
       'owner/repo',
       'notion:task-abc123',
       'specific-project-id',
+      undefined,
     );
     expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith(
       'notion:task-abc123',
@@ -1238,6 +1416,50 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     );
     expect(vi.mocked(setReviewSessionId)).not.toHaveBeenCalled();
     expect(result.verdict).toBe('approved');
+  });
+
+  it('surfaces an unconfirmed follow-up delivery to a live review session instead of dropping it silently', async () => {
+    const prRowWithLiveSession = {
+      ...mockPRRow,
+      review_session_id: 'existing-review-session-id',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const sendMock = mockSM.send as ReturnType<typeof vi.fn>;
+    sendMock.mockImplementationOnce(() => {
+      setImmediate(() =>
+        mockSM.emit(
+          'message',
+          makeSessionEventMessage(
+            'existing-review-session-id',
+            JSON.stringify(claudePayload),
+          ),
+        ),
+      );
+      return false;
+    });
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_nudge_delivery_failed',
+        actor_id: 'existing-review-session-id',
+      }),
+    );
   });
 
   it('resumes a dead-but-resumable review session via sendOrResume (Case 2)', async () => {
@@ -1710,6 +1932,47 @@ describe('PRReviewService.reReviewPR()', () => {
       'owner/repo',
       'notion:task-abc123',
       'proj-re-review',
+      undefined,
+    );
+  });
+
+  it('re-arms manual_verification_pending on a re-review that approves again, even if a prior round was cleared', async () => {
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'review-session-rearm',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getCachedType).mockReturnValue('🔧 Operational');
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.reReviewPR(42, 'owner/repo');
+
+    expect(result.verdict).toBe('approved');
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'manual_verification_pending',
+      undefined,
     );
   });
 
@@ -2143,22 +2406,9 @@ describe('PRReviewService — verdict survives GitHub side-effect failure (#627)
   });
 });
 
-// ── Size proportionality dimension ────────────────────────────────────────────
+// ── Baseline escalation floor ────────────────────────────────────────────────
 
-describe('PRReviewService — Size proportionality dimension', () => {
-  // Build a large diff that blows past the 800-LOC absolute floor.
-  function makeOversizedDiff(addedLines: number): string {
-    const out: string[] = [
-      'diff --git a/packages/backend/src/foo.ts b/packages/backend/src/foo.ts',
-      '--- a/packages/backend/src/foo.ts',
-      '+++ b/packages/backend/src/foo.ts',
-      `@@ -1,1 +1,${addedLines + 1} @@`,
-      ' keep me',
-    ];
-    for (let i = 0; i < addedLines; i++) out.push(`+added line ${i}`);
-    return out.join('\n');
-  }
-
+describe('PRReviewService — baseline escalation floor', () => {
   const fourPassedDims = [
     {
       name: 'Title and description vs task Summary',
@@ -2174,211 +2424,132 @@ describe('PRReviewService — Size proportionality dimension', () => {
     },
   ];
 
-  it('in-budget PR (no LLM size dim emitted) → synthesized Size dim passed:true, verdict approved', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+  function makeDiffTouching(path: string): string {
+    return [
+      `diff --git a/${path} b/${path}`,
+      `--- a/${path}`,
+      `+++ b/${path}`,
+      '@@ -1,1 +1,2 @@',
+      ' keep me',
+      '+added line',
+    ].join('\n');
+  }
 
-    const payload = {
+  async function runReview(
+    diff: string,
+    payload: Record<string, unknown>,
+  ): Promise<import('./PRReviewService').PRReviewResult> {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    const mockSM = makeMockSessionManager();
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_a: string, _b: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(opts.sessionId, JSON.stringify(payload)),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+    return service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(diff),
+    );
+  }
+
+  it('forces escalate:true when the diff touches .github/workflows/ even though review_rules found nothing', async () => {
+    const result = await runReview(
+      makeDiffTouching('.github/workflows/ci.yml'),
+      {
+        verdict: 'approved',
+        dimensions: fourPassedDims,
+        summary: 'LLM saw nothing to escalate.',
+      },
+    );
+    expect(result.escalate).toBe(true);
+    expect(result.baselineEscalationFloor).toBe(true);
+    expect(result.escalationReason).toMatch(/CI\/workflow config/);
+  });
+
+  it('forces escalate:true for a migration path', async () => {
+    const result = await runReview(
+      makeDiffTouching('db/migrations/0042_add_column.sql'),
+      {
+        verdict: 'approved',
+        dimensions: fourPassedDims,
+        summary: 'LLM saw nothing to escalate.',
+      },
+    );
+    expect(result.escalate).toBe(true);
+    expect(result.baselineEscalationFloor).toBe(true);
+    expect(result.escalationReason).toMatch(/database migration/);
+  });
+
+  it('forces escalate:true for an auth-related path', async () => {
+    const result = await runReview(
+      makeDiffTouching('packages/backend/src/auth/session.ts'),
+      {
+        verdict: 'approved',
+        dimensions: fourPassedDims,
+        summary: 'LLM saw nothing to escalate.',
+      },
+    );
+    expect(result.escalate).toBe(true);
+    expect(result.baselineEscalationFloor).toBe(true);
+    expect(result.escalationReason).toMatch(/auth/);
+  });
+
+  it('forces escalate:true for a secrets-related path', async () => {
+    const result = await runReview(
+      makeDiffTouching('packages/backend/src/config/secretsLoader.ts'),
+      {
+        verdict: 'approved',
+        dimensions: fourPassedDims,
+        summary: 'LLM saw nothing to escalate.',
+      },
+    );
+    expect(result.escalate).toBe(true);
+    expect(result.baselineEscalationFloor).toBe(true);
+    expect(result.escalationReason).toMatch(/secrets/);
+  });
+
+  it('does not escalate an ordinary diff with no baseline-floor paths', async () => {
+    const result = await runReview(makeDiffTouching('src/widgets/Button.tsx'), {
       verdict: 'approved',
       dimensions: fourPassedDims,
-      summary: 'All four passed; LLM omitted size dim.',
-    };
-
-    const mockSM = makeMockSessionManager();
-    const mockGH = makeMockGitHub(); // returns the small mockDiff
-
-    const service = new PRReviewService(
-      mockGH,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      (_a: string, _b: string, opts: { sessionId: string }) => {
-        setImmediate(() =>
-          mockSM.emit(
-            'message',
-            makeSessionEventMessage(opts.sessionId, JSON.stringify(payload)),
-          ),
-        );
-        return opts.sessionId;
-      },
-    );
-
-    const result = await service.reviewPR(
-      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
-      makeMockDiffSource(),
-    );
-    const sizeDim = result.dimensions!.find(
-      (d) => d.name === 'Size proportionality',
-    );
-    expect(sizeDim).toBeDefined();
-    expect(sizeDim!.passed).toBe(true);
-    expect(result.verdict).toBe('approved');
-  });
-
-  it('oversized PR (no LLM size dim emitted) → synthesized Size dim passed:false, verdict needs_changes', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
-
-    const payload = {
-      verdict: 'approved',
-      dimensions: fourPassedDims,
-      summary: 'AI thinks it is fine; size heuristic disagrees.',
-    };
-
-    const mockSM = makeMockSessionManager();
-    const mockGH = makeMockGitHub();
-
-    const service = new PRReviewService(
-      mockGH,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      (_a: string, _b: string, opts: { sessionId: string }) => {
-        setImmediate(() =>
-          mockSM.emit(
-            'message',
-            makeSessionEventMessage(opts.sessionId, JSON.stringify(payload)),
-          ),
-        );
-        return opts.sessionId;
-      },
-    );
-
-    // Pass the oversized diff through the DiffSource (not github.fetchDiff)
-    const result = await service.reviewPR(
-      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
-      makeMockDiffSource(makeOversizedDiff(1500)),
-    );
-    const sizeDim = result.dimensions!.find(
-      (d) => d.name === 'Size proportionality',
-    );
-    expect(sizeDim).toBeDefined();
-    expect(sizeDim!.passed).toBe(false);
-    expect(sizeDim!.notes).toMatch(/size budget|added\+deleted/);
-    expect(result.verdict).toBe('needs_changes');
-  });
-
-  it('oversized-but-justified PR (LLM emits passed:true with cleanup rationale) → verdict approved', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
-
-    const payload = {
-      verdict: 'approved',
-      dimensions: [
-        ...fourPassedDims,
-        {
-          name: 'Size proportionality',
-          passed: true,
-          notes:
-            'Diff is 1,500 lines but ~1,200 of those are deleting dead code paths the spec implicitly retires.',
-        },
-      ],
-      summary: 'Oversized but justified — necessary corollary cleanup.',
-    };
-
-    const mockSM = makeMockSessionManager();
-    const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.fetchDiff).mockResolvedValue({
-      prId: 42,
-      diff: makeOversizedDiff(1500),
-      filesChanged: ['packages/backend/src/foo.ts'],
+      summary: 'Nothing sensitive touched.',
     });
-
-    const service = new PRReviewService(
-      mockGH,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      (_a: string, _b: string, opts: { sessionId: string }) => {
-        setImmediate(() =>
-          mockSM.emit(
-            'message',
-            makeSessionEventMessage(opts.sessionId, JSON.stringify(payload)),
-          ),
-        );
-        return opts.sessionId;
-      },
-    );
-
-    const result = await service.reviewPR(
-      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
-      makeMockDiffSource(),
-    );
-    const sizeDim = result.dimensions!.find(
-      (d) => d.name === 'Size proportionality',
-    );
-    expect(sizeDim).toBeDefined();
-    expect(sizeDim!.passed).toBe(true);
-    expect(sizeDim!.notes).toContain('1,200');
-    expect(result.verdict).toBe('approved');
+    expect(result.escalate).toBeUndefined();
+    expect(result.baselineEscalationFloor).toBeUndefined();
   });
 
-  it('re-review path recomputes size signal against the FULL refreshed PR diff and injects it into the follow-up prompt', async () => {
-    const prRowWithSession = {
-      ...mockPRRow,
-      review_session_id: 'live-review-session',
-    };
-    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
-
-    const payload = {
-      verdict: 'needs_changes',
-      dimensions: [
-        ...fourPassedDims,
-        { name: 'Size proportionality', passed: false, notes: 'too large' },
-      ],
-      summary: 'Oversized, no justification.',
-    };
-
-    const mockSM = makeMockSessionManager();
-    const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.fetchDiff).mockResolvedValue({
-      prId: 42,
-      diff: makeOversizedDiff(1500),
-      filesChanged: ['packages/backend/src/foo.ts'],
-    });
-
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      async (sessionId: string) => {
-        setImmediate(() =>
-          mockSM.emit(
-            'message',
-            makeSessionEventMessage(sessionId, JSON.stringify(payload)),
-          ),
-        );
-        return sessionId;
+  it('cannot be overridden by the LLM setting escalate:false explicitly', async () => {
+    const result = await runReview(
+      makeDiffTouching('.github/workflows/deploy.yml'),
+      {
+        verdict: 'approved',
+        dimensions: fourPassedDims,
+        summary: 'LLM explicitly declined to escalate.',
+        escalate: false,
       },
     );
-
-    const service = new PRReviewService(
-      mockGH,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-    const result = await service.reReviewPR(42, 'owner/repo');
-
-    // Confirm the follow-up sent to the existing session contains refreshed size numbers
-    const [, followUpMessage] = (
-      mockSM.sendOrResume as ReturnType<typeof vi.fn>
-    ).mock.calls[0];
-    expect(followUpMessage).toContain('Refreshed Size Signal');
-    expect(followUpMessage).toContain('Lines added:');
-    expect(followUpMessage).toContain('Oversized: YES');
-    expect(result.verdict).toBe('needs_changes');
+    expect(result.escalate).toBe(true);
+    expect(result.baselineEscalationFloor).toBe(true);
   });
 });
 
-// ── buildPrompt() — size proportionality directive ───────────────────────────
+// ── buildPrompt() — conformance schema (size relocated to depth review) ──────
 
-describe('PRReviewService.buildPrompt() — size proportionality', () => {
-  it('includes the size signal section with computed numbers', () => {
+describe('PRReviewService.buildPrompt() — conformance schema', () => {
+  it('evaluates exactly 4 dimensions and no longer includes size proportionality', () => {
     const service = new PRReviewService(
       makeMockGitHub(),
       makeMockNotion(),
@@ -2387,53 +2558,9 @@ describe('PRReviewService.buildPrompt() — size proportionality', () => {
       'https://notion.so/ctx',
     );
     const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
-    expect(prompt).toContain('## Size Signal');
-    expect(prompt).toContain('Lines added:');
-    expect(prompt).toContain('Lines deleted:');
-    expect(prompt).toContain('Files touched:');
-    expect(prompt).toContain('Files listed in task spec:');
-    expect(prompt).toContain('Absolute LOC floor');
-  });
-
-  it('flags an oversized diff with ⚠️ in the signal section', () => {
-    const service = new PRReviewService(
-      makeMockGitHub(),
-      makeMockNotion(),
-      makeMockSessionManager() as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-    const bigDiffLines: string[] = [
-      'diff --git a/src/big.ts b/src/big.ts',
-      '--- a/src/big.ts',
-      '+++ b/src/big.ts',
-      '@@ -1,1 +1,1500 @@',
-    ];
-    for (let i = 0; i < 1500; i++) bigDiffLines.push(`+l${i}`);
-    const bigDiff: PRDiff = {
-      prId: 42,
-      diff: bigDiffLines.join('\n'),
-      filesChanged: ['src/big.ts'],
-    };
-    const prompt = service.buildPrompt(mockPR, bigDiff, mockTaskBody);
-    expect(prompt).toContain('OVERSIZED');
-    expect(prompt).toContain('exceeds floor of 800');
-  });
-
-  it('includes the Size proportionality dimension in the JSON schema and its directive', () => {
-    const service = new PRReviewService(
-      makeMockGitHub(),
-      makeMockNotion(),
-      makeMockSessionManager() as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
-    expect(prompt).toContain('Size proportionality');
-    // Reviewer is told to pass only when overflow is necessary corollary work
-    expect(prompt).toContain('necessary corollary work');
-    // Verdict math updated to 5 dimensions
-    expect(prompt).toContain('all 5 passed');
+    expect(prompt).toContain('exactly these 4 dimensions');
+    expect(prompt).toContain('all 4 passed');
+    expect(prompt).not.toContain('"name": "Size proportionality"');
   });
 });
 
@@ -3263,6 +3390,43 @@ describe('PRReviewService — manual verification items excluded from verdict', 
     expect(result.manualItemsForHuman).toEqual([
       'Run integration test suite against staging',
     ]);
+  });
+
+  it('filters the "Covered by the Manual Verification Gate task." sentinel out of manualItemsForHuman', () => {
+    const service = makeService();
+
+    const payload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'All good.',
+      manualItemsForHuman: [
+        'Covered by the Manual Verification Gate task.',
+        'Verify live credentials work end-to-end',
+      ],
+    };
+
+    const events = [makeAssistantEvent(JSON.stringify(payload))];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(result.manualItemsForHuman).toEqual([
+      'Verify live credentials work end-to-end',
+    ]);
+  });
+
+  it('omits manualItemsForHuman entirely when only the sentinel was present', () => {
+    const service = makeService();
+
+    const payload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'All good.',
+      manualItemsForHuman: ['Covered by the Manual Verification Gate task.'],
+    };
+
+    const events = [makeAssistantEvent(JSON.stringify(payload))];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(result.manualItemsForHuman).toBeUndefined();
   });
 
   it('manualItemsForHuman is omitted when the reviewer does not include it', () => {

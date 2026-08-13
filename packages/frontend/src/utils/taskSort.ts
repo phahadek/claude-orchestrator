@@ -25,6 +25,7 @@ export function sortByPriority<T extends TaskView>(tasks: T[]): T[] {
 
 export const STATUS_EMOJI: Record<DisplayStatus, string> = {
   needs_attention: '⚠️',
+  auto_recovering: '🔁',
   ready_to_merge: '✅',
   in_progress: '🔄',
   in_review: '👀',

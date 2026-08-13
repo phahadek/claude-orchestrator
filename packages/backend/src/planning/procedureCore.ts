@@ -21,8 +21,12 @@
 
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import { ALLOWED_TRANSITIONS, type OpsState } from '../ops/opsJournal';
+import type { SessionType } from '../session/sessionPredicates';
 
-export type SkillId = 'groom' | 'design' | 'ops' | 'split' | 'docs';
+export type SkillId = Extract<
+  SessionType,
+  'groom' | 'design' | 'ops' | 'split' | 'docs'
+>;
 
 /** `blocked` / `incident-frozen` are freezes reachable from (and returning to) any non-terminal state — not part of the normal path. */
 const OPS_JOURNAL_FREEZE_STATES: ReadonlySet<OpsState> = new Set([
@@ -167,6 +171,24 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       '{skillLabel} proposes; it never self-authorizes the commit.',
   },
   {
+    id: 'nudges',
+    title: 'Nudges',
+    appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
+    text:
+      'A nudge is an unsolicited message the orchestrator injects into a session ' +
+      'outside the turn it is waiting on, sent when it detects a condition that ' +
+      'needs a response. IS: obliges action — read it, and if it names one, take ' +
+      'it, ahead of any standing wait-for-instructions rule elsewhere in this ' +
+      'procedure. IS NOT observed — whether {skillLabel} acts on a nudge is never ' +
+      'checked, so act on it because it is true, not because it is scored. The ' +
+      'nudge a dispatched {skillLabel} session actually receives is the ' +
+      'supervisor\'s stuck-session pause ("Pause your work — supervisor flagged ' +
+      'this task as exceeding expected duration. Stop running tools and wait for ' +
+      'further instructions."). That one is EXEMPT from "take the named action" ' +
+      'above: stopping tool use and ending the turn the moment it arrives already ' +
+      'IS full compliance — there is no further action to weigh.',
+  },
+  {
     id: 'no-silent-writes',
     title: 'No silent writes',
     appliesTo: ['groom', 'design', 'ops', 'split'],
@@ -248,7 +270,16 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'state is satisfied. DO NOT treat "the proposal is ready to stage" as a ' +
       'stopping point when the session already holds, or could earn by request, ' +
       'the tool needed to carry it further. `applied-pending-confirm` names a ' +
-      'change actually applied — it has no legal meaning for an Investigation ' +
+      'change actually applied — for an Operational task, the `journal.setState` ' +
+      '→ `applied-pending-confirm` intent that reaches it IS the completing intent, and ' +
+      'MUST carry a `reconciliation` assertion — `{"description": "<what must be true once ' +
+      'the change applies>", "passed": <boolean>}` — naming what you yourself checked ' +
+      '(re-read the config row, count the backfill) and whether it held; a stage with no ' +
+      'assertion is refused at stage time. Once the operator approves that completing intent, ' +
+      'the orchestrator evaluates the assertion automatically: `passed: true` drives the ' +
+      'journal straight to `resolved` and closes the task with no further operator step; ' +
+      '`passed: false` stages an interrupting intent naming the mismatch instead, so only a ' +
+      'failed reconciliation ever reaches the operator a second time. It has no legal meaning for an Investigation ' +
       'whose conclusion is that no change is needed, so THE NO-CHANGE TERMINAL ' +
       'exists for exactly that outcome, and staging it is not the parking this ' +
       'rule forbids. Once a decided-no-change conclusion is reached, DO stage ' +
@@ -315,6 +346,22 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'above): the session stages the `journal.setState` → `resolved` transition, it ' +
       "never applies it — the operator's approval of that staged intent is the " +
       'device-auth action that performs the transition.',
+  },
+  {
+    id: 'declared-writes-auto-approve',
+    title: 'A declared write can auto-approve — check the task body first',
+    appliesTo: ['ops'],
+    text:
+      "Before staging `session.requestCapability` for a write, check the task's own body " +
+      'for a `## Declared writes` section — a bullet there naming this exact capability, ' +
+      "tagged Non-Prod-Mutating, is pre-authorized at grooming/Ready time and this session's " +
+      'matching `session.requestCapability` call auto-approves instead of parking for a human ' +
+      'decision. The match is exact: the capability string in the request must equal the ' +
+      "declared one verbatim, never a prefix or a near-match. A write that isn't declared " +
+      'there, or is declared but tagged/defaulted Prod-Mutating, gets no auto-approval — it ' +
+      'still routes through the normal request → wait-for-grant path above, same as any ' +
+      'undeclared write. This never changes what to request or when: it only changes how fast ' +
+      'a correctly-declared one clears.',
   },
   {
     id: 'ask-permission-not-speculative',
@@ -463,7 +510,12 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       "above, and withdrawing does not retire it into the corrected one's slot the way " +
       'an explicit `supersedes` does. This is the same `supersedes` field the platform ' +
       'already requires the corrected payload to carry — no separate call, no auto-' +
-      'supersede: only a caller that names the blocked id explicitly may retire it.',
+      'supersede: only a caller that names the blocked id explicitly may retire it. ' +
+      'Supersede ONLY the blocked intent named in the feedback — its group siblings that ' +
+      'were never blocked (sitting cleanly at `staged`/`approved`) must be left in place, ' +
+      'NOT superseded and re-staged: a superseded member never blocks a group commit ' +
+      'either way, so retiring an unblocked sibling fixes nothing and only multiplies the ' +
+      'cost of this correction round.',
   },
   {
     id: 'incidental-tooling-gap-not-a-blocker',
@@ -488,6 +540,32 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'on what the digest and the parts of the task reachable without it actually show.',
   },
   {
+    id: 'groom-deliverable-is-a-decision-about-the-task',
+    title: "A groom session's deliverable is a decision about the task",
+    appliesTo: ['groom'],
+    text:
+      "{skillLabel}'s deliverable is a decision about the target task — whether " +
+      'and how it is ready: promote it, defer it, or raise a blocking question — ' +
+      "never the output the task itself exists to produce. Whatever a task's Type " +
+      "mandates producing belongs to that Type's own execution session, not to " +
+      "{skillLabel}: a 📐 Design task's locked answers to its own listed Open " +
+      "Questions are a /design session's deliverable; a 🔎 Investigation task's " +
+      "root-cause finding is that Investigation session's deliverable; a 💻 Code " +
+      "task's implementation is that Code session's deliverable. DO NOT stage a " +
+      "decision.pickOne (or any other write) that answers a task's own Open " +
+      "Questions or otherwise produces the task's declared deliverable on the " +
+      'theory that the acceptance criteria name the mechanism (e.g. "answers ' +
+      'recorded as a committed decision.pickOne intent") — naming the mechanism ' +
+      'a later session will use is not an instruction for {skillLabel} to use it ' +
+      'now. This does not restrict `decision.pickOne` itself: staging one to ' +
+      'raise a question {skillLabel} cannot resolve on its own authority — a ' +
+      'scope doubt, an unconfirmed dependency, a spec/code contradiction — is a ' +
+      'legitimate and common escalation. The distinction is whose question it ' +
+      "is: an escalation asks the operator to unblock {skillLabel}'s own " +
+      "grooming judgment; answering a task's listed Open Questions imports that " +
+      "task's own deliverable into {skillLabel}'s.",
+  },
+  {
     id: 'investigate-before-resolving-no-deferral',
     title: 'Investigate before resolving — a defer is not a resolve',
     appliesTo: ['groom', 'design'],
@@ -505,13 +583,17 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'exempt from this check on their own open-question-space — see ' +
       "`readinessGate.ts`'s `OPEN_QUESTIONS_EXEMPT_TYPES` — because for those types " +
       'the open questions are the deliverable being scoped, not a precondition being ' +
-      'dodged. For an Investigation or observational Testing task specifically, the ' +
-      'unresolved question is the payload it carries into execution: report it ' +
-      'honestly in groomProposal.openQuestions and promote the task with it — never ' +
-      'launder it into "None," and never hold the task at Backlog on the theory that ' +
-      'an unresolved question forbids Ready. Every non-exempt type keeps the rule ' +
-      'above unchanged: a 💻 Code task with an unresolved trade-off still stays at ' +
-      'Backlog.)',
+      'dodged. For EVERY exempt type — 📋 Planning and 📐 Design included, not only ' +
+      '🔎 Investigation or observational 🧪 Testing — the unresolved question is the ' +
+      'payload the task carries into execution: report it honestly in ' +
+      'groomProposal.openQuestions and promote the task with it — never launder it ' +
+      'into "None," and never hold the task at Backlog on the theory that an ' +
+      "unresolved question forbids Ready. Resolving a Design or Planning task's own " +
+      "listed Open Questions belongs to that task's own dispatched execution session " +
+      "(a /design session) — see 'A groom session's deliverable is a decision about " +
+      "the task' above for why a groom session reports and promotes instead of " +
+      'answering them itself. Every non-exempt type keeps the rule above unchanged: ' +
+      'a 💻 Code task with an unresolved trade-off still stays at Backlog.)',
   },
   {
     id: 'decision-pickone-genuine-forks-only',
@@ -605,6 +687,52 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       " It is not the end of the design pass — see 'Architecture and follow-on " +
       "tasks are required deliverables' below for what still follows it in the " +
       'same session.',
+  },
+  {
+    id: 'design-zero-open-questions-reconstruct',
+    title:
+      'Zero listed Open Questions is a decision space to reconstruct, never a blocked state',
+    appliesTo: ['design'],
+    text:
+      'IS: a loaded digest whose Open Questions list is empty (`Open questions ' +
+      '(none): 0`, or an explicit-heading section with no items) is a normal ' +
+      'input to reconstruct, not a blocked state. A task most often arrives this ' +
+      'way because an upstream grooming pass folded the design into the body’s ' +
+      'own prose — a "Design (resolved): …" summary, a ratified rule, a "Ground ' +
+      'truth found" section — rather than filing it as this session’s own ' +
+      'deliverable, so nothing was ever locked as a `decision.pickOne`, no ' +
+      'architecture record exists, and (unless a groom session happened to run ' +
+      'one) no completeness critic has ever run against it either. DO read the ' +
+      'verbatim task body (the Design Investigation Slice’s "Task body" section) ' +
+      'and reconstruct the decision space it implies from scratch, exactly as if ' +
+      'the digest had listed the questions explicitly: every decision the body ' +
+      'records as already made becomes its own `decision.pickOne`, staged one at ' +
+      'a time in the order the body presents them (see "One Open Question per ' +
+      'turn" above), with the body’s recorded answer supplied as the ' +
+      'recommended `options[]` entry — a single confident-recommendation option, ' +
+      'never a distinct "confirm this" kind — so the operator’s disposition ' +
+      'surface is unchanged whether the answer was pre-settled or freshly ' +
+      'derived. DO verify each recorded decision against the current code before ' +
+      'recommending it back, the same as any other Open Question resolution (see ' +
+      '"Verify the task body’s premises" below) — a body-recorded decision is a ' +
+      'claim to re-derive, not a given to rubber-stamp; if it does not hold up, ' +
+      'stage the corrected answer as the recommendation instead. DO NOT treat an ' +
+      'empty Open Questions list as license to end the turn: the ' +
+      '"missing-or-empty-digest is a blocked state" rule (see "Deterministic ' +
+      'load" above) governs a digest that never loaded — a task lookup failure, ' +
+      'an unreachable loader — never a digest that loaded cleanly and simply ' +
+      'lists no Open Questions; reaching for that rule here is exactly the wrong ' +
+      'turn this principle exists to close off. DO run the completeness critic ' +
+      'and stage the closing synthesis, the architecture write(s), and the ' +
+      'follow-on `task.create` set on every reconstructed decision exactly as on ' +
+      'any other design pass — a re-derived settled decision still counts as a ' +
+      'locked decision for "Architecture pages and follow-on Code tasks are ' +
+      'required deliverables" below, it does not exempt the task from it. ' +
+      '`planning.noOp` is the terminal action ONLY when the task body genuinely ' +
+      'carries no decision space at all — no resolved-looking prose, no ' +
+      'ratified rule, nothing to reconstruct — and even then it must be staged, ' +
+      'naming why nothing needs reconstructing, never replaced by a prose ' +
+      'write-up in chat.',
   },
   {
     id: 'design-decision-pickone-payload-shape',
@@ -891,6 +1019,33 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'The symbolic reference resolves only within its own staged-intent group — ' +
       'it can never name a `task.create` staged in a different group.',
   },
+  {
+    id: 'groom-body-edit-grouped',
+    title: "A groom body edit joins its task's open decision group",
+    appliesTo: ['groom'],
+    text:
+      'A `task.patchBodySection` / `task.updateBody` staged against a task that ' +
+      'already has an open decision group (any live staged/approved/committed ' +
+      "intent of this session's carrying a `groupId` for this same task) MUST " +
+      'carry that same `groupId` — it is rejected at stage time, naming the open ' +
+      'group, if staged ungrouped. A grooming outcome is one atomic decision: the ' +
+      'group commits together, and the promotion gate composes the body it ' +
+      "validates from the group's own members — a body edit staged outside the " +
+      'group can be committed or rejected independently of the Ready flip it was ' +
+      'meant to support. DO stage every body edit with the same `groupId` as the ' +
+      "rest of the pass's decision once one is open for the task. A body edit " +
+      'staged before any group exists yet for that task stays standalone at that ' +
+      'moment — there is no group yet to join. That is not a permanent exemption: ' +
+      'the next time this session stages anything else with a `groupId` for that ' +
+      "same task, every one of the session's own still-open " +
+      '(staged/approved/needs_revision) standalone body edits for that task is ' +
+      'automatically adopted into that group — its `groupId` is reassigned, no ' +
+      're-staging required. DO NOT rely on staging order (body edit before the ' +
+      'decision) to keep it ungrouped on purpose — it will be swept in the moment ' +
+      'the group opens. The only body edit that stays standalone forever is one ' +
+      'whose session never opens a group for that task at all (e.g. a pass that ' +
+      'ends in `planning.noOp`).',
+  },
 ] as const;
 
 /**
@@ -1038,6 +1193,21 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'fetch or reverse-engineer context by hand. A missing or empty digest is a ' +
       'blocked state to report (end the turn and surface it), not a cue to go ' +
       'looking for context yourself.',
+    summaryOverrides: {
+      design:
+        'For an injected/dispatched design session, the task context and worklist ' +
+        'digest are already injected into this prompt — there is no loader to run ' +
+        'and no device-authed client this session can authenticate as, so never ' +
+        'attempt to fetch or reverse-engineer context by hand. A digest that ' +
+        'genuinely fails to load — the task lookup errors, the loader throws, no ' +
+        'digest section is present at all — is still a blocked state to report ' +
+        '(end the turn and surface it), not a cue to go looking for context ' +
+        'yourself. A digest that loads successfully but lists zero Open Questions ' +
+        'is NOT that case — a loaded digest with an empty Open Questions list is a ' +
+        'decision space to reconstruct from the task body, never a blocked state; ' +
+        'see "Zero listed Open Questions is a decision space to reconstruct, never ' +
+        'a blocked state" below.',
+    },
   },
   {
     id: 'investigate',
@@ -1431,7 +1601,10 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       "When the mandate calls for follow-on work — an Investigation's decision plus " +
       'filed follow-on tasks, a /design "🔲 Backlog" split, or a /groom split-off — ' +
       'stage each one as a `task.create` intent (landing at 🔲 Backlog) rather than ' +
-      'describing the task spec in chat for the operator to create by hand. The ' +
+      'describing the task spec in chat for the operator to create by hand. DO set ' +
+      '`priority` on every `task.create` — one of `"🔴 High"`, `"🟡 Medium"`, ' +
+      '`"🟢 Low"` — it is required at the tool boundary and the call is rejected, ' +
+      'naming the accepted values, if it is missing or set to anything else. The ' +
       'operator disposes the staged task like any other intent; never treat handing ' +
       'a task spec back in chat as an acceptable substitute for staging it.',
     summaryOverrides: {
@@ -1444,8 +1617,11 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'decisions imply no implementation work beyond themselves, stage a ' +
         '`planning.noOp` naming `skippedKind: "task.create"` rather than leaving ' +
         'the deliverable unaddressed — the closing synthesis is refused at stage ' +
-        'time until this is staged or the follow-on task itself is. The operator ' +
-        'disposes ' +
+        'time until this is staged or the follow-on task itself is. DO set ' +
+        '`priority` on every `task.create` — one of `"🔴 High"`, `"🟡 Medium"`, ' +
+        '`"🟢 Low"` — it is required at the tool boundary and the call is rejected, ' +
+        'naming the accepted values, if it is missing or set to anything else. ' +
+        'The operator disposes ' +
         'each staged task like any other intent; never treat handing a task spec ' +
         'back in chat as an acceptable substitute for staging it. ' +
         DESIGN_TERMINAL_ARTIFACTS_ORDERING,
@@ -1453,7 +1629,11 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'When the mandate calls for follow-on work — including an operational ' +
         'change that turns out to need a code change — stage it as a ' +
         '`task.create` intent (landing at 🔲 Backlog, typed 💻 Code) carrying the ' +
-        'spec, rather than describing it in chat. This session has no worktree or ' +
+        'spec, rather than describing it in chat. DO set `priority` on every ' +
+        '`task.create` — one of `"🔴 High"`, `"🟡 Medium"`, `"🟢 Low"` — it is ' +
+        'required at the tool boundary and the call is rejected, naming the ' +
+        'accepted values, if it is missing or set to anything else. This session ' +
+        'has no worktree or ' +
         'branch and must never create a PR or author code directly: a code ' +
         'change is categorically routed through a staged 💻 Code task, never ' +
         'applied by ops itself — stage the task and continue driving the rest of ' +
@@ -1579,11 +1759,16 @@ export const SIZE_TYPE_CHECK = {
     'nominates, it does not force, and `unsplittable` with a recorded reason ' +
     "remains a legitimate outcome above either one. Where a task's files cluster " +
     'into distinct root-causes, the file-count signal should read as a nomination ' +
-    'to split along those clusters rather than a flat count. Design/Planning ' +
-    'tasks are sized in open-question count instead, recorded as ' +
-    '`{decision: "n/a"}`. type_check is an advisory keyword/heuristic scan for a ' +
-    'task body whose content does not match its declared Type ("smuggling") — it ' +
-    'never hard-blocks; the groomer records a disposition.',
+    'to split along those clusters rather than a flat count. A numeric decision ' +
+    '(no_split/split_now/unsplittable) records the estimate it rests on, not just ' +
+    'the verdict: `{decision, files, loc, loc_method}` — `files` from the ' +
+    'sizeCheckSeed already computed for the task, `loc` estimated by the groomer ' +
+    'from the code-map digest, `loc_method` naming how ("estimated"). Design/' +
+    'Planning tasks are sized in open-question count instead, recorded as ' +
+    '`{decision: "n/a"}` with no numbers. type_check is an advisory ' +
+    'keyword/heuristic scan for a task body whose content does not match its ' +
+    'declared Type ("smuggling") — it never hard-blocks; the groomer records a ' +
+    'disposition.',
   implementedBy: [
     'packages/backend/src/groom/groomLoad.ts (sizeCheckSeed)',
     'packages/backend/src/groom/typeCheck.ts',

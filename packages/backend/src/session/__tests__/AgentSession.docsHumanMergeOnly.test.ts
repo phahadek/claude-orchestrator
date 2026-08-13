@@ -16,6 +16,8 @@ vi.mock('../../db/queries', () =>
     incrementCompactionCount: vi.fn(),
     setContextOccupancy: vi.fn(),
     setSessionModel: vi.fn(),
+    setSessionModelSettingKey: vi.fn(),
+    setSessionEffortSettingKey: vi.fn(),
     setSessionMetadata: vi.fn(),
     getPRBySessionId: vi.fn().mockReturnValue(null),
     setHeadSha: vi.fn(),
@@ -147,6 +149,17 @@ describe('AgentSession.handlePRDetected — docs human_merge_only gate', () => {
 
   it('does not set human_merge_only for a standard session PR', async () => {
     const session = makeSession('standard');
+    detectPR(session);
+    await new Promise((r) => setImmediate(r));
+
+    expect(upsertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ pr_number: 153, repo: 'owner/repo' }),
+    );
+    expect(setHumanMergeOnly).not.toHaveBeenCalled();
+  });
+
+  it('does not set human_merge_only for an ops session PR — an ops-sourced PR routes through the standard auto-review path', async () => {
+    const session = makeSession('ops');
     detectPR(session);
     await new Promise((r) => setImmediate(r));
 

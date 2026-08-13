@@ -41,7 +41,9 @@ const HOUR = 3_600_000;
 describe('detectAgingSignals', () => {
   it('fires for a decision older than the threshold', () => {
     const now = 1_000_000;
-    const pending = [{ id: 'intent-1', created_at: now - 25 * HOUR }];
+    const pending = [
+      { id: 'intent-1', created_at: now - 25 * HOUR, kind: 'task.setStatus' },
+    ];
     const signals = detectAgingSignals(pending, now, 24 * HOUR);
     expect(signals).toHaveLength(1);
     expect(signals[0].key).toBe('aging:intent-1');
@@ -50,16 +52,34 @@ describe('detectAgingSignals', () => {
 
   it('does not fire for a decision within the threshold', () => {
     const now = 1_000_000;
-    const pending = [{ id: 'intent-1', created_at: now - 1 * HOUR }];
+    const pending = [
+      { id: 'intent-1', created_at: now - 1 * HOUR, kind: 'task.setStatus' },
+    ];
     expect(detectAgingSignals(pending, now, 24 * HOUR)).toHaveLength(0);
   });
 
   it('produces a stable key for the same intent across repeated calls', () => {
     const now = 1_000_000;
-    const pending = [{ id: 'intent-1', created_at: now - 25 * HOUR }];
+    const pending = [
+      { id: 'intent-1', created_at: now - 25 * HOUR, kind: 'task.setStatus' },
+    ];
     const first = detectAgingSignals(pending, now, 24 * HOUR);
     const second = detectAgingSignals(pending, now + HOUR, 24 * HOUR);
     expect(first[0].key).toBe(second[0].key);
+  });
+
+  it('does not fire for a session-less gate.verify mirror intent past the threshold, while an equivalent planning intent still does', () => {
+    const now = 1_000_000;
+    const pending = [
+      { id: 'gate-verify-1', created_at: now - 89 * HOUR, kind: 'gate.verify' },
+      {
+        id: 'planning-1',
+        created_at: now - 89 * HOUR,
+        kind: 'task.setStatus',
+      },
+    ];
+    const signals = detectAgingSignals(pending, now, 24 * HOUR);
+    expect(signals.map((s) => s.key)).toEqual(['aging:planning-1']);
   });
 });
 
@@ -112,6 +132,7 @@ describe('detectFlatSignal', () => {
       tasks_closed: 0,
       gate_open: 0,
       gate_closed: 0,
+      gate_parked: 0,
       seed_open: 0,
       seed_closed: 0,
       ops_open: 0,
@@ -326,6 +347,25 @@ describe('computeMilestoneAttentionSignals actionability filter', () => {
       sessionManager,
     );
     expect(result.pendingCount).toBe(0);
+    expect(result.tier2.filter((s) => s.type === 'aging')).toHaveLength(0);
+  });
+
+  it('excludes a session-less gate.verify mirror intent from the aging signal even when well past the threshold', () => {
+    stageRow({
+      id: 'gate-verify-1',
+      kind: 'gate.verify',
+      session_id: null,
+      payload: JSON.stringify({ gateItemId: 'gate-item-1' }),
+      created_at: Date.now() - 999 * HOUR,
+    });
+    const sessionManager = makeSessionManager(false);
+
+    const result = computeMilestoneAttentionSignals(
+      PROJECT_ID,
+      MILESTONE,
+      sessionManager,
+    );
+    expect(result.pendingCount).toBe(1);
     expect(result.tier2.filter((s) => s.type === 'aging')).toHaveLength(0);
   });
 

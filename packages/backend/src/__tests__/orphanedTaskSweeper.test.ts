@@ -27,6 +27,8 @@ vi.mock('node:fs', () => ({
 
 vi.mock('../db/queries.js', () => ({
   getLatestCodeSessionByNotionTaskId: vi.fn(),
+  getLatestOpsSessionByTaskId: vi.fn(() => undefined),
+  getLatestDocsSessionByTaskId: vi.fn(() => undefined),
   hasActiveSessionForTask: vi.fn(),
   hasNonTerminalPlanningSessionForTask: vi.fn(() => false),
   isSessionAwaitingCapabilityDisposition: vi.fn(() => false),
@@ -36,6 +38,8 @@ vi.mock('../db/queries.js', () => ({
   getSessionLastActivityMs: vi.fn(() => null),
   upsertPullRequest: vi.fn(() => null),
   getOpsJournalEntry: vi.fn(() => undefined),
+  getSession: vi.fn(() => undefined),
+  listStagedIntentsBySession: vi.fn(() => []),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -53,9 +57,15 @@ vi.mock('../config.js', () => ({
   },
 }));
 
+vi.mock('../orchestration/usageAdmission.js', () => ({
+  isUsageAdmitted: vi.fn(() => ({ allowed: true })),
+}));
+
 import fs from 'node:fs';
 import {
   getLatestCodeSessionByNotionTaskId,
+  getLatestOpsSessionByTaskId,
+  getLatestDocsSessionByTaskId,
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
   isSessionAwaitingCapabilityDisposition,
@@ -65,6 +75,8 @@ import {
   getSessionLastActivityMs,
   upsertPullRequest,
   getOpsJournalEntry,
+  getSession,
+  listStagedIntentsBySession,
 } from '../db/queries.js';
 import {
   recordEvent,
@@ -72,6 +84,7 @@ import {
   getLatestNudgeTimestamp,
 } from '../audit/AuditLog.js';
 import { getAllProjects } from '../config.js';
+import { isUsageAdmitted } from '../orchestration/usageAdmission.js';
 import { OrphanedTaskSweeper } from '../orchestration/OrphanedTaskSweeper.js';
 import type { ServerMessage } from '../ws/types.js';
 
@@ -130,6 +143,24 @@ function makeSession(
   };
 }
 
+function makeDocsSession(
+  status: string,
+  startedAtOffsetMs: number,
+  endedAt?: number,
+  archived = 0,
+) {
+  return {
+    ...makeSession(
+      status,
+      startedAtOffsetMs,
+      endedAt,
+      '/fake/worktree',
+      archived,
+    ),
+    session_type: 'docs',
+  };
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('OrphanedTaskSweeper', () => {
@@ -154,6 +185,15 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(upsertPullRequest).mockClear();
     vi.mocked(getOpsJournalEntry).mockReset().mockReturnValue(undefined);
+    vi.mocked(getLatestOpsSessionByTaskId)
+      .mockReset()
+      .mockReturnValue(undefined);
+    vi.mocked(getLatestDocsSessionByTaskId)
+      .mockReset()
+      .mockReturnValue(undefined);
+    vi.mocked(getSession).mockReset().mockReturnValue(undefined);
+    vi.mocked(listStagedIntentsBySession).mockReset().mockReturnValue([]);
+    vi.mocked(isUsageAdmitted).mockReset().mockReturnValue({ allowed: true });
     broadcast.mockClear();
   });
 
@@ -548,6 +588,75 @@ describe('OrphanedTaskSweeper', () => {
         event_type: 'task_orphan_nudged',
         task_id: 'notion:abc',
       }),
+    );
+  });
+
+  it('withholds a nudge while plan usage is exhausted — no delivery, no budget spend, no operator escalation', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000; // ended 10 min ago (past grace)
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(isUsageAdmitted).mockReturnValue({
+      allowed: false,
+      window: 'five_hour',
+      reason: 'usage_deferral',
+    });
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    // Withheld entirely — the item stays outstanding for the next sweep tick
+    // rather than being sent (and failing) and burning a nudge slot.
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_nudged' }),
+    );
+    expect(setSessionPauseReason).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('delivers the withheld nudge once plan usage is admitted again', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    vi.mocked(isUsageAdmitted).mockReturnValue({
+      allowed: false,
+      window: 'five_hour',
+      reason: 'usage_deferral',
+    });
+    await sweeper.sweepOnce();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+
+    vi.mocked(isUsageAdmitted).mockReturnValue({ allowed: true });
+    await sweeper.sweepOnce();
+    expect(enqueueFeedback).toHaveBeenCalledWith(
+      'sess-1',
+      'system:nudge',
+      expect.stringContaining('no PR was opened'),
     );
   });
 
@@ -1096,6 +1205,17 @@ describe('OrphanedTaskSweeper', () => {
       vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
       vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
       vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+      vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(
+        makeSession('done', 30 * 60 * 1000) as ReturnType<
+          typeof getLatestOpsSessionByTaskId
+        >,
+      );
+      vi.mocked(getSession).mockReturnValue({
+        session_id: 'sess-1',
+        session_type: 'ops',
+        task_id: 'notion:abc',
+      } as ReturnType<typeof getSession>);
+      vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
       vi.mocked(getOpsJournalEntry).mockReturnValue({
         task_id: 'notion:abc',
         project: 'proj-1',
@@ -1137,6 +1257,100 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+    vi.mocked(getOpsJournalEntry).mockReturnValue({
+      task_id: 'notion:abc',
+      project: 'proj-1',
+      milestone: 'm1',
+      state: 'pending',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('does not revert an Investigation task that staged a decision even though its ops_journal is still pending', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
+    ]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+    vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(
+      makeSession('done', 30 * 60 * 1000) as ReturnType<
+        typeof getLatestOpsSessionByTaskId
+      >,
+    );
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'sess-1',
+      session_type: 'ops',
+      task_id: 'notion:abc',
+    } as ReturnType<typeof getSession>);
+    // Staged a decision — sessionDidWork must count this even with the
+    // journal still at its initial 'pending' state (or missing).
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      { id: 'intent-1', kind: 'task.updateBody', state: 'staged' },
+    ] as ReturnType<typeof listStagedIntentsBySession>);
+    vi.mocked(getOpsJournalEntry).mockReturnValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('reverts an Investigation task whose only intents are superseded/withdrawn/rejected (nothing dispositionable)', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '🔎 Investigation'),
+    ]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+    vi.mocked(getLatestOpsSessionByTaskId).mockReturnValue(
+      makeSession('done', 30 * 60 * 1000) as ReturnType<
+        typeof getLatestOpsSessionByTaskId
+      >,
+    );
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'sess-1',
+      session_type: 'ops',
+      task_id: 'notion:abc',
+    } as ReturnType<typeof getSession>);
+    // All rows exist but none are still on (or landed on) the decision
+    // surface — expired/superseded, withdrawn, and rejected respectively.
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      { id: 'intent-1', kind: 'task.updateBody', state: 'superseded' },
+      { id: 'intent-2', kind: 'task.updateBody', state: 'withdrawn' },
+      { id: 'intent-3', kind: 'task.updateBody', state: 'rejected' },
+    ] as ReturnType<typeof listStagedIntentsBySession>);
     vi.mocked(getOpsJournalEntry).mockReturnValue({
       task_id: 'notion:abc',
       project: 'proj-1',
@@ -1225,6 +1439,211 @@ describe('OrphanedTaskSweeper', () => {
 
     expect(backend.listTasksByStatus).toHaveBeenCalledWith('🔄 In Progress');
     expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  // ── Docs sweep (widened type filter) ───────────────────────────────────────
+
+  it('reverts a Docs task at In Progress whose only session is terminal and produced nothing dispositionable', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '📝 Docs'),
+    ]);
+    vi.mocked(getLatestDocsSessionByTaskId).mockReturnValue(
+      makeDocsSession('done', 30 * 60 * 1000) as ReturnType<
+        typeof getLatestDocsSessionByTaskId
+      >,
+    );
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(undefined);
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'sess-1',
+      session_type: 'docs',
+      task_id: 'notion:abc',
+    } as ReturnType<typeof getSession>);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'task_orphan_reverted',
+        task_id: 'notion:abc',
+      }),
+    );
+  });
+
+  it('leaves a Docs task at In Progress whose session staged live work', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '📝 Docs'),
+    ]);
+    vi.mocked(getLatestDocsSessionByTaskId).mockReturnValue(
+      makeDocsSession('done', 30 * 60 * 1000) as ReturnType<
+        typeof getLatestDocsSessionByTaskId
+      >,
+    );
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(undefined);
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'sess-1',
+      session_type: 'docs',
+      task_id: 'notion:abc',
+    } as ReturnType<typeof getSession>);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      { id: 'intent-1', kind: 'notion.pageEdit', state: 'staged' },
+    ] as ReturnType<typeof listStagedIntentsBySession>);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('does not revert or nudge a Docs task whose session opened a human_merge_only PR still awaiting human merge', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '📝 Docs'),
+    ]);
+    vi.mocked(getLatestDocsSessionByTaskId).mockReturnValue(
+      makeDocsSession('done', 30 * 60 * 1000) as ReturnType<
+        typeof getLatestDocsSessionByTaskId
+      >,
+    );
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      id: 9,
+      pr_number: 512,
+      pr_url: 'https://github.com/o/r/pull/512',
+      session_id: 'sess-1',
+      state: 'open',
+      human_merge_only: 1,
+    } as ReturnType<typeof getPRBySessionId>);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('never sweeps a Design task at In Progress (exclusion not widened)', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '📐 Design'),
+    ]);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(getLatestDocsSessionByTaskId).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('resolves a docs session via getLatestDocsSessionByTaskId for the non-Code session lookup', async () => {
+    // Guards the fall-through hazard: the non-Code branch must resolve a
+    // docs-type session rather than always seeing undefined (which would
+    // fall straight through to an unconditional revert).
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '📝 Docs'),
+    ]);
+    vi.mocked(getLatestDocsSessionByTaskId).mockReturnValue(
+      makeDocsSession('done', 30 * 60 * 1000) as ReturnType<
+        typeof getLatestDocsSessionByTaskId
+      >,
+    );
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(undefined);
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'sess-1',
+      session_type: 'docs',
+      task_id: 'notion:abc',
+    } as ReturnType<typeof getSession>);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      { id: 'intent-1', kind: 'notion.pageEdit', state: 'staged' },
+    ] as ReturnType<typeof listStagedIntentsBySession>);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(getLatestDocsSessionByTaskId).toHaveBeenCalledWith('notion:abc');
+    // getLatestOpsSessionByTaskId is the ops-only lookup — must not be
+    // consulted for a Docs task.
+    expect(getLatestOpsSessionByTaskId).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('leaves a Docs task alone when its only session is currently running (non-terminal)', async () => {
+    // hasNonTerminalPlanningSessionForTask now includes 'docs' — a live
+    // (non-terminal) docs session must never fall through to a revert, which
+    // would re-dispatch a task actively being worked on.
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '📝 Docs'),
+    ]);
+    vi.mocked(getLatestDocsSessionByTaskId).mockReturnValue(
+      makeDocsSession('running', 30 * 60 * 1000) as ReturnType<
+        typeof getLatestDocsSessionByTaskId
+      >,
+    );
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(true);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
     expect(recordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'task_orphan_reverted' }),
     );

@@ -1,10 +1,12 @@
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import type {
   StagedIntent,
   StagedIntentRejectOutcome,
 } from '../api/stagedIntents';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { CollapsibleField } from './CollapsibleField';
+import { useHighlightedCardKeyboardActions } from '../types/panelKeyboard';
+import { groupBlockedCount } from './groupRejectOutcome';
 import panelStyles from './DecisionPanel.module.css';
 import intentStyles from './StagedIntentPanel.module.css';
 import styles from './GroupCard.module.css';
@@ -50,6 +52,12 @@ interface Props {
   selected?: boolean;
   className?: string;
   'data-testid'?: string;
+  /**
+   * True while this card is the active keyboard ring's current highlight —
+   * enables its local 'a' (approve group) / 'r' (focus reason field)
+   * bindings. Defaults to false outside a keyboard-ring context.
+   */
+  highlighted?: boolean;
 }
 
 /** A short, kind-labelled identifier for a member's collapsed summary line — never the full per-kind view, which is reserved for the expanded state. */
@@ -71,19 +79,38 @@ function actionSuffixFor(groupKind: StagedIntent['groupKind']): string {
   return '';
 }
 
+interface HeadProposal {
+  groomProposal?: StagedIntent['groomProposal'];
+  decisionProposal?: string | null;
+  investigation?: string | null;
+  /** The member whose field was used, so the expanded StagedIntentPanel for that member can suppress its own copy and avoid rendering it twice. */
+  sourceIntentId?: string;
+}
+
 /**
  * The card's shared head proposal: the first member's groomProposal, or —
- * when no member carries one — the first member's decisionProposal. Mirrors
- * the per-intent groomProposal/decisionProposal precedence StagedIntentPanel
- * already applies to a standalone intent.
+ * when no member carries one — the first member's decisionProposal, or —
+ * when no member carries either — the first member's investigation. Mirrors
+ * the per-intent groomProposal/decisionProposal/investigation precedence
+ * StagedIntentPanel already applies to a standalone intent.
  */
-function headProposalOf(members: GroupCardMember[]) {
+function headProposalOf(members: GroupCardMember[]): HeadProposal {
   for (const { intent } of members) {
-    if (intent.groomProposal) return { groomProposal: intent.groomProposal };
+    if (intent.groomProposal) {
+      return { groomProposal: intent.groomProposal, sourceIntentId: intent.id };
+    }
   }
   for (const { intent } of members) {
     if (intent.decisionProposal) {
-      return { decisionProposal: intent.decisionProposal };
+      return {
+        decisionProposal: intent.decisionProposal,
+        sourceIntentId: intent.id,
+      };
+    }
+  }
+  for (const { intent } of members) {
+    if (intent.investigation) {
+      return { investigation: intent.investigation, sourceIntentId: intent.id };
     }
   }
   return {};
@@ -125,26 +152,54 @@ export function GroupCard({
   selected,
   className,
   'data-testid': dataTestId,
+  highlighted = false,
 }: Props) {
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
   const toggle = (id: string) =>
     setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  const reasonInputRef = useRef<HTMLTextAreaElement>(null);
 
   const head = headProposalOf(members);
   const actionSuffix = actionSuffixFor(members[0]?.intent.groupKind);
-  const blockedCount = members.filter(
-    ({ intent }) =>
+  const memberIntents = members.map(({ intent }) => intent);
+  const visibleBlockedCount = memberIntents.filter(
+    (intent) =>
       intent.state === 'needs_revision' ||
       intent.state === 'pending_verification',
   ).length;
+  // The backend-derived count spans every group member, visible or not — a
+  // group blocked solely by a hidden (auto-rejected, live-session) member
+  // still needs to render blocked, just without a Recover affordance for a
+  // row the operator can't see (see groupNonCommittable below).
+  const blockedCount = groupBlockedCount(memberIntents);
+  const resolvedOutcome: StagedIntentRejectOutcome =
+    draft.outcome ?? (blockedCount > 0 ? 'decline' : 'pushback');
+  // Mirrors the backend's commit-guard predicate exactly (blocked member OR
+  // incomplete owning session) — the group card must render blocked and
+  // disable its controls whenever the backend would refuse the commit, not
+  // just when a blocked member happens to be visible. `blockedCount > 0`
+  // covers a directly-visible blocked member even before the backend's
+  // `groupBlocked` field is threaded through everywhere it's constructed.
+  const groupNonCommittable =
+    blockedCount > 0 ||
+    members.some(({ intent }) => intent.groupBlocked === true);
+  const controlsDisabled = disabled || groupNonCommittable;
+
+  useHighlightedCardKeyboardActions({
+    highlighted,
+    onApprove:
+      !inFlight && !controlsDisabled ? () => onApproveGroup() : undefined,
+    onFocusReject: () => reasonInputRef.current?.focus(),
+  });
 
   return (
     <div
       className={`${panelStyles.group}${className ? ` ${className}` : ''}${
         selected ? ` ${styles.selected}` : ''
-      }`}
+      }${highlighted ? ` ${styles.keyboardHighlighted}` : ''}`}
       onClick={onClick}
       data-testid={dataTestId ?? `group-card-${groupId}`}
+      data-keyboard-highlighted={highlighted || undefined}
     >
       <div className={panelStyles.groupHeader}>
         <span className={styles.cardTitleGroup}>
@@ -180,24 +235,28 @@ export function GroupCard({
       )}
       {groupError && <div className={panelStyles.groupError}>{groupError}</div>}
 
-      {blockedCount > 0 && (
+      {(blockedCount > 0 || groupNonCommittable) && (
         <div
           className={styles.recoveryBanner}
           onClick={(e) => e.stopPropagation()}
           data-testid={`recovery-banner-${groupId}`}
         >
           <span className={styles.recoveryBannerText}>
-            {blockedCount} blocked member{blockedCount === 1 ? '' : 's'}
+            {blockedCount > 0
+              ? `${blockedCount} blocked member${blockedCount === 1 ? '' : 's'}`
+              : 'Blocked — awaiting session'}
           </span>
-          <button
-            type="button"
-            className={styles.recoverButton}
-            disabled={inFlight || disabled}
-            onClick={onRecoverGroup}
-            data-testid={`recover-group-${groupId}`}
-          >
-            {inFlight ? 'Recovering…' : '↺ Recover'}
-          </button>
+          {visibleBlockedCount > 0 && (
+            <button
+              type="button"
+              className={styles.recoverButton}
+              disabled={inFlight || disabled}
+              onClick={onRecoverGroup}
+              data-testid={`recover-group-${groupId}`}
+            >
+              {inFlight ? 'Recovering…' : '↺ Recover'}
+            </button>
+          )}
         </div>
       )}
 
@@ -227,10 +286,17 @@ export function GroupCard({
             <CollapsibleField text={head.groomProposal.operationalSeed} />
           </dd>
         </dl>
+      ) : head.decisionProposal ? (
+        <p className={intentStyles.rationale}>
+          <CollapsibleField text={head.decisionProposal} />
+        </p>
       ) : (
-        head.decisionProposal && (
-          <p className={intentStyles.rationale}>
-            <CollapsibleField text={head.decisionProposal} />
+        head.investigation && (
+          <p
+            className={intentStyles.rationale}
+            data-testid="group-card-investigation"
+          >
+            <CollapsibleField text={head.investigation} />
           </p>
         )
       )}
@@ -279,6 +345,10 @@ export function GroupCard({
                     onApproved={onApproved}
                     hideActions={hideActions}
                     disabled={disabled}
+                    hideInvestigation={
+                      head.investigation !== undefined &&
+                      head.sourceIntentId === intent.id
+                    }
                   />
                 </div>
               )}
@@ -294,7 +364,7 @@ export function GroupCard({
         <button
           type="button"
           className={panelStyles.commitButton}
-          disabled={inFlight || disabled}
+          disabled={inFlight || controlsDisabled}
           onClick={onApproveGroup}
         >
           {inFlight ? 'Approving…' : `✓ Approve${actionSuffix}`}
@@ -307,9 +377,9 @@ export function GroupCard({
           <button
             type="button"
             role="radio"
-            aria-checked={draft.outcome === 'pushback'}
+            aria-checked={resolvedOutcome === 'pushback'}
             className={
-              draft.outcome === 'pushback'
+              resolvedOutcome === 'pushback'
                 ? panelStyles.outcomeOptionActive
                 : panelStyles.outcomeOption
             }
@@ -320,9 +390,9 @@ export function GroupCard({
           <button
             type="button"
             role="radio"
-            aria-checked={draft.outcome === 'decline'}
+            aria-checked={resolvedOutcome === 'decline'}
             className={
-              draft.outcome === 'decline'
+              resolvedOutcome === 'decline'
                 ? panelStyles.outcomeOptionActive
                 : panelStyles.outcomeOption
             }
@@ -332,13 +402,12 @@ export function GroupCard({
           </button>
         </div>
         <textarea
+          ref={reasonInputRef}
           className={panelStyles.reasonInput}
           placeholder={
-            draft.outcome === 'pushback'
+            resolvedOutcome === 'pushback'
               ? 'What should the session revise?'
-              : draft.outcome === 'decline'
-                ? 'Why is this being declined?'
-                : 'Choose Pushback or Decline, then explain why'
+              : 'Why is this being declined?'
           }
           value={draft.reason}
           onChange={(e) => onSetDraft({ reason: e.target.value })}
@@ -346,18 +415,14 @@ export function GroupCard({
         <button
           type="button"
           className={panelStyles.denyButton}
-          disabled={
-            inFlight || disabled || !draft.outcome || !draft.reason.trim()
-          }
+          disabled={inFlight || disabled || !draft.reason.trim()}
           onClick={onRejectGroup}
         >
           {inFlight
             ? 'Submitting…'
-            : draft.outcome === 'pushback'
+            : resolvedOutcome === 'pushback'
               ? `↩ Pushback${actionSuffix}`
-              : draft.outcome === 'decline'
-                ? `✕ Decline${actionSuffix}`
-                : `Reject${actionSuffix}`}
+              : `✕ Decline${actionSuffix}`}
         </button>
       </div>
     </div>

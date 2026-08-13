@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyTriageFloor,
+  applyTriageFloorForType,
   hasOpenQuestionsHeading,
   isInteractiveTaskType,
+  isTriageEligibleType,
   INTERACTIVE_TASK_TYPES,
+  TRIAGE_ELIGIBLE_TYPES,
   TRIAGE_VERDICTS,
 } from '../triage';
 import type { TriageVerdict } from '../triage';
@@ -19,6 +22,33 @@ describe('isInteractiveTaskType / INTERACTIVE_TASK_TYPES', () => {
   it('does not treat 💻 Code (auto-dispatched) as interactive', () => {
     expect(isInteractiveTaskType('💻 Code')).toBe(false);
     expect(isInteractiveTaskType(undefined)).toBe(false);
+  });
+});
+
+describe('isTriageEligibleType / TRIAGE_ELIGIBLE_TYPES', () => {
+  it('includes 📐 Design, 📋 Planning, 🔧 Operational, and 🔎 Investigation', () => {
+    expect(new Set(TRIAGE_ELIGIBLE_TYPES)).toEqual(
+      new Set([
+        '📐 Design',
+        '📋 Planning',
+        '🔧 Operational',
+        '🔎 Investigation',
+      ]),
+    );
+    expect(isTriageEligibleType('🔧 Operational')).toBe(true);
+    expect(isTriageEligibleType('🔎 Investigation')).toBe(true);
+    expect(isTriageEligibleType('📐 Design')).toBe(true);
+  });
+
+  it('does not treat 💻 Code as triage-eligible', () => {
+    expect(isTriageEligibleType('💻 Code')).toBe(false);
+    expect(isTriageEligibleType(undefined)).toBe(false);
+  });
+
+  it('does not widen INTERACTIVE_TASK_TYPES itself', () => {
+    expect(new Set(INTERACTIVE_TASK_TYPES)).toEqual(
+      new Set(['📐 Design', '📋 Planning']),
+    );
   });
 });
 
@@ -129,6 +159,75 @@ describe('applyTriageFloor', () => {
       hasOpenQuestionsHeading: hasOpenQuestionsHeading(body),
     });
     expect(result).toEqual({ verdict: 'clean', reasons: [] });
+  });
+});
+
+describe('applyTriageFloorForType', () => {
+  const CLEAN_FACTS = {
+    hardBlockDepNotDone: false,
+    hasOpenQuestionsHeading: true,
+    hasRoutedConstraintConflict: false,
+  };
+
+  it('leaves a clean 🔧 Operational proposal clean when every fact is clean', () => {
+    const result = applyTriageFloorForType('🔧 Operational', {
+      proposedVerdict: 'clean',
+      ...CLEAN_FACTS,
+    });
+    expect(result).toEqual({ verdict: 'clean', reasons: [] });
+  });
+
+  it('leaves a clean 🔎 Investigation proposal clean when every fact is clean', () => {
+    const result = applyTriageFloorForType('🔎 Investigation', {
+      proposedVerdict: 'clean',
+      ...CLEAN_FACTS,
+    });
+    expect(result).toEqual({ verdict: 'clean', reasons: [] });
+  });
+
+  it('floors an 🔧 Operational proposal to blocked when a hard-block dependency is not Done', () => {
+    const result = applyTriageFloorForType('🔧 Operational', {
+      proposedVerdict: 'clean',
+      ...CLEAN_FACTS,
+      hardBlockDepNotDone: true,
+    });
+    expect(result.verdict).toBe('blocked');
+  });
+
+  it('names the 🔧 Operational required heading ("Targets / surfaces affected") when it is missing', () => {
+    const result = applyTriageFloorForType('🔧 Operational', {
+      proposedVerdict: 'clean',
+      ...CLEAN_FACTS,
+      hasOpenQuestionsHeading: false,
+    });
+    expect(result.verdict).toBe('needs-attention');
+    expect(
+      result.reasons.some((r) => r.includes('Targets / surfaces affected')),
+    ).toBe(true);
+  });
+
+  it('names the 🔎 Investigation required heading ("Deliverables") when it is missing', () => {
+    const result = applyTriageFloorForType('🔎 Investigation', {
+      proposedVerdict: 'clean',
+      ...CLEAN_FACTS,
+      hasOpenQuestionsHeading: false,
+    });
+    expect(result.verdict).toBe('needs-attention');
+    expect(result.reasons.some((r) => r.includes('Deliverables'))).toBe(true);
+  });
+
+  it('matches applyTriageFloor exactly for 📐 Design (same "## Open Questions" label)', () => {
+    const forDesign = applyTriageFloorForType('📐 Design', {
+      proposedVerdict: 'clean',
+      ...CLEAN_FACTS,
+      hasOpenQuestionsHeading: false,
+    });
+    const generic = applyTriageFloor({
+      proposedVerdict: 'clean',
+      ...CLEAN_FACTS,
+      hasOpenQuestionsHeading: false,
+    });
+    expect(forDesign).toEqual(generic);
   });
 });
 

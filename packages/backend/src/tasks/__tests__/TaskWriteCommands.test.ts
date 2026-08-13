@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockGetTaskCache = vi.fn();
 const mockGetMergeCommitForTask = vi.fn();
 const mockDeleteTaskCacheRow = vi.fn();
+const mockGetAllBoardCacheTasks = vi.fn();
 const mockRecordEvent = vi.fn();
 const mockInsertItem = vi.fn();
 const mockRecordAccretionMarker = vi.fn();
@@ -18,6 +19,8 @@ vi.mock('../../db/queries', () => ({
   getMergeCommitForTask: (...args: unknown[]) =>
     mockGetMergeCommitForTask(...args),
   deleteTaskCacheRow: (...args: unknown[]) => mockDeleteTaskCacheRow(...args),
+  getAllBoardCacheTasks: (...args: unknown[]) =>
+    mockGetAllBoardCacheTasks(...args),
 }));
 
 vi.mock('../../audit/AuditLog', () => ({
@@ -112,6 +115,8 @@ beforeEach(() => {
   mockGetMergeCommitForTask.mockReset();
   mockGetMergeCommitForTask.mockReturnValue(null);
   mockDeleteTaskCacheRow.mockReset();
+  mockGetAllBoardCacheTasks.mockReset();
+  mockGetAllBoardCacheTasks.mockReturnValue([]);
   mockRecordEvent.mockReset();
   mockInsertItem.mockReset();
   mockRecordAccretionMarker.mockReset();
@@ -155,7 +160,12 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
 
     await commands.setStatus('notion:abc', 'Ready', {
       groomingGate: {
-        size_check: { decision: 'no_split' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
       },
     });
@@ -165,7 +175,12 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
       '🗂️ Ready',
       expect.objectContaining({
         groomingGate: {
-          size_check: { decision: 'no_split' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       }),
@@ -210,7 +225,12 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
       source: 'human',
       sessionId: 'sess-1',
       groomingGate: {
-        size_check: { decision: 'no_split' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
       },
     });
@@ -222,7 +242,12 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
         source: 'human',
         sessionId: 'sess-1',
         groomingGate: {
-          size_check: { decision: 'no_split' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       },
@@ -238,12 +263,128 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
 
     await commands.setStatus('notion:abc', 'Ready', {
       groomingGate: {
-        size_check: { decision: 'no_split' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
       },
     });
 
     expect(mockDeleteTaskCacheRow).not.toHaveBeenCalled();
+  });
+});
+
+describe('TaskWriteCommands.setStatus — Deferred surfaces dependents', () => {
+  it('emits an audit event naming the deferred task and its dependent when the dependent is Ready', async () => {
+    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Ready));
+    mockGetAllBoardCacheTasks.mockReturnValue([
+      { id: 'notion:blocker', status: '🗂️ Ready', dependsOn: [] },
+      {
+        id: 'notion:dependent',
+        status: '🗂️ Ready',
+        dependsOn: ['notion:blocker'],
+      },
+    ]);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:blocker', 'Deferred');
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'task_deferred_blocks_dependents',
+        task_id: 'notion:blocker',
+        payload: expect.objectContaining({
+          deferredTaskId: 'notion:blocker',
+          dependentTaskIds: ['notion:dependent'],
+        }),
+      }),
+    );
+  });
+
+  it('emits no such event when the deferred task has no dependents', async () => {
+    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Ready));
+    mockGetAllBoardCacheTasks.mockReturnValue([
+      { id: 'notion:blocker', status: '🗂️ Ready', dependsOn: [] },
+      { id: 'notion:unrelated', status: '🗂️ Ready', dependsOn: [] },
+    ]);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:blocker', 'Deferred');
+
+    expect(mockRecordEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not report a dependent already at a terminal status', async () => {
+    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Ready));
+    mockGetAllBoardCacheTasks.mockReturnValue([
+      { id: 'notion:blocker', status: '🗂️ Ready', dependsOn: [] },
+      {
+        id: 'notion:done-dependent',
+        status: '✅ Done',
+        dependsOn: ['notion:blocker'],
+      },
+    ]);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:blocker', 'Deferred');
+
+    expect(mockRecordEvent).not.toHaveBeenCalled();
+  });
+
+  it('leaves the dependent untouched — no setDependsOn write is issued', async () => {
+    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Ready));
+    mockGetAllBoardCacheTasks.mockReturnValue([
+      { id: 'notion:blocker', status: '🗂️ Ready', dependsOn: [] },
+      {
+        id: 'notion:dependent',
+        status: '🗂️ Ready',
+        dependsOn: ['notion:blocker'],
+      },
+    ]);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:blocker', 'Deferred');
+
+    expect(backend.setDependsOn).not.toHaveBeenCalled();
+  });
+
+  it('matches a dependent whose dependsOn uses the notion:-prefixed form against a bare-uuid task row', async () => {
+    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Ready));
+    mockGetAllBoardCacheTasks.mockReturnValue([
+      {
+        id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        status: '🗂️ Ready',
+        dependsOn: [],
+      },
+      {
+        id: 'notion:dependent',
+        status: '🗂️ Ready',
+        dependsOn: ['notion:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
+      },
+    ]);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus(
+      'notion:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      'Deferred',
+    );
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'task_deferred_blocks_dependents',
+        payload: expect.objectContaining({
+          dependentTaskIds: ['notion:dependent'],
+        }),
+      }),
+    );
   });
 });
 
@@ -331,7 +472,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
     try {
       await commands.setStatus('notion:abc', 'Ready', {
         groomingGate: {
-          size_check: { decision: 'no_split' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       });
@@ -357,7 +503,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
 
     await commands.setStatus('notion:abc', 'Ready', {
       groomingGate: {
-        size_check: { decision: 'no_split' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
       },
     });
@@ -367,7 +518,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       '🗂️ Ready',
       expect.objectContaining({
         groomingGate: {
-          size_check: { decision: 'no_split' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       }),
@@ -392,7 +548,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       sessionId: 'sess-1',
       readinessOverride: { reason: 'human reviewed and approved' },
       groomingGate: {
-        size_check: { decision: 'no_split' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
       },
     });
@@ -478,6 +639,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'n/a' },
+          // 🔧 Operational is triage-eligible (see planning/triage.ts's
+          // TRIAGE_ELIGIBLE_TYPES), so checkGroomingPromotionGate requires a
+          // recorded triage verdict before it even reaches checkReadiness —
+          // supply one so this test still reaches (and exercises) the
+          // readiness gate it's actually testing.
+          triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
         },
       });
     } catch (err) {
@@ -579,7 +746,8 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
         fetchTaskPage: vi
           .fn()
           .mockResolvedValue(
-            '## Open Questions\n- What supplies the credential?\n',
+            '## Open Questions\n- What supplies the credential?\n\n' +
+              '## Files / paths affected\n- packages/backend/src/abc.ts *(new)*\n',
           ),
       });
       const commands = new BackendTaskWriteCommands(backend);
@@ -588,7 +756,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       try {
         await commands.setStatus(id, 'Ready', {
           groomingGate: {
-            size_check: { decision: 'no_split' },
+            size_check: {
+              decision: 'no_split',
+              files: 1,
+              loc: 40,
+              loc_method: 'estimated',
+            },
             type_check: { decision: 'none' },
             filesPathsEntries: [
               {
@@ -690,7 +863,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
 
     await commands.setStatus('notion:abc', 'Ready', {
       groomingGate: {
-        size_check: { decision: 'no_split' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
       },
     });
@@ -700,7 +878,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
       '🗂️ Ready',
       expect.objectContaining({
         groomingGate: {
-          size_check: { decision: 'no_split' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       }),
@@ -774,7 +957,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
     try {
       await commands.setStatus('notion:abc', 'Ready', {
         groomingGate: {
-          size_check: { decision: 'no_split' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       });
@@ -804,7 +992,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
     try {
       await commands.setStatus('notion:abc', 'Ready', {
         groomingGate: {
-          size_check: { decision: 'no_split' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       });
@@ -826,13 +1019,23 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
     mockGetAccretionMarker.mockReturnValue({ decision: 'items' });
     mockGetSeedAccretionMarker.mockReturnValue({ decision: 'none' });
     const backend = makeBackend({
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Summary\nAll good.\n\n' +
+            '## Files / paths affected\n- packages/backend/src/abc.ts *(new)*\n',
+        ),
     });
     const commands = new BackendTaskWriteCommands(backend);
 
     await commands.setStatus('notion:abc', 'Ready', {
       groomingGate: {
-        size_check: { decision: 'no_split' },
+        size_check: {
+          decision: 'no_split',
+          files: 1,
+          loc: 40,
+          loc_method: 'estimated',
+        },
         type_check: { decision: 'none' },
         filesPathsEntries: [
           {
@@ -849,7 +1052,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
       '🗂️ Ready',
       expect.objectContaining({
         groomingGate: {
-          size_check: { decision: 'no_split' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
           filesPathsEntries: [
             {
@@ -1231,6 +1439,83 @@ describe('TaskWriteCommands.moveTask', () => {
       'notion:new-id',
       undefined,
     );
+  });
+
+  it('moves a Ready Operational task whose body fails the readiness gate without throwing, preserving its status', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatusAndType('Ready', '🔧 Operational'),
+    );
+    const backend = makeMoveBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+    const params = makeMoveParams();
+    params.content.status = 'Ready';
+    // Missing the required "Targets / surfaces affected" heading — this
+    // body would fail checkReadiness if the gate re-ran on the move path.
+    params.content.bodyMarkdown = '## Files / paths affected\nsome/file.ts';
+
+    const result = await commands.moveTask(params);
+
+    expect(result.newTaskId).toBe('notion:new-id');
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:new-id',
+      STATUS_DISPLAY['Ready'],
+      undefined,
+    );
+    expect(backend.archive).not.toHaveBeenCalledWith(
+      'notion:new-id',
+      undefined,
+    );
+    expect(result.readinessAdvisory).toBeDefined();
+    expect(result.readinessAdvisory!.length).toBeGreaterThan(0);
+  });
+
+  it('never raises ReadinessGateError on the move path', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatusAndType('Ready', '🔧 Operational'),
+    );
+    const backend = makeMoveBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+    const params = makeMoveParams();
+    params.content.status = 'Ready';
+    params.content.bodyMarkdown = '## Files / paths affected\nsome/file.ts';
+
+    await expect(commands.moveTask(params)).resolves.not.toThrow();
+  });
+
+  it('preserves status, type, priority, and body faithfully across a move', async () => {
+    mockGetTaskCache.mockReturnValue(cacheRowWithStatus('In Progress'));
+    const backend = makeMoveBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+    const params = makeMoveParams();
+    params.content = {
+      title: 'Some task',
+      bodyMarkdown: '## Summary\nDetailed body content',
+      status: 'In Progress',
+      type: '💻 Code',
+      priority: 'High',
+    };
+
+    const result = await commands.moveTask(params);
+
+    expect(backend.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Some task',
+        type: '💻 Code',
+        priority: 'High',
+      }),
+      undefined,
+    );
+    expect(backend.updateBodyRaw).toHaveBeenCalledWith(
+      'notion:new-id',
+      '## Summary\nDetailed body content',
+      undefined,
+    );
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:new-id',
+      STATUS_DISPLAY['In Progress'],
+      undefined,
+    );
+    expect(result.newTaskId).toBe('notion:new-id');
   });
 });
 
@@ -1730,7 +2015,12 @@ describe('TaskWriteCommands.flipToReady', () => {
     milestone: 'M12',
     dependsOn: ['notion:dep-1'],
     groomingGate: {
-      size_check: { decision: 'no_split' as const },
+      size_check: {
+        decision: 'no_split' as const,
+        files: 1,
+        loc: 40,
+        loc_method: 'estimated',
+      },
       type_check: { decision: 'none' as const },
     },
     gateContribution: {
@@ -1908,7 +2198,12 @@ describe('TaskWriteCommands + NotionTaskBackend — raw Notion UUID taskId (regr
     await expect(
       commands.setStatus(rawTaskId, 'Ready', {
         groomingGate: {
-          size_check: { decision: 'no_split' },
+          size_check: {
+            decision: 'no_split',
+            files: 1,
+            loc: 40,
+            loc_method: 'estimated',
+          },
           type_check: { decision: 'none' },
         },
       }),

@@ -17,8 +17,9 @@ interface SeriesDef {
 /**
  * Tasks / gate / seed, not the aggregate alone — a large near-static axis
  * (e.g. gate) would otherwise swamp a shared linear scale and hide real
- * movement in a smaller one (e.g. tasks). Each series is normalized to its
- * own range, so a small axis's movement stays visible next to a big one's.
+ * movement in a smaller one (e.g. tasks). Each series is scaled to its own
+ * [0, max] domain, so a small axis's movement stays visible next to a big
+ * one's while zero always anchors to the plot's bottom.
  */
 const SERIES: SeriesDef[] = [
   { key: 'tasks_open', label: 'Tasks', className: styles.seriesTasks },
@@ -26,23 +27,31 @@ const SERIES: SeriesDef[] = [
   { key: 'seed_open', label: 'Seed', className: styles.seriesSeed },
 ];
 
+/**
+ * Zero-anchored: domain is always [0, max(values)], never [min, max]. A
+ * flat-zero series (e.g. seed_open staying 0 for a milestone's whole life)
+ * must draw at the bottom of the plot, not float to the visual center.
+ */
 function normalize(values: number[]): number[] {
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min;
-  if (range === 0) return values.map(() => 0.5);
-  return values.map((v) => (v - min) / range);
+  const max = Math.max(...values, 0);
+  if (max === 0) return values.map(() => 0);
+  return values.map((v) => v / max);
 }
 
-function toPath(normalized: number[]): string {
+function toPath(normalized: number[], timestamps: number[]): string {
   if (normalized.length === 0) return '';
   if (normalized.length === 1) {
     const y = HEIGHT - normalized[0] * HEIGHT;
     return `M0,${y} L${WIDTH},${y}`;
   }
-  const step = WIDTH / (normalized.length - 1);
+  const minTs = Math.min(...timestamps);
+  const maxTs = Math.max(...timestamps);
+  const tsRange = maxTs - minTs;
   return normalized
-    .map((v, i) => `${i === 0 ? 'M' : 'L'}${i * step},${HEIGHT - v * HEIGHT}`)
+    .map((v, i) => {
+      const x = tsRange === 0 ? 0 : ((timestamps[i] - minTs) / tsRange) * WIDTH;
+      return `${i === 0 ? 'M' : 'L'}${x},${HEIGHT - v * HEIGHT}`;
+    })
     .join(' ');
 }
 
@@ -56,6 +65,8 @@ function formatRange(first: number, last: number, range: number): string {
 export function ConvergenceSparkline({ points }: Props) {
   if (points.length === 0) return null;
 
+  const timestamps = points.map((p) => new Date(p.ts).getTime());
+
   const series = SERIES.map(({ key, label, className }) => {
     const values = points.map((p) => Number(p[key]));
     const first = values[0];
@@ -63,7 +74,7 @@ export function ConvergenceSparkline({ points }: Props) {
     const min = Math.min(...values);
     const max = Math.max(...values);
     const range = max - min;
-    const path = toPath(normalize(values));
+    const path = toPath(normalize(values), timestamps);
     return { key, label, className, path, first, last, range };
   });
 

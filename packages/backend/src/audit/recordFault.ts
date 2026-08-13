@@ -1,7 +1,10 @@
 import { recordEvent } from './AuditLog';
 import { logger } from '../logger';
 
-export type ProcessFaultKind = 'uncaughtException' | 'unhandledRejection';
+export type ProcessFaultKind =
+  | 'uncaughtException'
+  | 'unhandledRejection'
+  | 'routeError';
 
 /**
  * Durably records a process-level fault (uncaughtException / unhandledRejection).

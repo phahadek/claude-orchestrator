@@ -7,6 +7,7 @@ vi.mock('../db/db.js', async () => {
 
 import { db } from '../db/db.js';
 import { hasNonTerminalPlanningSessionForTask } from '../db/queries';
+import { PLANNING_SESSION_TYPES } from '../session/sessionPredicates';
 
 let sessionCounter = 0;
 
@@ -121,5 +122,63 @@ describe('hasNonTerminalPlanningSessionForTask', () => {
         'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
       ),
     ).toBe(true);
+  });
+
+  it('returns true for a live (non-terminal, unarchived) docs session', () => {
+    insertSession({
+      taskId: 'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      status: 'running',
+      sessionType: 'docs',
+      archived: false,
+    });
+    expect(
+      hasNonTerminalPlanningSessionForTask(
+        'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      ),
+    ).toBe(true);
+  });
+
+  it('returns false for a terminal (done) docs session', () => {
+    insertSession({
+      taskId: 'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      status: 'done',
+      sessionType: 'docs',
+    });
+    expect(
+      hasNonTerminalPlanningSessionForTask(
+        'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      ),
+    ).toBe(false);
+  });
+
+  it('returns true for a live (non-terminal, unarchived) split session', () => {
+    insertSession({
+      taskId: 'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      status: 'running',
+      sessionType: 'split',
+      archived: false,
+    });
+    expect(
+      hasNonTerminalPlanningSessionForTask(
+        'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      ),
+    ).toBe(true);
+  });
+
+  it('matches every type in the canonical PLANNING_SESSION_TYPES list — asserts the two enumerations cannot drift', () => {
+    for (const sessionType of PLANNING_SESSION_TYPES) {
+      sessionCounter = 0;
+      db.prepare('DELETE FROM sessions').run();
+      insertSession({
+        taskId: 'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+        status: 'active',
+        sessionType,
+      });
+      expect(
+        hasNonTerminalPlanningSessionForTask(
+          'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+        ),
+      ).toBe(true);
+    }
   });
 });

@@ -12,9 +12,8 @@ packages/frontend/.env
 *.db-wal
 *.db-journal
 
-# Claude Code / tool-generated directories — but keep tracked templates (.example)
+# Claude Code / tool-generated directories
 .claude/*
-!.claude/local-context.md.example
 .claire/
 
 # Skill caches (e.g. /groom loader output) — host-specific, never committed
@@ -44,5 +43,8 @@ commit_msg.*
 installers/windows/payload/
 installers/windows/dist/
 
-# Backend test isolation scratch dir (per-worker XDG_DATA_HOME — see testSetupDb.ts)
-packages/backend/.test-scratch-datadir-DO-NOT-COMMIT/
+# Backend test isolation scratch dir (per-worker XDG_DATA_HOME — see
+# testScratchDataDir.ts). Unanchored so it matches wherever it appears
+# (package-anchored by the resolver, but this is defence-in-depth against
+# any cwd it might still be created under).
+.test-scratch-datadir-DO-NOT-COMMIT/

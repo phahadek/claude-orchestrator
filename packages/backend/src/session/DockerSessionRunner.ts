@@ -7,12 +7,24 @@ import type {
   SessionRunnerOptions,
 } from './SessionRunner';
 import { logger } from '../logger';
-import { isPlanningSession } from './sessionPredicates';
+import { isPlanningSession, isCodeSession } from './sessionPredicates';
+import {
+  getSessionAddDirs,
+  getTestCommandDenyPatterns,
+  loadOrchestratorConfig,
+} from './orchestrator-config';
 import { createScratchDir, removeScratchDir } from './planningScratchDir';
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[DockerSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
 }
+
+/**
+ * How long endSession() waits for the exec process to exit on its own
+ * after stdin close before escalating to a forceful kill() + container
+ * teardown.
+ */
+const GRACEFUL_END_TIMEOUT_MS = 15_000;
 
 /**
  * Container name prefix for session containers.
@@ -78,9 +90,22 @@ export class DockerSessionRunner implements ISessionRunner {
       mcpConfigPath,
       systemPromptFilePath,
       sessionType,
+      granted,
     } = options;
     const isPlanning = Boolean(sessionType && isPlanningSession(sessionType));
     this._isPlanning = isPlanning;
+
+    // Per-session-type filesystem read envelope baseline plus any granted
+    // `read:path:` capability — see orchestrator-config.ts#getSessionAddDirs.
+    // `--add-dir` inside the container only reaches paths already bind-
+    // mounted into it, so each entry here must also be added as a read-only
+    // `-v <path>:<path>:ro` mount on the `docker run` invocation below, not
+    // just appended to the `claude` exec's `--add-dir` list.
+    const addDirs = getSessionAddDirs(
+      sessionType ?? '',
+      granted ?? [],
+      worktreePath,
+    );
 
     // Planning sessions share `cwd` === the project checkout (worktreePath
     // here) across concurrent sessions. Give them a writable per-session
@@ -145,6 +170,9 @@ export class DockerSessionRunner implements ISessionRunner {
           `-v "${claudeBin}:${claudeBin}:ro"`,
           // Mount claude credentials and config (read-only)
           `-v "${claudeConfigDir}:/root/.claude:ro"`,
+          // Per-type read envelope baseline + granted read:path: roots
+          // (read-only) — matches the --add-dir list on the claude exec below.
+          ...addDirs.map((dir) => `-v "${dir}:${dir}:ro"`),
           // Egress proxy env vars
           `-e HTTPS_PROXY=${proxyAddr}`,
           `-e HTTP_PROXY=${proxyAddr}`,
@@ -170,6 +198,16 @@ export class DockerSessionRunner implements ISessionRunner {
     // Build claude command arguments (same as CliSessionRunner)
     const permissionMode = isPlanning ? 'default' : 'acceptEdits';
 
+    // Code sessions must not be able to run the project's test commands
+    // directly — they're denied at the SDK permission layer (via the CLI's
+    // --settings flag, the settings.json-based route to the same
+    // `permissions.deny` field the Agent SDK exposes) and routed through
+    // test.request instead (see the Flaky/CI section of orchestrator-claudemd.ts).
+    const testDenyPatterns =
+      sessionType && isCodeSession(sessionType)
+        ? getTestCommandDenyPatterns(loadOrchestratorConfig(worktreePath).test)
+        : [];
+
     const claudeArgs = [
       ...(resumeSessionId
         ? ['--resume', resumeSessionId]
@@ -183,6 +221,12 @@ export class DockerSessionRunner implements ISessionRunner {
       '--permission-mode',
       permissionMode,
       ...(model ? ['--model', model] : []),
+      ...(testDenyPatterns.length
+        ? [
+            '--settings',
+            JSON.stringify({ permissions: { deny: testDenyPatterns } }),
+          ]
+        : []),
       ...(mcpConfigPath
         ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']
         : []),
@@ -194,7 +238,7 @@ export class DockerSessionRunner implements ISessionRunner {
       ...(isPlanning
         ? ['--disallowed-tools', ...PLANNING_DISALLOWED_TOOLS]
         : []),
-      ...(isPlanning ? ['--add-dir', '/'] : []),
+      ...addDirs.flatMap((dir) => ['--add-dir', dir]),
     ];
 
     log(this.sessionId, `exec claude in container: ${claudeArgs.join(' ')}`);
@@ -277,8 +321,8 @@ export class DockerSessionRunner implements ISessionRunner {
     return exitCode;
   }
 
-  sendMessage(message: string): void {
-    if (!this.execProc?.stdin?.writable) return;
+  sendMessage(message: string): boolean {
+    if (!this.execProc?.stdin?.writable) return false;
     try {
       this.execProc.stdin.write(
         JSON.stringify({
@@ -286,18 +330,50 @@ export class DockerSessionRunner implements ISessionRunner {
           message: { role: 'user', content: message },
         }) + '\n',
       );
+      return true;
     } catch (err) {
       log(
         this.sessionId,
-        `sendMessage stdin.write failed (ignored): ${(err as Error).message}`,
+        `sendMessage stdin.write failed: ${(err as Error).message}`,
       );
+      return false;
     }
   }
 
-  endSession(): void {
+  /**
+   * @returns true if the exec process did not exit on its own within the
+   * grace period and had to be escalated to a forceful kill() — callers use
+   * this to decide whether the escalation is audit-worthy.
+   */
+  async endSession(): Promise<boolean> {
     if (this.execProc?.stdin?.writable) {
       this.execProc.stdin.end();
     }
+    return this.waitForExitOrEscalate();
+  }
+
+  /**
+   * Waits up to GRACEFUL_END_TIMEOUT_MS for the exec process to exit on its
+   * own after stdin close. If it does not, escalates to kill() (SIGTERM,
+   * then SIGKILL, then container/network teardown) — a container surviving
+   * its session is exactly the kind of leak this is meant to catch.
+   */
+  private async waitForExitOrEscalate(): Promise<boolean> {
+    if (!this.execProc || this.execProc.exitCode !== null) return false;
+    const exited = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), GRACEFUL_END_TIMEOUT_MS);
+      this.execProc!.once('exit', () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+    if (exited) return false;
+    log(
+      this.sessionId,
+      `did not exit within ${GRACEFUL_END_TIMEOUT_MS}ms of stdin close; escalating to kill()`,
+    );
+    await this.kill();
+    return true;
   }
 
   async kill(): Promise<void> {

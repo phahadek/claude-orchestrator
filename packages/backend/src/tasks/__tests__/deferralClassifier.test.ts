@@ -92,24 +92,31 @@ vi.mock('../../logger', () => ({
   },
 }));
 
-import { classifyReadyProposal } from '../deferralClassifier';
+import {
+  classifyReadyProposal,
+  __resetClassifiedIntentIdsForTest,
+} from '../deferralClassifier';
 
-/** A fake ChildProcess: emits stdout data then closes with the given exit code. */
+/** A fake ChildProcess: emits stdout/stderr data then closes with the given exit code. */
 function fakeClassifyProcess(opts: {
   stdout?: string;
+  stderr?: string;
   exitCode?: number;
   neverClose?: boolean;
 }) {
   const proc = new EventEmitter() as EventEmitter & {
     stdout: PassThrough;
+    stderr: PassThrough;
     kill: (signal?: string) => void;
     pid: number;
   };
   proc.stdout = new PassThrough();
+  proc.stderr = new PassThrough();
   proc.pid = 12345;
   proc.kill = vi.fn();
   queueMicrotask(() => {
     if (opts.stdout) proc.stdout.emit('data', Buffer.from(opts.stdout));
+    if (opts.stderr) proc.stderr.emit('data', Buffer.from(opts.stderr));
     if (!opts.neverClose) proc.emit('close', opts.exitCode ?? 0);
   });
   return proc;
@@ -127,6 +134,7 @@ function cliJsonWrap(verdict: unknown): string {
  */
 function stubSpawn(opts: {
   stdout?: string;
+  stderr?: string;
   exitCode?: number;
   neverClose?: boolean;
 }) {
@@ -164,6 +172,7 @@ beforeEach(() => {
   mockLoggerDebug.mockReset();
   mockLoggerWarn.mockReset();
   mockLoggerInfo.mockReset();
+  __resetClassifiedIntentIdsForTest();
 
   mockGetTaskBackend.mockReturnValue({
     fetchTaskPage: vi.fn().mockResolvedValue('A clean, ready task body.'),
@@ -214,6 +223,17 @@ describe('classifyReadyProposal — type scope', () => {
     mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
     mockGetTaskCache.mockReturnValue({
       raw_json: JSON.stringify({ type: '🔧 Operational' }),
+    });
+    // Operational carries its own required-heading + reconcile-and-capture
+    // floor facts (readinessGate.ts's TYPE_FLOOR_FACTS) — satisfy those so
+    // this test isolates the type-scope guard, not the readiness guard.
+    mockGetTaskBackend.mockReturnValue({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Targets / surfaces affected\n- billing config catalog\n\n' +
+            '### 👁️ Manual verification\n- worker reconciled and captured the change signal\n',
+        ),
     });
     stubSpawn({
       stdout: cliJsonWrap({ status: 'clean', confidence: 0, findings: [] }),
@@ -694,6 +714,60 @@ describe('classifyReadyProposal — guard logging', () => {
       stdout: cliJsonWrap({ status: 'clean', confidence: 0, findings: [] }),
     });
     await classifyReadyProposal('group-1');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('classifyDeferral — stderr draining', () => {
+  it('records status:errored and warns with the captured stderr text on a non-zero exit', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({ stdout: '', stderr: 'boom: something broke', exitCode: 1 });
+
+    await classifyReadyProposal('group-1');
+
+    const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
+    expect(written.status).toBe('errored');
+    const warned = mockLoggerWarn.mock.calls.map((c) => c[0]).join('\n');
+    expect(warned).toContain('boom: something broke');
+  });
+
+  it('completes rather than hanging when the child writes more than the ~64KB pipe buffer to stderr', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    const bigStderr = 'x'.repeat(100_000);
+    stubSpawn({
+      stdout: cliJsonWrap({ status: 'clean', confidence: 0, findings: [] }),
+      stderr: bigStderr,
+      exitCode: 0,
+    });
+
+    await classifyReadyProposal('group-1');
+
+    expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
+    const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
+    expect(written.status).toBe('clean');
+  });
+});
+
+describe('classifyReadyProposal — per-intent idempotence', () => {
+  it('classifies a Ready intent exactly once across two calls for the same groupId (verify path + commit path)', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({
+      stdout: cliJsonWrap({ status: 'clean', confidence: 0, findings: [] }),
+    });
+
+    await classifyReadyProposal('group-1');
+    await classifyReadyProposal('group-1');
+
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
   });

@@ -133,6 +133,94 @@
   color: var(--error, #f38ba8);
 }
 
+.inFlightBadge {
+  display: inline-block;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  width: fit-content;
+  background: rgba(137, 180, 250, 0.15);
+  color: var(--accent, #89b4fa);
+}
+
+.inFlightIndicator {
+  margin-left: 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent, #89b4fa);
+  white-space: nowrap;
+}
+
+.awaitingSetupBadge {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 0.8125rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  width: fit-content;
+  border: none;
+  background: rgba(249, 226, 175, 0.15);
+  color: var(--warning, #f9e2af);
+  cursor: pointer;
+}
+
+.awaitingSetupBadge:hover {
+  background: rgba(249, 226, 175, 0.25);
+}
+
+.awaitingSetupIndicator {
+  margin-left: 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--warning, #f9e2af);
+  white-space: nowrap;
+}
+
+.awaitingSetupRow td {
+  background: rgba(249, 226, 175, 0.06);
+}
+
+.parkedBadge {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 0.8125rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  width: fit-content;
+  border: none;
+  background: rgba(203, 166, 247, 0.15);
+  color: var(--mauve, #cba6f7);
+  cursor: pointer;
+}
+
+.parkedBadge:hover {
+  background: rgba(203, 166, 247, 0.25);
+}
+
+.parkedRow td {
+  background: rgba(203, 166, 247, 0.06);
+}
+
+.parkedDueCount {
+  font-weight: 700;
+  color: var(--red, #f38ba8);
+}
+
+.parkedDueIndicator {
+  margin-left: 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--red, #f38ba8);
+  white-space: nowrap;
+}
+
+.parkedNotDueIndicator {
+  margin-left: 8px;
+  font-size: 0.75rem;
+  color: var(--subtext, #a6adc8);
+  white-space: nowrap;
+}
+
 .filters {
   display: flex;
   align-items: center;

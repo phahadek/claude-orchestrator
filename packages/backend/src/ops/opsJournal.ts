@@ -1,4 +1,5 @@
 import { recordEvent } from '../audit/AuditLog';
+import { resolveCapabilityDisqualification } from '../audit/capabilityDispositionMining';
 import {
   getOpsJournalEntry,
   listOpsJournalEntries,
@@ -91,6 +92,100 @@ export function isValidOpsTransition(from: OpsState, to: OpsState): boolean {
   return ALLOWED_TRANSITIONS[from].includes(to);
 }
 
+/**
+ * Session-reachable terminal ops_journal states, by task Type — resolved at
+ * grooming (task 3b822f91-52f3-8180). A dispatched/interactive 🔧
+ * Operational run drives the journal to applied-pending-confirm, carrying a
+ * reconciliation assertion (see OpsReconciliationAssertion) on the
+ * completing intent — the orchestrator evaluates it automatically once that
+ * intent applies (routes/stagedIntents.ts's applyIntent), advancing straight
+ * to resolved on a pass with no operator involvement, or staging an
+ * interrupting intent on a failure. So the session's own reachable target is
+ * applied-pending-confirm (or resolved/blocked, both also directly
+ * reachable); resolved itself is then normally reached automatically rather
+ * than staged by the session. A 🔎 Investigation self-verifies in-session —
+ * there is no operator-applied change to reconcile — so its terminal target
+ * is resolved or blocked. Any other (or uncached/missing) task Type falls
+ * back to the Operational set, the more permissive of the two. Used by
+ * PlanningOrchestrator.checkTerminal to nudge a session that reaches
+ * terminal with its journal still at an intermediate waypoint (pending /
+ * candidate / staged-proposal, or for Investigation also
+ * applied-pending-confirm) instead of letting it settle half-finished.
+ */
+const INVESTIGATION_SESSION_TERMINAL_STATES: ReadonlySet<OpsState> = new Set([
+  'resolved',
+  'blocked',
+]);
+
+const OPERATIONAL_SESSION_TERMINAL_STATES: ReadonlySet<OpsState> = new Set([
+  'applied-pending-confirm',
+  'resolved',
+  'blocked',
+]);
+
+export function isSessionTerminalOpsState(
+  state: OpsState,
+  taskType: string | null | undefined,
+): boolean {
+  const allowed =
+    taskType === '🔎 Investigation'
+      ? INVESTIGATION_SESSION_TERMINAL_STATES
+      : OPERATIONAL_SESSION_TERMINAL_STATES;
+  return allowed.has(state);
+}
+
+/**
+ * True when a `journal.setState` -> "applied-pending-confirm" transition for
+ * this task Type is the Operational completing intent and must therefore
+ * carry a reconciliation assertion — every Type except 🔎 Investigation
+ * (which never legitimately reaches applied-pending-confirm at all; see
+ * isSessionTerminalOpsState). Mirrors isSessionTerminalOpsState's own
+ * fallback rule so an uncached/missing Type is treated as Operational here
+ * too, rather than silently letting an unrecognized Type skip the gate.
+ */
+export function opsCompletionRequiresReconciliation(
+  taskType: string | null | undefined,
+): boolean {
+  return taskType !== '🔎 Investigation';
+}
+
+/**
+ * Thrown by foldOpsTransitionChain when a hop within the chain itself is
+ * illegal — in practice unreachable from the stage-time caller, which only
+ * ever folds a chain of already-individually-validated staged intents, but
+ * kept as a hard failure (rather than silently stopping the fold) so a bug
+ * upstream surfaces immediately instead of validating the next hop against
+ * the wrong state.
+ */
+export class InvalidOpsTransitionChainError extends Error {
+  constructor(from: OpsState, to: OpsState) {
+    super(`ops_journal: invalid transition ${from} -> ${to} in staged chain`);
+    this.name = 'InvalidOpsTransitionChainError';
+  }
+}
+
+/**
+ * The state a sequence of not-yet-applied journal.setState targets would
+ * leave an entry in, folding forward from `from` one hop at a time via
+ * isValidOpsTransition — the chain-aware read that lets a staged (but not
+ * yet applied) transition serve as the "current state" for validating the
+ * next staged transition in the same turn, instead of only ever reading the
+ * applied row. An empty chain returns `from` unchanged.
+ */
+export function foldOpsTransitionChain(
+  from: OpsState,
+  chain: readonly OpsState[],
+): OpsState {
+  let current = from;
+  for (const next of chain) {
+    if (!isValidOpsTransition(current, next)) {
+      throw new InvalidOpsTransitionChainError(current, next);
+    }
+    current = next;
+  }
+  return current;
+}
+
 function parseJson(value: string | null): unknown {
   if (value === null) return undefined;
   try {
@@ -160,7 +255,7 @@ export function setEntryState(
   taskId: string,
   state: OpsState,
   fields?: Partial<Omit<OpsJournalEntry, 'taskId' | 'state' | 'updatedAt'>>,
-): void {
+): OpsState {
   const row = getOpsJournalEntry(taskId);
   if (!row) {
     throw new Error(
@@ -181,6 +276,19 @@ export function setEntryState(
     updatedAt: new Date().toISOString(),
   };
   upsertOpsJournalEntry(entryToRow(updated));
+  // The sole hook that lifts or hardens a capability-disposition-trail
+  // disqualification (see audit/capabilityDispositionMining.ts) — a no-op
+  // for every ops_journal entry not tied to one. Runs for both the
+  // interactive route (routes/opsJournal.ts) and the staged journal.setState
+  // -> "resolved" commit path (routes/stagedIntents.ts), since both funnel
+  // through this function.
+  if (state === 'resolved') {
+    resolveCapabilityDisqualification(
+      taskId,
+      updated.resolution,
+      updated.updatedAt,
+    );
+  }
   recordEvent({
     event_type: 'ops_journal_state_changed',
     actor_type: 'system',
@@ -188,6 +296,7 @@ export function setEntryState(
     project_id: updated.project,
     payload: { from: current.state, to: state, milestone: updated.milestone },
   });
+  return current.state;
 }
 
 /**

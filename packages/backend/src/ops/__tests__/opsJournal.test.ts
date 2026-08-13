@@ -20,8 +20,14 @@ import {
   setEntryState,
   reconcileJournal,
   isValidOpsTransition,
+  foldOpsTransitionChain,
+  InvalidOpsTransitionChainError,
 } from '../opsJournal.js';
-import { upsertOpsJournalEntry } from '../../db/queries.js';
+import {
+  upsertOpsJournalEntry,
+  getCapabilityDisqualification,
+} from '../../db/queries.js';
+import { recordDisqualification } from '../../audit/capabilityDispositionMining.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM ops_journal').run();
@@ -265,5 +271,109 @@ describe('reconcileJournal', () => {
     expect(entry?.state).toBe('pending');
     expect(entry?.project).toBe('polimarket-analyser');
     expect(entry?.milestone).toBe('M12');
+  });
+});
+
+describe('setEntryState resolves a capability disqualification', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM capability_disqualification').run();
+  });
+
+  it('lifts the disqualification when the resolution declares "lifted"', () => {
+    seedEntry('investigation-1', { state: 'candidate' });
+    recordDisqualification(
+      {
+        projectId: 'polimarket-analyser',
+        capability: 'Bash(sqlite3:*)',
+        denialCount: 5,
+        taskIds: ['task-1', 'task-2'],
+      },
+      'investigation-1',
+      new Date(0).toISOString(),
+    );
+
+    setEntryState('investigation-1', 'resolved', {
+      resolution: { capabilityDisqualificationVerdict: 'lifted' },
+    });
+
+    const row = getCapabilityDisqualification(
+      'polimarket-analyser',
+      'Bash(sqlite3:*)',
+    );
+    expect(row?.state).toBe('lifted');
+    expect(row?.lifted_at).toBeTruthy();
+  });
+
+  it('hardens the disqualification when the resolution declares "hardened"', () => {
+    seedEntry('investigation-2', { state: 'candidate' });
+    recordDisqualification(
+      {
+        projectId: 'polimarket-analyser',
+        capability: 'Bash(curl:*)',
+        denialCount: 5,
+        taskIds: ['task-1', 'task-2'],
+      },
+      'investigation-2',
+      new Date(0).toISOString(),
+    );
+
+    setEntryState('investigation-2', 'resolved', {
+      resolution: { capabilityDisqualificationVerdict: 'hardened' },
+    });
+
+    const row = getCapabilityDisqualification(
+      'polimarket-analyser',
+      'Bash(curl:*)',
+    );
+    expect(row?.state).toBe('hardened');
+    expect(row?.lifted_at).toBeNull();
+  });
+
+  it('is a no-op for a resolved task not tied to a disqualification', () => {
+    seedEntry('plain-investigation', { state: 'candidate' });
+    expect(() =>
+      setEntryState('plain-investigation', 'resolved', {
+        resolution: { summary: 'nothing capability-related here' },
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe('foldOpsTransitionChain', () => {
+  it('returns the starting state unchanged for an empty chain', () => {
+    expect(foldOpsTransitionChain('pending', [])).toBe('pending');
+  });
+
+  it('folds a legal multi-hop chain to its final state', () => {
+    expect(foldOpsTransitionChain('pending', ['candidate', 'resolved'])).toBe(
+      'resolved',
+    );
+  });
+
+  it('folds a single legal hop', () => {
+    expect(foldOpsTransitionChain('pending', ['candidate'])).toBe('candidate');
+  });
+
+  it('throws when a hop in the chain is illegal from the state the prior hop produced', () => {
+    expect(() =>
+      foldOpsTransitionChain('pending', [
+        'candidate',
+        'applied-pending-confirm',
+      ]),
+    ).toThrow(InvalidOpsTransitionChainError);
+  });
+
+  it('throws naming the illegal hop, not the chain start', () => {
+    try {
+      foldOpsTransitionChain('pending', [
+        'candidate',
+        'applied-pending-confirm',
+      ]);
+      throw new Error('expected foldOpsTransitionChain to throw');
+    } catch (err) {
+      expect((err as Error).message).toContain(
+        'candidate -> applied-pending-confirm',
+      );
+    }
   });
 });

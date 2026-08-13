@@ -195,6 +195,14 @@ async function classifyDeferral(body: string): Promise<Advisory> {
     proc.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8');
     });
+    // Must be drained even though we only use it on the error path: an
+    // unread stderr pipe fills its OS buffer (~64 KB) once the child writes
+    // past it, blocking the child forever and stranding this call until the
+    // CLASSIFY_TIMEOUT_MS timeout reaps it.
+    let stderr = '';
+    proc.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
     proc.on('error', (err: Error) => {
       logger.warn(
         `[deferralClassifier] classify subprocess error: ${err.message}`,
@@ -224,6 +232,9 @@ async function classifyDeferral(body: string): Promise<Advisory> {
     proc.on('close', (code: number | null) => {
       clearTimeout(timer);
       if (code !== 0) {
+        logger.warn(
+          `[deferralClassifier] classify subprocess exited with code ${code}: ${stderr.trim()}`,
+        );
         settle({
           tier: 'semantic',
           status: 'errored',
@@ -261,13 +272,26 @@ async function classifyDeferral(body: string): Promise<Advisory> {
   });
 }
 
-/** Small in-process semaphore so a batch of Ready-flips doesn't spawn unbounded classify subprocesses. */
-class Semaphore {
+/**
+ * Small in-process semaphore so a batch of Ready-flips doesn't spawn
+ * unbounded classify subprocesses. Exported for reuse by the test.request
+ * governed lane's per-project concurrency cap (see
+ * orchestration/testRequestLane.ts) — same bounded-concurrency need, just a
+ * separate pool keyed per project instead of one process-wide pool.
+ */
+export class Semaphore {
   private available: number;
+  private readonly size: number;
   private readonly queue: (() => void)[] = [];
 
   constructor(size: number) {
     this.available = size;
+    this.size = size;
+  }
+
+  /** Count currently held (not available) — the admission-check peek, never mutates state. */
+  inUse(): number {
+    return this.size - this.available;
   }
 
   async acquire(): Promise<() => void> {
@@ -292,10 +316,28 @@ class Semaphore {
 
 const classifySemaphore = new Semaphore(MAX_CONCURRENT_CLASSIFICATIONS);
 
+// Includes 'committed': the group-commit path (commitGroupIntents) invokes
+// classifyReadyProposal fire-and-forget only after transitioning every
+// member to 'committed', so by the time this async call actually reads the
+// rows back, they're already past 'staged'/'approved'. The verify path
+// (verifyGroup) still calls in while members sit at 'staged', so both are
+// covered by the same set.
 const ACTIVE_INTENT_STATES: ReadonlySet<StagedIntentRow['state']> = new Set([
   'staged',
   'approved',
+  'committed',
 ]);
+
+// A group can reach classifyReadyProposal via both verifyGroup (idle-park)
+// and commitGroupIntents (group-commit) — process-lifetime dedup so an
+// intent that traverses both paths is only ever sent to the classifier
+// once. Advisory-only: safe to keep in memory rather than in the DB.
+const classifiedIntentIds = new Set<string>();
+
+/** Test-only: clears the process-lifetime dedup set so unit tests reusing the same fixture intent ids across cases don't collide. */
+export function __resetClassifiedIntentIdsForTest(): void {
+  classifiedIntentIds.clear();
+}
 
 function isReadyFlip(row: StagedIntentRow): boolean {
   if (row.kind !== 'task.setStatus' || !ACTIVE_INTENT_STATES.has(row.state)) {
@@ -368,6 +410,9 @@ export async function classifyReadyProposal(groupId: string): Promise<void> {
         );
         return;
       }
+
+      if (classifiedIntentIds.has(row.id)) return;
+      classifiedIntentIds.add(row.id);
 
       const release = await classifySemaphore.acquire();
       let advisory: Advisory;

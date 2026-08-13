@@ -11,6 +11,8 @@ import {
   getPRBySessionId,
   setSessionTerminalCompletionReason,
   TERMINAL_SESSION_STATUSES,
+  hasActiveCapabilityRequestForSession,
+  listIdlePlanningSessionsEligibleForTerminalSweep,
 } from '../db/queries';
 import type {
   Session,
@@ -22,17 +24,26 @@ import {
   isPlanningSession,
   isGateVerifySession,
 } from '../session/sessionPredicates';
-import { getEntry } from '../ops/opsJournal';
+import {
+  getEntry,
+  isSessionTerminalOpsState,
+  type OpsState,
+} from '../ops/opsJournal';
+import { getCachedType } from '../tasks/TaskWriteCommands';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
 import {
   verifyDispatchedGroupsForSession,
   sessionOwesGatedDesignArtifacts,
   findIncompleteOpsTerminalGroupsForSession,
+  isOpsTerminalClosingSetMember,
 } from '../routes/stagedIntents';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { emitTaskUpdated, broadcastTaskStatusChanged } from '../routes/tasks';
 import { NO_OP_INTENT_KIND, hasStagedDecision } from './planningDecisionKinds';
+import { runtimeSettings } from '../config';
+import { recordEvent } from '../audit/AuditLog';
+import type { Scheduler } from './Scheduler';
 
 export const DESIGN_DONE_STATUS = '✅ Done';
 
@@ -49,6 +60,29 @@ const DESIGN_COMPLETING_REASONS = new Set([
 ]);
 
 /**
+ * Shared closure guard for completeOpsTask and closeDeferredOpsTask: true
+ * when this session holds a rejected or needs_revision staged intent that is
+ * a member of one of its ops-terminal closing groups (see
+ * groupHasOpsTerminalMember / OPS_TERMINAL_KINDS in routes/stagedIntents.ts).
+ *
+ * Scoped to the closing set rather than every intent the session ever
+ * staged: a declined intent that has nothing to do with the closing decision
+ * (e.g. an unrelated gate-verify proposal the operator correctly rejected,
+ * with the session accounting for that reasoning in its own closing note)
+ * must not permanently strand the task at In Progress. A rejected or
+ * needs_revision member *inside* the closing set still blocks — it means
+ * the closing decision itself was refused, or is still revisable and the
+ * session may yet supersede it.
+ */
+function opsSessionHasBlockedClosingGroupMember(sessionId: string): boolean {
+  return listStagedIntentsBySession(sessionId).some(
+    (i) =>
+      (i.state === 'rejected' || i.state === 'needs_revision') &&
+      isOpsTerminalClosingSetMember(i),
+  );
+}
+
+/**
  * The bounded self-correct re-turn nudge sent exactly once (per session) when
  * a dispatched planning session reaches terminal having staged nothing that
  * counts as a decision — see checkTerminal's noDecisionNudgeSent guard.
@@ -57,6 +91,44 @@ const NO_DECISION_NUDGE_MESSAGE =
   'You reached terminal without staging — stage your decision, or an ' +
   'explicit no-op (planning.noOp) if nothing needs changing. The chat ' +
   'write-up is not the deliverable.';
+
+/**
+ * The bounded self-correct re-turn nudge sent once per distinct blocked-set
+ * (see checkTerminal's blockedMembersNudgeSentFor guard) when a planning
+ * session ends its turn while holding staged intents of its own at
+ * needs_revision/pending_verification — the resumable twin of
+ * surfaceBlockedMembersPauseReason, which only covers a session that is
+ * already terminal or has no live process. Names the blocked intent ids so
+ * the session's next turn can act on (supersede/answer) exactly those.
+ */
+function formatBlockedMembersNudgeMessage(
+  blockedMembers: StagedIntentRow[],
+): string {
+  return (
+    `You ended your turn holding ${blockedMembers.length} of your own staged ` +
+    'intent(s) blocked at needs_revision/pending_verification: ' +
+    `${blockedMembers.map((i) => i.id).join(', ')}. Resolve these — supersede ` +
+    'a needs_revision intent with a corrected one, or address whatever ' +
+    'pending_verification is waiting on — before ending the turn again.'
+  );
+}
+
+/**
+ * The bounded self-correct re-turn nudge sent exactly once (per session)
+ * when a dispatched ops session reaches terminal with its ops_journal entry
+ * still at an intermediate waypoint for its task's Type — see checkTerminal's
+ * noDecisionNudgeSent guard (shared with NO_DECISION_NUDGE_MESSAGE) and
+ * isSessionTerminalOpsState.
+ */
+function opsJournalNotTerminalNudgeMessage(state: OpsState): string {
+  return (
+    `You reached terminal with the ops journal still at "${state}" — that ` +
+    'is not a session-reachable terminal state. Continue the investigation ' +
+    'to its type-appropriate terminal (resolved, or applied-pending-confirm ' +
+    'for an Operational run), or stage journal.setState -> "blocked" if you ' +
+    'genuinely cannot proceed.'
+  );
+}
 
 type PlanningDisposition = 'approve' | 'pushback' | 'decline' | 'answer';
 
@@ -133,6 +205,18 @@ export class PlanningOrchestrator {
    */
   private noDecisionNudgeSent = new Set<string>();
 
+  /**
+   * Sessions that have already received the bounded blocked-members re-turn
+   * nudge (see checkTerminal), keyed by session id to the exact blocked
+   * intent id set (sorted, joined) the nudge named — a session-scoped budget
+   * of one nudge per distinct blocked set, so a session that ignores the
+   * nudge and ends its turn again with the *same* set unresolved escalates
+   * to surfaceBlockedMembersPauseReason instead of being nudged forever,
+   * while a set that changes (operator dispositions some, session supersedes
+   * others) earns a fresh nudge.
+   */
+  private blockedMembersNudgeSentFor = new Map<string, string>();
+
   constructor(private sessionManager: SessionManager) {
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
   }
@@ -143,7 +227,10 @@ export class PlanningOrchestrator {
     // state for a dispatched planning session, status stays 'running') or
     // exits — unlike session_ended, which only fires on actual process exit.
     if (msg.type === 'session_event' && msg.eventType === 'result') {
-      this.applyPendingApproveTerminal(msg.sessionId);
+      const wentTerminal = this.applyPendingApproveTerminal(msg.sessionId);
+      if (!wentTerminal) {
+        this.checkBlockedMembersNudgeOnTurnEnd(msg.sessionId);
+      }
       return;
     }
     if (msg.type !== 'session_ended') return;
@@ -224,6 +311,24 @@ export class PlanningOrchestrator {
     this.checkTerminal(sessionId);
   }
 
+  /**
+   * Turn-boundary twin of checkTerminal's blocked-members nudge — reachable
+   * from the result event alone, since a session that merely ends a turn and
+   * stays resumable (the common case) never emits session_ended and so never
+   * reaches onSessionParked/checkTerminal. Shares checkBlockedMembersNudge's
+   * detection and per-blocked-set budget with checkTerminal so a set nudged
+   * here does not also collect a fresh nudge at the session's next park, and
+   * deliberately does not drive the session terminal — that stays
+   * checkTerminal's alone, since running it at every turn boundary would end
+   * the session's process on this path too, which is not appropriate here.
+   */
+  private checkBlockedMembersNudgeOnTurnEnd(sessionId: string): void {
+    const row = getSession(sessionId);
+    if (!row || !isPlanningSession(row.session_type ?? '')) return;
+    const all = listStagedIntentsBySession(sessionId);
+    this.checkBlockedMembersNudge(sessionId, all);
+  }
+
   /** Returns true if at least one blocked, non-escalated group's errors were routed back to the session (i.e. it is about to resume). */
   private async verifyAndRoutePendingGroups(
     sessionId: string,
@@ -253,10 +358,12 @@ export class PlanningOrchestrator {
    * terminal (done) state as a side effect when true.
    *
    * stagedCountAtResume is refreshed here — to the current total — on every
-   * non-terminal call, not just from a disposition. checkTerminal already
-   * runs on every park (onSessionParked fires on every session_ended/idle
-   * message), so anchoring the snapshot to "count as of the last park"
-   * rather than "count as of the last disposition" makes the comparison
+   * non-terminal call, not just from a disposition. checkTerminal runs on
+   * every park (onSessionParked fires on every session_ended/idle message —
+   * a turn that merely ends and stays resumable does not park and does not
+   * reach checkTerminal; see checkBlockedMembersNudgeOnTurnEnd for that
+   * case), so anchoring the snapshot to "count as of the last park" rather
+   * than "count as of the last disposition" makes the comparison
    * self-correcting: a resume that isn't routed through handleDisposition/
    * handleGroupDisposition (e.g. a capability-grant resume) can no longer
    * leave the snapshot stale, and a park whose turn staged nothing new is
@@ -264,25 +371,115 @@ export class PlanningOrchestrator {
    * that follows a session's final disposition, with no further apply
    * required.
    */
-  checkTerminal(sessionId: string): boolean {
+  /**
+   * Core completeness predicate shared by the live event-driven path
+   * (checkTerminal) and the cold idle-sweep path
+   * (isSessionCompleteForIdleSweep) — a staged no-op marker requires no
+   * operator disposition, and staging one is itself the terminal signal
+   * rather than "new work" a next turn must settle, so it is excluded from
+   * the pending gate. `owesGatedArtifacts`: a session whose
+   * completeness.disposition was just approved still owes its gated
+   * architecture-unit / closing-synthesis write even though nothing is left
+   * `staged` — that approval is a precondition for further staging, not the
+   * end of the session's mandate. See sessionOwesGatedDesignArtifacts.
+   */
+  private computeStagedIntentState(sessionId: string): {
+    all: StagedIntentRow[];
+    countable: StagedIntentRow[];
+    stillPending: boolean;
+    owesGatedArtifacts: boolean;
+  } {
     const all = listStagedIntentsBySession(sessionId);
-    // A staged no-op marker requires no operator disposition, and staging
-    // one is itself the terminal signal rather than "new work" a next turn
-    // must settle — it is excluded from both the pending gate and the
-    // staged-something-new snapshot below, so it never holds a session
-    // pending or non-terminal the way a real task-write would.
     const countable = all.filter((i) => i.kind !== NO_OP_INTENT_KIND);
     const stillPending = countable.some((i) => i.state === 'staged');
+    const owesGatedArtifacts = sessionOwesGatedDesignArtifacts(sessionId);
+    return { all, countable, stillPending, owesGatedArtifacts };
+  }
+
+  /**
+   * The session's ops_journal state, if it is a task the session may not yet
+   * conclude on — i.e. an ops session (not gate-verify) with a journal entry
+   * that sits below its task Type's session-reachable terminal set (see
+   * isSessionTerminalOpsState). Returns undefined for every case that must
+   * pass through unaffected: a non-ops session, a gate-verify session (no
+   * Notion task), a task with no journal entry at all, or a journal already
+   * at a state the session is allowed to stop on (including blocked, which
+   * is a fully acceptable terminal outcome for every task Type).
+   */
+  private incompleteOpsJournalStateFor(sessionId: string): OpsState | null {
+    const row = getSession(sessionId);
+    if (!row || row.session_type !== 'ops' || !row.task_id) return null;
+    if (isGateVerifySession(row.task_id)) return null;
+    const entry = getEntry(row.task_id);
+    if (!entry) return null;
+    const taskType = getCachedType(row.task_id);
+    if (isSessionTerminalOpsState(entry.state, taskType)) return null;
+    return entry.state;
+  }
+
+  /**
+   * Resumable twin of surfaceBlockedMembersPauseReason: a session that ends
+   * its turn holding its own needs_revision/pending_verification intents is
+   * still alive to supersede/resolve them, so re-engage it with a bounded
+   * nudge instead of falling straight through to terminal (which would
+   * otherwise surface the pause reason and end the process while it could
+   * still self-correct). Shared by checkTerminal (checked ahead of its
+   * reachedTerminal gate, since a blocked member matters regardless of
+   * whether other intents are still awaiting disposition) and
+   * checkBlockedMembersNudgeOnTurnEnd (the turn-boundary path that must not
+   * drive the session terminal). `all` is passed in rather than refetched
+   * here since both callers already have it.
+   */
+  private checkBlockedMembersNudge(
+    sessionId: string,
+    all: StagedIntentRow[],
+  ): { blockedMembers: StagedIntentRow[]; blockedBudgetExhausted: boolean } {
+    const blockedMembers = all.filter(
+      (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
+    );
+    const blockedKey = blockedMembers
+      .map((i) => i.id)
+      .sort()
+      .join(',');
+    const blockedBudgetExhausted =
+      blockedMembers.length > 0 &&
+      this.blockedMembersNudgeSentFor.get(sessionId) === blockedKey;
+
+    if (blockedMembers.length > 0 && !blockedBudgetExhausted) {
+      this.blockedMembersNudgeSentFor.set(sessionId, blockedKey);
+      const countable = all.filter((i) => i.kind !== NO_OP_INTENT_KIND);
+      this.stagedCountAtResume.set(sessionId, countable.length);
+      this.sessionManager
+        .enqueueFeedback(
+          sessionId,
+          'planning-terminal-blocked-members-nudge',
+          formatBlockedMembersNudgeMessage(blockedMembers),
+        )
+        .catch((err) => {
+          logger.error(
+            `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after blocked-members nudge: ${err}`,
+          );
+        });
+    }
+
+    return { blockedMembers, blockedBudgetExhausted };
+  }
+
+  checkTerminal(sessionId: string): boolean {
+    const { all, countable, stillPending, owesGatedArtifacts } =
+      this.computeStagedIntentState(sessionId);
+
+    const { blockedMembers, blockedBudgetExhausted } =
+      this.checkBlockedMembersNudge(sessionId, all);
+    if (blockedMembers.length > 0 && !blockedBudgetExhausted) {
+      return false;
+    }
+
     const priorCount = this.stagedCountAtResume.get(sessionId) ?? 0;
     const stagedNothingNew = countable.length <= priorCount;
-    // A session whose completeness.disposition was just approved still owes
-    // its gated architecture-unit / closing-synthesis write even though
-    // nothing is left `staged` — that approval is a precondition for further
-    // staging, not the end of the session's mandate. See
-    // sessionOwesGatedDesignArtifacts.
-    const owesGatedArtifacts = sessionOwesGatedDesignArtifacts(sessionId);
     const reachedTerminal =
-      !stillPending && stagedNothingNew && !owesGatedArtifacts;
+      blockedBudgetExhausted ||
+      (!stillPending && stagedNothingNew && !owesGatedArtifacts);
 
     if (!reachedTerminal) {
       this.stagedCountAtResume.set(sessionId, countable.length);
@@ -290,6 +487,37 @@ export class PlanningOrchestrator {
     }
 
     if (hasStagedDecision(all)) {
+      const incompleteJournalState =
+        this.incompleteOpsJournalStateFor(sessionId);
+      if (incompleteJournalState) {
+        if (!this.noDecisionNudgeSent.has(sessionId)) {
+          this.noDecisionNudgeSent.add(sessionId);
+          this.stagedCountAtResume.set(sessionId, countable.length);
+          this.sessionManager
+            .enqueueFeedback(
+              sessionId,
+              'planning-terminal-ops-journal-incomplete-nudge',
+              opsJournalNotTerminalNudgeMessage(incompleteJournalState),
+            )
+            .catch((err) => {
+              logger.error(
+                `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after ops-journal-incomplete nudge: ${err}`,
+              );
+            });
+          return false;
+        }
+
+        const row = getSession(sessionId);
+        if (row?.task_id) {
+          setTaskPauseReason(
+            row.task_id,
+            'ops_journal_terminal_incomplete',
+            `Ops session ${sessionId} reached terminal with its ops_journal ` +
+              `entry still at "${incompleteJournalState}" — twice, after one ` +
+              'self-correct nudge.',
+          );
+        }
+      }
       this.markTerminal(sessionId, 'planning_no_pending_dispositions');
       return true;
     }
@@ -345,21 +573,7 @@ export class PlanningOrchestrator {
     // unreachable (excluded from both the operator-facing decision surface
     // and any live session), so raise a needs-attention pause reason
     // against the target task rather than leaving them silently stranded.
-    if (row.task_id) {
-      const blockedMembers = listStagedIntentsBySession(sessionId).filter(
-        (i) =>
-          i.state === 'needs_revision' || i.state === 'pending_verification',
-      );
-      if (blockedMembers.length > 0) {
-        setTaskPauseReason(
-          row.task_id,
-          'planning_terminal_blocked_members',
-          `Planning session ${sessionId} reached terminal (${reason}) with ` +
-            `${blockedMembers.length} blocked staged intent(s) still outstanding: ` +
-            `${blockedMembers.map((i) => i.id).join(', ')}.`,
-        );
-      }
-    }
+    this.surfaceBlockedMembersPauseReason(sessionId, row, reason);
 
     // An ops-terminal closing group that never carried its journal.setState
     // -> "resolved" transition leaves an Investigation's journal stuck at a
@@ -410,6 +624,7 @@ export class PlanningOrchestrator {
     setSessionTerminalCompletionReason(sessionId, reason);
     this.stagedCountAtResume.delete(sessionId);
     this.noDecisionNudgeSent.delete(sessionId);
+    this.blockedMembersNudgeSentFor.delete(sessionId);
     // The normal run().then() cleanup that frees a session's in-memory
     // planning-concurrency slot only fires when its subprocess exits — a
     // session marked terminal here (from the apply path, which can fire
@@ -420,6 +635,13 @@ export class PlanningOrchestrator {
     // above has already landed, so the clean-exit chain's markSessionIdle
     // call (AgentSession.handleCleanExit) hits the terminal guard in
     // markSessionIdle and is a no-op rather than clobbering done back to idle.
+    //
+    // setSessionTerminalCompletionReason above must land before this call:
+    // AgentSession.endSession reads it synchronously to tell a forced kill
+    // that follows a sanctioned conclusion apart from an unexpected one, so
+    // the escalation (if the CLI doesn't honor stdin close within the grace
+    // period) is classified as a clean conclusion rather than
+    // runner_killed_unexpected/session_errored.
     this.sessionManager.endSession(sessionId);
     this.sessionManager.emit('message', {
       type: 'session_status',
@@ -546,25 +768,36 @@ export class PlanningOrchestrator {
    * journal already at 'resolved' at this synchronous instant means the
    * investigation actually concluded — every other state (including a
    * missing entry) leaves the task in progress. This only ever fires for the
-   * no-change Investigation path, where journal.setState -> resolved is
-   * staged atomically alongside this session's other closing-group members
-   * via commitGroupIntents and is therefore already committed by the time
-   * markTerminal runs; the operator-confirmed applied-pending-confirm ->
-   * resolved path is out of scope (see routes/opsJournal.ts) and typically
-   * settles well after the session has gone terminal. Callers must exclude
-   * gate-verify sessions (task_id `gate-item:<id>`) first, since those have
-   * no Notion task to close and also have no ops_journal entry.
+   * no-change Investigation path, where the whole hop sequence to resolved
+   * (e.g. journal.setState -> candidate alongside journal.setState ->
+   * resolved) is staged in the same closing group and applied in order by
+   * commitGroupIntents — each hop validated against the effective state the
+   * prior staged hop in the chain would produce (stagedIntents.ts's
+   * effectiveOpsStateForStaging), not just the applied row — and is
+   * therefore already committed by the time markTerminal runs; the
+   * operator-confirmed applied-pending-confirm -> resolved path is out of
+   * scope (see routes/opsJournal.ts) and typically settles well after the
+   * session has gone terminal. Callers must exclude gate-verify sessions
+   * (task_id `gate-item:<id>`) first, since those have no Notion task to
+   * close and also have no ops_journal entry.
+   *
+   * Also gated on the absence of a PR row for this session, mirroring
+   * completeDocsTask: an ops session can now earn the PR-open tool grant
+   * (see opensPr('ops')) and open a PR against its target task, whose
+   * closure must run through the existing merge-driven path instead of
+   * this ops_journal-driven one — closing the task here while that PR is
+   * still open would pull the task out from under an in-flight review.
    */
   private completeOpsTask(sessionId: string, row: Session): void {
     const taskId = row.task_id;
     const projectId = row.project_id;
     if (!taskId || !projectId) return;
+    if (getPRBySessionId(sessionId)) return;
 
     const journalEntry = getEntry(taskId);
     if (!journalEntry || journalEntry.state !== 'resolved') return;
 
-    const intents = listStagedIntentsBySession(sessionId);
-    if (intents.some((i) => i.state === 'rejected')) return;
+    if (opsSessionHasBlockedClosingGroupMember(sessionId)) return;
 
     getTaskBackend(projectId)
       .updateStatus(taskId, DESIGN_DONE_STATUS, {
@@ -828,6 +1061,140 @@ export class PlanningOrchestrator {
       }
     }
   }
+
+  /**
+   * Sets the 'planning_terminal_blocked_members' pause reason when the
+   * session holds staged intents stuck at needs_revision/pending_verification
+   * — shared by markTerminal (which surfaces this alongside terminalizing)
+   * and the idle-sweep's blocked branch (which surfaces this INSTEAD of
+   * terminalizing, since those intents can never be resolved once the
+   * subprocess is gone). Returns true if a pause reason was set.
+   */
+  private surfaceBlockedMembersPauseReason(
+    sessionId: string,
+    row: Session,
+    reason: string,
+  ): boolean {
+    if (!row.task_id) return false;
+    const blockedMembers = listStagedIntentsBySession(sessionId).filter(
+      (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
+    );
+    if (blockedMembers.length === 0) return false;
+    setTaskPauseReason(
+      row.task_id,
+      'planning_terminal_blocked_members',
+      `Planning session ${sessionId} reached terminal (${reason}) with ` +
+        `${blockedMembers.length} blocked staged intent(s) still outstanding: ` +
+        `${blockedMembers.map((i) => i.id).join(', ')}.`,
+    );
+    return true;
+  }
+
+  /**
+   * Cold-path completeness check for a session with no live in-memory
+   * process — reuses computeStagedIntentState, the same core predicate
+   * checkTerminal applies on the live event-driven path, with
+   * stagedNothingNew treated as unconditionally true: nothing can ever be
+   * staged again for a session whose subprocess has already exited, so the
+   * turn-boundary comparison checkTerminal needs is moot here. Adds two
+   * gates that only matter once resumption is impossible:
+   *  - 'blocked': a needs_revision/pending_verification intent can never be
+   *    resolved by this session again — surface it for operator attention
+   *    rather than silently terminalizing over it.
+   *  - an outstanding session.requestCapability intent — the session is
+   *    still (structurally, if not literally) awaiting an answer.
+   */
+  private isSessionCompleteForIdleSweep(
+    sessionId: string,
+  ): 'terminal' | 'blocked' | 'not_ready' {
+    const { all, stillPending, owesGatedArtifacts } =
+      this.computeStagedIntentState(sessionId);
+    if (stillPending || owesGatedArtifacts) return 'not_ready';
+    if (hasActiveCapabilityRequestForSession(sessionId)) return 'not_ready';
+    const blocked = all.some(
+      (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
+    );
+    return blocked ? 'blocked' : 'terminal';
+  }
+
+  /**
+   * Periodic backstop for the gap checkTerminal structurally cannot close:
+   * a planning session whose subprocess has already exited (status='idle',
+   * ended_at set) can never again emit the session_ended/result message
+   * onSessionParked listens for, so checkTerminal is never re-triggered for
+   * it — it sits holding a countLivePlanningSessions() slot forever. This
+   * sweeps that population, applying isSessionCompleteForIdleSweep (positive
+   * evidence of completion, not an inference from elapsed time) gated by a
+   * generous age floor as defense-in-depth, and reuses markTerminal / the
+   * blocked-member pause-reason path rather than writing session status
+   * directly. archiveConcludedSessionsOlderThan's separate idle-exclusion
+   * guard is untouched — a session this sweep terminalizes is reclaimed by
+   * that archiver unchanged, on its own normal cadence.
+   */
+  sweepIdleTerminalSessions(nowFn: () => number = () => Date.now()): number {
+    const cutoffMs =
+      nowFn() -
+      runtimeSettings.idle_planning_terminal_sweep_age_floor_minutes * 60_000;
+    const candidates =
+      listIdlePlanningSessionsEligibleForTerminalSweep(cutoffMs);
+
+    const terminalizedIds: string[] = [];
+    for (const row of candidates) {
+      // Defensive regression guard: status='idle' should already imply no
+      // live process, but never destroy live work on that assumption
+      // alone. Checked against the real OS process (isProcessAlive), not
+      // the in-memory session map (isAlive) — a stale map entry must never
+      // block this sweep from reconciling a session whose process is
+      // actually gone.
+      if (this.sessionManager.isProcessAlive(row.session_id)) continue;
+
+      const outcome = this.isSessionCompleteForIdleSweep(row.session_id);
+      if (outcome === 'not_ready') continue;
+      if (outcome === 'blocked') {
+        this.surfaceBlockedMembersPauseReason(
+          row.session_id,
+          row,
+          'planning_idle_sweep_blocked',
+        );
+        continue;
+      }
+      this.markTerminal(row.session_id, 'planning_idle_sweep_terminal', {
+        skipInFlightGuard: true,
+      });
+      terminalizedIds.push(row.session_id);
+    }
+
+    if (terminalizedIds.length > 0) {
+      recordEvent({
+        event_type: 'planning_sessions_idle_swept_terminal',
+        actor_type: 'system',
+        payload: {
+          terminalized_count: terminalizedIds.length,
+          session_ids: terminalizedIds,
+        },
+      });
+      logger.info(
+        `[PlanningOrchestrator] idle-sweep terminalized ${terminalizedIds.length} finished idle planning session(s)`,
+      );
+    }
+
+    return terminalizedIds.length;
+  }
+
+  /** Registers the idle-terminal sweep with the Scheduler — cadence/reentrancy managed by Scheduler, this class owns sweep logic only. */
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'idle_planning_session_terminal_sweep',
+      intervalMs: () =>
+        runtimeSettings.idle_planning_terminal_sweep_interval_minutes * 60_000,
+      enabled: () => runtimeSettings.idle_planning_terminal_sweep_enabled,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        const items_processed = this.sweepIdleTerminalSessions();
+        return { items_processed };
+      },
+    });
+  }
 }
 
 /** True once every live intent in the group has settled (committed/rejected/superseded) — trivially true for an ungrouped intent. */
@@ -871,7 +1238,7 @@ function formatGatedArtifactsUnblockedMessage(intent: StagedIntentRow): string {
   );
 }
 
-function formatDispositionMessage(
+export function formatDispositionMessage(
   intent: StagedIntentRow,
   disposition: Exclude<PlanningDisposition, 'approve'>,
   reason?: string | null,
@@ -886,7 +1253,11 @@ function formatDispositionMessage(
         ? `Staged intent ${intent.id} (${intent.kind}) failed validation and was sent back for ` +
             `revision. Validation error: ${reason ?? ''}\n` +
             `To fix this, stage the corrected intent with supersedes set to "${intent.id}" (the id ` +
-            'of this rejected intent) so it retires the rejected one instead of leaving it in place.'
+            'of this rejected intent) so it retires the rejected one instead of leaving it in place. ' +
+            'Supersede ONLY this rejected intent — its unblocked group siblings (sitting cleanly at ' +
+            'staged/approved) must be left in place, not retired and re-staged; a superseded member ' +
+            'never blocks a group commit, so re-staging an unblocked sibling fixes nothing and only ' +
+            'multiplies the cost of this correction.'
         : `Staged intent ${intent.id} (${intent.kind}) was sent back for revision. Feedback: ${reason ?? ''}`;
     case 'answer':
       if (answer?.chosenLabel) {
@@ -916,9 +1287,12 @@ function formatDispositionMessage(
  *
  * Guards mirror completeOpsTask's: excludes gate-verify sessions (no Notion
  * task to close), requires the session's durable terminal_completion_reason
- * to be one of DESIGN_COMPLETING_REASONS, and bails if any staged intent for
- * the session is rejected. Additionally checks the task's current status
- * before writing, so it no-ops if completeOpsTask's synchronous path (the
+ * to be one of DESIGN_COMPLETING_REASONS, and bails via
+ * opsSessionHasBlockedClosingGroupMember if a rejected/needs_revision intent
+ * sits inside one of the session's ops-terminal closing groups — an
+ * unrelated decline elsewhere in the session's history does not block.
+ * Additionally checks the task's current status before writing, so it no-ops
+ * if completeOpsTask's synchronous path (the
  * decided-no-change Investigation, where journal.setState -> resolved
  * commits atomically alongside the session's terminal) already closed the
  * task — this route-driven path must never double-apply that close.
@@ -935,8 +1309,7 @@ export async function closeDeferredOpsTask(session: Session): Promise<void> {
     return;
   }
 
-  const intents = listStagedIntentsBySession(session.session_id);
-  if (intents.some((i) => i.state === 'rejected')) return;
+  if (opsSessionHasBlockedClosingGroupMember(session.session_id)) return;
 
   const backend = getTaskBackend(projectId);
   const summary = await backend.fetchTaskSummary(taskId);

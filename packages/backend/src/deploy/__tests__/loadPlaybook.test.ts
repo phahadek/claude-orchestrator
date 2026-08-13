@@ -45,7 +45,6 @@ steps:
     kind: shell
     command_or_prompt: "git pull"
     is_prod_mutating: false
-    supports_dry_run: true
   - id: restart
     kind: confirm-gate
     command_or_prompt: "systemctl restart app"

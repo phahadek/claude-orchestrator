@@ -153,6 +153,47 @@ scope creep into other files.
 > **Deliverables** instead of this section — see the `🔧 Operational & 🔎 Investigation`
 > section below.
 
+### Declared writes *(🔧 Operational tasks only)*
+Optional, but the only way a write a dispatched ops session performs can ever be
+**auto-approved** rather than parked for a human `session.requestCapability` decision (see the
+architecture unit "A task-settled write auto-approves a capability request only when declared,
+exact-matched, and not Prod-Mutating"). Today only `🔧 Operational` tasks reach this path — only
+a dispatched ops session issues write-shaped capability requests, so a Code/Design/Investigation
+task gains nothing from carrying this section, even though the parser and the Ready-transition
+validator run over every Type unconditionally.
+
+The heading text the parser matches — case-insensitively, emoji/punctuation-stripped, any
+`#`–`######` level (`readinessGate.ts`'s `normalizeHeadingText`) — must normalize to exactly:
+
+```
+Declared writes
+```
+
+Each bullet is `- ` or `* ` (or a numbered `1.`/`1)` line) followed by the capability string
+**backtick-quoted**, then optionally a separator (` — `, ` - `, `--`, or `|`) and a
+classification tag:
+
+```
+## Declared writes
+- `Bash(npm ci:*)` — Non-Prod-Mutating
+- `Bash(git push origin HEAD:*)` — Prod-Mutating
+- `mcp__github__merge_pull_request`
+```
+
+- The **capability string** must be the exact string a later `session.requestCapability` call
+  will send — this is an exact match, never a prefix or pattern.
+- The **classification tag** must unambiguously say "Non-Prod-Mutating" / "Not-Prod-Mutating"
+  (case/punctuation/whitespace-insensitive) to clear the entry for auto-approval. **Any other
+  tag — a bare "Prod-Mutating", an empty tag, or an unrecognized string — defaults to
+  Prod-Mutating.** This default is fail-closed by design: a **Prod-Mutating entry is never
+  auto-approved**, it always waits for a human decision, same as an undeclared write.
+- `None.` (the default when nothing accretes) is treated as empty, not malformed.
+- The section is **validated at the Backlog → Ready transition**: a bullet with no discernible
+  capability (an empty backtick span, or a tag with no capability before it) is malformed and
+  **blocks the Ready-flip** — the declaration must be durable and well-formed before any session
+  carrying it is ever dispatched. A missing/ambiguous Prod-Mutating tag is *not* a validation
+  failure — it just means that entry is fail-closed to manual approval.
+
 ### Implementation notes
 Always present, always created empty: `> To be filled in during/after task completion.`
 The implementing session fills it — workarounds, deviations, PR link (Code), final
@@ -353,20 +394,26 @@ Verification Gate.
   ID**, grouped by source task; **each contributing Code task points back at the config-seed task**
   (a one-line "operational seed: applied via the milestone config-seed task `<task-id>`" in its body,
   in place of a free-floating inline note).
-- **Accretion is mandatory and promotion-gated — not best-effort.** Because the seed is deliberately
-  kept out of the Code task's PR, the config-seed task is the **only** place it survives. So
-  **before** any 💻 Code task carrying an operational seed is marked `🗂️ Ready`, the groomer MUST
-  either (a) append that seed to the milestone's config-seed task body (grouped by source task,
-  creating the config-seed task if absent) **and** add the back-reference to the Code task, or
-  (b) confirm the task has **no** operational seed — recording the outcome as a `seed_contribution`
-  artifact in `grooming-state.json`: `{ "seed_task_id": "…", "seeds": [...], "appended_at": "…" }`
-  or `{ "decision": "none" }`. Symmetric with `gate_contribution` — same shape, same load-bearing
-  weight. Dropping a seed into an inline note without accreting it is the same silent-coverage-leak
-  class as stripping a manual item without accreting it to the Gate. *(Mechanical enforcement —
-  `seed_contribution` seeding + a `milestone_seed_task_id` field in `groom-load.mjs`, plus a
-  promotion-gate hook check in `groom-gate.mjs`, mirroring the Gate's — is tracked by the Backlog
-  task **Enforce milestone config-seed accretion in /groom** on the milestone board (mirroring the
-  Gate's enforcement task); until it ships, groomers apply this by hand.)*
+- **Accretion is mandatory and promotion-gated — mechanically enforced, not best-effort.** Because
+  the seed is deliberately kept out of the Code task's PR, the config-seed task is the **only**
+  place it survives. So **before** any 💻 Code task carrying an operational seed is marked
+  `🗂️ Ready`, the groomer MUST either (a) append that seed to the milestone's config-seed task
+  body (grouped by source task, creating the config-seed task if absent) **and** add the
+  back-reference to the Code task, or (b) confirm the task has **no** operational seed — recording
+  the outcome as a `seed_contribution` artifact via the `seed.stage` intent's `decision`/`seeds`
+  fields (`"seeds"` + the accreted `seed_item` rows, or `"decision": "none"`). Symmetric with
+  `gate_contribution` — same shape, same load-bearing weight. Dropping a seed into an inline note
+  without accreting it is the same silent-coverage-leak class as stripping a manual item without
+  accreting it to the Gate.
+  The Code task's own body carries the mechanical, server-verified half of this: every task body
+  renders a `## Operational seed` section (`None.` by default — see `bodyRender.ts`'s
+  `operationalSeedItems`), and before the Ready-flip the groomer writes the same seed spec(s) into
+  that section via a `task.patchBodySection` replace. At Ready-flip stage time,
+  `checkGroupArmingIntentCompleteness` (`stagedIntents.ts`) re-derives the section from the real
+  stored body (`readinessGate.ts`'s `parseOperationalSeedItems`) and cross-checks it against the
+  `seed.stage` intent's accreted `seeds` — the same strip⇔accrete content-match posture
+  `gate_contribution` enforces against the real body — so a groomer can no longer self-declare a
+  contribution the store doesn't actually carry.
 - **Acceptance criteria:** two-subsection format — `### 🤖 Automated tests` reads `*N/A —
   operational task; verification is by reconcile + capture.*`; `### 👁️ Manual verification` lists,
   per seed, "applied via audited CRUD + change signal; worker hot-reloaded (or runner restarted); the
@@ -417,6 +464,10 @@ uncertainty is **breadth / source / mechanics**, never *whether* or *what*.
   in the Code task's PR; only data/config seeds accrete.
 - Use a **Targets / surfaces affected** section (config categories / catalog entries / entities /
   hosts) in place of *Files / paths affected*.
+- **Optionally add a `## Declared writes` section** (see § Declared writes above) to
+  pre-authorize the exact write capabilities the dispatched ops session will need, so those
+  requests auto-approve instead of parking for a human decision. Leave it off (or `None.`) when
+  the writes aren't known ahead of time, or are all Prod-Mutating anyway.
 
 ### 🔎 Investigation — produce a defensible decision from live data
 The deliverable is a **decision** (diagnosis, disposition, go/no-go spike) plus **filed
@@ -453,6 +504,27 @@ root-cause bar), and declares **`Mode: 🧪 Testing · observational`** (or `· 
 - **Acceptance criteria:** like Investigation — `### 🤖 Automated tests` reads `*N/A — observational
   testing task.*`; `### 👁️ Manual verification` states the **disposition** (`pass` shown *by value*,
   not a green-looking zero; or `blocked-pending-fix` with the filed fix + `Depends On`).
+
+### 📝 Docs — a written doc change, executed interactively, gated like Code
+The deliverable is a **written doc change**. A `📝 Docs` task flows through the **`docs`**
+session type — per `procedures.md`'s Task types table, executed **interactively, not
+auto-dispatched**.
+
+- **The readiness gate applies to Docs exactly as it does to `💻 Code` — no carve-out.** The
+  live `## Open Questions` heading and the deferral-phrase tiers both apply at promotion time,
+  and Docs is (correctly) **absent** from `readinessGate.ts`'s `OPEN_QUESTIONS_EXEMPT_TYPES`.
+  Unlike `📐 Design` / `📋 Planning`, a Docs task also does **not** join
+  `planning/triage.ts`'s `INTERACTIVE_TASK_TYPES` batched clean-verdict path — it keeps the
+  full per-item Backlog → Ready promotion gate. This is deliberate: for Design/Planning, open
+  questions *are* the deliverable (the decision space being locked); for Docs, an unresolved
+  Open Question (which doc, which audience, what source material) is a genuine pre-Ready
+  defect, not something the doc-writing session should be left to resolve.
+- **Every Docs PR is forced `human_merge_only` at PR-open time**, regardless of how clean the
+  task's grooming was. This is deliberately **not redundant** with the promotion-time gate
+  above — the two checks verify two different objects: promotion judges the **task's scope**
+  (is it well-specified enough to hand to a session), while the forced human merge judges the
+  **produced content** (is the actual doc change correct). A well-groomed task can still
+  produce a doc edit that needs a human read before it lands.
 
 ### Classifying at authoring time
 Classify by the **primary deliverable**: a verified prod change ⇒ Operational; a decision ⇒

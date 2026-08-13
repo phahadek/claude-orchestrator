@@ -35,11 +35,21 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { insertSession, getSession, getStagedIntent } from '../../db/queries';
+import {
+  insertSession,
+  getSession,
+  getStagedIntent,
+  setStagedIntentAppliedTaskId,
+  transitionStagedIntent,
+  listStagedIntentsByGroup,
+} from '../../db/queries';
 import {
   createStagedIntentsRouter,
   stageIntent,
   translateApplyError,
+  routeApplyTimeFailure,
+  commitGroupIntents,
+  routeStageTimeBlock,
 } from '../stagedIntents';
 import { PlanningOrchestrator } from '../../orchestration/PlanningOrchestrator';
 import { NotionApiError } from '../../notion/types';
@@ -411,6 +421,149 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
   });
 });
 
+// ── task.create supersede of an already-applied intent — non-idempotent
+// apply's exposure under the supersede model ────────────────────────────────
+//
+// task.create's apply is not idempotent: each application mints a new task.
+// The state machine's supersede/dedup logic assumes a still-staged/approved
+// target hasn't taken effect yet — true for every other kind (each of their
+// applies converges on the same end state, so a stale assumption costs
+// nothing), but false for a create whose own apply raced a concurrent
+// supersede of its row and never reached `committed`, even though the task it
+// created is real. `applied_task_id` (set the instant the create's backend
+// write succeeds, independent of that row's own state transition) is the
+// fix's source of truth for "did this already happen" instead of `state`.
+describe('task.create supersede of an already-applied intent', () => {
+  it('a task.create superseding an intent whose apply already produced a task refuses instead of creating a second one', async () => {
+    const createTask = vi.fn().mockResolvedValue('notion:task-original');
+    mockGetTaskBackend.mockReturnValue({ type: 'notion', createTask });
+
+    seedPlanningSession('session-create-1', 'task-parent-1');
+    const original = stageIntent(
+      'task.create',
+      { title: 'New follow-on', body: 'x', databaseId: 'db-1' },
+      'proj-1',
+      null,
+      'session-create-1',
+    );
+
+    // The race this fix closes: the original's create already ran (a real
+    // task exists) but its own staged -> committed transition hasn't landed
+    // yet, so the row still reads 'staged' — exactly the state an explicit
+    // supersede is allowed to target.
+    setStagedIntentAppliedTaskId(original.id, 'notion:task-original');
+
+    const superseding = stageIntent(
+      'task.create',
+      { title: 'New follow-on (corrected)', body: 'y', databaseId: 'db-1' },
+      'proj-1',
+      null,
+      'session-create-1',
+      null,
+      null,
+      original.id,
+    );
+    expect(superseding.supersedes).toBe(original.id);
+    expect(getStagedIntent(original.id)!.state).toBe('superseded');
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    const app = makeApp(planningOrchestrator);
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${superseding.id}/apply`)
+      .send({});
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain(original.id);
+    expect(res.body.error).toContain('notion:task-original');
+    expect(createTask).not.toHaveBeenCalled();
+    expect(getStagedIntent(superseding.id)!.state).toBe('needs_revision');
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'staged_intent_create_supersede_noop',
+        actor_type: 'system',
+        payload: expect.objectContaining({
+          supersedingIntentId: superseding.id,
+          supersededIntentId: original.id,
+          resultId: 'notion:task-original',
+        }),
+      }),
+    );
+  });
+
+  it('a task.create superseding an intent that has not applied yet still creates exactly one task, as today', async () => {
+    const createTask = vi.fn().mockResolvedValue('notion:task-new');
+    mockGetTaskBackend.mockReturnValue({ type: 'notion', createTask });
+
+    seedPlanningSession('session-create-2', 'task-parent-2');
+    const original = stageIntent(
+      'task.create',
+      { title: 'New follow-on', body: 'x', databaseId: 'db-1' },
+      'proj-1',
+      null,
+      'session-create-2',
+    );
+
+    const superseding = stageIntent(
+      'task.create',
+      { title: 'New follow-on (corrected)', body: 'y', databaseId: 'db-1' },
+      'proj-1',
+      null,
+      'session-create-2',
+      null,
+      null,
+      original.id,
+    );
+    expect(getStagedIntent(original.id)!.state).toBe('superseded');
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    const app = makeApp(planningOrchestrator);
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${superseding.id}/apply`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(createTask).toHaveBeenCalledTimes(1);
+    expect(getStagedIntent(superseding.id)!.state).toBe('committed');
+    expect(getStagedIntent(superseding.id)!.applied_task_id).toBe(
+      'notion:task-new',
+    );
+  });
+
+  it('supersede behaviour for a non-create kind is unchanged — applied_task_id is never consulted', async () => {
+    const setProperties = vi.fn().mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({ type: 'notion', setProperties });
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    seedPlanningSession('session-create-3', 'task-7');
+    const original = stagePropertiesIntent('session-create-3', 'notion:task-7');
+
+    const superseding = stageIntent(
+      'task.setProperties',
+      { taskId: 'notion:task-7', patch: { title: 'Renamed twice' } },
+      'proj-1',
+      null,
+      'session-create-3',
+      null,
+      null,
+      original.id,
+    );
+
+    const app = makeApp(planningOrchestrator);
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${superseding.id}/apply`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(setProperties).toHaveBeenCalledTimes(1);
+    expect(getStagedIntent(superseding.id)!.state).toBe('committed');
+    expect(getStagedIntent(superseding.id)!.applied_task_id ?? null).toBeNull();
+  });
+});
+
 describe('translateApplyError', () => {
   it('renames a Notion object_not_found to the unresolvable task id rather than the sharing-permissions text', () => {
     const notionError = new NotionApiError(
@@ -459,5 +612,383 @@ describe('translateApplyError', () => {
     });
 
     expect(message).toBe('backend write failed');
+  });
+
+  function makePatchBodySectionIntent(overrides: {
+    sessionId: string;
+    taskId: string;
+    section: string;
+    find: string;
+    id: string;
+  }) {
+    return {
+      id: overrides.id,
+      kind: 'task.patchBodySection',
+      payload: {
+        taskId: overrides.taskId,
+        section: overrides.section,
+        operation: 'replace' as const,
+        find: overrides.find,
+        replaceWith: 'new text',
+      },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: overrides.sessionId,
+      state: 'approved' as const,
+      supersedes: null,
+      annotation: null,
+      groupId: null,
+      decisionProposal: null,
+      groomProposal: null,
+      advisory: null,
+      dispositionReason: null,
+      answer: null,
+    };
+  }
+
+  it('surfaces a distinctly stronger re-fetch instruction on the 2nd consecutive identical patchBodySection mismatch in one session', () => {
+    const notFoundError = new Error(
+      '[NotionClient] patchBodySection: text to replace not found in section "Context" of task ' +
+        'notion:task-1. Section text was: some text',
+    );
+    const intent = makePatchBodySectionIntent({
+      sessionId: 'session-repeat-1',
+      taskId: 'notion:task-1',
+      section: 'Context',
+      find: 'the exact phrase',
+      id: 'intent-a',
+    });
+
+    const first = translateApplyError(notFoundError, intent);
+    expect(first).not.toMatch(/re-fetch/i);
+
+    const second = translateApplyError(notFoundError, {
+      ...intent,
+      id: 'intent-b',
+    });
+    expect(second).toMatch(/re-fetch/i);
+    expect(second).toContain(
+      'This is the same "text to replace not found" mismatch as the previous attempt',
+    );
+  });
+
+  it('keeps surfacing the same stronger message on a 3rd-plus identical failure — no new escalation beyond the existing rejection', () => {
+    const notFoundError = new Error(
+      '[NotionClient] patchBodySection: text to replace not found in section "Context" of task ' +
+        'notion:task-2. Section text was: some text',
+    );
+    const intent = makePatchBodySectionIntent({
+      sessionId: 'session-repeat-2',
+      taskId: 'notion:task-2',
+      section: 'Context',
+      find: 'another phrase',
+      id: 'intent-c',
+    });
+
+    translateApplyError(notFoundError, intent);
+    const second = translateApplyError(notFoundError, {
+      ...intent,
+      id: 'intent-d',
+    });
+    const third = translateApplyError(notFoundError, {
+      ...intent,
+      id: 'intent-e',
+    });
+
+    expect(second).toBe(third);
+    expect(third).toMatch(/re-fetch/i);
+  });
+
+  it('does not strengthen the message when the session, task, section, or find text differs from the prior failure', () => {
+    const notFoundError = new Error(
+      '[NotionClient] patchBodySection: text to replace not found in section "Context" of task ' +
+        'notion:task-3. Section text was: some text',
+    );
+    const base = makePatchBodySectionIntent({
+      sessionId: 'session-repeat-3',
+      taskId: 'notion:task-3',
+      section: 'Context',
+      find: 'phrase one',
+      id: 'intent-f',
+    });
+    translateApplyError(notFoundError, base);
+
+    const differentFind = makePatchBodySectionIntent({
+      sessionId: 'session-repeat-3',
+      taskId: 'notion:task-3',
+      section: 'Context',
+      find: 'phrase two',
+      id: 'intent-g',
+    });
+    expect(translateApplyError(notFoundError, differentFind)).not.toMatch(
+      /re-fetch/i,
+    );
+  });
+});
+
+// ── idempotent routeApplyTimeFailure — a losing concurrent group-commit
+// invocation must not throw IllegalStagedIntentTransitionError ────────────
+//
+// commitGroupIntents' blocked-member guard reads state at entry, before
+// either invocation writes, so two concurrent commits over the same failing
+// member can both reach routeApplyTimeFailure with a stale pre-failure row.
+// Re-issuing the same pushback transition on an already-blocked row used to
+// throw out of the unguarded async route handler, destroying the structured
+// commit report (committed/failedId/remaining) the throw bypasses.
+describe('routeApplyTimeFailure — idempotent on an already-blocked row', () => {
+  it('returns normally, not throwing, when the row is already at needs_revision', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setProperties: vi.fn(),
+    });
+    seedPlanningSession('session-idem-1', 'notion:task-idem-1');
+    const intent = stagePropertiesIntent(
+      'session-idem-1',
+      'notion:task-idem-1',
+    );
+    transitionStagedIntent(intent.id, 'needs_revision', {
+      dispositionReason: 'prior failure',
+    });
+    const row = getStagedIntent(intent.id)!;
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+
+    await expect(
+      routeApplyTimeFailure(
+        row,
+        new Error('backend write failed'),
+        planningOrchestrator,
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        reason: expect.stringContaining('backend write failed'),
+      }),
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+  });
+
+  it('returns normally, not throwing, when the row is already at pending_verification', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setProperties: vi.fn(),
+    });
+    seedPlanningSession('session-idem-2', 'notion:task-idem-2');
+    const intent = stagePropertiesIntent(
+      'session-idem-2',
+      'notion:task-idem-2',
+    );
+    transitionStagedIntent(intent.id, 'pending_verification');
+    const row = getStagedIntent(intent.id)!;
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+
+    await expect(
+      routeApplyTimeFailure(
+        row,
+        new Error('backend write failed'),
+        planningOrchestrator,
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        reason: expect.stringContaining('backend write failed'),
+      }),
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('pending_verification');
+  });
+
+  it('returns the same translated reason for the already-blocked case as the first-failure case', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setProperties: vi.fn(),
+    });
+    seedPlanningSession('session-idem-3', 'notion:task-idem-3');
+    const intent = stagePropertiesIntent(
+      'session-idem-3',
+      'notion:task-idem-3',
+    );
+    // Captured before either call transitions the row — the same stale
+    // snapshot a losing concurrent invocation would be holding.
+    const staleRow = getStagedIntent(intent.id)!;
+    const err = new Error('backend write failed');
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+
+    const first = await routeApplyTimeFailure(
+      staleRow,
+      err,
+      planningOrchestrator,
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+
+    const second = await routeApplyTimeFailure(
+      staleRow,
+      err,
+      planningOrchestrator,
+    );
+    expect(second.reason).toBe(first.reason);
+  });
+
+  it('the first-failure path still transitions to needs_revision and records exactly one staged_intent_disposition event', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setProperties: vi.fn(),
+    });
+    seedPlanningSession('session-idem-4', 'notion:task-idem-4');
+    const intent = stagePropertiesIntent(
+      'session-idem-4',
+      'notion:task-idem-4',
+    );
+    const row = getStagedIntent(intent.id)!;
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    mockRecordEvent.mockClear();
+
+    await routeApplyTimeFailure(
+      row,
+      new Error('backend write failed'),
+      planningOrchestrator,
+    );
+
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+    const dispositionEvents = mockRecordEvent.mock.calls.filter(
+      ([evt]) => evt.event_type === 'staged_intent_disposition',
+    );
+    expect(dispositionEvents).toHaveLength(1);
+  });
+
+  it('two concurrent commitGroupIntents calls over the same failing member both return a structured result instead of one throwing', async () => {
+    const setProperties = vi
+      .fn()
+      .mockRejectedValue(new Error('backend write failed'));
+    mockGetTaskBackend.mockReturnValue({ type: 'notion', setProperties });
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    seedPlanningSession('session-race', 'notion:task-race');
+    const groupId = 'group-race';
+    const intent = stageIntent(
+      'task.setProperties',
+      { taskId: 'notion:task-race', patch: { title: 'Renamed' } },
+      'proj-1',
+      groupId,
+      'session-race',
+    );
+    transitionStagedIntent(intent.id, 'approved');
+
+    // Fired without awaiting between them: both invocations run their
+    // synchronous entry checks (blocked-member guard, live-member filter)
+    // against the same unmodified row before either reaches its first
+    // `await applyIntent(...)` and yields — reproducing the race two
+    // concurrent group-commit requests would hit.
+    const [result1, result2] = await Promise.all([
+      commitGroupIntents(
+        groupId,
+        { override: false, reason: '', actorType: 'human' },
+        planningOrchestrator,
+        sm as any,
+      ),
+      commitGroupIntents(
+        groupId,
+        { override: false, reason: '', actorType: 'human' },
+        planningOrchestrator,
+        sm as any,
+      ),
+    ]);
+
+    for (const result of [result1, result2]) {
+      expect(result.status).toBe(500);
+      expect(result.body.committed).toEqual([]);
+      expect(result.body.failedId).toBe(intent.id);
+      expect(result.body.remaining).toEqual([]);
+    }
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+  });
+});
+
+/**
+ * Sibling coverage for the commit-time precheck routing added alongside
+ * routeApplyTimeFailure/routeStageTimeBlock's own redrive paths: it shares
+ * routeStageTimeBlock's MAX_AUTO_REVISE_ROUNDS budget (keyed by groupId),
+ * not a fresh one, so a stage-time block already consumed for a group counts
+ * against a commit-time block discovered for the same group right after.
+ */
+describe("commit-time precheck routing shares routeStageTimeBlock's auto-revise budget", () => {
+  it('a group that already consumed a round at stage time escalates immediately on its next commit-time block instead of getting a fresh budget', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- Still unresolved?\n'),
+      updateStatus: vi.fn().mockResolvedValue(undefined),
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
+    });
+    const sm = makeSessionManager();
+    const groupId = 'group-shared-budget';
+    const taskId = 'notion:task-shared-budget';
+
+    // Round 1 — a stage-time block for this group, routed via
+    // routeStageTimeBlock (the same budget the commit-time path shares).
+    const staged = stageIntent(
+      'task.setStatus',
+      {
+        taskId,
+        status: 'Ready',
+        groomingGate: {
+          type: '💻 Code',
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+        },
+      },
+      'proj-1',
+      groupId,
+      'session-shared',
+    );
+    const checked = await routeStageTimeBlock(staged, sm as any);
+    expect(checked.state).toBe('needs_revision');
+    expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
+
+    // Clear the hidden member so it doesn't trip commitGroupIntents' own
+    // blocked-member guard (a separate 409 this task doesn't touch).
+    db.prepare('DELETE FROM staged_intent WHERE id = ?').run(checked.id);
+
+    // Round 2 — a fresh pair of members for the same group, blocked at
+    // commit time by the grooming promotion gate (missing size_check).
+    stageIntent(
+      'task.setDependsOn',
+      { taskId, dependsOn: [] },
+      'proj-1',
+      groupId,
+      'session-shared',
+    );
+    stageIntent(
+      'task.setStatus',
+      {
+        taskId,
+        status: 'Ready',
+        groomingGate: { type: '💻 Code', type_check: { decision: 'none' } },
+      },
+      'proj-1',
+      groupId,
+      'session-shared',
+    );
+    for (const row of listStagedIntentsByGroup(groupId)) {
+      transitionStagedIntent(row.id, 'approved');
+    }
+
+    const result = await commitGroupIntents(
+      groupId,
+      { override: false, reason: '', actorType: 'human' },
+      undefined,
+      sm as any,
+    );
+
+    expect(result.status).toBe(409);
+    // The group's budget was already spent by the stage-time block above —
+    // this 2nd consecutive failure for the same groupId escalates instead
+    // of enqueueing a 2nd feedback message.
+    expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
   });
 });

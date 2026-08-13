@@ -24,6 +24,18 @@ import {
 import { passesGroomDepGate } from '../../orchestration/planningCandidates';
 import { normalizeBoardId } from '../../tasks/taskId';
 import type { NotionTask } from '../../notion/types';
+import type { SessionType } from '../../session/sessionPredicates';
+import type { PlanningSessionType } from '../../orchestration/OpsSessionLauncher';
+
+/**
+ * Compile-time-only check: fails to typecheck if SkillId or
+ * PlanningSessionType ever stop being derived from SessionType (e.g. if one
+ * gains a literal SessionType doesn't have). Not exercised at runtime.
+ */
+type AssertExtendsSessionType<T extends SessionType | 'standard'> = T;
+type _SkillIdDerivesFromSessionType = AssertExtendsSessionType<SkillId>;
+type _PlanningSessionTypeDerivesFromSessionType =
+  AssertExtendsSessionType<PlanningSessionType>;
 
 const repoRoot = join(__dirname, '..', '..', '..', '..', '..');
 const sharedHardRulesPath = join(
@@ -88,10 +100,10 @@ describe('procedureCore', () => {
       'groom' | 'design' | 'ops' | 'split',
       { principles: number; steps: number }
     > = {
-      groom: { principles: 12, steps: 8 },
-      design: { principles: 22, steps: 7 },
-      ops: { principles: 15, steps: 5 },
-      split: { principles: 5, steps: 4 },
+      groom: { principles: 15, steps: 8 },
+      design: { principles: 24, steps: 7 },
+      ops: { principles: 17, steps: 5 },
+      split: { principles: 6, steps: 4 },
     };
     for (const skill of Object.keys(expected) as Array<keyof typeof expected>) {
       expect(principlesFor(skill).length, `${skill} principlesFor`).toBe(
@@ -160,6 +172,76 @@ describe('procedureCore', () => {
     expect(rendered).toContain('🔎 Investigation');
     expect(rendered).toContain('🧪 Testing');
     expect(rendered).toContain('OPEN_QUESTIONS_EXEMPT_TYPES');
+  });
+
+  it('gives the report-and-promote instruction ("report it honestly in groomProposal.openQuestions and promote") for every OPEN_QUESTIONS_EXEMPT_TYPES member, not only Investigation/Testing', () => {
+    const principle = CORE_PRINCIPLES.find(
+      (p) => p.id === 'investigate-before-resolving-no-deferral',
+    )!;
+    const rendered = renderPrinciple(principle, 'groom');
+    expect(rendered).toContain('For EVERY exempt type');
+    expect(rendered).toContain('📋 Planning and 📐 Design included');
+    expect(rendered).toContain(
+      'report it honestly in groomProposal.openQuestions and promote the task',
+    );
+    // Design/Planning's own Open Questions are not this session's to answer.
+    expect(rendered).toContain("that task's own dispatched execution session");
+  });
+
+  it("states that a groom session's deliverable is a decision about the task, never the task's own deliverable", () => {
+    const principle = CORE_PRINCIPLES.find(
+      (p) => p.id === 'groom-deliverable-is-a-decision-about-the-task',
+    )!;
+    expect(principle).toBeDefined();
+    expect(principle.appliesTo).toEqual(['groom']);
+    const rendered = renderPrinciple(principle, 'groom');
+    expect(rendered).toContain(
+      'deliverable is a decision about the target task',
+    );
+    expect(rendered).toContain(
+      'never the output the task itself exists to produce',
+    );
+    expect(rendered).toContain('📐 Design task');
+    expect(rendered).toContain(
+      "its own listed Open Questions are a /design session's deliverable",
+    );
+  });
+
+  it('keeps decision.pickOne available to groom sessions for legitimate escalations even after the deliverable-boundary principle is added', () => {
+    const deliverablePrinciple = CORE_PRINCIPLES.find(
+      (p) => p.id === 'groom-deliverable-is-a-decision-about-the-task',
+    )!;
+    const rendered = renderPrinciple(deliverablePrinciple, 'groom');
+    expect(rendered).toContain('does not restrict `decision.pickOne` itself');
+
+    const forksOnlyPrinciple = CORE_PRINCIPLES.find(
+      (p) => p.id === 'decision-pickone-genuine-forks-only',
+    )!;
+    expect(forksOnlyPrinciple).toBeDefined();
+    expect(forksOnlyPrinciple.appliesTo).toContain('groom');
+  });
+
+  it("states that a groom body edit must join its task's open decision group", () => {
+    const principle = CORE_PRINCIPLES.find(
+      (p) => p.id === 'groom-body-edit-grouped',
+    )!;
+    expect(principle).toBeDefined();
+    expect(principle.appliesTo).toEqual(['groom']);
+    const rendered = renderPrinciple(principle, 'groom');
+    expect(rendered).toContain('task.patchBodySection');
+    expect(rendered).toContain('task.updateBody');
+    expect(rendered).toMatch(/groupId/);
+    expect(rendered).toMatch(/rejected at stage time/);
+    expect(rendered).toMatch(/automatically adopted/);
+    expect(rendered).toMatch(/no re-staging required/);
+    expect(rendered).toMatch(/never opens a group/);
+
+    expect(
+      principlesFor('design').find((p) => p.id === principle.id),
+    ).toBeUndefined();
+    expect(
+      principlesFor('ops').find((p) => p.id === principle.id),
+    ).toBeUndefined();
   });
 
   it('keeps ordered steps sequential and non-empty per applicable skill', () => {
@@ -273,6 +355,24 @@ describe('procedureCore', () => {
       expect(rendered).toContain('supersedes');
       expect(rendered).toMatch(/DO NOT withdraw/);
     }
+  });
+
+  it("teaches supersede-on-stage-time-block's scope limit: only the blocked intent, never its unblocked group siblings — both in CORE_PRINCIPLES and in the assembled hard-rules.md markdown", () => {
+    const skills: SkillId[] = ['groom', 'design', 'ops', 'split'];
+    for (const skill of skills) {
+      const principle = principlesFor(skill).find(
+        (p) => p.id === 'supersede-on-stage-time-block',
+      );
+      expect(principle, `${skill}`).toBeDefined();
+      const rendered = renderPrinciple(principle!, skill);
+      expect(rendered).toMatch(/supersede only the blocked intent/i);
+      expect(rendered).toMatch(/siblings.*must be left in place/i);
+      expect(rendered).toMatch(/never blocks a group commit/i);
+    }
+
+    const markdown = renderHardRulesMarkdown();
+    expect(markdown).toMatch(/supersede only the blocked intent/i);
+    expect(markdown).toMatch(/siblings.*must be left in place/i);
   });
 
   it('keeps the self-caught-mistake withdraw directive rendering, and distinguishes it from the needs_revision supersede case rather than contradicting it', () => {
@@ -1130,6 +1230,16 @@ describe('procedureCore', () => {
       expect(rendered).toMatch(
         /the session stages the `journal\.setState` → `resolved` transition, it never applies it/,
       );
+    });
+
+    it('the declared-writes-auto-approve principle names the ## Declared writes section so a dispatched ops session knows where its auto-approved writes come from', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'declared-writes-auto-approve',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/## Declared writes/);
+      expect(rendered).toMatch(/Non-Prod-Mutating/);
+      expect(rendered).toMatch(/auto-approves/);
     });
   });
 });

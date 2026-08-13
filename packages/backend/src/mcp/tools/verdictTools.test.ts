@@ -21,11 +21,15 @@ function fakeSession() {
   return {
     recordReviewDisposition: vi.fn(),
     recordVerifiedFlakyDisposition: vi.fn(),
-    recordGateVerifyDisposition: vi.fn(),
+    recordGateVerifyDisposition: vi
+      .fn()
+      .mockReturnValue({ id: 'staged-1', milestone: 'M1' }),
+    recordDeployAgenticVerdict: vi.fn(),
   } as unknown as AgentSession & {
     recordReviewDisposition: ReturnType<typeof vi.fn>;
     recordVerifiedFlakyDisposition: ReturnType<typeof vi.fn>;
     recordGateVerifyDisposition: ReturnType<typeof vi.fn>;
+    recordDeployAgenticVerdict: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -71,10 +75,22 @@ describe('verdict-delivery MCP tools — registration', () => {
     await close();
   });
 
-  it('registers only gate.verify for an ops session', async () => {
+  it('registers gate.verify and deploy.verdict for an ops session', async () => {
     const { client, close } = await connectedClient(() => fakeSession(), 'ops');
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['gate.verify']);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'deploy.verdict',
+      'gate.verify',
+    ]);
+    await close();
+  });
+
+  it("gate.verify's description states the full-uuid gateItemId requirement", async () => {
+    const { client, close } = await connectedClient(() => fakeSession(), 'ops');
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'gate.verify');
+    expect(tool?.description).toMatch(/full gate item uuid/i);
+    expect(tool?.description).toMatch(/8-character short form/i);
     await close();
   });
 });
@@ -168,7 +184,11 @@ describe('gate.verify', () => {
         },
       },
     });
-    expect(resultOf(result as never)).toEqual({ status: 'ok' });
+    expect(resultOf(result as never)).toEqual({
+      status: 'ok',
+      id: 'staged-1',
+      milestone: 'M1',
+    });
     expect(session.recordGateVerifyDisposition).toHaveBeenCalledWith({
       gateItemId: 'item-1',
       disposition: 'pass',
@@ -179,6 +199,60 @@ describe('gate.verify', () => {
       },
       reclassify: undefined,
     });
+    await close();
+  });
+
+  it('accepts a not-yet-triggerable disposition (the parking abstain)', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'not-yet-triggerable',
+        evidence: {
+          expected: 'The nightly backfill has run at least once.',
+          found: 'No audit_log entry for this job yet — it has not run.',
+          query: 'auditLog.query projectId=proj-1 action=nightly_backfill',
+        },
+      },
+    });
+    expect(resultOf(result as never)).toEqual({
+      status: 'ok',
+      id: 'staged-1',
+      milestone: 'M1',
+    });
+    expect(session.recordGateVerifyDisposition).toHaveBeenCalledWith({
+      gateItemId: 'item-1',
+      disposition: 'not-yet-triggerable',
+      evidence: {
+        expected: 'The nightly backfill has run at least once.',
+        found: 'No audit_log entry for this job yet — it has not run.',
+        query: 'auditLog.query projectId=proj-1 action=nightly_backfill',
+      },
+      reclassify: undefined,
+    });
+    await close();
+  });
+
+  it('surfaces a not-found gateItemId (e.g. a short/truncated form) as an error, not a bare ok', async () => {
+    const session = fakeSession();
+    session.recordGateVerifyDisposition.mockImplementation(() => {
+      throw new Error(
+        'no gate item "short-id" — gateItemId must be the full gate_item id',
+      );
+    });
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'short-id',
+        disposition: 'pass',
+        evidence: { expected: 'x', found: 'y', query: 'z' },
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultOf(result as never).error).toMatch(/full gate_item id/);
     await close();
   });
 
@@ -276,7 +350,11 @@ describe('gate.verify', () => {
         },
       },
     });
-    expect(resultOf(result as never)).toEqual({ status: 'ok' });
+    expect(resultOf(result as never)).toEqual({
+      status: 'ok',
+      id: 'staged-1',
+      milestone: 'M1',
+    });
     expect(session.recordGateVerifyDisposition).toHaveBeenCalledWith({
       gateItemId: 'item-1',
       disposition: 'fail',
@@ -311,7 +389,7 @@ describe('gate.verify', () => {
     await close();
   });
 
-  it('accepts a reclassify proposal to Opportunistic', async () => {
+  it('accepts a reclassify proposal to needs-triage', async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session, 'ops');
     await client.callTool({
@@ -320,8 +398,8 @@ describe('gate.verify', () => {
         gateItemId: 'item-4',
         disposition: 'needs-setup',
         reclassify: {
-          to: 'Opportunistic',
-          reason: 'the triggering condition has not happened yet',
+          to: 'needs-triage',
+          reason: 'cannot tell what tier fits',
         },
       },
     });
@@ -330,8 +408,8 @@ describe('gate.verify', () => {
       disposition: 'needs-setup',
       evidence: undefined,
       reclassify: {
-        to: 'Opportunistic',
-        reason: 'the triggering condition has not happened yet',
+        to: 'needs-triage',
+        reason: 'cannot tell what tier fits',
       },
     });
     await close();
@@ -360,5 +438,48 @@ describe('gate.verify', () => {
     expect(new Set(gateVerifyReclassifyToSchema.options)).toEqual(
       VERIFIER_RECLASSIFY_TARGETS,
     );
+  });
+});
+
+describe('deploy.verdict', () => {
+  it('delegates to session.recordDeployAgenticVerdict', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'deploy.verdict',
+      arguments: { verdict: 'approved', detail: 'looks healthy' },
+    });
+    expect(resultOf(result as never)).toEqual({ status: 'ok' });
+    expect(session.recordDeployAgenticVerdict).toHaveBeenCalledWith({
+      verdict: 'approved',
+      detail: 'looks healthy',
+    });
+    await close();
+  });
+
+  it('surfaces a non-deploy-agentic session (e.g. task_id mismatch) as an error, not a bare ok', async () => {
+    const session = fakeSession();
+    session.recordDeployAgenticVerdict.mockImplementation(() => {
+      throw new Error(
+        'recordDeployAgenticVerdict: session task_id "gate-item:x" is not a deploy-agentic task',
+      );
+    });
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'deploy.verdict',
+      arguments: { verdict: 'inconclusive' },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultOf(result as never).error).toMatch(
+      /not a deploy-agentic task/,
+    );
+    await close();
+  });
+
+  it('is not registered for a non-planning (null workflow) session', async () => {
+    const { client, close } = await connectedClient(() => fakeSession(), null);
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).not.toContain('deploy.verdict');
+    await close();
   });
 });

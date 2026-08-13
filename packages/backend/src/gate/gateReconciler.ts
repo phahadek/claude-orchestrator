@@ -4,13 +4,16 @@ import { getProjectById, runtimeSettings } from '../config';
 import { typedGetSetting } from '../config/settings';
 import { computeAvailableCapacity } from '../orchestration/DispatchTriggerEvaluator';
 import { getTaskBackend } from '../tasks/TaskBackend';
+import { yieldToEventLoop } from '../utils/concurrency';
 import { getProjectDeployedSha } from '../deploy/deployService';
 import {
   countLivePlanningSessions,
   countLiveVerifySessions,
+  findActiveGateVerifyMirrorForItem,
   getArm,
   getGateItemsWithPendingCapabilityRequest,
   hasLiveVerifySessionForGateItem,
+  listActiveGateVerifyMirrors,
 } from '../db/queries';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
@@ -24,6 +27,7 @@ import {
   getGateReadiness,
   reconcileGateRunnability,
   nextRunnableGateItems,
+  nextPendingGateItems,
   appendGateItemEvent,
   createLocalGitAncestrySource,
   isFollowupTaskDone,
@@ -58,8 +62,28 @@ export interface GateVerificationResult {
    * (like `noted`), leaving the item runnable; nextRunnableGateItems skips
    * it on the next pull until a reclassify/reopen/new-source event
    * supersedes it as the item's latest event.
+   *
+   * `deferred` is only ever reached via an operator-supplied disposition on
+   * a Human-Observation mirror intent (stagedIntents.ts's gate.verify apply
+   * case) — no verifier ever proposes it. It matches GateReadinessPanel's
+   * direct-path "Defer" action: the item resolves to the `deferred` state,
+   * punting it to the next milestone, without filing follow-up work.
+   *
+   * `not-yet-triggerable` is the "the scenario hasn't occurred / the data
+   * doesn't exist yet" abstain — distinct from `needs-setup`'s "a human
+   * must perform a setup step" abstain. Unlike `needs-setup`, it advances
+   * state: appendGateItemEvent (gateService.ts) parks the item at `pending`
+   * with a backoff-scheduled next_attempt_at, which nextPendingGateItems /
+   * the reconciler tick re-pulls once elapsed — see routeVerificationResult
+   * below, which forwards it through the same generic disposition/evidence
+   * write the `pass` case uses.
    */
-  disposition: 'pass' | 'fail' | 'needs-setup';
+  disposition:
+    | 'pass'
+    | 'fail'
+    | 'needs-setup'
+    | 'deferred'
+    | 'not-yet-triggerable';
   evidence?: unknown;
   /**
    * Set only when `disposition` is `needs-setup` and the session was never
@@ -160,12 +184,15 @@ export const defaultFollowupFiler: FollowupFixTaskFiler = {
 
 /**
  * Classifications the reconciler auto-runs, one tier at a time. Read-Only
- * and Opportunistic auto-dispose on pass (gateService resolves it straight
- * to 'pass'); Prod-Mutating is run the same way but never mutates — its
- * verifier only gathers read-only evidence, and gateService routes a pass to
+ * auto-disposes on pass (gateService resolves it straight to 'pass');
+ * Prod-Mutating is run the same way but never mutates — its verifier only
+ * gathers read-only evidence, and gateService routes a pass to
  * 'pending-approval' (held until an operator calls approveGateItem) rather
- * than resolving it. needs-triage is excluded: it requires human
- * classification before it can be routed at all. Human-Observation is
+ * than resolving it. Both tiers are also pending-eligible: a
+ * `not-yet-triggerable` result parks the item at `pending` on a backoff
+ * schedule, pulled back in by nextPendingGateItems alongside this loop (see
+ * the tick's auto-run loop below). needs-triage is excluded: it requires
+ * human classification before it can be routed at all. Human-Observation is
  * excluded too, but for a different reason: it is not merely unrouted, it
  * is unverifiable by any headless session (UI/visual/interactive behavior
  * can only be judged by a human observing the running app) so it never
@@ -175,11 +202,7 @@ export const defaultFollowupFiler: FollowupFixTaskFiler = {
  * refuses to let a verifier-originated pass resolve it regardless of how it
  * was dispatched.
  */
-const AUTO_RUN_TIERS: GateItemClassification[] = [
-  'Read-Only',
-  'Opportunistic',
-  'Prod-Mutating',
-];
+const AUTO_RUN_TIERS: GateItemClassification[] = ['Read-Only', 'Prod-Mutating'];
 
 const DEFAULT_TIER_LIMIT = 10;
 
@@ -220,7 +243,12 @@ export interface GateReconcilerOptions {
 interface ProcessedGateItem {
   itemId: string;
   classification: GateItemClassification;
-  disposition: 'pass' | 'fail' | 'needs-setup';
+  disposition:
+    | 'pass'
+    | 'fail'
+    | 'needs-setup'
+    | 'deferred'
+    | 'not-yet-triggerable';
   /** Set when this run applied a verifier-proposed self-correction — `classification` above already reflects it. */
   reclassifiedTo?: GateItemClassification;
 }
@@ -282,7 +310,8 @@ function failEvidence(item: GateItem, verifierEvidence: unknown): unknown {
 /**
  * Appends the verifier's outcome and routes it:
  *  - pass/needs-setup: appendGateItemEvent as-is (pass is provenance-tagged
- *    operator='gate-verifier'; needs-setup is the non-terminal abstain).
+ *    with `passOperator`, 'gate-verifier' by default; needs-setup is the
+ *    non-terminal abstain).
  *  - fail: dedup — while a prior filed follow-up is still open (not Done),
  *    log the fresh failure against it instead of refiling; escalate to
  *    needs-setup instead of refiling once maxFixAttempts is spent; otherwise
@@ -352,6 +381,22 @@ export async function routeVerificationResult(
   concurrency: GateVerificationConcurrencyConfig = {},
   /** true = unattended (reconciler auto-launch / boot reattachment); false = operator-triggered manual dispatch (dispatchGateItemVerification) — recorded on every event this run appends. */
   unattended = false,
+  /**
+   * The operator provenance recorded on a `pass` event. Deliberately no
+   * default value — a JS default parameter only substitutes on an
+   * `undefined` *argument*, which is exactly the value the mirror call site
+   * below needs to pass through untouched, so a default here would silently
+   * clobber it back to 'gate-verifier'. Every headless-verifier-originated
+   * call (auto-run, boot reattachment, and an operator-approved verifier
+   * report re-routed through here from the decision surface) passes
+   * 'gate-verifier' explicitly. stagedIntents.ts's gate.verify apply case
+   * passes `undefined` only for an operator-supplied Human-Observation
+   * *mirror* disposition — there, no verifier ever ran; the pass is a
+   * human's own judgment and must not be tagged as the verifier's, or
+   * isVerifierBlockedFromPassing (gateService.ts) wrongly suppresses it to
+   * advisory-only and the item never advances.
+   */
+  passOperator: string | undefined,
 ): Promise<ProcessedGateItem> {
   const maxFixAttempts = concurrency.maxFixAttempts ?? DEFAULT_MAX_FIX_ATTEMPTS;
 
@@ -468,13 +513,33 @@ export async function routeVerificationResult(
       );
       gateStore.advanceState(item.id, 'open', 'fail', now);
     }
+  } else if (result.disposition === 'deferred') {
+    // Punts to the next milestone — the same disposition
+    // GateReadinessPanel's direct-path "Defer" button writes via
+    // appendGateItemEvent, reached here only from an operator-supplied
+    // mirror disposition (no verifier ever proposes this).
+    appendGateItemEvent(item.id, {
+      disposition: 'deferred',
+      evidence: result.evidence,
+      deploySha: deploySha ?? undefined,
+      unattended,
+    });
   } else {
-    // pass — auto-pass is provenance-tagged, never anonymous.
+    // pass, or not-yet-triggerable — a verifier-originated auto-pass is
+    // provenance-tagged, never anonymous; an operator-supplied mirror pass
+    // carries passOperator (undefined) so isVerifierBlockedFromPassing
+    // doesn't mistake it for the verifier's own verdict. A
+    // not-yet-triggerable result rides the same generic
+    // disposition/evidence forward — appendGateItemEvent already parks it
+    // at `pending` with a scheduled next_attempt_at (nextStateForDisposition
+    // / computeNotYetTriggerableBackoffHours, gateService.ts); the
+    // `operator` tag has no effect on that path (isVerifierBlockedFromPassing
+    // only special-cases `pass`).
     appendGateItemEvent(item.id, {
       disposition: result.disposition,
       evidence: result.evidence,
       deploySha: deploySha ?? undefined,
-      operator: 'gate-verifier',
+      operator: passOperator,
       unattended,
     });
   }
@@ -538,6 +603,7 @@ async function runReservedVerification(
       deploySha,
       concurrency,
       unattended,
+      'gate-verifier',
     );
   } finally {
     inFlightVerifications.delete(item.id);
@@ -582,6 +648,7 @@ export async function reattachOutstandingGateVerifications(): Promise<void> {
           deploySha,
           concurrency,
           true,
+          'gate-verifier',
         );
       } catch (err) {
         logger.error(
@@ -592,6 +659,148 @@ export async function reattachOutstandingGateVerifications(): Promise<void> {
       }
     })();
   }
+}
+
+/**
+ * The reconciler's Human-Observation mirror callbacks, wired at server
+ * bootstrap (see server.ts's configureGateItemMirrorSink) to stagedIntents.ts's
+ * stageIntent / withdrawGateVerifyMirror. Kept as an injected interface
+ * rather than a direct import — stagedIntents.ts already imports
+ * routeVerificationResult/defaultFollowupFiler from this module, so a static
+ * import in the other direction would be a cycle.
+ */
+/** The two gate-item states this reconciler surfaces into the Decision Inbox — see reconcileHumanObservationMirrors. */
+type GateItemMirrorOrigin = 'mirror' | 'consent';
+
+export interface GateItemMirrorSink {
+  /**
+   * Stage a `gate.verify` mirror intent for an item the operator needs to
+   * see on the decision surface: `origin: 'mirror'` for a runnable
+   * Human-Observation item (no groupId, no pre-set disposition — the
+   * operator supplies pass/fail/deferred at apply time); `origin: 'consent'`
+   * for a Prod-Mutating item held at pending-approval (the operator
+   * approves/rejects it directly, mirroring GateReadinessPanel's consent
+   * gate rather than routing through a disposition).
+   */
+  stageMirror(item: GateItem, origin: GateItemMirrorOrigin): void;
+  /** Retire (withdraw) a live mirror intent whose backing gate_item has left the state that earned it a mirror. */
+  retireMirror(intentId: string, reason: string): void;
+}
+
+let configuredMirrorSink: GateItemMirrorSink | null = null;
+
+/** Wires the mirror-staging sink for reconcileHumanObservationMirrors below. */
+export function configureGateItemMirrorSink(sink: GateItemMirrorSink): void {
+  configuredMirrorSink = sink;
+}
+
+export interface GateItemMirrorReconcileResult {
+  staged: string[];
+  retired: string[];
+}
+
+/** True for a runnable Human-Observation item — no headless session can judge rendered UI/visual state, so it needs an operator disposition. */
+function isMirrorCandidate(item: GateItem): boolean {
+  return (
+    item.classification === 'Human-Observation' && item.state === 'runnable'
+  );
+}
+
+/** True for a Prod-Mutating item held at pending-approval — a pass an operator must explicitly consent to or reject before it resolves. */
+function isConsentCandidate(item: GateItem): boolean {
+  return (
+    item.classification === 'Prod-Mutating' && item.state === 'pending-approval'
+  );
+}
+
+/** The withdrawal reason for a mirror whose backing item left the classification/state that earned it a mirror of the given origin. */
+function retireReasonFor(origin: GateItemMirrorOrigin, item: GateItem): string {
+  const expectedClassification: GateItemClassification =
+    origin === 'mirror' ? 'Human-Observation' : 'Prod-Mutating';
+  if (item.classification !== expectedClassification) {
+    return `gate_item reclassified to ${item.classification}`;
+  }
+  return `gate_item resolved to ${item.state}`;
+}
+
+/**
+ * Human-Observation items are excluded from AUTO_RUN_TIERS — no headless
+ * session can judge rendered UI/visual state — so without this they live
+ * only in the gate table, invisible unless an operator happens to browse
+ * GateReadinessPanel filtered to that classification. A Prod-Mutating item
+ * held at pending-approval has the opposite problem: it was verified, but
+ * the consent gate (task-writing.md § Manual Verification Gate) holds it
+ * for an operator's explicit approve/reject rather than resolving it — and
+ * that hold is likewise invisible outside GateReadinessPanel. This mirrors
+ * every unmirrored item matching either case into a staged `gate.verify`
+ * intent (reusing its shape/kind, distinguished by payload.origin — see
+ * GateItemMirrorOrigin) so both surface in the Decision Inbox instead.
+ *
+ * Level-triggered, not edge-triggered: re-evaluated every reconcile tick
+ * (not just on the open->runnable or pass->pending-approval transition) so
+ * an item accreted directly into either state is still caught. Idempotent
+ * via findActiveGateVerifyMirrorForItem's per-origin dedup lookup — a
+ * gate_item with an already-live mirror of that origin is never re-staged.
+ * The companion retire pass rescans every live mirror of both origins each
+ * tick (rather than hooking the direct GateReadinessPanel/consent routes
+ * individually) so a mirror is retired however the underlying item left the
+ * matching state — resolved via the direct panel path, approved/rejected
+ * from the milestone surface, or reclassified away — without a stale card
+ * lingering in the Inbox.
+ */
+export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResult {
+  const staged: string[] = [];
+  const retired: string[] = [];
+  if (!configuredMirrorSink) return { staged, retired };
+  const sink = configuredMirrorSink;
+
+  const allItems = gateStore.listAll();
+  const candidatesByOrigin: [
+    GateItemMirrorOrigin,
+    (item: GateItem) => boolean,
+  ][] = [
+    ['mirror', isMirrorCandidate],
+    ['consent', isConsentCandidate],
+  ];
+  for (const [origin, matches] of candidatesByOrigin) {
+    for (const item of allItems.filter(matches)) {
+      if (findActiveGateVerifyMirrorForItem(item.id, origin)) continue;
+      sink.stageMirror(item, origin);
+      staged.push(item.id);
+    }
+  }
+
+  const stillLiveByOrigin: Record<
+    GateItemMirrorOrigin,
+    (item: GateItem) => boolean
+  > = {
+    mirror: isMirrorCandidate,
+    consent: isConsentCandidate,
+  };
+  for (const [origin, stillLive] of Object.entries(stillLiveByOrigin) as [
+    GateItemMirrorOrigin,
+    (item: GateItem) => boolean,
+  ][]) {
+    for (const mirror of listActiveGateVerifyMirrors(origin)) {
+      let gateItemId: string | null = null;
+      try {
+        const payload = JSON.parse(mirror.payload) as { gateItemId?: unknown };
+        gateItemId =
+          typeof payload.gateItemId === 'string' ? payload.gateItemId : null;
+      } catch {
+        // Malformed payload — leave gateItemId null, treated as "backing item no longer exists" below.
+      }
+      const item = gateItemId ? gateStore.getItem(gateItemId) : undefined;
+      if (item !== undefined && stillLive(item)) continue;
+      const reason = !item
+        ? 'backing gate_item no longer exists'
+        : retireReasonFor(origin, item);
+      sink.retireMirror(mirror.id, reason);
+      retired.push(mirror.id);
+    }
+  }
+
+  return { staged, retired };
 }
 
 /**
@@ -623,7 +832,7 @@ export async function runGateReconcilerTick(
     const sha = await trigger.latestDeploySha(project);
     deployShaByProject[project] = sha;
     if (!sha) continue;
-    const result = reconcileGateRunnability(sha, {
+    const result = await reconcileGateRunnability(sha, {
       project,
       ancestrySource: ancestrySourceForProject(project),
     });
@@ -636,6 +845,16 @@ export async function runGateReconcilerTick(
           reopened: [...reconciled.reopened, ...result.reopened],
         }
       : result;
+  }
+
+  // Level-triggered, independent of the auto-run tiers below — runs even
+  // when no verifier is wired, since it stages Decision Inbox cards rather
+  // than dispatching anything.
+  const mirrorResult = reconcileHumanObservationMirrors();
+  if (mirrorResult.staged.length > 0 || mirrorResult.retired.length > 0) {
+    logger.info(
+      `[GateReconciler] Human-Observation mirror pass: staged ${mirrorResult.staged.length}, retired ${mirrorResult.retired.length}`,
+    );
   }
 
   // Keyed by project::milestone, not milestone alone — a milestone display
@@ -695,6 +914,8 @@ export async function runGateReconcilerTick(
     }
 
     for (const { project, milestone } of projectMilestones.values()) {
+      await yieldToEventLoop();
+
       let milestoneRow;
       try {
         milestoneRow = resolveMilestoneRowForProject(project, milestone);
@@ -714,6 +935,8 @@ export async function runGateReconcilerTick(
           limit,
         });
         for (const item of batch) {
+          await yieldToEventLoop();
+
           if (dispatchBudget <= 0) {
             skippedForBudget++;
             continue;
@@ -732,6 +955,31 @@ export async function runGateReconcilerTick(
             processed.push(outcome);
             dispatchBudget--;
           }
+        }
+      }
+
+      // Backoff-elapsed `pending` items — the not-yet-triggerable re-check
+      // pull, mirroring the AUTO_RUN_TIERS loop above but over `pending`
+      // state rather than a classification tier (pending is orthogonal to
+      // classification; see nextPendingGateItems).
+      const pendingBatch = nextPendingGateItems(project, milestone, { limit });
+      for (const item of pendingBatch) {
+        await yieldToEventLoop();
+
+        if (dispatchBudget <= 0) {
+          skippedForBudget++;
+          continue;
+        }
+        const outcome = await processItem(
+          item,
+          verifier,
+          followupFiler,
+          deployShaByProject[item.project] ?? null,
+          options.concurrency,
+        );
+        if (outcome) {
+          processed.push(outcome);
+          dispatchBudget--;
         }
       }
     }

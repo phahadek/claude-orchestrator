@@ -9,6 +9,8 @@ import {
   type Settings,
 } from '../config/settings';
 import { reapplySessionCgroupLimits } from '../session/sessionCgroup';
+import { getCapabilityDispositionEvents } from '../audit/AuditLog';
+import { isGrantable } from '../session/orchestrator-config';
 
 let _reviewOrchestrator: { drain(): Promise<void> } | null = null;
 export function setReviewOrchestrator(orch: { drain(): Promise<void> }): void {
@@ -31,6 +33,8 @@ const SETTING_KEYS = [
   'session_mode',
   'auto_launch_concurrency',
   'auto_launch_poll_interval_ms',
+  'hourly_usage_pause_threshold_percent',
+  'weekly_usage_pause_threshold_percent',
   'min_host_free_memory_mb',
   'per_session_reserve_mb',
   'session_cgroup_prod_reserve_mb',
@@ -55,6 +59,12 @@ const SETTING_KEYS = [
   'ops_session_effort',
   'gate_verify_session_model',
   'gate_verify_session_effort',
+  'groom_session_model',
+  'groom_session_effort',
+  'design_session_model',
+  'design_session_effort',
+  'docs_session_model',
+  'docs_session_effort',
   'tier3_classifier_model',
   'capability_auto_approve_allowlist',
   'milestone_attention_aging_threshold_seconds',
@@ -107,6 +117,12 @@ function applyToRuntime(
       break;
     case 'auto_launch_poll_interval_ms':
       runtimeSettings.auto_launch_poll_interval_ms = value as number;
+      break;
+    case 'hourly_usage_pause_threshold_percent':
+      runtimeSettings.hourly_usage_pause_threshold_percent = value as string;
+      break;
+    case 'weekly_usage_pause_threshold_percent':
+      runtimeSettings.weekly_usage_pause_threshold_percent = value as string;
       break;
     case 'min_host_free_memory_mb':
       runtimeSettings.min_host_free_memory_mb = value as number;
@@ -183,6 +199,24 @@ function applyToRuntime(
     case 'gate_verify_session_effort':
       runtimeSettings.gate_verify_session_effort = value as string;
       break;
+    case 'groom_session_model':
+      runtimeSettings.groom_session_model = value as string;
+      break;
+    case 'groom_session_effort':
+      runtimeSettings.groom_session_effort = value as string;
+      break;
+    case 'design_session_model':
+      runtimeSettings.design_session_model = value as string;
+      break;
+    case 'design_session_effort':
+      runtimeSettings.design_session_effort = value as string;
+      break;
+    case 'docs_session_model':
+      runtimeSettings.docs_session_model = value as string;
+      break;
+    case 'docs_session_effort':
+      runtimeSettings.docs_session_effort = value as string;
+      break;
     case 'tier3_classifier_model':
       runtimeSettings.tier3_classifier_model = value as string;
       break;
@@ -232,6 +266,10 @@ function runtimeSettingsAsRecord(): {
     auto_launch_poll_interval_ms: String(
       runtimeSettings.auto_launch_poll_interval_ms,
     ),
+    hourly_usage_pause_threshold_percent:
+      runtimeSettings.hourly_usage_pause_threshold_percent,
+    weekly_usage_pause_threshold_percent:
+      runtimeSettings.weekly_usage_pause_threshold_percent,
     min_host_free_memory_mb: String(runtimeSettings.min_host_free_memory_mb),
     per_session_reserve_mb: String(runtimeSettings.per_session_reserve_mb),
     session_cgroup_prod_reserve_mb: String(
@@ -274,6 +312,12 @@ function runtimeSettingsAsRecord(): {
     ops_session_effort: runtimeSettings.ops_session_effort,
     gate_verify_session_model: runtimeSettings.gate_verify_session_model,
     gate_verify_session_effort: runtimeSettings.gate_verify_session_effort,
+    groom_session_model: runtimeSettings.groom_session_model,
+    groom_session_effort: runtimeSettings.groom_session_effort,
+    design_session_model: runtimeSettings.design_session_model,
+    design_session_effort: runtimeSettings.design_session_effort,
+    docs_session_model: runtimeSettings.docs_session_model,
+    docs_session_effort: runtimeSettings.docs_session_effort,
     tier3_classifier_model: runtimeSettings.tier3_classifier_model,
     capability_auto_approve_allowlist:
       runtimeSettings.capability_auto_approve_allowlist,
@@ -286,9 +330,92 @@ function runtimeSettingsAsRecord(): {
   };
 }
 
+interface CapabilityAutoAllowSuggestion {
+  projectId: string;
+  capability: string;
+  /** Length of the current unbroken run of operator_approved dispositions for this key. */
+  approvedStreak: number;
+}
+
+/**
+ * Read-only mining pass over the capability_request_disposition audit trail:
+ * suggests capabilities an operator has approved by hand often enough
+ * (3 consecutive operator_approved dispositions, per key, with zero
+ * operator_denied/declined ever recorded against that same key) to be worth
+ * adding to `capability_auto_approve_allowlist`. Never writes the allowlist
+ * or `GRANT_DENYLIST_PATTERNS` itself — the operator applies a suggestion
+ * through the existing Settings UI.
+ *
+ * Keyed by the exact (project_id, capability) pair, never a coarser
+ * tool-name/command-prefix grouping. "Consecutive" is per-key: an
+ * auto_approved disposition for the same key (e.g. it was already
+ * allowlisted at that point and later removed) breaks the run, since it is
+ * not an operator_approved. A key with any operator_denied/declined
+ * disposition ever recorded is permanently disqualified from producing a
+ * fresh suggestion, regardless of approvals before or after — there is no
+ * lift mechanism here (that belongs to the companion disqualification/lift
+ * design).
+ */
+function computeCapabilityAutoAllowSuggestions(): CapabilityAutoAllowSuggestion[] {
+  interface KeyState {
+    projectId: string;
+    capability: string;
+    streak: number;
+    disqualified: boolean;
+  }
+  const states = new Map<string, KeyState>();
+  const order: string[] = [];
+
+  for (const event of getCapabilityDispositionEvents()) {
+    const key = JSON.stringify([event.projectId, event.capability]);
+    let state = states.get(key);
+    if (!state) {
+      state = {
+        projectId: event.projectId,
+        capability: event.capability,
+        streak: 0,
+        disqualified: false,
+      };
+      states.set(key, state);
+      order.push(key);
+    }
+    if (state.disqualified) continue;
+    if (
+      event.disposition === 'operator_denied' ||
+      event.disposition === 'declined'
+    ) {
+      state.disqualified = true;
+      state.streak = 0;
+    } else if (event.disposition === 'operator_approved') {
+      state.streak += 1;
+    } else {
+      // auto_approved — not an operator_approved, breaks the consecutive run.
+      state.streak = 0;
+    }
+  }
+
+  const allowlist = new Set(runtimeSettings.capability_auto_approve_allowlist);
+  const suggestions: CapabilityAutoAllowSuggestion[] = [];
+  for (const key of order) {
+    const state = states.get(key);
+    if (!state || state.disqualified || state.streak < 3) continue;
+    if (allowlist.has(state.capability)) continue;
+    if (!isGrantable(state.capability)) continue;
+    suggestions.push({
+      projectId: state.projectId,
+      capability: state.capability,
+      approvedStreak: state.streak,
+    });
+  }
+  return suggestions;
+}
+
 // GET /api/settings
 router.get('/', (_req: Request, res: Response) => {
-  res.json(runtimeSettingsAsRecord());
+  res.json({
+    ...runtimeSettingsAsRecord(),
+    capability_auto_allow_suggestions: computeCapabilityAutoAllowSuggestions(),
+  });
 });
 
 // PATCH /api/settings — validates each value against the schema before persisting.

@@ -50,7 +50,13 @@ import {
   _resetStageCredentialsForTesting,
 } from '../auth/SessionStageAuth';
 import { SessionManager } from '../session/SessionManager';
-import { insertSession, insertGateItem, getStagedIntent } from '../db/queries';
+import {
+  insertSession,
+  insertGateItem,
+  getStagedIntent,
+  updateSessionStatus,
+  addGrantedCapability,
+} from '../db/queries';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import { createUnit } from '../architecture/ArchUnitStore';
@@ -257,6 +263,9 @@ describe('buildMcpServer — tool surface per session type', () => {
         'task.getById',
         'pullRequest.getByTaskId',
         'gateSeed.getState',
+        'deploy.verdict',
+        'gate.reclassify',
+        'intent.dispositionStranded',
         'session.getRecord',
         'auditLog.query',
         'sessionEvents.query',
@@ -264,6 +273,8 @@ describe('buildMcpServer — tool surface per session type', () => {
     );
     expect(names).toContain('session.requestCapability');
     expect(names).toContain('gate.verify');
+    expect(names).toContain('gate.reclassify');
+    expect(names).toContain('intent.dispositionStranded');
     expect(names).not.toContain('review.disposition');
     expect(names).not.toContain('flaky.confirm');
   });
@@ -286,6 +297,8 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).not.toContain('architecture.queryUnits');
     expect(names).not.toContain('task.getById');
     expect(names).not.toContain('gate.verify');
+    expect(names).not.toContain('gate.reclassify');
+    expect(names).not.toContain('intent.dispositionStranded');
     expect(names).toContain('pullRequest.getByTaskId');
     expect(names).toContain('gateSeed.getState');
   });
@@ -443,6 +456,8 @@ describe('buildMcpServer — ctx.milestone attribution', () => {
       state: 'open',
       current_disposition: null,
       latest_disposition: null,
+      next_attempt_at: null,
+      pending_attempt_count: 0,
       updated_at: new Date(0).toISOString(),
     });
     insertSession({
@@ -666,6 +681,125 @@ describe('orchestratorMcpServer — MCP lifecycle instrumentation', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('resume after a non-terminal (idle) subprocess exit — credential survives', () => {
+  let server: http.Server;
+  let baseUrl: string;
+  let sessionManager: SessionManager;
+
+  beforeEach(async () => {
+    _resetStageCredentialsForTesting();
+    sessionManager = new SessionManager();
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createOrchestratorMcpRouter(sessionManager));
+    server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('expected server to bind to a port');
+    }
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('a resume after the turn ends idle (planning-session shape: project checkout worktree, no PR) still connects with a non-zero orchestrator tool count', async () => {
+    const sessionId = 'mcp-resume-idle-planning-1';
+    insertSession({
+      session_id: sessionId,
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'groom',
+      worktree_path: '/project',
+    });
+    const token = mintStageCredential(sessionId);
+
+    // The turn ends with the session parked idle (awaiting an operator
+    // decision) rather than reaching a terminal status — mirrors AgentSession's
+    // markSessionIdle followed by SessionManager's run().then() -> cleanupWorktree.
+    updateSessionStatus(sessionId, 'idle');
+    (sessionManager as any).cleanupWorktree(
+      sessionId,
+      '/project',
+      undefined,
+      '/project',
+    );
+
+    // Resume: the CLI reconnects presenting the same (never-revoked) token.
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`${baseUrl}/api/mcp`),
+      { requestInit: { headers: { Authorization: `Bearer ${token}` } } },
+    );
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    await client.connect(transport);
+    const { tools } = await client.listTools();
+    expect(tools.length).toBeGreaterThan(0);
+    await client.close();
+  });
+
+  it('a capability granted after the turn ends is usable by the resumed session (request -> grant -> resume -> successful staged write)', async () => {
+    const sessionId = 'mcp-resume-idle-planning-2';
+    insertSession({
+      session_id: sessionId,
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'groom',
+      worktree_path: '/project',
+    });
+    const token = mintStageCredential(sessionId);
+
+    // Turn 1: the session stages a session.requestCapability intent, then
+    // ends its turn — the mandated terminal move after staging a request.
+    updateSessionStatus(sessionId, 'idle');
+    (sessionManager as any).cleanupWorktree(
+      sessionId,
+      '/project',
+      undefined,
+      '/project',
+    );
+
+    // The operator approves the request while the session sits idle.
+    addGrantedCapability(sessionId, 'mcp__orchestrator__gateSeed_getState');
+
+    // Resume: same never-revoked token, now with the grant recorded.
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`${baseUrl}/api/mcp`),
+      { requestInit: { headers: { Authorization: `Bearer ${token}` } } },
+    );
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    await client.connect(transport);
+    const { tools } = await client.listTools();
+    expect(tools.length).toBeGreaterThan(0);
+
+    // The resumed session performs a successful staged write.
+    const result = await client.callTool({
+      name: 'session.requestCapability',
+      arguments: {
+        payload: {
+          capability: 'mcp__orchestrator__gateSeed_getState',
+          plan: 'now that the grant landed, use it in the resumed turn',
+          evidence: 'granted_capabilities includes it as of this resume',
+        },
+      },
+    });
+    const content = (result.content as { type: string; text: string }[])[0];
+    const staged = JSON.parse(content.text) as { id: string };
+    expect(getStagedIntent(staged.id)).not.toBeNull();
+
+    await client.close();
   });
 });
 

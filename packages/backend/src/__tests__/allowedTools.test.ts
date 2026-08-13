@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
+import {
+  PLANNING_INTENT_KINDS,
+  CODE_INTENT_KINDS,
+} from '../planning/planningIntentKinds';
 import {
   ALLOWED_TOOLS,
   GROOM_ALLOWED_TOOLS,
@@ -25,6 +28,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'task.setDependsOn',
   'task.updateBody',
   'task.setProperties',
+  'task.setType',
   'task.patchBodySection',
   'intent.withdraw',
   'gate.accrete',
@@ -38,6 +42,9 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'review.disposition',
   'flaky.confirm',
   'gate.verify',
+  'ops.prIntent',
+  'test.request',
+  'review.dispute',
   'completeness.disposition',
   'completeness.traceCoverage',
   'groom.precheck',
@@ -47,6 +54,9 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'planning.noOp',
   'pullRequest.getByTaskId',
   'gateSeed.getState',
+  'deploy.verdict',
+  'gate.reclassify',
+  'intent.dispositionStranded',
   'session.getRecord',
   'auditLog.query',
   'sessionEvents.query',
@@ -55,6 +65,81 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
 const REGISTERED_TOOL_NAMES = new Set(
   REGISTERED_ORCHESTRATOR_MCP_KINDS.map(orchestratorMcpToolName),
 );
+
+// The "core" registered surface a session's `--allowed-tools` gate must
+// track exactly: the health handshake, this session type's stage-proposal
+// kinds (PLANNING_INTENT_KINDS[workflow] or, for a standard/review session,
+// CODE_INTENT_KINDS — buildMcpServer's registerStageProposalTools call), the
+// verdict-delivery tools a non-planning session gets (registerVerdictTools,
+// workflow === null), and the always-on Tier-B reads. This is the exact
+// vocabulary the task-spec bug lives in: a kind registered here but missing
+// from the matching allow-list is denied on every call. Deliberately
+// excludes the always-on-but-read-only extras (architecture.*, task.getById,
+// pullRequest.getByTaskId, gateSeed.getState, groom.precheck, completeness.*,
+// deploy.verdict) — those are registered by separate, non-stage-proposal
+// registrars with their own (partly deliberate, e.g. gateSeed.getState for
+// groom/design) allow-list asymmetries outside this guard's scope.
+const TIER_B_KINDS = [
+  'session.getRecord',
+  'auditLog.query',
+  'sessionEvents.query',
+];
+const CORE_KINDS = new Set([
+  'health',
+  ...Object.values(PLANNING_INTENT_KINDS).flat(),
+  ...CODE_INTENT_KINDS,
+  'review.disposition',
+  'flaky.confirm',
+  ...TIER_B_KINDS,
+]);
+
+/** This session type's core stage-proposal + verdict + Tier-B kind vocabulary. */
+function coreRegisteredKinds(
+  workflow: keyof typeof PLANNING_INTENT_KINDS | null,
+): string[] {
+  const kinds = workflow ? PLANNING_INTENT_KINDS[workflow] : CODE_INTENT_KINDS;
+  const verdictKinds =
+    workflow === null ? ['review.disposition', 'flaky.confirm'] : [];
+  return ['health', ...kinds, ...verdictKinds, ...TIER_B_KINDS];
+}
+
+/** An allow-list's mcp__orchestrator__ entries, narrowed to the core vocabulary above. */
+function coreAllowListedKinds(list: readonly string[]): string[] {
+  return list.filter(
+    (t) =>
+      t.startsWith('mcp__orchestrator__') &&
+      [...CORE_KINDS].some((kind) => orchestratorMcpToolName(kind) === t),
+  );
+}
+
+describe('bidirectional guard — registered core kinds equal allow-listed core kinds', () => {
+  const cases: Array<
+    [string, keyof typeof PLANNING_INTENT_KINDS | null, readonly string[]]
+  > = [
+    ['standard', null, ALLOWED_TOOLS],
+    ['groom', 'groom', GROOM_ALLOWED_TOOLS],
+    ['design', 'design', DESIGN_ALLOWED_TOOLS],
+    ['ops', 'ops', OPS_ALLOWED_TOOLS],
+  ];
+
+  for (const [name, workflow, allowList] of cases) {
+    it(`${name} session: registered set equals allow-listed set`, () => {
+      const registered = new Set(
+        coreRegisteredKinds(workflow).map(orchestratorMcpToolName),
+      );
+      const allowed = new Set(coreAllowListedKinds(allowList));
+      expect(allowed).toEqual(registered);
+    });
+  }
+
+  it('adding a kind to CODE_INTENT_KINDS without a matching allow-list entry fails the guard', () => {
+    const registered = new Set(
+      [...coreRegisteredKinds(null), 'a.newKind'].map(orchestratorMcpToolName),
+    );
+    const allowed = new Set(coreAllowListedKinds(ALLOWED_TOOLS));
+    expect(allowed).not.toEqual(registered);
+  });
+});
 
 describe('PLANNING_DISALLOWED_TOOLS', () => {
   it('blocks self-scheduling/re-entry built-ins alongside the prior Skill/Write/Edit denylist', () => {
@@ -133,6 +218,11 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     });
   }
 
+  it("ALLOWED_TOOLS contains the underscore form of review_dispute — a code session's route out of a needs_changes verdict it concludes is wrong, not the dotted registration name", () => {
+    expect(ALLOWED_TOOLS).toContain('mcp__orchestrator__review_dispute');
+    expect(ALLOWED_TOOLS).not.toContain('mcp__orchestrator__review.dispute');
+  });
+
   it('design allow-list contains the underscore forms of completeness_disposition and completeness_traceCoverage', () => {
     expect(DESIGN_ALLOWED_TOOLS).toContain(
       'mcp__orchestrator__completeness_disposition',
@@ -182,6 +272,48 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     expect(OPS_ALLOWED_TOOLS).toContain(
       'mcp__orchestrator__session_requestCapability',
     );
+  });
+
+  it('ops allow-list contains the underscore forms of gate_reclassify and intent_dispositionStranded — hand-added entries, not staged-intent kinds, same precedent as gate_verify/deploy_verdict', () => {
+    expect(PLANNING_INTENT_KINDS.ops).not.toContain('gate.reclassify');
+    expect(PLANNING_INTENT_KINDS.ops).not.toContain(
+      'intent.dispositionStranded',
+    );
+    expect(OPS_ALLOWED_TOOLS).toContain('mcp__orchestrator__gate_reclassify');
+    expect(OPS_ALLOWED_TOOLS).toContain(
+      'mcp__orchestrator__intent_dispositionStranded',
+    );
+    expect(GROOM_ALLOWED_TOOLS).not.toContain(
+      'mcp__orchestrator__gate_reclassify',
+    );
+    expect(DESIGN_ALLOWED_TOOLS).not.toContain(
+      'mcp__orchestrator__gate_reclassify',
+    );
+  });
+});
+
+describe('GROOM_ALLOWED_TOOLS — restricted environment/context re-derivation surface', () => {
+  it('excludes unscoped filesystem-search and broad-directory-listing prefixes', () => {
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(find:*)');
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(ls:*)');
+  });
+
+  it('excludes bare git status/branch (no path scoping)', () => {
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(git status:*)');
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(git branch:*)');
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(git branch --list:*)');
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('Bash(git:*)');
+  });
+
+  it('still allows scoped git grep/show/log for code-region exploration', () => {
+    expect(GROOM_ALLOWED_TOOLS).toContain('Bash(git grep:*)');
+    expect(GROOM_ALLOWED_TOOLS).toContain('Bash(git show:*)');
+    expect(GROOM_ALLOWED_TOOLS).toContain('Bash(git log:*)');
+  });
+
+  it('a simulated unscoped filesystem search is denied — absent from the allowed-tools list, the same denial mechanism the ALLOWED_TOOLS github-tool exclusion tests above rely on', () => {
+    const simulatedGroomBashCall = 'Bash(find:*)';
+    expect(GROOM_ALLOWED_TOOLS).not.toContain(simulatedGroomBashCall);
   });
 });
 

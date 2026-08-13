@@ -8,6 +8,8 @@ import { recordEvent } from '../audit/AuditLog';
 import type { AuditEvent } from '../audit/types';
 import { registerStageProposalTools } from './tools/stageProposalTools';
 import { registerVerdictTools } from './tools/verdictTools';
+import { registerGateReclassifyTool } from './tools/gateReclassifyTool';
+import { registerStrandedIntentTool } from './tools/strandedIntentTool';
 import { registerCompletenessTools } from './tools/completenessTools';
 import { registerGroomPrecheckTool } from './tools/groomPrecheckTool';
 import { registerArchitectureReadTools } from './tools/architectureReadTools';
@@ -18,7 +20,10 @@ import { registerSessionRecordReadTool } from './tools/sessionRecordReadTool';
 import { registerAuditLogReadTools } from './tools/auditLogReadTools';
 import { registerSessionEventsReadTools } from './tools/sessionEventsReadTools';
 import type { SessionManager } from '../session/SessionManager';
-import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
+import {
+  PLANNING_INTENT_KINDS,
+  CODE_INTENT_KINDS,
+} from '../planning/planningIntentKinds';
 import type { PlanningWorkflow } from '../planning/planningIntentKinds';
 import { resolveMilestoneForSessionTask } from '../projects/milestoneResolver';
 import { normalizeTaskId, parseTaskId } from '../tasks/taskId';
@@ -169,7 +174,13 @@ export function buildOrchestratorMcpServerEntry(
  * session resolves to a project (one tool per staged-intent kind, see
  * mcp/tools/stageProposalTools.ts), and the verdict-delivery tool surface
  * (gate.verify / review.disposition / flaky.confirm, see
- * mcp/tools/verdictTools.ts) scoped to this session's live AgentSession,
+ * mcp/tools/verdictTools.ts) scoped to this session's live AgentSession, the
+ * 'ops'-scoped gate-item reclassification verb (gate.reclassify, see
+ * mcp/tools/gateReclassifyTool.ts — the authenticated-MCP replacement for
+ * the device-authed gate-state-client.mjs `reclassify` command) and the
+ * 'ops'-scoped stranded-intent disposition verb (intent.dispositionStranded,
+ * see mcp/tools/strandedIntentTool.ts), both acting immediately rather than
+ * staging an intent for later operator disposition,
  * — for a 'design' workflow session — the completeness-safeguard direct-
  * write/read surface (completeness.disposition / completeness.traceCoverage,
  * see mcp/tools/completenessTools.ts), and — for a 'groom' workflow session
@@ -231,8 +242,9 @@ export function buildMcpServer(
     registerStageProposalTools(server, {
       sessionId,
       projectId: session.project_id,
-      // undefined = register every kind (code/review sessions).
-      kinds: workflow ? PLANNING_INTENT_KINDS[workflow] : undefined,
+      // A null workflow (code/review sessions) registers CODE_INTENT_KINDS,
+      // not every kind — see planningIntentKinds.ts.
+      kinds: workflow ? PLANNING_INTENT_KINDS[workflow] : CODE_INTENT_KINDS,
       sessionManager,
       milestone,
     });
@@ -261,6 +273,9 @@ export function buildMcpServer(
     getSession: () => sessionManager.getLiveSession(sessionId),
     workflow,
   });
+
+  registerGateReclassifyTool(server, { sessionId, workflow });
+  registerStrandedIntentTool(server, { sessionId, workflow });
 
   registerArchitectureReadTools(server, { workflow });
 

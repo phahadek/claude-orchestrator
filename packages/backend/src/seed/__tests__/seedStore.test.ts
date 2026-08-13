@@ -123,6 +123,27 @@ describe('seedStore', () => {
     });
   });
 
+  it('round-trips classification when present, and leaves it undefined when absent', () => {
+    const classified = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      spec: 'Set ALERT_THRESHOLD_MS to 500 in config',
+      classification: 'operational-seed',
+      sources: [{ sourceTaskId: 'notion:c1', sourceTaskTitle: 'Task c1' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+    expect(getItem(classified.id)?.classification).toBe('operational-seed');
+
+    const unclassified = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      spec: 'Bump the retry backoff cap',
+      sources: [{ sourceTaskId: 'notion:c2', sourceTaskTitle: 'Task c2' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+    expect(getItem(unclassified.id)?.classification).toBeUndefined();
+  });
+
   it('advances the single state field (no current_disposition)', () => {
     const created = insertItem({
       project: 'polimarket-analyser',

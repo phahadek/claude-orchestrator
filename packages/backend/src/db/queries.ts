@@ -8,7 +8,11 @@ import {
   normalizeBoardId,
   toExternalId,
 } from '../tasks/taskId';
-import { isCodeSession, isPlanningSession } from '../session/sessionPredicates';
+import {
+  isCodeSession,
+  isPlanningSession,
+  PLANNING_SESSION_TYPES,
+} from '../session/sessionPredicates';
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
@@ -24,6 +28,8 @@ import type {
   NewPermissionDenialRow,
   TaskCache,
   PullRequestRow,
+  DepthReviewVerdictRow,
+  NewDepthReviewVerdictRow,
   PauseReason,
   CanonicalPauseReason,
   PauseReasonStruct,
@@ -38,7 +44,11 @@ import type {
   SessionPauseInterval,
   TaskRepoAssignmentRow,
   FeedbackInboxRow,
+  TestRequestRunRow,
+  TestRequestRunState,
   OpsJournalRow,
+  CapabilityDisqualificationRow,
+  NewCapabilityDisqualificationRow,
   GateItemRow,
   GateItemSourceRow,
   NewGateItemSourceRow,
@@ -71,62 +81,67 @@ import type {
   FlowArmRow,
   ConvergenceSnapshotRow,
   NewConvergenceSnapshotRow,
+  OpsJournalState,
 } from './types';
 import { FLOW_IDS, DEFAULT_ARM, type FlowId } from '../orchestration/flowArm';
 
+// ─── asOf reconstruction ────────────────────────────────────────────────────
+// Point-in-time reads for the gate-verify read path (see gate/gateItemVerifier.ts
+// and the mcp/tools/*ReadTools.ts it drives): "was X true at T" must never
+// silently fall back to whatever the row says right now. A field with no
+// historical record yet (sessions.status, pull_requests.*, deploy_run.status,
+// gate_item.min_deployed_commit/next_attempt_at/pending_attempt_count — all
+// pending the sibling point-in-time instrumentation task) is replaced with an
+// explicit Unreconstructable marker rather than the live value.
+
+/** Explicit "we don't know" marker for an asOf field with no history yet. */
+export interface Unreconstructable {
+  readonly __unreconstructable: true;
+  readonly reason: string;
+}
+
+function unreconstructable(reason: string): Unreconstructable {
+  return { __unreconstructable: true, reason };
+}
+
+export function isUnreconstructable(
+  value: unknown,
+): value is Unreconstructable {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Partial<Unreconstructable>).__unreconstructable === true
+  );
+}
+
 // ─── sessions ──────────────────────────────────────────────────────────────
 
-const stmtInsertSession = db.prepare<NewSession>(`
-  INSERT INTO sessions
-    (session_id, task_id, task_url, project_context_url,
-     project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
-  VALUES
-    (@session_id, @task_id, @task_url, @project_context_url,
-     @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
-`);
+let _stmtInsertSession: Database.Statement | null = null;
+let _stmtUpdateSessionStatus: Database.Statement | null = null;
+let _stmtUpdateSessionWorktreePath: Database.Statement | null = null;
+let _stmtGetSession: Database.Statement | null = null;
+let _stmtGetAllSessionIds: Database.Statement | null = null;
+let _stmtDeleteSession: Database.Statement | null = null;
+let _stmtInsertSessionOrIgnore: Database.Statement | null = null;
 
-const stmtUpdateSessionStatus = db.prepare<{
-  session_id: string;
-  status: string;
-  ended_at: number | null;
-}>(`
-  UPDATE sessions
-  SET status = @status, ended_at = @ended_at
-  WHERE session_id = @session_id
-`);
-
-const stmtUpdateSessionWorktreePath = db.prepare<{
-  session_id: string;
-  worktree_path: string;
-}>(`
-  UPDATE sessions
-  SET worktree_path = @worktree_path
-  WHERE session_id = @session_id
-`);
-
-const stmtGetSession = db.prepare<{ session_id: string }>(`
-  SELECT * FROM sessions WHERE session_id = @session_id
-`);
-
-const stmtGetAllSessionIds = db.prepare(`
-  SELECT session_id FROM sessions
-`);
-
-const stmtDeleteSession = db.prepare<{ session_id: string }>(`
-  DELETE FROM sessions WHERE session_id = @session_id
-`);
-
-const stmtInsertSessionOrIgnore = db.prepare<NewSession>(`
-  INSERT OR IGNORE INTO sessions
-    (session_id, task_id, task_url, project_context_url,
-     project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
-  VALUES
-    (@session_id, @task_id, @task_url, @project_context_url,
-     @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
-`);
+/** Lazily-prepared `sessions` row lookup by id — shared across many functions below. */
+function getStmtGetSession(): Database.Statement {
+  _stmtGetSession ??= db.prepare<{ session_id: string }>(`
+    SELECT * FROM sessions WHERE session_id = @session_id
+  `);
+  return _stmtGetSession;
+}
 
 export function insertSession(s: NewSession): void {
-  stmtInsertSession.run({
+  _stmtInsertSession ??= db.prepare<NewSession>(`
+    INSERT INTO sessions
+      (session_id, task_id, task_url, project_context_url,
+       project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
+    VALUES
+      (@session_id, @task_id, @task_url, @project_context_url,
+       @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
+  `);
+  _stmtInsertSession.run({
     ended_at: null,
     pr_url: null,
     worktree_path: null,
@@ -142,18 +157,52 @@ export function updateSessionStatus(
   status: string,
   endedAt?: number,
 ): void {
-  stmtUpdateSessionStatus.run({
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
+    | { status: string; task_id: string | null }
+    | undefined;
+  _stmtUpdateSessionStatus ??= db.prepare<{
+    session_id: string;
+    status: string;
+    ended_at: number | null;
+    terminalized_at: number | null;
+  }>(`
+    UPDATE sessions
+    SET status = @status, ended_at = @ended_at,
+        terminalized_at = COALESCE(terminalized_at, @terminalized_at)
+    WHERE session_id = @session_id
+  `);
+  _stmtUpdateSessionStatus.run({
     session_id: sessionId,
     status,
     ended_at: endedAt ?? null,
+    terminalized_at: TERMINAL_SESSION_STATUSES.has(status)
+      ? (endedAt ?? Date.now())
+      : null,
   });
+  if (current && current.status !== status) {
+    recordEvent({
+      event_type: 'session_status_changed',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: { from: current.status, to: status },
+    });
+  }
 }
 
 export function updateSessionWorktreePath(
   sessionId: string,
   worktreePath: string,
 ): void {
-  stmtUpdateSessionWorktreePath.run({
+  _stmtUpdateSessionWorktreePath ??= db.prepare<{
+    session_id: string;
+    worktree_path: string;
+  }>(`
+    UPDATE sessions
+    SET worktree_path = @worktree_path
+    WHERE session_id = @session_id
+  `);
+  _stmtUpdateSessionWorktreePath.run({
     session_id: sessionId,
     worktree_path: worktreePath,
   });
@@ -174,15 +223,23 @@ export function setSessionLastErrorDetail(
   ).run({ session_id: sessionId, last_error_detail: detail });
 }
 
-const stmtMarkSessionDone = db.prepare<{
-  session_id: string;
-  ended_at: number;
-  pr_url: string | null;
-}>(`
-  UPDATE sessions
-  SET status = 'done', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url)
-  WHERE session_id = @session_id
-`);
+let _stmtMarkSessionDone: Database.Statement | null = null;
+
+/** Lazily-prepared done-transition write — shared by markSessionDone and applyPendingDone. */
+function getStmtMarkSessionDone(): Database.Statement {
+  _stmtMarkSessionDone ??= db.prepare<{
+    session_id: string;
+    ended_at: number;
+    pr_url: string | null;
+    terminalized_at: number;
+  }>(`
+    UPDATE sessions
+    SET status = 'done', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url),
+        terminalized_at = COALESCE(terminalized_at, @terminalized_at)
+    WHERE session_id = @session_id
+  `);
+  return _stmtMarkSessionDone;
+}
 
 // pending_done_* are prepared lazily (inline, per-call) rather than as
 // module-level consts — unlike the sessions table's long-standing columns,
@@ -282,24 +339,8 @@ export function getSessionsWithPendingApproveTerminal(): Session[] {
     .all() as Session[];
 }
 
-const stmtMarkSessionIdle = db.prepare<{
-  session_id: string;
-  ended_at: number;
-  pr_url: string | null;
-}>(`
-  UPDATE sessions
-  SET status = 'idle', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url)
-  WHERE session_id = @session_id
-`);
-
-const stmtMarkSessionSuperseded = db.prepare<{
-  session_id: string;
-  ended_at: number;
-}>(`
-  UPDATE sessions
-  SET status = 'superseded', ended_at = @ended_at
-  WHERE session_id = @session_id
-`);
+let _stmtMarkSessionIdle: Database.Statement | null = null;
+let _stmtMarkSessionSuperseded: Database.Statement | null = null;
 
 /**
  * Mark a session as superseded — used when sendOrResume creates a continuation
@@ -311,7 +352,27 @@ export function markSessionSuperseded(
   sessionId: string,
   endedAt: number,
 ): void {
-  stmtMarkSessionSuperseded.run({ session_id: sessionId, ended_at: endedAt });
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
+    | { status: string; task_id: string | null }
+    | undefined;
+  _stmtMarkSessionSuperseded ??= db.prepare<{
+    session_id: string;
+    ended_at: number;
+  }>(`
+    UPDATE sessions
+    SET status = 'superseded', ended_at = @ended_at
+    WHERE session_id = @session_id
+  `);
+  _stmtMarkSessionSuperseded.run({ session_id: sessionId, ended_at: endedAt });
+  if (current && current.status !== 'superseded') {
+    recordEvent({
+      event_type: 'session_status_changed',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: { from: current.status, to: 'superseded' },
+    });
+  }
 }
 
 /**
@@ -359,9 +420,12 @@ export function getOtherRunningSessionsForTask(
  * 'done' now would either stomp an active turn or get silently reverted by
  * that turn's own terminal write once it finishes. Instead of writing, the
  * transition is deferred onto pending_done_* and a session_done_deferred_while_running
- * audit event is recorded. The deferred transition is applied once the turn
- * completes — see applyPendingDone, called from SessionManager's run()-settle
- * handler and its boot-time sweep — so it is never silently lost.
+ * audit event is recorded. The deferred transition is applied once the
+ * turn's boundary is reached — see applyPendingDone, primarily drained on
+ * the turn-boundary result event (fires whether the session then parks
+ * alive, the normal resting state, or exits), with SessionManager's
+ * run()-settle handler and its boot-time sweep as backstops — so it is
+ * never silently lost.
  *
  * opts.skipInFlightGuard bypasses the guard for callers that have already
  * independently confirmed there is no live process for this session (e.g.
@@ -376,7 +440,7 @@ export function markSessionDone(
   callSite?: string,
   opts?: { skipInFlightGuard?: boolean },
 ): void {
-  const current = stmtGetSession.get({ session_id: sessionId }) as
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: string; task_id: string | null }
     | undefined;
   if (current?.status === 'running' && !opts?.skipInFlightGuard) {
@@ -393,25 +457,45 @@ export function markSessionDone(
     setPendingDone(sessionId, endedAt, prUrl ?? null, callSite ?? 'unknown');
     return;
   }
-  stmtMarkSessionDone.run({
+  getStmtMarkSessionDone().run({
     session_id: sessionId,
     ended_at: endedAt,
     pr_url: prUrl ?? null,
+    terminalized_at: endedAt,
   });
+  if (current && current.status !== 'done') {
+    recordEvent({
+      event_type: 'session_status_changed',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: {
+        from: current.status,
+        to: 'done',
+        call_site: callSite ?? 'unknown',
+      },
+    });
+  }
 }
 
 /**
  * Applies a done-transition previously deferred by markSessionDone, once the
- * session's turn has genuinely completed (i.e. its process has exited — the
- * caller is responsible for only invoking this at that point, never while a
- * turn might still be in flight). No-op if nothing is pending. If the session
+ * session's turn has reached its boundary — the turn-boundary result event
+ * fires the instant a turn's result is processed, whether the session then
+ * parks alive (the normal resting state — status stays 'running' with no
+ * process exit) or exits. Process exit is NOT a precondition: a parked
+ * session may never exit on its own, so waiting for exit would strand the
+ * deferred transition forever. The caller is only responsible for invoking
+ * this once the in-flight turn that justified the deferral has ended (the
+ * result event, or an actual process exit as a backstop), never while that
+ * turn might still be in flight. No-op if nothing is pending. If the session
  * already reached a terminal status via another path in the meantime, the
  * stale pending mark is dropped rather than applied (that other terminal
  * status wins — it reflects something more recent).
  * Returns true if a deferred done-transition was applied.
  */
 export function applyPendingDone(sessionId: string): boolean {
-  const current = stmtGetSession.get({ session_id: sessionId }) as
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
     | {
         status: string;
         task_id: string | null;
@@ -425,10 +509,13 @@ export function applyPendingDone(sessionId: string): boolean {
     clearPendingDone(sessionId);
     return false;
   }
-  stmtMarkSessionDone.run({
+  getStmtMarkSessionDone().run({
     session_id: sessionId,
     ended_at: current.pending_done_ended_at,
     pr_url: current.pending_done_pr_url,
+    // The genuine terminal instant is now (the drain), not the original
+    // deferral time preserved in ended_at for backwards compatibility.
+    terminalized_at: Date.now(),
   });
   clearPendingDone(sessionId);
   recordEvent({
@@ -437,6 +524,17 @@ export function applyPendingDone(sessionId: string): boolean {
     actor_id: sessionId,
     task_id: current.task_id ?? null,
     payload: { call_site: current.pending_done_call_site ?? 'unknown' },
+  });
+  recordEvent({
+    event_type: 'session_status_changed',
+    actor_type: 'system',
+    actor_id: sessionId,
+    task_id: current.task_id ?? null,
+    payload: {
+      from: current.status,
+      to: 'done',
+      call_site: current.pending_done_call_site ?? 'unknown',
+    },
   });
   return true;
 }
@@ -491,14 +589,18 @@ const BASE_TERMINAL_STATUS_SQL_LIST = [...TERMINAL_SESSION_STATUSES]
   .map((s) => `'${s}'`)
   .join(', ');
 
-const stmtBackfillPrUrlIfNull = db.prepare<{
-  session_id: string;
-  pr_url: string | null;
-}>(`
-  UPDATE sessions
-  SET pr_url = COALESCE(pr_url, @pr_url)
-  WHERE session_id = @session_id
-`);
+/**
+ * SQL `IN (...)`-ready literal list derived from PLANNING_SESSION_TYPES —
+ * the single source of truth for which session_type values count as
+ * "planning" (see session/sessionPredicates.ts's isPlanningSession).
+ * Interpolated rather than parameterized so query plans still use
+ * idx_sessions_notion_task_id_session_type.
+ */
+const PLANNING_SESSION_TYPE_SQL_LIST = PLANNING_SESSION_TYPES.map(
+  (t) => `'${t}'`,
+).join(', ');
+
+let _stmtBackfillPrUrlIfNull: Database.Statement | null = null;
 
 /**
  * Atomically mark a session as idle (process exited, PR open, waiting for
@@ -523,7 +625,7 @@ export function markSessionIdle(
   endedAt: number,
   prUrl?: string | null,
 ): SessionStatus {
-  const current = stmtGetSession.get({ session_id: sessionId }) as
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: SessionStatus; task_id: string | null }
     | undefined;
   if (current && TERMINAL_SESSION_STATUSES.has(current.status)) {
@@ -535,15 +637,41 @@ export function markSessionIdle(
       payload: { status_before: current.status },
     });
     if (prUrl) {
-      stmtBackfillPrUrlIfNull.run({ session_id: sessionId, pr_url: prUrl });
+      _stmtBackfillPrUrlIfNull ??= db.prepare<{
+        session_id: string;
+        pr_url: string | null;
+      }>(`
+        UPDATE sessions
+        SET pr_url = COALESCE(pr_url, @pr_url)
+        WHERE session_id = @session_id
+      `);
+      _stmtBackfillPrUrlIfNull.run({ session_id: sessionId, pr_url: prUrl });
     }
     return current.status;
   }
-  stmtMarkSessionIdle.run({
+  _stmtMarkSessionIdle ??= db.prepare<{
+    session_id: string;
+    ended_at: number;
+    pr_url: string | null;
+  }>(`
+    UPDATE sessions
+    SET status = 'idle', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url)
+    WHERE session_id = @session_id
+  `);
+  _stmtMarkSessionIdle.run({
     session_id: sessionId,
     ended_at: endedAt,
     pr_url: prUrl ?? null,
   });
+  if (current && current.status !== 'idle') {
+    recordEvent({
+      event_type: 'session_status_changed',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: { from: current.status, to: 'idle' },
+    });
+  }
   return 'idle';
 }
 
@@ -641,17 +769,88 @@ export function getRunningSessionsWithMergedOrClosedPR(): StuckResultSessionRow[
 }
 
 export function getSession(sessionId: string): Session | undefined {
-  return stmtGetSession.get({ session_id: sessionId }) as Session | undefined;
+  return getStmtGetSession().get({ session_id: sessionId }) as
+    | Session
+    | undefined;
+}
+
+const SESSION_STATUS_UNRECONSTRUCTABLE_REASON =
+  'sessions.status has no historical record until the point-in-time instrumentation task lands — cannot answer "what was this session\'s status at T", only "what is it now"';
+
+export type SessionAsOf = Omit<Session, 'status'> & {
+  status: Unreconstructable;
+};
+
+/**
+ * Point-in-time read of a session row for the given `asOf` cutoff. `status`
+ * is not reconstructable yet (see module header) and always comes back as an
+ * Unreconstructable marker rather than the live value. Returns undefined both
+ * when the session doesn't exist and when it wasn't started yet as of `asOf`.
+ */
+export function getSessionAsOf(
+  sessionId: string,
+  asOf: string,
+): SessionAsOf | undefined {
+  const current = getSession(sessionId);
+  if (!current) return undefined;
+  const asOfMs = Date.parse(asOf);
+  if (current.started_at > asOfMs) return undefined;
+  return {
+    ...current,
+    status: unreconstructable(SESSION_STATUS_UNRECONSTRUCTABLE_REASON),
+  };
 }
 
 export function getAllSessionIds(): string[] {
-  return (stmtGetAllSessionIds.all() as { session_id: string }[]).map(
+  _stmtGetAllSessionIds ??= db.prepare(`
+    SELECT session_id FROM sessions
+  `);
+  return (_stmtGetAllSessionIds.all() as { session_id: string }[]).map(
     (r) => r.session_id,
   );
 }
 
+/**
+ * Session ids whose raw session_events have NOT been pruned — i.e. still
+ * backfillable from their stored event payloads. Used by the one-off
+ * cache-token backfill (scripts/backfill-cache-tokens.ts) to skip the
+ * sessions it can no longer reconstruct.
+ */
+export function getUnprunedSessionIds(): string[] {
+  return (
+    db
+      .prepare(`SELECT session_id FROM sessions WHERE events_pruned_at IS NULL`)
+      .all() as { session_id: string }[]
+  ).map((r) => r.session_id);
+}
+
+/**
+ * Absolute (non-additive) overwrite of the session's cache-token totals.
+ * Used only by the one-off cache-token backfill, which reconstructs the
+ * full cumulative total from history in one pass — unlike incrementCacheTokens,
+ * which is for the live per-turn accumulation path and must never be reused
+ * here (re-running the backfill would double-count).
+ */
+export function setCacheTokensAbsolute(
+  sessionId: string,
+  cacheReadTokens: number,
+  cacheCreationTokens: number,
+): void {
+  db.prepare(
+    `UPDATE sessions SET cache_read_tokens = ?, cache_creation_tokens = ? WHERE session_id = ?`,
+  ).run(cacheReadTokens, cacheCreationTokens, sessionId);
+}
+
 export function insertSessionOrIgnore(s: NewSession): void {
-  stmtInsertSessionOrIgnore.run({
+  _stmtInsertSessionOrIgnore ??= db.prepare<NewSession>(`
+    INSERT OR IGNORE INTO sessions
+      (session_id, task_id, task_url, project_context_url,
+       project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
+    VALUES
+      (@session_id, @task_id, @task_url, @project_context_url,
+       @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
+  `);
+  _stmtInsertSessionOrIgnore.run({
     ended_at: null,
     pr_url: null,
     worktree_path: null,
@@ -663,7 +862,10 @@ export function insertSessionOrIgnore(s: NewSession): void {
 }
 
 export function deleteSession(sessionId: string): boolean {
-  const result = stmtDeleteSession.run({ session_id: sessionId });
+  _stmtDeleteSession ??= db.prepare<{ session_id: string }>(`
+    DELETE FROM sessions WHERE session_id = @session_id
+  `);
+  const result = _stmtDeleteSession.run({ session_id: sessionId });
   return result.changes > 0;
 }
 
@@ -779,10 +981,34 @@ export function hasLiveVerifySessionForGateItem(itemId: string): boolean {
     .prepare<{ taskId: string }, { c: number }>(
       `SELECT COUNT(*) as c FROM sessions
        WHERE task_id = @taskId
-         AND status NOT IN ('done', 'error', 'killed', 'superseded')`,
+         AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})`,
     )
     .get({ taskId });
   return (row?.c ?? 0) > 0;
+}
+
+/**
+ * Batched liveness over getVerifySessionsForGateItems: for each gate item,
+ * whether its most recent verify session is still in flight. Reuses the
+ * same terminal-status set as hasLiveVerifySessionForGateItem instead of
+ * re-inlining it, and additionally honours endedAt so a session whose
+ * status hasn't yet caught up to its end doesn't read as live. One query
+ * for the whole id list — no per-item round trip.
+ */
+export function getLiveVerifySessionItemIds(itemIds: string[]): Set<string> {
+  const live = new Set<string>();
+  const seen = new Set<string>();
+  for (const session of getVerifySessionsForGateItems(itemIds)) {
+    if (seen.has(session.itemId)) continue;
+    seen.add(session.itemId);
+    if (
+      session.endedAt === null &&
+      !TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(session.sessionStatus)
+    ) {
+      live.add(session.itemId);
+    }
+  }
+  return live;
 }
 
 /**
@@ -841,6 +1067,75 @@ export function countLivePlanningSessions(): number {
   return rows.filter((r) => isPlanningSession(r.session_type ?? '')).length;
 }
 
+/**
+ * Full rows behind countLivePlanningSessions' count — the candidate
+ * population for the OS-process liveness reconciler
+ * (session/sessionLivenessReconciler.ts), which cross-references each row
+ * against real process liveness rather than the in-memory session map or
+ * status/elapsed-time alone.
+ */
+export function listLivePlanningSessionRows(): Session[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM sessions
+       WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
+         AND archived = 0`,
+    )
+    .all() as Session[];
+  return rows.filter((r) => isPlanningSession(r.session_type ?? ''));
+}
+
+/**
+ * All non-terminal session rows regardless of session_type — the candidate
+ * population for the non-planning half of the OS-process liveness
+ * reconciler (session/sessionLivenessReconciler.ts). Unlike
+ * listLivePlanningSessionRows above, this is not filtered to
+ * isPlanningSession: it exists to catch standard/review/depth_review
+ * sessions (code sessions and PR-review sessions), which have no other
+ * periodic OS-process-liveness sweep — StuckSessionMonitor only matches
+ * rows whose last event is 'result', so a session killed before it ever
+ * emits a session_events row is invisible to it, and resumeOrphanSessions
+ * only runs on backend boot.
+ */
+export function listLiveSessionRows(): Session[] {
+  return db
+    .prepare(
+      `SELECT * FROM sessions
+       WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
+         AND archived = 0`,
+    )
+    .all() as Session[];
+}
+
+/**
+ * Idle planning-type sessions (groom/design/ops/split/docs — see
+ * isPlanningSession) with ended_at set, unarchived, and older than the
+ * given cutoff — the candidate population for
+ * PlanningOrchestrator.sweepIdleTerminalSessions. Deliberately a separate
+ * query from archiveConcludedSessionsOlderThan, which excludes idle on
+ * purpose (its docstring: "the CLI subprocess is still alive and
+ * resumable") — that guard stays correct and untouched. This query exists
+ * because an idle session's subprocess has, in fact, already exited
+ * (status='idle' with ended_at set is a parked-but-exited session — see
+ * countLivePlanningSessions' docstring for why idle still holds a slot
+ * either way), so it is eligible for a *different* sweep that first checks
+ * whether the session is actually finished before ever archiving it.
+ */
+export function listIdlePlanningSessionsEligibleForTerminalSweep(
+  cutoffMs: number,
+): Session[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM sessions
+       WHERE status = 'idle'
+         AND ended_at IS NOT NULL
+         AND ended_at < @cutoff
+         AND archived = 0`,
+    )
+    .all({ cutoff: cutoffMs }) as Session[];
+  return rows.filter((r) => isPlanningSession(r.session_type ?? ''));
+}
+
 export interface GateItemPendingCapabilitySession {
   itemId: string;
   sessionId: string;
@@ -893,7 +1188,7 @@ export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
       `
     SELECT task_id FROM sessions
     WHERE status NOT IN (${TERMINAL_STATUS_SQL_LIST})
-      AND session_type IN ('groom', 'design', 'ops')
+      AND session_type IN (${PLANNING_SESSION_TYPE_SQL_LIST})
       AND archived = 0
   `,
     )
@@ -970,7 +1265,7 @@ export function getActiveSessions(): Session[] {
       s.session_id, s.task_id, s.task_url, s.project_context_url,
       s.project_id, s.status, s.started_at, s.ended_at, s.worktree_path,
       s.archived, s.favorited, s.session_type, s.note, s.tags,
-      s.total_input_tokens, s.total_output_tokens, s.model, s.task_name,
+      s.total_input_tokens, s.total_output_tokens, s.model, s.effort, s.task_name,
       s.granted_capabilities,
       COALESCE(s.pr_url, (
         SELECT p.pr_url FROM pull_requests p WHERE p.session_id = s.session_id LIMIT 1
@@ -1083,6 +1378,31 @@ export function setSessionModel(sessionId: string, model: string): void {
   );
 }
 
+export function setSessionEffort(sessionId: string, effort: string): void {
+  db.prepare('UPDATE sessions SET effort = ? WHERE session_id = ?').run(
+    effort,
+    sessionId,
+  );
+}
+
+export function setSessionModelSettingKey(
+  sessionId: string,
+  key: string,
+): void {
+  db.prepare(
+    'UPDATE sessions SET model_setting_key = ? WHERE session_id = ?',
+  ).run(key, sessionId);
+}
+
+export function setSessionEffortSettingKey(
+  sessionId: string,
+  key: string,
+): void {
+  db.prepare(
+    'UPDATE sessions SET effort_setting_key = ? WHERE session_id = ?',
+  ).run(key, sessionId);
+}
+
 export function setSessionTags(sessionId: string, tags: string[]): void {
   db.prepare('UPDATE sessions SET tags = ? WHERE session_id = ?').run(
     JSON.stringify(tags),
@@ -1160,6 +1480,47 @@ export function setDerivedTitle(sessionId: string, title: string): void {
   setSessionMetadata(sessionId, { derivedTitle: title });
 }
 
+/**
+ * Durable per-session capture of a task's declared-writes set (see
+ * readinessGate.ts's DeclaredWriteEntry), written exactly once at
+ * SessionManager.start() spawn time and read at capability-request time
+ * (routes/stagedIntents.ts's maybeAutoApproveCapabilityRequest, via
+ * getSessionDeclaredWrites below) — never re-derived from a live task-body
+ * fetch, so a mid-session task-body edit cannot retroactively widen an
+ * already-dispatched session's auto-approve eligibility. Backed by the
+ * existing `sessions.metadata` JSON column (mirrors setDerivedTitle above)
+ * rather than a dedicated column.
+ */
+export function setSessionDeclaredWrites(
+  sessionId: string,
+  declaredWrites: { capability: string; prodMutating: boolean }[],
+): void {
+  setSessionMetadata(sessionId, { declaredWrites });
+}
+
+/** Reads back the declared-writes set captured by setSessionDeclaredWrites. Empty when never captured (session dispatched before this feature, or a non-ops session). */
+export function getSessionDeclaredWrites(
+  sessionId: string,
+): { capability: string; prodMutating: boolean }[] {
+  const row = db
+    .prepare('SELECT metadata FROM sessions WHERE session_id = ?')
+    .get(sessionId) as { metadata: string | null } | undefined;
+  if (!row?.metadata) return [];
+  try {
+    const parsed = JSON.parse(row.metadata) as {
+      declaredWrites?: unknown;
+    };
+    return Array.isArray(parsed.declaredWrites)
+      ? (parsed.declaredWrites as {
+          capability: string;
+          prodMutating: boolean;
+        }[])
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export function setSessionMetadata(
   sessionId: string,
   fields: Record<string, unknown>,
@@ -1206,31 +1567,21 @@ function capEventPayload(payload: string): string {
   return JSON.stringify(truncated);
 }
 
-const stmtInsertEvent = db.prepare<
-  NewSessionEvent & { message_id: string | null }
->(`
-  INSERT INTO session_events (session_id, event_type, payload, timestamp, message_id)
-  VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
-`);
+let _stmtInsertEvent: Database.Statement | null = null;
+let _stmtInsertEventOrIgnore: Database.Statement | null = null;
+let _stmtUpdateEventPayload: Database.Statement | null = null;
+let _stmtGetEventsBySession: Database.Statement | null = null;
 
-const stmtInsertEventOrIgnore = db.prepare<
-  NewSessionEvent & { message_id: string | null }
->(`
-  INSERT OR IGNORE INTO session_events (session_id, event_type, payload, timestamp, message_id)
-  VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
-`);
-
-const stmtUpdateEventPayload = db.prepare<{
-  id: number;
-  payload: string;
-  timestamp: number;
-}>(`
-  UPDATE session_events SET payload = @payload, timestamp = @timestamp WHERE id = @id
-`);
-
-const stmtGetEventsBySession = db.prepare<{ session_id: string }>(`
-  SELECT * FROM session_events WHERE session_id = @session_id ORDER BY id ASC
-`);
+/** Lazily-prepared session_events insert — shared by insertEvent and upsertSessionEvent. */
+function getStmtInsertEvent(): Database.Statement {
+  _stmtInsertEvent ??= db.prepare<
+    NewSessionEvent & { message_id: string | null }
+  >(`
+    INSERT INTO session_events (session_id, event_type, payload, timestamp, message_id)
+    VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
+  `);
+  return _stmtInsertEvent;
+}
 
 /**
  * Epoch ms of the most recent session_events row for the session, or null
@@ -1248,7 +1599,7 @@ export function getSessionLastActivityMs(sessionId: string): number | null {
 }
 
 export function insertEvent(e: NewSessionEvent): void {
-  stmtInsertEvent.run({
+  getStmtInsertEvent().run({
     message_id: null,
     ...e,
     payload: capEventPayload(e.payload),
@@ -1256,7 +1607,13 @@ export function insertEvent(e: NewSessionEvent): void {
 }
 
 export function insertEventOrIgnore(e: NewSessionEvent): void {
-  stmtInsertEventOrIgnore.run({
+  _stmtInsertEventOrIgnore ??= db.prepare<
+    NewSessionEvent & { message_id: string | null }
+  >(`
+    INSERT OR IGNORE INTO session_events (session_id, event_type, payload, timestamp, message_id)
+    VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
+  `);
+  _stmtInsertEventOrIgnore.run({
     message_id: null,
     ...e,
     payload: capEventPayload(e.payload),
@@ -1278,21 +1635,28 @@ export function upsertSessionEvent(
 ): number {
   const cappedPayload = capEventPayload(e.payload);
   if (existingId != null) {
-    stmtUpdateEventPayload.run({
+    _stmtUpdateEventPayload ??= db.prepare<{
+      id: number;
+      payload: string;
+      timestamp: number;
+    }>(`
+      UPDATE session_events SET payload = @payload, timestamp = @timestamp WHERE id = @id
+    `);
+    _stmtUpdateEventPayload.run({
       id: existingId,
       payload: cappedPayload,
       timestamp: e.timestamp,
     });
     return existingId;
   }
-  const sessionRow = stmtGetSession.get({ session_id: e.session_id });
+  const sessionRow = getStmtGetSession().get({ session_id: e.session_id });
   if (!sessionRow) {
     logger.error(
       `[upsertSessionEvent] no sessions row for ${e.session_id} — dropping event (type=${e.event_type})`,
     );
     return -1;
   }
-  const result = stmtInsertEvent.run({
+  const result = getStmtInsertEvent().run({
     message_id: null,
     ...e,
     payload: cappedPayload,
@@ -1301,7 +1665,10 @@ export function upsertSessionEvent(
 }
 
 export function getEventsBySession(sessionId: string): SessionEvent[] {
-  return stmtGetEventsBySession.all({
+  _stmtGetEventsBySession ??= db.prepare<{ session_id: string }>(`
+    SELECT * FROM session_events WHERE session_id = @session_id ORDER BY id ASC
+  `);
+  return _stmtGetEventsBySession.all({
     session_id: sessionId,
   }) as SessionEvent[];
 }
@@ -1420,29 +1787,31 @@ export function querySessionEventsByProjectRows(
     .all(projectId, ...params, cappedLimit);
 }
 
-const stmtClearPermissionDenials = db.prepare(`DELETE FROM permission_denials`);
+let _stmtClearPermissionDenials: Database.Statement | null = null;
 
 export function clearPermissionDenials(): void {
-  stmtClearPermissionDenials.run();
+  _stmtClearPermissionDenials ??= db.prepare(`DELETE FROM permission_denials`);
+  _stmtClearPermissionDenials.run();
 }
 
 // ─── permission_denials ─────────────────────────────────────────────────────
 
-const stmtInsertPermissionDenial = db.prepare<NewPermissionDenialRow>(`
-  INSERT INTO permission_denials (session_id, tool_name, tool_use_id, tool_input, timestamp)
-  VALUES (@session_id, @tool_name, @tool_use_id, @tool_input, @timestamp)
-`);
-
-const stmtGetDenialsBySession = db.prepare<{ session_id: string }>(`
-  SELECT * FROM permission_denials WHERE session_id = @session_id ORDER BY id ASC
-`);
+let _stmtInsertPermissionDenial: Database.Statement | null = null;
+let _stmtGetDenialsBySession: Database.Statement | null = null;
 
 export function insertPermissionDenial(d: NewPermissionDenialRow): void {
-  stmtInsertPermissionDenial.run(d);
+  _stmtInsertPermissionDenial ??= db.prepare<NewPermissionDenialRow>(`
+    INSERT INTO permission_denials (session_id, tool_name, tool_use_id, tool_input, timestamp)
+    VALUES (@session_id, @tool_name, @tool_use_id, @tool_input, @timestamp)
+  `);
+  _stmtInsertPermissionDenial.run(d);
 }
 
 export function getDenialsBySession(sessionId: string): PermissionDenialRow[] {
-  return stmtGetDenialsBySession.all({
+  _stmtGetDenialsBySession ??= db.prepare<{ session_id: string }>(`
+    SELECT * FROM permission_denials WHERE session_id = @session_id ORDER BY id ASC
+  `);
+  return _stmtGetDenialsBySession.all({
     session_id: sessionId,
   }) as PermissionDenialRow[];
 }
@@ -1469,21 +1838,24 @@ export function getRecentPermissionDenials(
 
 // ─── task_cache ────────────────────────────────────────────────────────────
 
-const stmtUpsertTaskCache = db.prepare<{
-  task_id: string;
-  fetched_at: number;
-  raw_json: string;
-}>(`
-  INSERT INTO task_cache (task_id, fetched_at, raw_json)
-  VALUES (@task_id, @fetched_at, @raw_json)
-  ON CONFLICT(task_id) DO UPDATE SET
-    fetched_at = excluded.fetched_at,
-    raw_json   = excluded.raw_json
-`);
+let _stmtUpsertTaskCache: Database.Statement | null = null;
+let _stmtGetTaskCache: Database.Statement | null = null;
 
-const stmtGetTaskCache = db.prepare<{ task_id: string }>(`
-  SELECT * FROM task_cache WHERE task_id = @task_id
-`);
+/** Lazily-prepared task_cache upsert — shared by updateTaskCacheStatus, upsertTaskCache, and updateTaskStatusInBoardCaches. */
+function getStmtUpsertTaskCache(): Database.Statement {
+  _stmtUpsertTaskCache ??= db.prepare<{
+    task_id: string;
+    fetched_at: number;
+    raw_json: string;
+  }>(`
+    INSERT INTO task_cache (task_id, fetched_at, raw_json)
+    VALUES (@task_id, @fetched_at, @raw_json)
+    ON CONFLICT(task_id) DO UPDATE SET
+      fetched_at = excluded.fetched_at,
+      raw_json   = excluded.raw_json
+  `);
+  return _stmtUpsertTaskCache;
+}
 
 export function updateTaskCacheStatus(taskId: string, status: string): void {
   const row = getTaskCache(taskId);
@@ -1496,7 +1868,7 @@ export function updateTaskCacheStatus(taskId: string, status: string): void {
     } else if (parsed?.properties?.Status?.select) {
       parsed.properties.Status.select.name = status;
     }
-    stmtUpsertTaskCache.run({
+    getStmtUpsertTaskCache().run({
       task_id: row.task_id,
       fetched_at: row.fetched_at,
       raw_json: JSON.stringify(parsed),
@@ -1507,7 +1879,7 @@ export function updateTaskCacheStatus(taskId: string, status: string): void {
 }
 
 export function upsertTaskCache(taskId: string, rawJson: string): void {
-  stmtUpsertTaskCache.run({
+  getStmtUpsertTaskCache().run({
     task_id: taskId,
     fetched_at: Date.now(),
     raw_json: rawJson,
@@ -1515,7 +1887,10 @@ export function upsertTaskCache(taskId: string, rawJson: string): void {
 }
 
 export function getTaskCache(taskId: string): TaskCache | undefined {
-  return stmtGetTaskCache.get({ task_id: taskId }) as TaskCache | undefined;
+  _stmtGetTaskCache ??= db.prepare<{ task_id: string }>(`
+    SELECT * FROM task_cache WHERE task_id = @task_id
+  `);
+  return _stmtGetTaskCache.get({ task_id: taskId }) as TaskCache | undefined;
 }
 
 export function getCacheAge(taskId: string): number {
@@ -1528,9 +1903,15 @@ export function deleteTaskCacheRow(taskId: string): void {
   db.prepare(`DELETE FROM task_cache WHERE task_id = ?`).run(taskId);
 }
 
-const stmtGetBoardCacheRows = db.prepare(
-  `SELECT task_id, fetched_at, raw_json FROM task_cache WHERE task_id LIKE 'board:%'`,
-);
+let _stmtGetBoardCacheRows: Database.Statement | null = null;
+
+/** Lazily-prepared board:* cache read — shared by updateTaskStatusInBoardCaches and getAllBoardCacheTasks. */
+function getStmtGetBoardCacheRows(): Database.Statement {
+  _stmtGetBoardCacheRows ??= db.prepare(
+    `SELECT task_id, fetched_at, raw_json FROM task_cache WHERE task_id LIKE 'board:%'`,
+  );
+  return _stmtGetBoardCacheRows;
+}
 
 /**
  * Write-through for a status change: patches the `status` field of the
@@ -1554,7 +1935,7 @@ export function updateTaskStatusInBoardCaches(
   const normalized = normalizeTaskId(taskId);
   let rows: Array<{ task_id: string; fetched_at: number; raw_json: string }>;
   try {
-    rows = stmtGetBoardCacheRows.all() as Array<{
+    rows = getStmtGetBoardCacheRows().all() as Array<{
       task_id: string;
       fetched_at: number;
       raw_json: string;
@@ -1584,7 +1965,7 @@ export function updateTaskStatusInBoardCaches(
     }
     if (!changed) continue;
     try {
-      stmtUpsertTaskCache.run({
+      getStmtUpsertTaskCache().run({
         task_id: row.task_id,
         fetched_at: row.fetched_at,
         raw_json: JSON.stringify(tasks),
@@ -1593,6 +1974,65 @@ export function updateTaskStatusInBoardCaches(
       // Non-fatal: leave the row as-is rather than failing the status write.
     }
   }
+}
+
+/** Minimal shape read out of cached board blobs — just enough for reverse-dependency lookup. */
+export interface CachedBoardTaskEntry {
+  id: string;
+  status: string;
+  dependsOn: string[];
+}
+
+/**
+ * Every task entry across all cached `board:*` blobs, deduped by normalized
+ * id (last write wins). This is the same cache `updateTaskStatusInBoardCaches`
+ * patches in place, so it reflects the latest known status/dependsOn without
+ * a live Notion round-trip. Best-effort: an unparseable row is skipped rather
+ * than failing the caller.
+ */
+export function getAllBoardCacheTasks(): CachedBoardTaskEntry[] {
+  let rows: Array<{ task_id: string; fetched_at: number; raw_json: string }>;
+  try {
+    rows = getStmtGetBoardCacheRows().all() as Array<{
+      task_id: string;
+      fetched_at: number;
+      raw_json: string;
+    }>;
+  } catch {
+    return [];
+  }
+  const byId = new Map<string, CachedBoardTaskEntry>();
+  for (const row of rows) {
+    let tasks: unknown;
+    try {
+      tasks = JSON.parse(row.raw_json);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(tasks)) continue;
+    for (const entry of tasks) {
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        typeof (entry as { id?: unknown }).id === 'string' &&
+        typeof (entry as { status?: unknown }).status === 'string'
+      ) {
+        const e = entry as {
+          id: string;
+          status: string;
+          dependsOn?: unknown;
+        };
+        byId.set(normalizeTaskId(e.id), {
+          id: e.id,
+          status: e.status,
+          dependsOn: Array.isArray(e.dependsOn)
+            ? e.dependsOn.filter((d): d is string => typeof d === 'string')
+            : [],
+        });
+      }
+    }
+  }
+  return [...byId.values()];
 }
 
 export function incrementTokens(
@@ -1640,6 +2080,26 @@ export function setContextOccupancy(sessionId: string, tokens: number): void {
   ).run(tokens, sessionId);
 }
 
+/**
+ * Additively accumulate the session's cache-token spend. Each result event's
+ * usage.cache_read_input_tokens/cache_creation_input_tokens is already the
+ * cumulative total across every API call *in that turn*, so summing it across
+ * turns (result events) gives the session-wide cumulative total — the same
+ * additive rule incrementTokens applies for input/output tokens.
+ */
+export function incrementCacheTokens(
+  sessionId: string,
+  cacheReadTokens: number,
+  cacheCreationTokens: number,
+): void {
+  db.prepare(
+    `UPDATE sessions
+     SET cache_read_tokens = cache_read_tokens + ?,
+         cache_creation_tokens = cache_creation_tokens + ?
+     WHERE session_id = ?`,
+  ).run(cacheReadTokens, cacheCreationTokens, sessionId);
+}
+
 export function getZeroTokenSessions(limit: number): Session[] {
   return db
     .prepare(
@@ -1659,6 +2119,39 @@ export function getTaskTitleFromCache(taskId: string): string | null {
   try {
     const parsed = JSON.parse(row.raw_json) as { title?: unknown };
     return typeof parsed.title === 'string' ? parsed.title : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Returns a cached task's Notion Type (e.g. "💻 Code"), or null if unknown. */
+export function getTaskTypeFromCache(taskId: string): string | null {
+  const row = getTaskCache(taskId);
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.raw_json) as { type?: unknown };
+    return typeof parsed.type === 'string' ? parsed.type : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns a cached task's display-format status string, or null if unknown.
+ * Mirrors updateTaskCacheStatus's read shape: NotionTask stores status at
+ * top-level; raw Notion API uses properties.Status.select.name.
+ */
+export function getTaskStatusFromCache(taskId: string): string | null {
+  const row = getTaskCache(taskId);
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.raw_json) as {
+      status?: unknown;
+      properties?: { Status?: { select?: { name?: unknown } } };
+    };
+    if (typeof parsed.status === 'string') return parsed.status;
+    const selectName = parsed.properties?.Status?.select?.name;
+    return typeof selectName === 'string' ? selectName : null;
   } catch {
     return null;
   }
@@ -1688,6 +2181,7 @@ export function upsertPullRequest(
     | 'reviewer_requested_at'
     | 'flake_recovery_attempts'
     | 'human_merge_only'
+    | 'pr_intent_id'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -1821,13 +2315,20 @@ export function setHeadSha(
   repo: string,
   sha: string | null,
 ): void {
-  db.prepare<{ pr_number: number; repo: string; head_sha: string | null }>(
+  const now = new Date().toISOString();
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    head_sha: string | null;
+    updated_at: string;
+  }>(
     `
     UPDATE pull_requests
-    SET head_sha = @head_sha, stalled_pr_retry_count = 0
+    SET head_sha = @head_sha, stalled_pr_retry_count = 0,
+        updated_at = @updated_at, synced_at = @updated_at
     WHERE pr_number = @pr_number AND repo = @repo
   `,
-  ).run({ pr_number: prNumber, repo, head_sha: sha });
+  ).run({ pr_number: prNumber, repo, head_sha: sha, updated_at: now });
 }
 
 export function incrementStalledPRRetryCount(
@@ -1931,6 +2432,53 @@ function getPRByTaskId(taskId: string): PullRequestRow | null {
 
 export const getPRByNotionTaskId = getPRByTaskId;
 
+// A PR row's identity/provenance fields are set once at creation and never
+// mutate afterward; everything else (state, review/merge/CI status, pause
+// reason, etc.) has no per-field historical record until the sibling
+// point-in-time instrumentation task lands — see module header.
+const PR_STATIC_FIELDS = new Set<keyof PullRequestRow>([
+  'id',
+  'pr_number',
+  'pr_url',
+  'task_id',
+  'session_id',
+  'repo',
+  'head_branch',
+  'base_branch',
+  'created_at',
+  'node_id',
+]);
+
+const PR_UNRECONSTRUCTABLE_REASON =
+  'pull_requests.* mutable fields (state, review/merge/CI status, pause reason, etc.) have no historical record until the point-in-time instrumentation task lands — cannot answer "what was this PR\'s state at T", only "what is it now"';
+
+export type PRAsOf = {
+  [K in keyof PullRequestRow]: PullRequestRow[K] | Unreconstructable;
+};
+
+/**
+ * Point-in-time read of the most recent PR for a task, as of `asOf`. Only
+ * the static identity fields (see PR_STATIC_FIELDS) come back with real
+ * values; every mutable field is an Unreconstructable marker — see module
+ * header. Returns undefined both when no PR exists for the task and when the
+ * PR wasn't created yet as of `asOf`.
+ */
+export function getPRAsOf(taskId: string, asOf: string): PRAsOf | undefined {
+  const current = getPRByNotionTaskId(taskId);
+  if (!current) return undefined;
+  const asOfMs = Date.parse(asOf);
+  if (current.created_at && Date.parse(current.created_at) > asOfMs) {
+    return undefined;
+  }
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(current) as (keyof PullRequestRow)[]) {
+    result[key] = PR_STATIC_FIELDS.has(key)
+      ? current[key]
+      : unreconstructable(PR_UNRECONSTRUCTABLE_REASON);
+  }
+  return result as PRAsOf;
+}
+
 /**
  * Returns the most recent merged PR for a task, or null if none exists.
  * Used by AutoLauncher to skip tasks whose PR was already merged but whose
@@ -2008,6 +2556,7 @@ export function setPRReviewResult(
   repo: string,
   result: string,
 ): void {
+  const before = getPRByNumber(prNumber, repo);
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -2025,6 +2574,131 @@ export function setPRReviewResult(
     review_result: result,
     review_at: new Date().toISOString(),
   });
+  if (before && before.review_result !== result) {
+    recordEvent({
+      event_type: 'pr_review_result_changed',
+      actor_type: 'system',
+      task_id: before.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        from: before.review_result,
+        to: result,
+      },
+    });
+  }
+}
+
+/**
+ * Persist a PR's latest depth-review verdict — the second, post-conformance
+ * review pass (see ReviewOrchestrator.dispatchDepthReview). Distinct from
+ * setPRReviewResult, which writes pull_requests.review_result (the
+ * conformance verdict only); this table is never read or written by that
+ * path. Upserted on (pr_number, repo) — a re-run overwrites the prior row.
+ */
+export function upsertDepthReviewVerdict(row: NewDepthReviewVerdictRow): void {
+  db.prepare<
+    NewDepthReviewVerdictRow & { recorded_at: string; route_count: number }
+  >(
+    `
+    INSERT INTO depth_review_verdicts
+      (pr_number, repo, head_sha, verdict, dimensions, summary, depth_session_id, recorded_at, route_count)
+    VALUES
+      (@pr_number, @repo, @head_sha, @verdict, @dimensions, @summary, @depth_session_id, @recorded_at, @route_count)
+    ON CONFLICT(pr_number, repo) DO UPDATE SET
+      head_sha = excluded.head_sha,
+      verdict = excluded.verdict,
+      dimensions = excluded.dimensions,
+      summary = excluded.summary,
+      depth_session_id = excluded.depth_session_id,
+      recorded_at = excluded.recorded_at,
+      route_count = excluded.route_count
+  `,
+  ).run({
+    ...row,
+    recorded_at: new Date().toISOString(),
+    route_count: row.route_count ?? 0,
+  });
+}
+
+/** Read the latest depth-review verdict for a PR, if any depth pass has completed. */
+export function getDepthReviewVerdict(
+  prNumber: number,
+  repo: string,
+): DepthReviewVerdictRow | null {
+  return db
+    .prepare<{ pr_number: number; repo: string }>(
+      `
+    SELECT * FROM depth_review_verdicts WHERE pr_number = @pr_number AND repo = @repo
+  `,
+    )
+    .get({ pr_number: prNumber, repo }) as DepthReviewVerdictRow | null;
+}
+
+/**
+ * Thrown by linkPRToPRIntent when the approved ops.prIntent named by
+ * `intentId` already authorized a different PR — one approved PR-intent
+ * authorizes exactly one PR (fire-once); re-use against a second PR is
+ * rejected rather than silently re-pointed.
+ */
+export class PRIntentAlreadyConsumedError extends Error {
+  constructor(intentId: string, prNumber: number, repo: string) {
+    super(
+      `PR-intent "${intentId}" already authorized PR #${prNumber} in ${repo} — ` +
+        'an approved ops.prIntent authorizes exactly one PR.',
+    );
+    this.name = 'PRIntentAlreadyConsumedError';
+  }
+}
+
+/**
+ * Links a PR to the approved ops.prIntent it was opened for — the Ops
+ * fire-once consumption point PRReviewService's getPRIntentForPR reads at
+ * review time. Idempotent for the same (prNumber, repo): re-linking the same
+ * PR to the same intent is a no-op write. Rejects with
+ * PRIntentAlreadyConsumedError when `intentId` is already linked to a
+ * *different* PR row.
+ */
+export function linkPRToPRIntent(
+  prNumber: number,
+  repo: string,
+  intentId: string,
+): void {
+  const existing = db
+    .prepare<{
+      intent_id: string;
+    }>(
+      `SELECT pr_number, repo FROM pull_requests WHERE pr_intent_id = @intent_id`,
+    )
+    .get({ intent_id: intentId }) as
+    | { pr_number: number; repo: string }
+    | undefined;
+  if (existing && (existing.pr_number !== prNumber || existing.repo !== repo)) {
+    throw new PRIntentAlreadyConsumedError(
+      intentId,
+      existing.pr_number,
+      existing.repo,
+    );
+  }
+  db.prepare<{ pr_number: number; repo: string; intent_id: string }>(
+    `UPDATE pull_requests SET pr_intent_id = @intent_id WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo, intent_id: intentId });
+}
+
+/**
+ * Resolves the approved ops.prIntent a PR was linked to at open time (see
+ * linkPRToPRIntent), or null for a PR with no linked PR-intent — every
+ * non-Ops PR, or an Ops PR reviewed before the linking sibling mechanism
+ * runs. PRReviewService uses this to build the Ops rubric's "changed files"
+ * dimension against the approved declaration instead of a task-body section.
+ */
+export function getPRIntentForPR(
+  prNumber: number,
+  repo: string,
+): StagedIntentRow | null {
+  const pr = getPRByNumber(prNumber, repo);
+  if (!pr?.pr_intent_id) return null;
+  return getStagedIntent(pr.pr_intent_id) ?? null;
 }
 
 export function updatePRDraftStatus(
@@ -2044,11 +2718,20 @@ export function updatePRState(
   repo: string,
   state: string,
 ): void {
+  const before = getPRByNumber(prNumber, repo);
   db.prepare<{ pr_number: number; repo: string; state: string }>(
     `
     UPDATE pull_requests SET state = @state WHERE pr_number = @pr_number AND repo = @repo
   `,
   ).run({ pr_number: prNumber, repo, state });
+  if (before && before.state !== state) {
+    recordEvent({
+      event_type: 'pr_state_changed',
+      actor_type: 'system',
+      task_id: before.task_id ?? null,
+      payload: { pr_number: prNumber, repo, from: before.state, to: state },
+    });
+  }
 }
 
 export function setPreReviewStage(
@@ -2194,6 +2877,8 @@ export function updateMergeState(
     failingChecks && failingChecks.length > 0
       ? JSON.stringify(failingChecks)
       : null;
+  const now = new Date().toISOString();
+  const before = getPRByNumber(prNumber, repo);
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -2207,7 +2892,9 @@ export function updateMergeState(
     SET mergeable = @mergeable,
         merge_state = @merge_state,
         merge_state_checked_at = @checked_at,
-        failing_checks = @failing_checks
+        failing_checks = @failing_checks,
+        updated_at = @checked_at,
+        synced_at = @checked_at
     WHERE pr_number = @pr_number AND repo = @repo
   `,
   ).run({
@@ -2215,9 +2902,27 @@ export function updateMergeState(
     repo,
     mergeable,
     merge_state: mergeState,
-    checked_at: new Date().toISOString(),
+    checked_at: now,
     failing_checks: failingChecksJson,
   });
+  if (
+    before &&
+    (before.mergeable !== mergeable || before.merge_state !== mergeState)
+  ) {
+    recordEvent({
+      event_type: 'pr_merge_state_changed',
+      actor_type: 'system',
+      task_id: before.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        from_mergeable: before.mergeable,
+        to_mergeable: mergeable,
+        from_merge_state: before.merge_state,
+        to_merge_state: mergeState,
+      },
+    });
+  }
 }
 
 /**
@@ -2296,6 +3001,7 @@ export function setPauseReason(
     reason !== null
       ? serializePauseReason(pauseReasonFromCanonical(reason, detail))
       : null;
+  const before = getPRByNumber(prNumber, repo);
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -2314,6 +3020,19 @@ export function setPauseReason(
     pause_reason: serialized,
     pause_reason_set_at: reason !== null ? Date.now() : null,
   });
+  if (before && before.pause_reason !== serialized) {
+    recordEvent({
+      event_type: 'pr_pause_reason_changed',
+      actor_type: 'system',
+      task_id: before.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        from: before.pause_reason,
+        to: serialized,
+      },
+    });
+  }
 }
 
 /**
@@ -2572,7 +3291,7 @@ export function getApprovedOpenPRs(): PullRequestRow[] {
       `
     SELECT * FROM pull_requests
     WHERE state = 'open'
-      AND review_result LIKE '%approved%'
+      AND json_extract(review_result, '$.verdict') = 'approved'
       AND pause_reason IS NULL
       AND (human_merge_only IS NULL OR human_merge_only = 0)
   `,
@@ -2769,7 +3488,7 @@ export interface TaskAggregateRow {
   code_session_compaction_count: number | null;
   code_session_model: string | null;
   code_session_type: string | null;
-  // planning session (session_type IN ('groom', 'design', 'ops'))
+  // planning session (session_type IN PLANNING_SESSION_TYPES — see session/sessionPredicates.ts)
   planning_session_id: string | null;
   planning_session_status: string | null;
   planning_session_started_at: number | null;
@@ -2796,6 +3515,7 @@ export interface TaskAggregateRow {
   pr_merge_state: string | null;
   pr_pause_reason: string | null;
   pr_pre_review_stage: string | null;
+  pr_flake_recovery_attempts: number | null;
   session_pr_creation_failed_pause_reason: string | null;
 }
 
@@ -2828,7 +3548,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
             ORDER BY started_at DESC
           ) AS rn
         FROM sessions
-        WHERE session_type IN ('groom', 'design', 'ops')
+        WHERE session_type IN (${PLANNING_SESSION_TYPE_SQL_LIST})
       ),
       ranked_review AS (
         SELECT *,
@@ -2890,6 +3610,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.merge_state         AS pr_merge_state,
       pr.pause_reason        AS pr_pause_reason,
       pr.pre_review_stage    AS pr_pre_review_stage,
+      pr.flake_recovery_attempts AS pr_flake_recovery_attempts,
       CASE
         WHEN pr.pr_number IS NULL
           AND cs.pause_reason IN ('pr_creation_failed', 'stalled_idle')
@@ -2940,6 +3661,22 @@ export function getLatestOpsSessionByTaskId(
       `
     SELECT * FROM sessions
     WHERE task_id = @task_id AND session_type = 'ops'
+    ORDER BY started_at DESC
+    LIMIT 1
+  `,
+    )
+    .get({ task_id: taskId }) as Session | undefined;
+}
+
+/** Returns the most recent docs session for a given task ID — the docs-flow counterpart to getLatestOpsSessionByTaskId. */
+export function getLatestDocsSessionByTaskId(
+  taskId: string,
+): Session | undefined {
+  return db
+    .prepare<{ task_id: string }>(
+      `
+    SELECT * FROM sessions
+    WHERE task_id = @task_id AND session_type = 'docs'
     ORDER BY started_at DESC
     LIMIT 1
   `,
@@ -3323,7 +4060,7 @@ export function getApprovedLocalBranches(): LocalBranchRow[] {
     SELECT lb.* FROM local_branches lb
     JOIN projects p ON lb.project_id = p.id
     WHERE lb.status = 'open'
-      AND lb.review_result LIKE '%approved%'
+      AND json_extract(lb.review_result, '$.verdict') = 'approved'
       AND lb.pause_reason IS NULL
       AND p.auto_merge_enabled = 1
   `,
@@ -3725,6 +4462,125 @@ export function getProjectDeployedShaRow(
   return row ?? null;
 }
 
+// ─── behind-deploy preview ──────────────────────────────────────────────────
+
+export interface BehindItem {
+  kind: 'pr' | 'local-branch';
+  taskId: string | null;
+  title: string | null;
+  mergedAt: string; // the row's updated_at
+  prUrl?: string;
+  prNumber?: number;
+  branchName?: string;
+}
+
+/** Same repo-resolution as upsertPullRequest's repoConfigured check — github_repo may be a bare string or a JSON array of repos. */
+function resolveProjectRepos(projectId: string): string[] {
+  const project = listProjectRows().find((row) => row.id === projectId);
+  const raw = project?.github_repo;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as string[];
+  } catch {
+    // bare string
+  }
+  return [raw];
+}
+
+/**
+ * Merged pull_requests + merged local_branches rows since `sinceIso` (the
+ * project's last recorded deployed-SHA timestamp) — the DB-derived "behind"
+ * preview. `sinceIso` null means the project has no project_deployed_sha row
+ * (never deployed through this system): returns everything merged rather
+ * than erroring.
+ */
+export function listMergedSince(
+  projectId: string,
+  sinceIso: string | null,
+): BehindItem[] {
+  const items: BehindItem[] = [];
+  const repos = resolveProjectRepos(projectId);
+
+  if (repos.length > 0) {
+    const placeholders = repos.map(() => '?').join(', ');
+    const prRows = (
+      sinceIso
+        ? db
+            .prepare(
+              `SELECT pr_number, pr_url, task_id, title, updated_at
+               FROM pull_requests
+               WHERE repo IN (${placeholders}) AND state = 'merged' AND updated_at > ?
+               ORDER BY updated_at ASC`,
+            )
+            .all(...repos, sinceIso)
+        : db
+            .prepare(
+              `SELECT pr_number, pr_url, task_id, title, updated_at
+               FROM pull_requests
+               WHERE repo IN (${placeholders}) AND state = 'merged'
+               ORDER BY updated_at ASC`,
+            )
+            .all(...repos)
+    ) as Array<{
+      pr_number: number;
+      pr_url: string;
+      task_id: string | null;
+      title: string | null;
+      updated_at: string | null;
+    }>;
+    for (const row of prRows) {
+      items.push({
+        kind: 'pr',
+        taskId: row.task_id,
+        title: row.title,
+        mergedAt: row.updated_at ?? '',
+        prUrl: row.pr_url,
+        prNumber: row.pr_number,
+      });
+    }
+  }
+
+  const branchRows = (
+    sinceIso
+      ? db
+          .prepare(
+            `SELECT lb.branch_name, lb.updated_at, s.task_id, s.task_name
+             FROM local_branches lb
+             LEFT JOIN sessions s ON s.session_id = lb.session_id
+             WHERE lb.project_id = ? AND lb.status = 'merged' AND lb.updated_at > ?
+             ORDER BY lb.updated_at ASC`,
+          )
+          .all(projectId, sinceIso)
+      : db
+          .prepare(
+            `SELECT lb.branch_name, lb.updated_at, s.task_id, s.task_name
+             FROM local_branches lb
+             LEFT JOIN sessions s ON s.session_id = lb.session_id
+             WHERE lb.project_id = ? AND lb.status = 'merged'
+             ORDER BY lb.updated_at ASC`,
+          )
+          .all(projectId)
+  ) as Array<{
+    branch_name: string;
+    updated_at: string;
+    task_id: string | null;
+    task_name: string | null;
+  }>;
+  for (const row of branchRows) {
+    items.push({
+      kind: 'local-branch',
+      taskId: row.task_id,
+      title: row.task_name,
+      mergedAt: row.updated_at,
+      branchName: row.branch_name,
+    });
+  }
+
+  items.sort((a, b) => a.mergedAt.localeCompare(b.mergedAt));
+  return items;
+}
+
 // ─── deploy_run ───────────────────────────────────────────────────────────
 // Statements are cached lazily (prepared on first use, not at module load) so
 // importing this module doesn't fail on a not-yet-migrated db handle.
@@ -3743,6 +4599,47 @@ export function getDeployRun(runId: string): DeployRunRow | undefined {
     `SELECT * FROM deploy_run WHERE run_id = @run_id`,
   );
   return _stmtGetDeployRun.get({ run_id: runId }) as DeployRunRow | undefined;
+}
+
+// run_id/project/target_sha/started_at are set once at creation; status,
+// current_step and completed_at have no per-field historical record until
+// the sibling point-in-time instrumentation task lands — see module header.
+const DEPLOY_RUN_STATIC_FIELDS = new Set<keyof DeployRunRow>([
+  'run_id',
+  'project',
+  'target_sha',
+  'started_at',
+]);
+
+const DEPLOY_RUN_UNRECONSTRUCTABLE_REASON =
+  'deploy_run.status/current_step/completed_at have no historical record until the point-in-time instrumentation task lands — cannot answer "what was this run\'s status at T", only "what is it now"';
+
+export type DeployRunAsOf = {
+  [K in keyof DeployRunRow]: DeployRunRow[K] | Unreconstructable;
+};
+
+/**
+ * Point-in-time read of a deploy_run row as of `asOf`. Only the static
+ * identity fields (see DEPLOY_RUN_STATIC_FIELDS) come back with real values;
+ * status/current_step/completed_at are Unreconstructable markers — see
+ * module header. Returns undefined both when the run doesn't exist and when
+ * it wasn't started yet as of `asOf`.
+ */
+export function getDeployRunAsOf(
+  runId: string,
+  asOf: string,
+): DeployRunAsOf | undefined {
+  const current = getDeployRun(runId);
+  if (!current) return undefined;
+  const asOfMs = Date.parse(asOf);
+  if (Date.parse(current.started_at) > asOfMs) return undefined;
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(current) as (keyof DeployRunRow)[]) {
+    result[key] = DEPLOY_RUN_STATIC_FIELDS.has(key)
+      ? current[key]
+      : unreconstructable(DEPLOY_RUN_UNRECONSTRUCTABLE_REASON);
+  }
+  return result as DeployRunAsOf;
 }
 
 /** The project's in-flight run, if any — relies on the at-most-one-active-run-per-project index. */
@@ -3796,6 +4693,7 @@ export function updateDeployRunStatus(
   status: string,
   completedAt: string | null,
 ): void {
+  const before = getDeployRun(runId);
   _stmtUpdateDeployRunStatus ??= db.prepare<{
     run_id: string;
     status: string;
@@ -3808,6 +4706,14 @@ export function updateDeployRunStatus(
     status,
     completed_at: completedAt,
   });
+  if (before && before.status !== status) {
+    recordEvent({
+      event_type: 'deploy_run_status_changed',
+      actor_type: 'system',
+      project_id: before.project,
+      payload: { run_id: runId, from: before.status, to: status },
+    });
+  }
 }
 
 export function listDeployRunEvents(runId: string): DeployRunEventRow[] {
@@ -3955,7 +4861,7 @@ export function insertPauseInterval(
   sessionId: string,
   pauseReason: CanonicalPauseReason,
 ): void {
-  if (!stmtGetSession.get({ session_id: sessionId })) {
+  if (!getStmtGetSession().get({ session_id: sessionId })) {
     // Parent row is gone — inserting would violate the FK on session_pause_intervals.
     logger.warn(
       `[insertPauseInterval] skipped — session ${sessionId} no longer exists`,
@@ -4133,95 +5039,15 @@ export function getAllActiveMerges(): ActiveMergeRow[] {
   return db.prepare(`SELECT * FROM active_merges`).all() as ActiveMergeRow[];
 }
 
-// ─── orchestrator_test_results ────────────────────────────────────────────────
-
-export interface TestResultRow {
-  pr_number: number;
-  repo: string;
-  sha: string;
-  passed: number;
-  output: string;
-  ran_at: string;
-}
-
-export function hasTestResultForSha(
-  prNumber: number,
-  repo: string,
-  sha: string,
-): boolean {
-  const row = db
-    .prepare<{
-      pr_number: number;
-      repo: string;
-      sha: string;
-    }>(
-      `SELECT 1 FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
-    )
-    .get({ pr_number: prNumber, repo, sha });
-  return row != null;
-}
-
-export function upsertTestResult(
-  prNumber: number,
-  repo: string,
-  sha: string,
-  passed: boolean,
-  output: string,
-): void {
-  db.prepare<{
-    pr_number: number;
-    repo: string;
-    sha: string;
-    passed: number;
-    output: string;
-    ran_at: string;
-  }>(
-    `INSERT OR REPLACE INTO orchestrator_test_results (pr_number, repo, sha, passed, output, ran_at)
-     VALUES (@pr_number, @repo, @sha, @passed, @output, @ran_at)`,
-  ).run({
-    pr_number: prNumber,
-    repo,
-    sha,
-    passed: passed ? 1 : 0,
-    output,
-    ran_at: new Date().toISOString(),
-  });
-}
-
-export function getTestResult(
-  prNumber: number,
-  repo: string,
-  sha: string,
-): TestResultRow | undefined {
-  return db
-    .prepare<{
-      pr_number: number;
-      repo: string;
-      sha: string;
-    }>(
-      `SELECT * FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
-    )
-    .get({ pr_number: prNumber, repo, sha }) as TestResultRow | undefined;
-}
-
-/**
- * Invalidate the permanent per-(pr,repo,sha) F2 test result row so a
- * verified-flaky disposition can trigger a same-SHA re-run. Callers must
- * audit this via recordEvent — deletion alone is silent.
- */
-export function deleteTestResult(
-  prNumber: number,
-  repo: string,
-  sha: string,
-): void {
-  db.prepare<{
-    pr_number: number;
-    repo: string;
-    sha: string;
-  }>(
-    `DELETE FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
-  ).run({ pr_number: prNumber, repo, sha });
-}
+// ─── orchestrator_test_results (legacy) ─────────────────────────────────────
+//
+// orchestrator_test_results (the legacy (pr_number, repo, sha)-keyed table)
+// has no remaining production readers/writers — F2 (the orchestrator-run
+// test gate) is fully migrated onto the shared test_request_runs
+// content-hash cache (see the test_request_runs section below, and
+// getLatestTestRequestRun / deleteTestRequestRunsForContentHash). The table
+// itself is left in schema.ts as historical data; only its query functions
+// were removed.
 
 // ─── orchestrator_analyze_results ───────────────────────────────────────────
 
@@ -4306,6 +5132,69 @@ export function getAnalyzeResult(
       `SELECT * FROM orchestrator_analyze_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
     )
     .get({ pr_number: prNumber, repo, sha }) as AnalyzeResultRow | undefined;
+}
+
+// ─── orchestrator_analyze_content_cache ─────────────────────────────────────
+
+export interface AnalyzeContentCacheRow {
+  command: string;
+  content_hash: string;
+  passed: number;
+  output: string;
+  ran_at: string;
+}
+
+/**
+ * Narrower cache layer under orchestrator_analyze_results, keyed by command +
+ * content-hash of that command's trigger-path files rather than by
+ * (pr_number, repo, sha) — lets a byte-identical dependency state (e.g. the
+ * same package.json/lockfile bump) reuse one audit result across different
+ * PRs/SHAs.
+ */
+export function getAnalyzeContentCacheResult(
+  command: string,
+  contentHash: string,
+): AnalyzeContentCacheRow | undefined {
+  return db
+    .prepare<{
+      command: string;
+      content_hash: string;
+    }>(
+      `SELECT * FROM orchestrator_analyze_content_cache WHERE command = @command AND content_hash = @content_hash`,
+    )
+    .get({ command, content_hash: contentHash }) as
+    | AnalyzeContentCacheRow
+    | undefined;
+}
+
+/**
+ * INSERT OR IGNORE against the (command, content_hash) primary key — two
+ * concurrently-admitted PRs racing to populate the same cache entry is
+ * benign (one redundant audit run, not corruption), so this relies on the
+ * unique constraint instead of adding new locking.
+ */
+export function insertAnalyzeContentCacheResult(
+  command: string,
+  contentHash: string,
+  passed: boolean,
+  output: string,
+): void {
+  db.prepare<{
+    command: string;
+    content_hash: string;
+    passed: number;
+    output: string;
+    ran_at: string;
+  }>(
+    `INSERT OR IGNORE INTO orchestrator_analyze_content_cache (command, content_hash, passed, output, ran_at)
+     VALUES (@command, @content_hash, @passed, @output, @ran_at)`,
+  ).run({
+    command,
+    content_hash: contentHash,
+    passed: passed ? 1 : 0,
+    output,
+    ran_at: new Date().toISOString(),
+  });
 }
 
 // ─── session_events pruner ──────────────────────────────────────────────────
@@ -4427,6 +5316,60 @@ export function pruneSchedulerAudit(keepPerJob = 1000): void {
   }
 }
 
+// ─── audit_finding_dedup ────────────────────────────────────────────────────
+
+export interface AuditFindingDedupRow {
+  id: number;
+  project_id: string;
+  finding_identity: string;
+  task_id: string;
+  filed_at: string;
+}
+
+/** The dedup record for a (project, finding-identity) pair, or null if never filed. */
+export function getAuditFindingDedup(
+  projectId: string,
+  findingIdentity: string,
+): AuditFindingDedupRow | null {
+  const row = db
+    .prepare<{
+      project_id: string;
+      finding_identity: string;
+    }>(
+      `SELECT * FROM audit_finding_dedup WHERE project_id = @project_id AND finding_identity = @finding_identity`,
+    )
+    .get({ project_id: projectId, finding_identity: findingIdentity }) as
+    | AuditFindingDedupRow
+    | undefined;
+  return row ?? null;
+}
+
+/** Records (or replaces) the task a finding was just filed as — one row per (project, finding-identity). */
+export function upsertAuditFindingDedup(
+  projectId: string,
+  findingIdentity: string,
+  taskId: string,
+  filedAt: string,
+): void {
+  db.prepare<{
+    project_id: string;
+    finding_identity: string;
+    task_id: string;
+    filed_at: string;
+  }>(
+    `INSERT INTO audit_finding_dedup (project_id, finding_identity, task_id, filed_at)
+     VALUES (@project_id, @finding_identity, @task_id, @filed_at)
+     ON CONFLICT(project_id, finding_identity) DO UPDATE SET
+       task_id = excluded.task_id,
+       filed_at = excluded.filed_at`,
+  ).run({
+    project_id: projectId,
+    finding_identity: findingIdentity,
+    task_id: taskId,
+    filed_at: filedAt,
+  });
+}
+
 // ─── convergence_snapshot ───────────────────────────────────────────────────
 
 let _stmtInsertConvergenceSnapshot: Database.Statement | null = null;
@@ -4438,15 +5381,16 @@ export function insertConvergenceSnapshot(
 ): void {
   _stmtInsertConvergenceSnapshot ??= db.prepare<ConvergenceSnapshotRow>(`
     INSERT INTO convergence_snapshot
-      (id, project, milestone, ts, tasks_open, tasks_closed, gate_open, gate_closed,
+      (id, project, milestone, ts, tasks_open, tasks_closed, gate_open, gate_closed, gate_parked,
        seed_open, seed_closed, ops_open, ops_closed, total_scope, distance_to_green, status)
     VALUES
-      (@id, @project, @milestone, @ts, @tasks_open, @tasks_closed, @gate_open, @gate_closed,
+      (@id, @project, @milestone, @ts, @tasks_open, @tasks_closed, @gate_open, @gate_closed, @gate_parked,
        @seed_open, @seed_closed, @ops_open, @ops_closed, @total_scope, @distance_to_green, @status)
   `);
   _stmtInsertConvergenceSnapshot.run({
     id: randomUUID(),
     ...row,
+    gate_parked: row.gate_parked ?? 0,
   });
 }
 
@@ -4473,6 +5417,8 @@ export interface ConvergenceSnapshotHistoryWindow {
   limit?: number;
   /** Only rows with ts >= this ISO-8601 timestamp. */
   sinceTs?: string;
+  /** Only rows with ts <= this ISO-8601 timestamp. */
+  untilTs?: string;
 }
 
 /**
@@ -4486,7 +5432,7 @@ export function listConvergenceSnapshotHistory(
   milestone: string,
   window?: ConvergenceSnapshotHistoryWindow,
 ): ConvergenceSnapshotRow[] {
-  if (!window?.limit && !window?.sinceTs) {
+  if (!window?.limit && !window?.sinceTs && !window?.untilTs) {
     _stmtListConvergenceSnapshotHistory ??= db.prepare<{
       project: string;
       milestone: string;
@@ -4506,6 +5452,10 @@ export function listConvergenceSnapshotHistory(
   if (window.sinceTs) {
     conditions.push('ts >= @sinceTs');
     params.sinceTs = window.sinceTs;
+  }
+  if (window.untilTs) {
+    conditions.push('ts <= @untilTs');
+    params.untilTs = window.untilTs;
   }
 
   const whereClause = conditions.join(' AND ');
@@ -4536,27 +5486,28 @@ export interface SchedulerAuditStats {
   errorCount24h: number;
 }
 
-const stmtSchedulerAuditStats = db.prepare(`
-  WITH ranked AS (
-    SELECT
-      job,
-      status,
-      duration_ms,
-      started_at,
-      ROW_NUMBER() OVER (PARTITION BY job ORDER BY started_at DESC) AS rn
-    FROM scheduler_audit
-  )
-  SELECT
-    job,
-    MAX(CASE WHEN rn = 1 THEN duration_ms END) AS last_duration_ms,
-    SUM(CASE WHEN status IN ('ok', 'failed') AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS run_count_24h,
-    SUM(CASE WHEN status = 'failed' AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS error_count_24h
-  FROM ranked
-  GROUP BY job
-`);
+let _stmtSchedulerAuditStats: Database.Statement | null = null;
 
 export function getSchedulerAuditStats(): SchedulerAuditStats[] {
-  const rows = stmtSchedulerAuditStats.all() as Array<{
+  _stmtSchedulerAuditStats ??= db.prepare(`
+    WITH ranked AS (
+      SELECT
+        job,
+        status,
+        duration_ms,
+        started_at,
+        ROW_NUMBER() OVER (PARTITION BY job ORDER BY started_at DESC) AS rn
+      FROM scheduler_audit
+    )
+    SELECT
+      job,
+      MAX(CASE WHEN rn = 1 THEN duration_ms END) AS last_duration_ms,
+      SUM(CASE WHEN status IN ('ok', 'failed') AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS run_count_24h,
+      SUM(CASE WHEN status = 'failed' AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS error_count_24h
+    FROM ranked
+    GROUP BY job
+  `);
+  const rows = _stmtSchedulerAuditStats.all() as Array<{
     job: string;
     last_duration_ms: number | null;
     run_count_24h: number;
@@ -4643,6 +5594,121 @@ export function getOpsJournalEntry(taskId: string): OpsJournalRow | undefined {
   }) as OpsJournalRow | undefined;
 }
 
+/**
+ * ops_journal_state_changed/entry_seeded/entry_dropped are recorded with
+ * whatever task_id string the caller of setEntryState/reconcileJournal
+ * happened to hold (see opsJournal.ts) — not necessarily the bare form
+ * ops_journal.task_id normalizes to. Match against both so a caller who
+ * only has the bare or the notion:-prefixed form still finds its history.
+ */
+function opsJournalAuditTaskIdCandidates(taskId: string): string[] {
+  const bare = toBareOpsJournalTaskId(taskId);
+  return bare === taskId ? [taskId] : [taskId, bare];
+}
+
+function queryOpsJournalAuditEvents(
+  eventType: string,
+  taskId: string,
+): { ts: number; payload: Record<string, unknown> }[] {
+  const candidates = opsJournalAuditTaskIdCandidates(taskId);
+  const placeholders = candidates.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT ts, payload FROM audit_log WHERE event_type = ? AND task_id IN (${placeholders}) ORDER BY id ASC`,
+    )
+    .all(eventType, ...candidates) as { ts: number; payload: string }[];
+  return rows.map((r) => ({ ts: r.ts, payload: JSON.parse(r.payload) }));
+}
+
+const OPS_JOURNAL_UNRECONSTRUCTABLE_REASON =
+  'ops_journal fields other than state (disposition/evidence/finding_or_proposal/falsification/filed_followons/needs_from_operator/resolution/worked_in) have no per-field historical record — only state transitions are audited';
+
+export interface OpsJournalAsOf {
+  task_id: string;
+  project: string;
+  milestone: string;
+  state: OpsJournalState;
+  disposition: Unreconstructable;
+  worked_in: Unreconstructable;
+  evidence: Unreconstructable;
+  finding_or_proposal: Unreconstructable;
+  falsification: Unreconstructable;
+  filed_followons: Unreconstructable;
+  needs_from_operator: Unreconstructable;
+  resolution: Unreconstructable;
+  updated_at: string;
+}
+
+/**
+ * Point-in-time read of an ops_journal entry's `state`, reconstructed by
+ * replaying `ops_journal_state_changed`/`ops_journal_entry_seeded`/
+ * `ops_journal_entry_dropped` audit_log rows up to `asOf`. Every other
+ * column has no per-field history and comes back as an Unreconstructable
+ * marker — see module header. Returns undefined when the entry doesn't
+ * exist now, wasn't seeded yet as of `asOf`, or was dropped and not
+ * re-seeded by `asOf`.
+ */
+export function getOpsJournalEntryAsOf(
+  taskId: string,
+  asOf: string,
+): OpsJournalAsOf | undefined {
+  const current = getOpsJournalEntry(taskId);
+  if (!current) return undefined;
+  const asOfMs = Date.parse(asOf);
+
+  const seedEvents = queryOpsJournalAuditEvents(
+    'ops_journal_entry_seeded',
+    taskId,
+  );
+  const dropEvents = queryOpsJournalAuditEvents(
+    'ops_journal_entry_dropped',
+    taskId,
+  );
+  const stateEvents = queryOpsJournalAuditEvents(
+    'ops_journal_state_changed',
+    taskId,
+  ) as {
+    ts: number;
+    payload: { from: OpsJournalState; to: OpsJournalState };
+  }[];
+
+  const seedTs = [...seedEvents].reverse().find((e) => e.ts <= asOfMs)?.ts;
+  if (seedTs === undefined) return undefined;
+  const droppedAfterSeed = dropEvents.some(
+    (e) => e.ts > seedTs && e.ts <= asOfMs,
+  );
+  if (droppedAfterSeed) return undefined;
+
+  let state = current.state;
+  for (let i = stateEvents.length - 1; i >= 0; i--) {
+    if (stateEvents[i].ts > asOfMs) {
+      state = stateEvents[i].payload.from;
+    } else {
+      break;
+    }
+  }
+
+  return {
+    task_id: current.task_id,
+    project: current.project,
+    milestone: current.milestone,
+    state,
+    disposition: unreconstructable(OPS_JOURNAL_UNRECONSTRUCTABLE_REASON),
+    worked_in: unreconstructable(OPS_JOURNAL_UNRECONSTRUCTABLE_REASON),
+    evidence: unreconstructable(OPS_JOURNAL_UNRECONSTRUCTABLE_REASON),
+    finding_or_proposal: unreconstructable(
+      OPS_JOURNAL_UNRECONSTRUCTABLE_REASON,
+    ),
+    falsification: unreconstructable(OPS_JOURNAL_UNRECONSTRUCTABLE_REASON),
+    filed_followons: unreconstructable(OPS_JOURNAL_UNRECONSTRUCTABLE_REASON),
+    needs_from_operator: unreconstructable(
+      OPS_JOURNAL_UNRECONSTRUCTABLE_REASON,
+    ),
+    resolution: unreconstructable(OPS_JOURNAL_UNRECONSTRUCTABLE_REASON),
+    updated_at: current.updated_at,
+  };
+}
+
 export function listOpsJournalEntries(): OpsJournalRow[] {
   _stmtListOpsJournalEntries ??= db.prepare(`SELECT * FROM ops_journal`);
   return _stmtListOpsJournalEntries.all() as OpsJournalRow[];
@@ -4685,6 +5751,78 @@ export function deleteOpsJournalEntry(taskId: string): void {
   _stmtDeleteOpsJournalEntry.run({ task_id: toBareOpsJournalTaskId(taskId) });
 }
 
+// ─── capability_disqualification ────────────────────────────────────────────
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle.
+
+let _stmtGetCapabilityDisqualification: Database.Statement | null = null;
+let _stmtGetCapabilityDisqualificationByInvestigationTask: Database.Statement | null =
+  null;
+let _stmtUpsertCapabilityDisqualification: Database.Statement | null = null;
+
+function capabilityDisqualificationId(
+  projectId: string,
+  capability: string,
+): string {
+  return `${projectId}::${capability}`;
+}
+
+/** The current disqualification row for one (project, capability) key, or undefined if the key was never disqualified. */
+export function getCapabilityDisqualification(
+  projectId: string,
+  capability: string,
+): CapabilityDisqualificationRow | undefined {
+  _stmtGetCapabilityDisqualification ??= db.prepare<{ id: string }>(
+    `SELECT * FROM capability_disqualification WHERE id = @id`,
+  );
+  return _stmtGetCapabilityDisqualification.get({
+    id: capabilityDisqualificationId(projectId, capability),
+  }) as CapabilityDisqualificationRow | undefined;
+}
+
+/** The disqualification row a resolving Investigation task's id is attached to, or undefined. */
+export function getCapabilityDisqualificationByInvestigationTask(
+  investigationTaskId: string,
+): CapabilityDisqualificationRow | undefined {
+  _stmtGetCapabilityDisqualificationByInvestigationTask ??= db.prepare<{
+    investigation_task_id: string;
+  }>(
+    `SELECT * FROM capability_disqualification WHERE investigation_task_id = @investigation_task_id`,
+  );
+  return _stmtGetCapabilityDisqualificationByInvestigationTask.get({
+    investigation_task_id: investigationTaskId,
+  }) as CapabilityDisqualificationRow | undefined;
+}
+
+/** Insert-or-replace of one (project, capability) key's disqualification row, keyed on its deterministic id. */
+export function upsertCapabilityDisqualification(
+  row: NewCapabilityDisqualificationRow,
+): void {
+  _stmtUpsertCapabilityDisqualification ??= db.prepare(`
+    INSERT INTO capability_disqualification
+      (id, project_id, capability, investigation_task_id, state, created_at, resolved_at, lifted_at, updated_at)
+    VALUES
+      (@id, @project_id, @capability, @investigation_task_id, @state, @created_at, @resolved_at, @lifted_at, @updated_at)
+    ON CONFLICT(id) DO UPDATE SET
+      investigation_task_id = @investigation_task_id,
+      state = @state,
+      resolved_at = @resolved_at,
+      lifted_at = @lifted_at,
+      updated_at = @updated_at
+  `);
+  _stmtUpsertCapabilityDisqualification.run({
+    id: capabilityDisqualificationId(row.project_id, row.capability),
+    project_id: row.project_id,
+    capability: row.capability,
+    investigation_task_id: row.investigation_task_id,
+    state: row.state,
+    created_at: row.created_at,
+    resolved_at: row.resolved_at ?? null,
+    lifted_at: row.lifted_at ?? null,
+    updated_at: row.updated_at,
+  });
+}
+
 // ─── gate_item ────────────────────────────────────────────────────────────
 // Statements are cached lazily (prepared on first use, not at module load) so
 // importing this module doesn't fail on a not-yet-migrated db handle.
@@ -4703,6 +5841,141 @@ export function getGateItem(id: string): GateItemRow | undefined {
     `SELECT * FROM gate_item WHERE id = @id`,
   );
   return _stmtGetGateItem.get({ id }) as GateItemRow | undefined;
+}
+
+function queryGateItemAuditTransitions(
+  eventType: 'gate_item_state_changed' | 'gate_item_reclassified',
+  gateItemId: string,
+): { ts: number; from: string; to: string }[] {
+  const rows = db
+    .prepare<
+      { event_type: string; like: string },
+      { ts: number; payload: string }
+    >(`SELECT ts, payload FROM audit_log WHERE event_type = @event_type AND payload LIKE @like ORDER BY id ASC`)
+    .all({ event_type: eventType, like: `%"gateItemId":"${gateItemId}"%` });
+  return rows
+    .map((r) => {
+      const payload = JSON.parse(r.payload) as {
+        gateItemId: string;
+        from: string;
+        to: string;
+      };
+      return {
+        ts: r.ts,
+        from: payload.from,
+        to: payload.to,
+        gateItemId: payload.gateItemId,
+      };
+    })
+    .filter((r) => r.gateItemId === gateItemId);
+}
+
+const GATE_ITEM_UNRECONSTRUCTABLE_REASON =
+  'gate_item.min_deployed_commit/next_attempt_at/pending_attempt_count have no historical record until the point-in-time instrumentation task lands — cannot answer "what was this field at T", only "what is it now"';
+
+export interface GateItemAsOf {
+  id: string;
+  project: string;
+  milestone: string;
+  text: string;
+  classification: GateItemClassification;
+  state: string;
+  current_disposition: string | null;
+  min_deployed_commit: Unreconstructable;
+  next_attempt_at: Unreconstructable;
+  pending_attempt_count: Unreconstructable;
+  updated_at: string;
+}
+
+/**
+ * Point-in-time read of a gate_item's `state`, `classification`, and
+ * `current_disposition`, reconstructed by replaying `gate_item_created`/
+ * `gate_item_state_changed`/`gate_item_reclassified` audit_log rows (and
+ * gate_item_event's disposition history for current_disposition) up to
+ * `asOf`. min_deployed_commit/next_attempt_at/pending_attempt_count have no
+ * per-field history yet and come back as Unreconstructable markers — see
+ * module header. Returns undefined both when the item doesn't exist and
+ * when it wasn't created yet as of `asOf`.
+ */
+export function getGateItemAsOf(
+  id: string,
+  asOf: string,
+): GateItemAsOf | undefined {
+  const current = getGateItem(id);
+  if (!current) return undefined;
+  const asOfMs = Date.parse(asOf);
+
+  const createdRow = db
+    .prepare<
+      { like: string },
+      { ts: number }
+    >(`SELECT ts FROM audit_log WHERE event_type = 'gate_item_created' AND payload LIKE @like ORDER BY id ASC LIMIT 1`)
+    .get({ like: `%"gateItemId":"${id}"%` });
+  if (createdRow && createdRow.ts > asOfMs) return undefined;
+
+  const stateEvents = queryGateItemAuditTransitions(
+    'gate_item_state_changed',
+    id,
+  );
+  const reclassifyEvents = queryGateItemAuditTransitions(
+    'gate_item_reclassified',
+    id,
+  );
+
+  let state = current.state;
+  for (let i = stateEvents.length - 1; i >= 0; i--) {
+    if (stateEvents[i].ts > asOfMs) {
+      state = stateEvents[i].from;
+    } else {
+      break;
+    }
+  }
+
+  let classification = current.classification;
+  for (let i = reclassifyEvents.length - 1; i >= 0; i--) {
+    if (reclassifyEvents[i].ts > asOfMs) {
+      classification = reclassifyEvents[i].from as GateItemClassification;
+    } else {
+      break;
+    }
+  }
+
+  // current_disposition changes exactly when a state transition is recorded
+  // (gateStore.advanceState writes both together) — find the latest such
+  // transition at/before asOf, then the gate_item_event whose `at` produced
+  // it (the last event inserted at/before that transition's audit ts; the
+  // insert always precedes the audit write within the same synchronous call).
+  let lastStateChangeTs: number | undefined;
+  for (const se of stateEvents) {
+    if (se.ts > asOfMs) break;
+    lastStateChangeTs = se.ts;
+  }
+  let currentDisposition: string | null = null;
+  if (lastStateChangeTs !== undefined) {
+    for (const ev of listGateItemEvents(id)) {
+      if (Date.parse(ev.at) <= lastStateChangeTs) {
+        currentDisposition = ev.disposition;
+      } else {
+        break;
+      }
+    }
+  }
+
+  return {
+    id: current.id,
+    project: current.project,
+    milestone: current.milestone,
+    text: current.text,
+    classification,
+    state,
+    current_disposition: currentDisposition,
+    min_deployed_commit: unreconstructable(GATE_ITEM_UNRECONSTRUCTABLE_REASON),
+    next_attempt_at: unreconstructable(GATE_ITEM_UNRECONSTRUCTABLE_REASON),
+    pending_attempt_count: unreconstructable(
+      GATE_ITEM_UNRECONSTRUCTABLE_REASON,
+    ),
+    updated_at: current.updated_at,
+  };
 }
 
 export function listGateItemsByMilestone(
@@ -4725,10 +5998,12 @@ export function insertGateItem(row: GateItemRow): void {
   _stmtInsertGateItem ??= db.prepare<GateItemRow>(`
     INSERT INTO gate_item
       (id, project, milestone, text, classification, min_deployed_commit,
-       state, current_disposition, latest_disposition, updated_at)
+       state, current_disposition, latest_disposition, next_attempt_at,
+       pending_attempt_count, updated_at)
     VALUES
       (@id, @project, @milestone, @text, @classification, @min_deployed_commit,
-       @state, @current_disposition, @latest_disposition, @updated_at)
+       @state, @current_disposition, @latest_disposition, @next_attempt_at,
+       @pending_attempt_count, @updated_at)
   `);
   _stmtInsertGateItem.run(row);
 }
@@ -4744,6 +6019,8 @@ export function updateGateItem(row: GateItemRow): void {
       state = @state,
       current_disposition = @current_disposition,
       latest_disposition = @latest_disposition,
+      next_attempt_at = @next_attempt_at,
+      pending_attempt_count = @pending_attempt_count,
       updated_at = @updated_at
     WHERE id = @id
   `);
@@ -4863,6 +6140,7 @@ export function updateGateItemMinDeployedCommit(
   minDeployedCommit: string,
   updatedAt: string,
 ): void {
+  const before = getGateItem(id);
   _stmtUpdateGateItemMinDeployedCommit ??= db.prepare<{
     id: string;
     min_deployed_commit: string;
@@ -4875,6 +6153,64 @@ export function updateGateItemMinDeployedCommit(
     min_deployed_commit: minDeployedCommit,
     updated_at: updatedAt,
   });
+  if (before && before.min_deployed_commit !== minDeployedCommit) {
+    recordEvent({
+      event_type: 'gate_item_min_deployed_commit_changed',
+      actor_type: 'system',
+      payload: {
+        gate_item_id: id,
+        from: before.min_deployed_commit,
+        to: minDeployedCommit,
+      },
+    });
+  }
+}
+
+let _stmtUpdateGateItemPendingSchedule: Database.Statement | null = null;
+
+/**
+ * Writes the `pending` backoff schedule columns directly — used by
+ * gateStore.schedulePendingAttempt after a not-yet-triggerable disposition,
+ * separately from the (state, current_disposition) write in advanceState.
+ */
+export function updateGateItemPendingSchedule(
+  id: string,
+  nextAttemptAt: string,
+  pendingAttemptCount: number,
+  updatedAt: string,
+): void {
+  const before = getGateItem(id);
+  _stmtUpdateGateItemPendingSchedule ??= db.prepare<{
+    id: string;
+    next_attempt_at: string;
+    pending_attempt_count: number;
+    updated_at: string;
+  }>(
+    `UPDATE gate_item SET next_attempt_at = @next_attempt_at, pending_attempt_count = @pending_attempt_count, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtUpdateGateItemPendingSchedule.run({
+    id,
+    next_attempt_at: nextAttemptAt,
+    pending_attempt_count: pendingAttemptCount,
+    updated_at: updatedAt,
+  });
+  if (
+    before &&
+    (before.next_attempt_at !== nextAttemptAt ||
+      before.pending_attempt_count !== pendingAttemptCount)
+  ) {
+    recordEvent({
+      event_type: 'gate_item_schedule_changed',
+      actor_type: 'system',
+      payload: {
+        gate_item_id: id,
+        from_next_attempt_at: before.next_attempt_at,
+        to_next_attempt_at: nextAttemptAt,
+        from_pending_attempt_count: before.pending_attempt_count,
+        to_pending_attempt_count: pendingAttemptCount,
+      },
+    });
+  }
 }
 
 let _stmtTouchGateItemUpdatedAt: Database.Statement | null = null;
@@ -5171,6 +6507,7 @@ export interface SeedItemFilter {
   project?: string;
   milestone?: string;
   state?: string;
+  classification?: string;
 }
 
 function buildSeedItemWhereClause(filter: SeedItemFilter): {
@@ -5190,6 +6527,10 @@ function buildSeedItemWhereClause(filter: SeedItemFilter): {
   if (filter.state) {
     conditions.push('state = @state');
     params.state = filter.state;
+  }
+  if (filter.classification) {
+    conditions.push('classification = @classification');
+    params.classification = filter.classification;
   }
   return {
     clause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
@@ -5229,9 +6570,9 @@ export function countSeedItemsFiltered(filter: SeedItemFilter): number {
 export function insertSeedItem(row: SeedItemRow): void {
   _stmtInsertSeedItem ??= db.prepare<SeedItemRow>(`
     INSERT INTO seed_item
-      (id, project, milestone, spec, min_deployed_commit, state, updated_at)
+      (id, project, milestone, spec, classification, min_deployed_commit, state, updated_at)
     VALUES
-      (@id, @project, @milestone, @spec, @min_deployed_commit, @state, @updated_at)
+      (@id, @project, @milestone, @spec, @classification, @min_deployed_commit, @state, @updated_at)
   `);
   _stmtInsertSeedItem.run(row);
 }
@@ -5242,6 +6583,7 @@ export function updateSeedItem(row: SeedItemRow): void {
       project = @project,
       milestone = @milestone,
       spec = @spec,
+      classification = @classification,
       min_deployed_commit = @min_deployed_commit,
       state = @state,
       updated_at = @updated_at
@@ -5489,6 +6831,104 @@ export function countUndeliveredInboxItems(sessionId: string): number {
   return row.count;
 }
 
+// ─── test_request_runs ──────────────────────────────────────────────────────
+
+export function insertTestRequestRun(
+  id: string,
+  projectId: string,
+  contentHash: string,
+): void {
+  db.prepare(
+    `INSERT INTO test_request_runs (id, project_id, content_hash, state, output, started_at, finished_at)
+     VALUES (?, ?, ?, 'running', '', ?, NULL)`,
+  ).run(id, projectId, contentHash, Date.now());
+}
+
+export function completeTestRequestRun(
+  id: string,
+  state: TestRequestRunState,
+  output: string,
+): void {
+  db.prepare(
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ? WHERE id = ?`,
+  ).run(state, output, Date.now(), id);
+}
+
+/** Every run still `running` — used by the boot-time crash-recovery sweep. */
+export function listRunningTestRequestRuns(): TestRequestRunRow[] {
+  return db
+    .prepare(
+      `SELECT id, project_id, content_hash, state, output, started_at, finished_at
+       FROM test_request_runs WHERE state = 'running'`,
+    )
+    .all() as TestRequestRunRow[];
+}
+
+/**
+ * F2's (the orchestrator-run test gate) shared-cache read: the most
+ * recently finished (non-`running`) run for (project_id, content_hash). A
+ * hit means an identical whole-tree content hash already ran under this
+ * project's test commands — F2 downgrades to cache-hit-only and skips
+ * re-execution; a miss falls through to a real run via runProjectTestRequest,
+ * which durably records into this same table.
+ */
+export function getLatestTestRequestRun(
+  projectId: string,
+  contentHash: string,
+): TestRequestRunRow | undefined {
+  return db
+    .prepare<{ project_id: string; content_hash: string }>(
+      `SELECT id, project_id, content_hash, state, output, started_at, finished_at
+       FROM test_request_runs
+       WHERE project_id = @project_id AND content_hash = @content_hash AND state != 'running'
+       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get({ project_id: projectId, content_hash: contentHash }) as
+    | TestRequestRunRow
+    | undefined;
+}
+
+/**
+ * Invalidate every recorded run for (project_id, content_hash) — F2's
+ * flaky.confirm actuation path. Callers must audit this via recordEvent —
+ * deletion alone is silent. The subsequent rerun (via runProjectTestRequest)
+ * repopulates the cache with a fresh row.
+ */
+export function deleteTestRequestRunsForContentHash(
+  projectId: string,
+  contentHash: string,
+): void {
+  db.prepare<{ project_id: string; content_hash: string }>(
+    `DELETE FROM test_request_runs WHERE project_id = @project_id AND content_hash = @content_hash`,
+  ).run({ project_id: projectId, content_hash: contentHash });
+}
+
+// ─── session_test_request_cycles ───────────────────────────────────────────
+
+export function getSessionTestRequestCycleCount(sessionId: string): number {
+  const row = db
+    .prepare(
+      `SELECT count FROM session_test_request_cycles WHERE session_id = ?`,
+    )
+    .get(sessionId) as { count: number } | undefined;
+  return row?.count ?? 0;
+}
+
+/** Increment the per-session test.request cycle counter and return the new count. */
+export function incrementSessionTestRequestCycleCount(
+  sessionId: string,
+): number {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO session_test_request_cycles (session_id, count, updated_at)
+     VALUES (?, 1, ?)
+     ON CONFLICT(session_id) DO UPDATE SET
+       count = count + 1,
+       updated_at = excluded.updated_at`,
+  ).run(sessionId, now);
+  return getSessionTestRequestCycleCount(sessionId);
+}
+
 // ─── completeness_disposition ───────────────────────────────────────────────
 
 let _stmtInsertCompletenessDisposition: Database.Statement | null = null;
@@ -5723,19 +7163,43 @@ export function insertStagedIntent(row: StagedIntentRow): void {
     INSERT INTO staged_intent
       (id, kind, payload, payload_hash, task_id, project_id, session_id,
        group_id, milestone, state, supersedes, annotation, decision_proposal, investigation, groom_proposal,
-       advisory, disposition_reason, answer, created_at, updated_at)
+       advisory, disposition_reason, answer, applied_task_id, created_at, updated_at)
     VALUES
       (@id, @kind, @payload, @payload_hash, @task_id, @project_id, @session_id,
        @group_id, @milestone, @state, @supersedes, @annotation, @decision_proposal, @investigation, @groom_proposal,
-       @advisory, @disposition_reason, @answer, @created_at, @updated_at)
+       @advisory, @disposition_reason, @answer, @applied_task_id, @created_at, @updated_at)
   `);
-  // `row.investigation` defaults to null for callers built before this column
-  // existed (test fixtures, older call sites) — better-sqlite3's named-param
-  // binding otherwise throws on a key absent from the object.
+  // `row.investigation`/`row.applied_task_id` default to null for callers
+  // built before these columns existed (test fixtures, older call sites) —
+  // better-sqlite3's named-param binding otherwise throws on a key absent
+  // from the object.
   _stmtInsertStagedIntent.run({
     ...row,
     investigation: row.investigation ?? null,
+    applied_task_id: row.applied_task_id ?? null,
   });
+}
+
+let _stmtSetStagedIntentAppliedTaskId: Database.Statement | null = null;
+
+/**
+ * Durably records that this intent's apply already produced `resultId` — a
+ * plain UPDATE, unrestricted by STAGED_INTENT_TRANSITIONS, so it always
+ * succeeds even if the row's own state transition (staged/approved ->
+ * committed) is about to lose a race against a concurrent supersede. See
+ * StagedIntentRow.applied_task_id's doc comment.
+ */
+export function setStagedIntentAppliedTaskId(
+  id: string,
+  resultId: string,
+): void {
+  _stmtSetStagedIntentAppliedTaskId ??= db.prepare<{
+    id: string;
+    applied_task_id: string;
+  }>(
+    `UPDATE staged_intent SET applied_task_id = @applied_task_id WHERE id = @id`,
+  );
+  _stmtSetStagedIntentAppliedTaskId.run({ id, applied_task_id: resultId });
 }
 
 export function getStagedIntent(id: string): StagedIntentRow | undefined {
@@ -5964,8 +7428,26 @@ export function listAllActiveStagedIntents(): StagedIntentRow[] {
 /** The milestone key the ?milestone list lens uses to bucket legacy/unattributable rows — never a real milestone's canonical_short_id. */
 export const UNATTRIBUTED_MILESTONE_BUCKET = 'unattributed';
 
+/**
+ * The decision-inbox visibility set: intent states where the operator still
+ * owns a disposition — active (staged/approved) plus blocked
+ * (needs_revision/pending_verification). Terminal states (committed,
+ * rejected, superseded, withdrawn) are never included. This is the single
+ * source of truth for "awaiting operator disposition" — reuse it rather than
+ * re-listing the state names, so other surfaces (e.g. the grooming
+ * burndown's awaiting-disposition state) can't drift from the inbox they
+ * mirror.
+ */
+const DECISION_INBOX_VISIBLE_STATES: readonly StagedIntentState[] = [
+  'staged',
+  'approved',
+  'needs_revision',
+  'pending_verification',
+];
+
 let _stmtListStagedIntentsByMilestone: Database.Statement | null = null;
 let _stmtListStagedIntentsUnattributed: Database.Statement | null = null;
+let _stmtHasAwaitingDispositionIntentForTask: Database.Statement | null = null;
 
 /**
  * Active (staged/approved) *plus* blocked (needs_revision/pending_verification)
@@ -5991,7 +7473,8 @@ export function listStagedIntentsByMilestone(
       `SELECT * FROM staged_intent
        WHERE project_id = @project_id AND milestone IS NULL
          AND state IN ('staged', 'approved', 'needs_revision', 'pending_verification')
-       ORDER BY created_at ASC`,
+         AND NOT (kind = 'test.request' AND state = 'approved')
+       ORDER BY created_at DESC`,
     );
     return _stmtListStagedIntentsUnattributed.all({
       project_id: projectId,
@@ -6004,12 +7487,35 @@ export function listStagedIntentsByMilestone(
     `SELECT * FROM staged_intent
      WHERE project_id = @project_id AND milestone = @milestone
        AND state IN ('staged', 'approved', 'needs_revision', 'pending_verification')
-     ORDER BY created_at ASC`,
+       AND NOT (kind = 'test.request' AND state = 'approved')
+     ORDER BY created_at DESC`,
   );
   return _stmtListStagedIntentsByMilestone.all({
     project_id: projectId,
     milestone,
   }) as StagedIntentRow[];
+}
+
+/**
+ * True if this task has at least one staged_intent in the decision-inbox
+ * visibility set (see DECISION_INBOX_VISIBLE_STATES) — i.e. the operator
+ * still owns a disposition for it. Used by buildTaskViewFromRow to surface
+ * "groomed, awaiting disposition" as a distinct grooming-bar state from
+ * untouched.
+ */
+export function hasAwaitingDispositionIntentForTask(taskId: string): boolean {
+  _stmtHasAwaitingDispositionIntentForTask ??= db.prepare<unknown[]>(
+    `SELECT 1 FROM staged_intent
+     WHERE task_id = ?
+       AND state IN (${DECISION_INBOX_VISIBLE_STATES.map(() => '?').join(', ')})
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasAwaitingDispositionIntentForTask.get(
+      taskId,
+      ...DECISION_INBOX_VISIBLE_STATES,
+    ) !== undefined
+  );
 }
 
 /**
@@ -6060,6 +7566,38 @@ export function listStagedIntentsByGroup(groupId: string): StagedIntentRow[] {
   }) as StagedIntentRow[];
 }
 
+let _stmtListActiveBodyPatchIntentsForTask: Database.Statement | null = null;
+
+/**
+ * Active (staged/approved) task.updateBody / task.patchBodySection intents
+ * for a task, regardless of group — the same-task body-patch set
+ * computeProposedBody (routes/stagedIntents.ts) folds into its preview so an
+ * ungrouped body patch is never invisible to a grouped Ready-flip's gate
+ * check just because it wasn't staged into that group. task.patchBodySection
+ * rows store their dedup-scoped `<taskId>::<section>` compound key in the
+ * task_id column (see extractTaskId in stagedIntents.ts), not the bare
+ * taskId — the LIKE clause matches that compound form alongside
+ * task.updateBody's plain taskId.
+ */
+export function listActiveBodyPatchIntentsForTask(
+  taskId: string,
+): StagedIntentRow[] {
+  _stmtListActiveBodyPatchIntentsForTask ??= db.prepare<{
+    task_id: string;
+    task_id_prefix: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE (task_id = @task_id OR task_id LIKE @task_id_prefix)
+       AND kind IN ('task.updateBody', 'task.patchBodySection')
+       AND state IN ('staged', 'approved')
+     ORDER BY created_at ASC`,
+  );
+  return _stmtListActiveBodyPatchIntentsForTask.all({
+    task_id: taskId,
+    task_id_prefix: `${taskId}::%`,
+  }) as StagedIntentRow[];
+}
+
 let _stmtListStagedIntentsBySession: Database.Statement | null = null;
 
 /**
@@ -6079,24 +7617,52 @@ export function listStagedIntentsBySession(
 }
 
 let _stmtHasActiveStagedIntentForSession: Database.Statement | null = null;
+let _stmtHasBlockedStagedIntentForSession: Database.Statement | null = null;
+
+/**
+ * True when the session owns at least one staged_intent row parked in
+ * needs_revision or pending_verification — the same pair of states
+ * commitGroupIntents' blocked-member guard (routes/stagedIntents.ts) refuses
+ * a group over. Read directly off the persisted table, never a live session
+ * handle, so this stays correct across a backend restart.
+ */
+function hasBlockedStagedIntentForSession(sessionId: string): boolean {
+  _stmtHasBlockedStagedIntentForSession ??= db.prepare<{
+    session_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE session_id = @session_id AND state IN ('needs_revision', 'pending_verification')
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasBlockedStagedIntentForSession.get({ session_id: sessionId }) !==
+    undefined
+  );
+}
 
 /**
  * Derived "is this session's proposal set complete" signal — never a
- * persisted flag. True exactly when the session's turn is not in flight AND
- * it has at least one currently-active (staged/approved) staged intent.
- * Turn-in-flight lives only on the live AgentSession instance and is never
- * persisted (see AgentSession.hasActiveTurn()/_turnInFlight) — callers must
- * supply it; a session with no live instance in this process (parked across
- * a restart, or never spawned here) has no turn in flight by construction.
- * A wake (AgentSession.sendMessage) flips turn-in-flight back to true, so a
- * previously-complete session's staged intents refuse disposition again
- * until the resumed turn ends — no extra bookkeeping needed.
+ * persisted flag. True exactly when the session's turn is not in flight, it
+ * has at least one currently-active (staged/approved) staged intent, and
+ * none of its staged intents are wedged in needs_revision/pending_verification
+ * (a blocked member means the owning session isn't done turning on its own
+ * proposal set — the same predicate commitGroupIntents' blocked-member guard
+ * enforces at commit time, mirrored here so a session reads incomplete
+ * rather than fail open). Turn-in-flight lives only on the live AgentSession
+ * instance and is never persisted (see AgentSession.hasActiveTurn()/
+ * _turnInFlight) — callers must supply it; a session with no live instance
+ * in this process (parked across a restart, or never spawned here) has no
+ * turn in flight by construction. A wake (AgentSession.sendMessage) flips
+ * turn-in-flight back to true, so a previously-complete session's staged
+ * intents refuse disposition again until the resumed turn ends — no extra
+ * bookkeeping needed.
  */
 export function isSessionComplete(
   sessionId: string,
   turnInFlight: boolean,
 ): boolean {
   if (turnInFlight) return false;
+  if (hasBlockedStagedIntentForSession(sessionId)) return false;
   _stmtHasActiveStagedIntentForSession ??= db.prepare<{
     session_id: string;
   }>(
@@ -6132,6 +7698,37 @@ export function findActiveStagedIntentForTask(
     kind,
     task_id: taskId,
   }) as StagedIntentRow | undefined;
+}
+
+let _stmtListActiveOpsSetStateIntentsForTask: Database.Statement | null = null;
+
+/**
+ * Live (staged/approved) journal.setState intents for a task, oldest first —
+ * the in-flight ops-journal transition chain a session may be building up
+ * within one turn (e.g. pending -> candidate staged, then candidate ->
+ * resolved staged in the same closing group). Used to fold the effective
+ * "current" state a new journal.setState should be validated against at
+ * stage time, since the applied row alone only reflects the last *applied*
+ * hop, not staged-but-not-yet-applied ones. See
+ * ops/opsJournal.ts's foldOpsTransitionChain.
+ */
+export function listActiveOpsSetStateIntentsForTask(
+  projectId: string,
+  taskId: string,
+): StagedIntentRow[] {
+  _stmtListActiveOpsSetStateIntentsForTask ??= db.prepare<{
+    project_id: string;
+    task_id: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE project_id = @project_id AND task_id = @task_id AND kind = 'journal.setState'
+       AND state IN ('staged', 'approved')
+     ORDER BY created_at ASC`,
+  );
+  return _stmtListActiveOpsSetStateIntentsForTask.all({
+    project_id: projectId,
+    task_id: taskId,
+  }) as StagedIntentRow[];
 }
 
 let _stmtFindActiveStagedIntentByTitleForSession: Database.Statement | null =
@@ -6203,6 +7800,72 @@ export function findActiveDecisionPickOneForSession(
     session_id: sessionId,
     normalized_prompt: normalizedPrompt,
   }) as StagedIntentRow | undefined;
+}
+
+const _stmtFindActiveGateVerifyMirrorForItemByOrigin = new Map<
+  string,
+  Database.Statement
+>();
+
+/**
+ * The standing staged/approved `gate.verify` mirror intent (if any) for a
+ * given gate_item — the dedup slot for the reconciler's mirror step
+ * (gateReconciler.ts's reconcileHumanObservationMirrors), which carries no
+ * taskId to key on via findActiveStagedIntentForTask (gate.verify intents
+ * key on payload.gateItemId, not payload.taskId). Scoped to a specific
+ * payload.origin — `'mirror'` for a runnable Human-Observation item,
+ * `'consent'` for a Prod-Mutating item held at pending-approval — so a
+ * genuine verifier-originated gate.verify report, or the other origin's
+ * mirror, for the same item is never mistaken for a live one of this kind.
+ */
+export function findActiveGateVerifyMirrorForItem(
+  gateItemId: string,
+  origin: 'mirror' | 'consent' = 'mirror',
+): StagedIntentRow | undefined {
+  let stmt = _stmtFindActiveGateVerifyMirrorForItemByOrigin.get(origin);
+  if (!stmt) {
+    stmt = db.prepare<{ gate_item_id: string; origin: string }>(
+      `SELECT * FROM staged_intent
+       WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
+         AND json_extract(payload, '$.origin') = @origin
+         AND json_extract(payload, '$.gateItemId') = @gate_item_id
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    );
+    _stmtFindActiveGateVerifyMirrorForItemByOrigin.set(origin, stmt);
+  }
+  return stmt.get({
+    gate_item_id: gateItemId,
+    origin,
+  }) as StagedIntentRow | undefined;
+}
+
+const _stmtListActiveGateVerifyMirrorsByOrigin = new Map<
+  string,
+  Database.Statement
+>();
+
+/**
+ * Every live (staged/approved) mirror intent of the given origin, across all
+ * projects — the reconciler's level-triggered retirement scan reads this
+ * each pass to withdraw mirrors whose gate_item has since resolved (via the
+ * direct GateReadinessPanel/consent path) or, for `'mirror'`, been
+ * reclassified away from Human-Observation, so a stale card never lingers
+ * in the Decision Inbox.
+ */
+export function listActiveGateVerifyMirrors(
+  origin: 'mirror' | 'consent' = 'mirror',
+): StagedIntentRow[] {
+  let stmt = _stmtListActiveGateVerifyMirrorsByOrigin.get(origin);
+  if (!stmt) {
+    stmt = db.prepare<{ origin: string }>(
+      `SELECT * FROM staged_intent
+       WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
+         AND json_extract(payload, '$.origin') = @origin`,
+    );
+    _stmtListActiveGateVerifyMirrorsByOrigin.set(origin, stmt);
+  }
+  return stmt.all({ origin }) as StagedIntentRow[];
 }
 
 /**
@@ -6628,6 +8291,215 @@ export function getFlowRejectionRate(
   };
 }
 
+// ─── flake-recovery misclassification signal ──────────────────────────────
+
+/** The gates a flake-recovery re-run can target — see PRMergeWatcher.handleVerifiedFlakyDisposition. */
+type FlakeRecoveryGate = 'ci' | 'f2';
+
+const FLAKE_RECOVERY_EVENT_TO_GATE: Record<string, FlakeRecoveryGate> = {
+  flake_recovery_ci_rerun: 'ci',
+  flake_recovery_f2_rerun: 'f2',
+};
+
+export interface FlakeRecoveryMisclassificationRateResult {
+  project: string;
+  gate: FlakeRecoveryGate;
+  conclusive: number;
+  failed: number;
+  inconclusive: number;
+  rate: number | null;
+}
+
+/**
+ * The transient-failure contract's self-falsification rate: of flake-recovery
+ * re-runs that reached a conclusive outcome (passed/failed — see
+ * FlakeRecoveryOutcome), what fraction ended in `failed`. Inconclusive
+ * re-runs (head_sha drifted mid-run) are reported alongside but excluded
+ * from both the numerator and denominator, so they never silently dilute or
+ * inflate the rate. Informative only — mirrors getFlowRejectionRate's
+ * no-gating posture; nothing reads this to auto-disarm anything.
+ */
+export function getFlakeRecoveryMisclassificationRates(
+  project?: string,
+): FlakeRecoveryMisclassificationRateResult[] {
+  const eventTypes = Object.keys(FLAKE_RECOVERY_EVENT_TO_GATE);
+  const placeholders = eventTypes.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        project_id AS project,
+        event_type AS eventType,
+        SUM(CASE WHEN json_extract(payload, '$.outcome') = 'failed' THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN json_extract(payload, '$.outcome') IN ('passed', 'failed') THEN 1 ELSE 0 END) AS conclusive,
+        SUM(CASE WHEN json_extract(payload, '$.outcome') = 'inconclusive' THEN 1 ELSE 0 END) AS inconclusive
+      FROM audit_log
+      WHERE event_type IN (${placeholders})
+        AND project_id IS NOT NULL
+        ${project ? 'AND project_id = ?' : ''}
+      GROUP BY project_id, event_type
+    `,
+    )
+    .all(...eventTypes, ...(project ? [project] : [])) as Array<{
+    project: string;
+    eventType: string;
+    failed: number | null;
+    conclusive: number | null;
+    inconclusive: number | null;
+  }>;
+
+  return rows.map((row) => {
+    const conclusive = row.conclusive ?? 0;
+    const failed = row.failed ?? 0;
+    return {
+      project: row.project,
+      gate: FLAKE_RECOVERY_EVENT_TO_GATE[row.eventType],
+      conclusive,
+      failed,
+      inconclusive: row.inconclusive ?? 0,
+      rate: conclusive > 0 ? failed / conclusive : null,
+    };
+  });
+}
+
+/** The auto-grant kinds the disagreement-rate signal covers. */
+export type AutoGrantKind = 'gate.accrete' | 'seed.stage';
+
+export interface AutoGrantDisagreementRateResult {
+  kind: AutoGrantKind;
+  project: string;
+  milestone: string;
+  /** Auto-granted (annotation.autoApproved) commits of this kind this rate was computed over. */
+  total: number;
+  /** Of `total`, the ones whose accreted item(s) were later disagreed with by an independent verification. */
+  disagreed: number;
+  /** `disagreed / total`, or null when there's no denominator yet. */
+  rate: number | null;
+}
+
+let _stmtAutoGrantCommittedIntents: Database.Statement | null = null;
+let _stmtAutoGrantGateItemIds: Database.Statement | null = null;
+let _stmtAutoGrantGateItemEvents: Database.Statement | null = null;
+let _stmtAutoGrantSeedItemIds: Database.Statement | null = null;
+let _stmtAutoGrantSeedItemEvents: Database.Statement | null = null;
+
+/**
+ * Per-(project, milestone, kind) auto-grant disagreement rate — the
+ * measurable proxy for the auto-grant accuracy claim (Technical
+ * Architecture § "Auto-grant disagreement-rate signal"). Scoped to
+ * `kind ∈ {gate.accrete, seed.stage}`: the two staged-intent kinds that
+ * commit to `staged_intent`, tagged `annotation: {autoApproved: true}`, and
+ * whose accreted item(s) are readable off `gate_item_source`/
+ * `seed_item_source` (keyed by `source_task_id`).
+ *
+ * Numerator: committed auto-granted rows of this kind whose accreted
+ * item(s) later received an independent-verification disagreement —
+ * a `fail` `gate_item_event.disposition` (gate.accrete) or a `blocked`
+ * `seed_item_event.outcome` (seed.stage), or a `needs-setup` disposition
+ * recurring 2+ times on the same gate item (a single needs-setup is
+ * evidence gathering, not disagreement; seed items have no needs-setup
+ * equivalent). Denominator: all committed auto-granted rows of this kind —
+ * operator-approved commits of the same kinds are covered by the existing
+ * `getFlowRejectionRate` and are excluded here.
+ *
+ * Purely observational: no threshold, no auto-disarm, no new arm/disarm
+ * ladder — the operator reads this like the other trust-precision signals.
+ */
+export function getAutoGrantDisagreementRate(
+  project: string,
+  milestone: string,
+  kind: AutoGrantKind,
+): AutoGrantDisagreementRateResult {
+  _stmtAutoGrantCommittedIntents ??= db.prepare(`
+    SELECT payload, annotation
+    FROM staged_intent
+    WHERE kind = ? AND project_id = ? AND milestone = ? AND state = 'committed'
+  `);
+  const rows = _stmtAutoGrantCommittedIntents.all(kind, project, milestone) as {
+    payload: string;
+    annotation: string | null;
+  }[];
+
+  const autoApprovedSourceTaskIds: string[] = [];
+  for (const row of rows) {
+    if (!row.annotation) continue;
+    let annotation: { autoApproved?: unknown };
+    try {
+      annotation = JSON.parse(row.annotation) as { autoApproved?: unknown };
+    } catch {
+      continue;
+    }
+    if (annotation.autoApproved !== true) continue;
+    try {
+      const payload = JSON.parse(row.payload) as {
+        sourceTask?: { id?: unknown };
+      };
+      const rawId = payload?.sourceTask?.id;
+      if (typeof rawId === 'string') {
+        autoApprovedSourceTaskIds.push(normalizeTaskId(rawId));
+      }
+    } catch {
+      /* malformed payload — excluded from both numerator and denominator */
+    }
+  }
+
+  const total = autoApprovedSourceTaskIds.length;
+  let disagreed = 0;
+
+  if (kind === 'gate.accrete') {
+    _stmtAutoGrantGateItemIds ??= db.prepare(`
+      SELECT DISTINCT gate_item_id FROM gate_item_source WHERE source_task_id = ?
+    `);
+    _stmtAutoGrantGateItemEvents ??= db.prepare(`
+      SELECT disposition FROM gate_item_event WHERE gate_item_id = ?
+    `);
+    for (const sourceTaskId of autoApprovedSourceTaskIds) {
+      const itemIds = _stmtAutoGrantGateItemIds.all(sourceTaskId) as {
+        gate_item_id: string;
+      }[];
+      const disagreedHere = itemIds.some(({ gate_item_id }) => {
+        const events = _stmtAutoGrantGateItemEvents!.all(gate_item_id) as {
+          disposition: string | null;
+        }[];
+        if (events.some((e) => e.disposition === 'fail')) return true;
+        const needsSetupCount = events.filter(
+          (e) => e.disposition === 'needs-setup',
+        ).length;
+        return needsSetupCount >= 2;
+      });
+      if (disagreedHere) disagreed++;
+    }
+  } else {
+    _stmtAutoGrantSeedItemIds ??= db.prepare(`
+      SELECT DISTINCT seed_item_id FROM seed_item_source WHERE source_task_id = ?
+    `);
+    _stmtAutoGrantSeedItemEvents ??= db.prepare(`
+      SELECT outcome FROM seed_item_event WHERE seed_item_id = ?
+    `);
+    for (const sourceTaskId of autoApprovedSourceTaskIds) {
+      const itemIds = _stmtAutoGrantSeedItemIds.all(sourceTaskId) as {
+        seed_item_id: string;
+      }[];
+      const disagreedHere = itemIds.some(({ seed_item_id }) => {
+        const events = _stmtAutoGrantSeedItemEvents!.all(seed_item_id) as {
+          outcome: string;
+        }[];
+        return events.some((e) => e.outcome === 'blocked');
+      });
+      if (disagreedHere) disagreed++;
+    }
+  }
+
+  return {
+    kind,
+    project,
+    milestone,
+    total,
+    disagreed,
+    rate: total > 0 ? disagreed / total : null,
+  };
+}
+
 // ─── arch_unit ────────────────────────────────────────────────────────────
 // Statements are cached lazily (prepared on first use, not at module load) so
 // importing this module doesn't fail on a not-yet-migrated db handle.
@@ -6727,6 +8599,35 @@ export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
   return db
     .prepare(`SELECT * FROM arch_unit ${where} ORDER BY updated_at DESC`)
     .all(params) as ArchUnitRow[];
+}
+
+/**
+ * Distinct topic values across the whole arch_unit table (all statuses) —
+ * the live topic vocabulary, used to tell "topic not recognized" apart from
+ * "topic recognized but currently empty" when a queryArchUnits call by
+ * topic returns zero rows.
+ */
+export function listArchUnitTopics(): string[] {
+  const rows = db
+    .prepare(`SELECT DISTINCT topic FROM arch_unit ORDER BY topic`)
+    .all() as { topic: string }[];
+  return rows.map((r) => r.topic);
+}
+
+/**
+ * Distinct region values across the whole arch_unit table (all statuses),
+ * flattened out of each row's JSON regions array — the live region
+ * vocabulary a region substring filter is checked against.
+ */
+export function listArchUnitRegions(): string[] {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT r.value AS region
+       FROM arch_unit, json_each(arch_unit.regions) AS r
+       ORDER BY region`,
+    )
+    .all() as { region: string }[];
+  return rows.map((r) => r.region);
 }
 
 // ─── flow_arm ──────────────────────────────────────────────────────────────

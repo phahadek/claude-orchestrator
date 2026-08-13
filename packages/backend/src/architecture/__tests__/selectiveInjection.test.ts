@@ -23,6 +23,23 @@ import {
   selectArchitectureContext,
 } from '../selectiveInjection.js';
 
+const { getById, resolveConfigDir, loadManifest } = vi.hoisted(() => ({
+  getById: vi.fn(),
+  resolveConfigDir: vi.fn(),
+  loadManifest: vi.fn(),
+}));
+
+vi.mock('../../projects/ProjectService.js', () => ({
+  ProjectService: { getById },
+}));
+
+vi.mock('../../groom/groomLoad.js', () => ({
+  resolveConfigDir,
+  loadManifest,
+}));
+
+import { NotionClient } from '../../notion/NotionClient.js';
+
 function unit(overrides: Partial<ArchUnit> & { id: string }): ArchUnit {
   return {
     title: overrides.id,
@@ -207,5 +224,72 @@ describe('selectArchitectureContext (dual-read)', () => {
 
     expect(result.source).toBe('notion');
     expect(result.source === 'notion' && result.pages).toEqual(pages);
+  });
+
+  it('prefixes a bare manifest page id before calling fetchPageMarkdown on the non-adopted branch', async () => {
+    const bareId = '35522f9152f381feabbfd93e26a51c7d';
+    getById.mockReturnValue({ id: 'proj-3', projectDir: '/repo/proj-3' });
+    resolveConfigDir.mockReturnValue('/config/proj-3');
+    loadManifest.mockReturnValue({
+      context_pages: [{ id: bareId, title: 'Master Context' }],
+    });
+    const spy = vi
+      .spyOn(NotionClient.prototype, 'fetchPageMarkdown')
+      .mockResolvedValue({ title: 'Master Context', markdown: '# x' });
+
+    try {
+      const result = await selectArchitectureContext(
+        { projectId: 'proj-3' },
+        { isArchStoreAdopted: () => false },
+      );
+
+      expect(spy).toHaveBeenCalledWith(`notion:${bareId}`);
+      expect(result.source).toBe('notion');
+      expect(result.source === 'notion' && result.pages).toEqual([
+        { id: bareId, title: 'Master Context', markdown: '# x' },
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not throw the "Invalid task ID (no colon)" error for a bare 32-hex manifest id', async () => {
+    const bareId = '35522f9152f381feabbfd93e26a51c7d';
+    getById.mockReturnValue({ id: 'proj-4', projectDir: '/repo/proj-4' });
+    resolveConfigDir.mockReturnValue('/config/proj-4');
+    loadManifest.mockReturnValue({
+      context_pages: [{ id: bareId }],
+    });
+
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        const body = url.includes('/blocks/')
+          ? { results: [], has_more: false, next_cursor: null }
+          : {
+              properties: {
+                Name: {
+                  type: 'title',
+                  title: [{ text: { content: 'Master Context' } }],
+                },
+              },
+            };
+        return { ok: true, json: async () => body } as Response;
+      });
+
+    try {
+      // Real NotionClient.fetchPageMarkdown runs here, so toExternalId/parseTaskId
+      // execute for real against the (now-prefixed) id — this is what previously
+      // threw "Invalid task ID (no colon)" for a bare manifest id.
+      await expect(
+        selectArchitectureContext(
+          { projectId: 'proj-4' },
+          { isArchStoreAdopted: () => false },
+        ),
+      ).resolves.toBeDefined();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });

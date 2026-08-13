@@ -36,6 +36,8 @@ vi.mock('../../db/queries', () =>
     incrementCompactionCount: vi.fn(),
     setContextOccupancy: vi.fn(),
     setSessionModel: vi.fn(),
+    setSessionModelSettingKey: vi.fn(),
+    setSessionEffortSettingKey: vi.fn(),
     setSessionMetadata: vi.fn(),
     getPRBySessionId: vi.fn().mockReturnValue(null),
     setHeadSha: vi.fn(),
@@ -160,7 +162,7 @@ beforeEach(() => {
 });
 
 describe('AgentSession — initial prompt by session type', () => {
-  it.each(['groom', 'design', 'ops'] as const)(
+  it.each(['groom', 'design'] as const)(
     '%s session prompt has no PR/branch-verify instruction',
     async (sessionType) => {
       const session = makeSession(sessionType);
@@ -182,5 +184,59 @@ describe('AgentSession — initial prompt by session type', () => {
     const prompt = runCalls[0].prompt ?? '';
     expect(prompt).toMatch(/open a draft pr/i);
     expect(prompt).toMatch(/git branch --show-current/i);
+  });
+
+  it('ops session prompt waits for review after opening a PR instead of the no-PR planning prompt', async () => {
+    const session = makeSession('ops');
+    await session.run();
+
+    expect(runCalls).toHaveLength(1);
+    const prompt = runCalls[0].prompt ?? '';
+    // Not the standard code-session prompt — an ops session has no fixed
+    // branch to verify up front (it only gets one once a PR-intent is approved).
+    expect(prompt).not.toMatch(/git branch --show-current/i);
+    expect(prompt).not.toMatch(/open a draft pr/i);
+    // But unlike groom/design, it must wait for review rather than end the
+    // turn once it does hold the PR-open grant and opens one.
+    expect(prompt).toMatch(/wait/i);
+    expect(prompt).toMatch(/never merge your own pr/i);
+  });
+});
+
+describe('AgentSession — _turnInFlight initialization (hasInitialPrompt)', () => {
+  it('has no active turn immediately after construction when hasInitialPrompt is false (prompt-less respawn)', () => {
+    const session = new AgentSession(
+      'test-session-no-prompt',
+      'https://notion.so/task',
+      'https://notion.so/project',
+      {
+        attachPR: vi.fn().mockResolvedValue(undefined),
+        getTask: vi.fn().mockResolvedValue(null),
+      } as never,
+      '/tmp/worktree',
+      'task-123',
+      'test-session-no-prompt', // resumeSessionId — this is a --resume respawn
+      undefined,
+      'standard',
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      '',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false, // hasInitialPrompt
+    );
+
+    expect(session.hasActiveTurn()).toBe(false);
+  });
+
+  it('has an active turn immediately after construction when an initial prompt is supplied (fresh start)', () => {
+    const session = makeSession('standard');
+
+    expect(session.hasActiveTurn()).toBe(true);
   });
 });

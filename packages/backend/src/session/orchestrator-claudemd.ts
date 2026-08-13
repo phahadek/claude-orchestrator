@@ -6,7 +6,10 @@ export interface OrchestratorClaudeMdParams {
   /** Absolute path to the worktree directory. Injected into Git Isolation rules. */
   worktreePath: string;
   /**
-   * Verify commands the session runs before opening the PR (typecheck, build, tests).
+   * Verify commands the session runs before opening the PR (typecheck, build).
+   * The authoritative test gate (OrchestratorConfig.test) is separate and
+   * only reachable via the test.request intent — see the rendered
+   * "Pre-PR Gate" and "Flaky / Transient CI or F2 Gate Failures" sections.
    * Format and lint are handled by orchestrator autofix — not included here.
    * Rendered from the project's `.claude-orchestrator.yml` verify list.
    * When empty or omitted, the gate shows a "no local verify" fallback.
@@ -243,14 +246,24 @@ ${
 ${
   gitMode === 'local-only'
     ? ''
-    : `## Flaky / Transient CI or F2 Gate Failures
+    : `## Nudges
+
+A nudge is an unsolicited orchestrator message about your open PR — a merge-conflict, "base branch moved", or stalled-merge notice. Act on what it names, ahead of the "stop and wait" default above, which covers the gap between review passes, not a flagged change. Compliance isn't checked; act because it's true.
+
+Keep your PR mergeable against \`${targetBranch}\` for its whole life, not just through the Pre-PR Gate — rebase and push once you learn it's needed.
+
+The supervisor's "Pause your work" message isn't a nudge in this sense: stopping is what it asks, so stopping is full compliance.
+
+---
+
+## Flaky / Transient CI or F2 Gate Failures
 
 When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
 
-Only disposition a failure as flaky after clearing this verification bar, in order:
+Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Only disposition a failure as flaky after clearing this bar, in order:
 
-1. Run the failing test in isolation and confirm it fails or passes inconsistently on its own.
-2. Run the full test suite once more end-to-end and confirm it passes clean.
+1. Call \`test_request\`; confirm it reproduces there, not just in the CI log.
+2. Call \`test_request\` again after any fix; confirm it passes clean.
 3. Confirm the failure is unrelated to your diff (e.g. infra contention, test-ordering/parallelism interference, a timing race) — not a real regression you introduced.
 
 If all three hold, call the \`mcp__orchestrator__flaky_confirm\` tool instead of pushing a commit, with:
@@ -370,7 +383,9 @@ Run in order — all must pass before opening the PR:
 
 1. Rebase onto \`${targetBranch}\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
 ${verifySteps}
-${stageNum}. Stage only your implementation files for commit.`;
+${stageNum}. Stage only your implementation files for commit.
+
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`.`;
 })()}
 
 ---
@@ -548,4 +563,45 @@ ${reviewRules.map((rule) => `- ${rule}`).join('\n')}
 If this session is resumed or receives a follow-up message, it means there is
 a new diff to review. Wait for the diff content, then output a new JSON verdict.
 Do NOT start implementing anything.`.trimEnd();
+}
+
+/**
+ * Builds the CLAUDE.md header for a depth-review session (session type
+ * 'depth_review') — the second, separate review pass dispatched only after a
+ * PR's conformance verdict (session type 'review') reaches approved. Distinct
+ * from buildReviewClaudeMd: this pass never evaluates conformance
+ * (title/description vs Summary, diff vs Context spec, diff vs Acceptance
+ * Criteria, changed files vs Files/paths affected) — only security,
+ * concurrency, reliability/crash, data-integrity/parsing correctness, and
+ * size-proportionality (relocated here from the conformance pass).
+ */
+export function buildDepthReviewClaudeMd(taskName: string): string {
+  return `# Depth Review Session Rules
+
+You are a **depth review session** — a second, separate review pass that runs
+only after a PR's conformance review (title/description vs Summary, diff vs
+Context spec, diff vs Acceptance Criteria, changed files vs Files/paths
+affected) has already been approved. Your job is NOT to re-check conformance —
+it is to judge whether the diff is correct and safe, beyond matching what the
+task said it would do.
+
+## What you are
+- A defect-hunting reviewer, not a spec-conformance reviewer.
+- You evaluate the diff already embedded in your prompt across five
+  dimensions: security, concurrency, reliability/crash, data-integrity &
+  parsing correctness, and size-proportionality.
+- You output a single JSON verdict in the format requested by your prompt.
+
+## What you must NOT do
+- Do NOT implement code, create branches, make commits, or open/modify pull
+  requests — you have no git-push or GitHub-write tool access.
+- Do NOT fetch Notion pages, check git status, or look for tasks to work on.
+- Do NOT update task statuses.
+- Do NOT re-litigate conformance (Summary/Context spec/Acceptance
+  Criteria/Files affected) — the conformance pass already ran and approved
+  this diff; re-flagging a conformance-only concern here has no effect.
+
+## Task
+${taskName}
+`.trimEnd();
 }

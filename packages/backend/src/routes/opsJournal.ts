@@ -8,10 +8,12 @@ import {
   type OpsState,
 } from '../ops/opsJournal';
 import { requireDeviceAuth } from '../auth/DeviceAuth';
+import { requireDeviceOrSessionRouteAuth } from '../auth/SessionRouteAuth';
 import { stageJournalDecision, STAGED_PROPOSAL_STATE } from './stagedIntents';
 import { getLatestOpsSessionByTaskId } from '../db/queries';
 import { closeDeferredOpsTask } from '../orchestration/PlanningOrchestrator';
 import { logger } from '../logger';
+import { asyncHandler } from './asyncHandler';
 
 /**
  * Read/operator-write surface for the Ops(N) staged-intent view: exposes
@@ -19,11 +21,15 @@ import { logger } from '../logger';
  * in the shared StagedIntentPanel, and the state-transition write
  * (setEntryState) the interactive /ops skill performs while working a task.
  * Disposition stays human-gated at the transition level via
- * isValidOpsTransition. Device-authed only — a dispatched ops session
- * drives its journal forward by staging a `journal.setState` intent through
- * the orchestrator MCP tool surface instead (see mcp/tools/stageProposalTools.ts);
+ * isValidOpsTransition. The read (GET) is reachable by a dispatched session
+ * holding a per-session route credential (see SessionRouteAuth.ts) and a
+ * matching operator-granted `Bash(node .../ops-client.mjs journal ...)`
+ * capability, same as the operator/RC-session device token. The write
+ * (POST .../state) stays device-only — a dispatched ops session drives its
+ * journal forward by staging a `journal.setState` intent through the
+ * orchestrator MCP tool surface instead (see mcp/tools/stageProposalTools.ts);
  * the session-scoped journal-write credential this route used to also accept
- * has been retired.
+ * has been retired, and this task does not reopen it.
  */
 export function createOpsJournalRouter(): Router {
   const router = Router();
@@ -31,7 +37,7 @@ export function createOpsJournalRouter(): Router {
   // GET /api/ops-journal?milestone=M12
   router.get(
     '/ops-journal',
-    requireDeviceAuth,
+    requireDeviceOrSessionRouteAuth,
     (req: Request, res: Response) => {
       const milestone =
         typeof req.query.milestone === 'string' ? req.query.milestone : null;
@@ -48,7 +54,7 @@ export function createOpsJournalRouter(): Router {
   router.post(
     '/ops-journal/:taskId/state',
     requireDeviceAuth,
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const taskId = String(req.params.taskId);
 
       const body = req.body as {
@@ -137,7 +143,7 @@ export function createOpsJournalRouter(): Router {
             err instanceof Error ? err.message : 'ops-journal write failed',
         });
       }
-    },
+    }),
   );
 
   return router;

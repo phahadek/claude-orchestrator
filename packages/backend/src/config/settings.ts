@@ -10,6 +10,18 @@ const zodBoolCoerce = z.union([
   z.literal('false').transform((): false => false),
 ]);
 
+// Nullable percent threshold: '' (or absent) means the soft-pause is
+// disabled — mirrors the empty-string-means-off convention used for the
+// model/effort settings above, rather than introducing a separate null path.
+const usagePauseThresholdPercent = z
+  .string()
+  .refine(
+    (v) =>
+      v === '' ||
+      (Number.isFinite(Number(v)) && Number(v) >= 1 && Number(v) <= 100),
+    { message: 'Must be empty (disabled) or a number between 1 and 100' },
+  );
+
 const SettingsSchema = z.object({
   // Numeric settings (z.coerce accepts both numbers and parseable strings)
   max_concurrent_code_sessions: z.coerce.number().int().min(1),
@@ -20,6 +32,8 @@ const SettingsSchema = z.object({
   card_preview_lines: z.coerce.number().int().min(1),
   auto_launch_concurrency: z.coerce.number().int().min(1),
   auto_launch_poll_interval_ms: z.coerce.number().int().min(100),
+  hourly_usage_pause_threshold_percent: usagePauseThresholdPercent,
+  weekly_usage_pause_threshold_percent: usagePauseThresholdPercent,
   min_host_free_memory_mb: z.coerce.number().int().min(0),
   per_session_reserve_mb: z.coerce.number().int().min(0),
   session_notify_threshold_seconds: z.coerce.number().int().min(0),
@@ -35,6 +49,8 @@ const SettingsSchema = z.object({
   reviewer_comment_quiescence_ms: z.coerce.number().int().min(0),
   session_pr_close_grace_minutes: z.coerce.number().int().min(0),
   flake_recovery_max_retries: z.coerce.number().int().min(0),
+  test_request_max_concurrent_per_project: z.coerce.number().int().min(1),
+  test_request_cycle_limit: z.coerce.number().int().min(1),
   session_cgroup_prod_reserve_mb: z.coerce.number().int().min(0),
   session_cgroup_memory_high_fraction: z.coerce.number().min(0).max(1),
   milestone_attention_aging_threshold_seconds: z.coerce.number().int().min(0),
@@ -55,6 +71,9 @@ const SettingsSchema = z.object({
   planning_session_model: z.string(),
   ops_session_model: z.string(),
   gate_verify_session_model: z.string(),
+  groom_session_model: z.string(),
+  design_session_model: z.string(),
+  docs_session_model: z.string(),
   tier3_classifier_model: z.string(),
 
   // Enum settings — only accepted values are valid
@@ -81,6 +100,9 @@ const SettingsSchema = z.object({
     'xhigh',
     'max',
   ]),
+  groom_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
+  design_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
+  docs_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
 
   // JSON-serialised string arrays
   ai_reviewer_usernames: z.array(z.string()),
@@ -101,6 +123,8 @@ export const SETTING_DEFAULTS: Settings = {
   card_preview_lines: 3,
   auto_launch_concurrency: 1,
   auto_launch_poll_interval_ms: 60_000,
+  hourly_usage_pause_threshold_percent: '',
+  weekly_usage_pause_threshold_percent: '',
   min_host_free_memory_mb: 4096,
   per_session_reserve_mb: 3072,
   session_notify_threshold_seconds: 3600,
@@ -116,6 +140,8 @@ export const SETTING_DEFAULTS: Settings = {
   reviewer_comment_quiescence_ms: 120_000,
   session_pr_close_grace_minutes: 5,
   flake_recovery_max_retries: 2,
+  test_request_max_concurrent_per_project: 2,
+  test_request_cycle_limit: 5,
   session_cgroup_prod_reserve_mb: 4096,
   session_cgroup_memory_high_fraction: 0.9,
   milestone_attention_aging_threshold_seconds: 24 * 60 * 60,
@@ -129,6 +155,9 @@ export const SETTING_DEFAULTS: Settings = {
   planning_session_model: '',
   ops_session_model: '',
   gate_verify_session_model: '',
+  groom_session_model: '',
+  design_session_model: '',
+  docs_session_model: '',
   tier3_classifier_model: 'claude-haiku-4-5-20251001',
   session_mode: 'cli',
   release_channel: 'stable',
@@ -139,6 +168,9 @@ export const SETTING_DEFAULTS: Settings = {
   planning_session_effort: '',
   ops_session_effort: '',
   gate_verify_session_effort: '',
+  groom_session_effort: '',
+  design_session_effort: '',
+  docs_session_effort: '',
   ai_reviewer_usernames: [],
   bot_comment_deny_list: [],
   bot_comment_allow_list: [],

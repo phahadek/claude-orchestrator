@@ -121,6 +121,13 @@ export class StalledPRReconciler {
       const existing = parsePauseReason(pr.pause_reason);
       if (existing?.reason === 'stalled_reconcile_cap') continue;
 
+      // A pause reason declaring retry_strategy: 'manual_action' (e.g.
+      // depth_review_escalation) is already an operator action item, parked
+      // the same way a human_merge_only PR is above — never re-drive it,
+      // and never clobber its diagnostic pause reason with a generic
+      // stalled classification.
+      if (existing?.retry_strategy === 'manual_action') continue;
+
       // Resolve review session status for the errored-session check
       const reviewSessionStatus = pr.review_session_id
         ? (getSession(pr.review_session_id)?.status ?? null)
@@ -311,6 +318,17 @@ export class StalledPRReconciler {
     }
 
     if (kind === 'analyze_failing') {
+      // The bounded, session-verified flake-recovery mechanism
+      // (flaky.confirm gate:'analyze' -> PRMergeWatcher.handleVerifiedFlakyDisposition)
+      // owns analyze_failing recovery now. Only fall back to this blunt
+      // full-pipeline retry once that mechanism's own retry budget is
+      // exhausted — otherwise this sweep would short-circuit the bounded
+      // mechanism on every stall pass before a session ever gets a chance to
+      // dispose it as verified-flaky.
+      const maxRetries = typedGetSetting('flake_recovery_max_retries');
+      if (pr.flake_recovery_attempts < maxRetries) {
+        return false;
+      }
       // Invalidate the per-SHA analyze cache so the pipeline re-runs analyze
       // rather than returning the stale cached failure.
       if (headSha) {
@@ -522,7 +540,7 @@ export class StalledPRReconciler {
     const prompt =
       kind === 'conflict_dead_session'
         ? formatMergeConflictFeedback({
-            branchName: pr.head_branch ?? `feature/pr-${prNumber}`,
+            branchName: pr.head_branch,
             baseBranch: pr.base_branch ?? 'dev',
           })
         : kind === 'session_inert'

@@ -128,78 +128,111 @@ export class DispatchTriggerEvaluator {
   }
 
   async tickOnce(): Promise<number> {
-    // Usage admission is an account-wide gate, independent of arm/capacity
-    // accounting below: when the plan usage is exhausted, don't dispatch at
-    // all this tick — the deferral (persisted by isUsageAdmitted) is
-    // re-evaluated automatically on the next tick.
-    if (!isUsageAdmitted().allowed) return 0;
-
-    const listProjects = this.options.listProjects ?? getAllProjects;
-    const projects = listProjects();
-    if (projects.length === 0) return 0;
-
-    const orderedProjects = rotateFromIndex(projects, this.roundRobinIndex);
-    this.roundRobinIndex = (this.roundRobinIndex + 1) % projects.length;
-
-    const available = computeAvailableCapacity({
-      maxConcurrentPlanningSessions: typedGetSetting(
-        'max_concurrent_planning_sessions',
-      ),
-      humanReserve: typedGetSetting('human_reserve'),
-      activePlanningSessions: this.sessionManager.getLivePlanningSessionCount(),
-    });
-    if (available <= 0) return 0;
-
+    const startedAt = Date.now();
+    let eligibleCount = 0;
     let dispatched = 0;
-    for (const project of orderedProjects) {
-      if (dispatched >= available) break;
-      await yieldToEventLoop();
+    try {
+      // Usage admission is an account-wide gate, independent of arm/capacity
+      // accounting below: when the plan usage is exhausted, don't dispatch at
+      // all this tick — the deferral (persisted by isUsageAdmitted) is
+      // re-evaluated automatically on the next tick.
+      if (!isUsageAdmitted().allowed) return 0;
 
-      const groomCandidates = await this.scanProjectGroomCandidates(project.id);
-      dispatched += await this.dispatchUpTo(
-        groomCandidates,
-        available - dispatched,
-        (c) => this.dispatchPlanningCandidate(c, 'groom'),
-      );
-      if (dispatched >= available) continue;
+      const listProjects = this.options.listProjects ?? getAllProjects;
+      const projects = listProjects();
+      if (projects.length === 0) return 0;
 
-      const opsCandidates = await this.scanProjectOpsCandidates(project.id);
-      dispatched += await this.dispatchUpTo(
-        opsCandidates,
-        available - dispatched,
-        (c) => this.dispatchOpsCandidate(c),
-      );
-      if (dispatched >= available) continue;
+      const orderedProjects = rotateFromIndex(projects, this.roundRobinIndex);
+      this.roundRobinIndex = (this.roundRobinIndex + 1) % projects.length;
 
-      const designCandidates = await this.scanProjectDesignCandidates(
-        project.id,
-      );
-      dispatched += await this.dispatchUpTo(
-        designCandidates,
-        available - dispatched,
-        (c) => this.dispatchPlanningCandidate(c, 'design'),
-      );
-      if (dispatched >= available) continue;
+      const available = computeAvailableCapacity({
+        maxConcurrentPlanningSessions: typedGetSetting(
+          'max_concurrent_planning_sessions',
+        ),
+        humanReserve: typedGetSetting('human_reserve'),
+        activePlanningSessions:
+          this.sessionManager.getLivePlanningSessionCount(),
+      });
+      if (available <= 0) return 0;
 
-      const docsCandidates = await this.scanProjectDocsCandidates(project.id);
-      dispatched += await this.dispatchUpTo(
-        docsCandidates,
-        available - dispatched,
-        (c) => this.dispatchPlanningCandidate(c, 'docs'),
+      for (const project of orderedProjects) {
+        if (dispatched >= available) break;
+        await yieldToEventLoop();
+
+        const groomCandidates = await this.scanProjectGroomCandidates(
+          project.id,
+        );
+        eligibleCount += groomCandidates.length;
+        dispatched += await this.dispatchUpTo(
+          groomCandidates,
+          available - dispatched,
+          (c) => this.dispatchPlanningCandidate(c, 'groom'),
+          (c) => this.revalidateGroomCandidate(c),
+        );
+        if (dispatched >= available) continue;
+
+        const opsCandidates = await this.scanProjectOpsCandidates(project.id);
+        eligibleCount += opsCandidates.length;
+        dispatched += await this.dispatchUpTo(
+          opsCandidates,
+          available - dispatched,
+          (c) => this.dispatchOpsCandidate(c),
+        );
+        if (dispatched >= available) continue;
+
+        const designCandidates = await this.scanProjectDesignCandidates(
+          project.id,
+        );
+        eligibleCount += designCandidates.length;
+        dispatched += await this.dispatchUpTo(
+          designCandidates,
+          available - dispatched,
+          (c) => this.dispatchPlanningCandidate(c, 'design'),
+          (c) => this.revalidateDesignCandidate(c),
+        );
+        if (dispatched >= available) continue;
+
+        const docsCandidates = await this.scanProjectDocsCandidates(project.id);
+        eligibleCount += docsCandidates.length;
+        dispatched += await this.dispatchUpTo(
+          docsCandidates,
+          available - dispatched,
+          (c) => this.dispatchPlanningCandidate(c, 'docs'),
+          (c) => this.revalidateDocsCandidate(c),
+        );
+      }
+      return dispatched;
+    } finally {
+      const elapsedMs = Date.now() - startedAt;
+      const skippedCount = eligibleCount - dispatched;
+      logger.info(
+        `[DispatchTriggerEvaluator] poll complete (eligible=${eligibleCount}, launched=${dispatched}, skipped=${skippedCount}) durationMs=${elapsedMs}`,
       );
     }
-    return dispatched;
   }
 
-  /** Dispatches candidates FIFO until `remaining` sessions have launched or the list is exhausted. */
+  /**
+   * Dispatches candidates FIFO until `remaining` sessions have launched or
+   * the list is exhausted. When `revalidate` is given, it's re-run
+   * immediately before each launch against freshly-read state (task_cache,
+   * not a live board round-trip) — a candidate that passed the scan-time
+   * predicate but no longer qualifies by launch time (status changed, a
+   * session appeared) is skipped rather than dispatched, closing the race
+   * between candidate selection and the dispatch call for that candidate.
+   * Skipped candidates aren't counted here: the caller's `eligibleCount -
+   * dispatched` already reports them, since eligibleCount is fixed at
+   * scan time and `dispatched` only grows on an actual launch.
+   */
   private async dispatchUpTo<T>(
     candidates: T[],
     remaining: number,
     dispatchFn: (candidate: T) => Promise<boolean>,
+    revalidate?: (candidate: T) => boolean | Promise<boolean>,
   ): Promise<number> {
     let dispatched = 0;
     for (const candidate of candidates) {
       if (dispatched >= remaining) break;
+      if (revalidate && !(await revalidate(candidate))) continue;
       const launched = await dispatchFn(candidate);
       if (launched) dispatched++;
     }
@@ -369,6 +402,69 @@ export class DispatchTriggerEvaluator {
       if (found) return found;
     }
     return undefined;
+  }
+
+  /**
+   * Re-runs isGroomCandidate against a fresh task_cache read immediately
+   * before launch, closing the scan-vs-launch race: loadBoardTasks re-reads
+   * the cache row each call and only reuses the parsed board when its
+   * raw_json is byte-identical, so a status/session change that landed in
+   * task_cache since the scan is picked up here without a live board fetch.
+   * Reuses isGroomCandidate itself (not a hand-written subset) so scan-time
+   * and launch-time eligibility can never disagree.
+   */
+  private revalidateGroomCandidate(candidate: FlowCandidate): boolean {
+    const tasks = this.loadBoardTasks(candidate.milestone.id);
+    const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
+    const task = tasksById.get(normalizeBoardId(candidate.task.id));
+    if (!task) return false;
+    return isGroomCandidate(task, {
+      tasksById,
+      resolveDep: (depId) => this.resolveProjectDep(candidate.projectId, depId),
+      hasActiveSession: hasActiveSessionForTask,
+      hasActiveGroomSession: (taskId) =>
+        hasActivePlanningSessionForTask(taskId, 'groom'),
+      inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
+      isNoOpSuppressed: isGroomNoOpSuppressed,
+      isKillSuppressed: (taskId) => isPlanningKillSuppressed(taskId, 'groom'),
+    });
+  }
+
+  /** Same immediately-before-launch re-check as revalidateGroomCandidate, reusing isDesignCandidate. */
+  private revalidateDesignCandidate(candidate: FlowCandidate): boolean {
+    const tasks = this.loadBoardTasks(candidate.milestone.id);
+    const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
+    const task = tasksById.get(normalizeBoardId(candidate.task.id));
+    if (!task) return false;
+    return isDesignCandidate(task, {
+      tasksById,
+      resolveDep: (depId) => this.resolveProjectDep(candidate.projectId, depId),
+      hasActiveSession: hasActiveSessionForTask,
+      hasActiveDesignSession: (taskId) =>
+        hasActivePlanningSessionForTask(taskId, 'design'),
+      inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
+      armed: getArm(candidate.milestone.id, 'design'),
+      isKillSuppressed: (taskId) => isPlanningKillSuppressed(taskId, 'design'),
+    });
+  }
+
+  /** Same immediately-before-launch re-check as revalidateGroomCandidate, reusing isDocsCandidate. */
+  private async revalidateDocsCandidate(
+    candidate: FlowCandidate,
+  ): Promise<boolean> {
+    const tasks = this.loadBoardTasks(candidate.milestone.id);
+    const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
+    const task = tasksById.get(normalizeBoardId(candidate.task.id));
+    if (!task) return false;
+    return isDocsCandidate(task, {
+      tasksById,
+      hasActiveSession: hasActiveSessionForTask,
+      hasActiveDocsSession: (taskId) =>
+        hasActivePlanningSessionForTask(taskId, 'docs'),
+      inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
+      projectId: candidate.projectId,
+      armed: getArm(candidate.milestone.id, 'docs'),
+    });
   }
 
   private loadBoardTasks(milestoneId: string): NotionTask[] {

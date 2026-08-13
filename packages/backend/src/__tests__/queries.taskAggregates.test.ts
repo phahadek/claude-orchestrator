@@ -435,4 +435,130 @@ describe('getActiveTaskAggregates — review session token fields', () => {
     expect(rows[0].review_session_input_tokens).toBe(150);
     expect(rows[0].review_session_output_tokens).toBe(75);
   });
+
+  it('threads pull_requests.flake_recovery_attempts through as pr_flake_recovery_attempts', async () => {
+    const { db } = await import('../db/db.js');
+    upsertTaskCache(
+      PREFIXED_ID,
+      JSON.stringify({
+        id: PREFIXED_ID,
+        title: 'Flaky Task',
+        status: '🔍 In Review',
+      }),
+    );
+    upsertPullRequest(makePR({ pr_number: 77, task_id: PREFIXED_ID }));
+    db.prepare(
+      'UPDATE pull_requests SET flake_recovery_attempts = 1 WHERE pr_number = ?',
+    ).run(77);
+
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].pr_flake_recovery_attempts).toBe(1);
+  });
+});
+
+describe('getActiveTaskAggregates — planning session set (docs/split)', () => {
+  it('resolves a docs session as planning_session_id when it is the only planning-type session', () => {
+    upsertTaskCache(
+      PREFIXED_ID,
+      JSON.stringify({
+        id: PREFIXED_ID,
+        title: 'Docs Task',
+        status: '🔄 In Progress',
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: 'docs-sess',
+        task_id: PREFIXED_ID,
+        session_type: 'docs',
+        started_at: 1000,
+      }),
+    );
+
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].planning_session_id).toBe('docs-sess');
+    expect(rows[0].planning_session_type).toBe('docs');
+  });
+
+  it('resolves the newer docs session over an older groom session (live regression instance)', () => {
+    upsertTaskCache(
+      PREFIXED_ID,
+      JSON.stringify({
+        id: PREFIXED_ID,
+        title: 'Docs Task',
+        status: '🔄 In Progress',
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: 'groom-old',
+        task_id: PREFIXED_ID,
+        session_type: 'groom',
+        started_at: 1000,
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: 'docs-new',
+        task_id: PREFIXED_ID,
+        session_type: 'docs',
+        started_at: 2000,
+      }),
+    );
+
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].planning_session_id).toBe('docs-new');
+    expect(rows[0].planning_session_type).toBe('docs');
+  });
+
+  it('resolves a split session as planning_session_id', () => {
+    upsertTaskCache(
+      PREFIXED_ID,
+      JSON.stringify({
+        id: PREFIXED_ID,
+        title: 'Split Task',
+        status: '🔄 In Progress',
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: 'split-sess',
+        task_id: PREFIXED_ID,
+        session_type: 'split',
+        started_at: 1000,
+      }),
+    );
+
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].planning_session_id).toBe('split-sess');
+    expect(rows[0].planning_session_type).toBe('split');
+  });
+
+  it('never resolves a docs session into code_session_id', () => {
+    upsertTaskCache(
+      PREFIXED_ID,
+      JSON.stringify({
+        id: PREFIXED_ID,
+        title: 'Docs Task',
+        status: '🔄 In Progress',
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: 'docs-only',
+        task_id: PREFIXED_ID,
+        session_type: 'docs',
+        started_at: 1000,
+      }),
+    );
+
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].code_session_id).toBeNull();
+    expect(rows[0].planning_session_id).toBe('docs-only');
+  });
 });

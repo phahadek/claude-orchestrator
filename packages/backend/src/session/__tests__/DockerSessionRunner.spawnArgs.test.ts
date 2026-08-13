@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
 
@@ -57,10 +57,36 @@ vi.mock('../planningScratchDir', () => ({
   removeScratchDir: vi.fn(),
 }));
 
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import { execSync } from 'child_process';
 import { DockerSessionRunner } from '../DockerSessionRunner';
+import { getTestCommandDenyPatterns } from '../orchestrator-config';
 
 const SESSION_ID = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff';
 const RESUME_ID = 'bbbbcccc-dddd-eeee-ffff-aaaaaaaaaaaa';
+
+const CONFIG_BASELINE = [
+  path.join('/fake/config', 'procedures.md'),
+  path.join('/fake/config', 'task-writing.md'),
+  path.join('/fake/config', 'README.md'),
+  path.join('/fake/config', 'guidelines-baseline.json'),
+  path.join('/fake/config', 'projects', 'worktree', 'context.md'),
+  path.join('/fake/config', 'projects', 'worktree', 'investigation-guide.md'),
+  path.join('/fake/config', 'projects', 'worktree', 'grooming.json'),
+];
+
+/** The `docker run -d ... <containerName> ...` command string for the session container (3rd execSync call). */
+function sessionContainerRunCommand(): string {
+  const calls = vi.mocked(execSync).mock.calls;
+  const call = calls.find(
+    (c) =>
+      typeof c[0] === 'string' && (c[0] as string).includes('sleep infinity'),
+  );
+  if (!call) throw new Error('session container docker run command not found');
+  return call[0] as string;
+}
 
 const defaultOptions = {
   worktreePath: '/fake/worktree',
@@ -70,7 +96,16 @@ const defaultOptions = {
 
 beforeEach(() => {
   capturedDockerArgs = [];
+  // getSessionAddDirs (orchestrator-config.ts) resolves the central config
+  // tree via $ORCHESTRATOR_CONFIG_DIR — set it to a fixed path so the
+  // baseline is deterministic and doesn't depend on real fs layout relative
+  // to the fake worktree path.
+  process.env.ORCHESTRATOR_CONFIG_DIR = '/fake/config';
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  delete process.env.ORCHESTRATOR_CONFIG_DIR;
 });
 
 describe('DockerSessionRunner spawn args', () => {
@@ -187,9 +222,16 @@ describe('DockerSessionRunner --disallowed-tools', () => {
   );
 });
 
-describe('DockerSessionRunner --add-dir (directory sandbox lift)', () => {
-  it.each(['groom', 'design', 'ops'] as const)(
-    'includes --add-dir / for a %s (planning) session',
+describe('DockerSessionRunner --add-dir (filesystem read envelope)', () => {
+  function addDirValues(args: string[]): string[] {
+    return args.reduce<string[]>((acc, arg, i) => {
+      if (arg === '--add-dir') acc.push(args[i + 1]);
+      return acc;
+    }, []);
+  }
+
+  it.each(['groom', 'design', 'ops', 'docs', 'split'] as const)(
+    'includes the per-type baseline --add-dir entries for a %s (planning) session — no more unconditional "/"',
     async (sessionType) => {
       const runner = new DockerSessionRunner(SESSION_ID);
       await runner.run(
@@ -200,9 +242,10 @@ describe('DockerSessionRunner --add-dir (directory sandbox lift)', () => {
       );
 
       const claudeArgs = capturedDockerArgs.slice(4);
-      const idx = claudeArgs.indexOf('--add-dir');
-      expect(idx).not.toBe(-1);
-      expect(claudeArgs[idx + 1]).toBe('/');
+      expect(addDirValues(claudeArgs).sort()).toEqual(
+        [...CONFIG_BASELINE].sort(),
+      );
+      expect(claudeArgs).not.toContain('/');
     },
   );
 
@@ -228,6 +271,61 @@ describe('DockerSessionRunner --add-dir (directory sandbox lift)', () => {
 
     const claudeArgs = capturedDockerArgs.slice(4);
     expect(claudeArgs).not.toContain('--add-dir');
+  });
+
+  it('adds exactly one granted read:path: root to --add-dir on top of the baseline', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    const grantedPath = '/srv/orchestrator/data/some-project';
+    await runner.run(
+      'hello',
+      undefined,
+      {
+        ...defaultOptions,
+        sessionType: 'ops',
+        granted: [`read:path:${grantedPath}`],
+      },
+      () => {},
+    );
+
+    const claudeArgs = capturedDockerArgs.slice(4);
+    expect(addDirValues(claudeArgs).sort()).toEqual(
+      [...CONFIG_BASELINE, grantedPath].sort(),
+    );
+  });
+
+  it('mounts each baseline + granted path read-only on the session container docker run invocation', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    const grantedPath = '/srv/orchestrator/data/some-project';
+    await runner.run(
+      'hello',
+      undefined,
+      {
+        ...defaultOptions,
+        sessionType: 'ops',
+        granted: [`read:path:${grantedPath}`],
+      },
+      () => {},
+    );
+
+    const runCmd = sessionContainerRunCommand();
+    for (const dir of [...CONFIG_BASELINE, grantedPath]) {
+      expect(runCmd).toContain(`-v "${dir}:${dir}:ro"`);
+    }
+  });
+
+  it('adds no extra -v mounts on the session container for a non-planning session', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, sessionType: 'standard' },
+      () => {},
+    );
+
+    const runCmd = sessionContainerRunCommand();
+    for (const dir of CONFIG_BASELINE) {
+      expect(runCmd).not.toContain(`-v "${dir}:${dir}:ro"`);
+    }
   });
 });
 
@@ -278,5 +376,52 @@ describe('DockerSessionRunner --mcp-config / --append-system-prompt-file', () =>
 
     const claudeArgs = capturedDockerArgs.slice(4);
     expect(claudeArgs).not.toContain('--append-system-prompt-file');
+  });
+});
+
+describe('DockerSessionRunner test-command deny patterns', () => {
+  let worktreeDir: string;
+
+  beforeEach(() => {
+    worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docker-deny-test-'));
+    fs.writeFileSync(
+      path.join(worktreeDir, '.claude-orchestrator.yml'),
+      'test:\n  - npm test\n',
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(worktreeDir, { recursive: true, force: true });
+  });
+
+  it('denies the configured test commands for a standard (code) session', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, worktreePath: worktreeDir, sessionType: 'standard' },
+      () => {},
+    );
+
+    const claudeArgs = capturedDockerArgs.slice(4);
+    const settingsIdx = claudeArgs.indexOf('--settings');
+    expect(settingsIdx).not.toBe(-1);
+    const settings = JSON.parse(claudeArgs[settingsIdx + 1]);
+    expect(settings.permissions.deny).toEqual(
+      getTestCommandDenyPatterns(['npm test']),
+    );
+  });
+
+  it('does not deny test commands for a non-code session (e.g. review)', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, worktreePath: worktreeDir, sessionType: 'review' },
+      () => {},
+    );
+
+    const claudeArgs = capturedDockerArgs.slice(4);
+    expect(claudeArgs).not.toContain('--settings');
   });
 });

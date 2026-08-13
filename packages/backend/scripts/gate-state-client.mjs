@@ -20,6 +20,7 @@
 //   node gate-state-client.mjs reopen <gateItemId> [reason] [operator]
 //   node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
 //   node gate-state-client.mjs accrete <json-payload>
+//   node gate-state-client.mjs carry-forward <gateItemId> <milestone>
 //
 // Example:
 //   node gate-state-client.mjs event gi-42 \
@@ -28,6 +29,16 @@
 //   node gate-state-client.mjs accrete \
 //     '{"project":"p1","taskId":"notion:t1","title":"Add retry","milestone":"M12",
 //       "classification":"Read-Only","items":[{"text":"Click through checkout once"}]}'
+//   node gate-state-client.mjs carry-forward gi-42 M13
+//
+// `carry-forward` is the item-level re-home for a deferred/pending gate item
+// that has no single owning source task to accrete against (e.g. it was
+// itself hand-carried forward from an earlier milestone) — it copies the
+// item's full text/classification/sources (sources may be empty) to
+// <milestone> as a fresh open item, leaving the original exactly as it was
+// under the closing milestone. Idempotent by (project, milestone, text): a
+// repeat call for the same item and target milestone returns the existing
+// copy rather than minting a second one.
 //
 // `disposition` on an `event` payload is optional (omit it for a pure log
 // entry — evidence recorded, state left unchanged) and, when present, must
@@ -42,9 +53,30 @@
 //   ORCHESTRATOR_BACKEND_PORT backend loopback port (default 3000; shared
 //                             with the other sanctioned session clients)
 //   ORCHESTRATOR_DEVICE_TOKEN device bearer token authorizing the request
+//   ORCHESTRATOR_ROUTE_CREDENTIAL_FILE dispatched-session credential file,
+//                             read only when ORCHESTRATOR_DEVICE_TOKEN is unset
 
 import http from 'node:http';
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+
+/**
+ * Resolves the bearer token: prefer the shared operator device token
+ * (RC-session usage), falling back to a dispatched session's own
+ * per-session route credential file when no device token is set.
+ */
+function resolveRouteToken() {
+  if (process.env.ORCHESTRATOR_DEVICE_TOKEN) {
+    return process.env.ORCHESTRATOR_DEVICE_TOKEN;
+  }
+  const credFile = process.env.ORCHESTRATOR_ROUTE_CREDENTIAL_FILE;
+  if (!credFile) return undefined;
+  try {
+    return readFileSync(credFile, 'utf-8').trim();
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Issues one loopback HTTP request against the gate-state API and resolves
@@ -203,6 +235,23 @@ export function accreteGateContribution({ host, port, token, contribution }) {
   });
 }
 
+export function carryForwardGateItem({
+  host,
+  port,
+  token,
+  gateItemId,
+  milestone,
+}) {
+  return requestGateState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/gate/items/${encodeURIComponent(gateItemId)}/carry-forward`,
+    payload: { milestone },
+  });
+}
+
 function parseFlags(argv) {
   function option(name) {
     const i = argv.indexOf(name);
@@ -226,7 +275,8 @@ const USAGE =
   '  node gate-state-client.mjs approve <gateItemId> [operator]\n' +
   '  node gate-state-client.mjs reopen <gateItemId> [reason] [operator]\n' +
   '  node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]\n' +
-  '  node gate-state-client.mjs accrete <json-payload>';
+  '  node gate-state-client.mjs accrete <json-payload>\n' +
+  '  node gate-state-client.mjs carry-forward <gateItemId> <milestone>';
 
 async function main() {
   function fail(message) {
@@ -242,11 +292,11 @@ async function main() {
 
   const host = process.env.ORCHESTRATOR_BACKEND_HOST ?? '127.0.0.1';
   const port = process.env.ORCHESTRATOR_BACKEND_PORT ?? '3000';
-  const token = process.env.ORCHESTRATOR_DEVICE_TOKEN;
+  const token = resolveRouteToken();
   if (!token) {
     fail(
-      'ORCHESTRATOR_DEVICE_TOKEN not set — this script must be run with a ' +
-        'device credential available.',
+      'Neither ORCHESTRATOR_DEVICE_TOKEN nor a readable ORCHESTRATOR_ROUTE_CREDENTIAL_FILE ' +
+        'is set — this script must be run with a device credential available.',
     );
     return;
   }
@@ -341,6 +391,16 @@ async function main() {
         port,
         token,
         contribution,
+      });
+    } else if (command === 'carry-forward') {
+      const [gateItemId, milestone] = rest;
+      if (!gateItemId || !milestone) return fail(USAGE);
+      result = await carryForwardGateItem({
+        host,
+        port,
+        token,
+        gateItemId,
+        milestone,
       });
     } else {
       return fail(USAGE);

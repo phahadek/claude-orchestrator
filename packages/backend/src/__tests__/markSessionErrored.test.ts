@@ -160,6 +160,7 @@ import { recordEvent } from '../audit/AuditLog';
 import { emitTaskUpdated } from '../routes/tasks';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { ServerMessage } from '../ws/types';
+import { db } from '../db/db.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -194,6 +195,42 @@ function setupFakeBackend(
     fetchTaskPage: vi.fn().mockResolvedValue(''),
   } as never);
   return updateStatusImpl;
+}
+
+let nextStagedIntentId = 0;
+
+/** Stages a real staged_intent row (real in-memory db — this file's db/queries
+ * mock spreads actual exports) so reap behavior can be asserted on real state. */
+function stageIntent(
+  sessionId: string,
+  overrides: Record<string, unknown> = {},
+): string {
+  const id = `intent-${++nextStagedIntentId}`;
+  queries.insertStagedIntent({
+    id,
+    kind: 'task.setStatus',
+    payload: '{}',
+    payload_hash: 'hash',
+    task_id: null,
+    project_id: 'test-proj',
+    session_id: sessionId,
+    group_id: null,
+    milestone: null,
+    state: 'staged',
+    supersedes: null,
+    annotation: null,
+    decision_proposal: null,
+    investigation: null,
+    groom_proposal: null,
+    advisory: null,
+    disposition_reason: null,
+    answer: null,
+    applied_task_id: null,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    ...overrides,
+  } as never);
+  return id;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -847,5 +884,192 @@ describe('SessionManager.markSessionErrored() — blocked path side-effects', ()
     expect(launchFailedMsg).toBeDefined();
     expect(launchFailedMsg!.taskId).toBe('notion-task-id');
     expect(launchFailedMsg!.sessionId).toBe('test-session');
+  });
+});
+
+// ── Staged-intent reap suppression (grant-respawn kill is not a real death) ──
+
+describe('SessionManager.markSessionErrored() — staged-intent reap suppression', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
+    setupFakeBackend();
+  });
+
+  it("a genuine kill (no opts) still expires the session's uncommitted staged intents — regression for the original protection", () => {
+    const staged = stageIntent('test-session');
+    const approved = stageIntent('test-session', { state: 'approved' });
+
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill');
+
+    expect(queries.getStagedIntent(staged)!.state).toBe('superseded');
+    expect(queries.getStagedIntent(staged)!.disposition_reason).toBe(
+      'session_killed',
+    );
+    expect(queries.getStagedIntent(approved)!.state).toBe('superseded');
+  });
+
+  it("a genuine error still expires the session's uncommitted staged intents", () => {
+    const staged = stageIntent('test-session');
+
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+
+    expect(queries.getStagedIntent(staged)!.state).toBe('superseded');
+    expect(queries.getStagedIntent(staged)!.disposition_reason).toBe(
+      'session_error',
+    );
+  });
+
+  it('opts.suppressReap leaves a staged intent exactly as it was — the grant-respawn kill path', () => {
+    const staged = stageIntent('test-session');
+
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill', undefined, {
+      suppressReap: true,
+    });
+
+    expect(queries.getStagedIntent(staged)!.state).toBe('staged');
+    expect(queries.getStagedIntent(staged)!.disposition_reason).toBeNull();
+  });
+
+  it('opts.suppressReap leaves a sibling capability-request intent staged by the same session untouched (regression for live instance 2)', () => {
+    const requestA = stageIntent('test-session', {
+      kind: 'session.requestCapability',
+      state: 'staged',
+    });
+    const requestB = stageIntent('test-session', {
+      kind: 'session.requestCapability',
+      state: 'staged',
+    });
+
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill', undefined, {
+      suppressReap: true,
+    });
+
+    expect(queries.getStagedIntent(requestA)!.state).toBe('staged');
+    expect(queries.getStagedIntent(requestB)!.state).toBe('staged');
+  });
+
+  it("opts.suppressReap on one session does not touch a different session's staged intents either way", () => {
+    const own = stageIntent('test-session');
+    const other = stageIntent('other-session');
+
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill', undefined, {
+      suppressReap: true,
+    });
+
+    expect(queries.getStagedIntent(own)!.state).toBe('staged');
+    expect(queries.getStagedIntent(other)!.state).toBe('staged');
+  });
+
+  it('suppressReap is scoped to a single call — a later genuine kill of the same session still reaps', () => {
+    const staged = stageIntent('test-session');
+
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill', undefined, {
+      suppressReap: true,
+    });
+    expect(queries.getStagedIntent(staged)!.state).toBe('staged');
+
+    // A subsequent, genuine kill (no suppressReap) must reap normally —
+    // the flag must never leak across calls.
+    sm.markSessionErrored('test-session', 'killed', 'user_kill');
+    expect(queries.getStagedIntent(staged)!.state).toBe('superseded');
+  });
+});
+
+// ── Expiry notification (this task) ─────────────────────────────────────────
+
+describe('SessionManager.markSessionErrored() — expiry notification', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
+    setupFakeBackend();
+    db.prepare('DELETE FROM session_feedback_inbox').run();
+  });
+
+  it('enqueues a feedback item naming each expired intent id and kind', () => {
+    const staged = stageIntent('test-session', { kind: 'task.create' });
+    const approved = stageIntent('test-session', {
+      kind: 'journal.setState',
+      state: 'approved',
+    });
+
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill');
+
+    const items = queries.listUndeliveredInboxItems('test-session');
+    expect(items).toHaveLength(1);
+    expect(items[0].source).toBe('staged-intent-expiry');
+    expect(items[0].payload).toContain(staged);
+    expect(items[0].payload).toContain('task.create');
+    expect(items[0].payload).toContain(approved);
+    expect(items[0].payload).toContain('journal.setState');
+  });
+
+  it('names the group id when the expired intents belonged to a group', () => {
+    stageIntent('test-session', {
+      kind: 'task.create',
+      group_id: 'md-path-validation-descope-1617',
+    });
+
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill');
+
+    const items = queries.listUndeliveredInboxItems('test-session');
+    expect(items[0].payload).toContain('md-path-validation-descope-1617');
+  });
+
+  it('does not enqueue feedback when the session expires nothing', () => {
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill');
+
+    expect(queries.listUndeliveredInboxItems('test-session')).toHaveLength(0);
+  });
+
+  it('does not resurrect expired intents — state stays superseded after the notification path runs', () => {
+    const staged = stageIntent('test-session');
+
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill');
+
+    expect(queries.getStagedIntent(staged)!.state).toBe('superseded');
+    expect(queries.getStagedIntent(staged)!.disposition_reason).toBe(
+      'session_killed',
+    );
+  });
+
+  it('sends a bounded, summarized message for a session with many expired intents', () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 15; i++) {
+      ids.push(stageIntent('test-session', { kind: 'task.create' }));
+    }
+
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill');
+
+    const items = queries.listUndeliveredInboxItems('test-session');
+    expect(items).toHaveLength(1);
+    // Not every one of the 15 ids gets individually listed.
+    const listedCount = ids.filter((id) =>
+      items[0].payload.includes(id),
+    ).length;
+    expect(listedCount).toBeLessThan(15);
+    expect(items[0].payload).toMatch(/more expired intent/);
+  });
+
+  it('opts.suppressReap (grant-respawn kill) enqueues no feedback — nothing was actually expired', () => {
+    stageIntent('test-session');
+
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill', undefined, {
+      suppressReap: true,
+    });
+
+    expect(queries.listUndeliveredInboxItems('test-session')).toHaveLength(0);
   });
 });

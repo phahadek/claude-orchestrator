@@ -84,6 +84,37 @@ describe('renderTaskBody — section structure', () => {
     expect(blocks[implHeadingIdx + 1]).toMatchObject({ type: 'quote' });
   });
 
+  it('renders staged Operational seed items under their own "## Operational seed" heading', () => {
+    const blocks = renderTaskBody(
+      baseSections({ operationalSeedItems: ['Set default retry count to 3'] }),
+    );
+    const seedHeadingIdx = blocks.findIndex(
+      (b) =>
+        b.type === 'heading_2' &&
+        JSON.stringify(b.heading_2).includes('Operational seed'),
+    );
+    expect(seedHeadingIdx).toBeGreaterThanOrEqual(0);
+    expect(blocks[seedHeadingIdx + 1]).toMatchObject({
+      type: 'bulleted_list_item',
+      bulleted_list_item: {
+        rich_text: [{ text: { content: 'Set default retry count to 3' } }],
+      },
+    });
+  });
+
+  it('renders "None." for Operational seed when no items are declared', () => {
+    const blocks = renderTaskBody(baseSections());
+    const seedHeadingIdx = blocks.findIndex(
+      (b) =>
+        b.type === 'heading_2' &&
+        JSON.stringify(b.heading_2).includes('Operational seed'),
+    );
+    expect(blocks[seedHeadingIdx + 1]).toMatchObject({
+      type: 'paragraph',
+      paragraph: { rich_text: [{ text: { content: 'None.' } }] },
+    });
+  });
+
   it('renders "None — Wave N." when there are no dependencies', () => {
     const blocks = renderTaskBody(baseSections({ dependencies: [] }));
     const depsHeadingIdx = blocks.findIndex(

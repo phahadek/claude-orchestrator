@@ -45,12 +45,15 @@ import {
   type RegionsLike,
 } from './constraintCatalog';
 import {
-  applyTriageFloor,
-  isInteractiveTaskType,
+  applyTriageFloorForType,
+  isTriageEligibleType,
   INTERACTIVE_TASK_TYPES,
+  TRIAGE_ELIGIBLE_TYPES,
   type TriageVerdict,
 } from '../planning/triage';
 import { ProjectService } from '../projects/ProjectService';
+import type { SeedItemClassification } from '../db/types';
+import { extractPathToken } from './groomLoad';
 
 const SIZE_CHECK_DECISIONS = new Set([
   'no_split',
@@ -58,6 +61,17 @@ const SIZE_CHECK_DECISIONS = new Set([
   'unsplittable',
   'n/a',
 ]);
+
+/**
+ * Prose rendering of `TRIAGE_ELIGIBLE_TYPES` for in-band refusal text — a
+ * single derivation point so the refusals below can never drift from the
+ * set that actually gates promotion (see the "six/seven groomingGate
+ * fields" completeness-claim drift this task fixes for the injected
+ * procedure's copy of the same list).
+ */
+const TRIAGE_ELIGIBLE_TYPES_LIST = Array.from(TRIAGE_ELIGIBLE_TYPES).join(
+  ' / ',
+);
 
 /** Task types that require a gate_contribution accretion marker before Ready. */
 const GATE_CONTRIBUTION_TYPES = new Set(['💻 Code']);
@@ -79,11 +93,15 @@ const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
  * scope-reshaping mechanism after Design/Planning: "An Investigation
  * legitimately produces Code tasks as its output" (procedures.md § Task
  * types), so a task depending on a non-Done Investigation is groomed against
- * a scope the Investigation may reshape, supersede, or split.
+ * a scope the Investigation may reshape, supersede, or split. 🔧 Operational
+ * is included for the same reason: its runtime/launch-and-observe outcome
+ * (a backfill's actual reconciled state, a config authored against live
+ * data) can reshape a dependent task's scope just as directly.
  */
 const DEPENDS_ON_GATE_TYPES = new Set([
   ...INTERACTIVE_TASK_TYPES,
   '🔎 Investigation',
+  '🔧 Operational',
 ]);
 
 /** and/or is a Files/paths-section hedge token only — see readinessGate.ts's Tier-2 class for the general-prose scan, which deliberately excludes it. */
@@ -155,7 +173,19 @@ interface GateContributionCandidate {
 }
 
 export interface GroomingGateEntry {
-  size_check?: { decision?: unknown; [key: string]: unknown } | null;
+  /**
+   * `files`/`loc`/`loc_method` are required alongside `decision` for the
+   * numeric decisions (no_split/split_now/unsplittable) — see
+   * `sizeCheckMissingNumericFields` below. `n/a` (Design/Planning, sized in
+   * open-question count instead) carries no numbers to require.
+   */
+  size_check?: {
+    decision?: unknown;
+    files?: unknown;
+    loc?: unknown;
+    loc_method?: unknown;
+    [key: string]: unknown;
+  } | null;
   type_check?: {
     decision?: unknown;
     disposition?: unknown;
@@ -172,10 +202,11 @@ export interface GroomingGateEntry {
   /** This task's declared Depends On, resolved to type/status — drives FM3's Design/Planning liveness + cite-or-route signals. */
   dependsOnTasks?: DependsOnTaskRef[];
   /**
-   * Approve-by-standard triage input for an interactive (📐 Design /
-   * 📋 Planning) task — see planning/triage.ts. Required for those types
-   * before promotion; ignored for auto-dispatched types (💻 Code stays
-   * per-task-gated). `proposedVerdict` is the groomer's judgment-primary
+   * Approve-by-standard triage input for a triage-eligible task (see
+   * `isTriageEligibleType` / `TRIAGE_ELIGIBLE_TYPES` in planning/triage.ts).
+   * Required for those types before promotion; rejected outright for
+   * auto-dispatched/ineligible types (💻 Code stays per-task-gated).
+   * `proposedVerdict` is the groomer's judgment-primary
    * call; `hasOpenQuestionsHeading` is a structural fact groomLoad.ts
    * computes from the task body. The deterministic floor is re-applied here
    * from server-derived facts (hard-block Depends On, routed constraint
@@ -197,20 +228,25 @@ export interface GroomingGateEntry {
   /**
    * The groomer's declared operational data/config seeds for seed_contribution
    * — the assessment output stageSeedContribution's `seeds` array is supposed
-   * to mint verbatim (see task-writing.md § Milestone config-seed). Unlike
-   * gate_contribution's candidates, seeds have no pre-groom body section to
-   * re-derive server-side (they are identified from reading the change, not
-   * stripped from an author-authored list) — this is the groomer's own
-   * declared set, cross-checked at stage-group-commit time
-   * (stagedIntents.ts's precheckGroupCommit, via
-   * readinessGate.ts's checkAccretionContentMatch) against the group's live
-   * `seed.stage` intent's actual `seeds` array, the same strip⇔accrete
-   * content-match posture gate_contribution enforces against the real body.
+   * to mint verbatim (see task-writing.md § Milestone config-seed). Now the
+   * *trigger* for the content-match check, not one side of it: like
+   * gate_contribution, seeds now have a real, persisted body section
+   * (bodyRender.ts's `## Operational seed`, parsed back out via
+   * readinessGate.ts's parseOperationalSeedItems) to re-derive server-side —
+   * checkGroupArmingIntentCompleteness (stagedIntents.ts) fetches the real
+   * stored task body and cross-checks its parsed items against the group's
+   * live `seed.stage` intent's actual `seeds` array via
+   * checkAccretionContentMatch, the same strip⇔accrete content-match posture
+   * gate_contribution enforces, independent of this self-declared field.
    * Absent entirely, this check fails open (mirrors gate_contribution's own
    * candidates check) — a caller that hasn't started passing this yet records
    * nothing here and is unaffected.
    */
-  seedContributionCandidates?: { spec: string }[];
+  seedContributionCandidates?: {
+    spec: string;
+    /** Mirrors GateContributionCandidate.classification — see SeedItemClassification. */
+    classification?: SeedItemClassification;
+  }[];
   /**
    * True when this task's pre-groom body (at Ready-flip staging time) still
    * carried a "### 👁️ Manual verification" section — a structural fact
@@ -255,6 +291,38 @@ function isSizeCheckClassified(entry: GroomingGateEntry): boolean {
     typeof sc.decision === 'string' &&
     SIZE_CHECK_DECISIONS.has(sc.decision)
   );
+}
+
+/** Decisions that size the actual code diff and so must carry files/loc/loc_method. */
+const SIZE_CHECK_NUMERIC_DECISIONS = new Set([
+  'no_split',
+  'split_now',
+  'unsplittable',
+]);
+
+/**
+ * A numeric size_check decision (everything but Design/Planning's `n/a`)
+ * must also record `files`/`loc`/`loc_method` — the estimate the decision
+ * rests on, not merely the decision itself. Names each missing field rather
+ * than a bare "malformed" so the groomer knows exactly what to add; never
+ * judges whether the recorded numbers are plausible.
+ */
+function sizeCheckMissingNumericFields(entry: GroomingGateEntry): string[] {
+  const sc = entry.size_check;
+  if (
+    !sc ||
+    typeof sc !== 'object' ||
+    typeof sc.decision !== 'string' ||
+    !SIZE_CHECK_NUMERIC_DECISIONS.has(sc.decision)
+  ) {
+    return [];
+  }
+  const missing: string[] = [];
+  if (typeof sc.files !== 'number') missing.push('files');
+  if (typeof sc.loc !== 'number') missing.push('loc');
+  if (typeof sc.loc_method !== 'string' || !sc.loc_method.trim())
+    missing.push('loc_method');
+  return missing;
 }
 
 /**
@@ -347,6 +415,28 @@ function isGateContributionCandidatesClassified(
 }
 
 /**
+ * Present-and-dispositioned, same posture as isGateContributionCandidatesClassified:
+ * every seed_contribution candidate must carry a non-empty classification
+ * string, but the content of that classification is never judged — a
+ * groomer's "needs-triage" call is accepted exactly as readily as
+ * "operational-seed". Absent an `entry.seedContributionCandidates` array
+ * entirely, this check fails open (nothing to disposition).
+ */
+function isSeedContributionCandidatesClassified(
+  candidates: GroomingGateEntry['seedContributionCandidates'],
+): { ok: boolean; reasons: string[] } {
+  if (!candidates || candidates.length === 0) return { ok: true, reasons: [] };
+  const reasons = candidates
+    .filter((c) => !c.classification || !`${c.classification}`.trim())
+    .map(
+      (c) =>
+        `seed_contribution candidate "${c.spec}" has no recorded classification — every candidate ` +
+        'must be triaged operational-seed / in-pr / needs-triage before promotion.',
+    );
+  return { ok: reasons.length === 0, reasons };
+}
+
+/**
  * Word-boundary match, excluding hyphenated compounds (e.g. `confirm-gate`,
  * `confirm-restart`) — a bare `includes` flagged those StepKind/playbook step
  * ids alongside real hedges. `\b` alone still rejects `Confirmed` (no
@@ -382,16 +472,24 @@ function entryNeedsTrackedFileResolution(entry: FilesPathsEntry): boolean {
 }
 
 /**
- * Re-derives every Files/paths entry's `existsInRepo` from the project's own
- * tracked-file set instead of trusting the session-supplied field — the
- * fix for the incident this module's docstring (:25-31) and the
+ * Re-derives the Files/paths entry list from the task body itself — the fix
+ * for the incident this module's docstring (:25-31) and the
  * isFilesPathsDeclaringRepoWork docstring below describe: a session that
- * mislabels `existsInRepo` bypasses both Files/paths checks the same way a
- * mislabeled `isNew` used to. Only resolves for 💻 Code tasks with a
- * non-empty entry list whose verdict actually depends on the recomputed
- * value (`entryNeedsTrackedFileResolution`) — the two checks that consume
- * this both fail-open for other types/empty/unaffected entries before this
- * would matter.
+ * hand-retypes its `groomingGate.filesPathsEntries` payload (dropping
+ * backticks, reflowing text) can change the verdict without changing the
+ * artifact. When `taskBody` is supplied, the `## Files / paths affected`
+ * section is parsed and git-validated straight from that body
+ * (groomLoad.ts's own `parseFilesPathsEntries`) and the session-supplied
+ * `entries` are not consulted at all for existence. Only resolves for
+ * 💻 Code tasks — the two checks that consume this both fail-open for other
+ * types. When `taskBody` is absent (a caller that hasn't been updated, or a
+ * unit test exercising the other gate mechanics directly), this falls back
+ * to re-deriving `existsInRepo` on the session-supplied `entries`. Either
+ * way, the tracked-file lookup itself is skipped whenever the verdict can't
+ * change (`entryNeedsTrackedFileResolution`) — cheaply pre-checked against
+ * the body's raw list items (`parseFilesPathsRawItems`, no git access) when
+ * `taskBody` is supplied, so a Ready-flip whose entries are all hedge-blocked
+ * / `*(new)*` / well-formed never pays for a repo resolution it doesn't need.
  *
  * Deliberately does NOT fail open when the tracked-file set can't be
  * resolved (no project, no repoRoot, git failure): an unavailable oracle
@@ -408,19 +506,65 @@ function entryNeedsTrackedFileResolution(entry: FilesPathsEntry): boolean {
  * groomLoad.ts is, and a static import would put that whole surface area on
  * every one of those callers' module graphs.
  */
+/** Whether `markdown` carries a top-level `## Files / paths affected`-style heading at all, independent of whether that section has any content. */
+function hasFilesPathsHeading(markdown: string): boolean {
+  return markdown.split('\n').some(
+    (line) =>
+      /^#{1,3}\s/.test(line) &&
+      line
+        .replace(/^#+\s*/, '')
+        .toLowerCase()
+        .includes('files'),
+  );
+}
+
 async function resolveFilesPathsEntriesServerSide(
   type: string | undefined,
   entries: FilesPathsEntry[] | undefined,
   projectId: string | undefined,
+  taskBody: string | undefined,
 ): Promise<{ entries: FilesPathsEntry[] | undefined; blockedReason?: string }> {
-  if (
-    type !== '💻 Code' ||
-    !entries ||
-    entries.length === 0 ||
-    !entries.some(entryNeedsTrackedFileResolution)
-  ) {
+  if (type !== '💻 Code') {
     return { entries };
   }
+
+  // The candidate list a tracked-file lookup would actually be resolved
+  // against: the body's own parsed raw items once `taskBody` is supplied and
+  // actually carries a `## Files / paths affected` heading — defect 2's fix,
+  // never the session's retyped payload — falling back to the
+  // session-supplied `entries` when no body was supplied, or a supplied body
+  // has no such heading at all (a task-writing.md violation on its own,
+  // already blocked upstream by the readiness gate for a real Ready flip;
+  // never a live path this loses precision on).
+  const bodyHasFilesHeading = !!taskBody && hasFilesPathsHeading(taskBody);
+  let bodySection: string | undefined;
+  let candidates: { raw: string; isNew: boolean }[];
+  if (bodyHasFilesHeading) {
+    const { parseSection } = await import('../notion/NotionClient');
+    const { parseFilesPathsRawItems } = await import('./groomLoad');
+    bodySection = parseSection(taskBody as string, 'files');
+    candidates = parseFilesPathsRawItems(bodySection);
+  } else {
+    candidates = entries ?? [];
+  }
+
+  if (
+    candidates.length === 0 ||
+    !candidates.some((e) =>
+      entryNeedsTrackedFileResolution({
+        raw: e.raw,
+        isNew: e.isNew,
+        existsInRepo: false,
+      }),
+    )
+  ) {
+    return {
+      entries: bodyHasFilesHeading
+        ? candidates.map((e) => ({ ...e, existsInRepo: false }))
+        : entries,
+    };
+  }
+
   const repoRoot = projectId
     ? ProjectService.getById(projectId)?.projectDir
     : undefined;
@@ -432,8 +576,11 @@ async function resolveFilesPathsEntriesServerSide(
         `project "${projectId ?? 'unknown'}"; the tracked-file set this check requires is unavailable.`,
     };
   }
-  const { resolveTrackedFileSet, filesPathsEntryExistsInRepo } =
-    await import('./groomLoad');
+  const {
+    resolveTrackedFileSet,
+    filesPathsEntryExistsInRepo,
+    parseFilesPathsEntries,
+  } = await import('./groomLoad');
   let trackedFiles: Set<string>;
   try {
     trackedFiles = await resolveTrackedFileSet(repoRoot);
@@ -445,8 +592,13 @@ async function resolveFilesPathsEntriesServerSide(
         `resolved for project "${projectId}": ${(err as Error).message}`,
     };
   }
+  if (bodyHasFilesHeading) {
+    return {
+      entries: parseFilesPathsEntries(bodySection ?? '', trackedFiles),
+    };
+  }
   return {
-    entries: entries.map((e) => ({
+    entries: (entries ?? []).map((e) => ({
       ...e,
       existsInRepo: filesPathsEntryExistsInRepo(e.raw, trackedFiles),
     })),
@@ -502,13 +654,18 @@ const EXTERNAL_PREFIX_RE = /^[A-Za-z][A-Za-z0-9 ]*:\s/;
  * parse as true, while a line naming work in another system
  * (`Notion: Design the per-flow arm model...`) must parse as false. Requires
  * a file extension on the leading token and rejects an explicit
- * external-source prefix.
+ * external-source prefix. Resolves its candidate through groomLoad.ts's
+ * `extractPathToken` (backtick-aware, same `cleanPathToken` normalisation)
+ * rather than a naive split, so this and `filesPathsEntryExistsInRepo` never
+ * disagree on what a given entry's path token is — a conventionally
+ * backticked new-file entry (`` `src/foo/bar.py` (new) ``) must parse the
+ * same whether or not it is backticked.
  */
-function looksLikeRepoPath(raw: string): boolean {
+export function looksLikeRepoPath(raw: string): boolean {
   const trimmed = raw.trim();
   if (EXTERNAL_PREFIX_RE.test(trimmed)) return false;
-  const candidate = trimmed.split(/[\s(]/)[0] ?? '';
-  return /\.[A-Za-z0-9]+$/.test(candidate);
+  const candidate = extractPathToken(trimmed);
+  return !!candidate && /\.[A-Za-z0-9]+$/.test(candidate);
 }
 
 /**
@@ -626,54 +783,63 @@ function isConstraintsDispositioned(entry: GroomingGateEntry): {
 }
 
 /**
- * Approve-by-standard triage is defined for interactive (📐 Design /
- * 📋 Planning) types only — 💻 Code (and any other non-interactive type,
- * e.g. 🔎 Investigation, 🔧 Operational) keeps the per-task human gate that
- * approve-by-standard would otherwise remove. `entry.triage` is
- * session-supplied, like `entry.type`: a dispatched session could otherwise
- * attach a triage verdict to any task type to buy it batched treatment. A
- * Ready-flip carrying `entry.triage` for a resolved type outside
- * INTERACTIVE_TASK_TYPES is therefore rejected outright (never silently
- * stripped), so the staging session sees the mismatch and can re-stage
- * without a triage block. `type` here is always the caller's resolved type
- * (authoritative when available — see checkGroomingPromotionGate), never
- * `entry.type` on its own.
+ * Approve-by-standard triage is defined for triage-eligible types only —
+ * 📐 Design / 📋 Planning (INTERACTIVE_TASK_TYPES) plus 🔧 Operational /
+ * 🔎 Investigation (planning/triage.ts's TRIAGE_ELIGIBLE_TYPES, per the
+ * clean-verdict standard locked in "Articulate the clean-verdict standard
+ * for 🔧 Operational and 🔎 Investigation promotion"). 💻 Code (and any other
+ * ineligible type) keeps the per-task human gate that approve-by-standard
+ * would otherwise remove. `entry.triage` is session-supplied, like
+ * `entry.type`: a dispatched session could otherwise attach a triage verdict
+ * to any task type to buy it batched treatment. A Ready-flip carrying
+ * `entry.triage` for a resolved type outside TRIAGE_ELIGIBLE_TYPES is
+ * therefore rejected outright (never silently stripped), so the staging
+ * session sees the mismatch and can re-stage without a triage block. `type`
+ * here is always the caller's resolved type (authoritative when available —
+ * see checkGroomingPromotionGate), never `entry.type` on its own.
  */
 function isTriageEligibleForType(
   type: string | undefined,
   entry: GroomingGateEntry,
 ): { ok: boolean; reasons: string[] } {
-  if (!entry.triage || isInteractiveTaskType(type))
+  if (!entry.triage || isTriageEligibleType(type))
     return { ok: true, reasons: [] };
   return {
     ok: false,
     reasons: [
       `groomingGate.triage was recorded for task type "${type ?? 'unknown'}" — approve-by-standard triage ` +
-        'applies only to interactive types (📐 Design / 📋 Planning); this type keeps the per-task human ' +
-        'gate and must not carry a triage verdict. Re-stage without groomingGate.triage.',
+        `applies only to triage-eligible types (${TRIAGE_ELIGIBLE_TYPES_LIST}); ` +
+        'this type keeps the per-task human gate and must not carry a triage verdict. Re-stage without ' +
+        'groomingGate.triage.',
     ],
   };
 }
 
 /**
- * Approve-by-standard promotion path for interactive (📐 Design /
- * 📋 Planning) types — the per-task server-enforced records above stay
- * required and type-agnostic; this is the one additional gate that stands in
- * for the per-item human decision those types no longer carry. An
- * interactive-type task promotes only once its triage input floors to
- * 'clean'. 💻 Code (and any other non-interactive type) fails open — this
- * check does not apply to it, so auto-dispatched promotion is unaffected.
+ * Approve-by-standard promotion path for triage-eligible types (📐 Design /
+ * 📋 Planning / 🔧 Operational / 🔎 Investigation — see
+ * planning/triage.ts's TRIAGE_ELIGIBLE_TYPES) — the per-task server-enforced
+ * records above stay required and type-agnostic; this is the one additional
+ * gate that stands in for the per-item human decision those types no longer
+ * carry. A triage-eligible task promotes only once its triage input floors
+ * to 'clean', evaluated against that type's own registry-defined
+ * required-heading fact (applyTriageFloorForType). 💻 Code (and any other
+ * ineligible type) fails open — this check does not apply to it, so
+ * auto-dispatched promotion is unaffected.
  */
 function isInteractiveTriageClean(
   type: string | undefined,
   entry: GroomingGateEntry,
 ): { ok: boolean; reasons: string[] } {
-  if (!isInteractiveTaskType(type)) return { ok: true, reasons: [] };
+  if (!isTriageEligibleType(type)) return { ok: true, reasons: [] };
   if (!entry.triage) {
     return {
       ok: false,
       reasons: [
-        `interactive task type "${type}" requires a recorded triage verdict before promotion — see planning/triage.ts.`,
+        `triage-eligible task type "${type}" requires a recorded triage verdict before promotion — ` +
+          `types ${TRIAGE_ELIGIBLE_TYPES_LIST} require groomingGate.triage ` +
+          '(`{"proposedVerdict": "clean"|"blocked"|"needs-attention", "hasOpenQuestionsHeading": true|false}`); ' +
+          'promotion without a per-item human sign-off requires a clean verdict.',
       ],
     };
   }
@@ -688,7 +854,7 @@ function isInteractiveTriageClean(
     entry.constraintsDispositioned ?? {},
   ).some((d) => d.disposition === 'conflict_route');
 
-  const floored = applyTriageFloor({
+  const floored = applyTriageFloorForType(type, {
     proposedVerdict: entry.triage.proposedVerdict,
     hardBlockDepNotDone,
     hasOpenQuestionsHeading: entry.triage.hasOpenQuestionsHeading,
@@ -700,7 +866,7 @@ function isInteractiveTriageClean(
       ok: false,
       reasons: [
         `triage verdict is "${floored.verdict}" (${floored.reasons.join('; ') || 'not proposed as clean'}) — ` +
-          `an interactive (${type}) task promotes without a per-item sign-off only once triaged clean.`,
+          `a triage-eligible (${type}) task promotes without a per-item sign-off only once triaged clean.`,
       ],
     };
   }
@@ -725,6 +891,14 @@ function isInteractiveTriageClean(
  * checks run — a session's own `existsInRepo` claim on its staged payload is
  * never trusted as the deciding value. Async because that re-derivation
  * shells out to git.
+ *
+ * `taskBody`, when supplied, is the task's current raw markdown — the
+ * Files/paths entry list the two Files/paths checks evaluate is then parsed
+ * straight out of its `## Files / paths affected` section, not out of
+ * `entry.filesPathsEntries` (the session's own retyped transcription of that
+ * section into its groomingGate payload). Every caller that already has the
+ * task body in hand (or fetches it anyway for `checkReadiness`) should pass
+ * it through so the verdict tracks the artifact, not the paraphrase.
  */
 export async function checkGroomingPromotionGate(
   entry: GroomingGateEntry,
@@ -732,6 +906,7 @@ export async function checkGroomingPromotionGate(
   authoritativeType?: string,
   accretionOpts?: AccretionCheckOptions,
   projectId?: string,
+  taskBody?: string,
 ): Promise<GroomingGateResult> {
   const reasons: string[] = [];
   const resolvedType = authoritativeType ?? entry.type;
@@ -741,6 +916,15 @@ export async function checkGroomingPromotionGate(
       'size_check is missing or malformed — every Code/Tooling task must have an explicit size ' +
         'classification recorded before promotion. Expected {"decision": "no_split"|"split_now"|"unsplittable"|"n/a"}.',
     );
+  } else {
+    const missingNumericFields = sizeCheckMissingNumericFields(entry);
+    if (missingNumericFields.length > 0) {
+      reasons.push(
+        `size_check is missing required field(s): ${missingNumericFields.join(', ')} — a numeric ` +
+          'size decision (no_split/split_now/unsplittable) must also record the files/loc/loc_method ' +
+          'estimate the decision rests on, not judge whether that estimate is correct.',
+      );
+    }
   }
 
   if (!isTypeCheckDispositioned(entry)) {
@@ -761,6 +945,7 @@ export async function checkGroomingPromotionGate(
       resolvedType,
       entry.filesPathsEntries,
       projectId,
+      taskBody,
     );
   if (blockedReason) {
     reasons.push(blockedReason);
@@ -831,6 +1016,11 @@ export function checkAccretionContributions(
       .reasons,
   );
 
+  reasons.push(
+    ...isSeedContributionCandidatesClassified(entry.seedContributionCandidates)
+      .reasons,
+  );
+
   return { allowed: reasons.length === 0, reasons };
 }
 
@@ -846,4 +1036,43 @@ export class GroomingGateError extends Error {
     super(`grooming promotion gate blocked: ${reasons.join('; ')}`);
     this.name = 'GroomingGateError';
   }
+}
+
+/**
+ * One staged-intent group member, as `findAutoApproveIneligibleTaskCreate`
+ * needs to see it: its kind, and — for a `task.create` — the type its own
+ * payload declares (never the group's subject task's type; see below).
+ */
+export interface GroupCommitMember {
+  kind: string;
+  /** For `task.create` only: the type field carried on that intent's own payload. */
+  taskCreatePayloadType?: string;
+}
+
+/**
+ * The multi-group /batch/commit approve-by-standard surface's task.create
+ * guard: a `task.create` must never be created via that unattended,
+ * many-groups-at-once disposition — regardless of the type it declares.
+ * Task creation is a deliberate per-task human act; batch-committing many
+ * groups on one clean-triage verdict is not that act, no matter what type
+ * the minted task would be. The caller (stagedIntents.ts's
+ * commitGroupIntents) must only invoke this when `opts.triageMilestoneLabel`
+ * is set — i.e. only for the multi-group /batch/commit path. The
+ * single-group `/approve` route (a human explicitly reviewing and approving
+ * one specific group) is a deliberate per-task disposition and must remain
+ * free to create a task.create of any type; it must never call this
+ * function.
+ */
+export function findAutoApproveIneligibleTaskCreate(
+  members: readonly GroupCommitMember[],
+): { blocked: boolean; reasons: string[] } {
+  const reasons = members
+    .filter((m) => m.kind === 'task.create')
+    .map(
+      (m) =>
+        `task.create${m.taskCreatePayloadType ? ` for type "${m.taskCreatePayloadType}"` : ''} cannot be ` +
+        'created through the multi-group batch-commit approve-by-standard surface; commit this group ' +
+        'individually through the single-group /approve route instead.',
+    );
+  return { blocked: reasons.length > 0, reasons };
 }

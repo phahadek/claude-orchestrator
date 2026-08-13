@@ -14,9 +14,11 @@ import type { SessionManager } from '../../session/SessionManager';
 import {
   taskTypeSchema,
   taskStatusSchema,
+  taskPrioritySchema,
   gateContributionDecisionSchema,
   seedContributionDecisionSchema,
   opsStateSchema,
+  opsReconciliationAssertionSchema,
   taskBodySectionsSchema,
   patchBodySectionPayloadSchema,
   groomingGateEntrySchema,
@@ -37,9 +39,12 @@ export interface StageProposalToolContext {
   sessionId: string;
   projectId: string;
   /**
-   * Restricts registration to this set of staged-intent kinds (e.g. a
-   * planning workflow's PLANNING_INTENT_KINDS entry). Undefined registers
-   * every kind — the code/review session behavior, unchanged.
+   * Restricts registration to this set of staged-intent kinds — a planning
+   * workflow's PLANNING_INTENT_KINDS entry, or a code/review session's
+   * CODE_INTENT_KINDS (see orchestratorMcpServer.ts's buildMcpServer, the
+   * sole caller). Undefined registers every kind; buildMcpServer never
+   * passes undefined, but direct callers (e.g. tests) may still opt into
+   * the full surface this way.
    */
   kinds?: readonly string[];
   /** Used to route a stage-time validation block back to this session in-turn, via enqueueFeedback. */
@@ -134,11 +139,11 @@ export function registerStageProposalTools(
     {
       title: 'Stage a new task',
       description:
-        'Stages a task.create intent — lands a new task at Backlog once a human applies it. Pass the full page body (raw markdown, the authoring-standard section format) via `body` — it is written verbatim at create time. task.updateBody is for revising a task that already exists, not for a task being staged now.',
+        'Stages a task.create intent — lands a new task at Backlog once a human applies it. Pass the full page body (raw markdown, the authoring-standard section format) via `body` — it is written verbatim at create time. task.updateBody is for revising a task that already exists, not for a task being staged now. `priority` is required — one of "🔴 High", "🟡 Medium", "🟢 Low".',
       inputSchema: envelope({
         title: z.string(),
         type: taskTypeSchema.optional(),
-        priority: z.string().optional(),
+        priority: taskPrioritySchema,
         dependsOn: z.array(z.string()).optional(),
         databaseId: z.string().optional(),
         milestone: z.string().optional(),
@@ -182,7 +187,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a task body rewrite',
       description:
-        'Stages a task.updateBody intent carrying the structured TaskBodySections map (Summary, Dependencies, Context, Acceptance criteria, Files/Notion pages affected) — never free markdown.',
+        'Stages a task.updateBody intent carrying the structured TaskBodySections map (Summary, Dependencies, Context, Acceptance criteria, Files/Notion pages affected) — never free markdown. From a groom session: if this task already has an open decision group, pass that same groupId — a groom body edit is rejected when staged ungrouped once a group is open for the task.',
       inputSchema: envelope({
         taskId: z.string(),
         sections: taskBodySectionsSchema,
@@ -196,7 +201,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a targeted task body-section patch',
       description:
-        'Stages a task.patchBodySection intent — append/replace/remove against one heading-bounded section of a task body, without rewriting the rest of the page. append auto-creates the section; replace requires the section and the exact find text to already exist; remove on an absent section is a no-op.',
+        'Stages a task.patchBodySection intent — append/replace/remove against one heading-bounded section of a task body, without rewriting the rest of the page. append auto-creates the section; replace requires the section and the exact find text to already exist; remove on an absent section is a no-op. From a groom session: if this task already has an open decision group, pass that same groupId — a groom body edit is rejected when staged ungrouped once a group is open for the task.',
       inputSchema: {
         payload: patchBodySectionPayloadSchema,
         ...intentEnvelopeShape,
@@ -210,7 +215,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a cosmetic task property change',
       description:
-        'Stages a task.setProperties intent — Priority and Task Name only; Status/Type/Depends On have their own tools.',
+        'Stages a task.setProperties intent — Priority and Task Name only; Status/Depends On/Type have their own tools.',
       inputSchema: envelope({
         taskId: z.string(),
         patch: z.object({
@@ -220,6 +225,20 @@ export function registerStageProposalTools(
       }),
     },
     async (args) => stage('task.setProperties', args.payload, ctx, args),
+  );
+
+  registerTool(
+    'task.setType',
+    {
+      title: 'Stage a task Type change',
+      description:
+        'Stages a task.setType intent — a retype to another Type in the closed vocabulary (Code/Design/Operational/Investigation). HUMAN_APPLY_ONLY: staged for operator disposition, never applied by a session.',
+      inputSchema: envelope({
+        taskId: z.string(),
+        type: taskTypeSchema,
+      }),
+    },
+    async (args) => stage('task.setType', args.payload, ctx, args),
   );
 
   registerTool(
@@ -321,11 +340,20 @@ export function registerStageProposalTools(
     {
       title: 'Stage an ops journal state change',
       description:
-        'Stages a journal.setState intent — an in-place ops_journal entry transition (see ops/opsJournal.ts).',
+        'Stages a journal.setState intent — an in-place ops_journal entry transition (see ' +
+        'ops/opsJournal.ts). A transition to "applied-pending-confirm" is the Operational ' +
+        'completing intent (every task Type except 🔎 Investigation) and must carry ' +
+        '`reconciliation` — a declaration of what must be true once the change applies, which ' +
+        'the orchestrator evaluates automatically once this intent applies: a pass drives the ' +
+        'journal straight to "resolved" with no operator involvement, a failure stages an ' +
+        'interrupting intent naming the mismatch. Perform the actual check yourself (re-read the ' +
+        'config row, count the backfill) before staging — reconciliation.passed is your own ' +
+        'verdict, not re-derived by the orchestrator.',
       inputSchema: envelope({
         taskId: z.string(),
         state: opsStateSchema,
         fields: z.record(z.string(), z.unknown()).optional(),
+        reconciliation: opsReconciliationAssertionSchema.optional(),
       }),
     },
     async (args) => stage('journal.setState', args.payload, ctx, args),
@@ -355,6 +383,7 @@ export function registerStageProposalTools(
       inputSchema: envelope({
         taskId: z.string(),
         reason: z.string(),
+        skippedKind: z.string().optional(),
       }),
     },
     async (args) => stage('planning.noOp', args.payload, ctx, args),
@@ -390,6 +419,36 @@ export function registerStageProposalTools(
       }),
     },
     async (args) => stage('review.dispute', args.payload, ctx, args),
+  );
+
+  registerTool(
+    'test.request',
+    {
+      title: "Request a run of this project's configured test commands",
+      description:
+        "Stages a test.request intent — a request to run the project's configured `test:` commands against this session's own worktree. Mechanically auto-granted (no operator disposition needed) whenever the project has `test:` commands configured: the server independently recomputes a whole-tree content hash off the live worktree rather than trusting anything this call claims, admits the run through the same per-project concurrency + host memory-headroom gate every other dispatch decision uses, and coalesces two concurrent requests for identical tree content into one execution. The (truncated) pass/fail result is delivered back to this session via its feedback inbox on the next turn. Bounded by a per-session cycle counter — exceeding it pauses the session for an operator instead of auto-running further requests. Cannot belong to a group.",
+      inputSchema: envelope({
+        taskId: z.string(),
+        reason: z.string(),
+      }),
+    },
+    async (args) => stage('test.request', args.payload, ctx, args),
+  );
+
+  registerTool(
+    'ops.prIntent',
+    {
+      title: 'Declare an intent to open a PR for this Ops task',
+      description:
+        "Stages an ops.prIntent intent — this session's mid-execution \"I intend to open a PR for X, here's the diff scope and why\" declaration. An Ops session's PR content is a decision made during the work, not something the task body declares up front, so operator approval of this declaration is the sanctioned go-ahead to open the PR: PRReviewService's Ops rubric then reviews the diff against payload.scope instead of a task-body Files/paths section. Cannot belong to a group — it applies via a direct operator approval, not a group commit. One approved ops.prIntent authorizes exactly one PR (fire-once).",
+      inputSchema: envelope({
+        taskId: z.string(),
+        title: z.string(),
+        scope: z.string(),
+        reason: z.string(),
+      }),
+    },
+    async (args) => stage('ops.prIntent', args.payload, ctx, args),
   );
 
   // Not routed through `stage()`: unlike every other tool here, this acts

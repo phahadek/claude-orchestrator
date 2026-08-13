@@ -16,7 +16,10 @@ import { loadDesignContext } from '../design/designLoad';
 import { loadDocsContext } from '../docs/docsLoad';
 import { getProjectRowById } from '../db/queries';
 import { resolveMilestoneForProject } from '../projects/milestoneResolver';
-import { isPlanningSession } from '../session/sessionPredicates';
+import {
+  isPlanningSession,
+  type SessionType,
+} from '../session/sessionPredicates';
 import { toExternalId, normalizeTaskId } from '../tasks/taskId';
 
 /** Strips a `source:` prefix for URL-building; falls back to the raw id if unprefixed. */
@@ -58,11 +61,7 @@ export function setOpsSessionLauncherRefreshFn(
  * workflow -> sessionType resolution.
  */
 export type PlanningSessionType =
-  | 'groom'
-  | 'design'
-  | 'ops'
-  | 'split'
-  | 'docs'
+  | Extract<SessionType, 'groom' | 'design' | 'ops' | 'split' | 'docs'>
   | 'standard';
 
 /**
@@ -316,7 +315,9 @@ export class OpsSessionLauncher {
     opsContext: OpsLoadResult | undefined,
     task: PlanningTaskEntry,
     taskUrl: string,
-  ): Promise<{ content: string; title?: string } | undefined> {
+  ): Promise<
+    { content: string; title?: string; docsTargetSurface?: string } | undefined
+  > {
     try {
       let digest: PlanningDigest;
       if (sessionType === 'groom') {
@@ -383,7 +384,13 @@ export class OpsSessionLauncher {
         milestoneId,
         projectId,
       });
-      return { content, title: resolvedTitle };
+      return {
+        content,
+        title: resolvedTitle,
+        ...(digest.workflow === 'docs' && {
+          docsTargetSurface: digest.data.targetSurface,
+        }),
+      };
     } catch (err) {
       if (err instanceof GroomWorklistTaskNotFoundError) throw err;
       if (err instanceof GroomTaskSourceUnsupportedError) throw err;
@@ -407,7 +414,9 @@ export class OpsSessionLauncher {
     const taskUrl =
       task.url ||
       `https://www.notion.so/${bareTaskId(task.id).replace(/-/g, '')}`;
-    let injectedProcedure: { content: string; title?: string } | undefined;
+    let injectedProcedure:
+      | { content: string; title?: string; docsTargetSurface?: string }
+      | undefined;
     if (isPlanningSession(sessionType)) {
       try {
         injectedProcedure = await this.buildInjectedProcedure(
@@ -455,8 +464,12 @@ export class OpsSessionLauncher {
               opsContext,
               task as OpsTaskEntry,
             ),
+            declaredWrites: (task as OpsTaskEntry).declaredWrites,
           }),
           ...(injectedProcedureContent && { injectedProcedureContent }),
+          ...(injectedProcedure?.docsTargetSurface !== undefined && {
+            docsTargetSurface: injectedProcedure.docsTargetSurface,
+          }),
           ...(model && { model }),
           ...(effort && { effort }),
         },

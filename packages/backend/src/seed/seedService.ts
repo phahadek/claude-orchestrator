@@ -125,6 +125,7 @@ export interface ListSeedItemsOptions {
   project?: string;
   milestone?: string;
   state?: string;
+  classification?: string;
   page?: number;
   limit?: number;
   /** 'not-done-first' surfaces unconfirmed items ahead of confirmed ones — the run-worklist default. */
@@ -157,6 +158,7 @@ export function listSeedItems(
       project: options.project,
       milestone: options.milestone,
       state: options.state,
+      classification: options.classification,
     },
     limit,
     offset,

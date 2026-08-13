@@ -16,14 +16,33 @@ vi.mock('../../db/queries', () =>
     incrementCompactionCount: vi.fn(),
     setContextOccupancy: vi.fn(),
     setSessionModel: vi.fn(),
+    setSessionModelSettingKey: vi.fn(),
+    setSessionEffortSettingKey: vi.fn(),
     setSessionMetadata: vi.fn(),
     getPRBySessionId: vi.fn().mockReturnValue(null),
     setHeadSha: vi.fn(),
     setPauseReason: vi.fn(),
     setSessionPauseReason: vi.fn(),
     insertPauseInterval: vi.fn(),
+    getLatestTestRequestRun: vi.fn().mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    }),
   }),
 );
+
+vi.mock('../analyzeGating', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzeGating')>();
+  return {
+    ...actual,
+    computeWholeTreeContentHash: vi.fn().mockResolvedValue('hash'),
+  };
+});
 
 vi.mock('../../config', () => ({
   ALLOWED_TOOLS: [],

@@ -130,6 +130,49 @@ describe('task.create staged by a planning session', () => {
       type: '💻 Code',
     });
     expect(fields).not.toHaveProperty('status');
+    // Backward compatibility: a staged-intent row written before priority
+    // became a required MCP-tool field carries no `priority` key at all —
+    // the apply path must keep accepting it rather than throwing on commit.
+    expect(fields).not.toHaveProperty('priority');
+  });
+
+  it('writes the Priority property through to the created page when the payload carries one', async () => {
+    const createTask = vi.fn().mockResolvedValue('notion:new-task-id');
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask,
+    });
+
+    const intent = stageIntent(
+      'task.create',
+      {
+        databaseId: 'db-1',
+        title: 'Fix the thing the investigation found',
+        type: '💻 Code',
+        priority: '🔴 High',
+      },
+      'proj-1',
+      null,
+      'session-ops-1',
+      null,
+    );
+    const staged = await runStageTimeReadyChecks(intent);
+
+    const app = buildApp();
+    const agent = supertest(app);
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(200);
+
+    expect(createTask).toHaveBeenCalledTimes(1);
+    const [fields] = createTask.mock.calls[0];
+    expect(fields).toEqual({
+      databaseId: 'db-1',
+      title: 'Fix the thing the investigation found',
+      type: '💻 Code',
+      priority: '🔴 High',
+    });
   });
 
   it('resolves the board databaseId server-side from a milestone reference — a session never supplies a raw databaseId', async () => {

@@ -5,6 +5,8 @@ import path from 'path';
 import {
   loadOrchestratorConfig,
   getSessionAllowedTools,
+  getSessionAddDirs,
+  getTestCommandDenyPatterns,
   isGrantable,
   sessionRecordReadCapability,
   parseSessionRecordReadCapability,
@@ -12,8 +14,11 @@ import {
   parseAuditLogReadCapability,
   sessionEventsReadCapability,
   parseSessionEventsReadCapability,
+  pathReadCapability,
+  parsePathReadCapability,
   isSanctionedAutoApproveCapability,
   bashCapabilityConfersFileMutation,
+  isDeclaredWriteAutoApprove,
 } from '../orchestrator-config';
 import { NOTION_READ_MCP_TOOLS } from '../../config';
 import {
@@ -323,6 +328,11 @@ describe('getSessionAllowedTools', () => {
       }
     });
 
+    it('includes the session.requestCapability tool — the in-band escalation path for a docs session, derived automatically from PLANNING_INTENT_KINDS.docs', () => {
+      const tools = getSessionAllowedTools('docs', { allowed_tools: [] });
+      expect(tools).toContain('mcp__orchestrator__session_requestCapability');
+    });
+
     it('merges an allowlisted WebFetch entry per declared source domain and never grants open WebSearch', () => {
       const tools = getSessionAllowedTools(
         'docs',
@@ -493,6 +503,202 @@ describe('isGrantable', () => {
 
   it('returns true for the own-record read capability — the never-grantable set stays unchanged', () => {
     expect(isGrantable(sessionRecordReadCapability('session-abc'))).toBe(true);
+  });
+
+  it('is not denied by GRANT_DENYLIST_PATTERNS for a read:path: capability whose path embeds "apply" or "resolve"', () => {
+    expect(
+      isGrantable(pathReadCapability('/some/dir/containing/apply/or/resolve')),
+    ).toBe(true);
+  });
+});
+
+describe('pathReadCapability / parsePathReadCapability', () => {
+  it('round-trips the granted absolute path through the capability string', () => {
+    const capability = pathReadCapability('/srv/config/projects/foo');
+    expect(capability).toBe('read:path:/srv/config/projects/foo');
+    expect(parsePathReadCapability(capability)).toBe(
+      '/srv/config/projects/foo',
+    );
+  });
+
+  it('returns null for a capability that is not a read:path: grant', () => {
+    expect(parsePathReadCapability('Bash(psql:*)')).toBeNull();
+  });
+});
+
+describe('getSessionAddDirs', () => {
+  let tmpDir: string;
+  let configDir: string;
+  let projectDir: string;
+  const originalEnv = process.env.ORCHESTRATOR_CONFIG_DIR;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-add-dirs-'));
+    configDir = path.join(tmpDir, 'config');
+    projectDir = path.join(tmpDir, 'my-project');
+    fs.mkdirSync(path.join(configDir, 'projects', 'my-project'), {
+      recursive: true,
+    });
+    fs.mkdirSync(projectDir, { recursive: true });
+    process.env.ORCHESTRATOR_CONFIG_DIR = configDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (originalEnv === undefined) {
+      delete process.env.ORCHESTRATOR_CONFIG_DIR;
+    } else {
+      process.env.ORCHESTRATOR_CONFIG_DIR = originalEnv;
+    }
+  });
+
+  it.each(['groom', 'design', 'ops', 'docs', 'split'] as const)(
+    'returns the shared central-config-tree baseline for a %s session, excluding credential-shaped siblings',
+    (sessionType) => {
+      const dirs = getSessionAddDirs(sessionType, [], projectDir);
+
+      expect(dirs).toEqual(
+        expect.arrayContaining([
+          path.join(configDir, 'procedures.md'),
+          path.join(configDir, 'task-writing.md'),
+          path.join(configDir, 'README.md'),
+          path.join(configDir, 'guidelines-baseline.json'),
+          path.join(configDir, 'projects', 'my-project', 'context.md'),
+          path.join(
+            configDir,
+            'projects',
+            'my-project',
+            'investigation-guide.md',
+          ),
+          path.join(configDir, 'projects', 'my-project', 'grooming.json'),
+        ]),
+      );
+
+      for (const forbidden of ['remote-control.env', 'hooks', 'systemd']) {
+        expect(dirs.some((d) => d.includes(forbidden))).toBe(false);
+      }
+    },
+  );
+
+  it.each(['standard', 'review'] as const)(
+    'returns no baseline for a %s (non-planning) session',
+    (sessionType) => {
+      expect(getSessionAddDirs(sessionType, [], projectDir)).toEqual([]);
+    },
+  );
+
+  it('adds exactly the granted read:path: root on top of the baseline', () => {
+    const grantedPath = '/srv/orchestrator/data/some-project';
+    const dirs = getSessionAddDirs(
+      'ops',
+      [pathReadCapability(grantedPath)],
+      projectDir,
+    );
+
+    expect(dirs).toContain(grantedPath);
+    expect(dirs).toEqual(
+      expect.arrayContaining([path.join(configDir, 'procedures.md')]),
+    );
+  });
+
+  it('ignores a granted capability that is not a read:path: grant', () => {
+    const dirs = getSessionAddDirs('ops', ['Bash(psql:*)'], projectDir);
+    expect(dirs).not.toContain('Bash(psql:*)');
+  });
+
+  it('adds only the granted path for a non-planning session, which has no baseline', () => {
+    const grantedPath = '/srv/orchestrator/data/some-project';
+    const dirs = getSessionAddDirs(
+      'standard',
+      [pathReadCapability(grantedPath)],
+      projectDir,
+    );
+    expect(dirs).toEqual([grantedPath]);
+  });
+});
+
+/**
+ * Mirrors the SDK's `Bash(<prefix>:*)` deny-rule matching for test purposes
+ * only: a chained command (`&&`/`;`/`|`) is evaluated per simple command,
+ * and each simple command is denied if it equals, or starts with, one of
+ * the rules' prefixes.
+ */
+function isDeniedByPatterns(patterns: string[], command: string): boolean {
+  const prefixes = patterns
+    .map((p) => /^Bash\((.+):\*\)$/.exec(p)?.[1])
+    .filter((p): p is string => Boolean(p));
+  const simpleCommands = command.split(/&&|;|\|/).map((c) => c.trim());
+  return simpleCommands.some((sc) =>
+    prefixes.some((prefix) => sc === prefix || sc.startsWith(`${prefix} `)),
+  );
+}
+
+describe('getTestCommandDenyPatterns', () => {
+  it('returns an empty list when no test commands are configured', () => {
+    expect(getTestCommandDenyPatterns([])).toEqual([]);
+  });
+
+  it('turns each configured test command into a Bash(<command>:*) deny rule', () => {
+    const denies = getTestCommandDenyPatterns([
+      'npm test',
+      'npm run test:unit',
+    ]);
+    expect(denies).toContain('Bash(npm test:*)');
+    expect(denies).toContain('Bash(npm run test:unit:*)');
+  });
+
+  it('dedupes and trims whitespace', () => {
+    const denies = getTestCommandDenyPatterns([' npm test ', 'npm test', '']);
+    expect(denies.filter((p) => p === 'Bash(npm test:*)')).toHaveLength(1);
+  });
+
+  it('never denies the coarse install/build/typecheck prefixes', () => {
+    const denies = getTestCommandDenyPatterns(['npm test']);
+    expect(denies).not.toContain('Bash(npm:*)');
+    expect(denies).not.toContain('Bash(npx:*)');
+    expect(denies).not.toContain('Bash(tsc:*)');
+  });
+
+  describe('claude-dashboard-shaped config (npm run test -w <workspace>)', () => {
+    const denies = getTestCommandDenyPatterns([
+      'npm run test -w packages/frontend',
+      'npm run test -w packages/backend',
+    ]);
+
+    it.each([
+      'npx vitest run',
+      'npx vitest run src/routes/__tests__/stagedIntents.dispositionStranded.test.ts',
+      'cd packages/backend && npx vitest run',
+      'cd packages/backend && npx vitest run 2>&1 | tail -150',
+    ])('blocks the direct-runner bypass %s', (command) => {
+      expect(isDeniedByPatterns(denies, command)).toBe(true);
+    });
+
+    it.each([
+      'npx tsc --noEmit -p packages/backend/tsconfig.json',
+      'npm run build',
+      'npm ci',
+    ])('leaves %s permitted', (command) => {
+      expect(isDeniedByPatterns(denies, command)).toBe(false);
+    });
+  });
+
+  describe('polimarket-shaped config (uv run pytest)', () => {
+    const denies = getTestCommandDenyPatterns(['uv run pytest']);
+
+    it.each([
+      'uv run pytest',
+      'uv run pytest tests/',
+      'pytest',
+      'python -m pytest',
+    ])('blocks the direct-runner invocation %s', (command) => {
+      expect(isDeniedByPatterns(denies, command)).toBe(true);
+    });
+
+    it('does not block other uv run subcommands', () => {
+      expect(isDeniedByPatterns(denies, 'uv run ruff check')).toBe(false);
+      expect(isDeniedByPatterns(denies, 'uv sync')).toBe(false);
+    });
   });
 });
 
@@ -731,5 +937,43 @@ describe('isSanctionedAutoApproveCapability', () => {
         'groom',
       ),
     ).toBe(true);
+  });
+});
+
+describe('isDeclaredWriteAutoApprove', () => {
+  it('is true for a capability that exact-matches a non-Prod-Mutating declared entry', () => {
+    expect(
+      isDeclaredWriteAutoApprove('Bash(npm ci:*)', [
+        { capability: 'Bash(npm ci:*)', prodMutating: false },
+      ]),
+    ).toBe(true);
+  });
+
+  it('is false for a capability that matches a Prod-Mutating declared entry', () => {
+    expect(
+      isDeclaredWriteAutoApprove('Bash(git push:*)', [
+        { capability: 'Bash(git push:*)', prodMutating: true },
+      ]),
+    ).toBe(false);
+  });
+
+  it('is false for a capability with no declared match at all', () => {
+    expect(
+      isDeclaredWriteAutoApprove('Bash(npm publish:*)', [
+        { capability: 'Bash(npm ci:*)', prodMutating: false },
+      ]),
+    ).toBe(false);
+  });
+
+  it('never matches by prefix/pattern — only an exact string match counts', () => {
+    expect(
+      isDeclaredWriteAutoApprove('Bash(npm ci --production:*)', [
+        { capability: 'Bash(npm ci:*)', prodMutating: false },
+      ]),
+    ).toBe(false);
+  });
+
+  it('is false for an empty declared-writes set', () => {
+    expect(isDeclaredWriteAutoApprove('Bash(npm ci:*)', [])).toBe(false);
   });
 });

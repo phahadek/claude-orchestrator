@@ -10,10 +10,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
 
-const { mockGetTaskBackend, mockRecordEvent } = vi.hoisted(() => ({
-  mockGetTaskBackend: vi.fn(),
-  mockRecordEvent: vi.fn(),
-}));
+const { mockGetTaskBackend, mockRecordEvent, mockClassifyReadyProposal } =
+  vi.hoisted(() => ({
+    mockGetTaskBackend: vi.fn(),
+    mockRecordEvent: vi.fn(),
+    mockClassifyReadyProposal: vi.fn(),
+  }));
 
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: mockGetTaskBackend,
@@ -21,6 +23,10 @@ vi.mock('../../tasks/TaskBackend', () => ({
 
 vi.mock('../../audit/AuditLog', () => ({
   recordEvent: mockRecordEvent,
+}));
+
+vi.mock('../../tasks/deferralClassifier', () => ({
+  classifyReadyProposal: mockClassifyReadyProposal,
 }));
 
 vi.mock('../../db/db', async () => {
@@ -58,11 +64,14 @@ import {
   insertStagedIntent,
   getStagedIntent,
   insertSession,
+  transitionStagedIntent,
+  upsertTaskCache,
 } from '../../db/queries';
 import {
   createStagedIntentsRouter,
   stageIntent,
   TaskCreateMissingGroupError,
+  GroomBodyEditMissingGroupError,
 } from '../stagedIntents';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
@@ -88,12 +97,23 @@ function sections(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   mockGetTaskBackend.mockReset();
   mockRecordEvent.mockReset();
+  mockClassifyReadyProposal.mockReset();
+  mockClassifyReadyProposal.mockResolvedValue(undefined);
   vi.mocked(getTaskCache).mockReturnValue(null);
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
   db.prepare('DELETE FROM gate_accretion').run();
   db.prepare('DELETE FROM seed_accretion').run();
+  db.prepare("DELETE FROM task_cache WHERE task_id LIKE 'board:%'").run();
 });
+
+/** Seeds a single board-cache blob (getAllBoardCacheTasks reads every board:* row). */
+function seedBoardCache(
+  key: string,
+  tasks: Array<{ id: string; status: string; dependsOn: string[] }>,
+) {
+  upsertTaskCache(`board:${key}`, JSON.stringify(tasks));
+}
 
 async function stageGroup(
   agent: ReturnType<typeof supertest>,
@@ -639,6 +659,42 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
     );
   });
 
+  it('records a staged_intent_group_committed audit row at the commit boundary with group id, member count and outcome', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn().mockResolvedValue(undefined),
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-gc',
+      't-gc',
+      'g-gc',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-gc/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'staged_intent_group_committed',
+        payload: expect.objectContaining({
+          group_id: 'g-gc',
+          member_count: 2,
+          outcome: 'committed',
+        }),
+      }),
+    );
+  });
+
   it('commits a group containing a task.patchBodySection member atomically alongside setDependsOn/setStatus', async () => {
     const calls: string[] = [];
     const patchBodySection = vi.fn().mockImplementation(async () => {
@@ -646,7 +702,11 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
     });
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Summary\nClean.\n\n## 👁️ Manual verification\n- Some step\n',
+        ),
       updateStatus: vi.fn().mockImplementation(async () => {
         calls.push('setStatus');
       }),
@@ -922,6 +982,345 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
       expect.arrayContaining([expect.objectContaining({ tier: 'structural' })]),
     );
   });
+
+  it('blocks a group whose task.patchBodySection member does not compose, naming that intent id in the blocked reason', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      patchBodySection: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const taskId = 't-non-composing';
+    const groupId = 'g-non-composing';
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-non-composing',
+      groupId,
+      payload: { taskId, dependsOn: [] },
+    });
+    // Targets a section that isn't in the stored body — cannot compose.
+    const patch = await agent.post('/api/staged-intents').send({
+      kind: 'task.patchBodySection',
+      projectId: 'proj-non-composing',
+      groupId,
+      payload: {
+        taskId,
+        section: 'Files / paths affected',
+        operation: 'replace',
+        find: 'src/missing.ts',
+        replaceWith: 'src/present.ts',
+      },
+    });
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-non-composing',
+      groupId,
+      payload: {
+        taskId,
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+        },
+      },
+    });
+
+    await agent
+      .post(`/api/staged-intents/${dependsOn.body.id}/approve`)
+      .send({});
+    await agent.post(`/api/staged-intents/${patch.body.id}/approve`).send({});
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.reasons.join(' ')).toContain(patch.body.id);
+    expect(commit.body.reasons.join(' ')).toContain('did not compose');
+  });
+});
+
+describe('task.setStatus -> Deferred blocked while a non-terminal dependent is not re-pointed', () => {
+  it('refuses when the group carries no companion task.setDependsOn for the dependent, surfacing a structured 409 with the blocking task ids', async () => {
+    seedBoardCache('k1', [
+      { id: 't-defer-1', status: '🗂️ Ready', dependsOn: [] },
+      { id: 't-dependent-1', status: '🗂️ Ready', dependsOn: ['t-defer-1'] },
+    ]);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-1',
+      groupId: 'g-defer-1',
+      payload: { taskId: 't-defer-1', status: 'Deferred' },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-defer-1/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).toContain('t-dependent-1');
+    expect(commit.body.dependentTaskIds).toEqual(['t-dependent-1']);
+  });
+
+  it('succeeds when the same group also carries a task.setDependsOn re-pointing the dependent', async () => {
+    seedBoardCache('k2', [
+      { id: 't-defer-2', status: '🗂️ Ready', dependsOn: [] },
+      { id: 't-dependent-2', status: '🗂️ Ready', dependsOn: ['t-defer-2'] },
+    ]);
+    const updateStatus = vi.fn();
+    const setDependsOn = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-2',
+      groupId: 'g-defer-2',
+      payload: { taskId: 't-defer-2', status: 'Deferred' },
+    });
+    const repoint = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-defer-2',
+      groupId: 'g-defer-2',
+      payload: { taskId: 't-dependent-2', dependsOn: ['t-successor'] },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+    await agent.post(`/api/staged-intents/${repoint.body.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-defer-2/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(updateStatus).toHaveBeenCalled();
+    expect(setDependsOn).toHaveBeenCalledWith(
+      'notion:t-dependent-2',
+      ['notion:t-successor'],
+      expect.anything(),
+    );
+  });
+
+  it('a companion task.setDependsOn committed in an earlier apply of the same group still satisfies the guard', async () => {
+    seedBoardCache('k3', [
+      { id: 't-defer-3', status: '🗂️ Ready', dependsOn: [] },
+      { id: 't-dependent-3', status: '🗂️ Ready', dependsOn: ['t-defer-3'] },
+    ]);
+    const updateStatus = vi.fn();
+    const setDependsOn = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    // First apply of the group: only the re-point commits.
+    const repoint = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-defer-3',
+      groupId: 'g-defer-3',
+      payload: { taskId: 't-dependent-3', dependsOn: ['t-successor'] },
+    });
+    await agent.post(`/api/staged-intents/${repoint.body.id}/approve`).send({});
+    const firstCommit = await agent
+      .post('/api/staged-intents/group/g-defer-3/commit')
+      .send({});
+    expect(firstCommit.status).toBe(200);
+
+    // Second apply, same groupId: the setStatus->Deferred intent is staged
+    // later, against the durable store where the re-point already committed.
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-3',
+      groupId: 'g-defer-3',
+      payload: { taskId: 't-defer-3', status: 'Deferred' },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+    const secondCommit = await agent
+      .post('/api/staged-intents/group/g-defer-3/commit')
+      .send({});
+
+    expect(secondCommit.status).toBe(200);
+    expect(updateStatus).toHaveBeenCalled();
+  });
+
+  it('is unaffected when the task has no dependents — no companion intent required', async () => {
+    seedBoardCache('k4', [
+      { id: 't-defer-4', status: '🗂️ Ready', dependsOn: [] },
+    ]);
+    const updateStatus = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-4',
+      groupId: 'g-defer-4',
+      payload: { taskId: 't-defer-4', status: 'Deferred' },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-defer-4/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(updateStatus).toHaveBeenCalled();
+  });
+
+  it('is unaffected when the only dependents are already terminal (Done or Deferred)', async () => {
+    seedBoardCache('k5', [
+      { id: 't-defer-5', status: '🗂️ Ready', dependsOn: [] },
+      { id: 't-dependent-done', status: '✅ Done', dependsOn: ['t-defer-5'] },
+      {
+        id: 't-dependent-deferred',
+        status: '⏭️ Deferred',
+        dependsOn: ['t-defer-5'],
+      },
+    ]);
+    const updateStatus = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-5',
+      groupId: 'g-defer-5',
+      payload: { taskId: 't-defer-5', status: 'Deferred' },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-defer-5/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(updateStatus).toHaveBeenCalled();
+  });
+
+  it('a companion task.setDependsOn naming the deferred task itself rather than its dependent does not satisfy the guard', async () => {
+    seedBoardCache('k6', [
+      { id: 't-defer-6', status: '🗂️ Ready', dependsOn: [] },
+      { id: 't-dependent-6', status: '🗂️ Ready', dependsOn: ['t-defer-6'] },
+    ]);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-6',
+      groupId: 'g-defer-6',
+      payload: { taskId: 't-defer-6', status: 'Deferred' },
+    });
+    // Mirror-semantics trap: names the deferred task itself, not the dependent.
+    const mirror = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-defer-6',
+      groupId: 'g-defer-6',
+      payload: { taskId: 't-defer-6', dependsOn: [] },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+    await agent.post(`/api/staged-intents/${mirror.body.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-defer-6/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.dependentTaskIds).toEqual(['t-dependent-6']);
+  });
+
+  it('the existing DependsOnCompletenessError Ready-flip guard is unchanged', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-ready-regress',
+      groupId: 'g-ready-regress',
+      payload: {
+        taskId: 't-ready-regress',
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+        },
+      },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-ready-regress/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).toContain(
+      'its intent group has no task.setDependsOn',
+    );
+  });
 });
 
 describe('Manual-verification-strip grouping — commit-time hard enforcement', () => {
@@ -957,7 +1356,11 @@ describe('Manual-verification-strip grouping — commit-time hard enforcement', 
     const patchBodySection = vi.fn().mockResolvedValue(undefined);
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Summary\nClean.\n\n## 👁️ Manual verification\n- Some step\n',
+        ),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
       patchBodySection,
@@ -1218,14 +1621,18 @@ describe('strip⇔accrete content-verification hard gate', () => {
   });
 });
 
-describe('seed_contribution strip⇔accrete content-match (declared candidates vs staged seeds)', () => {
+describe('seed_contribution strip⇔accrete content-match (body-derived "## Operational seed" section vs staged seeds)', () => {
+  const SEED_BODY =
+    '## Summary\nClean.\n\n## Operational seed\n- Set default retry count to 3\n- Enable the new feature flag\n';
+  const NO_SEED_SECTION_BODY = '## Summary\nClean.';
+
   async function stageSeedContentMatchGroup(
     agent: ReturnType<typeof supertest>,
     projectId: string,
     taskId: string,
     groupId: string,
     seedStageOverrides: Record<string, unknown>,
-    seedContributionCandidates?: { spec: string }[],
+    seedContributionCandidates?: { spec: string; classification?: string }[],
   ) {
     const dependsOn = await agent.post('/api/staged-intents').send({
       kind: 'task.setDependsOn',
@@ -1271,10 +1678,10 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
     return { dependsOn, seedStage, setStatus };
   }
 
-  it('commits cleanly when declared seed candidates match staged seeds', async () => {
+  it('commits cleanly when N items in the body\'s "## Operational seed" section match N staged seeds', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi.fn().mockResolvedValue(SEED_BODY),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
     });
@@ -1286,8 +1693,18 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
       'proj-cm-seed',
       't-cm-seed',
       groupId,
-      { seeds: [{ spec: 'Set default retry count to 3' }] },
-      [{ spec: 'Set default retry count to 3' }],
+      {
+        seeds: [
+          { spec: 'Set default retry count to 3' },
+          { spec: 'Enable the new feature flag' },
+        ],
+      },
+      [
+        {
+          spec: 'ignored — trigger only, no longer the comparison side',
+          classification: 'operational-seed',
+        },
+      ],
     );
 
     const commit = await agent
@@ -1297,10 +1714,10 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
     expect(commit.status).toBe(200);
   });
 
-  it('hard-blocks when fewer seeds were staged than declared', async () => {
+  it('hard-blocks when fewer seeds were staged than the body declares', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi.fn().mockResolvedValue(SEED_BODY),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
     });
@@ -1313,10 +1730,7 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
       't-cm-seed-fewer',
       groupId,
       { seeds: [{ spec: 'Set default retry count to 3' }] },
-      [
-        { spec: 'Set default retry count to 3' },
-        { spec: 'Enable the new feature flag' },
-      ],
+      [{ spec: 'Set default retry count to 3' }],
     );
 
     const commit = await agent
@@ -1336,7 +1750,7 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
   it('hard-blocks on an item-correspondence mismatch even with equal counts', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi.fn().mockResolvedValue(SEED_BODY),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
     });
@@ -1354,10 +1768,7 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
           { spec: 'Something totally unrelated' },
         ],
       },
-      [
-        { spec: 'Set default retry count to 3' },
-        { spec: 'Enable the new feature flag' },
-      ],
+      [{ spec: 'Set default retry count to 3' }],
     );
 
     const commit = await agent
@@ -1368,10 +1779,41 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
     expect(commit.body.error).toContain('content mismatch');
   });
 
+  it('never blocks a grouped Ready-flip when the real stored body carries no "## Operational seed" section', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue(NO_SEED_SECTION_BODY),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-seed-missing-section';
+    await stageSeedContentMatchGroup(
+      agent,
+      'proj-cm-seed-missing',
+      't-cm-seed-missing',
+      groupId,
+      { seeds: [{ spec: 'Set default retry count to 3' }] },
+      [
+        {
+          spec: 'Set default retry count to 3',
+          classification: 'operational-seed',
+        },
+      ],
+    );
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+  });
+
   it('does not run the content-match check when no seedContributionCandidates were declared', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi.fn().mockResolvedValue(SEED_BODY),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
     });
@@ -1397,7 +1839,7 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
   it('does not run the content-match check for the existing none/n-a decision path', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi.fn().mockResolvedValue(SEED_BODY),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
     });
@@ -1410,7 +1852,12 @@ describe('seed_contribution strip⇔accrete content-match (declared candidates v
       't-cm-seed-none',
       groupId,
       { seeds: [], decision: 'n/a' },
-      [{ spec: 'Set default retry count to 3' }],
+      [
+        {
+          spec: 'Set default retry count to 3',
+          classification: 'operational-seed',
+        },
+      ],
     );
 
     const commit = await agent
@@ -1621,6 +2068,65 @@ describe('Tier-3 advisory vs. annotation — commit-time channel independence', 
       .send({});
 
     expect(commit.status).toBe(409);
+  });
+});
+
+describe('Tier-3 advisory — group-commit path invocation', () => {
+  it('invokes classifyReadyProposal with the group id once a Ready-flip group commits', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    vi.mocked(getTaskCache).mockReturnValue(null);
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-commit-tier3',
+      't-commit-tier3',
+      'g-commit-tier3',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-commit-tier3/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(mockClassifyReadyProposal).toHaveBeenCalledWith('g-commit-tier3');
+  });
+
+  it('does not let a rejecting classifyReadyProposal reject, delay, or alter the commit result', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    vi.mocked(getTaskCache).mockReturnValue(null);
+    mockClassifyReadyProposal.mockRejectedValue(new Error('classifier down'));
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-commit-tier3-fail',
+      't-commit-tier3-fail',
+      'g-commit-tier3-fail',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-commit-tier3-fail/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.ok).toBe(true);
   });
 });
 
@@ -2432,5 +2938,542 @@ describe('task.create staged while the session has an open decision group for it
       ['notion:sibling-task-id-3'],
       { source: 'human' },
     );
+  });
+});
+
+describe('task.patchBodySection / task.updateBody staged ungrouped while the session has an open decision group', () => {
+  function seedGroomSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'groom',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  function seedDesignSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'design',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  function seedOpsSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  it('rejects an ungrouped task.patchBodySection when the session already has an open group for its own task', () => {
+    seedGroomSession('groom-body-1', 't-body-original-1');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-body-original-1', dependsOn: [] },
+      'proj-body',
+      'g-body-1',
+      'groom-body-1',
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.patchBodySection',
+        {
+          taskId: 't-body-original-1',
+          section: 'Context',
+          operation: 'append',
+          content: 'Extra context.',
+        },
+        'proj-body',
+        null,
+        'groom-body-1',
+      ),
+    ).toThrow(GroomBodyEditMissingGroupError);
+  });
+
+  it('rejects an ungrouped task.updateBody when the session already has an open group for its own task', () => {
+    seedGroomSession('groom-body-2', 't-body-original-2');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-body-original-2', dependsOn: [] },
+      'proj-body',
+      'g-body-2',
+      'groom-body-2',
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: 't-body-original-2', sections: sections() },
+        'proj-body',
+        null,
+        'groom-body-2',
+      ),
+    ).toThrow(GroomBodyEditMissingGroupError);
+  });
+
+  it("accepts a task.patchBodySection carrying the open group's own groupId", () => {
+    seedGroomSession('groom-body-3', 't-body-original-3');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-body-original-3', dependsOn: [] },
+      'proj-body',
+      'g-body-3',
+      'groom-body-3',
+    );
+
+    const patch = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-body-original-3',
+        section: 'Context',
+        operation: 'append',
+        content: 'Extra context.',
+      },
+      'proj-body',
+      'g-body-3',
+      'groom-body-3',
+    );
+    expect(patch.groupId).toBe('g-body-3');
+  });
+
+  it('still accepts a standalone ungrouped task.patchBodySection from a groom session with no open decision group for its task', () => {
+    seedGroomSession('groom-body-standalone', 't-body-standalone');
+
+    const patch = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-body-standalone',
+        section: 'Context',
+        operation: 'append',
+        content: 'Extra context.',
+      },
+      'proj-body',
+      null,
+      'groom-body-standalone',
+    );
+    expect(patch.groupId).toBeNull();
+  });
+
+  it('does not affect a design session staging a standalone ungrouped body edit', () => {
+    seedDesignSession('design-body-1', 't-body-design-1');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-body-design-1', dependsOn: [] },
+      'proj-body',
+      'g-body-design-1',
+      'design-body-1',
+    );
+
+    const patch = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-body-design-1',
+        section: 'Context',
+        operation: 'append',
+        content: 'Extra context.',
+      },
+      'proj-body',
+      null,
+      'design-body-1',
+    );
+    expect(patch.groupId).toBeNull();
+  });
+
+  it('does not add a second rejection reason for an ops session — its own pre-existing ops-terminal grouping rule (unrelated to this change) still fires unchanged', () => {
+    seedOpsSession('ops-body-1', 't-body-ops-1');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-body-ops-1', dependsOn: [] },
+      'proj-body',
+      'g-body-ops-1',
+      'ops-body-1',
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: 't-body-ops-1', sections: sections() },
+        'proj-body',
+        null,
+        'ops-body-1',
+      ),
+    ).toThrow(/ops-terminal member/);
+
+    const patch = stageIntent(
+      'task.updateBody',
+      { taskId: 't-body-ops-1', sections: sections() },
+      'proj-body',
+      'g-body-ops-1',
+      'ops-body-1',
+    );
+    expect(patch.groupId).toBe('g-body-ops-1');
+  });
+});
+
+describe("retroactive adoption — a standalone groom body edit joins its task's group once one opens", () => {
+  function seedGroomSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'groom',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  it('adopts a standalone staged body edit into the group the same session opens afterward', () => {
+    seedGroomSession('groom-adopt-1', 't-adopt-1');
+    const orphan = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-adopt-1',
+        section: 'Context',
+        operation: 'append',
+        content: 'Fixed the body first.',
+      },
+      'proj-body',
+      null,
+      'groom-adopt-1',
+    );
+    expect(orphan.groupId).toBeNull();
+
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-adopt-1', dependsOn: [] },
+      'proj-body',
+      'g-adopt-1',
+      'groom-adopt-1',
+    );
+
+    expect(getStagedIntent(orphan.id)!.group_id).toBe('g-adopt-1');
+  });
+
+  it('adopts a needs_revision orphan (group_id reassigned) and the resulting group is groupBlocked until it resolves', async () => {
+    seedGroomSession('groom-adopt-2', 't-adopt-2');
+    const orphan = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-adopt-2',
+        section: 'Context',
+        operation: 'append',
+        content: 'Fixed the body first.',
+      },
+      'proj-body',
+      null,
+      'groom-adopt-2',
+    );
+    transitionStagedIntent(orphan.id, 'needs_revision', {
+      dispositionReason: 'needs a rewrite',
+    });
+    expect(getStagedIntent(orphan.id)!.state).toBe('needs_revision');
+
+    const groupId = 'g-adopt-2';
+    const dependsOn = stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-adopt-2', dependsOn: [] },
+      'proj-body',
+      groupId,
+      'groom-adopt-2',
+    );
+
+    const app = makeApp();
+    const agent = supertest(app);
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+
+    const adopted = getStagedIntent(orphan.id)!;
+    expect(adopted.group_id).toBe(groupId);
+    expect(adopted.state).toBe('needs_revision');
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+    expect(commit.status).toBe(409);
+    expect(commit.body.blockingId).toBe(orphan.id);
+  });
+
+  it('leaves a superseded orphan alone — it is not adopted into the newly opened group', () => {
+    seedGroomSession('groom-adopt-3', 't-adopt-3');
+    const first = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-adopt-3',
+        section: 'Context',
+        operation: 'append',
+        content: 'First version.',
+      },
+      'proj-body',
+      null,
+      'groom-adopt-3',
+    );
+    // Restaging the same kind/task with different content supersedes `first`.
+    const second = stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 't-adopt-3',
+        section: 'Context',
+        operation: 'append',
+        content: 'Second version.',
+      },
+      'proj-body',
+      null,
+      'groom-adopt-3',
+    );
+    expect(getStagedIntent(first.id)!.state).toBe('superseded');
+
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-adopt-3', dependsOn: [] },
+      'proj-body',
+      'g-adopt-3',
+      'groom-adopt-3',
+    );
+
+    expect(getStagedIntent(first.id)!.group_id).toBeNull();
+    expect(getStagedIntent(second.id)!.group_id).toBe('g-adopt-3');
+  });
+
+  it('reconciles an orphan even when the group was already open before this stage call — the sweep runs on every stage into the group, not only the first', () => {
+    seedGroomSession('groom-adopt-4', 't-adopt-4');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-adopt-4', dependsOn: [] },
+      'proj-body',
+      'g-adopt-4',
+      'groom-adopt-4',
+    );
+
+    // Simulate a pre-existing stray orphan (e.g. staged before this fix
+    // shipped) sitting outside the already-open group.
+    insertStagedIntent({
+      id: 'stray-orphan-4',
+      kind: 'task.updateBody',
+      payload: JSON.stringify({ taskId: 't-adopt-4', sections: sections() }),
+      payload_hash: 'hash-stray-orphan-4',
+      task_id: 't-adopt-4',
+      project_id: 'proj-body',
+      session_id: 'groom-adopt-4',
+      group_id: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      milestone: null,
+      created_at: 1000,
+      updated_at: 1000,
+    });
+
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-adopt-4', dependsOn: ['notion:some-other-task'] },
+      'proj-body',
+      'g-adopt-4',
+      'groom-adopt-4',
+    );
+
+    expect(getStagedIntent('stray-orphan-4')!.group_id).toBe('g-adopt-4');
+  });
+});
+
+describe('a groom session staging task.create against its own Design/Planning subject task', () => {
+  function seedGroomSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'groom',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  function seedDesignSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'design',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  it.each([
+    ['📐 Design', 'groom-df-1a', 't-groom-design-subject-a'],
+    ['📋 Planning', 'groom-df-1b', 't-groom-design-subject-b'],
+  ])(
+    'rejects a task.create staged by a groom session whose subject task is %s',
+    (taskType, sessionId, taskId) => {
+      seedGroomSession(sessionId, taskId);
+      vi.mocked(getTaskCache).mockReturnValue({
+        task_id: taskId,
+        fetched_at: 0,
+        raw_json: JSON.stringify({ type: taskType }),
+      });
+
+      expect(() =>
+        stageIntent(
+          'task.create',
+          { title: 'Pre-authored follow-on', type: '💻 Code' },
+          'proj-groom-df',
+          `g-${sessionId}`,
+          sessionId,
+        ),
+      ).toThrow(/Design Execution session/);
+    },
+  );
+
+  it('does not affect a groom session staging task.create against a non-Design subject task (its legitimate follow-on-filing path)', () => {
+    seedGroomSession('groom-df-2', 't-groom-investigation-subject');
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 't-groom-investigation-subject',
+      fetched_at: 0,
+      raw_json: JSON.stringify({ type: '🔎 Investigation' }),
+    });
+
+    const create = stageIntent(
+      'task.create',
+      { title: 'Grounded follow-on from an investigation', type: '💻 Code' },
+      'proj-groom-df',
+      'g-groom-df-2',
+      'groom-df-2',
+    );
+    expect(create.kind).toBe('task.create');
+  });
+
+  it('does not affect a Design Execution session staging its own follow-on task.create against its Design subject task', () => {
+    seedDesignSession('design-df-1', 't-design-subject');
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 't-design-subject',
+      fetched_at: 0,
+      raw_json: JSON.stringify({ type: '📐 Design' }),
+    });
+    // Bypasses stageIntent's own completeness.disposition staging (out of
+    // scope here) to directly satisfy assertCompletenessApproval's gate —
+    // same shortcut stagedIntents.completenessGate.test.ts uses.
+    db.prepare(
+      `INSERT INTO staged_intent (id, kind, payload, project_id, state, session_id, created_at, updated_at, payload_hash)
+       VALUES (@id, 'completeness.disposition', @payload, @project_id, 'committed', @session_id, @created_at, @updated_at, @payload_hash)`,
+    ).run({
+      id: 'design-df-1-disposition',
+      payload: JSON.stringify({ taskId: 'notion:t-design-subject' }),
+      project_id: 'proj-design-df',
+      session_id: 'design-df-1',
+      created_at: 1,
+      updated_at: 1,
+      payload_hash: 'irrelevant-hash',
+    });
+
+    const create = stageIntent(
+      'task.create',
+      {
+        title: 'Locked-decision follow-on',
+        type: '💻 Code',
+        priority: '🔴 High',
+      },
+      'proj-design-df',
+      'g-design-df-1',
+      'design-df-1',
+    );
+    expect(create.kind).toBe('task.create');
   });
 });

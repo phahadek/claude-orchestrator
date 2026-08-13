@@ -108,6 +108,16 @@ unattended while still keeping a human on every close.
 ### Universal — every run, every mode
 
 - **Read-only diagnosis before any write.** Never mutate to learn what you can read.
+- **Acknowledgement is not compliance — the next action is what agreement looks like.** Saying "you're
+  right" and then proceeding with your own plan is a null response that costs the operator the
+  correction twice. On accepting a correction: **state what you are doing differently, then do that**
+  — not the plan you already had. A correction **persists for the rest of the run**; a rule conceded
+  once does not need re-conceding each time it applies.
+- **Ambiguous input: resolve it before acting.** **If you call an input ambiguous, you may not act on
+  your interpretation in the same turn** — ask, then act. Real run: a bare `+` was read as approval,
+  *said aloud to be ambiguous*, and acted on anyway. Flagging an ambiguity and then proceeding is
+  worse than either asking cleanly or acting silently: it transfers the risk to the operator while
+  keeping the action. This binds hardest on anything that writes or files.
 - **The sanctioned read surface is the default — use it freely, no permission needed.** The
   analyst MCP + the `/ops` HTTP read endpoints are the normal read path; reach for them without
   asking the operator. **"Read by value" almost always means these**, not raw SQL. Ad-hoc
@@ -152,6 +162,76 @@ unattended while still keeping a human on every close.
   it must be **kept honest by a real forcing function** (a one-time precondition at the point of
   resumption, a hard dependency) — never a rot-able backlog note, and never a standing per-run check
   that taxes every future execution to police a finite, shrinking condition.
+
+### Evidence law — the claim shape dictates the admissible evidence
+
+Wrong conclusions in an ops run share one mechanism: a cheap check returned a result consistent with
+the hypothesis, and the search stopped. Reciting "falsify before you assert" does not prevent it —
+the discipline gets recited and violated in the same session. What prevents it is mechanical. Before
+stating a claim — in a journal entry, a verdict, a filed task, or to the operator — find its shape
+here and confirm you ran **that** evidence, not the cheap substitute.
+
+| Claim shape | Admissible evidence | The cheap substitute that fails |
+| --- | --- | --- |
+| "X is absent / not wired / not running / 0" — any **negative** | A search or query whose **scope you can state**, run through the false-negative checklist (§ 🔎 Investigation, "read outputs by value") | Checking the one place you expect it. A `livestats` filter against a producer that writes `source='lol'` reads as "0 rows / dark" |
+| "Session / daemon / job S did or didn't do Y" | **S's own record** — its transcript, its log, its event stream | Its artifacts or its status. Artifacts cannot show a failed call, a flail, or a silent abort |
+| "At time T the state was Z" | **Point-in-time** rows: events, audit history, timestamped snapshots | A **current-state** column. The events under study are what mutated it — it can read zero by construction |
+| "X is by design / intentional" | A **quoted** docstring, comment, commit message, or design doc | Inferring intent from a naming difference or an apparent symmetry. The docstring is usually directly above the code, and says the opposite |
+| "S is abandoned / stuck / safe to terminate" | Its **event stream** — recency **and** volume — plus a **second observation separated in time** | A status field plus elapsed time. `idle` is not terminal (`procedures.md` § Never recommend a terminal action against a session on status alone — a hard rule, not a preference) |
+| "This behaviour is a bug" | The spec, docstring, or invariant it **violates**, quoted | It looked wrong. A correct guard refusing an invalid operation is not a bug, and "fixing" it makes things worse |
+| "Task / design Y already owns this" | **Y's quoted body** | Y's **title**. A title compresses a task to a topic; two tasks on one topic routinely own different questions |
+
+**Row 2 is a gate, not a preference: no claim about what a session / daemon / job did — or why —
+before you have read its own record.** State rows, intent rows, and artifacts describe the
+**envelope**; they cannot distinguish *"it never supplied the value"* from *"it supplied the value and
+something downstream ate it."* Real run: nine intent members all showed a null proposal field and the
+cause was reported as "the session didn't supply one"; the transcript showed a **3,272-character
+proposal supplied every time**, silently discarded by the envelope. **A supporting base rate does not
+corroborate a cause you have not read the record for** — that wrong answer came decorated with
+191/557 rows and looked well-evidenced.
+
+**Validate the instrument before trusting what it returns — state the coverage.** A query is not a
+read of the record until you know what it dropped. Before concluding from any filtered, joined, or
+type-coerced query, **state the fraction of the population it covers**: rows returned vs rows that
+exist. **A filter that drops more than ~20% of the population is not a read of the record** — it is a
+sample, and must be described as one or widened until it isn't. Real failure: a transcript reader
+filtered to two event types, dropping **489 of 571 events**, while the preceding command had already
+printed the type histogram proving it — the number was generated, then ignored, and the remainder was
+reported as complete.
+
+**A zero or a thin result is a claim about the instrument before it is a claim about the world.**
+Before reporting any zero, confirm the comparison can be true at all: types match (an ISO string
+compared against **epoch-ms** columns matches nothing, ever), the filter value equals what the
+*producer* writes, the id-space is the same. This is the false-negative checklist in § 🔎
+Investigation, applied one step earlier — to the instrument rather than the result.
+
+**Replicate a predicate *exactly*, or you are measuring a different question.** When you reconstruct a
+check the system performs — a budget, a capacity, a coverage count, an eligibility or backfill filter
+— **copy its predicate verbatim from the source.** Every condition you add that the code lacks, and
+every loosening you allow that it doesn't, changes the question while the number keeps looking
+authoritative. Real run: a dispatch budget computed with an `archived = 0` filter **the code does not
+have** returned **9** where the true budget was **0**, and that one added condition hid the root cause
+across a dozen reads; a coverage scan reported **5** by prefix-matching and **22** by exact match.
+Neither was bad arithmetic — both answered a question nobody asked. **Paste the predicate, don't
+paraphrase it**; if you must diverge, say which condition you changed, in the same breath as the
+number.
+
+**Column types vary per table — print one raw value before reading meaning into a filtered result.**
+The epoch-ms trap has an inverted twin: a `started_at` stored as **ISO TEXT** compared with
+`>= Date.now() - N` returned rows from **nine days earlier** presented as "since this morning" — a
+silent coercion producing plausible, wrong history. Never infer a timestamp column's type from a
+sibling table: **`SELECT` one row, read the literal value, confirm your comparison can be true against
+it.** And **never conclude absence from truncated output** — a `head -40` on a list nearly became
+"those rows were deleted." Truncation is your formatting, not the data's.
+
+**State the disconfirming test in the same clause as the claim** — before the operator asks, not
+after. *"Not running — `systemctl list-units` across the host shows no matching unit, and the
+supervisor config names none."* A claim whose disconfirming test you cannot name in one clause is not
+ready to state, let alone journal.
+
+**Timestamps spanning more than one day carry their date.** Format `YYYY-MM-DD HH:MM:SS`. Bare
+`HH:MM:SS` collapses a multi-day window into an apparent single day and inverts before/after
+conclusions.
 
 ### 🔧 Operational
 
@@ -203,10 +283,42 @@ unattended while still keeping a human on every close.
   question.** *If your follow-on title starts with "Investigate…", you haven't finished
   investigating* — you punted. File a **Code / Operational** task that names the proven cause and the
   fix, not a re-run of the diagnosis.
-- **Falsify every "it's fine / no bug / will self-heal / the numbers say X".** For any such
-  conclusion, run an explicit falsification: **"what would I observe if this were false, and did I
-  look?"** Ask "why, really?" and "would that actually fix it?" one level deeper than feels
-  necessary — in practice this flips the answer more often than not.
+- **Run every claim through § Evidence law before stating it.** For any conclusion — "it's fine",
+  "no bug", "will self-heal", "the numbers say X" — find the claim's shape in the table and confirm
+  you ran the admissible evidence, not the cheap substitute; then state the disconfirming test in the
+  same clause. Ask "why, really?" and "would that actually fix it?" one level deeper than feels
+  necessary — that flips the answer more than half the time.
+- **Read one instance of the data before proposing a mechanism.** Structural reasoning about
+  carriers, fields, schemas, and where a value *could* live — with no payload read — produces
+  confident nothing. Real run: four turns proposing carriers for a payload (a new intent kind, a
+  group-level field, a designated bearer) without reading a single instance of the payload; one query
+  showed the required structure **already existed**, in a kind already in the set and already used for
+  exactly that. Before designing a mechanism, **`SELECT` one row and read it.**
+- **Find the precedent before proposing a mechanism.** Search the same subsystem for how this shape of
+  problem is already solved, and prefer extending that to inventing a parallel path. Real run: a fix
+  was proposed for a broken auto-adjudication step when the answer was that the step should not exist
+  — *"replace a broken machinery by some extra broken machinery"*; and a closure design anchored on the
+  wrong precedent while the right one sat **forty lines above code already read three times.**
+  **Corollary — a deviation from a consistently-applied pattern is usually the defect, not a gap to
+  fill with machinery.** Where a system applies one rule everywhere (*sessions stage, the operator
+  disposes*), the place that departs from it is the bug. Fix the deviation; don't build a second
+  mechanism to service it.
+- **Silent-success paths — can the record tell "no work" from "blocked"?** A component reporting
+  `status=ok, items_processed=0` is indistinguishable from one that is wedged, and reads as healthy
+  everywhere. When you find one, ask whether the record separates the two cases — **if it cannot, that
+  is itself a finding**, independent of which case is live. Same family as "deployed but inert", one
+  layer out: the mechanism fires, does nothing, and says so in the voice of success.
+- **When the operator holds the one instrument you lack, ask for a single scoped observation — never
+  ask them to diagnose.** Ask for **one observation, and enumerate what each possible answer would
+  mean**, so their reply resolves the question instead of starting a discussion (*"which of these four
+  strings is in the panel?"*, *"is the element present at height 0?"*). That is using an instrument,
+  not escalating. *"Can you look and tell me what's wrong?"* hands back the diagnosis that is yours.
+- **An explanation of why the system might be right is not a finding.** On hitting something odd the
+  reflex is *"is this actually correct?"* — not *"here is why this might be intentional."* A
+  docstring, a naming convention, an apparent symmetry: each is a **claim to check**, and the check
+  is usually thirty seconds of reading. **When the operator rejects a rationale, drop it** — do not
+  re-offer a weaker one (latency, performance, "probably deliberate") to salvage the position. That
+  spends the operator's scrutiny defending a guess.
 - **Treat a registered number as a claim to re-derive, never a fact.** A prior task's stated
   figures, a "known" count — re-derive it from live data before you build on it.
 - **Read outputs by *value*, not by row-count/existence, and check provenance.** N rows of
@@ -226,6 +338,16 @@ unattended while still keeping a human on every close.
   page (surfaced by the loader / Flow step 2). It very often documents the exact case and the
   interpretation trap — **skipping it flips real findings** (it inverted a seed-verification finding
   this session). Do this *at the moment of interpretation*, before you record even a candidate.
+- **"Mirror the existing X" is the highest-risk sentence in a filed task.** It reads as safe and
+  low-effort, which is why it ships unexamined — it delegates a semantics question to an implementer
+  who resolves it by pattern-match. **Never write "mirror X" alone:** name the exact helper, counter,
+  or guard, state what carries across, and state what does **not**. Two regressions from one run came
+  from this one sentence shape — a completion path mirrored across a **type boundary** where the
+  source's terminal state and the target's were different state machines (result: a record marked
+  ✅ Done with its required field `NULL`), and a budget mirrored onto an unnamed counter whose
+  DB-backed variant counted **104 archived idle corpses** (result: the budget pinned at 0). Test
+  before writing it: *if the implementer resolves this mirror the most obvious way and the obvious way
+  is wrong, does anything catch it?* A mirror across a type boundary almost never transfers whole.
 - **Output is filed tasks, not code.** File 🔲 Backlog tasks (Code / Operational / Investigation)
   for what you find. **Accurate-the-first-time beats file-then-correct** — run the one-level-deeper
   check *before* filing, and set priority from the verified severity, not the first impression.
@@ -388,7 +510,11 @@ that actuation here.
    enumerates the 🔧 Operational / 🔎 Investigation tasks — **plus observational / E2E 🧪 Testing
    folded in as an Investigation variant** (mode `investigation`, flavor `testing`), while
    **excluding test-authoring** Testing to the `worklist.test_authoring` triage list (reclassify →
-   💻 Code) — into `worklist.executable` / `dep_blocked` / `needs_grooming` / `closed_not_done`; and
+   💻 Code) — into `worklist.executable` / `dep_blocked` / `needs_grooming` / `closed_not_done`
+   (`worklist.newly_unblocked` further flags which executable entries were `dep_blocked` on the
+   previous ops-context load for this milestone and have since cleared every blocking
+   dependency — call these out explicitly in step 4; they read identically to an always-ready
+   task otherwise.); and
    (c) pre-seeds + reconciles the `ops_journal` DB table server-side — one row per **eligible**
    (Ready / In-Progress) task at `state:"pending"`, preserving prior worked fields and **trimming**
    rows whose task is now Done / off-board (same job the old loader did to its on-disk journal, now
@@ -425,7 +551,8 @@ that actuation here.
 4. **Present the overview + a suggested review order.** Open with the **coverage line — "N eligible ·
    N advanced off `pending`"** (they must match; any entry still `pending` in
    `ops-client.mjs journal --milestone <M>`'s output means step 3 isn't finished — go back). Summarize: what's staged, what's blocked
-   and on what, what was filed, incidents frozen. Then propose a review order (like `design`),
+   and on what, what was filed, incidents frozen, and which tasks are `newly_unblocked` (name them
+   by id — a dependency just landed and they were stuck last run). Then propose a review order (like `design`),
    favoring in this priority:
    1. **Incidents / blockers** — safety, first eyes.
    2. **High-confidence items** — cheap, mechanically-verified directed-Operational completions

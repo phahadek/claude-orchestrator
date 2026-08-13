@@ -26,7 +26,10 @@ export function runMigrations(target: Database.Database): void {
       model                     TEXT,
       task_name                 TEXT,
       review_result             TEXT,
-      compaction_count          INTEGER NOT NULL DEFAULT 0
+      compaction_count          INTEGER NOT NULL DEFAULT 0,
+      effort                    TEXT,
+      model_setting_key         TEXT,
+      effort_setting_key        TEXT
     );
 
     CREATE TABLE IF NOT EXISTS session_events (
@@ -170,6 +173,15 @@ export function runMigrations(target: Database.Database): void {
       PRIMARY KEY (pr_number, repo, sha)
     );
 
+    CREATE TABLE IF NOT EXISTS orchestrator_analyze_content_cache (
+      command       TEXT    NOT NULL,
+      content_hash  TEXT    NOT NULL,
+      passed        INTEGER NOT NULL,
+      output        TEXT    NOT NULL DEFAULT '',
+      ran_at        TEXT    NOT NULL,
+      PRIMARY KEY (command, content_hash)
+    );
+
     CREATE TABLE IF NOT EXISTS task_no_op_attempts (
       task_id          TEXT PRIMARY KEY,
       retry_count      INTEGER NOT NULL DEFAULT 0,
@@ -207,6 +219,20 @@ export function runMigrations(target: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_ops_journal_project_milestone ON ops_journal(project, milestone);
 
+    CREATE TABLE IF NOT EXISTS capability_disqualification (
+      id                     TEXT    PRIMARY KEY,
+      project_id             TEXT    NOT NULL,
+      capability             TEXT    NOT NULL,
+      investigation_task_id  TEXT    NOT NULL,
+      state                  TEXT    NOT NULL,
+      created_at             TEXT    NOT NULL,
+      resolved_at            TEXT,
+      lifted_at              TEXT,
+      updated_at             TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_capability_disqualification_project ON capability_disqualification(project_id);
+    CREATE INDEX IF NOT EXISTS idx_capability_disqualification_investigation_task ON capability_disqualification(investigation_task_id);
+
     CREATE TABLE IF NOT EXISTS gate_item (
       id                     TEXT    PRIMARY KEY,
       project                TEXT    NOT NULL,
@@ -217,6 +243,8 @@ export function runMigrations(target: Database.Database): void {
       state                  TEXT    NOT NULL,
       current_disposition    TEXT,
       latest_disposition     TEXT,
+      next_attempt_at        TEXT,
+      pending_attempt_count  INTEGER NOT NULL DEFAULT 0,
       updated_at             TEXT    NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_gate_item_project_milestone ON gate_item(project, milestone);
@@ -381,6 +409,7 @@ export function runMigrations(target: Database.Database): void {
       tasks_closed      INTEGER NOT NULL,
       gate_open         INTEGER NOT NULL,
       gate_closed       INTEGER NOT NULL,
+      gate_parked       INTEGER NOT NULL DEFAULT 0,
       seed_open         INTEGER NOT NULL,
       seed_closed       INTEGER NOT NULL,
       ops_open          INTEGER NOT NULL,
@@ -403,12 +432,33 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_session_feedback_inbox_session_delivered
       ON session_feedback_inbox(session_id, delivered_at);
 
+    CREATE TABLE IF NOT EXISTS test_request_runs (
+      id           TEXT    PRIMARY KEY,
+      project_id   TEXT    NOT NULL,
+      content_hash TEXT    NOT NULL,
+      state        TEXT    NOT NULL,
+      output       TEXT    NOT NULL DEFAULT '',
+      started_at   INTEGER NOT NULL,
+      finished_at  INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_project_hash
+      ON test_request_runs(project_id, content_hash);
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_state
+      ON test_request_runs(state);
+
+    CREATE TABLE IF NOT EXISTS session_test_request_cycles (
+      session_id TEXT    PRIMARY KEY,
+      count      INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_sessions_archived_started_at ON sessions(archived, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_sessions_notion_task_id_session_type ON sessions(task_id, session_type, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pull_requests_task_id_pr_number ON pull_requests(task_id, pr_number DESC);
+    CREATE INDEX IF NOT EXISTS idx_pull_requests_repo_state ON pull_requests(repo, state);
   `);
 
   // Idempotent column additions for existing databases
@@ -1251,6 +1301,24 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_staged_intent_project_milestone ON staged_intent(project_id, milestone);
   `);
 
+  // staged_intent.applied_task_id: the id `applyIntent` minted for a
+  // non-idempotent create-shaped kind (task.create / arch.createUnit) —
+  // set unconditionally the instant the backend write succeeds, in the same
+  // synchronous step, before the separate staged/approved -> committed state
+  // transition is even attempted. That transition can lose a race against a
+  // concurrent supersede of the still-staged row (see
+  // AlreadyAppliedCreateSupersedeError's doc comment in stagedIntents.ts) and
+  // never reach 'committed' even though the task already exists — leaving
+  // `state` an unreliable signal for "has this create's side effect already
+  // run". `applied_task_id` is the durable, race-proof answer to that
+  // question, independent of whatever state the row ends up in. Forward-only:
+  // existing rows get NULL.
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN applied_task_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+
   // ── arch_unit: architecture-information store ───────────────────────────
   // A single titled architecture statement (kind/topic/regions/status envelope
   // + markdown body). Mirrors the gate_item/seed_item shape: envelope as typed
@@ -1385,6 +1453,48 @@ export function runMigrations(target: Database.Database): void {
       update.run(token, row.id);
     }
   }
+
+  // staged_intent.milestone: canonicalize pre-existing rows written before
+  // stageIntent's caller-side resolveMilestoneForProject normalization
+  // existed (see stagedIntents.milestoneNormalization.test.ts) — those rows
+  // were keyed on whatever form the caller happened to pass (a milestone's
+  // DB id/UUID, or its full display name) instead of the canonical short id
+  // every read (listStagedIntentsByMilestone, the GET /staged-intents
+  // ?milestone= route) matches on literally. Left uncanonicalized, such a
+  // row is invisible to any caller that queries in a different form than it
+  // was written in — the exact false-empty this migration closes. Runs after
+  // the canonical_short_id backfills above so `m.canonical_short_id` is
+  // populated. Matches a row's milestone value against the milestones table
+  // (by id, or by name case-insensitively) scoped to the row's own
+  // project_id — mirroring findMilestone in milestoneResolver.ts — and
+  // rewrites it to COALESCE(canonical_short_id, name), i.e.
+  // canonicalMilestoneKey. A value already in canonical form (or belonging
+  // to no milestone the row's project knows about) matches nothing and is
+  // left untouched — this is deliberate, not a gap: a NULL milestone is the
+  // "unattributed" bucket's rows, handled separately by
+  // backfillStagedIntentMilestones (queries.ts, task-id-based, run at every
+  // boot) rather than this schema migration, and an unmatched non-NULL value
+  // could belong to a deleted/renamed milestone that would be unsafe to
+  // guess at. Idempotent: a row already canonical produces no EXISTS match
+  // on a second run.
+  target.exec(`
+    UPDATE staged_intent
+    SET milestone = (
+      SELECT COALESCE(m.canonical_short_id, m.name)
+      FROM milestones m
+      WHERE m.project_id = staged_intent.project_id
+        AND (m.id = staged_intent.milestone
+             OR m.name = staged_intent.milestone COLLATE NOCASE)
+      LIMIT 1
+    )
+    WHERE milestone IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM milestones m
+        WHERE m.project_id = staged_intent.project_id
+          AND (m.id = staged_intent.milestone
+               OR m.name = staged_intent.milestone COLLATE NOCASE)
+      );
+  `);
 
   // ── projects.arch_store_adopted: per-project dual-read flag ─────────────
   // A whole project flips to reading the arch_unit store at once — no
@@ -1669,6 +1779,26 @@ export function runMigrations(target: Database.Database): void {
       );
   `);
 
+  // gate_item.next_attempt_at / pending_attempt_count: the `pending` state's
+  // backoff schedule. next_attempt_at is the earliest time the item is
+  // eligible for its next not-yet-triggerable re-check (NULL once the item
+  // leaves pending); pending_attempt_count is the number of consecutive
+  // not-yet-triggerable results so far, driving the doubling backoff (3h,
+  // 6h, 12h, ... capped at 168h). Pre-existing rows never entered `pending`,
+  // so no backfill beyond the column defaults is needed.
+  try {
+    target.exec(`ALTER TABLE gate_item ADD COLUMN next_attempt_at TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE gate_item ADD COLUMN pending_attempt_count INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
   // sessions.terminal_completion_reason: durable copy of the `reason` string
   // PlanningOrchestrator.markTerminal already threads through to
   // markSessionDone's `callSite` argument (previously log/audit-only). Read
@@ -1728,6 +1858,153 @@ export function runMigrations(target: Database.Database): void {
   try {
     target.exec(
       `ALTER TABLE gate_item_event ADD COLUMN min_deployed_commit_at_fail TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // Cache-token spend, captured with overwrite/SET semantics mirroring
+  // context_occupancy_tokens — the usage payload's cache figures are
+  // cumulative-per-turn, not per-turn deltas. Rows written before this
+  // migration default to 0, which is what distinguishes pre-migration from
+  // post-migration cache spend in analytics.
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // pull_requests.pr_intent_id: the approved ops.prIntent (staged_intent.id)
+  // this PR was opened for — the Ops rubric's pointer to the operator-approved
+  // "here's the diff scope and why" declaration PRReviewService resolves at
+  // review time in place of a task-body Files/paths section. Set once, at
+  // PR-open time, via db/queries.ts's linkPRToPRIntent, which enforces that
+  // one approved PR-intent authorizes exactly one PR (fire-once) — a second
+  // PR row claiming the same intent id is rejected there rather than at the
+  // schema level, since SQLite has no partial-unique-except-null shorthand
+  // that also produces an actionable error message.
+  try {
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN pr_intent_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // seed_item.classification: mirrors gate_item's classification column, but
+  // nullable/optional — unlike gate_item's NOT NULL classification, existing
+  // seed_item rows predate this concept and a caller that hasn't started
+  // passing it yet (groomGate.ts's seedContributionCandidates fails open the
+  // same way) should not be broken by its absence.
+  try {
+    target.exec(`ALTER TABLE seed_item ADD COLUMN classification TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // ── audit_finding_dedup: scheduled base-branch dependency/license-audit
+  // sweep's dedup record ──────────────────────────────────────────────────
+  // One row per (project, finding-identity) currently covered by a filed
+  // dep-bump task. finding_identity is the advisory id (GHSA/npm advisory
+  // number) for a dependency-vulnerability finding, or
+  // "<package>@<version>:<license>" for a license finding. The record only
+  // suppresses re-filing while task_id remains open (not Done) — the sweep
+  // re-checks the referenced task's live status before treating a hit as
+  // "already covered", so a closed task's row is stale rather than binding.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS audit_finding_dedup (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id     TEXT    NOT NULL,
+      finding_identity TEXT  NOT NULL,
+      task_id        TEXT    NOT NULL,
+      filed_at       TEXT    NOT NULL,
+      UNIQUE(project_id, finding_identity)
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_finding_dedup_project_identity
+      ON audit_finding_dedup(project_id, finding_identity);
+  `);
+
+  // Non-blocking `pending` (parked) gate-item count, alongside the existing
+  // open/closed split — never subtracted from gate_open, since parked items
+  // don't count toward blocking/green status.
+  try {
+    target.exec(
+      `ALTER TABLE convergence_snapshot ADD COLUMN gate_parked INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // Resolved effort level used at session launch (e.g. "high") — nullable
+  // for historical rows launched before this column existed.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN effort TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // sessions.terminalized_at: written only at a genuine terminal transition
+  // (status -> done/error/killed), never on a non-terminal write that
+  // happens to also touch ended_at (e.g. the deferred-while-running path).
+  // ended_at's semantics are left unchanged for backwards compatibility —
+  // this is a separate, additive column so "was this session terminal at
+  // time T" can be answered directly. NULL for historical rows; backfill is
+  // out of scope.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN terminalized_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+
+  // Which settings key (e.g. "groom_session_model") the session's model/effort
+  // were actually resolved from — dedicated key vs. shared fallback — so
+  // provenance is recoverable even when the resolved values happen to match.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN model_setting_key TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN effort_setting_key TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // depth_review_verdicts: durable record of each PR's latest depth-review
+  // pass (the second, post-conformance review dispatched by
+  // ReviewOrchestrator.dispatchDepthReview) — separate from
+  // pull_requests.review_result, which carries only the conformance verdict.
+  // Keyed on (pr_number, repo) so "this PR's latest depth verdict" is a
+  // single-row read; a re-run overwrites the prior row rather than
+  // accumulating history.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS depth_review_verdicts (
+      pr_number        INTEGER NOT NULL,
+      repo             TEXT    NOT NULL,
+      head_sha         TEXT,
+      verdict          TEXT    NOT NULL,
+      dimensions       TEXT    NOT NULL,
+      summary          TEXT    NOT NULL,
+      depth_session_id TEXT,
+      recorded_at      TEXT    NOT NULL,
+      route_count      INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (pr_number, repo)
+    );
+  `);
+  // route_count: how many times a depth finding has been routed to the
+  // implementing session on an unchanged head SHA — bounds re-routing (see
+  // ReviewOrchestrator.dispatchDepthReview). Added after the table's initial
+  // creation, so existing rows need the column backfilled.
+  try {
+    target.exec(
+      `ALTER TABLE depth_review_verdicts ADD COLUMN route_count INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */

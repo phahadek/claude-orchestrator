@@ -4,6 +4,7 @@ import {
   getGateReadiness,
   reconcileGateRunnability,
   nextRunnableGateItems,
+  nextPendingGateItems,
   getGateItem,
   getGateItemDetail,
   getVerifySessionsForGateItem,
@@ -11,14 +12,20 @@ import {
   listMilestoneReadiness,
   appendGateItemEvent,
   approveGateItem,
+  rejectGateItem,
   reopenGateItem,
   reclassifyGateItem,
   backfillGateTask,
+  carryForwardGateItem,
 } from '../gate/gateService';
 import { dispatchGateItemVerification } from '../gate/gateReconciler';
 import type { GateItemClassification } from '../db/types';
-import { getFlowRejectionRate } from '../db/queries';
-import type { TrustPrecisionFlow } from '../db/queries';
+import {
+  getFlowRejectionRate,
+  getFlakeRecoveryMisclassificationRates,
+  getAutoGrantDisagreementRate,
+} from '../db/queries';
+import type { TrustPrecisionFlow, AutoGrantKind } from '../db/queries';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
 import type {
@@ -30,6 +37,7 @@ import {
   resolveMilestoneAnyProject,
   UnknownMilestoneError,
 } from '../projects/milestoneResolver';
+import { asyncHandler } from './asyncHandler';
 
 /**
  * Thin read/write surface over gateService's module functions — the
@@ -71,16 +79,19 @@ export function createGateStateRouter(): Router {
   });
 
   // POST /api/gate/reconcile  { deploySha }
-  router.post('/gate/reconcile', (req: Request, res: Response) => {
-    const body = req.body as { deploySha?: unknown };
-    const deploySha =
-      typeof body.deploySha === 'string' ? body.deploySha : null;
-    if (!deploySha) {
-      res.status(400).json({ error: 'deploySha is required' });
-      return;
-    }
-    res.json(reconcileGateRunnability(deploySha));
-  });
+  router.post(
+    '/gate/reconcile',
+    asyncHandler(async (req: Request, res: Response) => {
+      const body = req.body as { deploySha?: unknown };
+      const deploySha =
+        typeof body.deploySha === 'string' ? body.deploySha : null;
+      if (!deploySha) {
+        res.status(400).json({ error: 'deploySha is required' });
+        return;
+      }
+      res.json(await reconcileGateRunnability(deploySha));
+    }),
+  );
 
   // GET /api/gate/next?project=P&milestone=M12&classification=Read-Only&limit=5
   router.get('/gate/next', (req: Request, res: Response) => {
@@ -111,6 +122,44 @@ export function createGateStateRouter(): Router {
             classification,
             limit: Number.isFinite(limit) ? limit : undefined,
           },
+        ),
+      );
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // GET /api/gate/pending-due?project=P&milestone=M12&limit=5
+  // Non-arm-gated read of backoff-elapsed `pending` items — the only route
+  // back for a parked item once its next_attempt_at has passed, independent
+  // of the (milestone, 'gate-verify') arm that gates auto-run's own pull of
+  // the same set. Purely a read: it never dispatches a verify session, so
+  // exposing it does not weaken the arm's suppression of unattended runs.
+  router.get('/gate/pending-due', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : null;
+    const milestone =
+      typeof req.query.milestone === 'string' ? req.query.milestone : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (!milestone) {
+      res.status(400).json({ error: 'milestone is required' });
+      return;
+    }
+    const limit =
+      typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+    try {
+      res.json(
+        nextPendingGateItems(
+          project,
+          resolveMilestoneForProject(project, milestone),
+          { limit: Number.isFinite(limit) ? limit : undefined },
         ),
       );
     } catch (err) {
@@ -272,6 +321,31 @@ export function createGateStateRouter(): Router {
     }
   });
 
+  // POST /api/gate/items/:id/reject  { operator, reason }
+  router.post('/gate/items/:id/reject', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const body = req.body as { operator?: unknown; reason?: unknown };
+    if (typeof body.reason !== 'string' || !body.reason.trim()) {
+      res
+        .status(400)
+        .json({ error: 'reason is required to reject a gate item' });
+      return;
+    }
+    try {
+      const updated = rejectGateItem(
+        id,
+        body.reason,
+        typeof body.operator === 'string' ? body.operator : undefined,
+      );
+      res.json(updated);
+    } catch (err) {
+      res.status(400).json({
+        error:
+          err instanceof Error ? err.message : 'gate item rejection failed',
+      });
+    }
+  });
+
   // POST /api/gate/items/:id/reopen  { operator, reason }
   router.post('/gate/items/:id/reopen', (req: Request, res: Response) => {
     const id = String(req.params.id);
@@ -318,63 +392,109 @@ export function createGateStateRouter(): Router {
     },
   );
 
-  // POST /api/gate/backfill  { project, taskId, milestone, milestoneBoardIds }
-  router.post('/gate/backfill', async (req: Request, res: Response) => {
-    const body = req.body as {
-      project?: unknown;
-      taskId?: unknown;
-      milestone?: unknown;
-      milestoneBoardIds?: unknown;
-    };
-    const project = typeof body.project === 'string' ? body.project : null;
-    const taskId = typeof body.taskId === 'string' ? body.taskId : null;
-    const milestone =
-      typeof body.milestone === 'string' ? body.milestone : null;
-    if (!project) {
-      res.status(400).json({ error: 'project is required' });
-      return;
-    }
-    if (!taskId) {
-      res.status(400).json({ error: 'taskId is required' });
-      return;
-    }
-    if (!milestone) {
-      res.status(400).json({ error: 'milestone is required' });
-      return;
-    }
-    const milestoneBoardIds = Array.isArray(body.milestoneBoardIds)
-      ? body.milestoneBoardIds.filter(
-          (id): id is string => typeof id === 'string',
-        )
-      : undefined;
-
-    let canonicalMilestone: string;
-    try {
-      canonicalMilestone = resolveMilestoneForProject(project, milestone);
-    } catch (err) {
-      if (err instanceof UnknownMilestoneError) {
-        res.status(400).json({ error: err.message });
+  // POST /api/gate/items/:id/carry-forward  { milestone }
+  // Item-level re-home for a deferred/pending gate item to the next
+  // milestone, preserving its full sources array (including empty) — the
+  // sourceless-carry-forward path milestone-wrap Step 3 uses for items that
+  // have no single owning task to accrete against. See
+  // gateService.carryForwardGateItem / gateStore.carryForwardItem.
+  router.post(
+    '/gate/items/:id/carry-forward',
+    (req: Request, res: Response) => {
+      const id = String(req.params.id);
+      const body = req.body as { milestone?: unknown };
+      const milestone =
+        typeof body.milestone === 'string' ? body.milestone : null;
+      if (!milestone) {
+        res.status(400).json({ error: 'milestone is required' });
         return;
       }
-      throw err;
-    }
+      const item = getGateItem(id);
+      if (!item) {
+        res.status(404).json({ error: `no gate item ${id}` });
+        return;
+      }
+      try {
+        const canonicalMilestone = resolveMilestoneForProject(
+          item.project,
+          milestone,
+        );
+        res.json(carryForwardGateItem(id, canonicalMilestone));
+      } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        res.status(400).json({
+          error:
+            err instanceof Error
+              ? err.message
+              : 'gate item carry-forward failed',
+        });
+      }
+    },
+  );
 
-    try {
-      const result = await backfillGateTask({
-        project,
-        taskId,
-        milestone: canonicalMilestone,
-        milestoneBoardIds,
-      });
-      res.json(result);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'gate backfill failed';
-      res.status(message.includes('not found') ? 404 : 409).json({
-        error: message,
-      });
-    }
-  });
+  // POST /api/gate/backfill  { project, taskId, milestone, milestoneBoardIds }
+  router.post(
+    '/gate/backfill',
+    asyncHandler(async (req: Request, res: Response) => {
+      const body = req.body as {
+        project?: unknown;
+        taskId?: unknown;
+        milestone?: unknown;
+        milestoneBoardIds?: unknown;
+      };
+      const project = typeof body.project === 'string' ? body.project : null;
+      const taskId = typeof body.taskId === 'string' ? body.taskId : null;
+      const milestone =
+        typeof body.milestone === 'string' ? body.milestone : null;
+      if (!project) {
+        res.status(400).json({ error: 'project is required' });
+        return;
+      }
+      if (!taskId) {
+        res.status(400).json({ error: 'taskId is required' });
+        return;
+      }
+      if (!milestone) {
+        res.status(400).json({ error: 'milestone is required' });
+        return;
+      }
+      const milestoneBoardIds = Array.isArray(body.milestoneBoardIds)
+        ? body.milestoneBoardIds.filter(
+            (id): id is string => typeof id === 'string',
+          )
+        : undefined;
+
+      let canonicalMilestone: string;
+      try {
+        canonicalMilestone = resolveMilestoneForProject(project, milestone);
+      } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+
+      try {
+        const result = await backfillGateTask({
+          project,
+          taskId,
+          milestone: canonicalMilestone,
+          milestoneBoardIds,
+        });
+        res.json(result);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'gate backfill failed';
+        res.status(message.includes('not found') ? 404 : 409).json({
+          error: message,
+        });
+      }
+    }),
+  );
 
   // POST /api/gate/accrete-contribution
   //   { project, taskId, title, milestone, classification, items: [{ text }] }
@@ -384,7 +504,7 @@ export function createGateStateRouter(): Router {
   // "none"/"n/a" mint the marker alone, with an empty items array.
   router.post(
     '/gate/accrete-contribution',
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const body = req.body as {
         project?: unknown;
         taskId?: unknown;
@@ -454,7 +574,7 @@ export function createGateStateRouter(): Router {
           error: err instanceof Error ? err.message : 'gate accretion failed',
         });
       }
-    },
+    }),
   );
 
   // POST /api/gate/verify-launch  { itemIds }
@@ -491,11 +611,16 @@ export function createGateStateRouter(): Router {
     'gate-verify',
   ];
 
+  const AUTO_GRANT_KINDS: AutoGrantKind[] = ['gate.accrete', 'seed.stage'];
+
   // GET /api/gate/trust-rate?project=<id>&milestone=M12&flow=groom
   // The Milestone panel's trust-precision read: per flow per milestone, the
   // rate at which auto-dispatched output was rejected/abstained rather than
   // approved — see db/queries.ts's getFlowRejectionRate for the per-flow
-  // definition. Informative only; no auto-disarm.
+  // definition. Alongside it, always includes the per-kind auto-grant
+  // disagreement rate (see getAutoGrantDisagreementRate) for the same
+  // project+milestone — a second, independent trust-precision read that
+  // isn't scoped by `flow`. Both are informative only; no auto-disarm.
   router.get('/gate/trust-rate', (req: Request, res: Response) => {
     const project =
       typeof req.query.project === 'string' ? req.query.project : null;
@@ -516,13 +641,23 @@ export function createGateStateRouter(): Router {
     }
     try {
       const canonicalMilestone = resolveMilestoneForProject(project, milestone);
-      res.json(
-        getFlowRejectionRate(
+      const autoGrantDisagreementRate = Object.fromEntries(
+        AUTO_GRANT_KINDS.map((kind) => [
+          kind,
+          getAutoGrantDisagreementRate(project, canonicalMilestone, kind),
+        ]),
+      ) as Record<
+        AutoGrantKind,
+        ReturnType<typeof getAutoGrantDisagreementRate>
+      >;
+      res.json({
+        ...getFlowRejectionRate(
           project,
           canonicalMilestone,
           flow as TrustPrecisionFlow,
         ),
-      );
+        autoGrantDisagreementRate,
+      });
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {
         res.status(400).json({ error: err.message });
@@ -530,6 +665,19 @@ export function createGateStateRouter(): Router {
       }
       throw err;
     }
+  });
+
+  // GET /api/gate/flake-recovery-rate?project=<id>
+  // The transient-failure contract's self-falsification rate: per
+  // (project, gate), the fraction of conclusive flake-recovery re-runs
+  // (see db/queries.ts's getFlakeRecoveryMisclassificationRates) that ended
+  // in failure rather than passing. Inconclusive re-runs are reported
+  // alongside, excluded from the rate. Informative only; no gating, no
+  // auto-disarm — matches the trust-rate signal's posture.
+  router.get('/gate/flake-recovery-rate', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : undefined;
+    res.json(getFlakeRecoveryMisclassificationRates(project));
   });
 
   return router;

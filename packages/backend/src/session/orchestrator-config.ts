@@ -8,10 +8,57 @@ import {
   DESIGN_ALLOWED_TOOLS,
   OPS_ALLOWED_TOOLS,
   DOCS_ALLOWED_TOOLS,
+  DEPTH_REVIEW_ALLOWED_TOOLS,
   docsWebFetchTools,
   NOTION_READ_MCP_TOOLS,
   runtimeSettings,
 } from '../config';
+import { isPlanningSession } from './sessionPredicates';
+
+/**
+ * Locates the central config tree (the sibling `config/` checkout holding
+ * `procedures.md`, `task-writing.md`, and `projects/<key>/` per-project
+ * docs). Mirrors groom/groomLoad.ts#resolveConfigDir's exact resolution
+ * order (env var, then `../config`/`../../config` relative to the project
+ * checkout) but is kept as its own copy here rather than importing
+ * groomLoad.ts directly: that module pulls in NotionClient, ProjectService,
+ * and a promisified `execFile` at import time, which is unwanted weight on
+ * every dispatched session's spawn path (this function runs on every
+ * CliSessionRunner/DockerSessionRunner spawn, not just groom sessions).
+ */
+function resolveConfigDir(projectDir: string): string | null {
+  const explicit = process.env.ORCHESTRATOR_CONFIG_DIR;
+  if (explicit) return path.resolve(explicit);
+  for (const c of [
+    path.resolve(projectDir, '..', 'config'),
+    path.resolve(projectDir, '..', '..', 'config'),
+  ]) {
+    if (fs.existsSync(path.join(c, 'projects'))) return c;
+  }
+  return null;
+}
+
+/**
+ * A single analyze-gate command with an optional path-trigger glob list. When
+ * `trigger_paths` is set, the command is skipped for a PR whose diff touches
+ * none of those globs (minimatch, matched against `git diff --name-only`
+ * paths — see pathDiffPredicate.ts's matchesPathDiff). Omitted/empty
+ * `trigger_paths` means "always run", matching plain-string entries.
+ *
+ * `transient_output_patterns` is a list of regexes (tested against a failed
+ * command's combined stdout/stderr) identifying diff-orthogonal infra noise
+ * — network blips, registry 5xxs, DNS failures — that should mark the
+ * failure as transient (`is_transient`) alongside the existing timeout/OOM
+ * detection, even though the command itself didn't time out or get killed.
+ */
+interface AnalyzeCommandEntry {
+  command: string;
+  trigger_paths?: string[];
+  transient_output_patterns?: string[];
+}
+
+/** Backward-compatible: a bare string is a command with no path trigger (always runs, no content-hash caching). */
+export type AnalyzeCommand = string | AnalyzeCommandEntry;
 
 export interface OrchestratorConfig {
   /**
@@ -57,7 +104,7 @@ export interface OrchestratorConfig {
   /** Stop running subsequent test commands after the first failure. Default true. */
   test_fail_fast: boolean;
   /** Commands the orchestrator runs as static analysis gate, between verify and test. Empty = gate skipped. */
-  analyze: string[];
+  analyze: AnalyzeCommand[];
   /** Per-command timeout in seconds for analyze commands. Default 300. */
   analyze_timeout_sec: number;
   /** Max RSS in MB for any single analyze command subprocess. 0 = disabled. Default 0. */
@@ -95,6 +142,34 @@ const DEFAULTS: OrchestratorConfig = {
   analyze_fail_fast: true,
   autofix_skip_ci: false,
 };
+
+function isValidAnalyzeEntry(v: unknown): v is AnalyzeCommand {
+  if (typeof v === 'string') return true;
+  if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+    const obj = v as Record<string, unknown>;
+    if (typeof obj.command !== 'string') return false;
+    if (
+      obj.trigger_paths !== undefined &&
+      !(
+        Array.isArray(obj.trigger_paths) &&
+        obj.trigger_paths.every((p) => typeof p === 'string')
+      )
+    ) {
+      return false;
+    }
+    if (
+      obj.transient_output_patterns !== undefined &&
+      !(
+        Array.isArray(obj.transient_output_patterns) &&
+        obj.transient_output_patterns.every((p) => typeof p === 'string')
+      )
+    ) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
 
 /**
  * Load per-project orchestrator configuration from `<projectDir>/.claude-orchestrator.yml`.
@@ -164,7 +239,7 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
           ? parsed.test_fail_fast
           : DEFAULTS.test_fail_fast,
       analyze: Array.isArray(parsed.analyze)
-        ? parsed.analyze
+        ? (parsed.analyze as unknown[]).filter(isValidAnalyzeEntry)
         : DEFAULTS.analyze,
       analyze_timeout_sec:
         typeof parsed.analyze_timeout_sec === 'number' &&
@@ -227,8 +302,38 @@ const GRANT_DENYLIST_PATTERNS = [
   /^MultiEdit$/i,
 ];
 
+/**
+ * Prefix for the grantable single-path filesystem-read capability: widens a
+ * dispatched planning/ops session's read envelope (the `--add-dir` list
+ * passed to the CLI, or the matching read-only bind mount in Docker mode —
+ * see DockerSessionRunner) by exactly one absolute host path beyond its
+ * per-session-type baseline (getSessionAddDirs below). Parameterized by the
+ * literal path, like SESSION_RECORD_READ_PREFIX/AUDIT_LOG_READ_PREFIX below —
+ * but unlike those id-parameterized prefixes, a granted path can legitimately
+ * contain a denylisted substring (e.g. a directory named `.../apply-svc` or
+ * `.../resolve-cache`), so `isGrantable` special-cases this prefix below
+ * rather than scanning the whole capability string against
+ * GRANT_DENYLIST_PATTERNS. Read-only: there is no write counterpart.
+ */
+const PATH_READ_PREFIX = 'read:path:';
+
 export function isGrantable(capability: string): boolean {
+  if (capability.startsWith(PATH_READ_PREFIX)) return true;
   return !GRANT_DENYLIST_PATTERNS.some((re) => re.test(capability));
+}
+
+/**
+ * True when `capability` already matches GRANT_DENYLIST_PATTERNS — the
+ * denylist-mining exclusion the capability-disposition-trail miner
+ * (audit/capabilityDispositionMining.ts) checks before staging an
+ * Investigation task for a repeated-denial pattern: a key the denylist
+ * already covers needs no auto-deny candidate generated for it. The
+ * logical negation of `isGrantable`, exported separately so the miner's
+ * intent reads as "is this already denylisted" rather than reusing a
+ * grant-time predicate for an unrelated exclusion check.
+ */
+export function isGrantDenylisted(capability: string): boolean {
+  return !isGrantable(capability);
 }
 
 /**
@@ -311,6 +416,18 @@ export function parseSessionEventsReadCapability(
     : null;
 }
 
+/** Builds the exact capability string for reading one additional absolute host path. */
+export function pathReadCapability(absPath: string): string {
+  return `${PATH_READ_PREFIX}${absPath}`;
+}
+
+/** Extracts the granted absolute path from a `read:path:` capability, or null if it isn't one. */
+export function parsePathReadCapability(capability: string): string | null {
+  return capability.startsWith(PATH_READ_PREFIX)
+    ? capability.slice(PATH_READ_PREFIX.length)
+    : null;
+}
+
 /**
  * Curated, operator-editable allowlist of sanctioned read-only capabilities
  * that `session.requestCapability` auto-approves without an operator park
@@ -370,6 +487,29 @@ export function isSanctionedAutoApproveCapability(
         capability === sessionEventsReadCapability(requestingProjectId))) ||
     sanctionedAutoApproveCapabilities().includes(capability)
   );
+}
+
+/**
+ * Stage-time auto-approve eligibility for a write-shaped
+ * `session.requestCapability` request against the requesting ops session's
+ * captured declared-writes set (see readinessGate.ts's DeclaredWriteEntry,
+ * SessionManager.start's declaredWrites capture, and
+ * db/queries.ts#getSessionDeclaredWrites). True iff `capability` exact-matches
+ * a declared entry AND that entry is not tagged Prod-Mutating — never a
+ * prefix/pattern match, and a Prod-Mutating-tagged entry (including one that
+ * defaulted there for lack of an unambiguous tag — see
+ * classifyProdMutatingTag) never auto-approves regardless of how confidently
+ * it matches. This is purely additive: it narrows which already-`isGrantable`
+ * requests skip manual approval, it never widens what's grantable — callers
+ * must check `isGrantable(capability)` first (see
+ * stagedIntents.ts#maybeAutoApproveCapabilityRequest).
+ */
+export function isDeclaredWriteAutoApprove(
+  capability: string,
+  declaredWrites: readonly { capability: string; prodMutating: boolean }[],
+): boolean {
+  const match = declaredWrites.find((e) => e.capability === capability);
+  return match != null && !match.prodMutating;
 }
 
 /**
@@ -488,6 +628,147 @@ export function getSessionAllowedTools(
                 ...notionExtras,
                 ...docsWebFetchTools(docsSourceDomains),
               ]
-            : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
+            : sessionType === 'depth_review'
+              ? [...DEPTH_REVIEW_ALLOWED_TOOLS, ...notionExtras]
+              : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
   return [...new Set([...base, ...grantable])];
+}
+
+/**
+ * A test-runner ecosystem: `detect` identifies whether any configured test
+ * command belongs to it (by its invoking package manager / interpreter),
+ * `wrappers` are the ways that ecosystem's coarse `ALLOWED_TOOLS` entries
+ * (`Bash(npm:*)`/`Bash(npx:*)`/`Bash(node:*)`, plus interpreters a project
+ * may add via its own `allowed_tools`) let a runner be invoked directly, and
+ * `runners` are that ecosystem's common test-runner CLI names. Only
+ * wrappers that ride on a prefix already coarse-allowed (or plausibly
+ * project-added, for the Python case) are listed — e.g. `yarn`/`pnpm` are
+ * omitted since neither appears in `ALLOWED_TOOLS`, so a bare `Bash(yarn:*)`
+ * call is already blocked by the allow-list, not by this deny layer.
+ */
+interface TestRunnerEcosystem {
+  detect: RegExp;
+  wrappers: string[];
+  runners: string[];
+}
+
+const TEST_RUNNER_ECOSYSTEMS: TestRunnerEcosystem[] = [
+  {
+    detect: /^(npm|npx|node)\b/,
+    wrappers: ['npx', 'npm exec'],
+    runners: ['vitest', 'jest', 'mocha', 'ava', 'tap', 'jasmine'],
+  },
+  {
+    detect: /^(uv|python3?|poetry|pytest)\b/,
+    wrappers: ['uv run', 'python -m', 'python3 -m', 'poetry run'],
+    runners: ['pytest'],
+  },
+];
+
+/**
+ * Argument-level SDK `permissions.deny` rules for a code session, derived
+ * from the project's configured `test:` commands (OrchestratorConfig.test —
+ * the same list test.request/testRequestLane.ts runs as the authoritative
+ * test gate). A code session must not be able to run the project's tests
+ * directly (see the "Flaky / Transient CI or F2 Gate Failures" section of
+ * orchestrator-claudemd.ts, which routes it through test.request instead) —
+ * this is what actually enforces that at the tool layer, rather than relying
+ * on the injected instructions alone.
+ *
+ * Two layers of deny rule are generated:
+ *
+ * 1. Exact: each configured command becomes a `Bash(<command>:*)` prefix
+ *    rule so trailing args (`-- --run`, extra flags) are still caught.
+ * 2. Runner: a configured command like `npm run test -w packages/frontend`
+ *    only denies that literal invocation, leaving the underlying test
+ *    runner (vitest, resolved via the workspace's `package.json`, not
+ *    visible here) reachable directly through the same coarse `npx`/`node`
+ *    allow entries — `npx vitest run` runs the exact same suite without
+ *    matching rule 1. TEST_RUNNER_ECOSYSTEMS closes that gap: once any
+ *    configured command identifies a project as using an ecosystem (npm or
+ *    Python), every common test-runner CLI in that ecosystem is denied
+ *    across the wrapper forms (`npx <runner>`, `uv run <runner>`, bare
+ *    `<runner>`, ...) that ride on already-allowed prefixes.
+ *
+ * Deliberately leaves the coarse `Bash(npm:*)`/`Bash(npx:*)`/`Bash(node:*)`/
+ * `Bash(tsc:*)` allow entries in ALLOWED_TOOLS untouched — only the
+ * specific runner binaries are denied, not the package managers themselves,
+ * so install/build/typecheck commands keep working. Only meaningful for
+ * `sessionType === 'standard'` (see isCodeSession) — callers should gate on
+ * that before calling this with a non-empty list.
+ */
+export function getTestCommandDenyPatterns(testCommands: string[]): string[] {
+  const trimmed = testCommands.map((cmd) => cmd.trim()).filter(Boolean);
+  const exact = trimmed.map((cmd) => `Bash(${cmd}:*)`);
+
+  const runnerPatterns: string[] = [];
+  for (const eco of TEST_RUNNER_ECOSYSTEMS) {
+    if (!trimmed.some((cmd) => eco.detect.test(cmd))) continue;
+    for (const runner of eco.runners) {
+      runnerPatterns.push(`Bash(${runner}:*)`);
+      for (const wrapper of eco.wrappers) {
+        runnerPatterns.push(`Bash(${wrapper} ${runner}:*)`);
+      }
+    }
+  }
+
+  return [...new Set([...exact, ...runnerPatterns])];
+}
+
+/**
+ * Per-session-type baseline for the filesystem read envelope beyond a
+ * dispatched session's own worktree — the `--add-dir` list passed to the CLI
+ * (Docker mode: the matching set of read-only bind mounts on the `docker
+ * run` invocation, since `--add-dir` inside the container only reaches
+ * already-mounted paths — see DockerSessionRunner), unioned with any granted
+ * `read:path:` capability (see PATH_READ_PREFIX above). Replaces the former
+ * unconditional `--add-dir /` lift for every `isPlanningSession` type
+ * (groom/design/ops/split/docs — and gate-verify, which dispatches as
+ * sessionType 'ops'): every dispatched session ran as the same OS user, so
+ * that blanket lift gave direct OS-level read access to every other
+ * colocated project's secrets and to other sessions' scoped `.mcp.json`
+ * credential files.
+ *
+ * The baseline is the central config tree's shared doc subpaths only — never
+ * the config directory wholesale, since `remote-control.env`, `hooks/`, and
+ * `systemd/` are credential-shaped siblings of `procedures.md`/
+ * `task-writing.md` in that same tree. `projectDir` is the project checkout
+ * root (== SessionRunnerOptions.worktreePath for a planning session, which
+ * has no worktree of its own) — used both to resolve the central config tree
+ * (resolveConfigDir) and, via its basename, as the per-project key under
+ * `config/projects/<key>/`. A non-planning session type (standard/review)
+ * gets no baseline at all — it stays confined to its worktree, same as
+ * before this function existed.
+ */
+export function getSessionAddDirs(
+  sessionType: string,
+  granted: string[],
+  projectDir: string,
+): string[] {
+  const baseline: string[] = [];
+  if (isPlanningSession(sessionType)) {
+    const configDir = resolveConfigDir(projectDir);
+    if (configDir) {
+      baseline.push(
+        path.join(configDir, 'procedures.md'),
+        path.join(configDir, 'task-writing.md'),
+        path.join(configDir, 'README.md'),
+        path.join(configDir, 'guidelines-baseline.json'),
+      );
+      const projectConfigDir = path.join(
+        configDir,
+        'projects',
+        path.basename(projectDir),
+      );
+      baseline.push(
+        path.join(projectConfigDir, 'context.md'),
+        path.join(projectConfigDir, 'investigation-guide.md'),
+        path.join(projectConfigDir, 'grooming.json'),
+      );
+    }
+  }
+  const grantedPaths = granted
+    .map(parsePathReadCapability)
+    .filter((p): p is string => p !== null);
+  return [...new Set([...baseline, ...grantedPaths])];
 }

@@ -33,11 +33,8 @@ import { TaskCacheRefresher } from './orchestration/TaskCacheRefresher';
 import { ConvergenceSnapshotJob } from './orchestration/ConvergenceSnapshotJob';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
-import {
-  requireDeviceAuth,
-  validateWsToken,
-  isLoopbackIp,
-} from './auth/DeviceAuth';
+import { validateWsToken, isLoopbackIp } from './auth/DeviceAuth';
+import { requireDeviceOrSessionRouteAuth } from './auth/SessionRouteAuth';
 import {
   createPublicEnrollmentRouter,
   createGatedEnrollmentRouter,
@@ -51,6 +48,7 @@ import {
 import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
+import { DepthReviewService } from './github/DepthReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PlanningOrchestrator } from './orchestration/PlanningOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
@@ -70,17 +68,22 @@ import { PlanUsagePoller } from './orchestration/PlanUsagePoller';
 import { registerUsagePoller } from './orchestration/usageAdmission';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { StrandedOpsTaskMonitor } from './orchestration/StrandedOpsTaskMonitor';
+import { DeferredBlockerSweep } from './orchestration/DeferredBlockerSweep';
+import { CapabilityDispositionMiner } from './orchestration/CapabilityDispositionMiner';
 import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
+import { register as registerScheduledAuditSweep } from './orchestration/ScheduledAuditSweep';
 import {
   register as registerGateReconciler,
   configureGateVerification,
+  configureGateItemMirrorSink,
   reattachOutstandingGateVerifications,
 } from './gate/gateReconciler';
 import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
+import { latestDispositionEvidence } from './gate/gateService';
 import { SessionGateItemVerifier } from './gate/gateItemVerifier';
 import {
   deleteGhostSessions,
@@ -91,16 +94,23 @@ import { resolveMilestoneForTaskId } from './projects/milestoneResolver';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
-import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
+import {
+  createDiagnosticsRouter,
+  setScheduler,
+  setAutoLauncher,
+} from './routes/diagnostics';
 import {
   createDeployRouter,
   setDeployScheduler,
+  setDeploySessionManager,
   resumeActiveDeployRuns,
 } from './routes/deploy';
 import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
 import {
   createStagedIntentsRouter,
   setStagedIntentBroadcast,
+  stageIntent,
+  withdrawGateVerifyMirror,
 } from './routes/stagedIntents';
 import { createOrchestratorMcpRouter } from './mcp/orchestratorMcpServer';
 import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
@@ -128,6 +138,7 @@ import {
   handleUncaughtException,
   handleUnhandledRejection,
 } from './audit/recordFault';
+import { asyncErrorBoundary } from './routes/asyncHandler';
 import { setupSessionCgroup } from './session/sessionCgroup';
 
 runMigrations(db);
@@ -143,19 +154,6 @@ try {
 } catch (err) {
   logger.error(
     `[server] staged_intent milestone backfill failed: ${err instanceof Error ? err.message : String(err)}`,
-  );
-}
-
-// Resume-at-boot: a project's deploy_run left `running` by a self-deploy
-// restart (the restart step reboots this very backend) never finalizes on
-// its own — verify/report-in/record-sha only run if something re-drives
-// it. Guarded and non-blocking so one project's resume failure can't stall
-// the rest of boot.
-try {
-  resumeActiveDeployRuns(listProjectRows());
-} catch (err) {
-  logger.error(
-    `[server] boot deploy-run resume failed: ${err instanceof Error ? err.message : String(err)}`,
   );
 }
 
@@ -191,6 +189,8 @@ const prReviewService = new PRReviewService(
   undefined,
   sessionManager,
 );
+const depthReviewService = new DepthReviewService(sessionManager, undefined);
+prReviewService.setDepthReviewService(depthReviewService);
 // Retained so push_detected handler can call consumeAutofixSha() to detect
 // autofix-only pushes and suppress iteration-counter increments for them.
 const reviewOrchestrator = new ReviewOrchestrator(
@@ -199,8 +199,26 @@ const reviewOrchestrator = new ReviewOrchestrator(
   AUTO_REVIEW_ENABLED,
   githubClient,
 );
+reviewOrchestrator.setDepthReviewService(depthReviewService);
 setSettingsReviewOrchestrator(reviewOrchestrator);
 const planningOrchestrator = new PlanningOrchestrator(sessionManager);
+
+// Wire sessionManager into the deploy-agentic-step spawner before any
+// deploy_run resume below could reach an `agentic` step.
+setDeploySessionManager(sessionManager);
+
+// Resume-at-boot: a project's deploy_run left `running` by a self-deploy
+// restart (the restart step reboots this very backend) never finalizes on
+// its own — verify/report-in/record-sha only run if something re-drives
+// it. Guarded and non-blocking so one project's resume failure can't stall
+// the rest of boot.
+try {
+  resumeActiveDeployRuns(listProjectRows());
+} catch (err) {
+  logger.error(
+    `[server] boot deploy-run resume failed: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
 
 const PORT = getOrchestratorConfig().server.port;
 logConfigProvenanceSummary();
@@ -239,7 +257,7 @@ app.use('/api', createSetupModeGuard());
 // localStorage, with no cookie/service-worker), so gating the shell globally
 // returned JSON instead of the app on every fresh load/reload once a device was
 // enrolled — locking all devices out. The API/WS stay gated.
-app.use('/api', requireDeviceAuth);
+app.use('/api', requireDeviceOrSessionRouteAuth);
 // Auth-gated enrollment routes (approve, devices) — valid enrolled-device token required
 app.use('/api/enrollment', createGatedEnrollmentRouter());
 app.use('/api/permission-denials', permissionDenialsRouter);
@@ -268,6 +286,7 @@ prMergeWatcher.setReviewOrchestrator(reviewOrchestrator);
 // Gate consumes the merge-completion signal; PRMergeWatcher stays unaware of gate state.
 registerGateMergeConsumer(prMergeWatcher);
 prReviewService.setAutoMerger(autoMerger);
+reviewOrchestrator.setAutoMerger(autoMerger);
 setAutoMerger(autoMerger);
 const reviewerCommentsWatcher = new ReviewerCommentsWatcher(
   githubClient,
@@ -326,6 +345,12 @@ app.use('/api', createMergeCandidatesRouter());
 app.use('/api', createOpsContextRouter());
 app.use('/api', createMilestonesRouter());
 app.use('/api', createPlanningLaunchRouter(opsSessionLauncher));
+
+// Terminal error boundary: catches rejections/throws from asyncHandler-wrapped
+// route handlers that weren't already handled inside the route. Must stay
+// last among router mounts — Express selects error middleware by position.
+app.use(asyncErrorBoundary);
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')),
@@ -454,6 +479,7 @@ wss.on('connection', (ws, req) => {
 // AutoLauncher is constructed up-front; pollOnce() is called during boot after
 // orphan resume, and the Scheduler drives subsequent periodic polls.
 const autoLauncher = new AutoLauncher(sessionManager, broadcast);
+setAutoLauncher(autoLauncher);
 
 // DispatchTriggerEvaluator: sibling to AutoLauncher — scans armed flows
 // (groom/ops/design) across all projects' non-Done milestones and dispatches
@@ -514,6 +540,18 @@ const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
 // exemption for such tasks otherwise leaves permanently unobserved.
 const strandedOpsTaskMonitor = new StrandedOpsTaskMonitor();
 
+// Deferred-blocker sweep: periodic catch-all for a Ready (or other
+// non-terminal) task whose Depends On names an already-⏭️-Deferred task —
+// catches the pre-existing backlog and any case the write-path hook
+// (TaskWriteCommands.surfaceDependentsOfDeferredTask) misses.
+const deferredBlockerSweep = new DeferredBlockerSweep();
+
+// Capability-disposition-trail miner: files a 🔎 Investigation task (never a
+// ready denylist decision) for any capability with 5+ operator denials
+// across 2+ tasks and zero approvals ever recorded — see
+// audit/capabilityDispositionMining.ts.
+const capabilityDispositionMiner = new CapabilityDispositionMiner();
+
 const sessionEventsPruner = new SessionEventsPruner();
 
 // Convergence snapshot: samples the live milestone convergence every 5
@@ -528,6 +566,7 @@ stalledPRReconciler.setGitHubClient(githubClient);
 // Concluded-session archiver: registers with Scheduler for cadence management.
 const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);
 concludedSessionArchiver.register(scheduler);
+planningOrchestrator.register(scheduler);
 prMergeWatcher.register(scheduler);
 reviewerCommentsWatcher.register(scheduler);
 updateChecker.register(scheduler);
@@ -541,6 +580,8 @@ opsSessionLauncher.register(scheduler);
 autoMerger.register(scheduler);
 orphanedTaskSweeper.register(scheduler);
 strandedOpsTaskMonitor.register(scheduler);
+deferredBlockerSweep.register(scheduler);
+capabilityDispositionMiner.register(scheduler);
 stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);
@@ -548,6 +589,10 @@ stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 convergenceSnapshotJob.register(scheduler);
 registerWorktreeReconciler(scheduler);
+// Daily base-branch dependency/license-audit sweep — independent of any PR,
+// closes the gap the per-PR analyze gate's diff-triggered skip leaves for
+// manifests no PR ever touches.
+registerScheduledAuditSweep(scheduler);
 // Session-map reconciler: defense-in-depth sweep dropping stale in-memory
 // this.sessions entries whose DB row is terminal or missing, so a slot leak
 // from any (known or future) code path self-heals without operator
@@ -558,7 +603,39 @@ scheduler.register({
   runOnBoot: true,
   concurrency: 'skip-if-running',
   run: async () => {
-    sessionManager.reconcileSessionsMap();
+    const { dropped } = sessionManager.reconcileSessionsMap();
+    return { items_processed: dropped };
+  },
+});
+// Session liveness reconciler: the DB → OS mirror of session_map_reconciler
+// above. That sweep only ever drops a stale in-memory entry once the DB row
+// is already terminal; this one terminalizes a non-terminal planning
+// session row whose OS subprocess does not exist, then drops its in-memory
+// entry too — so the two sweeps can't leave a session stranded in the gap
+// where each defers to the other's axis. Same cadence pattern.
+scheduler.register({
+  name: 'session_liveness_reconciler',
+  intervalMs: 10 * 60_000,
+  runOnBoot: true,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const { reconciled } = sessionManager.reconcilePlanningSessionLiveness();
+    return { items_processed: reconciled.length };
+  },
+});
+// Non-planning counterpart to session_liveness_reconciler above: covers
+// standard/review/depth_review session rows, which have no other periodic
+// OS-process-liveness sweep — StuckSessionMonitor requires a 'result' event
+// to exist, and resumeOrphanSessions only runs on backend boot. Same
+// cadence pattern.
+scheduler.register({
+  name: 'non_planning_session_liveness_reconciler',
+  intervalMs: 10 * 60_000,
+  runOnBoot: true,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const { reconciled } = sessionManager.reconcileNonPlanningSessionLiveness();
+    return { items_processed: reconciled.length };
   },
 });
 // Gate-verification reconciler: runnability/readiness reconcile on every
@@ -577,6 +654,41 @@ const gateVerificationOptions = {
 };
 registerGateReconciler(scheduler, gateVerificationOptions);
 configureGateVerification(gateVerificationOptions);
+
+// Gate-item mirror sink: surfaces two states that would otherwise be
+// invisible outside GateReadinessPanel as `gate.verify` staged intents in
+// the Decision Inbox — every runnable Human-Observation gate_item
+// (origin: 'mirror', no headless session can judge rendered UI) and every
+// Prod-Mutating gate_item held at pending-approval (origin: 'consent', the
+// operator's consent gate). See gateReconciler.reconcileHumanObservationMirrors,
+// run every reconcile tick.
+configureGateItemMirrorSink({
+  stageMirror(item, origin) {
+    stageIntent(
+      'gate.verify',
+      origin === 'consent'
+        ? {
+            gateItemId: item.id,
+            origin: 'consent',
+            evidence: latestDispositionEvidence(item),
+          }
+        : { gateItemId: item.id, origin: 'mirror' },
+      item.project,
+      null,
+      null,
+      origin === 'consent'
+        ? `Prod-Mutating (pending approval): ${item.text}`
+        : `Human-Observation: ${item.text}`,
+      null,
+      null,
+      item.milestone,
+      null,
+    );
+  },
+  retireMirror(intentId, reason) {
+    withdrawGateVerifyMirror(intentId, reason);
+  },
+});
 
 void runBootSequence({
   jsonlReader,

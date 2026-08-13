@@ -45,20 +45,20 @@ describe('triageVerdict', () => {
     expect(triageVerdict(intents)).toBeNull();
   });
 
-  it('returns null for a 🔎 Investigation group even when a clean verdict is present in the payload', () => {
+  it('returns the proposed verdict for a 🔎 Investigation group', () => {
     const intents = readyIntent('t-investigation', {
       type: '🔎 Investigation',
       triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
     });
-    expect(triageVerdict(intents)).toBeNull();
+    expect(triageVerdict(intents)).toBe('clean');
   });
 
-  it('returns null for a 🔧 Operational group even when a clean verdict is present in the payload', () => {
+  it('returns the proposed verdict for a 🔧 Operational group', () => {
     const intents = readyIntent('t-operational', {
       type: '🔧 Operational',
-      triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+      triage: { proposedVerdict: 'blocked', hasOpenQuestionsHeading: true },
     });
-    expect(triageVerdict(intents)).toBeNull();
+    expect(triageVerdict(intents)).toBe('blocked');
   });
 
   it('returns null when groomingGate.type is missing, even with a verdict present (pre-fix record)', () => {

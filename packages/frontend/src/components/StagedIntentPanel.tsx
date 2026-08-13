@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { renderTaskBodyMarkdown } from '@claude-orchestrator/backend/src/tasks/bodyRender';
 import type {
   StagedIntent,
@@ -6,8 +6,10 @@ import type {
   GroomProposalFields,
 } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
+import { gateApi } from '../api/gate';
 import { diffTaskBody, splitSections, type SectionDiff } from './bodyDiff';
 import { CollapsibleField } from './CollapsibleField';
+import { useHighlightedCardKeyboardActions } from '../types/panelKeyboard';
 import styles from './StagedIntentPanel.module.css';
 
 interface Props {
@@ -35,12 +37,26 @@ interface Props {
    */
   hideActions?: boolean;
   /**
+   * Suppresses this panel's own rendering of `intent.investigation` — used
+   * when the enclosing GroupCard already rendered this same intent's
+   * investigation text in the group's head, so expanding the member in
+   * place doesn't duplicate it.
+   */
+  hideInvestigation?: boolean;
+  /**
    * True while the owning session hasn't signaled its proposal set complete
    * for the turn — the backend refuses apply/approve/reject too, so every
    * disposition control is disabled rather than left to fail. The headline,
    * registers, and proposal are still rendered read-only.
    */
   disabled?: boolean;
+  /**
+   * True while this card is the active keyboard ring's current highlight —
+   * enables its local 'a' (approve) / 'r' (focus reason field) bindings.
+   * Defaults to false so the panel is inert outside a keyboard-ring
+   * context (e.g. rendered standalone in the session DecisionPanel today).
+   */
+  highlighted?: boolean;
 }
 
 function isNotFoundError(err: unknown): boolean {
@@ -307,7 +323,12 @@ interface GroomingGateRegions {
 
 /** Mirrors groomGate.ts's GroomingGateEntry — the client only renders these fields, never re-judges them. */
 interface GroomingGate {
-  size_check?: { decision?: string } | null;
+  size_check?: {
+    decision?: string;
+    files?: number;
+    loc?: number;
+    loc_method?: string;
+  } | null;
   type_check?: { decision?: string; disposition?: string } | null;
   type?: string;
   regions?: GroomingGateRegions;
@@ -330,6 +351,11 @@ function GroomingGateSummary({ gate }: { gate: GroomingGate }) {
   ).length;
   const filesPathsEntries = gate.filesPathsEntries ?? [];
   const constraintsDispositioned = gate.constraintsDispositioned ?? {};
+  const sizeCheck = gate.size_check;
+  const sizeCheckEstimate =
+    typeof sizeCheck?.loc === 'number' && typeof sizeCheck?.files === 'number'
+      ? ` (${sizeCheck.loc} LoC${sizeCheck.loc_method ? ` ${sizeCheck.loc_method}` : ''}, ${sizeCheck.files} file${sizeCheck.files === 1 ? '' : 's'})`
+      : '';
 
   return (
     <div
@@ -337,10 +363,11 @@ function GroomingGateSummary({ gate }: { gate: GroomingGate }) {
       data-testid="staged-intent-grooming-gate-summary"
     >
       <p>
-        Size: {gate.size_check?.decision ?? '—'} · Type check:{' '}
-        {gate.type_check?.decision ?? '—'} · Task type: {gate.type ?? '—'} ·{' '}
-        {regionCount} region{regionCount === 1 ? '' : 's'} · {constraintCount}{' '}
-        constraint{constraintCount === 1 ? '' : 's'} dispositioned
+        Size: {sizeCheck?.decision ?? '—'}
+        {sizeCheckEstimate} · Type check: {gate.type_check?.decision ?? '—'} ·
+        Task type: {gate.type ?? '—'} · {regionCount} region
+        {regionCount === 1 ? '' : 's'} · {constraintCount} constraint
+        {constraintCount === 1 ? '' : 's'} dispositioned
       </p>
       {(constraintCount > 0 || filesPathsEntries.length > 0) && (
         <details className={styles.expandDetail}>
@@ -836,9 +863,10 @@ function GateAccreteHeadline({ intent }: { intent: StagedIntent }) {
 
 interface GateVerifyPayload {
   gateItemId: string;
-  disposition: 'pass' | 'fail' | 'needs-setup';
+  disposition?: 'pass' | 'fail' | 'needs-setup' | 'deferred';
   evidence?: unknown;
   reclassify?: { to: string; reason: string };
+  origin?: 'mirror' | 'consent';
 }
 
 interface GateVerifyEvidence {
@@ -918,7 +946,13 @@ function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
     <div className={styles.text} data-testid="staged-intent-gate-verify">
       <p>
         Gate item <strong>{payload.gateItemId}</strong>:{' '}
-        <strong>{payload.disposition}</strong>
+        {payload.origin === 'mirror' ? (
+          <strong>Human-Observation — awaiting operator disposition</strong>
+        ) : payload.origin === 'consent' ? (
+          <strong>Prod-Mutating — pending approval</strong>
+        ) : (
+          <strong>{payload.disposition}</strong>
+        )}
       </p>
       {evidence == null && payload.evidence != null ? (
         renderFallback(payload.evidence)
@@ -1193,7 +1227,9 @@ export function StagedIntentPanel({
   onDismiss,
   onApproved,
   hideActions,
+  hideInvestigation = false,
   disabled = false,
+  highlighted = false,
 }: Props) {
   // A member stuck off the active surface (needs_revision |
   // pending_verification) — its only operator-usable exit is decline
@@ -1214,6 +1250,9 @@ export function StagedIntentPanel({
   const [rejectReason, setRejectReason] = useState('');
   const [showOverride, setShowOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
+  const [consentRejectReason, setConsentRejectReason] = useState('');
+  const [parkEvidence, setParkEvidence] = useState('');
+  const rejectReasonRef = useRef<HTMLTextAreaElement>(null);
 
   const blocked = Boolean(
     intent.annotation &&
@@ -1233,15 +1272,44 @@ export function StagedIntentPanel({
   // disposition (commit/approve/reject) is ever offered for it.
   const isNoOp = intent.kind === 'planning.noOp';
   const isGrouped = !!intent.groupId;
+  // A Human-Observation mirror carries no pre-set disposition — no verifier
+  // ever observed anything, so the operator picks Pass/Fail/Defer here
+  // instead of a single generic "Commit" (see GateVerifyIntentPayload.origin).
+  const isGateVerifyMirror =
+    intent.kind === 'gate.verify' &&
+    (intent.payload as { origin?: string } | null)?.origin === 'mirror';
+  // A Prod-Mutating item held at pending-approval (the consent gate) — its
+  // pass is already recorded, so the operator's only choices are Approve
+  // (release to pass, via the same approveGateItem the GateReadinessPanel
+  // path uses) or Reject-with-reason (records withheld consent as a `fail`
+  // disposition). Neither goes through the generic intent apply/reject
+  // machinery — see StagedIntentPanel.tsx's handleConsentApprove/Reject.
+  const isGateVerifyConsent =
+    intent.kind === 'gate.verify' &&
+    (intent.payload as { origin?: string } | null)?.origin === 'consent';
+  const consentGateItemId = isGateVerifyConsent
+    ? (intent.payload as GateVerifyPayload).gateItemId
+    : null;
 
-  const handleApply = async (override?: { reason: string }) => {
+  const handleApply = async (
+    override?: { reason: string },
+    mirrorDisposition?:
+      | 'pass'
+      | 'fail'
+      | 'needs-setup'
+      | 'deferred'
+      | 'not-yet-triggerable',
+    mirrorEvidence?: string,
+  ) => {
     setInFlight(override ? 'override' : 'apply');
     setError(null);
     try {
-      const { result } = await stagedIntentsApi.apply(
-        intent.id,
-        override ? { override: true, reason: override.reason } : undefined,
-      );
+      const { result } = await stagedIntentsApi.apply(intent.id, {
+        override: !!override,
+        reason: override?.reason,
+        mirrorDisposition,
+        mirrorEvidence,
+      });
       onApplied?.(intent, result);
     } catch (err) {
       if (isNotFoundError(err)) {
@@ -1277,6 +1345,40 @@ export function StagedIntentPanel({
       setInFlight(null);
     }
   };
+
+  // Mirrors the visible primary action button's own enable condition — 'a'
+  // is a no-op whenever that button would be hidden or disabled, never
+  // bypassing its gate. For a grouped/capability-request/completeness-
+  // disposition card the primary action is Approve (see the
+  // "Approve"/"Grant" button below); for an ordinary standalone card it's
+  // Commit (see the "✓ Commit" button below) — matching each card's own
+  // rendered primary control rather than assuming Approve applies to both.
+  const usesApproveAsPrimary = isGrouped || skipsApply;
+  const canUsePrimaryActionViaKeyboard =
+    !hideActions &&
+    !isNoOp &&
+    !isGateVerifyConsent &&
+    inFlight === null &&
+    !disabled &&
+    (usesApproveAsPrimary
+      ? intent.state !== 'approved' && !isBlockedState
+      : !blocked && !isGateVerifyMirror);
+
+  const handlePrimaryAction = () => {
+    if (usesApproveAsPrimary) {
+      void handleApprove();
+    } else {
+      void handleApply();
+    }
+  };
+
+  useHighlightedCardKeyboardActions({
+    highlighted,
+    onApprove: canUsePrimaryActionViaKeyboard ? handlePrimaryAction : undefined,
+    onFocusReject: hideActions
+      ? undefined
+      : () => rejectReasonRef.current?.focus(),
+  });
 
   const handleAcknowledge = async () => {
     setInFlight('acknowledge');
@@ -1319,8 +1421,47 @@ export function StagedIntentPanel({
     }
   };
 
+  const handleConsentApprove = async () => {
+    if (!consentGateItemId) return;
+    setInFlight('approve');
+    setError(null);
+    try {
+      const updated = await gateApi.approveItem(consentGateItemId);
+      onApplied?.(intent, updated);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to approve gate item',
+      );
+    } finally {
+      setInFlight(null);
+    }
+  };
+
+  const handleConsentReject = async () => {
+    const reason = consentRejectReason.trim();
+    if (!consentGateItemId || !reason) return;
+    setInFlight('reject');
+    setError(null);
+    try {
+      const updated = await gateApi.rejectItem(consentGateItemId, { reason });
+      onApplied?.(intent, updated);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to reject gate item',
+      );
+    } finally {
+      setInFlight(null);
+    }
+  };
+
   return (
-    <div className={styles.panel}>
+    <div
+      className={`${styles.panel}${
+        highlighted ? ` ${styles.keyboardHighlighted}` : ''
+      }`}
+      data-testid="staged-intent-panel"
+      data-keyboard-highlighted={highlighted || undefined}
+    >
       <div className={styles.header}>
         <span className={styles.kind}>{intent.kind}</span>
         {intent.groupId && (
@@ -1335,6 +1476,16 @@ export function StagedIntentPanel({
             <span className={styles.stateBadge}>{intent.state}</span>
           )
         )}
+        {intent.annotation &&
+          'autoApproved' in intent.annotation &&
+          intent.annotation.autoApproved && (
+            <span
+              className={styles.autoApprovedBadge}
+              data-testid="staged-intent-auto-approved"
+            >
+              auto-approved
+            </span>
+          )}
         {disabled && (
           <span
             className={styles.stateBadge}
@@ -1361,7 +1512,7 @@ export function StagedIntentPanel({
         )
       )}
 
-      {intent.investigation && (
+      {intent.investigation && !hideInvestigation && (
         <p
           className={styles.rationale}
           data-testid="staged-intent-investigation"
@@ -1382,7 +1533,39 @@ export function StagedIntentPanel({
 
       {error && <div className={styles.error}>{error}</div>}
 
-      {hideActions ? null : isNoOp ? (
+      {hideActions ? null : isGateVerifyConsent ? (
+        <div className={styles.rejectForm}>
+          <textarea
+            className={styles.feedbackInput}
+            placeholder="Why is consent being withheld?"
+            value={consentRejectReason}
+            onChange={(e) => setConsentRejectReason(e.target.value)}
+            data-testid="staged-intent-gate-consent-reject-reason"
+          />
+          <div className={styles.permissionButtons}>
+            <button
+              type="button"
+              className={styles.approveButton}
+              disabled={inFlight !== null || disabled}
+              data-testid="staged-intent-gate-consent-approve"
+              onClick={() => void handleConsentApprove()}
+            >
+              {inFlight === 'approve' ? 'Approving…' : 'Approve'}
+            </button>
+            <button
+              type="button"
+              className={styles.denyButton}
+              disabled={
+                inFlight !== null || disabled || !consentRejectReason.trim()
+              }
+              data-testid="staged-intent-gate-consent-reject"
+              onClick={() => void handleConsentReject()}
+            >
+              {inFlight === 'reject' ? 'Submitting…' : 'Reject'}
+            </button>
+          </div>
+        </div>
+      ) : isNoOp ? (
         <div className={styles.rejectForm}>
           <button
             type="button"
@@ -1453,6 +1636,7 @@ export function StagedIntentPanel({
               </button>
             </div>
             <textarea
+              ref={rejectReasonRef}
               className={styles.feedbackInput}
               placeholder={
                 rejectOutcome === 'pushback'
@@ -1465,7 +1649,64 @@ export function StagedIntentPanel({
           </div>
 
           <div className={styles.permissionButtons}>
-            {!isGrouped && !blocked && !skipsApply && (
+            {!isGrouped && !blocked && !skipsApply && isGateVerifyMirror && (
+              <>
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={inFlight !== null || disabled}
+                  data-testid="staged-intent-gate-verify-mirror-pass"
+                  onClick={() => void handleApply(undefined, 'pass')}
+                >
+                  {inFlight === 'apply' ? 'Applying…' : 'Pass'}
+                </button>
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={inFlight !== null || disabled}
+                  data-testid="staged-intent-gate-verify-mirror-fail"
+                  onClick={() => void handleApply(undefined, 'fail')}
+                >
+                  {inFlight === 'apply' ? 'Applying…' : 'Fail'}
+                </button>
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={inFlight !== null || disabled}
+                  data-testid="staged-intent-gate-verify-mirror-defer"
+                  title="Resolves this item permanently — it will not be re-attempted. Use Park to postpone instead."
+                  onClick={() => void handleApply(undefined, 'deferred')}
+                >
+                  {inFlight === 'apply' ? 'Applying…' : 'Defer (resolves)'}
+                </button>
+                <textarea
+                  className={styles.feedbackInput}
+                  placeholder="Why can't this be verified right now? (required to park)"
+                  value={parkEvidence}
+                  onChange={(e) => setParkEvidence(e.target.value)}
+                  data-testid="staged-intent-gate-verify-mirror-park-evidence"
+                />
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={
+                    inFlight !== null || disabled || !parkEvidence.trim()
+                  }
+                  data-testid="staged-intent-gate-verify-mirror-park"
+                  title="Postpones this item — it stays open and is automatically re-attempted later."
+                  onClick={() =>
+                    void handleApply(
+                      undefined,
+                      'not-yet-triggerable',
+                      parkEvidence,
+                    )
+                  }
+                >
+                  {inFlight === 'apply' ? 'Applying…' : 'Park'}
+                </button>
+              </>
+            )}
+            {!isGrouped && !blocked && !skipsApply && !isGateVerifyMirror && (
               <button
                 type="button"
                 className={styles.approveButton}

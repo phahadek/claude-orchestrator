@@ -3,7 +3,7 @@
  * (packages/backend/src/routes/gateState.ts) — the /gate skill's triage
  * route for reclassifying a needs-triage item.
  *
- * AC: a valid target (Read-Only/Prod-Mutating/Opportunistic) is applied and
+ * AC: a valid target (Read-Only/Prod-Mutating/Human-Observation) is applied and
  * the updated item returned; a bad target is rejected with a 400 and the
  * service surfaces the rejection rather than the route pre-validating it.
  */

@@ -245,9 +245,11 @@ export function SessionControls({
                       session.totalInputTokens ?? 0,
                       session.totalOutputTokens ?? 0,
                       session.model,
+                      session.cache_read_tokens ?? 0,
+                      session.cache_creation_tokens ?? 0,
                     ),
                   )
-                : `${formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens (~${formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model))} est.)`}
+                : `${formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens (~${formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model, session.cache_read_tokens ?? 0, session.cache_creation_tokens ?? 0))} est.)`}
             </span>
           )}
           <button
@@ -398,7 +400,7 @@ export function SessionControls({
                 className={`${styles.capabilityChip} ${provenance === 'auto' ? styles['capabilityChip--auto'] : styles['capabilityChip--operator']}`}
                 title={capability}
               >
-                {capability}
+                <span className={styles.capabilityText}>{capability}</span>
                 <span className={styles.capabilityProvenance}>
                   {provenance === 'auto' ? 'auto' : 'operator'}
                 </span>

@@ -37,7 +37,6 @@ import {
   setTaskWriteRefreshFn,
 } from '../../tasks/TaskWriteCommands';
 import type { TaskBackend } from '../../tasks/TaskBackend';
-import { ReadinessGateError } from '../../tasks/readinessGate';
 
 // ─── planMove: the four dependency cases ─────────────────────────────────────
 
@@ -292,7 +291,7 @@ describe('BackendTaskWriteCommands.moveTask', () => {
     );
   });
 
-  it('fires the readiness gate when restoring Ready, and blocks without an override', async () => {
+  it('restores Ready without re-running the readiness gate as a hard block — a move re-parents already-groomed content, it does not re-author it', async () => {
     const backend = makeBackend({
       fetchTaskPage: vi
         .fn()
@@ -300,37 +299,36 @@ describe('BackendTaskWriteCommands.moveTask', () => {
     });
     const commands = new BackendTaskWriteCommands(backend, 'proj-1');
 
-    await expect(
-      commands.moveTask(
-        baseParams({
-          content: { ...baseParams().content, status: 'Ready' },
-        }),
-      ),
-    ).rejects.toBeInstanceOf(ReadinessGateError);
-    expect(backend.updateStatus).not.toHaveBeenCalled();
-  });
-
-  it('allows the Ready restore with a readiness override and records the override event', async () => {
-    const backend = makeBackend({
-      fetchTaskPage: vi
-        .fn()
-        .mockResolvedValue('## Open Questions\n- unresolved\n'),
-    });
-    const commands = new BackendTaskWriteCommands(backend, 'proj-1');
-
-    await commands.moveTask(
+    const result = await commands.moveTask(
       baseParams({
         content: { ...baseParams().content, status: 'Ready' },
       }),
-      { source: 'human', readinessOverride: { reason: 'operator says go' } },
     );
 
     expect(backend.updateStatus).toHaveBeenCalledWith(
       'notion:new',
       '🗂️ Ready',
-      expect.anything(),
+      undefined,
     );
-    expect(mockRecordEvent).toHaveBeenCalledWith(
+    expect(result.readinessAdvisory).toEqual([
+      expect.objectContaining({ tier: 'structural' }),
+    ]);
+  });
+
+  it('surfaces no readinessAdvisory, and never records a readiness_override event, when the restored body is gate-clean', async () => {
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Open Questions\nNone\n'),
+    });
+    const commands = new BackendTaskWriteCommands(backend, 'proj-1');
+
+    const result = await commands.moveTask(
+      baseParams({
+        content: { ...baseParams().content, status: 'Ready' },
+      }),
+    );
+
+    expect(result.readinessAdvisory).toBeUndefined();
+    expect(mockRecordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'readiness_override' }),
     );
   });

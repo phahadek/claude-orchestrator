@@ -29,12 +29,14 @@ export const taskStatusSchema = z.enum([
   'Done',
 ]);
 
+/** Canonical Priority vocabulary — the board's actual Priority select options. */
+export const taskPrioritySchema = z.enum(['🔴 High', '🟡 Medium', '🟢 Low']);
+
 /** GateItemClassification, plus the two non-classifying accretion dispositions. */
 export const gateContributionDecisionSchema = z
   .enum([
     'Read-Only',
     'Prod-Mutating',
-    'Opportunistic',
     'Human-Observation',
     'needs-triage',
     'none',
@@ -69,6 +71,29 @@ export const opsStateSchema = z.enum([
   'incident-frozen',
   'resolved',
 ]);
+
+/**
+ * OpsReconciliationAssertion — db/types.ts. Required on the Operational
+ * completing intent (journal.setState -> "applied-pending-confirm"): a
+ * declaration of what must be true once the change applies, evaluated
+ * automatically once this intent applies (see stagedIntents.ts's
+ * reconcileOpsCompletion). The session performs the actual check itself
+ * (re-reading a config row, counting a backfill) and reports the outcome
+ * here — `passed` is the session's own verdict, not re-derived by the
+ * orchestrator.
+ */
+export const opsReconciliationAssertionSchema = z.object({
+  description: z
+    .string()
+    .describe('What must be true once the change applies.'),
+  passed: z
+    .boolean()
+    .describe('Whether the session confirmed the assertion holds.'),
+  mismatch: z
+    .string()
+    .optional()
+    .describe('What was actually observed instead, when passed is false.'),
+});
 
 /** bodyRender.ts's BlockModel union — the Context section's structured content model. */
 const blockModelSchema = z.discriminatedUnion('type', [
@@ -218,7 +243,18 @@ export const taskBodySectionsSchema = z.object({
 /** groomGate.ts's GroomingGateEntry — deep validation stays with checkGroomingPromotionGate. */
 export const groomingGateEntrySchema = z
   .object({
-    size_check: z.record(z.string(), z.unknown()).nullable().optional(),
+    size_check: z
+      .object({
+        decision: z.enum(['no_split', 'split_now', 'unsplittable', 'n/a']),
+        files: z.number().optional(),
+        loc: z.number().optional(),
+        loc_method: z.string().optional(),
+        split_into: z.array(z.unknown()).optional(),
+        reason: z.string().optional(),
+      })
+      .loose()
+      .nullable()
+      .optional(),
     type_check: z.record(z.string(), z.unknown()).nullable().optional(),
     type: z.string().optional(),
     regions: z.unknown().optional(),
@@ -230,6 +266,34 @@ export const groomingGateEntrySchema = z
         proposedVerdict: z.enum(TRIAGE_VERDICTS),
         hasOpenQuestionsHeading: z.boolean(),
       })
+      .optional(),
+    /** Structural fact: whether the pre-groom body carried a `## Operational seed` section — see groomGate.ts's GroomingGateEntry. */
+    hasOperationalSeedSection: z.boolean().optional(),
+    /** Per-line triage of the pre-groom `## Operational seed` section's candidates — see groomGate.ts's GroomingGateEntry.seedContributionCandidates. */
+    seedContributionCandidates: z
+      .array(
+        z.object({
+          spec: z.string(),
+          classification: z
+            .enum(['operational-seed', 'in-pr', 'needs-triage'])
+            .optional(),
+        }),
+      )
+      .optional(),
+    /** Per-line triage of the pre-groom `### 👁️ Manual verification` section's candidates — see groomGate.ts's GroomingGateEntry.gateContributionCandidates. */
+    gateContributionCandidates: z
+      .array(
+        z.object({
+          text: z.string(),
+          classification: z
+            .enum([
+              'runtime-observable',
+              'config-or-code-determined',
+              'needs-triage',
+            ])
+            .optional(),
+        }),
+      )
       .optional(),
   })
   .optional();
@@ -244,13 +308,7 @@ export const gateContributionSourceTaskSchema = z.object({
 export const gateContributionItemInputSchema = z.object({
   text: z.string(),
   classification: z
-    .enum([
-      'Read-Only',
-      'Prod-Mutating',
-      'Opportunistic',
-      'Human-Observation',
-      'needs-triage',
-    ])
+    .enum(['Read-Only', 'Prod-Mutating', 'Human-Observation', 'needs-triage'])
     .optional()
     .describe(
       `${GATE_ITEM_TIER_SELECTION_GUIDANCE} Overrides the batch-level ` +
@@ -297,20 +355,20 @@ export const reviewDispositionSchema = z.enum([
 ]);
 
 /** VerifiedFlakyDisposition's gate vocabulary — see AgentSession.ts's recordVerifiedFlakyDisposition. */
-export const flakyGateSchema = z.enum(['ci', 'f2']);
+export const flakyGateSchema = z.enum(['ci', 'f2', 'analyze']);
 
 /** GateVerifyDisposition's disposition vocabulary — see AgentSession.ts's recordGateVerifyDisposition. */
 export const gateVerifyDispositionSchema = z.enum([
   'pass',
   'fail',
   'needs-setup',
+  'not-yet-triggerable',
 ]);
 
 /** AgentSession.ts's VERIFIER_RECLASSIFY_TARGETS — the only reclassify targets a gate-verify session may propose. */
 export const gateVerifyReclassifyToSchema = z.enum([
   'Human-Observation',
   'needs-triage',
-  'Opportunistic',
 ]);
 
 export const gateVerifyReclassifySchema = z.object({
@@ -368,3 +426,36 @@ export const gateVerifyPayloadSchema = z
       });
     }
   });
+
+/**
+ * gate.verify's success response — echoes the staged intent's id and its
+ * recorded milestone, the same shape journal.setState already echoes, so a
+ * caller can see how its write was actually recorded (which gate_item it
+ * resolved to, and whether it landed attributed to a milestone) instead of
+ * a bare acknowledgement.
+ */
+export const gateVerifyResultSchema = z.object({
+  status: z.literal('ok'),
+  id: z.string(),
+  milestone: z.string().nullable(),
+});
+
+/**
+ * gateService.ts's RECLASSIFY_TARGETS — the /gate skill's own triage
+ * vocabulary a human operator (and now the gate.reclassify MCP verb) may
+ * move a gate item to. Excludes 'needs-triage': that's an input state, never
+ * a reclassification target — reclassifyGateItem rejects it at runtime too,
+ * this schema just surfaces the same rule to the calling model up front.
+ */
+export const gateReclassifyClassificationSchema = z.enum([
+  'Read-Only',
+  'Prod-Mutating',
+  'Human-Observation',
+]);
+
+/** AgenticVerdict — see DeployOrchestrator.ts and AgentSession.ts's recordDeployAgenticVerdict. */
+export const deployAgenticVerdictSchema = z.enum([
+  'approved',
+  'rejected',
+  'inconclusive',
+]);

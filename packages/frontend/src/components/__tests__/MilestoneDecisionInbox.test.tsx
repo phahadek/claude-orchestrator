@@ -8,6 +8,7 @@ import {
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { MilestoneDecisionInbox } from '../MilestoneDecisionInbox';
 import { stagedIntentsApi } from '../../api/stagedIntents';
+import { gateApi } from '../../api/gate';
 import type { StagedIntent } from '../../api/stagedIntents';
 import type { TaskView } from '../../types/taskView';
 
@@ -409,7 +410,10 @@ describe('MilestoneDecisionInbox', () => {
     // (actions aren't hidden for it) once expanded, while the committed
     // sibling stays read-only.
     fireEvent.click(screen.getByTestId('group-member-toggle-blocked-member'));
-    expect(screen.getByRole('button', { name: /decline/i })).toBeTruthy();
+    const memberPanel = screen.getByTestId('group-member-blocked-member');
+    expect(
+      within(memberPanel).getByRole('button', { name: /decline/i }),
+    ).toBeTruthy();
   });
 
   it('shows a failed group approve error only on that group card, not on other group cards', async () => {
@@ -516,7 +520,155 @@ describe('MilestoneDecisionInbox', () => {
     );
   });
 
-  it('disables the group reject submit until an outcome is chosen, even with a reason typed', async () => {
+  it('renders a pushed-back group (operator needs_revision, no autoRejected annotation) as blocked, disables Approve, and never fires the commit request when clicked', async () => {
+    const groupId = 'group-pushed-back';
+    const blockedMember: StagedIntent = {
+      id: `${groupId}-status`,
+      kind: 'task.setStatus',
+      payload: { taskId: 't-pushed-back', status: 'Ready' },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'session-groom',
+      groupId,
+      groupKind: 'groom',
+      milestone: 'M1',
+      state: 'needs_revision',
+      sessionComplete: true,
+      groupBlocked: true,
+      groupBlockedMemberCount: 1,
+    };
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      blockedMember,
+    ]);
+    const approveGroup = vi.spyOn(stagedIntentsApi, 'approveGroup');
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
+    expect(within(card).getByTestId(`recovery-banner-${groupId}`)).toBeTruthy();
+
+    const approveButton = within(card).getByRole('button', {
+      name: /approve groom/i,
+    }) as HTMLButtonElement;
+    expect(approveButton.disabled).toBe(true);
+
+    fireEvent.click(approveButton);
+    expect(approveGroup).not.toHaveBeenCalled();
+  });
+
+  it('renders a pending_verification member as blocked, disabling Approve, the same as an auto-rejected one', async () => {
+    const groupId = 'group-pending-verification';
+    const blockedMember: StagedIntent = {
+      id: `${groupId}-status`,
+      kind: 'task.setStatus',
+      payload: { taskId: 't-pv', status: 'Ready' },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'session-groom',
+      groupId,
+      groupKind: 'groom',
+      milestone: 'M1',
+      state: 'pending_verification',
+      sessionComplete: true,
+      groupBlocked: true,
+      groupBlockedMemberCount: 1,
+    };
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      blockedMember,
+    ]);
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
+    expect(within(card).getByTestId(`recovery-banner-${groupId}`)).toBeTruthy();
+    const approveButton = within(card).getByRole('button', {
+      name: /approve groom/i,
+    }) as HTMLButtonElement;
+    expect(approveButton.disabled).toBe(true);
+  });
+
+  it('renders a group blocked (Approve disabled, no Recover offered) when its only blocked member is auto-rejected and hidden behind a still-live session', async () => {
+    const groupId = 'group-hidden-blocked';
+    // The auto-rejected/needs_revision sibling never reaches the frontend —
+    // isVisibleOnDecisionSurface filters it out server-side while its
+    // session is live — so only its visible sibling is fetched. The backend
+    // still marks the visible sibling groupBlocked: true because it reads
+    // every member of the group, not just the visible ones.
+    const visibleSibling: StagedIntent = {
+      id: `${groupId}-dep`,
+      kind: 'task.setDependsOn',
+      payload: { taskId: 't-hidden', dependsOn: [] },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'session-groom',
+      groupId,
+      groupKind: 'groom',
+      milestone: 'M1',
+      state: 'staged',
+      sessionComplete: true,
+      groupBlocked: true,
+      groupBlockedMemberCount: 1,
+    };
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      visibleSibling,
+    ]);
+    const approveGroup = vi.spyOn(stagedIntentsApi, 'approveGroup');
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    // The blocked member stays off the surface entirely — the fix doesn't
+    // re-filter its visible sibling out either.
+    expect(
+      screen.getByTestId(`milestone-decision-card-${groupId}`),
+    ).toBeTruthy();
+
+    const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
+    expect(within(card).getByTestId(`recovery-banner-${groupId}`)).toBeTruthy();
+    // No visible blocked row to recover — Recover isn't offered.
+    expect(within(card).queryByTestId(`recover-group-${groupId}`)).toBeNull();
+
+    const approveButton = within(card).getByRole('button', {
+      name: /approve groom/i,
+    }) as HTMLButtonElement;
+    expect(approveButton.disabled).toBe(true);
+    fireEvent.click(approveButton);
+    expect(approveGroup).not.toHaveBeenCalled();
+  });
+
+  it('disables Approve/Recover via the disabled prop when a group member session has not signaled turn-complete', async () => {
+    const groupId = 'group-session-incomplete';
+    const member: StagedIntent = {
+      id: `${groupId}-status`,
+      kind: 'task.setStatus',
+      payload: { taskId: 't-incomplete', status: 'Ready' },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'session-groom',
+      groupId,
+      groupKind: 'groom',
+      milestone: 'M1',
+      state: 'staged',
+      sessionComplete: true,
+      groupBlocked: true,
+      groupBlockedMemberCount: 0,
+      groupSessionIncomplete: true,
+    };
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([member]);
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
+    const approveButton = within(card).getByRole('button', {
+      name: /approve groom/i,
+    }) as HTMLButtonElement;
+    expect(approveButton.disabled).toBe(true);
+  });
+
+  it('enables the group reject submit once a reason is typed, defaulting to pushback with no outcome chosen', async () => {
     const groupId = 'group-reject';
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
       {
@@ -538,7 +690,7 @@ describe('MilestoneDecisionInbox', () => {
 
     const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
     fireEvent.change(
-      within(card).getByPlaceholderText(/pushback or decline/i),
+      within(card).getByPlaceholderText(/what should the session revise/i),
       {
         target: { value: 'No need' },
       },
@@ -546,9 +698,9 @@ describe('MilestoneDecisionInbox', () => {
 
     expect(
       within(card)
-        .getByRole('button', { name: /reject groom/i })
+        .getByRole('button', { name: /pushback groom/i })
         .hasAttribute('disabled'),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('issues an explicit decline (never inferred) when Decline is chosen on the group reject toggle', async () => {
@@ -822,6 +974,177 @@ describe('MilestoneDecisionInbox', () => {
     await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
 
     const card = screen.getByTestId('milestone-decision-card-pickone-no-task');
+    expect(card.textContent).toContain('Untitled decision');
     expect(card.textContent).toContain('decision.pickOne');
+  });
+
+  it('resolves a decision.pickOne card header to its originating session task name when the intent carries no payload.taskId', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'pickone-session-task',
+        kind: 'decision.pickOne',
+        payload: {
+          prompt: 'Which approach?',
+          options: [{ label: 'A', description: 'Option A' }],
+          allowFreeForm: false,
+        },
+        projectId: 'proj-1',
+        createdAt: 0,
+        sessionId: 'session-groom',
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    render(
+      <MilestoneDecisionInbox
+        projectId="proj-1"
+        milestone="M1"
+        tasks={[]}
+        sessions={[
+          { sessionId: 'session-groom', taskName: 'Fix the login flow' },
+        ]}
+      />,
+    );
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId(
+      'milestone-decision-card-pickone-session-task',
+    );
+    expect(card.textContent).toContain('Fix the login flow');
+    expect(card.textContent).toContain('decision.pickOne');
+  });
+
+  it('resolves gate.accrete and seed.stage card headers from payload.sourceTask.id', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'gate-accrete-intent',
+        kind: 'gate.accrete',
+        payload: { sourceTask: { id: 'notion:accrete' }, items: [] },
+        projectId: 'proj-1',
+        createdAt: 1,
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+      },
+      {
+        id: 'seed-stage-intent',
+        kind: 'seed.stage',
+        payload: { sourceTask: { id: 'notion:seed' }, seeds: [] },
+        projectId: 'proj-1',
+        createdAt: 0,
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    render(
+      <MilestoneDecisionInbox
+        projectId="proj-1"
+        milestone="M1"
+        tasks={[
+          makeTask({ taskId: 'notion:accrete', taskName: 'Accrete target' }),
+          makeTask({ taskId: 'notion:seed', taskName: 'Seed target' }),
+        ]}
+      />,
+    );
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const gateCard = screen.getByTestId(
+      'milestone-decision-card-gate-accrete-intent',
+    );
+    expect(gateCard.textContent).toContain('Accrete target');
+    expect(gateCard.textContent).toContain('gate.accrete');
+
+    const seedCard = screen.getByTestId(
+      'milestone-decision-card-seed-stage-intent',
+    );
+    expect(seedCard.textContent).toContain('Seed target');
+    expect(seedCard.textContent).toContain('seed.stage');
+  });
+
+  it('resolves a gate.verify card header from its referenced gate item text, not the unresolved-label fallback', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'gate-verify-intent',
+        kind: 'gate.verify',
+        payload: { gateItemId: 'gate-item-1' },
+        projectId: 'proj-1',
+        createdAt: 0,
+        sessionId: null,
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+    vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+      item: {
+        id: 'gate-item-1',
+        project: 'proj-1',
+        milestone: 'M1',
+        text: 'Confirm the login redirect works in prod',
+        classification: 'Human-Observation',
+        state: 'runnable',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      sources: [],
+      events: [],
+    });
+
+    render(
+      <MilestoneDecisionInbox projectId="proj-1" milestone="M1" tasks={[]} />,
+    );
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = await screen.findByTestId(
+      'milestone-decision-card-gate-verify-intent',
+    );
+    await waitFor(() =>
+      expect(card.textContent).toContain(
+        'Confirm the login redirect works in prod',
+      ),
+    );
+    expect(card.textContent).not.toContain('Untitled decision');
+  });
+
+  it('signals onCardsRemoved with the dispositioned card id, so a caller (e.g. the decision stack) can re-select whatever is now topmost', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'intent-1',
+        kind: 'task.setStatus',
+        payload: { taskId: 'notion:1', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 1,
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+    vi.spyOn(stagedIntentsApi, 'apply').mockResolvedValue({
+      ok: true,
+      result: {},
+    });
+
+    const onCardsRemoved = vi.fn();
+    render(
+      <MilestoneDecisionInbox
+        projectId="proj-1"
+        milestone="M1"
+        onCardsRemoved={onCardsRemoved}
+      />,
+    );
+
+    const card = await screen.findByTestId('milestone-decision-card-intent-1');
+    fireEvent.click(within(card).getByText('✓ Commit'));
+
+    await waitFor(() =>
+      expect(onCardsRemoved).toHaveBeenCalledWith(['intent-1']),
+    );
   });
 });

@@ -92,6 +92,95 @@ describe('Header', () => {
     expect(onViewChange).toHaveBeenCalledWith('settings');
   });
 
+  it('renders nav buttons in order: Milestone, Tasks, Sessions, PRs, Gate Readiness, Architecture, Analytics, Settings', () => {
+    render(<Header {...defaultProps} />);
+    const nav = screen
+      .getAllByRole('button')
+      .filter((btn) =>
+        [
+          'Milestone',
+          'Tasks',
+          'Sessions',
+          'PRs',
+          'Gate Readiness',
+          'Architecture',
+          'Analytics',
+          'Settings',
+        ].includes(btn.getAttribute('aria-label') ?? ''),
+      );
+    expect(nav.map((btn) => btn.getAttribute('aria-label'))).toEqual([
+      'Milestone',
+      'Tasks',
+      'Sessions',
+      'PRs',
+      'Gate Readiness',
+      'Architecture',
+      'Analytics',
+      'Settings',
+    ]);
+  });
+
+  it('renders Tasks, Sessions, and PRs as icons (emoji), not their text labels', () => {
+    render(<Header {...defaultProps} />);
+    const tasksBtn = screen.getByRole('button', { name: 'Tasks' });
+    const sessionsBtn = screen.getByRole('button', { name: 'Sessions' });
+    const prsBtn = screen.getByRole('button', { name: 'PRs' });
+    expect(tasksBtn.textContent).not.toContain('Tasks');
+    expect(sessionsBtn.textContent).not.toContain('Sessions');
+    expect(prsBtn.textContent?.replace(/\d+/, '').trim()).not.toContain('PRs');
+    expect(tasksBtn.getAttribute('title')).toBe('Tasks');
+    expect(sessionsBtn.getAttribute('title')).toBe('Sessions');
+    expect(prsBtn.getAttribute('title')).toBe('PRs');
+  });
+
+  it('keeps the PRs accessible name stable whether or not the count badge is present', () => {
+    const { rerender } = render(
+      <Header {...defaultProps} incompleteReviewCount={0} />,
+    );
+    expect(screen.getByRole('button', { name: 'PRs' })).toBeDefined();
+
+    rerender(<Header {...defaultProps} incompleteReviewCount={3} />);
+    expect(screen.getByRole('button', { name: 'PRs' })).toBeDefined();
+    expect(screen.getByText('3')).toBeDefined();
+  });
+
+  it('renders shortcut-bearing nav items (Tasks, Sessions, PRs, Analytics, Settings) in the order the 1-5 keyboard shortcuts assume', () => {
+    render(<Header {...defaultProps} />);
+    const shortcutLabels = [
+      'Tasks',
+      'Sessions',
+      'PRs',
+      'Analytics',
+      'Settings',
+    ];
+    const nav = screen
+      .getAllByRole('button')
+      .filter((btn) =>
+        shortcutLabels.includes(btn.getAttribute('aria-label') ?? ''),
+      );
+    expect(nav.map((btn) => btn.getAttribute('aria-label'))).toEqual(
+      shortcutLabels,
+    );
+  });
+
+  it('every nav button has both a title and an aria-label', () => {
+    render(<Header {...defaultProps} />);
+    [
+      'Milestone',
+      'Tasks',
+      'Sessions',
+      'PRs',
+      'Gate Readiness',
+      'Architecture',
+      'Analytics',
+      'Settings',
+    ].forEach((name) => {
+      const btn = screen.getByRole('button', { name });
+      expect(btn.getAttribute('title')).toBeTruthy();
+      expect(btn.getAttribute('aria-label')).toBeTruthy();
+    });
+  });
+
   describe('desktop layout regression', () => {
     it('shows app name on desktop', () => {
       render(<Header {...defaultProps} />);

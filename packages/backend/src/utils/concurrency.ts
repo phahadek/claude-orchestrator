@@ -1,4 +1,13 @@
 /**
+ * Yields control back to the event loop so a long-running scan/iteration
+ * interleaves with pending HTTP/WS request handling instead of holding the
+ * loop for the entire pass.
+ */
+export function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
  * Run `fn` over `items` with at most `concurrency` calls in flight at once.
  * Results are returned in the same order as `items`.
  * Throws from `fn` propagate and abort remaining work for that slot.

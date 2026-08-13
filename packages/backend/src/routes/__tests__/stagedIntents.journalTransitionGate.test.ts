@@ -36,8 +36,8 @@ vi.mock('../../projects/ProjectService', () => ({
 }));
 
 import { db } from '../../db/db';
-import { createStagedIntentsRouter } from '../stagedIntents';
-import { upsertOpsJournalEntry } from '../../db/queries';
+import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
+import { upsertOpsJournalEntry, insertSession } from '../../db/queries';
 import { isValidOpsTransition, type OpsState } from '../../ops/opsJournal';
 
 function buildApp() {
@@ -134,17 +134,28 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
       const taskId = `task-pair-${from}-${to}`;
       seedEntry(taskId, from);
 
-      // A transition to `resolved` closes the investigation and is an
-      // ops-terminal member (see OPS_TERMINAL_KINDS in stagedIntents.ts) —
-      // it now requires a groupId, orthogonal to the transition-legality
-      // check this test exercises.
+      // A transition to `resolved` closes the investigation, and a
+      // transition to `applied-pending-confirm` is the Operational
+      // completing intent (see OPS_TERMINAL_KINDS in stagedIntents.ts) — both
+      // are ops-terminal members and require a groupId, and the latter also
+      // requires a reconciliation assertion (see
+      // OpsReconciliationAssertionMissingError) — both orthogonal to the
+      // transition-legality check this test exercises.
       const res = await supertest(app)
         .post('/api/staged-intents')
         .send({
           kind: 'journal.setState',
-          payload: { taskId, state: to },
+          payload: {
+            taskId,
+            state: to,
+            ...(to === 'applied-pending-confirm'
+              ? { reconciliation: { description: 'assertion', passed: true } }
+              : {}),
+          },
           projectId: 'proj-1',
-          ...(to === 'resolved' ? { groupId: `group-${taskId}` } : {}),
+          ...(to === 'resolved' || to === 'applied-pending-confirm'
+            ? { groupId: `group-${taskId}` }
+            : {}),
         });
 
       const expectedLegal = isValidOpsTransition(from, to);
@@ -269,5 +280,425 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
       .prepare('SELECT * FROM ops_journal WHERE task_id = ?')
       .get('task-3') as { state: string };
     expect(row.state).toBe('resolved');
+  });
+
+  function journalState(taskId: string): string {
+    return (
+      db
+        .prepare('SELECT state FROM ops_journal WHERE task_id = ?')
+        .get(taskId) as { state: string }
+    ).state;
+  }
+
+  describe('staged closing-set chains (candidate + resolved in one group)', () => {
+    it('stages candidate and resolved in one group and commits through the chain in order', async () => {
+      const app = buildApp();
+      seedEntry('task-chain-1', 'pending');
+      const groupId = 'group-chain-1';
+
+      const candidateRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-chain-1', state: 'candidate' },
+          projectId: 'proj-1',
+          groupId,
+        });
+      expect(candidateRes.status).toBe(201);
+
+      // The applied row is still "pending" here — this stage call only
+      // succeeds because it is validated against the effective state the
+      // just-staged candidate transition would produce, not the applied row.
+      const resolvedRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-chain-1', state: 'resolved' },
+          projectId: 'proj-1',
+          groupId,
+        });
+      expect(resolvedRes.status).toBe(201);
+      expect(resolvedRes.body.id).not.toBe(candidateRes.body.id);
+
+      // Both hops coexist as live siblings — the second did not supersede
+      // the first.
+      const liveMembers = db
+        .prepare(
+          `SELECT id FROM staged_intent WHERE group_id = ? AND state IN ('staged','approved')`,
+        )
+        .all(groupId);
+      expect(liveMembers).toHaveLength(2);
+
+      const commitRes = await supertest(app)
+        .post(`/api/staged-intents/group/${groupId}/approve`)
+        .send({});
+      expect(commitRes.status).toBe(200);
+      expect(journalState('task-chain-1')).toBe('resolved');
+    });
+
+    it('rejects an illegal hop from the staged-chain effective state and never stages it', async () => {
+      const app = buildApp();
+      seedEntry('task-chain-2', 'pending');
+      const groupId = 'group-chain-2';
+
+      const candidateRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-chain-2', state: 'candidate' },
+          projectId: 'proj-1',
+          groupId,
+        });
+      expect(candidateRes.status).toBe(201);
+
+      // applied-pending-confirm is not reachable directly from "candidate"
+      // (must pass through staged-proposal) — rejected, naming the staged
+      // effective state ("candidate"), not the still-applied "pending" one.
+      const illegalRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-chain-2', state: 'applied-pending-confirm' },
+          projectId: 'proj-1',
+          groupId,
+        });
+      expect(illegalRes.status).toBe(400);
+      expect(illegalRes.body.error).toContain(
+        '"candidate" -> "applied-pending-confirm"',
+      );
+
+      // Never staged — the group carries only the legal candidate hop.
+      const members = db
+        .prepare(`SELECT kind FROM staged_intent WHERE group_id = ?`)
+        .all(groupId);
+      expect(members).toHaveLength(1);
+
+      // The group commits fine on just its one legal member — the illegal
+      // hop never entered it, so there is nothing left to partially apply.
+      const commitRes = await supertest(app)
+        .post(`/api/staged-intents/group/${groupId}/approve`)
+        .send({});
+      expect(commitRes.status).toBe(200);
+      expect(journalState('task-chain-2')).toBe('candidate');
+    });
+
+    it('rejects a direct illegal single-hop transition within a group, with no prior staged transition', async () => {
+      const app = buildApp();
+      seedEntry('task-chain-3', 'pending');
+      const groupId = 'group-chain-3';
+
+      const res = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-chain-3', state: 'applied-pending-confirm' },
+          projectId: 'proj-1',
+          groupId,
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain(
+        '"pending" -> "applied-pending-confirm"',
+      );
+      expect(res.body.error).toContain('Current state is "pending"');
+
+      const rows = db
+        .prepare(`SELECT * FROM staged_intent WHERE group_id = ?`)
+        .all(groupId);
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  describe('self-transition mirror suppression', () => {
+    function activeIntentsForTask(taskId: string) {
+      return db
+        .prepare(
+          `SELECT * FROM staged_intent WHERE task_id = ? AND state IN ('staged', 'approved')`,
+        )
+        .all(taskId) as Array<{ id: string }>;
+    }
+
+    it('does not re-stage when committing a staged-proposal -> staged-proposal self-transition', async () => {
+      const app = buildApp();
+      seedEntry('task-self-1', 'staged-proposal');
+
+      const stageRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-self-1', state: 'staged-proposal' },
+          projectId: 'proj-1',
+        });
+      expect(stageRes.status).toBe(201);
+
+      const applyRes = await supertest(app)
+        .post(`/api/staged-intents/${stageRes.body.id}/apply`)
+        .send({});
+      expect(applyRes.status).toBe(200);
+
+      // The commit applies (the journal stays at staged-proposal) but must
+      // not manufacture a fresh, byte-identical replacement intent — that is
+      // the unbounded re-stage loop this suite guards against.
+      expect(activeIntentsForTask('task-self-1')).toHaveLength(0);
+      expect(journalState('task-self-1')).toBe('staged-proposal');
+    });
+
+    it('mirrors exactly once for a genuine forward transition into staged-proposal, with no residual after the mirror itself commits', async () => {
+      const app = buildApp();
+      seedEntry('task-self-2', 'candidate');
+
+      const stageRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-self-2', state: 'staged-proposal' },
+          projectId: 'proj-1',
+        });
+      expect(stageRes.status).toBe(201);
+
+      await supertest(app)
+        .post(`/api/staged-intents/${stageRes.body.id}/apply`)
+        .send({});
+
+      // One mirror was produced by the genuine candidate -> staged-proposal
+      // transition.
+      const mirrors = activeIntentsForTask('task-self-2');
+      expect(mirrors).toHaveLength(1);
+
+      // Committing that mirror is itself a staged-proposal -> staged-proposal
+      // self-transition — it must not spawn another mirror.
+      const mirrorApplyRes = await supertest(app)
+        .post(`/api/staged-intents/${mirrors[0].id}/apply`)
+        .send({});
+      expect(mirrorApplyRes.status).toBe(200);
+
+      expect(activeIntentsForTask('task-self-2')).toHaveLength(0);
+      expect(journalState('task-self-2')).toBe('staged-proposal');
+    });
+
+    it('still mirrors a legitimate later re-entry into staged-proposal after the journal left it', async () => {
+      const app = buildApp();
+      seedEntry('task-self-3', 'candidate');
+
+      // First genuine transition into staged-proposal — mirrors as expected.
+      const firstRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-self-3', state: 'staged-proposal' },
+          projectId: 'proj-1',
+        });
+      await supertest(app)
+        .post(`/api/staged-intents/${firstRes.body.id}/apply`)
+        .send({});
+      const firstMirrors = activeIntentsForTask('task-self-3');
+      expect(firstMirrors).toHaveLength(1);
+
+      // The operator sends the entry back to candidate (e.g. more work
+      // needed), consuming the mirror in the process.
+      const backRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-self-3', state: 'candidate' },
+          projectId: 'proj-1',
+        });
+      expect(backRes.status).toBe(201);
+      await supertest(app)
+        .post(`/api/staged-intents/${backRes.body.id}/apply`)
+        .send({});
+      expect(journalState('task-self-3')).toBe('candidate');
+
+      // A later, independent session stages a fresh, legitimate
+      // candidate -> staged-proposal transition — this must still mirror,
+      // proving the fix only suppresses true self-transitions.
+      const secondRes = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: {
+            taskId: 'task-self-3',
+            state: 'staged-proposal',
+            fields: { findingOrProposal: { summary: 'second pass' } },
+          },
+          projectId: 'proj-1',
+        });
+      expect(secondRes.status).toBe(201);
+      await supertest(app)
+        .post(`/api/staged-intents/${secondRes.body.id}/apply`)
+        .send({});
+
+      const secondMirrors = activeIntentsForTask('task-self-3');
+      expect(secondMirrors).toHaveLength(1);
+      expect(
+        JSON.parse((secondMirrors[0] as any).payload).fields.findingOrProposal,
+      ).toEqual({ summary: 'second pass' });
+    });
+  });
+
+  /**
+   * AC: an ops session's journal.setState -> "blocked" is refused unless the
+   * session has staged at least one session.requestCapability, or the intent
+   * carries a substantive standDownReason — see
+   * assertOpsBlockedClosureRequestedCapability in ../stagedIntents. This
+   * runs through stageIntent() directly (rather than via HTTP) because the
+   * check keys on `sessionId`, and the POST /staged-intents route is the
+   * device/human-authed surface, which never carries one (see
+   * SESSION_TASK_BINDING_KINDS's sibling comment on that route) — a
+   * dispatched ops session only ever stages through the MCP tool surface
+   * (stageProposalTools.ts's `stage()`), which threads `ctx.sessionId`
+   * through to this exact `stageIntent()` call.
+   */
+  describe('ops session journal.setState -> "blocked" capability-request gate', () => {
+    const PROJECT_ID = 'proj-1';
+    const OPS_SESSION_ID = 'ops-session-blocked-gate-1';
+    const TASK_ID = 'task-blocked-gate-1';
+
+    function stageBlocked(
+      sessionId: string | null,
+      extra: Record<string, unknown> = {},
+    ) {
+      return stageIntent(
+        'journal.setState',
+        { taskId: TASK_ID, state: 'blocked', ...extra },
+        PROJECT_ID,
+        null,
+        sessionId,
+      );
+    }
+
+    function stageCapabilityRequest(sessionId: string) {
+      return stageIntent(
+        'session.requestCapability',
+        {
+          capability: 'Bash(curl:*)',
+          plan: 'reach the endpoint the task needs',
+          evidence: 'no other sanctioned tool reaches it',
+        },
+        PROJECT_ID,
+        null,
+        sessionId,
+      );
+    }
+
+    beforeEach(() => {
+      db.prepare('DELETE FROM sessions').run();
+      db.prepare('DELETE FROM audit_log').run();
+      seedEntry(TASK_ID, 'candidate');
+      insertSession({
+        session_id: OPS_SESSION_ID,
+        task_id: TASK_ID,
+        task_url: null,
+        project_context_url: null,
+        project_id: PROJECT_ID,
+        status: 'running',
+        started_at: 1,
+        session_type: 'ops',
+      } as any);
+    });
+
+    it('refuses blocked with no capability request and no standDownReason, naming the escalation', () => {
+      expect(() => stageBlocked(OPS_SESSION_ID)).toThrow(
+        /session\.requestCapability/,
+      );
+      expect(() => stageBlocked(OPS_SESSION_ID)).toThrow(
+        /"payload":\{"capability":"<the exact tool or capability>","plan":"<what you will do once granted>","evidence":"<why this write is needed>"\}/,
+      );
+    });
+
+    it('accepts blocked once the session has staged a session.requestCapability, in any state', () => {
+      const req = stageCapabilityRequest(OPS_SESSION_ID);
+      db.prepare(
+        `UPDATE staged_intent SET state = 'rejected' WHERE id = @id`,
+      ).run({ id: req.id });
+      expect(() => stageBlocked(OPS_SESSION_ID)).not.toThrow();
+    });
+
+    it('accepts blocked with a substantive standDownReason and no capability request', () => {
+      expect(() =>
+        stageBlocked(OPS_SESSION_ID, {
+          standDownReason:
+            'This is a design decision only a human can make, not a capability gap.',
+        }),
+      ).not.toThrow();
+    });
+
+    it.each([
+      ['empty string', ''],
+      ['whitespace only', '   '],
+      ['a bare boolean', true],
+    ])('does not accept standDownReason that is %s', (_label, value) => {
+      expect(() =>
+        stageBlocked(OPS_SESSION_ID, { standDownReason: value }),
+      ).toThrow(/session\.requestCapability/);
+    });
+
+    it('leaves candidate, staged-proposal and resolved transitions unaffected', () => {
+      seedEntry('task-blocked-gate-regression', 'pending');
+      expect(() =>
+        stageIntent(
+          'journal.setState',
+          { taskId: 'task-blocked-gate-regression', state: 'candidate' },
+          PROJECT_ID,
+          null,
+          OPS_SESSION_ID,
+        ),
+      ).not.toThrow();
+      expect(() =>
+        stageIntent(
+          'journal.setState',
+          { taskId: TASK_ID, state: 'staged-proposal' },
+          PROJECT_ID,
+          null,
+          OPS_SESSION_ID,
+        ),
+      ).not.toThrow();
+      expect(() =>
+        stageIntent(
+          'journal.setState',
+          { taskId: TASK_ID, state: 'resolved' },
+          PROJECT_ID,
+          'group-blocked-gate-regression',
+          OPS_SESSION_ID,
+        ),
+      ).not.toThrow();
+    });
+
+    it('leaves a non-ops session unaffected', () => {
+      insertSession({
+        session_id: 'design-session-blocked-gate-1',
+        task_id: TASK_ID,
+        task_url: null,
+        project_context_url: null,
+        project_id: PROJECT_ID,
+        status: 'running',
+        started_at: 1,
+        session_type: 'design',
+      } as any);
+      expect(() => stageBlocked('design-session-blocked-gate-1')).not.toThrow();
+    });
+
+    it('leaves a human-staged intent with no sessionId unaffected', () => {
+      expect(() => stageBlocked(null)).not.toThrow();
+    });
+
+    it('surfaces through POST /staged-intents as a structured 400, not an unhandled throw', async () => {
+      const app = buildApp();
+      // The device/human REST surface never carries a sessionId, so the gate
+      // itself never fires here — this proves the same
+      // OpsJournalTransitionRejectedError instance the gate throws is wired
+      // into that route's error-to-status mapping (see the second `catch` in
+      // the POST /staged-intents handler), by exercising the illegal-
+      // transition form of the same error class through the real route.
+      seedEntry('task-blocked-gate-http', 'resolved');
+      const res = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-blocked-gate-http', state: 'blocked' },
+          projectId: PROJECT_ID,
+        });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('"resolved" -> "blocked"');
+    });
   });
 });

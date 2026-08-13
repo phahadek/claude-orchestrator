@@ -111,6 +111,8 @@ vi.mock('../session/orchestrator-config', () => ({
     bashRules: [],
   })),
   getSessionAllowedTools: vi.fn(() => []),
+  getSessionAddDirs: vi.fn(() => []),
+  getTestCommandDenyPatterns: vi.fn(() => []),
 }));
 
 vi.mock('../session/orchestrator-claudemd', () => ({
@@ -175,6 +177,8 @@ vi.mock('../db/queries', () =>
     incrementTokens: vi.fn(),
     insertSessionAudit: vi.fn(),
     setSessionModel: vi.fn(),
+    setSessionModelSettingKey: vi.fn(),
+    setSessionEffortSettingKey: vi.fn(),
     setSessionMetadata: vi.fn(),
     getPRBySessionId: vi.fn(() => null),
     setHeadSha: vi.fn(),

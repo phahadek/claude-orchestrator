@@ -26,11 +26,28 @@ vi.mock('../auth/SessionStageAuth', () => ({
 import { SessionManager } from '../session/SessionManager';
 import * as queries from '../db/queries';
 import { revokeStageCredential } from '../auth/SessionStageAuth';
+import { db } from '../db/db';
+
+function auditRowsFor(sessionId: string): Array<{
+  ts: number;
+  event_type: string;
+  payload: string;
+}> {
+  return db
+    .prepare(
+      `SELECT ts, event_type, payload FROM audit_log WHERE actor_id = ? AND event_type = 'session_map_entry_dropped'`,
+    )
+    .all(sessionId) as Array<{
+    ts: number;
+    event_type: string;
+    payload: string;
+  }>;
+}
 
 function setSessionEntry(sm: SessionManager, sessionId: string): void {
   (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(
     sessionId,
-    { sendMessage: vi.fn() },
+    { sendMessage: vi.fn(), endSession: vi.fn().mockResolvedValue(undefined) },
   );
 }
 
@@ -60,6 +77,16 @@ describe('reconcileSessionsMap()', () => {
       sessionId,
       'missing_db_row',
     );
+
+    const rows = auditRowsFor(sessionId);
+    expect(rows).toHaveLength(1);
+    expect(Number.isInteger(rows[0].ts)).toBe(true);
+    const payload = JSON.parse(rows[0].payload);
+    expect(payload).toEqual({
+      session_id: sessionId,
+      status: null,
+      revocation_reason: 'missing_db_row',
+    });
   });
 
   it.each(['error', 'killed', 'done'])(
@@ -82,8 +109,54 @@ describe('reconcileSessionsMap()', () => {
         sessionId,
         `terminal_status:${status}`,
       );
+
+      const rows = auditRowsFor(sessionId);
+      expect(rows).toHaveLength(1);
+      const payload = JSON.parse(rows[0].payload);
+      expect(payload).toEqual({
+        session_id: sessionId,
+        status,
+        revocation_reason: `terminal_status:${status}`,
+      });
     },
   );
+
+  it('emits session_ended for a terminal-status drop so StuckSessionMonitor clears its timer', () => {
+    const sessionId = 'terminal-emits-session-ended';
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: sessionId,
+      status: 'error',
+      task_id: 'task-42',
+    } as never);
+
+    const sm = new SessionManager();
+    setSessionEntry(sm, sessionId);
+    const messages: unknown[] = [];
+    sm.on('message', (msg) => messages.push(msg));
+
+    sm.reconcileSessionsMap();
+
+    expect(messages).toContainEqual({
+      type: 'session_ended',
+      sessionId,
+      status: 'error',
+      taskId: 'task-42',
+    });
+  });
+
+  it('does not emit session_ended for a missing-row drop', () => {
+    const sessionId = 'missing-row-no-emit';
+    vi.mocked(queries.getSession).mockReturnValue(null as never);
+
+    const sm = new SessionManager();
+    setSessionEntry(sm, sessionId);
+    const messages: unknown[] = [];
+    sm.on('message', (msg) => messages.push(msg));
+
+    sm.reconcileSessionsMap();
+
+    expect(messages).toHaveLength(0);
+  });
 
   it('never touches an entry whose DB row is non-terminal (genuinely live)', () => {
     const sessionId = 'live-session';
@@ -100,5 +173,6 @@ describe('reconcileSessionsMap()', () => {
     expect(result.dropped).toBe(0);
     expect(hasSessionEntry(sm, sessionId)).toBe(true);
     expect(revokeStageCredential).not.toHaveBeenCalled();
+    expect(auditRowsFor(sessionId)).toHaveLength(0);
   });
 });

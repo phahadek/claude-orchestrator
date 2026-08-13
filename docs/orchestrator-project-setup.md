@@ -140,7 +140,7 @@ A Godot C# project has three categories of files the worktree won't have:
 the `.godot/` cache (gitignored), restored NuGet packages, and the editor's
 `.csproj`/`.sln` if those are gitignored in your setup.
 
-`scripts/bootstrap-worktree.sh` in your project root:
+`scripts/bootstrap-worktree.sh` in your project root: <!-- path-check:ignore -->
 
 ```bash
 #!/usr/bin/env bash
@@ -351,7 +351,7 @@ mkdir -p "$(dirname "$DEV_DB")"
 ### Why not just use `process.cwd()` everywhere?
 
 When a session runs inside the worktree, `cwd` is already the worktree root —
-so relative paths like `./dev.db` or `.dev-state/dev.db` are naturally
+so relative paths like `./dev.db` or `.dev-state/dev.db` are naturally <!-- path-check:ignore -->
 worktree-scoped. The problem arises when code constructs **absolute** paths
 from compile-time constants (`__dirname`, `import.meta.url`, project-root
 references baked in at build time) or receives an absolute path from a config

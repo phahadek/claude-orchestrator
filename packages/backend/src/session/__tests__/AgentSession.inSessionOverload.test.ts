@@ -35,6 +35,8 @@ vi.mock('../../db/queries', () =>
     incrementCompactionCount: vi.fn(),
     setContextOccupancy: vi.fn(),
     setSessionModel: vi.fn(),
+    setSessionModelSettingKey: vi.fn(),
+    setSessionEffortSettingKey: vi.fn(),
     setSessionMetadata: vi.fn(),
     getPRBySessionId: vi.fn().mockReturnValue(null),
     setHeadSha: vi.fn(),
@@ -113,6 +115,7 @@ vi.mock('../../utils/eventFilters', () => ({
 
 import { AgentSession } from '../AgentSession';
 import { setPauseReason, setTaskPauseReason } from '../../db/queries';
+import { recordEvent } from '../../audit/AuditLog';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -209,6 +212,57 @@ describe('AgentSession in-session 529/500 handling', () => {
       expect.any(String),
     );
     expect(sessionManager.respawnForTransientOverload).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an unconfirmed pause-nudge delivery instead of silently dropping it', () => {
+    const sessionManager = {
+      send: vi.fn().mockReturnValue(false),
+      isAlive: vi.fn().mockReturnValue(true),
+      recordInSessionOverloadEvent: vi.fn().mockReturnValue({
+        count: 6,
+        escalated: true,
+        cooldownMs: 300_000,
+      }),
+      respawnForTransientOverload: vi.fn().mockResolvedValue(true),
+      clearInSessionOverloadBudget: vi.fn(),
+    };
+    const session = makeSession(sessionManager);
+
+    sendEvent(session, OVERLOAD_ERROR_EVENT);
+
+    expect(sessionManager.send).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(String),
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_nudge_delivery_failed',
+        actor_id: 'test-session-id',
+      }),
+    );
+  });
+
+  it('does not surface a delivery failure when the pause nudge is confirmed delivered', () => {
+    const sessionManager = {
+      send: vi.fn().mockReturnValue(true),
+      isAlive: vi.fn().mockReturnValue(true),
+      recordInSessionOverloadEvent: vi.fn().mockReturnValue({
+        count: 6,
+        escalated: true,
+        cooldownMs: 300_000,
+      }),
+      respawnForTransientOverload: vi.fn().mockResolvedValue(true),
+      clearInSessionOverloadBudget: vi.fn(),
+    };
+    const session = makeSession(sessionManager);
+
+    sendEvent(session, OVERLOAD_ERROR_EVENT);
+
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_nudge_delivery_failed',
+      }),
+    );
   });
 
   it('falls back to a manual-recovery pause under api_overloaded when no sessionManager is present', () => {

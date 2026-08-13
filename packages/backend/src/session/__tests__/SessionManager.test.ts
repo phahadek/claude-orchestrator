@@ -26,7 +26,10 @@ function makeMockSession(): MockSession {
   ee.hasEnded = false;
   ee.sessionType = 'standard';
   ee.run = vi.fn().mockReturnValue(new Promise(() => {}));
-  ee.sendMessage = vi.fn();
+  // Default: confirmed delivery (mirrors AgentSession.sendMessage's success
+  // return) — tests that want to exercise the failed-write fallback path
+  // override this per-test with .mockReturnValue(false).
+  ee.sendMessage = vi.fn().mockReturnValue(true);
   ee.kill = vi.fn().mockResolvedValue(undefined);
   ee.endSession = vi.fn();
   ee.gracefulPause = vi.fn().mockResolvedValue(undefined);
@@ -67,6 +70,7 @@ vi.mock('../branchModel', () => ({
     .mockReturnValue({ startingPoint: 'dev', milestoneSlug: null }),
   ensureMilestoneBranch: vi.fn(),
   deriveBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
+  resolveResumeBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
 }));
 vi.mock('../orchestrator-config', () => ({
   loadOrchestratorConfig: vi
@@ -128,6 +132,7 @@ vi.mock('../../db/queries', () =>
     hasActivePlanningSessionForTask: vi.fn().mockReturnValue(false),
     incrementTaskCrashCount: vi.fn().mockReturnValue(1),
     getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
+    getTaskCache: vi.fn().mockReturnValue(undefined),
     setSessionPauseReason: vi.fn(),
     setSessionLastErrorDetail: vi.fn(),
     setTaskPauseReason: vi.fn(),
@@ -230,14 +235,17 @@ import {
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
   setSessionPauseReason,
+  getTaskCache,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
 import { buildSessionContext } from '../ContextBuilder';
+import { deriveBranchSlug } from '../branchModel';
 import { execSync, exec as execCb } from 'child_process';
 import { recordEvent } from '../../audit/AuditLog';
 import * as fsModule from 'fs';
 import { loadOrchestratorConfig } from '../orchestrator-config';
+import { getTaskBackend } from '../../tasks/TaskBackend';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -282,6 +290,26 @@ function makeProject() {
   } as any;
 }
 
+/**
+ * Registers a live in-memory session on `sm` (via the resume path) and
+ * returns its captured mock AgentSession, so tests can assert on
+ * session.endSession()/kill() without spawning a real subprocess.
+ */
+async function registerLiveSession(sm: SessionManager, sessionId = SESSION_ID) {
+  vi.mocked(getSession).mockReturnValue(makeDeadRow(sessionId)); // idle — resumable
+  const p = sm.sendOrResume(sessionId, 'boot');
+  await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+  const session = capturedSessions[capturedSessions.length - 1];
+  session.emit('message', {
+    type: 'session_event' as const,
+    sessionId,
+    eventType: 'system' as const,
+    content: 'boot',
+  });
+  await p;
+  return session;
+}
+
 // ── sendOrResume — dead session path ─────────────────────────────────────────
 
 describe('sendOrResume — dead session path', () => {
@@ -320,6 +348,21 @@ describe('sendOrResume — dead session path', () => {
     expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
     const firstArg = vi.mocked(AgentSession).mock.calls[0][0];
     expect(firstArg).toBe(SESSION_ID);
+  });
+
+  it('delivers the fast-path text exactly once, even if the respawned session emits multiple messages', async () => {
+    await doResume('only-once');
+    // A second event from the same respawned session must not trigger a
+    // second send — the once('message', ...) gate only fires the first time.
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'assistant',
+      content: 'second event',
+    });
+
+    expect(capturedSessions[0].sendMessage).toHaveBeenCalledTimes(1);
+    expect(capturedSessions[0].sendMessage).toHaveBeenCalledWith('only-once');
   });
 
   it('updates DB row to running (does not insert a new row)', async () => {
@@ -431,6 +474,63 @@ describe('sendOrResume — dead session path', () => {
       expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
     },
   );
+
+  it('refuses to respawn an idle-but-archived session without allowTerminal — no AgentSession constructed', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'idle',
+      archived: 1,
+    } as any);
+
+    const result = await sm.sendOrResume(SESSION_ID, 'feedback');
+
+    expect(result).toBeNull();
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+  });
+
+  it('with allowTerminal, resumes an idle-but-archived session — recovery paths still work', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'idle',
+      archived: 1,
+    } as any);
+
+    const p = sm.sendOrResume(SESSION_ID, 're-open me', {
+      allowTerminal: true,
+    });
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    const result = await p;
+
+    expect(result).toBe(SESSION_ID);
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
+  });
+
+  it('an idle, unarchived session still resumes normally — idle is not reclassified as terminal', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'idle',
+      archived: 0,
+    } as any);
+
+    const p = sm.sendOrResume(SESSION_ID, 'feedback');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    const result = await p;
+
+    expect(result).toBe(SESSION_ID);
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
+  });
 
   it('with allowTerminal, respawns a terminal session and records session_terminal_reopened instead of silently writing running', async () => {
     vi.mocked(getSession).mockReturnValue({
@@ -569,6 +669,61 @@ describe('enqueueFeedback — terminal session behavior', () => {
       SESSION_ID,
       expect.any(String),
     );
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
+  });
+
+  it('dispositioning an intent whose session is idle-but-archived marks the inbox item delivered and spawns no process, even with attemptTerminalResume defaulted to true', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'idle',
+      archived: 1,
+    } as any);
+    const sendOrResumeSpy = vi.spyOn(sm, 'sendOrResume');
+
+    await sm.enqueueFeedback(
+      SESSION_ID,
+      'operator-disposition',
+      'staged intent declined',
+    );
+
+    expect(sendOrResumeSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
+  });
+});
+
+// ── enqueueFeedback — usage admission gate ───────────────────────────────────
+
+describe('enqueueFeedback — usage admission gate', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      { id: 'item-1', source: 'system:nudge', payload: 'nudge text' },
+    ] as any);
+  });
+
+  it('a nudge withheld by a usage deferral (sendOrResume returns null) is not marked delivered', async () => {
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValue(null);
+
+    await sm.enqueueFeedback(SESSION_ID, 'system:nudge', 'nudge text');
+
+    expect(vi.mocked(markInboxItemsDelivered)).not.toHaveBeenCalled();
+  });
+
+  it('the same withheld item is delivered once the deferral clears (sendOrResume succeeds)', async () => {
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValueOnce(null);
+    await sm.enqueueFeedback(SESSION_ID, 'system:nudge', 'nudge text');
+    expect(vi.mocked(markInboxItemsDelivered)).not.toHaveBeenCalled();
+
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValueOnce(SESSION_ID);
+    await sm.enqueueFeedback(SESSION_ID, 'system:nudge', 'nudge text');
+
     expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
   });
 });
@@ -1397,7 +1552,9 @@ describe('cleanupWorktree chokepoint guard', () => {
     expect(removeCalls).toHaveLength(0);
   });
 
-  it('idle session with NO PR — teardown proceeds (no guard)', () => {
+  it('idle session with NO PR — guard also fires (idle is non-terminal regardless of PR)', () => {
+    // A planning session is exactly this shape (idle, pr_url null) — the
+    // guard must protect it too, not just idle sessions with an open PR.
     vi.mocked(getSession).mockReturnValue(makeIdleNoPrRow());
     (sm as any).cleanupWorktree(
       SESSION_ID,
@@ -1410,7 +1567,7 @@ describe('cleanupWorktree chokepoint guard', () => {
       .mock.calls.filter(
         ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
       );
-    expect(removeCalls).toHaveLength(1);
+    expect(removeCalls).toHaveLength(0);
   });
 
   it('done session with PR — teardown proceeds (guard only fires for idle)', () => {
@@ -1430,6 +1587,137 @@ describe('cleanupWorktree chokepoint guard', () => {
         ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
       );
     expect(removeCalls).toHaveLength(1);
+  });
+});
+
+// ── cleanupWorktree — stage-credential revocation is gated by the terminal
+//    status guard, not by an unconditional teardown ──────────────────────────
+
+describe('cleanupWorktree — stage credential revocation ordering', () => {
+  let sm: SessionManager;
+  const PLANNING_SESSION_ID = 'planning-session-xyz789';
+
+  /** Planning-session row shape: worktree_path === the project checkout, pr_url null. */
+  function makePlanningSessionRow(status: string) {
+    return {
+      session_id: PLANNING_SESSION_ID,
+      task_id: 'task-1',
+      task_name: 'my-task',
+      task_url: 'https://notion.so/task',
+      project_context_url: 'https://notion.so/project',
+      project_id: PROJECT_ID,
+      status,
+      session_type: 'groom',
+      pr_url: null,
+      worktree_path: PROJECT_DIR,
+      started_at: 1000,
+      ended_at: status === 'idle' ? null : 2000,
+    } as any;
+  }
+
+  beforeEach(async () => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    const { _resetStageCredentialsForTesting } =
+      await import('../../auth/SessionStageAuth');
+    _resetStageCredentialsForTesting();
+  });
+
+  it('a subprocess exit while DB status is non-terminal retains the stage credential (no revocation recorded)', async () => {
+    const { mintStageCredential } = await import('../../auth/SessionStageAuth');
+    const token = mintStageCredential(PLANNING_SESSION_ID);
+    vi.mocked(getSession).mockReturnValue(makePlanningSessionRow('idle'));
+
+    (sm as any).cleanupWorktree(
+      PLANNING_SESSION_ID,
+      PROJECT_DIR, // planning sessions use the project checkout as their worktree_path
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(
+      vi
+        .mocked(recordEvent)
+        .mock.calls.some(
+          ([evt]) => evt.event_type === 'mcp_session_credential_revoked',
+        ),
+    ).toBe(false);
+
+    // The credential is still the one the CLI's mcp config carries.
+    const { mintStageCredential: remint } =
+      await import('../../auth/SessionStageAuth');
+    expect(remint(PLANNING_SESSION_ID)).toBe(token);
+  });
+
+  it.each(['done', 'error', 'killed'])(
+    'a session reaching genuinely terminal status %s still has its credential revoked',
+    async (status) => {
+      const { mintStageCredential } =
+        await import('../../auth/SessionStageAuth');
+      mintStageCredential(PLANNING_SESSION_ID);
+      vi.mocked(getSession).mockReturnValue(makePlanningSessionRow(status));
+
+      (sm as any).cleanupWorktree(
+        PLANNING_SESSION_ID,
+        PROJECT_DIR,
+        undefined,
+        PROJECT_DIR,
+      );
+
+      expect(
+        vi
+          .mocked(recordEvent)
+          .mock.calls.some(
+            ([evt]) =>
+              evt.event_type === 'mcp_session_credential_revoked' &&
+              (evt.payload as any)?.sessionId === PLANNING_SESSION_ID,
+          ),
+      ).toBe(true);
+    },
+  );
+
+  it('the idle guard is evaluated before any credential revocation or in-memory session deletion', () => {
+    // Seed an in-memory session entry the way wireSession would.
+    const fakeSession = { sessionType: 'groom' } as any;
+    (sm as any).sessions.set(PLANNING_SESSION_ID, fakeSession);
+    vi.mocked(getSession).mockReturnValue(makePlanningSessionRow('idle'));
+
+    (sm as any).cleanupWorktree(
+      PLANNING_SESSION_ID,
+      PROJECT_DIR,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    // Guard fired first — the in-memory entry must survive the non-terminal exit.
+    expect((sm as any).sessions.get(PLANNING_SESSION_ID)).toBe(fakeSession);
+    expect(
+      vi
+        .mocked(recordEvent)
+        .mock.calls.some(
+          ([evt]) => evt.event_type === 'mcp_session_credential_revoked',
+        ),
+    ).toBe(false);
+  });
+
+  it('the idle guard protects a planning session row (project checkout as worktree_path, pr_url null)', () => {
+    vi.mocked(getSession).mockReturnValue(makePlanningSessionRow('idle'));
+
+    (sm as any).cleanupWorktree(
+      PLANNING_SESSION_ID,
+      PROJECT_DIR,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
+    expect(removeCalls).toHaveLength(0);
   });
 });
 
@@ -1822,6 +2110,243 @@ describe('terminal cleanup for idle sessions (not live)', () => {
         ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
       );
     expect(removeCalls).toHaveLength(1);
+  });
+});
+
+// ── markSessionErrored: revert guard on the task's current status ────────────
+//
+// A dying standard session must never demote a task that already reached a
+// terminal state (Done/Deferred) — see UNCOUNTED_REASONS handling and the
+// crash-budget branch in markSessionErrored.
+
+describe('markSessionErrored — Notion status revert respects the task current status', () => {
+  let sm: SessionManager;
+
+  function taskCacheRow(status: string) {
+    return {
+      task_id: 'task-1',
+      fetched_at: 0,
+      raw_json: JSON.stringify({ status }),
+    } as any;
+  }
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  it('user_kill on a ✅ Done task performs no updateStatus call', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'killed',
+    });
+    vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('✅ Done'));
+
+    sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
+
+    const backend = vi.mocked(getTaskBackend)('');
+    expect(vi.mocked(backend.updateStatus)).not.toHaveBeenCalled();
+  });
+
+  it('user_kill on a ⏭️ Deferred task performs no updateStatus call', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'killed',
+    });
+    vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('⏭️ Deferred'));
+
+    sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
+
+    const backend = vi.mocked(getTaskBackend)('');
+    expect(vi.mocked(backend.updateStatus)).not.toHaveBeenCalled();
+  });
+
+  it('user_kill on a 🔄 In Progress task still reverts it to 🗂️ Ready (majority case)', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'killed',
+    });
+    vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('🔄 In Progress'));
+
+    sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
+
+    const backend = vi.mocked(getTaskBackend)('');
+    expect(vi.mocked(backend.updateStatus)).toHaveBeenCalledWith(
+      'task-1',
+      '🗂️ Ready',
+      expect.objectContaining({
+        source: 'orchestrator',
+        sessionId: SESSION_ID,
+      }),
+    );
+  });
+
+  it('a cache miss falls back to the existing revert behaviour rather than silently skipping it', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'killed',
+    });
+    vi.mocked(getTaskCache).mockReturnValue(undefined);
+
+    sm.markSessionErrored(SESSION_ID, 'killed', 'user_kill');
+
+    const backend = vi.mocked(getTaskBackend)('');
+    expect(vi.mocked(backend.updateStatus)).toHaveBeenCalledWith(
+      'task-1',
+      '🗂️ Ready',
+      expect.objectContaining({
+        source: 'orchestrator',
+        sessionId: SESSION_ID,
+      }),
+    );
+  });
+
+  it('a counted reason (crash budget path) does not set 🚫 Blocked on an already ✅ Done task', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'error',
+    });
+    vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('✅ Done'));
+    vi.mocked(incrementTaskCrashCount).mockReturnValue(2);
+
+    sm.markSessionErrored(SESSION_ID, 'error', 'run_error');
+
+    const backend = vi.mocked(getTaskBackend)('');
+    expect(vi.mocked(backend.updateStatus)).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'user_kill',
+    'pr_closed',
+    'launch_failed',
+    'backend_spawn_degraded',
+  ])(
+    'handlePlanningSessionCrash still returns early for %s (UNCOUNTED_REASONS), unchanged',
+    (reason) => {
+      vi.mocked(getSession).mockReturnValue({
+        ...makeDeadRow(),
+        status: 'killed',
+        session_type: 'groom',
+      });
+      vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('🔄 In Progress'));
+
+      sm.markSessionErrored(SESSION_ID, 'killed', reason);
+
+      const backend = vi.mocked(getTaskBackend)('');
+      expect(vi.mocked(backend.updateStatus)).not.toHaveBeenCalled();
+      expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+    },
+  );
+});
+
+// ── endSession: terminal-status guard + escalation delegation ────────────────
+
+describe('endSession — refuses to escalate against a non-terminal (idle) session', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  it('does not call session.endSession() when the row is idle — idle is never terminal', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+
+    sm.endSession(SESSION_ID);
+
+    expect(session.endSession).not.toHaveBeenCalled();
+  });
+
+  it('does not call session.endSession() when the row is running (mid-turn, not idle either)', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'running',
+    });
+
+    sm.endSession(SESSION_ID);
+
+    expect(session.endSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['done', 'error', 'killed'] as const)(
+    'calls session.endSession() once the row is terminal (%s)',
+    async (status) => {
+      const session = await registerLiveSession(sm);
+      vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status });
+
+      sm.endSession(SESSION_ID);
+
+      expect(session.endSession).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
+describe('archiveAndEndSession — honours its "reap any live subprocess" docstring', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  it('delegates to endSession() so a live session with a terminal row is actually torn down', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'done' });
+
+    sm.archiveAndEndSession(SESSION_ID);
+
+    expect(session.endSession).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── reconcileSessionsMap: reap-before-evict ───────────────────────────────────
+
+describe('reconcileSessionsMap — reaps the process before dropping a stale entry', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  it('calls session.endSession() before evicting an entry whose row went terminal underneath it', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'done' });
+
+    const result = sm.reconcileSessionsMap();
+
+    expect(session.endSession).toHaveBeenCalledTimes(1);
+    expect(result.dropped).toBe(1);
+  });
+
+  it('calls session.endSession() before evicting an entry whose row disappeared entirely', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue(undefined);
+
+    const result = sm.reconcileSessionsMap();
+
+    expect(session.endSession).toHaveBeenCalledTimes(1);
+    expect(result.dropped).toBe(1);
+  });
+
+  it('never touches a live session whose row is still idle (non-terminal)', async () => {
+    const session = await registerLiveSession(sm);
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'idle' });
+
+    const result = sm.reconcileSessionsMap();
+
+    expect(session.endSession).not.toHaveBeenCalled();
+    expect(result.dropped).toBe(0);
   });
 });
 
@@ -2781,6 +3306,107 @@ describe('start() — bootstrap gate', () => {
   });
 });
 
+// ── start() — two same-titled tasks dispatched concurrently ───────────────
+
+describe('start() — two same-titled tasks dispatched concurrently', () => {
+  let sm: SessionManager;
+
+  const BASE_ORCH_CONFIG = {
+    mcp_servers: undefined,
+    allowed_tools: [],
+    verify: [],
+    bash_rules: [],
+    session_rules: [],
+    bootstrap_script: '',
+    required_env: [] as string[],
+    required_files: [] as string[],
+    autofix: [],
+    ci_check_name: [],
+    test: [],
+    test_timeout_sec: 300,
+    test_max_rss_mb: 0,
+    test_fail_fast: true,
+    analyze: [],
+    analyze_timeout_sec: 300,
+    analyze_max_rss_mb: 0,
+    analyze_fail_fast: true,
+  };
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(fsModule.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({ ...BASE_ORCH_CONFIG });
+
+    // Restore the real title+id derivation for this describe block so the
+    // two dispatches below actually diverge instead of both resolving to the
+    // module-wide fixed mock value ('feature/my-task').
+    vi.mocked(deriveBranchSlug).mockImplementation(
+      (title: string, taskId?: string | null, prefix = 'feature') => {
+        const slug = title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '');
+        return taskId ? `${prefix}/${slug}-${taskId}` : `${prefix}/${slug}`;
+      },
+    );
+  });
+
+  it('same task_name, different task_id → distinct branch names, both launch (no isBranchAlreadyExists path)', async () => {
+    const wtAddCommands: string[] = [];
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree add')) wtAddCommands.push(cmd);
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    await Promise.all([
+      sm.start('https://notion.so/task', 'https://notion.so/project', {
+        projectId: PROJECT_ID,
+        taskKind: 'non_milestone',
+        taskName: 'Duplicate title task',
+        taskId: 'task-id-one',
+      }),
+      sm.start('https://notion.so/task', 'https://notion.so/project', {
+        projectId: PROJECT_ID,
+        taskKind: 'non_milestone',
+        taskName: 'Duplicate title task',
+        taskId: 'task-id-two',
+      }),
+    ]);
+
+    await vi.waitFor(() =>
+      expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(2),
+    );
+
+    const branchArgs = vi
+      .mocked(deriveBranchSlug)
+      .mock.calls.map(([title, taskId]) => `${title}::${taskId}`);
+    expect(new Set(branchArgs).size).toBe(branchArgs.length);
+
+    const branchesUsed = wtAddCommands.map((cmd) => {
+      const m = cmd.match(/-b "([^"]+)"/);
+      return m?.[1];
+    });
+    expect(new Set(branchesUsed).size).toBe(2);
+
+    // Neither dispatch hit the "A branch named ... already exists" recovery path.
+    expect(vi.mocked(setSessionPauseReason)).not.toHaveBeenCalledWith(
+      expect.any(String),
+      'launch_failed',
+    );
+  });
+});
+
 // ── start() — pre-launch fetch serialization/coalescing (integration) ──────
 
 describe('start() — pre-launch fetch serialization/coalescing (integration)', () => {
@@ -2943,10 +3569,12 @@ describe('start() — worktree_path persistence', () => {
     vi.mocked(loadOrchestratorConfig).mockReturnValue({
       mcp_servers: undefined,
       allowed_tools: [],
+      required_env: [],
+      required_files: [],
     } as any);
   });
 
-  it.each(['groom', 'design', 'ops'] as const)(
+  it.each(['groom', 'design'] as const)(
     'persists worktree_path as null for a %s (planning) session — no worktree is ever created on disk',
     async (sessionType) => {
       await sm.start('https://notion.so/task', 'https://notion.so/project', {
@@ -2962,18 +3590,64 @@ describe('start() — worktree_path persistence', () => {
     },
   );
 
-  it('persists a real worktree_path for a standard (code) session', async () => {
+  it.each(['standard', 'ops'] as const)(
+    'persists a real worktree_path for a %s session',
+    async (sessionType) => {
+      await sm.start('https://notion.so/task', 'https://notion.so/project', {
+        projectId: PROJECT_ID,
+        taskKind: 'non_milestone',
+        taskName: 'my-task',
+        sessionType,
+      });
+
+      expect(vi.mocked(insertSession)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          worktree_path: expect.stringContaining('.claude/worktrees/'),
+        }),
+      );
+    },
+  );
+
+  it('persists a real worktree_path for a docs session whose task declares a repo-file Target surface', async () => {
     await sm.start('https://notion.so/task', 'https://notion.so/project', {
       projectId: PROJECT_ID,
-      taskKind: 'non_milestone',
+      taskKind: 'milestone',
       taskName: 'my-task',
-      sessionType: 'standard',
+      sessionType: 'docs',
+      docsTargetSurface: 'docs/api/webhooks.md',
     });
 
     expect(vi.mocked(insertSession)).toHaveBeenCalledWith(
       expect.objectContaining({
         worktree_path: expect.stringContaining('.claude/worktrees/'),
       }),
+    );
+  });
+
+  it('persists worktree_path as null for a docs session whose task declares a Notion-page Target surface — regression guard', async () => {
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'milestone',
+      taskName: 'my-task',
+      sessionType: 'docs',
+      docsTargetSurface: '20a1b2c3-d4e5-4f60-8a1b-2c3d4e5f6071',
+    });
+
+    expect(vi.mocked(insertSession)).toHaveBeenCalledWith(
+      expect.objectContaining({ worktree_path: null }),
+    );
+  });
+
+  it('persists worktree_path as null for a docs session with no declared Target surface', async () => {
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'milestone',
+      taskName: 'my-task',
+      sessionType: 'docs',
+    });
+
+    expect(vi.mocked(insertSession)).toHaveBeenCalledWith(
+      expect.objectContaining({ worktree_path: null }),
     );
   });
 });
@@ -2991,6 +3665,8 @@ describe('start() — planning/ops prompt assembly (gate-verify hardening)', () 
     vi.mocked(loadOrchestratorConfig).mockReturnValue({
       mcp_servers: undefined,
       allowed_tools: [],
+      required_env: [],
+      required_files: [],
     } as any);
   });
 
@@ -3112,6 +3788,8 @@ describe('start() — planning-flow dedup', () => {
     vi.mocked(loadOrchestratorConfig).mockReturnValue({
       mcp_servers: undefined,
       allowed_tools: [],
+      required_env: [],
+      required_files: [],
     } as any);
     // clearAllMocks() clears call history but not implementations set by an
     // earlier test in this file — reset every planning-dedup predicate to

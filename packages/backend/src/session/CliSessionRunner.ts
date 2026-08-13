@@ -13,12 +13,23 @@ import type {
 } from './SessionRunner';
 import { logger } from '../logger';
 import { placeSessionPid } from './sessionCgroup';
-import { isPlanningSession } from './sessionPredicates';
+import { isPlanningSession, isCodeSession } from './sessionPredicates';
+import {
+  getSessionAddDirs,
+  getTestCommandDenyPatterns,
+  loadOrchestratorConfig,
+} from './orchestrator-config';
 import {
   createScratchDir,
   removeScratchDir,
   getScratchDir,
 } from './planningScratchDir';
+
+/**
+ * How long endSession() waits for the process to exit on its own after
+ * stdin close before escalating to a forceful process-tree kill().
+ */
+export const GRACEFUL_END_TIMEOUT_MS = 15_000;
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -56,6 +67,7 @@ export class CliSessionRunner implements ISessionRunner {
       disableAutoCompact,
       extraEnv,
       sessionType,
+      granted,
     } = options;
 
     // Planning/ops sessions must never silently auto-accept a tool call
@@ -92,9 +104,36 @@ export class CliSessionRunner implements ISessionRunner {
     // execute granted commands against out-of-tree host paths. The
     // capability-grant allowlist (--allowed-tools) plus the Write/Edit/Skill
     // denylist above are the write-safety boundary for these session
-    // types — not the CLI's directory sandbox — so it's lifted here via
-    // `--add-dir /`. Coding/review sessions keep the default worktree-only
-    // sandbox.
+    // types — not the CLI's directory sandbox. Rather than lifting the
+    // sandbox wholesale (`--add-dir /` gave every dispatched planning
+    // session direct OS-level read access to every other colocated
+    // project's secrets and to other sessions' scoped `.mcp.json`
+    // credential files, since all sessions run as one OS user), the
+    // envelope is a small per-session-type baseline plus any
+    // `read:path:` capability granted on re-dispatch — see
+    // getSessionAddDirs. Coding/review sessions keep the default
+    // worktree-only sandbox (empty add-dir list).
+    const addDirs = getSessionAddDirs(
+      sessionType ?? '',
+      granted ?? [],
+      worktreePath,
+    );
+
+    // Code sessions must not be able to run the project's test commands
+    // directly — they're denied at the SDK permission layer (via the CLI's
+    // --settings flag, the settings.json-based route to the same
+    // `permissions.deny` field the Agent SDK exposes) and routed through
+    // test.request instead (see the Flaky/CI section of orchestrator-claudemd.ts).
+    const testDenyPatterns =
+      sessionType && isCodeSession(sessionType)
+        ? getTestCommandDenyPatterns(loadOrchestratorConfig(worktreePath).test)
+        : [];
+    const settingsOverrides: Record<string, unknown> = {};
+    if (disableAutoCompact) settingsOverrides.autoCompactEnabled = false;
+    if (testDenyPatterns.length) {
+      settingsOverrides.permissions = { deny: testDenyPatterns };
+    }
+
     const spawnArgs = [
       ...(resumeSessionId
         ? ['--resume', resumeSessionId]
@@ -109,8 +148,8 @@ export class CliSessionRunner implements ISessionRunner {
       permissionMode,
       ...(model ? ['--model', model] : []),
       ...(effort ? ['--effort', effort] : []),
-      ...(disableAutoCompact
-        ? ['--settings', '{"autoCompactEnabled":false}']
+      ...(Object.keys(settingsOverrides).length
+        ? ['--settings', JSON.stringify(settingsOverrides)]
         : []),
       ...(mcpConfigPath
         ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']
@@ -123,7 +162,7 @@ export class CliSessionRunner implements ISessionRunner {
       ...(isPlanning
         ? ['--disallowed-tools', ...PLANNING_DISALLOWED_TOOLS]
         : []),
-      ...(isPlanning ? ['--add-dir', '/'] : []),
+      ...addDirs.flatMap((dir) => ['--add-dir', dir]),
     ];
 
     const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR'] as const;
@@ -141,7 +180,25 @@ export class CliSessionRunner implements ISessionRunner {
     // DB_PATH pointing at the live orchestrator database must never be
     // forwarded, or a `vitest run` inside the session would open and write
     // to production data. Session code has no legitimate need for this var.
-    const { DB_PATH: _productionDbPath, ...inheritedEnv } = process.env;
+    //
+    // ORCHESTRATOR_DEVICE_TOKEN is stripped for a different reason: it's the
+    // shared, human-operator credential the sanctioned route-client scripts
+    // (gate-state-client.mjs, staged-intents-client.mjs, etc.) read when run
+    // from an interactive Remote-Control session. Handing it to a dispatched
+    // session would authorize everything those routes allow, forever, for
+    // every device — the wrong shape for a scoped, revocable grant. A
+    // dispatched session instead gets its own per-session, capability-scoped
+    // credential via ORCHESTRATOR_ROUTE_CREDENTIAL_FILE (see extraEnv below
+    // and SessionRouteAuth.ts). This backend process has no legitimate need
+    // to hold ORCHESTRATOR_DEVICE_TOKEN in its own env either — device
+    // tokens are validated against the DB, not an env var — so stripping it
+    // here is a no-op for any expected deployment and pure defense-in-depth
+    // against a misconfigured environment forwarding it.
+    const {
+      DB_PATH: _productionDbPath,
+      ORCHESTRATOR_DEVICE_TOKEN: _sharedDeviceToken,
+      ...inheritedEnv
+    } = process.env;
 
     this.proc = spawn(config.claudePath, spawnArgs, {
       cwd: worktreePath,
@@ -239,8 +296,8 @@ export class CliSessionRunner implements ISessionRunner {
     return exitCode;
   }
 
-  sendMessage(message: string): void {
-    if (!this.proc?.stdin?.writable) return;
+  sendMessage(message: string): boolean {
+    if (!this.proc?.stdin?.writable) return false;
     try {
       this.proc.stdin.write(
         JSON.stringify({
@@ -248,18 +305,62 @@ export class CliSessionRunner implements ISessionRunner {
           message: { role: 'user', content: message },
         }) + '\n',
       );
+      return true;
     } catch (err) {
       log(
         this.sessionId,
-        `sendMessage stdin.write failed (ignored): ${(err as Error).message}`,
+        `sendMessage stdin.write failed: ${(err as Error).message}`,
       );
+      return false;
     }
   }
 
-  endSession(): void {
+  /**
+   * @param concludedCleanly whether the caller is closing stdin as the
+   * sanctioned conclusion of a session that already recorded why it's
+   * ending (e.g. a groom session's markTerminal, after
+   * setSessionTerminalCompletionReason) rather than an unexplained
+   * teardown. Purely descriptive here (logging only) — AgentSession.endSession
+   * is what actually carries this into the exit-code classification, since
+   * it owns the DB/audit side this runner stays free of.
+   * @returns true if the process did not exit on its own within the grace
+   * period and had to be escalated to a forceful kill() — callers use this
+   * to decide whether the escalation is audit-worthy.
+   */
+  async endSession(concludedCleanly = false): Promise<boolean> {
     if (this.proc?.stdin?.writable) {
       this.proc.stdin.end();
     }
+    return this.waitForExitOrEscalate(concludedCleanly);
+  }
+
+  /**
+   * Waits up to GRACEFUL_END_TIMEOUT_MS for the process to exit on its own
+   * after stdin close. A CLI that does not honor stdin EOF (or a hung
+   * subprocess) would otherwise sit alive forever under a session already
+   * marked terminal — escalate to the same SIGTERM/SIGKILL process-tree
+   * kill() used for explicit aborts.
+   */
+  private async waitForExitOrEscalate(
+    concludedCleanly: boolean,
+  ): Promise<boolean> {
+    if (!this.proc || this.proc.exitCode !== null) return false;
+    const exited = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), GRACEFUL_END_TIMEOUT_MS);
+      this.proc!.once('exit', () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+    if (exited) return false;
+    log(
+      this.sessionId,
+      `did not exit within ${GRACEFUL_END_TIMEOUT_MS}ms of stdin close` +
+        (concludedCleanly ? ' (session already concluded cleanly)' : '') +
+        '; escalating to kill()',
+    );
+    await this.kill();
+    return true;
   }
 
   async kill(): Promise<void> {

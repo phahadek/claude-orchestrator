@@ -3,7 +3,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   listGateItemsByMilestone,
   listSeedItemsByMilestone,
+  getGateItemAsOf,
 } from '../../db/queries';
+import {
+  resolveMilestoneForProject,
+  UnknownMilestoneError,
+} from '../../projects/milestoneResolver';
 
 /** Per-connection context the gate/seed read tool is scoped to. */
 export interface GateSeedReadToolContext {
@@ -45,23 +50,49 @@ export function registerGateSeedReadTools(
     {
       title: 'Fetch gate/seed item state for a milestone',
       description:
-        'Read-only: returns { gateItems, seedItems } state for the given milestone — each item as { id, milestone, text/spec, classification (gate only), state }. No event history, no operator field.',
-      inputSchema: { milestone: z.string() },
+        "Read-only: returns { gateItems, seedItems } state for the given milestone — each item as { id, milestone, text/spec, classification (gate only), state }. No event history, no operator field. milestone accepts any of the milestone's forms (DB UUID, canonical short id, or full display name); an unresolvable milestone raises rather than returning an empty result. Optional `asOf` (ISO timestamp) reconstructs each gate item's classification/state as of that time instead of reading current state — gate items that did not exist yet as of `asOf` are omitted; seed items are unaffected (current-state only).",
+      inputSchema: { milestone: z.string(), asOf: z.string().optional() },
     },
     async (args) => {
-      const gateItems: GateItemState[] = listGateItemsByMilestone(
-        ctx.projectId,
-        args.milestone,
-      ).map((row) => ({
-        id: row.id,
-        milestone: row.milestone,
-        text: row.text,
-        classification: row.classification,
-        state: row.state,
-      }));
+      let milestone: string;
+      try {
+        milestone = resolveMilestoneForProject(ctx.projectId, args.milestone);
+      } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          return {
+            content: [
+              { type: 'text', text: JSON.stringify({ error: err.message }) },
+            ],
+            isError: true,
+          };
+        }
+        throw err;
+      }
+      const gateItemRows = listGateItemsByMilestone(ctx.projectId, milestone);
+      const gateItems: GateItemState[] = args.asOf
+        ? gateItemRows
+            .map((row): GateItemState | null => {
+              const asOf = getGateItemAsOf(row.id, args.asOf!);
+              if (!asOf) return null;
+              return {
+                id: asOf.id,
+                milestone: asOf.milestone,
+                text: asOf.text,
+                classification: asOf.classification,
+                state: asOf.state,
+              };
+            })
+            .filter((item): item is GateItemState => item !== null)
+        : gateItemRows.map((row) => ({
+            id: row.id,
+            milestone: row.milestone,
+            text: row.text,
+            classification: row.classification,
+            state: row.state,
+          }));
       const seedItems: SeedItemState[] = listSeedItemsByMilestone(
         ctx.projectId,
-        args.milestone,
+        milestone,
       ).map((row) => ({
         id: row.id,
         milestone: row.milestone,

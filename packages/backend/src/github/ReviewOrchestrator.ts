@@ -20,8 +20,9 @@ import {
   insertPendingReviewSync,
   deletePendingReviewSync,
   getAllPendingReviewSyncs,
-  hasTestResultForSha,
-  upsertTestResult,
+  getLatestTestRequestRun,
+  upsertDepthReviewVerdict,
+  getDepthReviewVerdict,
   hasAnalyzeResultForSha,
   upsertAnalyzeResult,
   getAnalyzeResult,
@@ -35,11 +36,24 @@ import type {
   PRReviewService,
   PRReviewResult,
   WorkItem,
+  BaselineEscalationMatch,
 } from './PRReviewService';
-import { FetchRetryExhaustedError } from './PRReviewService';
+import {
+  FetchRetryExhaustedError,
+  matchBaselineEscalationFloor,
+} from './PRReviewService';
+import type {
+  DepthReviewService,
+  DepthReviewResult,
+} from './DepthReviewService';
+import { SIZE_DIMENSION_NAME as DEPTH_SIZE_DIMENSION_NAME } from './DepthReviewService';
+import type { AutoMerger } from './AutoMerger';
+import { parsePauseReason } from '../db/pauseReason';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
-import type { ReviewJob } from './types';
+import { parseDiffFiles } from './GitHubClient';
+import type { ReviewJob, FlakeRecoveryOutcome } from './types';
+import type { DiffSource } from './DiffSource';
 import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
 import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import type { DispositionsParsedPayload } from './types';
@@ -48,7 +62,10 @@ import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runTestCommands } from '../session/test-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
+import { computeWholeTreeContentHash } from '../session/analyzeGating';
+import { runProjectTestRequest } from '../orchestration/testRequestLane';
 import { recordEvent } from '../audit/AuditLog';
+import { opensPr } from '../session/sessionPredicates';
 import type { ServerMessage } from '../ws/types';
 import { PreReviewPipeline } from './PreReviewPipeline';
 
@@ -72,6 +89,14 @@ type QueuedJob = (ReviewJob & { type?: 'pr' }) | LocalBranchJob;
 
 const STALL_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const STALL_CHECK_INTERVAL_MS = 5 * 60 * 1000; // check every 5 minutes
+// Backstop ceiling on the depth-review dispatch, above DepthReviewService's
+// own 15-minute internal timeout — see runDepthReviewWithCeiling().
+const DEPTH_REVIEW_DISPATCH_CEILING_MS = 20 * 60 * 1000; // 20 minutes
+// Bounds how many times a non-size depth finding can be routed to the
+// implementing session on an unchanged head SHA (see dispatchDepthReview's
+// routeCount tracking) — beyond this, a session that isn't fixing it
+// escalates instead of cycling forever.
+const MAX_DEPTH_REVIEW_ROUTE_ATTEMPTS = 2;
 
 export class ReviewOrchestrator {
   private queue: QueuedJob[] = [];
@@ -86,6 +111,34 @@ export class ReviewOrchestrator {
   readonly bootReady: Promise<void>;
   private stallDetectorInterval: ReturnType<typeof setInterval> | null = null;
   private preReviewPipeline: PreReviewPipeline;
+  /**
+   * Optional reference to the depth-review pass — the second, separate
+   * review dispatched only after a PR's conformance verdict reaches
+   * approved (see runDepthReviewPass). Set via setDepthReviewService() after
+   * both services are constructed (server.ts), mirroring the
+   * mergeWatcher/autoMerger wiring on PRReviewService. Left unset in most
+   * tests, which is fine: the depth pass fails open, so an unwired instance
+   * behaves exactly like a depth-review timeout — no escalation, merge
+   * proceeds on conformance approval alone.
+   */
+  private depthReviewService?: DepthReviewService;
+
+  setDepthReviewService(service: DepthReviewService): void {
+    this.depthReviewService = service;
+  }
+
+  /**
+   * Optional reference to AutoMerger, used to re-drive the merge after
+   * dispatchDepthReview clears the depth_review_pending hold it inherits
+   * from PRReviewService.handleApprovedVerdict. Set via setAutoMerger()
+   * after both services are constructed (server.ts), mirroring
+   * PRReviewService's own autoMerger wiring.
+   */
+  private autoMerger?: AutoMerger;
+
+  setAutoMerger(merger: AutoMerger): void {
+    this.autoMerger = merger;
+  }
 
   constructor(
     private reviewService: PRReviewService,
@@ -480,8 +533,13 @@ export class ReviewOrchestrator {
 
   /**
    * Run the configured test: commands for a PR's head SHA.
-   * Deduplicates: if a result already exists for this SHA, skips execution.
-   * Persists { passed, output } keyed by (prNumber, repo, sha) for F2 to consult.
+   * Deduplicates against the shared F2 content-hash cache
+   * (test_request_runs, the same table the test.request lane and
+   * PreReviewPipeline.buildTestsStage write into): if an identical
+   * whole-tree content hash already has a result, skips execution. On a
+   * miss, runs via runProjectTestRequest, which durably records the result
+   * into test_request_runs for F2 to consult — so a push doesn't run tests
+   * twice for the same content.
    */
   async runTestPipeline(
     prNumber: number,
@@ -495,9 +553,13 @@ export class ReviewOrchestrator {
   ): Promise<void> {
     if (!commands?.length || !headSha) return;
 
-    if (hasTestResultForSha(prNumber, repo, headSha)) {
+    const project = getProjectByGithubRepo(repo);
+    if (!project) return;
+
+    const contentHash = await computeWholeTreeContentHash(worktreePath);
+    if (contentHash && getLatestTestRequestRun(project.id, contentHash)) {
       logger.info(
-        `[ReviewOrchestrator] tests already ran for PR #${prNumber} SHA ${headSha.slice(0, 7)} — skipping`,
+        `[ReviewOrchestrator] tests content-cache hit for PR #${prNumber} SHA ${headSha.slice(0, 7)} — skipping`,
       );
       return;
     }
@@ -506,15 +568,24 @@ export class ReviewOrchestrator {
       `[ReviewOrchestrator] running tests for PR #${prNumber} SHA ${headSha.slice(0, 7)} (timeout ${timeoutSec}s)`,
     );
 
-    const { passed, output } = await runTestCommands(
-      worktreePath,
-      commands,
-      timeoutSec,
-      (msg) => logger.info(`[ReviewOrchestrator] test PR #${prNumber}: ${msg}`),
-      { maxRssMb, failFast },
-    );
-
-    upsertTestResult(prNumber, repo, headSha, passed, output);
+    const { passed } = contentHash
+      ? await runProjectTestRequest({
+          projectId: project.id,
+          contentHash,
+          worktreePath,
+          commands,
+          timeoutSec,
+          maxRssMb,
+          failFast,
+        })
+      : await runTestCommands(
+          worktreePath,
+          commands,
+          timeoutSec,
+          (msg) =>
+            logger.info(`[ReviewOrchestrator] test PR #${prNumber}: ${msg}`),
+          { maxRssMb, failFast },
+        );
 
     logger.info(
       `[ReviewOrchestrator] tests ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
@@ -533,8 +604,38 @@ export class ReviewOrchestrator {
     headSha: string,
     worktreePath: string,
     project: ProjectConfig,
-  ): Promise<{ passed: boolean; output: string } | null> {
+  ): Promise<{
+    outcome: FlakeRecoveryOutcome;
+    passed: boolean;
+    output: string;
+  } | null> {
     return this.preReviewPipeline.rerunFlakyTests(
+      prNumber,
+      repo,
+      headSha,
+      worktreePath,
+      project,
+    );
+  }
+
+  /**
+   * Actuate a verified-flaky disposition on the analyze gate — delegates to
+   * PreReviewPipeline.rerunFlakyAnalyze. Exposed here so PRMergeWatcher (which
+   * holds a ReviewOrchestrator reference, not a PreReviewPipeline one) can
+   * drive same-SHA analyze re-runs.
+   */
+  async rerunFlakyAnalyze(
+    prNumber: number,
+    repo: string,
+    headSha: string,
+    worktreePath: string,
+    project: ProjectConfig,
+  ): Promise<{
+    outcome: FlakeRecoveryOutcome;
+    passed: boolean;
+    output: string;
+  } | null> {
+    return this.preReviewPipeline.rerunFlakyAnalyze(
       prNumber,
       repo,
       headSha,
@@ -823,7 +924,12 @@ export class ReviewOrchestrator {
         result.escalationReason ??
         `Review for local branch ${job.branchName} was escalated per project review rules.`;
       logger.warn(`[ReviewOrchestrator] ${message}`);
-      setLocalBranchPauseReason(job.localBranchId, 'review_rules_escalation');
+      setLocalBranchPauseReason(
+        job.localBranchId,
+        result.baselineEscalationFloor
+          ? 'baseline_escalation_floor'
+          : 'review_rules_escalation',
+      );
       this.sessionManager.emit('message', {
         type: 'review_escalated',
         prNumber: job.localBranchId,
@@ -844,7 +950,10 @@ export class ReviewOrchestrator {
 
   private onSessionEnded(sessionId: string): void {
     const session = getSession(sessionId);
-    if (session?.session_type !== 'standard') return;
+    // Admits every PR-opening session type (standard, docs, ops) — a
+    // needs_changes verdict re-review must fire for an ops-sourced PR the
+    // same as a standard one, not just standard's own.
+    if (!session || !opensPr(session.session_type ?? '')) return;
 
     const pr = getPRBySessionId(sessionId);
     if (!pr || !pr.review_result) return;
@@ -1043,7 +1152,13 @@ export class ReviewOrchestrator {
         result.escalationReason ??
         `Review for PR #${job.prNumber} was escalated per project review rules.`;
       logger.warn(`[ReviewOrchestrator] ${message}`);
-      setPauseReason(job.prNumber, job.repo, 'review_rules_escalation');
+      setPauseReason(
+        job.prNumber,
+        job.repo,
+        result.baselineEscalationFloor
+          ? 'baseline_escalation_floor'
+          : 'review_rules_escalation',
+      );
       this.sessionManager.emit('message', {
         type: 'review_escalated',
         prNumber: job.prNumber,
@@ -1087,8 +1202,277 @@ export class ReviewOrchestrator {
           }),
         );
       }
+    } else if (result.verdict === 'approved') {
+      // Depth review runs only after conformance is approved. Auto-merge is
+      // held on depth_review_pending (set by PRReviewService.
+      // handleApprovedVerdict, before autoMerger.attempt()) for the
+      // duration of this dispatch, so a depth finding can still gate the
+      // merge. Fire-and-forget from the caller's perspective — dispatch
+      // itself clears the hold and re-drives the merge on every exit path;
+      // the .catch() here is a last-resort guard against a throw before or
+      // during the service call (e.g. getPRByNumber, diff-source
+      // construction) so the hold can never strand the PR unmerged.
+      this.dispatchDepthReview(job, project.id).catch((e) => {
+        logger.warn(
+          `[ReviewOrchestrator] depth review dispatch failed for PR #${job.prNumber} (${job.repo}) — failing open: ${e}`,
+        );
+        this.clearDepthReviewHoldAndRemerge(job);
+      });
     }
 
     this.consumePendingPushIfSet(job.prNumber, job.repo);
+  }
+
+  /**
+   * Dispatch the depth-review pass for a just-conformance-approved PR and
+   * route its result. Session-routing is the default for a depth finding:
+   * the composed finding is enqueued to the implementing session through
+   * enqueueFeedback — the same path the size-only branch already uses — so
+   * the PR re-enters the ordinary fix-and-re-review loop instead of stalling
+   * on a human. Operator escalation (setPauseReason + review_escalated, same
+   * channel the conformance pass's review_rules_escalation uses) is reserved
+   * for the baseline-floor categories the design locks (CI/workflow config,
+   * migrations, auth, secrets), for a PR with no linked session to route to,
+   * and for a finding that has been routed MAX_DEPTH_REVIEW_ROUTE_ATTEMPTS
+   * times on an unchanged head SHA without a fix landing. A floor finding on
+   * a PR that does have a session both escalates AND routes — the operator
+   * is informed and the session still gets the text. DepthReviewService
+   * itself fails open (returns null on any error/timeout), so a null result
+   * here clears the depth_review_pending hold and re-drives the merge —
+   * never an escalation, never a merge block. Every exit path below clears
+   * the hold except the routing and escalation paths, which keep the PR
+   * paused — routing keeps depth_review_pending (holding merge on the
+   * outstanding finding) rather than clearing it, and escalation replaces it
+   * with depth_review_escalation.
+   */
+  private async dispatchDepthReview(
+    job: ReviewJob,
+    projectId: string,
+  ): Promise<void> {
+    if (!this.depthReviewService) return;
+
+    const prRow = getPRByNumber(job.prNumber, job.repo);
+    const diffSource = this.github
+      ? new GitHubDiffSource(this.github, job.repo, job.prNumber)
+      : {
+          fetchDiff: async () => {
+            throw new Error('No GitHub client available for diff');
+          },
+        };
+
+    const result = await this.runDepthReviewWithCeiling(
+      job,
+      projectId,
+      diffSource,
+      prRow?.task_id ?? null,
+    );
+    if (!result) {
+      this.clearDepthReviewHoldAndRemerge(job);
+      return;
+    }
+
+    const headSha = prRow?.head_sha ?? null;
+    const priorVerdict = getDepthReviewVerdict(job.prNumber, job.repo);
+    const priorRouteCount =
+      priorVerdict?.head_sha && priorVerdict.head_sha === headSha
+        ? (priorVerdict.route_count ?? 0)
+        : 0;
+    const routeCount = result.hasNonSizeFailure ? priorRouteCount + 1 : 0;
+
+    // Persist the verdict and record its audit event — a storage failure
+    // here must not block the merge path (same fail-open shape as dispatch
+    // itself), so it's isolated in its own try/catch rather than allowed to
+    // throw into the escalate/auto-fix/clear-hold branches below.
+    try {
+      upsertDepthReviewVerdict({
+        pr_number: job.prNumber,
+        repo: job.repo,
+        head_sha: headSha,
+        verdict: result.verdict,
+        dimensions: JSON.stringify(result.dimensions),
+        summary: result.summary,
+        depth_session_id: result.sessionId,
+        route_count: routeCount,
+      });
+      recordEvent({
+        event_type: 'depth_review_completed',
+        actor_type: 'system',
+        task_id: prRow?.task_id ?? null,
+        payload: {
+          pr_number: job.prNumber,
+          repo: job.repo,
+          verdict: result.verdict,
+          hasNonSizeFailure: result.hasNonSizeFailure,
+          sizeOnlyFailure: result.sizeOnlyFailure,
+        },
+      });
+    } catch (e) {
+      logger.warn(
+        `[ReviewOrchestrator] failed to persist depth review verdict for PR #${job.prNumber} (${job.repo}) — failing open: ${e}`,
+      );
+    }
+
+    if (result.hasNonSizeFailure) {
+      const failing = result.dimensions.filter(
+        (d) => !d.passed && d.name !== DEPTH_SIZE_DIMENSION_NAME,
+      );
+      const message = [
+        `Depth review for PR #${job.prNumber} found a defect beyond spec-conformance:`,
+        result.summary,
+        '',
+        ...failing.map((d) => `- **${d.name}**: ${d.notes}`),
+      ].join('\n');
+      logger.warn(`[ReviewOrchestrator] ${message}`);
+
+      let floorMatches: BaselineEscalationMatch[] = [];
+      try {
+        const diffText = await diffSource.fetchDiff();
+        floorMatches = matchBaselineEscalationFloor(parseDiffFiles(diffText));
+      } catch (e) {
+        logger.warn(
+          `[ReviewOrchestrator] failed to re-fetch diff for PR #${job.prNumber} (${job.repo}) to check the baseline escalation floor — treating as no floor match: ${e}`,
+        );
+      }
+      const boundExceeded = routeCount > MAX_DEPTH_REVIEW_ROUTE_ATTEMPTS;
+      const noSession = !prRow?.session_id;
+      const mustEscalate =
+        floorMatches.length > 0 || boundExceeded || noSession;
+
+      if (mustEscalate) {
+        const detailParts: string[] = [];
+        if (floorMatches.length > 0) {
+          const categories = [...new Set(floorMatches.map((m) => m.category))];
+          detailParts.push(`baseline floor: ${categories.join(', ')}`);
+        }
+        if (boundExceeded) {
+          detailParts.push(
+            `re-routed ${routeCount} times on unchanged head SHA without a fix`,
+          );
+        }
+        if (noSession) {
+          detailParts.push('no linked session — routing was impossible');
+        }
+        // Replaces the depth_review_pending hold — the PR stays paused, now
+        // on an escalation reason, not merged.
+        setPauseReason(
+          job.prNumber,
+          job.repo,
+          'depth_review_escalation',
+          detailParts.join('; '),
+        );
+        this.sessionManager.emit('message', {
+          type: 'review_escalated',
+          prNumber: job.prNumber,
+          repo: job.repo,
+          message,
+        });
+      }
+
+      // Session-routing is the default whenever a session is linked — even
+      // when the finding also escalated (floor / bound), so the session
+      // isn't left waiting on an operator with no feedback at all.
+      if (prRow?.session_id) {
+        await this.sessionManager.enqueueFeedback(
+          prRow.session_id,
+          'ai-reviewer',
+          message,
+        );
+      }
+
+      // Both exit paths leave the PR paused: escalation is on
+      // depth_review_escalation (set above); a plain route keeps the
+      // depth_review_pending hold already in place — do not clear it or
+      // re-drive the merge, or an unfixed defect could merge before the
+      // session's next push re-triggers conformance + depth review.
+      return;
+    }
+
+    if (result.sizeOnlyFailure && prRow?.session_id) {
+      const sizeDim = result.dimensions.find(
+        (d) => d.name === DEPTH_SIZE_DIMENSION_NAME && !d.passed,
+      );
+      const message = [
+        `The depth review pass flagged this PR for scope creep (size-proportionality):`,
+        sizeDim?.notes ?? result.summary,
+      ].join('\n');
+      await this.sessionManager.enqueueFeedback(
+        prRow.session_id,
+        'ai-reviewer',
+        message,
+      );
+    }
+    this.clearDepthReviewHoldAndRemerge(job);
+  }
+
+  /**
+   * Races the depth-review service call against a backstop ceiling well
+   * above DepthReviewService's own internal timeout (15 min), so a session
+   * that never reaches a terminal status there (see the depth_review
+   * terminal-status fixes this mirrors) still cannot hold a merge
+   * indefinitely. DepthReviewService.runDepthReview() itself never rejects
+   * (it fails open to null internally) — this is a second, independent
+   * backstop, not a replacement for that contract.
+   */
+  private runDepthReviewWithCeiling(
+    job: ReviewJob,
+    projectId: string,
+    diffSource: DiffSource,
+    taskId: string | null,
+  ): Promise<DepthReviewResult | null> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const ceiling = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        logger.warn(
+          `[ReviewOrchestrator] depth review for PR #${job.prNumber} (${job.repo}) exceeded the ${Math.round(DEPTH_REVIEW_DISPATCH_CEILING_MS / 60000)}-minute dispatch ceiling — failing open`,
+        );
+        resolve(null);
+      }, DEPTH_REVIEW_DISPATCH_CEILING_MS);
+
+      this.depthReviewService!.runDepthReview(
+        job.prNumber,
+        job.repo,
+        diffSource,
+        projectId,
+        job.contextUrl,
+        taskId,
+      ).then(
+        (result) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(ceiling);
+          resolve(result);
+        },
+        () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(ceiling);
+          resolve(null);
+        },
+      );
+    });
+  }
+
+  /**
+   * Clears the depth_review_pending hold and re-attempts the merge — used
+   * on every dispatchDepthReview exit path that doesn't escalate. Only
+   * clears when the current pause_reason is still depth_review_pending, so
+   * an unrelated hold set in the meantime (e.g. manual_verification_pending,
+   * review_rules_escalation) is never clobbered — attempt() is still called
+   * either way since AutoMerger re-checks pause_reason itself and no-ops if
+   * one remains.
+   */
+  private clearDepthReviewHoldAndRemerge(job: ReviewJob): void {
+    const row = getPRByNumber(job.prNumber, job.repo);
+    if (
+      parsePauseReason(row?.pause_reason ?? null)?.reason ===
+      'depth_review_pending'
+    ) {
+      setPauseReason(job.prNumber, job.repo, null);
+    }
+    if (this.autoMerger) {
+      this.autoMerger.attempt(job.prNumber, job.repo);
+    }
   }
 }

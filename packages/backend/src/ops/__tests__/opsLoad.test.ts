@@ -261,6 +261,29 @@ describe('loadOpsContext — classification', () => {
     expect(deferredBlocked?.blockingDepIds).toEqual(['task-deferred']);
   });
 
+  it('treats a Depends-On id absent from every loaded row as non-blocking (fail-open)', async () => {
+    rows = [
+      {
+        id: 'task-op-out-of-window-dep',
+        name: 'Op with dep off every loaded board',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+        dependsOn: 'task-not-on-any-board',
+      },
+    ];
+
+    const result = await loadOpsContext(MILESTONE);
+
+    expect(result.worklist.executable.map((t) => t.id)).toEqual([
+      'task-op-out-of-window-dep',
+    ]);
+    expect(result.worklist.dep_blocked.map((t) => t.id)).toEqual([]);
+    const task = result.worklist.executable.find(
+      (t) => t.id === 'task-op-out-of-window-dep',
+    );
+    expect(task?.blockingDepIds).toEqual([]);
+  });
+
   it('excludes test-authoring 🧪 Testing tasks and folds observational Testing in as executable', async () => {
     rows = [
       {
@@ -432,7 +455,7 @@ describe('loadOpsContext — architecture dual-read', () => {
 });
 
 describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
-  it('pre-seeds exactly one pending entry per executable task', async () => {
+  it('pre-seeds exactly one pending entry per executable task, plus dep_blocked tasks', async () => {
     rows = [
       {
         id: 'exec-1',
@@ -458,8 +481,80 @@ describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
     await loadOpsContext(MILESTONE);
 
     const entries = listOpsJournalEntries();
-    expect(entries.map((e) => e.task_id).sort()).toEqual(['exec-1', 'exec-2']);
+    expect(entries.map((e) => e.task_id).sort()).toEqual([
+      'blocked-1',
+      'exec-1',
+      'exec-2',
+    ]);
     for (const e of entries) expect(e.state).toBe('pending');
+  });
+
+  it('seeds a dep_blocked task at pending like an executable one', async () => {
+    rows = [
+      {
+        id: 'exec-1',
+        name: 'Executable 1',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+      {
+        id: 'blocked-1',
+        name: 'Blocked',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+        dependsOn: 'exec-1',
+      },
+    ];
+
+    await loadOpsContext(MILESTONE);
+
+    const entries = listOpsJournalEntries();
+    expect(entries.map((e) => e.task_id).sort()).toEqual([
+      'blocked-1',
+      'exec-1',
+    ]);
+    for (const e of entries) expect(e.state).toBe('pending');
+  });
+
+  it('preserves a dep_blocked task journal entry (state and finding_or_proposal intact) across a run', async () => {
+    rows = [
+      {
+        id: 'exec-1',
+        name: 'Executable 1',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+      {
+        id: 'blocked-1',
+        name: 'Blocked',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+        dependsOn: 'exec-1',
+      },
+    ];
+
+    upsertOpsJournalEntry({
+      task_id: 'blocked-1',
+      project: PROJECT,
+      milestone: MILESTONE,
+      state: 'staged-proposal',
+      disposition: null,
+      worked_in: null,
+      evidence: JSON.stringify(['staged evidence']),
+      finding_or_proposal: JSON.stringify({ proposal: 'workflow diff' }),
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date(0).toISOString(),
+    } as never);
+
+    await loadOpsContext(MILESTONE);
+
+    const blocked = getEntry('blocked-1');
+    expect(blocked?.state).toBe('staged-proposal');
+    expect(blocked?.findingOrProposal).toEqual({ proposal: 'workflow diff' });
+    expect(blocked?.evidence).toEqual(['staged evidence']);
   });
 
   it('drops entries for tasks now Done/Deferred/removed and preserves worked fields for still-open tasks', async () => {

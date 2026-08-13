@@ -57,6 +57,8 @@ import {
   emitTaskUpdated,
 } from '../routes/tasks.js';
 import * as queries from '../db/queries.js';
+import { insertStagedIntent } from '../db/queries.js';
+import type { StagedIntentState } from '../db/types.js';
 import { getTaskBackend } from '../tasks/TaskBackend.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import type { NotionTask } from '../notion/types.js';
@@ -710,6 +712,108 @@ describe('buildTaskViewFromRow — totalTokens', () => {
   });
 });
 
+describe('buildTaskViewFromRow — hasAwaitingDispositionIntent', () => {
+  let intentCounter = 0;
+
+  function stageIntent(taskId: string, state: StagedIntentState) {
+    intentCounter += 1;
+    insertStagedIntent({
+      id: `intent-${intentCounter}`,
+      kind: 'task.setStatus',
+      payload: '{}',
+      payload_hash: `hash-${intentCounter}`,
+      task_id: taskId,
+      project_id: 'proj-1',
+      session_id: null,
+      group_id: null,
+      milestone: 'M1',
+      state,
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      investigation: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: 0,
+      updated_at: 0,
+    });
+  }
+
+  it('is true for a task holding a staged intent', async () => {
+    stageIntent('task-backlog', 'staged');
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-backlog', '🔲 Backlog'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    const task = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-backlog',
+    );
+    expect(task.hasAwaitingDispositionIntent).toBe(true);
+  });
+
+  it('is true for a task holding an approved, needs_revision, or pending_verification intent', async () => {
+    stageIntent('task-approved', 'approved');
+    stageIntent('task-needs-revision', 'needs_revision');
+    stageIntent('task-pending-verification', 'pending_verification');
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-approved', '🔲 Backlog'),
+      makeAggregate('task-needs-revision', '🔲 Backlog'),
+      makeAggregate('task-pending-verification', '🔲 Backlog'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    for (const taskId of [
+      'task-approved',
+      'task-needs-revision',
+      'task-pending-verification',
+    ]) {
+      const task = res.body.tasks.find(
+        (t: { taskId: string }) => t.taskId === taskId,
+      );
+      expect(task.hasAwaitingDispositionIntent).toBe(true);
+    }
+  });
+
+  it('is false for a task whose only intents are terminal (committed/rejected/superseded/withdrawn)', async () => {
+    stageIntent('task-terminal', 'committed');
+    stageIntent('task-terminal', 'rejected');
+    stageIntent('task-terminal', 'superseded');
+    stageIntent('task-terminal', 'withdrawn');
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-terminal', '🔲 Backlog'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    const task = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-terminal',
+    );
+    expect(task.hasAwaitingDispositionIntent).toBe(false);
+  });
+
+  it('is false for a task with no staged intents at all', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-no-intents', '🔲 Backlog'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    const task = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-no-intents',
+    );
+    expect(task.hasAwaitingDispositionIntent).toBe(false);
+  });
+});
+
 // ── GET /api/tasks/export?format=yaml ─────────────────────────────────────────
 
 describe('GET /api/tasks/export?format=yaml', () => {
@@ -1068,6 +1172,53 @@ describe('TaskView recoveryDescriptor', () => {
       (t: { taskId: string }) => t.taskId === 'task-1',
     );
     expect(task.recoveryDescriptor).toMatchObject({ available: false });
+  });
+});
+
+describe('TaskView displayStatus — auto_recovering threading', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'board:board-1',
+      raw_json: JSON.stringify([
+        { id: 'task-1', status: '👀 In Review', dependsOn: [] },
+      ]),
+      fetched_at: Date.now(),
+    } as never);
+  });
+
+  it("returns 'auto_recovering' for a ci_failing pause when pr_flake_recovery_attempts is below the max_retries setting", async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-1', '👀 In Review', {
+        pr_pause_reason: 'ci_failing',
+        pr_flake_recovery_attempts: 0,
+      }),
+    ]);
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    const task = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-1',
+    );
+    expect(task.displayStatus).toBe('auto_recovering');
+  });
+
+  it("returns 'needs_attention' for a ci_failing pause once pr_flake_recovery_attempts reaches the max_retries setting (default 2)", async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-1', '👀 In Review', {
+        pr_pause_reason: 'ci_failing',
+        pr_flake_recovery_attempts: 2,
+      }),
+    ]);
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    const task = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-1',
+    );
+    expect(task.displayStatus).toBe('needs_attention');
   });
 });
 

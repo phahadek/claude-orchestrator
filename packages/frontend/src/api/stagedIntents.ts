@@ -90,7 +90,9 @@ export interface StagedIntent {
   annotation?:
     | { blocked: true; violations: StagedIntentViolation[] }
     | { blocked: true; reasons: string[] }
+    | { advisory: true; violations: StagedIntentViolation[] }
     | { autoRejected: true }
+    | { autoApproved: true }
     | null;
   /**
    * Tier-3 semantic readiness advisory — a caution signal (confidence +
@@ -116,6 +118,29 @@ export interface StagedIntent {
    * every other kind and for a non-file-mutating capability.
    */
   confersFileMutation?: boolean;
+  /**
+   * Mirrors the backend's group-commit non-committability predicate
+   * (commitGroupIntents' 409 guard): true when this intent's group has any
+   * member — visible or not — in needs_revision/pending_verification, or
+   * any live member's owning session is incomplete. Null for an ungrouped
+   * intent. Drives GroupCard's disabled Approve/Reject controls.
+   */
+  groupBlocked?: boolean | null;
+  /**
+   * Count of this intent's group members — visible or not — sitting in
+   * needs_revision/pending_verification. Used to render an accurate
+   * blocked-member banner even when the blocking member itself is hidden
+   * from the decision surface.
+   */
+  groupBlockedMemberCount?: number | null;
+  /**
+   * True when some live member of this intent's group has an owning session
+   * that hasn't gone complete for the turn — the incomplete-session leg of
+   * `groupBlocked`, isolated so the milestone inbox can wire it through
+   * GroupCard's `disabled` prop without also disabling the blocked-member
+   * Recover/Decline affordances, which stay usable while blocked.
+   */
+  groupSessionIncomplete?: boolean | null;
 }
 
 /** The two explicit operator-chosen outcomes for a reject disposition. */
@@ -144,6 +169,22 @@ export interface ApplyOptions {
   /** Overrides a blocked-with-reason intent — requires a non-empty reason. */
   override?: boolean;
   reason?: string;
+  /**
+   * The operator's chosen disposition for a Human-Observation `gate.verify`
+   * mirror intent (payload.origin === 'mirror') — such an intent carries no
+   * pre-set disposition, since no verifier ever observed anything, so the
+   * operator supplies one here at apply time. Ignored for every other kind.
+   * `not-yet-triggerable` parks the item at `pending` for a scheduled
+   * backoff re-check instead of resolving it — distinct from `deferred`,
+   * which resolves the item permanently.
+   */
+  mirrorDisposition?:
+    | 'pass'
+    | 'fail'
+    | 'needs-setup'
+    | 'deferred'
+    | 'not-yet-triggerable';
+  mirrorEvidence?: string;
 }
 
 /** Mirrors the backend's UNATTRIBUTED_MILESTONE_BUCKET (db/queries.ts) — the ?milestone lens value for legacy/unresolvable rows. */
@@ -206,6 +247,8 @@ export const stagedIntentsApi = {
         body: JSON.stringify({
           override: options?.override ?? false,
           reason: options?.reason ?? '',
+          mirrorDisposition: options?.mirrorDisposition,
+          mirrorEvidence: options?.mirrorEvidence,
         }),
       },
     );

@@ -10,11 +10,14 @@ import {
   getTaskCache,
   deleteTaskCacheRow,
   getMergeCommitForTask,
+  getAllBoardCacheTasks,
 } from '../db/queries';
+import { DependencyResolver } from '../notion/DependencyResolver';
 import {
   checkReadiness,
   ReadinessGateError,
   standardTriageCleanDesignOverrideReason,
+  type ReadinessViolation,
 } from './readinessGate';
 import {
   checkGroomingPromotionGate,
@@ -35,7 +38,10 @@ import {
   type SeedAccretionMarker,
 } from '../seed/seedStore';
 import type { GroomingGateEntry } from '../groom/groomGate';
-import type { GateItemClassification } from '../db/types';
+import type {
+  GateItemClassification,
+  SeedItemClassification,
+} from '../db/types';
 import { recordEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
 import { planMove, type MoveGraphTask } from '../orchestration/moveTask';
@@ -264,6 +270,14 @@ export interface MoveTaskResult {
   newTaskId: string;
   droppedEdges: { from: string; to: string }[];
   cascadeSet: string[];
+  /**
+   * Non-blocking readiness-gate advisory for the moved copy's restored
+   * status. A move re-parents already-groomed content — it does not change
+   * the body — so a gate violation here is surfaced for visibility rather
+   * than blocking the move (the gate already ran, and passed, at the
+   * task's original promotion to Ready).
+   */
+  readinessAdvisory?: ReadinessViolation[];
 }
 
 /** The Code/Tooling task whose runtime items are being accreted onto the milestone gate. */
@@ -324,6 +338,8 @@ export interface SeedContributionSourceTask {
  */
 export interface SeedContributionItemInput {
   spec: string;
+  /** Mirrors GateContributionItemInput's classification override — see SeedItemClassification. */
+  classification?: SeedItemClassification;
 }
 
 /**
@@ -516,19 +532,18 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
     if (status === 'Ready') {
+      const body = (await this.backend.fetchTaskPage(taskId)) ?? '';
       const gateResult = await checkGroomingPromotionGate(
         options?.groomingGate ?? {},
         taskId,
         getCachedType(taskId) ?? undefined,
         undefined,
         this.projectId,
+        body,
       );
       if (!gateResult.allowed) {
         throw new GroomingGateError(gateResult.reasons);
       }
-    }
-    if (status === 'Ready') {
-      const body = (await this.backend.fetchTaskPage(taskId)) ?? '';
       const violations = checkReadiness(body, getCachedType(taskId));
       if (violations.length > 0) {
         const readinessOverride = resolveReadinessOverride(taskId, options);
@@ -549,7 +564,42 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
         });
       }
     }
+    if (status === 'Deferred') {
+      this.surfaceDependentsOfDeferredTask(taskId, options);
+    }
     await this.backend.updateStatus(taskId, STATUS_DISPLAY[status], options);
+  }
+
+  /**
+   * A Deferred task never reaches ✅ Done, so it is a permanent blocker for
+   * anything that depends on it (see DependencyResolver.findBlockers) — but
+   * nothing else makes that block operator-visible. Record an audit event
+   * naming every still-live dependent so a Ready task doesn't sit
+   * undispatchable forever with no signal. Detection only: dependsOn is never
+   * rewritten here, since choosing a replacement blocker is a judgement call.
+   */
+  private surfaceDependentsOfDeferredTask(
+    taskId: string,
+    options?: TaskWriteOptions,
+  ): void {
+    const boardTasks = getAllBoardCacheTasks();
+    if (boardTasks.length === 0) return;
+    const dependents = new DependencyResolver().findDependents(
+      taskId,
+      boardTasks,
+    );
+    if (dependents.length === 0) return;
+    recordEvent({
+      event_type: 'task_deferred_blocks_dependents',
+      actor_type: options?.source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId ?? null,
+      task_id: taskId,
+      payload: {
+        deferredTaskId: taskId,
+        dependentTaskIds: dependents.map((d) => d.id),
+      },
+    });
   }
 
   async setDependsOn(
@@ -759,6 +809,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
           project: sourceTask.project,
           milestone,
           spec: seed.spec,
+          classification: seed.classification,
           sources: [
             {
               sourceTaskId,
@@ -898,6 +949,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       options,
     );
 
+    let readinessAdvisory: ReadinessViolation[] = [];
     try {
       await this.backend.updateBodyRaw(
         newTaskId,
@@ -906,7 +958,11 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
 
       if (content.status !== 'Backlog') {
-        await this.restoreStatus(newTaskId, content.status, options);
+        readinessAdvisory = await this.restoreStatus(
+          newTaskId,
+          content.status,
+          options,
+        );
       }
 
       for (const rewrite of plan.dependentRewrites) {
@@ -1000,43 +1056,36 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       newTaskId,
       droppedEdges: plan.droppedEdges,
       cascadeSet: plan.cascadeSet,
+      readinessAdvisory: readinessAdvisory.length
+        ? readinessAdvisory
+        : undefined,
     };
   }
 
   /**
-   * Authoritative status restore — bypasses isValidTransition (the moved
-   * page just landed in Backlog and the original status may not be a legal
-   * transition from it), but still runs the readiness gate when restoring
-   * Ready, honoring the same override + audit path as setStatus.
+   * Authoritative status restore for the move path — bypasses
+   * isValidTransition (the moved page just landed in Backlog and the
+   * original status may not be a legal transition from it) and, unlike
+   * setStatus, never re-runs the readiness gate as a hard block: a move is a
+   * re-parenting of already-groomed content (the body is copied verbatim,
+   * not re-authored), and the promotion gate already ran — and passed —
+   * when the task first reached Ready. Any violations detected against the
+   * gate in force today are still surfaced (returned to the caller as a
+   * non-blocking advisory) rather than silently dropped, but they never
+   * throw ReadinessGateError.
    */
   private async restoreStatus(
     taskId: string,
     status: TaskStatus,
     options?: TaskWriteOptions,
-  ): Promise<void> {
+  ): Promise<ReadinessViolation[]> {
+    let violations: ReadinessViolation[] = [];
     if (status === 'Ready') {
       const body = (await this.backend.fetchTaskPage(taskId)) ?? '';
-      const violations = checkReadiness(body, getCachedType(taskId));
-      if (violations.length > 0) {
-        const readinessOverride = resolveReadinessOverride(taskId, options);
-        if (!readinessOverride) {
-          throw new ReadinessGateError(violations);
-        }
-        recordEvent({
-          event_type: 'readiness_override',
-          actor_type: 'human',
-          actor_id: options?.sessionId ?? null,
-          project_id: this.projectId ?? null,
-          task_id: taskId,
-          payload: {
-            reason: readinessOverride.reason,
-            tiers: violations.map((v) => v.tier),
-            violations,
-          },
-        });
-      }
+      violations = checkReadiness(body, getCachedType(taskId));
     }
     await this.backend.updateStatus(taskId, STATUS_DISPLAY[status], options);
+    return violations;
   }
 }
 

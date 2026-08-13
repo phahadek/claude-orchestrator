@@ -64,7 +64,7 @@ vi.mock('../../hooks/useWebSocket', () => ({
 }));
 
 vi.mock('../../hooks/useKeyboardShortcuts', () => ({
-  useKeyboardShortcuts: vi.fn(),
+  useKeyboardShortcuts: vi.fn(() => ({ highlightedItemId: null })),
 }));
 
 vi.mock('../Header', () => ({
@@ -87,7 +87,6 @@ vi.mock('../HistoryGrid', () => ({
 
 vi.mock('../Notifications', () => ({ Notifications: () => null }));
 vi.mock('../ShortcutHint', () => ({ ShortcutHint: () => null }));
-vi.mock('../DispatchModal', () => ({ DispatchModal: () => null }));
 vi.mock('../PermissionEventLog', () => ({ PermissionEventLog: () => null }));
 vi.mock('../SessionFilterBar', () => ({ SessionFilterBar: () => null }));
 vi.mock('../Settings', () => ({ Settings: () => null }));

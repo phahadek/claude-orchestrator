@@ -130,6 +130,7 @@ vi.mock('../session/orchestrator-config', () => ({
     mcp_servers: [],
   })),
   getSessionAllowedTools: vi.fn(() => []),
+  getSessionAddDirs: vi.fn(() => []),
 }));
 
 vi.mock('../session/orchestrator-claudemd', () => ({
@@ -172,6 +173,8 @@ vi.mock('../db/queries', () =>
     setContextOccupancy: vi.fn(),
     insertSessionAudit: vi.fn(),
     setSessionModel: vi.fn(),
+    setSessionModelSettingKey: vi.fn(),
+    setSessionEffortSettingKey: vi.fn(),
     getPRBySessionId: vi.fn(() => null),
     setHeadSha: vi.fn(),
     hasActiveSessionForTask: vi.fn(() => false),
@@ -372,8 +375,8 @@ describe('upsertSessionEvent — defensive guard (source-level)', () => {
       'utf-8',
     );
     const upsertIdx = source.indexOf('export function upsertSessionEvent');
-    const insertIdx = source.indexOf('stmtInsertEvent.run', upsertIdx);
-    const guardIdx = source.indexOf('stmtGetSession.get', upsertIdx);
+    const insertIdx = source.indexOf('getStmtInsertEvent().run', upsertIdx);
+    const guardIdx = source.indexOf('getStmtGetSession().get', upsertIdx);
     expect(guardIdx).toBeGreaterThan(upsertIdx);
     expect(guardIdx).toBeLessThan(insertIdx);
   });

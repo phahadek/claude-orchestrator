@@ -1,9 +1,15 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import {
   checkReadiness,
   parseManualVerificationItems,
+  parseOperationalSeedItems,
   checkAccretionContentMatch,
+  extractDeclaredWrites,
 } from '../readinessGate';
+
+const repoRoot = join(__dirname, '..', '..', '..', '..', '..');
 
 describe('checkReadiness — Tier 1 (structural)', () => {
   it('flags a body with a non-empty Open Questions section', () => {
@@ -132,9 +138,16 @@ describe('checkReadiness — type-aware Open Questions / deferral exemption', ()
     expect(checkReadiness(deferralBody, '📋 Planning')).toEqual([]);
   });
 
-  it('does not flag Open Questions / deferral for 🔎 Investigation', () => {
-    expect(checkReadiness(openQuestionsBody, '🔎 Investigation')).toEqual([]);
-    expect(checkReadiness(deferralBody, '🔎 Investigation')).toEqual([]);
+  it('does not flag the generic Open Questions / deferral checks for 🔎 Investigation (its own Deliverables/decision-branch floor facts still apply)', () => {
+    // Investigation's Tier-1/Tier-2 exemption is about the *generic* Open
+    // Questions / deferral checks — it still needs its own Deliverables
+    // heading and decision-branch structure (see the floor-facts describe
+    // block below), so this body satisfies those to isolate the exemption.
+    const investigationBody =
+      '## Deliverables\n- A go/no-go decision.\n\n## Context\n- If the spike succeeds, file the Code task.\n- If it fails, file a follow-on Investigation.\n\n' +
+      openQuestionsBody +
+      deferralBody;
+    expect(checkReadiness(investigationBody, '🔎 Investigation')).toEqual([]);
   });
 
   it('does not flag Open Questions / deferral for 🧪 Testing', () => {
@@ -150,6 +163,156 @@ describe('checkReadiness — type-aware Open Questions / deferral exemption', ()
       true,
     );
     expect(codeViolations.some((v) => v.detail.includes('residue'))).toBe(true);
+  });
+});
+
+describe('checkReadiness — 🔧 Operational floor facts', () => {
+  const validBody =
+    '## Targets / surfaces affected\n- billing config catalog\n\n### 👁️ Manual verification\n- seed present on prod; worker reconciled and captured the change signal\n';
+
+  it('passes a clean Operational body', () => {
+    expect(checkReadiness(validBody, '🔧 Operational')).toEqual([]);
+  });
+
+  it('fails when Targets / surfaces affected is missing', () => {
+    const body =
+      '### 👁️ Manual verification\n- seed present on prod; worker reconciled and captured the change signal\n';
+    const violations = checkReadiness(body, '🔧 Operational');
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('Targets'),
+      ),
+    ).toBe(true);
+  });
+
+  it('fails when Targets / surfaces affected is present but empty', () => {
+    const body =
+      '## Targets / surfaces affected\nNone\n\n### 👁️ Manual verification\n- seed present on prod; worker reconciled and captured the change signal\n';
+    const violations = checkReadiness(body, '🔧 Operational');
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('Targets'),
+      ),
+    ).toBe(true);
+  });
+
+  it('fails when Manual verification lacks reconcile-and-capture language', () => {
+    const body =
+      '## Targets / surfaces affected\n- billing config catalog\n\n### 👁️ Manual verification\n- looks fine\n';
+    const violations = checkReadiness(body, '🔧 Operational');
+    expect(
+      violations.some(
+        (v) => v.tier === 'lexical' && v.detail.includes('reconcile'),
+      ),
+    ).toBe(true);
+  });
+
+  it('passes when reconcile and capture are stated separately, order-agnostic', () => {
+    const body =
+      '## Targets / surfaces affected\n- billing config catalog\n\n### 👁️ Manual verification\n- captured evidence that the worker reconciled the change\n';
+    expect(checkReadiness(body, '🔧 Operational')).toEqual([]);
+  });
+
+  it('still blocks on a deferral phrase (Tier 2 not exempted for Operational)', () => {
+    const body =
+      validBody + '\nThe retry policy will be decide during implementation.';
+    const violations = checkReadiness(body, '🔧 Operational');
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('a sample body missing Targets / surfaces affected is blocked by checkReadiness', () => {
+    const body =
+      '### 👁️ Manual verification\n- seed present on prod; worker reconciled and captured the change signal\n';
+    expect(checkReadiness(body, '🔧 Operational').length).toBeGreaterThan(0);
+  });
+
+  it('a sample body containing a deferral phrase is still blocked', () => {
+    const body =
+      validBody + '\nThe retry policy will be decide during implementation.';
+    expect(checkReadiness(body, '🔧 Operational').length).toBeGreaterThan(0);
+  });
+
+  it('does not accept a required heading that only appears inside a fenced code block', () => {
+    const body =
+      '## Example\n```\n## Targets / surfaces affected\n- billing config catalog\n```\n\n### 👁️ Manual verification\n- seed present on prod; worker reconciled and captured the change signal\n';
+    const violations = checkReadiness(body, '🔧 Operational');
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('Targets'),
+      ),
+    ).toBe(true);
+  });
+
+  it('still detects a genuine top-level required heading outside any fence', () => {
+    const body = '```\nsome unrelated example\n```\n\n' + validBody;
+    expect(checkReadiness(body, '🔧 Operational')).toEqual([]);
+  });
+});
+
+describe('checkReadiness — 🔎 Investigation floor facts', () => {
+  const validBody =
+    '## Deliverables\n- A go/no-go decision plus follow-on tasks.\n\n## Context\n- If latency regressed after the deploy, file a Code rollback task.\n- If it did not, file a follow-on Investigation into the alert itself.\n';
+
+  it('passes a clean Investigation body', () => {
+    expect(checkReadiness(validBody, '🔎 Investigation')).toEqual([]);
+  });
+
+  it('fails when Deliverables is missing', () => {
+    const body =
+      '## Context\n- If latency regressed, file a rollback task.\n- If not, investigate the alert.\n';
+    const violations = checkReadiness(body, '🔎 Investigation');
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('Deliverables'),
+      ),
+    ).toBe(true);
+  });
+
+  it('fails when Deliverables is present but empty', () => {
+    const body =
+      '## Deliverables\nNone\n\n## Context\n- If latency regressed, file a rollback task.\n- If not, investigate the alert.\n';
+    const violations = checkReadiness(body, '🔎 Investigation');
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('Deliverables'),
+      ),
+    ).toBe(true);
+  });
+
+  it('fails when Context has no enumerated decision-branch structure', () => {
+    const body =
+      '## Deliverables\n- A go/no-go decision.\n\n## Context\nLatency looked elevated yesterday, worth a look.\n';
+    const violations = checkReadiness(body, '🔎 Investigation');
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('decision-branch'),
+      ),
+    ).toBe(true);
+  });
+
+  it('accepts a plain list as a lenient decision-branch structure (no literal a/b/c lettering required)', () => {
+    const body =
+      '## Deliverables\n- A go/no-go decision.\n\n## Context\n- Root cause is the retry storm.\n- Root cause is the upstream outage.\n';
+    expect(checkReadiness(body, '🔎 Investigation')).toEqual([]);
+  });
+
+  it("Investigation's existing Tier-1/Tier-2 exemption is unchanged: a live Open Questions section and a deferral phrase are not flagged", () => {
+    const body =
+      validBody +
+      '\n## Open Questions\n- Which alert threshold?\n\nThe retry policy will be decide during implementation.';
+    expect(checkReadiness(body, '🔎 Investigation')).toEqual([]);
+  });
+
+  it('a sample body missing Deliverables is blocked by checkReadiness', () => {
+    const body =
+      '## Context\n- If latency regressed, file a rollback task.\n- If not, investigate the alert.\n';
+    expect(checkReadiness(body, '🔎 Investigation').length).toBeGreaterThan(0);
+  });
+
+  it('a sample body whose Context lacks any enumerated decision-branch structure surfaces as a violation', () => {
+    const body =
+      '## Deliverables\n- A go/no-go decision.\n\n## Context\nLatency looked elevated yesterday, worth a look.\n';
+    expect(checkReadiness(body, '🔎 Investigation').length).toBeGreaterThan(0);
   });
 });
 
@@ -180,6 +343,36 @@ describe('parseManualVerificationItems', () => {
   it('returns an empty array for an explicit "None" section', () => {
     const body = '### 👁️ Manual verification\nNone\n';
     expect(parseManualVerificationItems(body)).toEqual([]);
+  });
+});
+
+describe('parseOperationalSeedItems', () => {
+  it('parses bulleted items under a "## Operational seed" heading', () => {
+    const body =
+      '## Summary\nStuff.\n\n## Operational seed\n- Set default retry count to 3\n- Enable the new feature flag\n';
+    expect(parseOperationalSeedItems(body)).toEqual([
+      'Set default retry count to 3',
+      'Enable the new feature flag',
+    ]);
+  });
+
+  it('matches any heading level and stops at the next heading', () => {
+    const body =
+      '### Operational Seed\n1. First seed\n2. Second seed\n\n## Next section\n- Not an operational seed item\n';
+    expect(parseOperationalSeedItems(body)).toEqual([
+      'First seed',
+      'Second seed',
+    ]);
+  });
+
+  it('returns an empty array when there is no Operational seed section', () => {
+    const body = '## Summary\nNo such section here.\n';
+    expect(parseOperationalSeedItems(body)).toEqual([]);
+  });
+
+  it('returns an empty array for the rendered "None." placeholder', () => {
+    const body = '## Operational seed\nNone.\n';
+    expect(parseOperationalSeedItems(body)).toEqual([]);
   });
 });
 
@@ -236,5 +429,92 @@ describe('checkAccretionContentMatch', () => {
   it('is a no-op when nothing was stripped', () => {
     const result = checkAccretionContentMatch('gate_contribution', [], []);
     expect(result.ok).toBe(true);
+  });
+});
+
+describe('checkReadiness — Declared writes section', () => {
+  it('does not flag a well-formed, fully-tagged Declared writes section', () => {
+    const body =
+      '## Declared writes\n' +
+      '- `Bash(npm ci:*)` — Non-Prod-Mutating\n' +
+      '- `Bash(git push origin HEAD:*)` — Prod-Mutating\n';
+    const violations = checkReadiness(body);
+    expect(violations).toHaveLength(0);
+  });
+
+  it('does not block Ready on an entry missing its Prod-Mutating tag — it defaults to Prod-Mutating instead of failing open', () => {
+    const body = '## Declared writes\n- `mcp__github__merge_pull_request`\n';
+    const violations = checkReadiness(body);
+    expect(violations).toHaveLength(0);
+
+    const entries = extractDeclaredWrites(body);
+    expect(entries).toEqual([
+      { capability: 'mcp__github__merge_pull_request', prodMutating: true },
+    ]);
+  });
+
+  it('defaults an ambiguously-tagged entry to Prod-Mutating rather than failing open', () => {
+    const body = '## Declared writes\n- `Bash(npm ci:*)` — TBD\n';
+    const entries = extractDeclaredWrites(body);
+    expect(entries).toEqual([
+      { capability: 'Bash(npm ci:*)', prodMutating: true },
+    ]);
+  });
+
+  it('recognizes an unambiguous Non-Prod-Mutating tag as eligible for auto-approval', () => {
+    const body = '## Declared writes\n- `Bash(npm ci:*)` — Non-Prod-Mutating\n';
+    const entries = extractDeclaredWrites(body);
+    expect(entries).toEqual([
+      { capability: 'Bash(npm ci:*)', prodMutating: false },
+    ]);
+  });
+
+  it('blocks Ready on a malformed entry with no discernible capability', () => {
+    const body = '## Declared writes\n- ``\n';
+    const violations = checkReadiness(body);
+    expect(
+      violations.some(
+        (v) => v.tier === 'structural' && v.detail.includes('malformed'),
+      ),
+    ).toBe(true);
+    expect(extractDeclaredWrites(body)).toEqual([]);
+  });
+
+  it('is empty for a task body with no Declared writes section', () => {
+    expect(extractDeclaredWrites('## Some other section\ncontent')).toEqual([]);
+    expect(checkReadiness('## Some other section\ncontent')).toHaveLength(0);
+  });
+
+  it('treats a "None" Declared writes section as empty, not malformed', () => {
+    const body = '## Declared writes\nNone\n';
+    expect(extractDeclaredWrites(body)).toEqual([]);
+    expect(checkReadiness(body)).toHaveLength(0);
+  });
+
+  it('documents the exact heading text the parser normalizes against, so the doc and the parser cannot drift', () => {
+    const taskWritingMd = readFileSync(
+      join(repoRoot, 'config-template', 'task-writing.md'),
+      'utf8',
+    );
+    expect(taskWritingMd).toContain('## Declared writes');
+    const parserHeadingLiteral = 'declared writes';
+    expect(taskWritingMd.toLowerCase()).toContain(parserHeadingLiteral);
+    expect(
+      extractDeclaredWrites(`## Declared writes\n- \`Bash(ls:*)\`\n`),
+    ).toEqual([{ capability: 'Bash(ls:*)', prodMutating: true }]);
+  });
+
+  it('round-trips the documented authoring format into the expected {capability, prodMutating}[] shape', () => {
+    const body =
+      '## Declared writes\n' +
+      '- `Bash(npm ci:*)` — Non-Prod-Mutating\n' +
+      '- `Bash(git push origin HEAD:*)` — Prod-Mutating\n' +
+      '- `mcp__github__merge_pull_request`\n';
+    expect(checkReadiness(body)).toHaveLength(0);
+    expect(extractDeclaredWrites(body)).toEqual([
+      { capability: 'Bash(npm ci:*)', prodMutating: false },
+      { capability: 'Bash(git push origin HEAD:*)', prodMutating: true },
+      { capability: 'mcp__github__merge_pull_request', prodMutating: true },
+    ]);
   });
 });

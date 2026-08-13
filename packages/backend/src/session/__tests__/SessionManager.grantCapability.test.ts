@@ -19,6 +19,7 @@ type MockSession = EventEmitter & {
   taskId?: string;
   run: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
+  hasActiveTurn: ReturnType<typeof vi.fn>;
   kill: ReturnType<typeof vi.fn>;
   endSession: ReturnType<typeof vi.fn>;
   gracefulPause: ReturnType<typeof vi.fn>;
@@ -26,13 +27,21 @@ type MockSession = EventEmitter & {
   lockFileForNextInjection: ReturnType<typeof vi.fn>;
 };
 
-function makeMockSession(): MockSession {
+// Mirrors AgentSession's real _turnInFlight initialization: hasActiveTurn()
+// starts at whatever hasInitialPrompt (the constructor's final positional
+// arg) says, defaulting true like the real constructor. respawnSession
+// always passes false — this lets tests observe the real wiring rather than
+// a value hardcoded independent of the constructor call under test.
+function makeMockSession(hasActiveTurnInitial = true): MockSession {
   const ee = new EventEmitter() as MockSession;
   ee.prUrl = undefined;
   ee.hasEnded = false;
   ee.sessionType = 'standard';
   ee.run = vi.fn().mockReturnValue(new Promise(() => {}));
-  ee.sendMessage = vi.fn();
+  // Default: confirmed delivery — mirrors AgentSession.sendMessage's success
+  // return when the underlying stdin write actually reached the process.
+  ee.sendMessage = vi.fn().mockReturnValue(true);
+  ee.hasActiveTurn = vi.fn().mockReturnValue(hasActiveTurnInitial);
   ee.kill = vi.fn().mockResolvedValue(undefined);
   ee.endSession = vi.fn();
   ee.gracefulPause = vi.fn().mockResolvedValue(undefined);
@@ -42,8 +51,12 @@ function makeMockSession(): MockSession {
 }
 
 vi.mock('../AgentSession', () => ({
-  AgentSession: vi.fn().mockImplementation(() => {
-    const s = makeMockSession();
+  AgentSession: vi.fn().mockImplementation((...args: unknown[]) => {
+    // Last positional constructor arg — see AgentSession's hasInitialPrompt param.
+    const hasInitialPrompt = args[args.length - 1];
+    const s = makeMockSession(
+      typeof hasInitialPrompt === 'boolean' ? hasInitialPrompt : true,
+    );
     capturedSessions.push(s);
     return s;
   }),
@@ -73,6 +86,7 @@ vi.mock('../branchModel', () => ({
     .mockReturnValue({ startingPoint: 'dev', milestoneSlug: null }),
   ensureMilestoneBranch: vi.fn(),
   deriveBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
+  resolveResumeBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
 }));
 vi.mock('../orchestrator-config', async () => {
   const actual = await vi.importActual<typeof import('../orchestrator-config')>(
@@ -143,6 +157,9 @@ vi.mock('../../db/queries', () => ({
   setSessionPauseReason: vi.fn(),
   setSessionLastErrorDetail: vi.fn(),
   setTaskPauseReason: vi.fn(),
+  enqueueFeedbackItem: vi.fn(),
+  listUndeliveredInboxItems: vi.fn().mockReturnValue([]),
+  markInboxItemsDelivered: vi.fn(),
   TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
   getUsageDeferral: vi.fn().mockReturnValue(null),
   getGrantedCapabilities: vi.fn(
@@ -220,6 +237,8 @@ import {
   getSession,
   addGrantedCapability,
   getGrantedCapabilities,
+  listUndeliveredInboxItems,
+  markInboxItemsDelivered,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
@@ -391,5 +410,191 @@ describe('grantCapability — takes effect on a live session', () => {
       'Bash(sudo systemctl:*)',
     );
     expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+  });
+});
+
+// ── regression: lone read-capability grant on a live-but-idle session ────────
+// A non-tool-shaped grant (e.g. read:audit-log:*) never triggers
+// grantCapability's respawn branch — the session's only route to a real turn
+// is resumeCapabilityRequester's enqueueFeedback call. Previously, when the
+// live session's direct stdin write silently failed (closed pipe / dead
+// process), enqueueFeedback -> deliverUndeliveredInboxItems -> sendOrResume
+// still returned "success" and the item was marked delivered, parking the
+// session forever with no automatic recovery. It must now fall back to the
+// same --resume respawn path grantCapability itself uses for tool-shaped
+// grants.
+describe('enqueueFeedback — lone capability-request approval on a live-but-idle session', () => {
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    capturedSessions = [];
+    grantedCapabilitiesStore = new Map();
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getSession).mockReturnValue(makeRow());
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  async function establishLiveSession(): Promise<void> {
+    const p = sm.sendOrResume(SESSION_ID, 'boot');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+    vi.mocked(AgentSession).mockClear();
+  }
+
+  const APPROVAL_MESSAGE =
+    'Capability request approved: "read:audit-log:claude-dashboard" has been granted for this session.';
+
+  it('falls back to a --resume respawn (a real turn starts) when the direct send to the live session fails', async () => {
+    await establishLiveSession();
+    const liveSession = capturedSessions[capturedSessions.length - 1];
+
+    // Simulate the fire-and-forget stdin write silently failing — a closed
+    // pipe or synchronous write() throw on an already-exited process.
+    liveSession.sendMessage.mockReturnValue(false);
+
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      {
+        id: 1,
+        session_id: SESSION_ID,
+        source: 'operator-disposition',
+        payload: APPROVAL_MESSAGE,
+      } as any,
+    ]);
+
+    const feedbackPromise = sm.enqueueFeedback(
+      SESSION_ID,
+      'operator-disposition',
+      APPROVAL_MESSAGE,
+      { attemptTerminalResume: false },
+    );
+
+    // The failed direct send falls through into the respawn path.
+    await vi.waitFor(() =>
+      expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(1),
+    );
+    const resumedSession = capturedSessions[capturedSessions.length - 1];
+    resumedSession.emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'resumed',
+    });
+
+    await feedbackPromise;
+
+    // A real turn started on the resumed session with the capability message.
+    expect(resumedSession.sendMessage).toHaveBeenCalledWith(
+      expect.stringContaining('read:audit-log:claude-dashboard'),
+    );
+    // Only marked delivered once the respawn actually delivered it.
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([1]);
+  });
+
+  it('delivers directly, with no respawn, when the direct send to the live session succeeds', async () => {
+    await establishLiveSession();
+    const liveSession = capturedSessions[capturedSessions.length - 1];
+
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      {
+        id: 2,
+        session_id: SESSION_ID,
+        source: 'operator-disposition',
+        payload: APPROVAL_MESSAGE,
+      } as any,
+    ]);
+
+    await sm.enqueueFeedback(
+      SESSION_ID,
+      'operator-disposition',
+      APPROVAL_MESSAGE,
+      { attemptTerminalResume: false },
+    );
+
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(liveSession.sendMessage).toHaveBeenCalledWith(
+      expect.stringContaining('read:audit-log:claude-dashboard'),
+    );
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([2]);
+  });
+});
+
+// ── regression: prompt-less capability-grant respawn vs enqueueFeedback's
+// active-turn guard ───────────────────────────────────────────────────────
+// resumeCapabilityRequester calls grantCapability() then enqueueFeedback()
+// in sequence. For a tool-shaped capability, grantCapability's own respawn
+// (respawnForCapabilityGrant -> respawnSession) kills the live process and
+// constructs a fresh AgentSession with no initial prompt (--resume only).
+// Before the fix, AgentSession's _turnInFlight always started true, so the
+// respawned session's hasActiveTurn() lied about a turn being in flight and
+// enqueueFeedback's live-session guard deferred forever — the message was
+// never delivered because no turn boundary could ever occur. The fix makes
+// hasActiveTurn() reflect reality (false immediately after a prompt-less
+// respawn), so enqueueFeedback falls through to deliverUndeliveredInboxItems
+// and actually delivers.
+describe('grantCapability + enqueueFeedback — tool-shaped grant respawn does not deadlock', () => {
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    capturedSessions = [];
+    grantedCapabilitiesStore = new Map();
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getSession).mockReturnValue(makeRow());
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  async function establishLiveSession(): Promise<void> {
+    const p = sm.sendOrResume(SESSION_ID, 'boot');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+    vi.mocked(AgentSession).mockClear();
+  }
+
+  const GRANT_MESSAGE =
+    'Capability request approved: "Bash(sudo systemctl:*)" has been granted for this session.';
+
+  it('delivers the feedback item (not left pending) after a tool-shaped grant respawns the session', async () => {
+    await establishLiveSession();
+
+    // grantCapability respawns: kills the live session, constructs a fresh
+    // AgentSession with hasInitialPrompt=false (no prompt sent at spawn).
+    await sm.grantCapability(SESSION_ID, 'Bash(sudo systemctl:*)');
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(1);
+    const respawnedSession = capturedSessions[capturedSessions.length - 1];
+
+    // The respawned session correctly reports no turn in flight — nothing
+    // was actually sent to it yet.
+    expect(respawnedSession.hasActiveTurn()).toBe(false);
+
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      {
+        id: 3,
+        session_id: SESSION_ID,
+        source: 'operator-disposition',
+        payload: GRANT_MESSAGE,
+      } as any,
+    ]);
+
+    await sm.enqueueFeedback(SESSION_ID, 'operator-disposition', GRANT_MESSAGE);
+
+    // enqueueFeedback did not bail out at the active-turn guard: it delivered
+    // directly to the (now live) respawned session and marked the item done.
+    expect(respawnedSession.sendMessage).toHaveBeenCalledWith(
+      expect.stringContaining('Bash(sudo systemctl:*)'),
+    );
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([3]);
   });
 });

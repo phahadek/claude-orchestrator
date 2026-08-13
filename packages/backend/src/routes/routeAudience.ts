@@ -139,6 +139,11 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'PR panel approve action',
   },
+  'POST /api/prs/:owner/:repoName/:prNumber/verify-manual-items': {
+    audience: 'operator',
+    reason:
+      'operator sign-off clearing manual_verification_pending — single-action dashboard button',
+  },
   'DELETE /api/prs/:prNumber': {
     audience: 'operator',
     reason: 'PR panel remove action',
@@ -210,6 +215,10 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'gate item disposition',
   },
+  'POST /api/gate/items/:id/reject': {
+    audience: 'operator',
+    reason: "gate item disposition — the consent gate's reject path",
+  },
   'POST /api/gate/items/:id/reopen': {
     audience: 'operator',
     reason: 'gate item disposition',
@@ -223,6 +232,10 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     reason: 'Remote-Control tooling (gate-state-client.mjs)',
   },
   'POST /api/gate/accrete-contribution': {
+    audience: 'tooling',
+    reason: 'called by packages/backend/scripts/gate-state-client.mjs',
+  },
+  'POST /api/gate/items/:id/carry-forward': {
     audience: 'tooling',
     reason: 'called by packages/backend/scripts/gate-state-client.mjs',
   },

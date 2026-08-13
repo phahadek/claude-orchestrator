@@ -1,12 +1,44 @@
-/** Cost per million tokens in USD, keyed by model family substring. */
+/**
+ * Cost per million tokens in USD, keyed by model family substring.
+ * Cache tokens are priced on their own tier per Anthropic's published cache
+ * pricing: cache writes (creation) cost 1.25x the base input rate, cache
+ * reads cost 0.1x the base input rate.
+ *
+ * All current generations within a family (Opus 4.6/4.7/4.8/5, Sonnet 4.6/5,
+ * Haiku 4.5) share one published rate, so a family-level match is sufficient
+ * today. Note: Sonnet 5 currently carries a promotional rate distinct from
+ * its list price below — this shape cannot represent a per-generation
+ * override; if a family's generations diverge in price, switch to a
+ * per-model-id table with this array as the fallback.
+ */
 const MODEL_PRICING: {
   match: string;
   inputPerMillion: number;
   outputPerMillion: number;
+  cacheReadPerMillion: number;
+  cacheCreationPerMillion: number;
 }[] = [
-  { match: 'opus', inputPerMillion: 15, outputPerMillion: 75 },
-  { match: 'sonnet', inputPerMillion: 3, outputPerMillion: 15 },
-  { match: 'haiku', inputPerMillion: 0.8, outputPerMillion: 4 },
+  {
+    match: 'opus',
+    inputPerMillion: 5,
+    outputPerMillion: 25,
+    cacheReadPerMillion: 0.5,
+    cacheCreationPerMillion: 6.25,
+  },
+  {
+    match: 'sonnet',
+    inputPerMillion: 3,
+    outputPerMillion: 15,
+    cacheReadPerMillion: 0.3,
+    cacheCreationPerMillion: 3.75,
+  },
+  {
+    match: 'haiku',
+    inputPerMillion: 1,
+    outputPerMillion: 5,
+    cacheReadPerMillion: 0.1,
+    cacheCreationPerMillion: 1.25,
+  },
 ];
 
 /** Default pricing when model is unknown — falls back to Sonnet. */
@@ -16,15 +48,42 @@ export function calculateCost(
   inputTokens: number,
   outputTokens: number,
   model?: string | null,
+  cacheReadTokens = 0,
+  cacheCreationTokens = 0,
 ): number {
   const pricing =
     MODEL_PRICING.find((p) => model?.toLowerCase().includes(p.match)) ??
     DEFAULT_PRICING;
   return (
     (inputTokens * pricing.inputPerMillion +
-      outputTokens * pricing.outputPerMillion) /
+      outputTokens * pricing.outputPerMillion +
+      cacheReadTokens * pricing.cacheReadPerMillion +
+      cacheCreationTokens * pricing.cacheCreationPerMillion) /
     1_000_000
   );
+}
+
+/**
+ * Canonical session-type category map — single source of truth for how the
+ * analytics route groups session types. Distinct from sessionPredicates.ts,
+ * which encodes operational/dispatch predicates (worktree, PR, concurrency)
+ * rather than the cost-accounting taxonomy consumed here.
+ */
+export const SESSION_TYPE_CATEGORIES = {
+  planning: ['groom', 'design', 'ops', 'split'],
+  execution: ['standard', 'review', 'docs', 'depth_review'],
+} as const;
+
+export type SessionTypeCategory = keyof typeof SESSION_TYPE_CATEGORIES;
+
+export function categoryForSessionType(
+  sessionType: string,
+): SessionTypeCategory {
+  return (SESSION_TYPE_CATEGORIES.planning as readonly string[]).includes(
+    sessionType,
+  )
+    ? 'planning'
+    : 'execution';
 }
 
 export function formatCost(costUsd: number): string {

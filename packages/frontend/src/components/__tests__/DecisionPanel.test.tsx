@@ -192,7 +192,7 @@ describe('DecisionPanel', () => {
     );
   });
 
-  it('leaves the group reject submit disabled until an outcome is chosen, even with a reason typed', async () => {
+  it('enables the group reject submit once a reason is typed, defaulting to pushback with no outcome chosen', async () => {
     vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
       groomGroupIntents('group-5', 't-5'),
     );
@@ -201,15 +201,15 @@ describe('DecisionPanel', () => {
     await waitFor(() => screen.getByTestId('decision-panel'));
 
     fireEvent.change(
-      screen.getByPlaceholderText(/choose pushback or decline/i),
+      screen.getByPlaceholderText(/what should the session revise/i),
       { target: { value: 'No need' } },
     );
 
     expect(
       screen
-        .getByRole('button', { name: /reject groom/i })
+        .getByRole('button', { name: /pushback groom/i })
         .hasAttribute('disabled'),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('issues an explicit pushback (never inferred) when Pushback is chosen on the group reject toggle', async () => {
@@ -395,7 +395,7 @@ describe('DecisionPanel', () => {
       expect(screen.getByRole('radio', { name: /pushback/i })).toBeTruthy();
       expect(screen.getByRole('radio', { name: /decline/i })).toBeTruthy();
       expect(
-        screen.getByPlaceholderText(/choose pushback or decline/i),
+        screen.getByPlaceholderText(/what should the session revise/i),
       ).toBeTruthy();
 
       fireEvent.click(screen.getByRole('radio', { name: /pushback/i }));

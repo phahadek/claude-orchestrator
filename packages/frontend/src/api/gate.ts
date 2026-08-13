@@ -17,7 +17,6 @@ export const TRUST_PRECISION_FLOWS: TrustPrecisionFlow[] = [
 export type GateItemClassification =
   | 'Read-Only'
   | 'Prod-Mutating'
-  | 'Opportunistic'
   | 'Human-Observation'
   | 'needs-triage';
 
@@ -76,6 +75,12 @@ export interface GateItem {
   updatedAt: string;
   sources: GateItemSource[];
   events: GateItemEvent[];
+  /** True if this item currently has a non-terminal, unended verify session — set on the list read only. */
+  verifyInFlight?: boolean;
+  /** Backoff schedule for a `pending` item — when it next becomes due for re-check. Undefined for a non-pending item. */
+  nextAttemptAt?: string;
+  /** How many not-yet-triggerable attempts have been scheduled for this item's current pending parking. */
+  pendingAttemptCount?: number;
 }
 
 export interface GateItemDetail {
@@ -93,15 +98,23 @@ interface GateBlockingItem {
   state: string;
   /** True when the item's latest event carries a non-resolving disposition (needs-setup/noted) — attempted but inconclusive. */
   nonResolving?: boolean;
+  /** Backoff schedule for a `pending` item — when it next becomes due for re-check. Undefined for a non-pending item. */
+  nextAttemptAt?: string;
+  /** How many not-yet-triggerable attempts have been scheduled for this item's current pending parking. */
+  pendingAttemptCount?: number;
 }
 
 export interface GateReadiness {
   status: 'green' | 'blocked';
   blocking: GateBlockingItem[];
+  /** Items parked at `pending` (backoff-scheduled) — a sibling of `blocking`, never a subset of it, and never counted toward the green/blocked status. */
+  parked: GateBlockingItem[];
   /** Subset of `blocking` whose latest disposition is non-resolving (needs-setup/noted). */
   nonResolvingItems: GateBlockingItem[];
   /** The milestone's full per-state item totals, independent of any table filter. */
   counts: Record<string, number>;
+  /** Exact count of items whose latest_disposition is needs-setup — matches the awaitingSetup list filter's own semantics, not the wider nonResolvingItems (needs-setup ∪ noted) set. */
+  awaitingSetupCount: number;
 }
 
 export interface MilestoneReadiness {
@@ -109,6 +122,8 @@ export interface MilestoneReadiness {
   milestone: string;
   status: 'green' | 'blocked';
   blockingCount: number;
+  /** Items parked at `pending` — never counted toward blockingCount or the green/blocked status. */
+  parkedCount: number;
 }
 
 export interface ListGateItemsParams {
@@ -149,6 +164,11 @@ export interface ReopenGateItemInput {
 }
 
 export interface ApproveGateItemInput {
+  operator?: string;
+}
+
+export interface RejectGateItemInput {
+  reason: string;
   operator?: string;
 }
 
@@ -246,6 +266,18 @@ export const gateApi = {
   approveItem(id: string, input: ApproveGateItemInput = {}): Promise<GateItem> {
     return apiRequest<GateItem>(
       `/api/gate/items/${encodeURIComponent(id)}/approve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
+  /** Rejects a pending-approval (Prod-Mutating) gate item — withheld consent, recorded as a `fail` disposition with a mandatory reason. Leaves the item unresolved in the readiness rollup; reopenItem forms the loop back to re-verification. */
+  rejectItem(id: string, input: RejectGateItemInput): Promise<GateItem> {
+    return apiRequest<GateItem>(
+      `/api/gate/items/${encodeURIComponent(id)}/reject`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

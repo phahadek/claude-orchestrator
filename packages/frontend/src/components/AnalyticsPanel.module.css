@@ -57,6 +57,33 @@
   color: var(--accent, #89b4fa);
 }
 
+.customRange {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted, #a6adc8);
+  font-size: 0.8125rem;
+}
+
+.dateInput {
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--text-primary, #cdd6f4);
+  font-size: 0.8125rem;
+  padding: 3px 6px;
+}
+
+.milestoneSelect {
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--text-primary, #cdd6f4);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  padding: 3px 8px;
+}
+
 .status {
   color: var(--text-muted, #a6adc8);
   font-size: 0.875rem;
@@ -173,8 +200,120 @@
 }
 
 .taskNameCell {
-  max-width: 260px;
+  max-width: 480px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.typeBadge {
+  flex-shrink: 0;
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.75rem;
+  color: var(--text-muted, #a6adc8);
+}
+
+.taskLink {
+  background: none;
+  border: none;
+  color: var(--accent, #89b4fa);
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskLink:hover {
+  text-decoration: underline;
+}
+
+.searchInput {
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--text-primary, #cdd6f4);
+  font-size: 0.8125rem;
+  padding: 4px 10px;
+  margin-left: auto;
+  min-width: 200px;
+}
+
+.sortHeaderBtn {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: inherit;
+  font-weight: inherit;
+  padding: 0;
+}
+
+.sortHeaderBtn:hover {
+  color: var(--text-primary, #cdd6f4);
+}
+
+.migrationMarker {
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--color-yellow, #f9e2af);
+  border-radius: 8px;
+  color: var(--color-yellow, #f9e2af);
+  font-size: 0.8125rem;
+  padding: 8px 14px;
+}
+
+.legendRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--text-muted, #a6adc8);
+}
+
+.legendSwatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.rollupRow {
+  cursor: pointer;
+}
+
+.expandCell {
+  width: 18px;
+  color: var(--text-muted, #a6adc8);
+  text-align: center;
+}
+
+.sessionRow {
+  cursor: pointer;
+}
+
+.sessionRow td {
+  background: var(--bg-secondary, #181825);
+  color: var(--text-muted, #a6adc8);
+  font-size: 0.75rem;
+}
+
+.sessionNameCell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 20px;
 }

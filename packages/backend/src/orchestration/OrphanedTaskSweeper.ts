@@ -9,6 +9,8 @@ import type { ResolvedTask } from '../tasks/types';
 import type { ServerMessage } from '../ws/types';
 import {
   getLatestCodeSessionByNotionTaskId,
+  getLatestOpsSessionByTaskId,
+  getLatestDocsSessionByTaskId,
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
   isSessionAwaitingCapabilityDisposition,
@@ -17,8 +19,9 @@ import {
   setSessionPauseReason,
   getSessionLastActivityMs,
   upsertPullRequest,
-  getOpsJournalEntry,
 } from '../db/queries';
+import { sessionDidWork } from '../session/sessionLifecycle';
+import { isUsageAdmitted } from './usageAdmission';
 import {
   recordEvent,
   countNudgeEvents,
@@ -33,6 +36,7 @@ const SWEEPABLE_TYPES = new Set([
   '💻 Code',
   '🔧 Operational',
   '🔎 Investigation',
+  '📝 Docs',
 ]);
 
 const IN_PROGRESS_STATUS = '🔄 In Progress';
@@ -164,7 +168,17 @@ export class OrphanedTaskSweeper {
     taskType: string,
     backend: TaskBackend,
   ): Promise<void> {
-    const latestSession = getLatestCodeSessionByNotionTaskId(taskId);
+    // Docs is the one non-Code sweepable type that opens its own session and
+    // can open a PR (human_merge_only) — resolve its own-type session here so
+    // the PR-exemption and idle-nudge logic below (written against 'standard'
+    // sessions) actually sees it, instead of always finding undefined via
+    // getLatestCodeSessionByNotionTaskId (which only ever resolves 'standard'
+    // sessions). Ops/Investigation never open a PR and are left as-is —
+    // their own-type session is resolved separately, further down.
+    const latestSession =
+      taskType === '📝 Docs'
+        ? getLatestDocsSessionByTaskId(taskId)
+        : getLatestCodeSessionByNotionTaskId(taskId);
 
     if (latestSession) {
       // error|killed sessions have no active presence — fall through to revert.
@@ -298,15 +312,23 @@ export class OrphanedTaskSweeper {
     // fall through every PR/idle exemption above and land here alongside a
     // genuinely abandoned task. Their session_type ('ops') is also invisible
     // to getLatestCodeSessionByNotionTaskId/hasActiveSessionForTask (standard-
-    // session-only), so latestSession is typically undefined too. The one
-    // artifact that distinguishes "finished, awaiting operator disposition"
-    // from "abandoned" is the ops_journal entry: if it has advanced beyond
-    // 'pending', the session did its job — leave the task In Progress rather
-    // than silently returning it to the dispatch pool. A journal still stuck
-    // at 'pending' (or missing entirely) is still a genuine orphan.
+    // session-only), so latestSession is typically undefined too. What
+    // distinguishes "finished, awaiting operator disposition" from
+    // "abandoned" is sessionDidWork: a stage-only ops session that staged a
+    // decision (even with its ops_journal still 'pending' or missing), or
+    // one whose ops_journal has advanced past 'pending' with nothing staged,
+    // both count as having done its job — leave the task In Progress rather
+    // than silently returning it to the dispatch pool. Neither signal true
+    // is still a genuine orphan.
     if (taskType !== '💻 Code') {
-      const journalEntry = getOpsJournalEntry(taskId);
-      if (journalEntry && journalEntry.state !== 'pending') {
+      // Docs already resolved its own-type session into latestSession above;
+      // Ops/Investigation never open a PR, so their session is only ever
+      // looked up here, for this fallback judgment.
+      const nonCodeSession =
+        taskType === '📝 Docs'
+          ? latestSession
+          : getLatestOpsSessionByTaskId(taskId);
+      if (nonCodeSession && sessionDidWork(nonCodeSession.session_id)) {
         return;
       }
     }
@@ -330,6 +352,16 @@ export class OrphanedTaskSweeper {
     nudgeMessage: string,
   ): Promise<void> {
     const { session_id, worktree_path } = session;
+
+    // Plan usage is exhausted account-wide: a nudge sent now would only
+    // deliver a limit response, not real work, yet would still burn a slot
+    // of the finite nudge budget and eventually escalate the session to the
+    // operator as "stalled" for the wrong reason. Skip entirely — leave the
+    // nudge count and pause_reason untouched — so the next sweep tick (after
+    // the persisted usage_deferral expires) retries with a clean slate.
+    if (!isUsageAdmitted().allowed) {
+      return;
+    }
 
     // Unrecoverable: worktree is gone — surface to operator, no nudge possible.
     if (!worktree_path || !fs.existsSync(worktree_path)) {

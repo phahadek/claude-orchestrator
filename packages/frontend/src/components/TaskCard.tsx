@@ -40,6 +40,7 @@ function getProjectRepos(
 
 const STATUS_LABELS: Record<DisplayStatus, string> = {
   needs_attention: '⚠️ Needs Attention',
+  auto_recovering: '🔁 Auto-Recovering',
   ready_to_merge: '✅ Ready to Merge',
   in_progress: '🔄 In Progress',
   in_review: '👀 In Review',
@@ -103,6 +104,12 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Session could not be resumed at boot (missing worktree, or the resumed process failed immediately) — review and redispatch when ready.',
   review_rules_escalation:
     'Reviewer escalated per project-specific review rules — see the review summary for details and resolve manually.',
+  baseline_escalation_floor:
+    'Escalated by the baseline escalation floor — diff touches CI/workflow config, migrations, auth, or secrets — see the review summary for details and resolve manually.',
+  depth_review_escalation:
+    'Depth review found a security/concurrency/reliability/data-integrity defect beyond spec-conformance — see the review summary for details and resolve manually.',
+  depth_review_pending:
+    'Depth review pass is in flight — auto-merge is held until it completes or times out. No action needed.',
   planning_crashed:
     'Planning session crashed repeatedly — review the session and redispatch planning when ready.',
   planning_first_turn_empty:
@@ -113,10 +120,16 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Planning session reached a terminal state with staged intents still blocked in verification — the group can no longer be superseded by that session; review and disposition the blocked members manually.',
   ops_terminal_group_incomplete:
     'Ops session reached a terminal state with its closing group missing the journal.setState -> "resolved" transition — the investigation journal is stuck and the task will not close; stage the missing transition manually.',
+  ops_journal_terminal_incomplete:
+    'Ops session reached a terminal state with its ops_journal entry still at an intermediate waypoint after one self-correct nudge — the investigation stopped short of its type-appropriate terminal (resolved/applied-pending-confirm) or an explicit blocked; review and redispatch to continue it.',
   usage_limit_deferred:
     'Plan usage limit exhausted — launch deferred until the window resets. Will resume automatically.',
   api_overloaded_exhausted:
     'API overloaded (529) — automatic retries were exhausted. Review and resume manually.',
+  manual_verification_pending:
+    'Manual verification required — review the checklist and sign off to allow auto-merge.',
+  test_request_cycle_exceeded:
+    'Session exceeded its test.request cycle limit — review and resume manually.',
 };
 
 function verdictLabel(verdict: string): string {
@@ -129,6 +142,8 @@ function verdictLabel(verdict: string): string {
 function planningSessionTypeLabel(sessionType: string): string {
   if (sessionType === 'groom') return 'Grooming';
   if (sessionType === 'design') return 'Design';
+  if (sessionType === 'docs') return 'Docs';
+  if (sessionType === 'split') return 'Split';
   return 'Ops';
 }
 
@@ -166,6 +181,7 @@ export function TaskCard({
   })();
   const isNonCode = !task.taskType.includes('💻');
   const pauseStruct = parsePauseReason(task.pauseReason);
+  const [verifyInFlight, setVerifyInFlight] = useState(false);
 
   const handleRecover = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -180,6 +196,39 @@ export function TaskCard({
       // state will be updated via WS broadcast
     } finally {
       setRecoveryInFlight(false);
+    }
+  };
+
+  const manualVerificationPending =
+    pauseStruct?.reason === 'manual_verification_pending';
+  const manualVerificationItems: string[] = (() => {
+    if (!manualVerificationPending || !task.pauseDetail) return [];
+    try {
+      const parsed: unknown = JSON.parse(task.pauseDetail);
+      return Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === 'string')
+        : [];
+    } catch {
+      return [];
+    }
+  })();
+
+  const handleVerifyManualItems = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (verifyInFlight || !pr) return;
+    const match = pr.prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\//);
+    if (!match) return;
+    const [, owner, repoName] = match;
+    setVerifyInFlight(true);
+    try {
+      await authedFetch(
+        `/api/prs/${owner}/${repoName}/${pr.prNumber}/verify-manual-items`,
+        { method: 'POST' },
+      );
+    } catch {
+      // state will be updated via WS broadcast
+    } finally {
+      setVerifyInFlight(false);
     }
   };
 
@@ -303,6 +352,26 @@ export function TaskCard({
             <span className={styles.placeholder}>—</span>
           )}
         </>
+      )}
+
+      {manualVerificationPending && (
+        <div className={styles.manualVerification}>
+          {manualVerificationItems.length > 0 && (
+            <ul className={styles.manualVerificationList}>
+              {manualVerificationItems.map((item, idx) => (
+                <li key={idx}>{item}</li>
+              ))}
+            </ul>
+          )}
+          <button
+            className={styles.verifyManualButton}
+            disabled={verifyInFlight || !pr}
+            onClick={(e) => void handleVerifyManualItems(e)}
+            title="Sign off on manual verification and allow auto-merge"
+          >
+            ✔ Verified — allow auto-merge
+          </button>
+        </div>
       )}
 
       <div className={styles.cardFooter}>

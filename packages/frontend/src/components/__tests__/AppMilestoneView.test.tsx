@@ -30,7 +30,7 @@ vi.mock('../../hooks/useWebSocket', () => ({
 }));
 
 vi.mock('../../hooks/useKeyboardShortcuts', () => ({
-  useKeyboardShortcuts: () => {},
+  useKeyboardShortcuts: () => ({ highlightedItemId: null }),
 }));
 
 vi.mock('../TaskList', () => ({
@@ -43,10 +43,6 @@ vi.mock('../Notifications', () => ({
 
 vi.mock('../ShortcutHint', () => ({
   ShortcutHint: () => null,
-}));
-
-vi.mock('../DispatchModal', () => ({
-  DispatchModal: () => null,
 }));
 
 function stubProjects(projects: unknown[]) {

@@ -32,8 +32,6 @@ export interface StepDescriptor {
   changed_paths?: PathGlob[];
   /** Whether this step mutates production — gates the confirm-before-run rule. */
   is_prod_mutating: boolean;
-  /** Whether the step supports a read-only preview invocation. */
-  supports_dry_run?: boolean;
   /** A condition description/command to poll until satisfied (e.g. health check settling). */
   poll_until?: string;
   /**
@@ -159,6 +157,13 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   ) {
     return `steps[${index}].command_or_prompt for a ${step.kind} step must be an executable command, not prose`;
   }
+  if (
+    step.kind === 'agentic' &&
+    isString(step.command_or_prompt) &&
+    looksExecutable(step.command_or_prompt)
+  ) {
+    return `steps[${index}].command_or_prompt for an agentic step must be a prose prompt, not an executable command`;
+  }
   if (typeof step.is_prod_mutating !== 'boolean') {
     return `steps[${index}].is_prod_mutating must be a boolean`;
   }
@@ -167,12 +172,6 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   }
   if (step.changed_paths !== undefined && !isStringArray(step.changed_paths)) {
     return `steps[${index}].changed_paths must be an array of strings`;
-  }
-  if (
-    step.supports_dry_run !== undefined &&
-    typeof step.supports_dry_run !== 'boolean'
-  ) {
-    return `steps[${index}].supports_dry_run must be a boolean`;
   }
   if (step.poll_until !== undefined && !isString(step.poll_until)) {
     return `steps[${index}].poll_until must be a string`;
@@ -201,7 +200,6 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
     run_as: step.run_as as string | undefined,
     changed_paths: step.changed_paths as string[] | undefined,
     is_prod_mutating: step.is_prod_mutating,
-    supports_dry_run: step.supports_dry_run as boolean | undefined,
     poll_until: step.poll_until as string | undefined,
     identity_capture: step.identity_capture as string | undefined,
     rollback_ref: step.rollback_ref as string | undefined,
@@ -351,6 +349,13 @@ export function validatePlaybook(
     if (!stepIds.has(s.rollback_ref)) {
       errors.push(
         `steps[${i}].rollback_ref "${s.rollback_ref}" does not match any step id`,
+      );
+    }
+  });
+  steps.forEach((s, i) => {
+    if (s.kind === 'agentic' && s.is_prod_mutating) {
+      errors.push(
+        `steps[${i}].is_prod_mutating must not be true for an agentic step`,
       );
     }
   });

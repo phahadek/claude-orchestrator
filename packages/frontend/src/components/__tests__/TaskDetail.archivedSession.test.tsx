@@ -26,6 +26,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     review: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
+    hasAwaitingDispositionIntent: false,
     ...overrides,
   };
 }

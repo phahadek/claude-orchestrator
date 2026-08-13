@@ -495,7 +495,12 @@ function stripHyphens(id: string): string {
   return id.replace(/-/g, '');
 }
 
-const NEW_MARKER = /\(\s*new\s*\)/i;
+/**
+ * Matches both `(new)` and the `(new — reason)` / `(new - reason)` form
+ * taught by config/task-writing.md's sibling Notion `(update — Section
+ * name)` convention — the dash may be a hyphen, en-dash, or em-dash.
+ */
+const NEW_MARKER = /\(\s*new\s*\)|\(\s*new\s*[-–—][^)]*\)/i;
 
 function cleanPathToken(tok: string): string {
   return tok
@@ -504,12 +509,27 @@ function cleanPathToken(tok: string): string {
     .trim();
 }
 
-/** Best-effort path-shaped token out of a single Files/paths list-item line. */
-function extractPathToken(line: string): string | null {
+/**
+ * Best-effort path-shaped token out of a single Files/paths list-item line.
+ * Two shapes are recognised outside a backticked span: a nested path (needs
+ * a `/`, e.g. `packages/backend/src/foo.ts`) and a bare repo-root filename
+ * (no `/` at all, e.g. `README.md` or `.gitignore`) — the latter requires a
+ * `.` extension or a leading-dot dotfile name so an ordinary prose word
+ * never gets mistaken for a path; a lone trailing sentence-period (e.g.
+ * "...the description.") still fails to match since nothing follows the
+ * dot. The lookbehind/lookahead on the root-file alternative keeps it from
+ * matching mid-path substrings (e.g. the `.ts` tail of a nested path) —
+ * those are already handled by the nested-path alternative.
+ */
+export function extractPathToken(line: string): string | null {
   const backtick = line.match(/`([^`]+)`/);
   if (backtick) return cleanPathToken(backtick[1]);
-  const pathLike = line.match(/([A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+)/);
-  if (pathLike) return cleanPathToken(pathLike[1]);
+  const nested = line.match(/([A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+)/);
+  if (nested) return cleanPathToken(nested[1]);
+  const rootFile = line.match(
+    /(?<![\w/.-])(\.[A-Za-z0-9][\w.-]*|[A-Za-z0-9_-]+\.[A-Za-z0-9][\w.-]*)(?![\w/-])/,
+  );
+  if (rootFile) return cleanPathToken(rootFile[1]);
   return null;
 }
 
@@ -528,23 +548,38 @@ export function filesPathsEntryExistsInRepo(
 }
 
 /**
+ * FM2 — split a task's `## Files / paths affected` section into one raw list
+ * item per entry, without git-validating any of them — the cheap half of
+ * `parseFilesPathsEntries`, split out so a caller (groomGate.ts) can decide
+ * whether a tracked-file lookup is even worth doing before paying for one.
+ */
+export function parseFilesPathsRawItems(
+  section: string,
+): { raw: string; isNew: boolean }[] {
+  const items: { raw: string; isNew: boolean }[] = [];
+  for (const line of section.split('\n')) {
+    const m = line.match(/^\s*[-*]\s+(.+)$/);
+    if (!m) continue;
+    const raw = m[1].trim();
+    if (!raw) continue;
+    items.push({ raw, isNew: NEW_MARKER.test(raw) });
+  }
+  return items;
+}
+
+/**
  * FM2 — parse a task's `## Files / paths affected` section into one entry
  * per list item, git-validating each candidate path against `trackedFiles`.
  * groomGate.ts's resolve-in-artifact check re-derives the hedge-token scan
  * itself from `raw`; this loader only supplies the git-validated facts a
  * gate can't compute without repo access.
  */
-function parseFilesPathsEntries(
+export function parseFilesPathsEntries(
   section: string,
   trackedFiles: Set<string>,
 ): FilesPathsEntry[] {
   const entries: FilesPathsEntry[] = [];
-  for (const line of section.split('\n')) {
-    const m = line.match(/^\s*[-*]\s+(.+)$/);
-    if (!m) continue;
-    const raw = m[1].trim();
-    if (!raw) continue;
-    const isNew = NEW_MARKER.test(raw);
+  for (const { raw, isNew } of parseFilesPathsRawItems(section)) {
     const existsInRepo = filesPathsEntryExistsInRepo(raw, trackedFiles);
     entries.push({ raw, isNew, existsInRepo });
   }

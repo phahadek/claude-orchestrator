@@ -25,6 +25,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     review: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
+    hasAwaitingDispositionIntent: false,
     ...overrides,
   };
 }
@@ -145,6 +146,18 @@ describe('TaskDetail', () => {
       />,
     );
     expect(screen.getByText('🔄 In Progress')).toBeTruthy();
+  });
+
+  it("renders 'auto_recovering' status with its own distinct label, not Needs Attention", () => {
+    render(
+      <TaskDetail
+        task={makeTask({ displayStatus: 'auto_recovering' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('🔁 Auto-Recovering')).toBeTruthy();
+    expect(screen.queryByText('⚠️ Needs Attention')).toBeNull();
   });
 
   it('renders priority badge', () => {

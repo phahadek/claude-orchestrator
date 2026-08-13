@@ -7,6 +7,73 @@ import {
   renderHardRulesMarkdown,
 } from '../procedureCore';
 
+describe('design procedure — zero listed Open Questions is a decision space to reconstruct, not a blocked state', () => {
+  const zeroQuestionsPrinciple = CORE_PRINCIPLES.find(
+    (p) => p.id === 'design-zero-open-questions-reconstruct',
+  )!;
+  const zeroQuestionsText = renderPrinciple(zeroQuestionsPrinciple, 'design');
+
+  const loadStep = ORDERED_STEPS.find((s) => s.id === 'deterministic-load')!;
+  const loadStepText = stepSummaryFor(loadStep, 'design');
+
+  it('is defined and scoped to design only', () => {
+    expect(zeroQuestionsPrinciple).toBeDefined();
+    expect(zeroQuestionsPrinciple.appliesTo).toEqual(['design']);
+  });
+
+  it('renders guidance to reconstruct the decision space from the task body, not to report a blocked state', () => {
+    expect(zeroQuestionsText).toMatch(
+      /is a normal input to reconstruct, not a blocked state/i,
+    );
+    expect(zeroQuestionsText).toMatch(
+      /reconstruct the decision space it implies from scratch/i,
+    );
+    expect(zeroQuestionsText).not.toMatch(/end the turn and surface it/i);
+  });
+
+  it('stages one decision.pickOne per body-recorded decision, with the recorded answer as the recommended option', () => {
+    expect(zeroQuestionsText).toMatch(
+      /every decision the body\s+records as already made becomes its own `decision\.pickOne`/i,
+    );
+    expect(zeroQuestionsText).toMatch(
+      /the body’s recorded answer supplied as the\s+recommended `options\[\]` entry/i,
+    );
+    expect(zeroQuestionsText).toMatch(/never a distinct "confirm this" kind/i);
+  });
+
+  it('still requires the completeness critic and the architecture write on a reconstructed pass', () => {
+    expect(zeroQuestionsText).toMatch(/DO run the completeness critic/i);
+    expect(zeroQuestionsText).toMatch(
+      /the architecture write\(s\), and the\s+follow-on `task\.create` set on every reconstructed decision/i,
+    );
+  });
+
+  it('states planning.noOp is the terminal action only when no decision space exists at all, and must be staged', () => {
+    expect(zeroQuestionsText).toMatch(
+      /`planning\.noOp` is the terminal action ONLY when the task body genuinely\s+carries no decision space at all/i,
+    );
+    expect(zeroQuestionsText).toMatch(
+      /even then it must be staged,\s+naming why nothing needs reconstructing, never replaced by a prose\s+write-up in chat/i,
+    );
+  });
+
+  it('the Deterministic load step distinguishes a genuinely failed digest load (still blocked) from a loaded digest with zero Open Questions (not blocked)', () => {
+    expect(loadStepText).toMatch(
+      /digest that genuinely fails to load[\s\S]*is still a blocked state to report/i,
+    );
+    expect(loadStepText).toMatch(
+      /A digest that loads successfully but lists zero Open Questions\s+is NOT that case/i,
+    );
+  });
+
+  it('the assembled hard-rules markdown carries the reconstruct-don’t-block guidance for design', () => {
+    const rendered = renderHardRulesMarkdown();
+    expect(rendered).toMatch(
+      /Zero listed Open Questions is a decision space to reconstruct, never a blocked state/i,
+    );
+  });
+});
+
 describe('design procedure — one Open Question per turn, no parallel staging', () => {
   const oneQuestionPerTurn = CORE_PRINCIPLES.find(
     (p) => p.id === 'design-one-question-per-turn',

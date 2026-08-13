@@ -30,7 +30,7 @@ vi.mock('../../hooks/useWebSocket', () => ({
 }));
 
 vi.mock('../../hooks/useKeyboardShortcuts', () => ({
-  useKeyboardShortcuts: () => {},
+  useKeyboardShortcuts: () => ({ highlightedItemId: null }),
 }));
 
 vi.mock('../SessionGrid', () => ({
@@ -53,10 +53,6 @@ vi.mock('../Notifications', () => ({
 
 vi.mock('../ShortcutHint', () => ({
   ShortcutHint: () => null,
-}));
-
-vi.mock('../DispatchModal', () => ({
-  DispatchModal: () => null,
 }));
 
 vi.mock('../TaskList', () => ({

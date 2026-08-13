@@ -16,6 +16,7 @@ function makePoint(
     tasks_closed: 0,
     gate_open: 0,
     gate_closed: 0,
+    gate_parked: 0,
     seed_open: 0,
     seed_closed: 0,
     ops_open: 0,
@@ -79,7 +80,7 @@ describe('ConvergenceSparkline', () => {
     expect(tasksPath.classList.contains(styles.lineFlat)).toBe(false);
   });
 
-  it('keeps per-series normalization so a small-range series still spans the full plot height', () => {
+  it('zero-anchors each series to its own [0, max] domain, not [min, max]', () => {
     render(<ConvergenceSparkline points={points} />);
     const tasksPath = screen.getByTestId(
       'convergence-sparkline-series-tasks_open',
@@ -88,20 +89,79 @@ describe('ConvergenceSparkline', () => {
       'convergence-sparkline-series-gate_open',
     );
 
-    // tasks_open ranges 6..20 (span 14), gate_open ranges 154..190 (span 36) —
-    // despite the smaller absolute span, both paths must use the full [0, HEIGHT]
-    // extent because each is normalized against its own min/max independently.
-    const heightOf = (d: string) => {
+    const yOf = (d: string, index: number) => {
       const ys = Array.from(
         d.matchAll(/[ML]-?\d+(?:\.\d+)?,(-?\d+(?:\.\d+)?)/g),
       ).map((m) => Number(m[1]));
-      return Math.max(...ys) - Math.min(...ys);
+      return ys[index];
     };
 
-    expect(heightOf(tasksPath.getAttribute('d')!)).toBeCloseTo(
-      heightOf(gatePath.getAttribute('d')!),
-      5,
+    // tasks_open: max is 20 (first point) -> normalized to 1 -> y = 0 (top).
+    expect(yOf(tasksPath.getAttribute('d')!, 0)).toBeCloseTo(0, 5);
+    // gate_open: max is 190 (last two points) -> normalized to 1 -> y = 0.
+    expect(yOf(gatePath.getAttribute('d')!, 2)).toBeCloseTo(0, 5);
+    expect(yOf(gatePath.getAttribute('d')!, 3)).toBeCloseTo(0, 5);
+  });
+
+  it('renders a series constant at 0 at the bottom of the plotted range, not the midpoint', () => {
+    const zeroPoints = [
+      makePoint({ tasks_open: 5, seed_open: 0 }),
+      makePoint({ tasks_open: 5, seed_open: 0 }),
+      makePoint({ tasks_open: 5, seed_open: 0 }),
+    ];
+    render(<ConvergenceSparkline points={zeroPoints} />);
+    const seedPath = screen.getByTestId(
+      'convergence-sparkline-series-seed_open',
     );
+    const ys = Array.from(
+      seedPath
+        .getAttribute('d')!
+        .matchAll(/[ML]-?\d+(?:\.\d+)?,(-?\d+(?:\.\d+)?)/g),
+    ).map((m) => Number(m[1]));
+    // Bottom of the plot is y = HEIGHT (64), never the midpoint (32).
+    for (const y of ys) {
+      expect(y).toBeCloseTo(64, 5);
+    }
+  });
+
+  it('renders 0 at the chart bottom for a non-zero series (zero-anchored, not [min, max])', () => {
+    const nonZeroPoints = [
+      makePoint({ tasks_open: 0 }),
+      makePoint({ tasks_open: 20 }),
+      makePoint({ tasks_open: 10 }),
+    ];
+    render(<ConvergenceSparkline points={nonZeroPoints} />);
+    const tasksPath = screen.getByTestId(
+      'convergence-sparkline-series-tasks_open',
+    );
+    const ys = Array.from(
+      tasksPath
+        .getAttribute('d')!
+        .matchAll(/[ML]-?\d+(?:\.\d+)?,(-?\d+(?:\.\d+)?)/g),
+    ).map((m) => Number(m[1]));
+    // First point (value 0) must draw at the very bottom, y = HEIGHT.
+    expect(ys[0]).toBeCloseTo(64, 5);
+  });
+
+  it('spaces points by elapsed time, not fixed index steps', () => {
+    const unevenPoints = [
+      makePoint({ ts: '2026-07-31T00:00:00Z', tasks_open: 0 }),
+      makePoint({ ts: '2026-07-31T00:01:00Z', tasks_open: 10 }),
+      makePoint({ ts: '2026-07-31T01:01:00Z', tasks_open: 20 }),
+    ];
+    render(<ConvergenceSparkline points={unevenPoints} />);
+    const tasksPath = screen.getByTestId(
+      'convergence-sparkline-series-tasks_open',
+    );
+    const xs = Array.from(
+      tasksPath.getAttribute('d')!.matchAll(/[ML](-?\d+(?:\.\d+)?),/g),
+    ).map((m) => Number(m[1]));
+
+    expect(xs[0]).toBeCloseTo(0, 5);
+    expect(xs[2]).toBeCloseTo(160, 5);
+    // Gap 1 (60s) is 1/60th of the total 3600s span — the middle point
+    // should sit near the start, far from an evenly-spaced index midpoint (80).
+    expect(xs[1]).toBeLessThan(10);
   });
 
   it('fills the container width instead of centering at a fixed intrinsic size', () => {
