@@ -45,6 +45,10 @@ vi.mock('../config/settings.js', () => ({
   typedGetSetting: vi.fn(() => 5),
 }));
 
+vi.mock('../session/sessionLifecycle.js', () => ({
+  sessionBusyInFlightToolCall: vi.fn(() => false),
+}));
+
 import {
   getAllOpenPRs,
   getSession,
@@ -66,6 +70,7 @@ import {
   hasPrBodyMarkerUpdateSinceTimestamp,
 } from '../audit/AuditLog.js';
 import { typedGetSetting } from '../config/settings.js';
+import { sessionBusyInFlightToolCall } from '../session/sessionLifecycle.js';
 import { StalledPRReconciler } from '../orchestration/StalledPRReconciler.js';
 import type { ServerMessage } from '../ws/types.js';
 
@@ -1179,6 +1184,32 @@ describe('StalledPRReconciler', () => {
 
       expect(ro.enqueueReview).not.toHaveBeenCalled();
       expect(sm.relaunchFixerForPR).toHaveBeenCalled();
+    });
+
+    it('does not nudge when the session is busy inside an in-flight tool call (live process, pending tool_use)', async () => {
+      const pr = makeInertPR();
+      vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+      vi.mocked(getSession).mockImplementation((sessionId: string) => {
+        if (sessionId === 'session-1') return { status: 'running' } as any;
+        return null as any;
+      });
+      vi.mocked(hasPrBodyMarkerUpdateSinceTimestamp).mockReturnValue(false);
+      vi.mocked(sessionBusyInFlightToolCall).mockReturnValue(true);
+
+      const { fn: broadcast } = makeBroadcast();
+      const ro = makeReviewOrchestrator();
+      const sm = makeSessionManager();
+      const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+      reconciler.setReviewOrchestrator(ro as any);
+      reconciler.setSessionManager(sm as any);
+
+      await reconciler.reconcileOnce();
+
+      expect(ro.enqueueReview).not.toHaveBeenCalled();
+      expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+      expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+
+      vi.mocked(sessionBusyInFlightToolCall).mockReturnValue(false);
     });
 
     it('skips entirely (no nudge, no increment) when a review is already in-flight for the PR', async () => {
