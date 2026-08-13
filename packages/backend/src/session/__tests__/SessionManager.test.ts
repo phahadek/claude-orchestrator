@@ -270,7 +270,6 @@ import {
   getTaskCache,
   insertCompletingSignal,
   incrementSessionPokeRetryCount,
-  resetSessionPokeRetryCount,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
