@@ -183,9 +183,78 @@ export function recordDispatch(
   dispatchedAt: string,
 ): void {
   db.prepare(
-    `INSERT INTO investigation_report_dispatch (report_id, session_id, dispatched_at)
+    `INSERT OR IGNORE INTO investigation_report_dispatch (report_id, session_id, dispatched_at)
      VALUES (?, ?, ?)`,
   ).run(reportId, sessionId, dispatchedAt);
+}
+
+/**
+ * Atomically inserts a batch dispatch's session row (via caller-supplied
+ * insertSession, e.g. SessionManager's session insert) together with every
+ * report's investigation_report_dispatch row, in a single transaction — a
+ * session can never commit without its dispatch rows, or vice versa. Callers
+ * must not commit the session insert separately; pass it as insertSession.
+ */
+export function recordBatchDispatch(
+  insertSession: () => void,
+  reportIds: string[],
+  sessionId: string,
+  dispatchedAt: string,
+): void {
+  db.transaction(() => {
+    insertSession();
+    for (const reportId of reportIds) {
+      recordDispatch(reportId, sessionId, dispatchedAt);
+    }
+  })();
+}
+
+interface SessionMetadataWithReportIds {
+  reportIds?: string[];
+}
+
+/**
+ * Reconciler backfill: finds investigate-batch sessions (task_id
+ * 'report-batch:<batchId>') whose investigation_report_dispatch rows are
+ * missing — e.g. recordBatchDispatch's transaction didn't reach this call
+ * site — and backfills them from sessions.metadata.reportIds, which the
+ * dispatch call site is required to populate. Idempotent: INSERT OR IGNORE
+ * plus the (report_id, session_id) unique index means re-running a tick
+ * after a previous backfill (or after recordBatchDispatch itself already
+ * wrote the rows) is a no-op. Returns the number of dispatch rows inserted
+ * this tick.
+ */
+export function reconcileOrphanedDispatches(dispatchedAt: string): number {
+  const sessions = db
+    .prepare(
+      `SELECT session_id, metadata FROM sessions WHERE task_id LIKE 'report-batch:%'`,
+    )
+    .all() as { session_id: string; metadata: string | null }[];
+
+  let backfilled = 0;
+  for (const session of sessions) {
+    const hasDispatchRow = db
+      .prepare(
+        `SELECT 1 FROM investigation_report_dispatch WHERE session_id = ? LIMIT 1`,
+      )
+      .get(session.session_id);
+    if (hasDispatchRow || !session.metadata) continue;
+
+    let reportIds: string[];
+    try {
+      const parsed = JSON.parse(
+        session.metadata,
+      ) as SessionMetadataWithReportIds;
+      reportIds = Array.isArray(parsed.reportIds) ? parsed.reportIds : [];
+    } catch {
+      continue;
+    }
+    for (const reportId of reportIds) {
+      recordDispatch(reportId, session.session_id, dispatchedAt);
+      backfilled++;
+    }
+  }
+  return backfilled;
 }
 
 /** Every session ever dispatched for a report, oldest first — its entire dispatch history. */
@@ -256,6 +325,41 @@ export function isResolveEligible(reportId: string): boolean {
   return intentStates.every((row) =>
     TERMINAL_STAGED_INTENT_STATES.has(row.state),
   );
+}
+
+/**
+ * Dispatch eligibility: state === 'committed' AND no live non-terminal
+ * session already recorded for this report (isInFlight). This is the
+ * predicate a scan builds candidates from, and — mirroring
+ * DispatchTriggerEvaluator.dispatchUpTo's revalidate-before-dispatch
+ * pattern — the same predicate re-run immediately before each launch below.
+ */
+export function isDispatchEligible(reportId: string): boolean {
+  const report = getReport(reportId);
+  if (!report) return false;
+  return report.state === 'committed' && !isInFlight(reportId);
+}
+
+/**
+ * Dispatches candidate report-id batches (always-batched, even a batch of
+ * one) FIFO, re-validating isDispatchEligible for every report in a batch
+ * immediately before that batch's launch — against freshly-read state, not
+ * the scan-time snapshot. This closes the race between candidate selection
+ * and the dispatch call: a report that passed the scan but had another
+ * dispatch land (or was abandoned) before its turn is skipped rather than
+ * double-dispatched. dispatchFn is expected to perform the actual session
+ * creation + recordBatchDispatch write and return whether it launched.
+ */
+export function dispatchReportBatchesUpTo(
+  candidateBatches: string[][],
+  dispatchFn: (reportIds: string[]) => boolean,
+): number {
+  let dispatched = 0;
+  for (const batch of candidateBatches) {
+    if (!batch.every((reportId) => isDispatchEligible(reportId))) continue;
+    if (dispatchFn(batch)) dispatched++;
+  }
+  return dispatched;
 }
 
 /**

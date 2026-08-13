@@ -2056,5 +2056,7 @@ export function runMigrations(target: Database.Database): void {
       ON investigation_report_dispatch(report_id);
     CREATE INDEX IF NOT EXISTS idx_investigation_report_dispatch_session_id
       ON investigation_report_dispatch(session_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_investigation_report_dispatch_unique
+      ON investigation_report_dispatch(report_id, session_id);
   `);
 }
