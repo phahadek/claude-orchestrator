@@ -205,6 +205,65 @@ describe('reconcileSessionLiveness', () => {
       .get('api-mode-session') as { status: string };
     expect(row.status).toBe('running');
   });
+
+  it('records examined = N, alive = N, terminalized = 0 when the whole candidate set reports alive', () => {
+    seedSession({ sessionId: 'alive-1', status: 'running' });
+    seedSession({ sessionId: 'alive-2', status: 'running' });
+    seedSession({ sessionId: 'alive-3', status: 'idle' });
+
+    const result = reconcileSessionLiveness({
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(3);
+    expect(result.alive).toBe(3);
+    expect(result.reconciled.length).toBe(0);
+  });
+
+  it('records examined = 0 for an empty candidate set — distinguishable from an all-alive sweep', () => {
+    const result = reconcileSessionLiveness({
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(0);
+    expect(result.alive).toBe(0);
+    expect(result.reconciled.length).toBe(0);
+  });
+
+  it('counts a row whose liveness check fails open (unreadable ps) as alive, and does not terminalize it', () => {
+    seedSession({ sessionId: 'fail-open-row', status: 'running' });
+
+    // isSessionProcessAlive returns true on an unreadable ps — simulate that
+    // fail-open verdict directly via the injected isProcessAlive dep.
+    const result = reconcileSessionLiveness({
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.alive).toBe(1);
+    expect(result.reconciled).toEqual([]);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('fail-open-row') as { status: string };
+    expect(row.status).toBe('running');
+  });
+
+  it('items_processed (reconciled.length) still equals the terminalized count, unchanged in meaning', () => {
+    seedSession({ sessionId: 'dead-1', status: 'running' });
+    seedSession({ sessionId: 'dead-2', status: 'running' });
+    seedSession({ sessionId: 'alive-4', status: 'running' });
+
+    const result = reconcileSessionLiveness({
+      isProcessAlive: (sessionId) => sessionId === 'alive-4',
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled.length).toBe(2);
+    expect(result.examined).toBe(3);
+    expect(result.alive).toBe(1);
+  });
 });
 
 describe('reconcileNonPlanningSessionLiveness', () => {
@@ -353,5 +412,80 @@ describe('reconcileNonPlanningSessionLiveness', () => {
         }),
       }),
     );
+  });
+
+  it('records examined = N, alive = N, terminalized = 0 when the whole candidate set reports alive', () => {
+    seedSession({
+      sessionId: 'np-alive-1',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    seedSession({
+      sessionId: 'np-alive-2',
+      status: 'running',
+      sessionType: 'review',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(2);
+    expect(result.alive).toBe(2);
+    expect(result.reconciled.length).toBe(0);
+  });
+
+  it('records examined = 0 for an empty candidate set — distinguishable from an all-alive sweep', () => {
+    const result = reconcileNonPlanningSessionLiveness({
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(0);
+    expect(result.alive).toBe(0);
+    expect(result.reconciled.length).toBe(0);
+  });
+
+  it('counts a row whose liveness check fails open (unreadable ps) as alive, and does not terminalize it', () => {
+    seedSession({
+      sessionId: 'np-fail-open-row',
+      status: 'running',
+      sessionType: 'standard',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.alive).toBe(1);
+    expect(result.reconciled).toEqual([]);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('np-fail-open-row') as { status: string };
+    expect(row.status).toBe('running');
+  });
+
+  it('items_processed (reconciled.length) still equals the terminalized count, unchanged in meaning', () => {
+    seedSession({
+      sessionId: 'np-dead-1',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    seedSession({
+      sessionId: 'np-alive-3',
+      status: 'running',
+      sessionType: 'review',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      isProcessAlive: (sessionId) => sessionId === 'np-alive-3',
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled.length).toBe(1);
+    expect(result.examined).toBe(2);
+    expect(result.alive).toBe(1);
   });
 });

@@ -619,8 +619,14 @@ scheduler.register({
   runOnBoot: true,
   concurrency: 'skip-if-running',
   run: async () => {
-    const { reconciled } = sessionManager.reconcilePlanningSessionLiveness();
-    return { items_processed: reconciled.length };
+    const { reconciled, examined, alive } =
+      sessionManager.reconcilePlanningSessionLiveness();
+    return {
+      items_processed: reconciled.length,
+      examined,
+      alive,
+      terminalized: reconciled.length,
+    };
   },
 });
 // Non-planning counterpart to session_liveness_reconciler above: covers
@@ -634,8 +640,14 @@ scheduler.register({
   runOnBoot: true,
   concurrency: 'skip-if-running',
   run: async () => {
-    const { reconciled } = sessionManager.reconcileNonPlanningSessionLiveness();
-    return { items_processed: reconciled.length };
+    const { reconciled, examined, alive } =
+      sessionManager.reconcileNonPlanningSessionLiveness();
+    return {
+      items_processed: reconciled.length,
+      examined,
+      alive,
+      terminalized: reconciled.length,
+    };
   },
 });
 // Gate-verification reconciler: runnability/readiness reconcile on every
