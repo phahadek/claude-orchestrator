@@ -363,7 +363,9 @@ describe('SessionManager — turn-boundary drain + reap', () => {
     // (e.g. a crash between the status write and the pending_done clear),
     // leaving pending_done_* unapplied — the scenario
     // getSessionsWithUnappliedPendingDone covers.
-    db.prepare(`UPDATE sessions SET status = 'idle' WHERE session_id = 's7'`).run();
+    db.prepare(
+      `UPDATE sessions SET status = 'idle' WHERE session_id = 's7'`,
+    ).run();
     expect(getRow('s7').status).toBe('idle');
     expect(getRow('s7').pending_done_ended_at).not.toBeNull();
 
