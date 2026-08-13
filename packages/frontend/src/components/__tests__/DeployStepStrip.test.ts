@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveDeployStepStates } from '../DeployStepStrip';
+import { deriveDeployStepStates } from '../deployStepState';
 import type { DeployPlanStep, DeployRunEvent } from '../../api/deploy';
 
 function makeEvent(overrides: Partial<DeployRunEvent>): DeployRunEvent {
