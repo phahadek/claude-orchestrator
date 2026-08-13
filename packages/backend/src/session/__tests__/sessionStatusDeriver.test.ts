@@ -57,7 +57,9 @@ describe('deriveSessionStatus', () => {
     });
 
     it('does not fire when no newer session exists', () => {
-      const result = deriveSessionStatus(baseInput({ hasNewerSessionForTask: false }));
+      const result = deriveSessionStatus(
+        baseInput({ hasNewerSessionForTask: false }),
+      );
       expect(result).toBeNull();
     });
   });
@@ -198,9 +200,7 @@ describe('deriveSessionStatus', () => {
     it('produces a reason that does NOT satisfy DESIGN_COMPLETING_REASONS.has(...) for an operator-ended session', () => {
       const result = deriveSessionStatus(
         baseInput({
-          ledgerEntries: [
-            ledgerRow({ signal_value: 'planning_operator_end' }),
-          ],
+          ledgerEntries: [ledgerRow({ signal_value: 'planning_operator_end' })],
         }),
       );
       expect(result).not.toBeNull();
@@ -244,9 +244,16 @@ describe('deriveSessionStatus', () => {
   });
 
   it('the output type has no "retrying" member', () => {
-    const impossible: DerivedSessionOutcome[] = ['done', 'error', 'killed', 'superseded'];
+    const impossible: DerivedSessionOutcome[] = [
+      'done',
+      'error',
+      'killed',
+      'superseded',
+    ];
     // @ts-expect-error — 'retrying' must not be assignable to DerivedSessionOutcome.
     const notAllowed: DerivedSessionOutcome = 'retrying';
-    expect(impossible).not.toContain(notAllowed as unknown as DerivedSessionOutcome);
+    expect(impossible).not.toContain(
+      notAllowed as unknown as DerivedSessionOutcome,
+    );
   });
 });

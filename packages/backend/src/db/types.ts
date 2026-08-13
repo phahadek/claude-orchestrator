@@ -1200,4 +1200,7 @@ export interface CompletingSignalLedgerRow {
   recorded_at: number;
 }
 
-export type NewCompletingSignalLedgerRow = Omit<CompletingSignalLedgerRow, 'id'>;
+export type NewCompletingSignalLedgerRow = Omit<
+  CompletingSignalLedgerRow,
+  'id'
+>;

@@ -9,7 +9,11 @@ import type { DerivedSessionOutcome } from '../sessionStatusDeriver';
 describe('completingSignalRegistry', () => {
   it('resolves exactly one descriptor for every (session_type, task_type, hasOpenPR) triple in current use', () => {
     expect(REGISTERED_TRIPLES.length).toBeGreaterThan(0);
-    for (const { sessionType, taskTypeCategory, hasOpenPR } of REGISTERED_TRIPLES) {
+    for (const {
+      sessionType,
+      taskTypeCategory,
+      hasOpenPR,
+    } of REGISTERED_TRIPLES) {
       const descriptor = resolveCompletingSignal(
         sessionType,
         taskTypeCategory,
@@ -34,9 +38,9 @@ describe('completingSignalRegistry', () => {
     expect(() => resolveCompletingSignal('standard', 'code', false)).toThrow(
       /no completing-signal descriptor mapped/,
     );
-    expect(() =>
-      resolveCompletingSignal('depth_review', 'any', false),
-    ).toThrow(/no completing-signal descriptor mapped/);
+    expect(() => resolveCompletingSignal('depth_review', 'any', false)).toThrow(
+      /no completing-signal descriptor mapped/,
+    );
   });
 
   it('every descriptor reason maps to a terminal DerivedSessionOutcome (no retrying, no non-terminal values)', () => {
@@ -46,7 +50,11 @@ describe('completingSignalRegistry', () => {
       'killed',
       'superseded',
     ];
-    for (const { sessionType, taskTypeCategory, hasOpenPR } of REGISTERED_TRIPLES) {
+    for (const {
+      sessionType,
+      taskTypeCategory,
+      hasOpenPR,
+    } of REGISTERED_TRIPLES) {
       const descriptor = resolveCompletingSignal(
         sessionType,
         taskTypeCategory,
@@ -79,11 +87,7 @@ describe('completingSignalRegistry', () => {
   });
 
   it('docs and ops fall back to staged-decision only when they have not opened a PR of their own', () => {
-    const docsWithPr = resolveCompletingSignal(
-      'docs',
-      'docs_or_assets',
-      true,
-    );
+    const docsWithPr = resolveCompletingSignal('docs', 'docs_or_assets', true);
     const docsWithoutPr = resolveCompletingSignal(
       'docs',
       'docs_or_assets',
@@ -93,11 +97,7 @@ describe('completingSignalRegistry', () => {
     expect(docsWithoutPr.kind).toBe('staged_intent_terminal');
 
     const opsWithPr = resolveCompletingSignal('ops', 'ops_eligible', true);
-    const opsWithoutPr = resolveCompletingSignal(
-      'ops',
-      'ops_eligible',
-      false,
-    );
+    const opsWithoutPr = resolveCompletingSignal('ops', 'ops_eligible', false);
     expect(opsWithPr.kind).toBe('external_pr_event');
     expect(opsWithoutPr.kind).toBe('staged_intent_terminal');
   });
