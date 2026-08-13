@@ -49,6 +49,8 @@ import type {
   TestRequestFailureReason,
   DependencyCacheEntryRow,
   DependencyCacheEntryStatus,
+  TestRunResultRow,
+  NewTestRunResultRow,
   OpsJournalRow,
   CapabilityDisqualificationRow,
   NewCapabilityDisqualificationRow,
@@ -6842,11 +6844,20 @@ export function insertTestRequestRun(
   contentHash: string,
   sessionId: string | null,
   requestedAt: number,
+  concurrentRunCount?: number | null,
 ): void {
   db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason)
-     VALUES (?, ?, ?, ?, 'running', '', ?, ?, NULL, NULL)`,
-  ).run(id, projectId, contentHash, sessionId, requestedAt, Date.now());
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count)
+     VALUES (?, ?, ?, ?, 'running', '', ?, ?, NULL, NULL, ?)`,
+  ).run(
+    id,
+    projectId,
+    contentHash,
+    sessionId,
+    requestedAt,
+    Date.now(),
+    concurrentRunCount ?? null,
+  );
 }
 
 export function completeTestRequestRun(
@@ -6855,18 +6866,50 @@ export function completeTestRequestRun(
   output: string,
   failureReason: TestRequestFailureReason | null = null,
   structuredResult?: string | null,
+  oomKilled?: boolean,
 ): void {
   db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ? WHERE id = ?`,
-  ).run(state, output, Date.now(), failureReason, structuredResult ?? null, id);
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ? WHERE id = ?`,
+  ).run(
+    state,
+    output,
+    Date.now(),
+    failureReason,
+    structuredResult ?? null,
+    oomKilled ? 1 : 0,
+    id,
+  );
 }
+
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed`;
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {
   return db
     .prepare(
-      `SELECT id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs WHERE state = 'running'`,
+    )
+    .all() as TestRequestRunRow[];
+}
+
+/**
+ * Every non-running run with a structured_result but no extracted
+ * test_run_results rows yet — the boot-time re-derivation sweep's work list
+ * (see ingestTestRunResults in testRequestLane.ts). Catches both a crash
+ * mid-ingestion and structured_result having been populated by a process
+ * that predates this extraction step.
+ */
+export function listTestRequestRunsNeedingExtraction(): TestRequestRunRow[] {
+  return db
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE structured_result IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM test_run_results
+           WHERE test_run_results.test_request_run_id = test_request_runs.id
+         )`,
     )
     .all() as TestRequestRunRow[];
 }
@@ -6885,7 +6928,7 @@ export function getLatestTestRequestRun(
 ): TestRequestRunRow | undefined {
   return db
     .prepare<{ project_id: string; content_hash: string }>(
-      `SELECT id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
        WHERE project_id = @project_id AND content_hash = @content_hash AND state != 'running'
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
@@ -7038,6 +7081,77 @@ export function claimDependencyCacheEntryForEviction(
     )
     .run(projectId, lockHash, expectedLastUsedAt);
   return result.changes > 0;
+}
+
+// ─── test_run_results ───────────────────────────────────────────────────────
+
+/** True if any row has already been extracted for this run — the idempotency check. */
+export function hasTestRunResults(testRequestRunId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 FROM test_run_results WHERE test_request_run_id = ? LIMIT 1`,
+    )
+    .get(testRequestRunId);
+  return row !== undefined;
+}
+
+let _stmtInsertTestRunResult: Database.Statement | null = null;
+
+/**
+ * Inserts every extracted test row for a run in a single transaction, so a
+ * crash mid-ingestion never leaves a partial set for `hasTestRunResults` to
+ * mistake for "done". No-op on an empty `tests` list.
+ */
+export function insertTestRunResults(
+  testRequestRunId: string,
+  tests: NewTestRunResultRow[],
+  concurrentRunCount: number | null,
+  oomKilled: boolean,
+): void {
+  if (tests.length === 0) return;
+  _stmtInsertTestRunResult ??= db.prepare<{
+    test_request_run_id: string;
+    test_id: string;
+    name: string;
+    outcome: string;
+    duration_ms: number;
+    concurrent_run_count: number | null;
+    oom_killed: number;
+    created_at: number;
+  }>(`
+    INSERT INTO test_run_results
+      (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+    VALUES
+      (@test_request_run_id, @test_id, @name, @outcome, @duration_ms, @concurrent_run_count, @oom_killed, @created_at)
+  `);
+  const stmt = _stmtInsertTestRunResult;
+  const insertAll = db.transaction((items: NewTestRunResultRow[]) => {
+    const now = Date.now();
+    for (const item of items) {
+      stmt.run({
+        test_request_run_id: testRequestRunId,
+        test_id: item.test_id,
+        name: item.name,
+        outcome: item.outcome,
+        duration_ms: item.duration_ms,
+        concurrent_run_count: concurrentRunCount,
+        oom_killed: oomKilled ? 1 : 0,
+        created_at: now,
+      });
+    }
+  });
+  insertAll(tests);
+}
+
+export function listTestRunResultsForRun(
+  testRequestRunId: string,
+): TestRunResultRow[] {
+  return db
+    .prepare(
+      `SELECT id, test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at
+       FROM test_run_results WHERE test_request_run_id = ?`,
+    )
+    .all(testRequestRunId) as TestRunResultRow[];
 }
 
 // ─── session_test_request_cycles ───────────────────────────────────────────

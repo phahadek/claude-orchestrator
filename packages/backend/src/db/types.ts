@@ -1021,6 +1021,10 @@ export interface TestRequestRunRow {
   /** Normalized test-result JSON (junit-xml parse), populated by the acquisition/parser follow-on. Null for pre-existing rows and until that follow-on runs. */
   structured_result: string | null;
   failure_reason: TestRequestFailureReason | null;
+  /** Per-project Semaphore occupancy at admission, captured before insertion — see testRequestLane.ts. Null for pre-existing rows. */
+  concurrent_run_count: number | null;
+  /** Copied from TestCommandResult.oomKilled at completion time. */
+  oom_killed: number;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────
@@ -1041,6 +1045,48 @@ export interface DependencyCacheEntryRow {
   status: DependencyCacheEntryStatus;
   created_at: number;
   last_used_at: number;
+}
+
+// ─── test_run_results ───────────────────────────────────────────────────────
+
+/**
+ * The structured_result contract's shape (junit-xml normalized JSON) as
+ * stored on test_request_runs.structured_result — only the fields
+ * test_run_results extraction reads.
+ */
+interface StructuredTestCase {
+  id: string;
+  name: string;
+  outcome: string;
+  durationMs: number;
+}
+
+interface StructuredTestSuite {
+  tests: StructuredTestCase[];
+}
+
+export interface StructuredTestResult {
+  suites: StructuredTestSuite[];
+}
+
+/** One row per test, extracted from a completed run's structured_result. */
+export interface TestRunResultRow {
+  id: number;
+  test_request_run_id: string;
+  test_id: string;
+  name: string;
+  outcome: string;
+  duration_ms: number;
+  concurrent_run_count: number | null;
+  oom_killed: number;
+  created_at: number;
+}
+
+export interface NewTestRunResultRow {
+  test_id: string;
+  name: string;
+  outcome: string;
+  duration_ms: number;
 }
 
 // ─── arch_unit ────────────────────────────────────────────────────────────

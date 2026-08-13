@@ -34,8 +34,16 @@ import {
   insertTestRequestRun,
   completeTestRequestRun,
   listRunningTestRequestRuns,
+  listTestRequestRunsNeedingExtraction,
+  hasTestRunResults,
+  insertTestRunResults,
 } from '../db/queries';
-import type { TestRequestFailureReason } from '../db/types';
+import type {
+  TestRequestFailureReason,
+  TestRequestRunRow,
+  StructuredTestResult,
+  NewTestRunResultRow,
+} from '../db/types';
 import { logger } from '../logger';
 import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
 
@@ -162,6 +170,9 @@ async function executeTestRequestRun(
   const release = await semaphore.acquire();
   const runId = randomUUID();
   const startedAt = Date.now();
+  // Occupancy right after acquiring — includes this run — captured now
+  // rather than inferred later, per the concurrent_run_count validity signal.
+  const concurrentRunCount = semaphore.inUse();
   try {
     insertTestRequestRun(
       runId,
@@ -169,6 +180,7 @@ async function executeTestRequestRun(
       spec.contentHash,
       spec.sessionId,
       requestedAt,
+      concurrentRunCount,
     );
     broadcastRunStatus({
       runId,
@@ -186,11 +198,14 @@ async function executeTestRequestRun(
       (msg) => logger.info(`[testRequestLane] ${msg}`),
       { maxRssMb: spec.maxRssMb, failFast: spec.failFast },
     );
+    const oomKilled = result.oomKilled ?? false;
     completeTestRequestRun(
       runId,
       result.passed ? 'passed' : 'failed',
       result.output,
       result.passed ? null : failureReasonFor(result),
+      null,
+      oomKilled,
     );
     broadcastRunStatus({
       runId,
@@ -203,11 +218,26 @@ async function executeTestRequestRun(
       startedAt,
       finishedAt: Date.now(),
     });
+    ingestTestRunResults({
+      id: runId,
+      project_id: spec.projectId,
+      content_hash: spec.contentHash,
+      session_id: spec.sessionId,
+      state: result.passed ? 'passed' : 'failed',
+      output: result.output,
+      requested_at: requestedAt,
+      started_at: startedAt,
+      finished_at: Date.now(),
+      failure_reason: result.passed ? null : failureReasonFor(result),
+      structured_result: null,
+      concurrent_run_count: concurrentRunCount,
+      oom_killed: oomKilled ? 1 : 0,
+    });
     return { ...result, runId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const output = `[testRequestLane] execution error: ${message}`;
-    completeTestRequestRun(runId, 'failed', output, 'generic');
+    completeTestRequestRun(runId, 'failed', output, 'generic', null, false);
     broadcastRunStatus({
       runId,
       projectId: spec.projectId,
@@ -253,5 +283,63 @@ export function recoverInterruptedTestRequestRuns(): void {
       startedAt: run.started_at,
       finishedAt: Date.now(),
     });
+  }
+}
+
+/**
+ * Extracts a completed run's structured_result into one test_run_results row
+ * per test, denormalizing the run's concurrent_run_count/oom_killed validity
+ * signals onto each row. No-op if there's nothing to extract (no
+ * structured_result, no tests, or already extracted) — safe to call
+ * unconditionally after every run and again from the boot sweep below, which
+ * is what makes extraction re-derivable/idempotent rather than a one-shot
+ * step that data loss can slip past.
+ */
+export function ingestTestRunResults(run: TestRequestRunRow): void {
+  if (!run.structured_result) return;
+  if (hasTestRunResults(run.id)) return;
+
+  let parsed: StructuredTestResult;
+  try {
+    parsed = JSON.parse(run.structured_result) as StructuredTestResult;
+  } catch (err) {
+    logger.warn(
+      `[testRequestLane] failed to parse structured_result for run ${run.id}:`,
+      err,
+    );
+    return;
+  }
+
+  const tests: NewTestRunResultRow[] = (parsed.suites ?? []).flatMap((suite) =>
+    (suite.tests ?? []).map((test) => ({
+      test_id: test.id,
+      name: test.name,
+      outcome: test.outcome,
+      duration_ms: test.durationMs,
+    })),
+  );
+  if (tests.length === 0) return;
+
+  insertTestRunResults(
+    run.id,
+    tests,
+    run.concurrent_run_count ?? null,
+    !!run.oom_killed,
+  );
+}
+
+/**
+ * Boot-time re-derivation sweep: catches every run with a structured_result
+ * but no extracted test_run_results rows — a crash mid-ingestion, or a run
+ * completed before this extraction step existed — and ingests it. A delay,
+ * never data loss, since extraction is fully re-derivable from the run row.
+ */
+export function sweepTestRunResultsExtraction(): void {
+  const pending = listTestRequestRunsNeedingExtraction();
+  for (const run of pending) {
+    logger.info(
+      `[testRequestLane] extracting test_run_results for run ${run.id} (project ${run.project_id})`,
+    );
+    ingestTestRunResults(run);
   }
 }

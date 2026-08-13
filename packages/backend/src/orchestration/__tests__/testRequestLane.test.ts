@@ -32,16 +32,22 @@ import { db } from '../../db/db';
 import {
   runProjectTestRequest,
   recoverInterruptedTestRequestRuns,
+  ingestTestRunResults,
+  sweepTestRunResultsExtraction,
 } from '../testRequestLane';
 import {
   insertTestRequestRun,
+  completeTestRequestRun,
   listRunningTestRequestRuns,
+  getLatestTestRequestRun,
+  listTestRunResultsForRun,
 } from '../../db/queries';
 
 beforeEach(() => {
   mockRunTestCommands.mockReset();
   mockHasAdmission.mockReset();
   mockHasAdmission.mockReturnValue(true);
+  db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
 });
 
@@ -196,5 +202,218 @@ describe('recoverInterruptedTestRequestRuns', () => {
       .prepare(`SELECT state FROM test_request_runs WHERE id = ?`)
       .get('run-1') as { state: string };
     expect(row.state).toBe('failed');
+  });
+});
+
+// ── concurrent_run_count / oom_killed — validity signals captured at run time ──
+
+describe('concurrent_run_count', () => {
+  it("reflects the per-project Semaphore's actual occupancy under concurrent test.request calls", async () => {
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const p1 = runProjectTestRequest(baseSpec({ contentHash: 'hash-conc-1' }));
+    const p2 = runProjectTestRequest(baseSpec({ contentHash: 'hash-conc-2' }));
+
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+    await Promise.all([p1, p2]);
+
+    const rows = db
+      .prepare(
+        `SELECT concurrent_run_count FROM test_request_runs WHERE content_hash IN ('hash-conc-1', 'hash-conc-2') ORDER BY concurrent_run_count`,
+      )
+      .all() as { concurrent_run_count: number }[];
+    const counts = rows.map((r) => r.concurrent_run_count);
+    // Both runs are admitted concurrently (default per-project limit is 2),
+    // so each recorded occupancy must fall within [1, 2] — and since both
+    // were in flight together, the true concurrent occupancy of 2 must have
+    // been observed by at least one of them.
+    for (const count of counts) {
+      expect(count).toBeGreaterThanOrEqual(1);
+      expect(count).toBeLessThanOrEqual(2);
+    }
+    expect(Math.max(...counts)).toBe(2);
+  });
+});
+
+describe('oom_killed', () => {
+  it('is set when TestCommandResult.oomKilled is true', async () => {
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'killed',
+      oomKilled: true,
+    });
+
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-oom' }));
+
+    const row = db
+      .prepare(
+        `SELECT oom_killed FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .get('hash-oom') as { oom_killed: number };
+    expect(row.oom_killed).toBe(1);
+  });
+
+  it('defaults to 0 when TestCommandResult.oomKilled is absent', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-no-oom' }));
+
+    const row = db
+      .prepare(
+        `SELECT oom_killed FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .get('hash-no-oom') as { oom_killed: number };
+    expect(row.oom_killed).toBe(0);
+  });
+});
+
+// ── ingestTestRunResults — per-test extraction from structured_result ──────
+
+describe('ingestTestRunResults', () => {
+  it('produces one row per test with correct outcome/duration, carrying the run validity signals', () => {
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [
+            { id: 't1', name: 'test one', outcome: 'passed', durationMs: 12 },
+            { id: 't2', name: 'test two', outcome: 'failed', durationMs: 34 },
+          ],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-extract-1',
+      'proj-1',
+      'hash-extract-1',
+      null,
+      Date.now(),
+      2,
+    );
+    completeTestRequestRun(
+      'run-extract-1',
+      'passed',
+      'ok',
+      null,
+      structured,
+      true,
+    );
+
+    const run = getLatestTestRequestRun('proj-1', 'hash-extract-1')!;
+    ingestTestRunResults(run);
+
+    const rows = listTestRunResultsForRun('run-extract-1');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      test_id: 't1',
+      name: 'test one',
+      outcome: 'passed',
+      duration_ms: 12,
+      concurrent_run_count: 2,
+      oom_killed: 1,
+    });
+    expect(rows[1]).toMatchObject({
+      test_id: 't2',
+      name: 'test two',
+      outcome: 'failed',
+      duration_ms: 34,
+    });
+  });
+
+  it('is idempotent — calling it twice does not duplicate rows', () => {
+    const structured = JSON.stringify({
+      suites: [
+        { tests: [{ id: 't1', name: 'n', outcome: 'passed', durationMs: 1 }] },
+      ],
+    });
+    insertTestRequestRun(
+      'run-extract-2',
+      'proj-1',
+      'hash-extract-2',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun('run-extract-2', 'passed', 'ok', null, structured);
+
+    const run = getLatestTestRequestRun('proj-1', 'hash-extract-2')!;
+    ingestTestRunResults(run);
+    ingestTestRunResults(run);
+
+    expect(listTestRunResultsForRun('run-extract-2')).toHaveLength(1);
+  });
+
+  it('is a no-op when structured_result is null', () => {
+    insertTestRequestRun(
+      'run-extract-3',
+      'proj-1',
+      'hash-extract-3',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun('run-extract-3', 'passed', 'ok');
+
+    const run = getLatestTestRequestRun('proj-1', 'hash-extract-3')!;
+    ingestTestRunResults(run);
+
+    expect(listTestRunResultsForRun('run-extract-3')).toHaveLength(0);
+  });
+});
+
+describe('sweepTestRunResultsExtraction', () => {
+  it('catches a row with structured_result set but no test_run_results rows', () => {
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [{ id: 't1', name: 'n', outcome: 'passed', durationMs: 5 }],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-sweep-1',
+      'proj-1',
+      'hash-sweep-1',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun('run-sweep-1', 'passed', 'ok', null, structured);
+
+    expect(listTestRunResultsForRun('run-sweep-1')).toHaveLength(0);
+
+    sweepTestRunResultsExtraction();
+
+    expect(listTestRunResultsForRun('run-sweep-1')).toHaveLength(1);
+  });
+
+  it('leaves an already-extracted run untouched', () => {
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [{ id: 't1', name: 'n', outcome: 'passed', durationMs: 5 }],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-sweep-2',
+      'proj-1',
+      'hash-sweep-2',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun('run-sweep-2', 'passed', 'ok', null, structured);
+    sweepTestRunResultsExtraction();
+    expect(listTestRunResultsForRun('run-sweep-2')).toHaveLength(1);
+
+    sweepTestRunResultsExtraction();
+
+    expect(listTestRunResultsForRun('run-sweep-2')).toHaveLength(1);
   });
 });
