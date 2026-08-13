@@ -1175,6 +1175,73 @@ describe('StagedIntentPanel', () => {
     });
   });
 
+  describe('test.request operator override', () => {
+    function makeTestRequestIntent(overrides: Partial<StagedIntent> = {}) {
+      return makeIntent({
+        kind: 'test.request',
+        payload: { command: 'npm test', reason: 'verify the fix' },
+        ...overrides,
+      });
+    }
+
+    it('renders Approve and not Commit for a staged, ungrouped test.request intent', () => {
+      render(<StagedIntentPanel intent={makeTestRequestIntent()} />);
+
+      expect(screen.getByRole('button', { name: /^approve$/i })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
+    });
+
+    it('approving a staged test.request calls the approve route, not apply', async () => {
+      const approve = vi
+        .spyOn(stagedIntentsApi, 'approve')
+        .mockResolvedValue({ ...makeTestRequestIntent(), state: 'approved' });
+      const apply = vi.spyOn(stagedIntentsApi, 'apply');
+
+      render(<StagedIntentPanel intent={makeTestRequestIntent()} />);
+      fireEvent.click(screen.getByRole('button', { name: /^approve$/i }));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('intent-1'));
+      expect(apply).not.toHaveBeenCalled();
+    });
+
+    it("'a' fires Approve (not Commit) for a highlighted test.request card", async () => {
+      const approve = vi
+        .spyOn(stagedIntentsApi, 'approve')
+        .mockResolvedValue({ ...makeTestRequestIntent(), state: 'approved' });
+      const apply = vi.spyOn(stagedIntentsApi, 'apply');
+
+      render(<StagedIntentPanel intent={makeTestRequestIntent()} highlighted />);
+
+      act(() => fireKey('a'));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('intent-1'));
+      expect(apply).not.toHaveBeenCalled();
+    });
+
+    it('reject with a reason remains available on a staged test.request and posts to the reject route', async () => {
+      const reject = vi
+        .spyOn(stagedIntentsApi, 'reject')
+        .mockResolvedValue({ ok: true });
+
+      render(<StagedIntentPanel intent={makeTestRequestIntent()} />);
+
+      fireEvent.change(
+        screen.getByPlaceholderText('What should the session revise?'),
+        { target: { value: 'not needed right now' } },
+      );
+      fireEvent.click(
+        screen.getByRole('button', { name: /pushback|decline/i }),
+      );
+
+      await waitFor(() =>
+        expect(reject).toHaveBeenCalledWith(
+          'intent-1',
+          expect.objectContaining({ reason: 'not needed right now' }),
+        ),
+      );
+    });
+  });
+
   describe('keyboard ring bindings', () => {
     it("'a' fires handleApprove for a highlighted grouped intent with no required input", async () => {
       const approve = vi
