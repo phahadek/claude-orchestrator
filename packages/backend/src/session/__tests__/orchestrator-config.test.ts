@@ -183,6 +183,39 @@ describe('loadOrchestratorConfig', () => {
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.autofix_skip_ci).toBe(true);
   });
+
+  it('parses test_report_format and test_report_glob when set in config', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'test_report_format: junit-xml',
+        'test_report_glob: "**/test-results/*.xml"',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.test_report_format).toBe('junit-xml');
+    expect(config.test_report_glob).toBe('**/test-results/*.xml');
+  });
+
+  it('falls back to defaults for absent or malformed test_report_format/test_report_glob', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      ['test_report_format: cobertura', 'test_report_glob: 42'].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.test_report_format).toBeUndefined();
+    expect(config.test_report_glob).toBe('');
+  });
+
+  it('defaults test_report_format and test_report_glob when the config file is absent', () => {
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.test_report_format).toBeUndefined();
+    expect(config.test_report_glob).toBe('');
+  });
 });
 
 describe('getSessionAllowedTools', () => {
