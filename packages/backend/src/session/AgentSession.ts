@@ -2832,10 +2832,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     let delivered: string | null;
     try {
       delivered =
-        (await this.sessionManager?.sendOrResume?.(
-          this.sessionId,
-          combined,
-        )) ?? null;
+        (await this.sessionManager?.sendOrResume?.(this.sessionId, combined)) ??
+        null;
     } catch (err) {
       sessionLog(
         this.sessionId,
