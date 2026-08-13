@@ -1406,9 +1406,21 @@ export function archiveSession(sessionId: string): boolean {
 }
 
 export function unarchiveSession(sessionId: string): boolean {
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
+    | { task_id: string | null; session_type: SessionType; archived: number }
+    | undefined;
   const result = db
     .prepare('UPDATE sessions SET archived = 0 WHERE session_id = ?')
     .run(sessionId);
+  if (result.changes > 0 && current && current.archived !== 0) {
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      'unarchived',
+      Date.now(),
+    );
+  }
   return result.changes > 0;
 }
 

@@ -33,6 +33,7 @@ import {
   applyPendingDone,
   getSessionsWithUnappliedPendingDone,
   archiveSession,
+  unarchiveSession,
   archiveFinishedSessions,
   archiveConcludedSessionsOlderThan,
   listCompletingSignalsForSession,
@@ -226,6 +227,24 @@ describe('archive sweep dual-write (routes/sessions.ts operator archive + Conclu
     archiveSession('arch2');
 
     expect(listCompletingSignalsForSession('arch2')).toHaveLength(0);
+  });
+
+  it('unarchiveSession (routes/sessions.ts PATCH /:id/unarchive) records a ledger row', () => {
+    insertSession({ session_id: 'unarch1', status: 'done', archived: 1 });
+
+    unarchiveSession('unarch1');
+
+    const signals = listCompletingSignalsForSession('unarch1');
+    expect(signals).toHaveLength(1);
+    expect(signals[0].signal_value).toBe('unarchived');
+  });
+
+  it('unarchiveSession is a no-op (no ledger row) when the session is not archived', () => {
+    insertSession({ session_id: 'unarch2', status: 'done', archived: 0 });
+
+    unarchiveSession('unarch2');
+
+    expect(listCompletingSignalsForSession('unarch2')).toHaveLength(0);
   });
 
   it('archiveFinishedSessions (bulk route) records a ledger row per archived session', () => {
