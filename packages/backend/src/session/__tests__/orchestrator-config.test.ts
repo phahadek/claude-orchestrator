@@ -298,6 +298,34 @@ describe('getSessionAllowedTools', () => {
     expect(tools).toContain('mcp__analyst__query_alarm_rules');
   });
 
+  it('an investigate-dispatched (ops sessionType, report-batch task id) session gets INVESTIGATE_ALLOWED_TOOLS, not OPS_ALLOWED_TOOLS', () => {
+    const plainOps = getSessionAllowedTools(
+      'ops',
+      { allowed_tools: [] },
+      [],
+      undefined,
+      [],
+      'notion:some-task-id',
+    );
+    const investigate = getSessionAllowedTools(
+      'ops',
+      { allowed_tools: [] },
+      [],
+      undefined,
+      [],
+      'report-batch:batch-1',
+    );
+    expect(investigate).not.toEqual(plainOps);
+    expect(investigate).not.toContain(
+      orchestratorMcpToolName('journal.setState'),
+    );
+    expect(investigate).not.toContain(orchestratorMcpToolName('gate.verify'));
+    expect(investigate).toContain(
+      orchestratorMcpToolName('decision.pickOne'),
+    );
+    expect(plainOps).toContain(orchestratorMcpToolName('gate.verify'));
+  });
+
   it('ops base profile is read + stage + safe live-data surface, distinct from groom/design/standard', () => {
     const ops = getSessionAllowedTools('ops', { allowed_tools: [] });
     const groom = getSessionAllowedTools('groom', { allowed_tools: [] });
@@ -971,6 +999,24 @@ describe('isSanctionedAutoApproveCapability', () => {
       ),
     ).toBe(true);
   });
+
+  it.each([
+    ['audit-log', auditLogReadCapability('project-abc')],
+    ['session-events', sessionEventsReadCapability('project-abc')],
+  ])(
+    'auto-approves the %s capability for an investigate-dispatched session (sessionType ops, report-batch task id)',
+    (_label, capability) => {
+      expect(
+        isSanctionedAutoApproveCapability(
+          capability,
+          'session-1',
+          'project-abc',
+          'ops',
+          'report-batch:batch-1',
+        ),
+      ).toBe(true);
+    },
+  );
 });
 
 describe('isDeclaredWriteAutoApprove', () => {

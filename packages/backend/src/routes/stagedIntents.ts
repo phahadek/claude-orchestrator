@@ -5122,6 +5122,7 @@ async function maybeAutoApproveCapabilityRequest(
     intent.sessionId,
     intent.projectId,
     requestingSession?.session_type,
+    requestingSession?.task_id,
   );
 
   const declaredWriteEligible =
