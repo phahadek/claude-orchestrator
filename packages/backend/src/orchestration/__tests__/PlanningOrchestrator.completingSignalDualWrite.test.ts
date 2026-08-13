@@ -38,7 +38,9 @@ vi.mock('../../routes/stagedIntents', () => ({
 }));
 
 vi.mock('../../tasks/TaskBackend', () => ({
-  getTaskBackend: vi.fn(() => ({ updateStatus: vi.fn().mockResolvedValue(undefined) })),
+  getTaskBackend: vi.fn(() => ({
+    updateStatus: vi.fn().mockResolvedValue(undefined),
+  })),
 }));
 
 vi.mock('../../routes/tasks', () => ({

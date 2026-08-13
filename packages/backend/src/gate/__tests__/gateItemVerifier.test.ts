@@ -400,9 +400,7 @@ describe('SessionGateItemVerifier — leaves a reporting session live, archives 
         signal_value: 'gate_item_verifier_consumed',
       }),
     );
-    expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith(
-      'sess-1',
-    );
+    expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith('sess-1');
   });
 
   it('leaves an already-error session alone: no archive, no status overwrite', async () => {
