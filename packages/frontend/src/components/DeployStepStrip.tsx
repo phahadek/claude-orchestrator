@@ -1,6 +1,9 @@
 import type { DeployPlanStep } from '../api/deploy';
 import type { DeployRunEvent } from '../api/deploy';
-import { deriveDeployStepStates, type DeployStepState } from './deployStepState';
+import {
+  deriveDeployStepStates,
+  type DeployStepState,
+} from './deployStepState';
 import styles from './DeployStepStrip.module.css';
 
 const STATE_GLYPH: Record<DeployStepState, string> = {
