@@ -521,6 +521,24 @@ in-scope; it is not a licence to touch any other session's git/worktree/PR — s
 
 ---
 
+## Milestone-seed sessions
+
+**Trigger:** _"Let's start planning milestone X"_ / _"seed milestone X"_ — a human-driven
+session that stands up a **new milestone**: its charter, its board, and its seed set of
+Design tasks. Distinct from `/groom` and `/design`, which work an *existing* milestone's
+backlog.
+
+Procedure lives in the **`/milestone-seed` skill** (`skills/milestone-seed/`). It ends with <!-- path-check:ignore -->
+the board **seeded and inert** — registering and activating the milestone belongs to
+`/milestone-wrap`, which is what makes it safe to seed while the prior milestone is still
+running.
+
+> This section was previously the full procedure text, carried here because the skill was
+> local-only and unversioned — this file was its only backup. The skill now has a source
+> under `skills/`, so the procedure lives there and this is a pointer.
+
+---
+
 ## Grooming & design sessions
 
 Two structured session types run against a milestone's task board; both are deterministic
