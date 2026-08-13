@@ -2019,10 +2019,13 @@ export class SessionManager extends EventEmitter {
         );
       } else {
         try {
-          await exec(`bash "${orchConfig.bootstrap_script}" "${worktreePath}"`, {
-            cwd: projectDir,
-            timeout: 120_000,
-          });
+          await exec(
+            `bash "${orchConfig.bootstrap_script}" "${worktreePath}"`,
+            {
+              cwd: projectDir,
+              timeout: 120_000,
+            },
+          );
           logger.info(
             `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,
           );
