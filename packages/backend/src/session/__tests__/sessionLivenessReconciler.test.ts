@@ -495,7 +495,9 @@ describe('reconcileNonPlanningSessionLiveness', () => {
 });
 
 describe('reconcileOrphanProcesses', () => {
-  function proc(overrides: Partial<ClaudeSessionProcess>): ClaudeSessionProcess {
+  function proc(
+    overrides: Partial<ClaudeSessionProcess>,
+  ): ClaudeSessionProcess {
     return { pid: 1234, sessionId: null, etimeSeconds: 10_000, ...overrides };
   }
 
@@ -524,7 +526,9 @@ describe('reconcileOrphanProcesses', () => {
 
       const killed: number[] = [];
       const result = reconcileOrphanProcesses({
-        scanProcesses: () => [proc({ pid: 222, sessionId: `orphan-${status}` })],
+        scanProcesses: () => [
+          proc({ pid: 222, sessionId: `orphan-${status}` }),
+        ],
         killProcess: (pid) => killed.push(pid),
         nowFn: () => NOW,
       });
@@ -602,9 +606,7 @@ describe('reconcileOrphanProcesses', () => {
 
     const killed: number[] = [];
     const result = reconcileOrphanProcesses({
-      scanProcesses: () => [
-        proc({ pid: 777, sessionId: 'just-terminalized' }),
-      ],
+      scanProcesses: () => [proc({ pid: 777, sessionId: 'just-terminalized' })],
       killProcess: (pid) => killed.push(pid),
       nowFn: () => NOW,
     });
@@ -635,9 +637,7 @@ describe('reconcileOrphanProcesses', () => {
     statusWriterSpy.mockClear();
 
     reconcileOrphanProcesses({
-      scanProcesses: () => [
-        proc({ pid: 999, sessionId: 'no-status-write' }),
-      ],
+      scanProcesses: () => [proc({ pid: 999, sessionId: 'no-status-write' })],
       killProcess: () => {},
       nowFn: () => NOW,
     });

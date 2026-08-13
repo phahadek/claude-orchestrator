@@ -76,7 +76,8 @@ export function scanClaudeSessionProcesses(): ClaudeSessionProcess[] {
       const match = line.match(PS_LINE_RE);
       if (!match) continue;
       const [, pidStr, etimeStr, args] = match;
-      const idMatch = args.match(SESSION_ID_ARG_RE) ?? args.match(RESUME_ARG_RE);
+      const idMatch =
+        args.match(SESSION_ID_ARG_RE) ?? args.match(RESUME_ARG_RE);
       processes.push({
         pid: Number(pidStr),
         sessionId: idMatch ? idMatch[1] : null,
