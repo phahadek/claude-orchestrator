@@ -60,7 +60,9 @@ export function LaneHealthPanel({ projectId, invalidationKey }: Props) {
             </span>
           </div>
           <div className={styles.metricRow}>
-            <span className={styles.metricLabel}>Execution time (p50/p90/p99)</span>
+            <span className={styles.metricLabel}>
+              Execution time (p50/p90/p99)
+            </span>
             <span className={styles.metricValue}>
               {formatMs(rollup.executionTimeMs.p50)} /{' '}
               {formatMs(rollup.executionTimeMs.p90)} /{' '}
