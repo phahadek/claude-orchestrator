@@ -608,6 +608,7 @@ export function createGateStateRouter(): Router {
     'groom',
     'design',
     'ops',
+    'investigate',
     'gate-verify',
   ];
 

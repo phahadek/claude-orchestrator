@@ -10,6 +10,7 @@ import { MilestoneDecisionInbox } from '../MilestoneDecisionInbox';
 import { stagedIntentsApi } from '../../api/stagedIntents';
 import { gateApi } from '../../api/gate';
 import { reportsApi } from '../../api/reports';
+import { investigateApi } from '../../api/investigate';
 import type { StagedIntent } from '../../api/stagedIntents';
 import type { InvestigationReport } from '../../api/reports';
 import type { TaskView } from '../../types/taskView';
@@ -1358,6 +1359,33 @@ describe('MilestoneDecisionInbox', () => {
 
       fireEvent.click(screen.getByTestId('report-batch-clear'));
       expect(screen.queryByTestId('report-batch-bar')).toBeNull();
+    });
+
+    it("clicking 'Investigate Selected' calls the launch route with exactly the selected reportIds", async () => {
+      vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
+      vi.spyOn(reportsApi, 'list').mockResolvedValue({
+        items: [
+          makeReport({ id: 'r-1', state: 'committed', inFlight: false }),
+          makeReport({ id: 'r-2', state: 'committed', inFlight: false }),
+          makeReport({ id: 'r-3', state: 'committed', inFlight: false }),
+        ],
+        total: 3,
+        page: 1,
+      });
+      const launch = vi
+        .spyOn(investigateApi, 'launch')
+        .mockResolvedValue({ sessionId: 'session-inv-1', reportIds: [] });
+
+      render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+
+      await screen.findByTestId('report-card-r-1');
+      fireEvent.click(screen.getByTestId('report-select-r-1'));
+      fireEvent.click(screen.getByTestId('report-select-r-3'));
+
+      fireEvent.click(screen.getByTestId('report-batch-dispatch'));
+
+      await waitFor(() => expect(launch).toHaveBeenCalledTimes(1));
+      expect(launch).toHaveBeenCalledWith(['r-1', 'r-3']);
     });
   });
 });
