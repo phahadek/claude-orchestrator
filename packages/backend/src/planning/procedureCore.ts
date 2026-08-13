@@ -768,6 +768,30 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'below for what belongs in an option’s `description` specifically.',
   },
   {
+    id: 'design-decision-output-shape',
+    title:
+      'Decision output shape — density, one thesis per paragraph, architectural justification',
+    appliesTo: ['design'],
+    text:
+      'Governs how the prose inside `decisionProposal` and each option ' +
+      '`description` is shaped — "decision.pickOne payload shape" above says ' +
+      'which field a piece of content goes in; this says how the prose in that ' +
+      'field reads. DO write every sentence to carry a claim — DO NOT restate ' +
+      'the question, DO NOT throat-clear ("this is an important decision ' +
+      'because...") and DO NOT summarize the other options inside one ' +
+      'option’s `description`. DO give each paragraph exactly one thesis — a ' +
+      'paragraph making two arguments is two paragraphs, separated by a blank ' +
+      'line (`\\n\\n`). DO keep each paragraph to at most three lines. DO ' +
+      'justify the recommendation architecturally — on properties of the ' +
+      'design itself: coupling, failure modes, where authority for a judgment ' +
+      'belongs, what the system must guarantee — and DO NOT justify it by ' +
+      'existing-code precedent; "this codebase already does X elsewhere, so do ' +
+      'X again" is not an architectural argument, even when the codebase’s ' +
+      'current behavior is one of the facts informing the decision. Concrete ' +
+      'file:line / commit evidence still belongs in the `investigation` field, ' +
+      'per "decision.pickOne payload shape" above, never inline here.',
+  },
+  {
     id: 'design-recommendation-quality',
     title:
       'Recommendation quality — reuse before new machinery, minimal scope, verify before locking',
