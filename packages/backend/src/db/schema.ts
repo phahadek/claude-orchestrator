@@ -1870,6 +1870,28 @@ export function runMigrations(target: Database.Database): void {
         WHERE task_repo_assignments.task_id = audit_log.task_id
       );
   `);
+  // task_repo_assignments is only ever populated for multi-repo projects
+  // (an explicit human assign-repo action) — single-repo projects never
+  // write a row there, so the backfill above misses effectively every
+  // single-repo task_id. sessions.task_id + sessions.project_id are
+  // populated unconditionally for every dispatched session, so it's tried
+  // next to cover the rows the assignment-table backfill can't reach.
+  target.exec(`
+    UPDATE audit_log
+    SET project_id = (
+      SELECT sessions.project_id FROM sessions
+      WHERE sessions.task_id = audit_log.task_id
+        AND sessions.project_id IS NOT NULL
+      ORDER BY sessions.started_at DESC LIMIT 1
+    )
+    WHERE project_id IS NULL
+      AND task_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM sessions
+        WHERE sessions.task_id = audit_log.task_id
+          AND sessions.project_id IS NOT NULL
+      );
+  `);
 
   // gate_item_event.min_deployed_commit_at_fail: stamped server-side (in
   // gateStore.appendEvent) at write time for a `fail` disposition, from the

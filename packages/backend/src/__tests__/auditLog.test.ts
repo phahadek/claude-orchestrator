@@ -123,6 +123,28 @@ describe('recordEvent() project_id derivation', () => {
     expect(row?.project_id).toBe('proj-derive-task');
   });
 
+  it('populates project_id from sessions.task_id when task_repo_assignments has no row (single-repo project)', async () => {
+    const { db } = await import('../db/db.js');
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url, status, started_at, project_id)
+       VALUES ('sess-single-repo', 'task-single-repo', NULL, NULL, 'running', ?, 'proj-single-repo')`,
+    ).run(Date.now());
+
+    recordEvent({
+      event_type: 'pipeline_stage_entered',
+      actor_type: 'system',
+      task_id: 'task-single-repo',
+      payload: {},
+    });
+
+    const row = db
+      .prepare(
+        `SELECT project_id FROM audit_log WHERE event_type='pipeline_stage_entered' AND task_id='task-single-repo'`,
+      )
+      .get() as { project_id: string | null } | undefined;
+    expect(row?.project_id).toBe('proj-single-repo');
+  });
+
   it('leaves project_id NULL and does not throw when neither actor nor task resolves', async () => {
     const { db } = await import('../db/db.js');
 
