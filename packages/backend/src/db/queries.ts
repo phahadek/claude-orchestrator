@@ -7035,6 +7035,21 @@ export function getLatestTestRequestRun(
 }
 
 /**
+ * Single run by id — used to fetch a just-completed run's structured_result
+ * for delivery digest rendering (see testResultDigest.ts) once
+ * runProjectTestRequest resolves with only the run's id in hand.
+ */
+export function getTestRequestRunById(
+  id: string,
+): TestRequestRunRow | undefined {
+  return db
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS} FROM test_request_runs WHERE id = ?`,
+    )
+    .get(id) as TestRequestRunRow | undefined;
+}
+
+/**
  * The most recent run (project_id, session_id) originated — session-keyed
  * counterpart to getLatestTestRequestRun's content-hash keying, for a
  * frontend consumer (useTestLaneRunStatus) that knows its own session id but
