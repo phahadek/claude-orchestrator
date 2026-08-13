@@ -43,6 +43,7 @@ import {
 import {
   getActiveDeviceCount,
   pruneSchedulerAudit,
+  pruneTestRunResults,
   listProjectRows,
 } from './db/queries';
 import { importProjectsFromEnv } from './projects/projectImport';
@@ -400,6 +401,19 @@ scheduler.register({
   runOnBoot: false,
   run: async () => {
     pruneSchedulerAudit(1000);
+  },
+});
+// Bound retention: prune raw test_run_results rows past a 30-day window,
+// daily. Comfortably exceeds the BASELINE_WINDOW_SAMPLES sample window
+// testRequestLane.ts's regression baseline draws from; the per-test
+// aggregate in test_perf_baselines survives pruning indefinitely.
+const TEST_RUN_RESULTS_RETENTION_MS = 30 * 24 * 60 * 60_000;
+scheduler.register({
+  name: 'test_run_results_pruner',
+  intervalMs: 24 * 60 * 60_000,
+  runOnBoot: false,
+  run: async () => {
+    pruneTestRunResults(TEST_RUN_RESULTS_RETENTION_MS);
   },
 });
 // Backstop for the terminal-status reap hook in SessionManager: catches
