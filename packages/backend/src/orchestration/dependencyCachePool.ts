@@ -56,7 +56,7 @@ export interface DependencyCachePoolSpec {
 const BOOTSTRAP_TIMEOUT_MS = 120_000;
 const VERIFY_TIMEOUT_MS = 120_000;
 
-function cacheStorageDir(projectId: string, lockHash: string): string {
+export function cacheStorageDir(projectId: string, lockHash: string): string {
   return path.join(getDataDir(), 'dependency-cache', projectId, lockHash);
 }
 
@@ -206,6 +206,12 @@ export async function tryDependencyCachePool(
 
   const existing = getReadyDependencyCacheEntry(spec.projectId, lockHash);
   if (existing) {
+    // Touched before materialization starts (not after) — the periodic
+    // DependencyCacheReconciler sweep never evicts an entry it just saw
+    // touched within its grace window, so this closes the race where the
+    // sweep could delete a storage dir another launch is actively copying
+    // from.
+    touchDependencyCacheEntryLastUsed(spec.projectId, lockHash);
     if (
       materializeCacheDirs(
         spec.projectId,
@@ -215,7 +221,6 @@ export async function tryDependencyCachePool(
       ) &&
       (await runVerify(spec.worktreePath, spec.verifyCommand))
     ) {
-      touchDependencyCacheEntryLastUsed(spec.projectId, lockHash);
       logger.info(
         `[dependencyCachePool] cache hit for project ${spec.projectId} lockHash=${lockHash.slice(0, 12)} session=${spec.sessionId.slice(0, 8)}`,
       );
@@ -236,6 +241,7 @@ export async function tryDependencyCachePool(
   }
 
   // Dependencies were built in a different session's worktree — materialize + verify locally.
+  touchDependencyCacheEntryLastUsed(spec.projectId, lockHash);
   if (
     materializeCacheDirs(
       spec.projectId,
@@ -245,7 +251,6 @@ export async function tryDependencyCachePool(
     ) &&
     (await runVerify(spec.worktreePath, spec.verifyCommand))
   ) {
-    touchDependencyCacheEntryLastUsed(spec.projectId, lockHash);
     return true;
   }
   return false;

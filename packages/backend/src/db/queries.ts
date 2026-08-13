@@ -6963,6 +6963,47 @@ export function listBuildingDependencyCacheEntries(): DependencyCacheEntryRow[] 
     .all() as DependencyCacheEntryRow[];
 }
 
+/** `ready` rows oldest-used first — used by DependencyCacheReconciler's eviction sweep. */
+export function listReadyDependencyCacheEntries(): DependencyCacheEntryRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM dependency_cache_entries WHERE status = 'ready' ORDER BY last_used_at ASC`,
+    )
+    .all() as DependencyCacheEntryRow[];
+}
+
+/** Removes a (project_id, lock_hash) row — used by DependencyCacheReconciler after it deletes the on-disk entry. */
+export function deleteDependencyCacheEntry(
+  projectId: string,
+  lockHash: string,
+): void {
+  db.prepare(
+    `DELETE FROM dependency_cache_entries WHERE project_id = ? AND lock_hash = ?`,
+  ).run(projectId, lockHash);
+}
+
+/**
+ * Atomically claims a `ready` row for eviction: deletes it only if
+ * `last_used_at` still matches `expectedLastUsedAt`, i.e. nothing has
+ * touched (materialized from) it since the reconciler last read it. Returns
+ * false if the row was touched or already gone, meaning the caller must NOT
+ * delete the on-disk entry — DependencyCacheReconciler relies on this to
+ * close the race between its sweep snapshot and the actual eviction.
+ */
+export function claimDependencyCacheEntryForEviction(
+  projectId: string,
+  lockHash: string,
+  expectedLastUsedAt: number,
+): boolean {
+  const result = db
+    .prepare(
+      `DELETE FROM dependency_cache_entries
+       WHERE project_id = ? AND lock_hash = ? AND status = 'ready' AND last_used_at = ?`,
+    )
+    .run(projectId, lockHash, expectedLastUsedAt);
+  return result.changes > 0;
+}
+
 // ─── session_test_request_cycles ───────────────────────────────────────────
 
 export function getSessionTestRequestCycleCount(sessionId: string): number {
