@@ -28,7 +28,7 @@ Two copies exist with different jobs:
 
 A `cp` fails both directions: overwrite clobbers local content; seed-only never propagates
 upstream updates. **There is no re-vendor path in this repo that force-overwrites a live copy.**
-(A previous mechanism, `scripts/deploy-grooming.mjs`, did exactly that — a blind
+(A previous mechanism, `scripts/deploy-grooming.mjs`, did exactly that — a blind <!-- path-check:ignore -->
 `cpSync(..., { force: true })` — and it silently destroyed vendored-local content in the `/ops`
 skill with no backup and no way to detect it after the fact. It has been removed outright.)
 Deploying an update to any of these is an **integration**: take what changed upstream since the

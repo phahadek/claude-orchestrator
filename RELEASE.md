@@ -44,7 +44,7 @@ Create a GitHub release from the new tag. The auto-updater polls the GitHub Rele
 
 ## Version drift guard
 
-`scripts/release.mjs` exits non-zero if `packages/backend/package.json.version` does not equal the target version after writing. This prevents releasing a tag that is out of sync with the running version reported by the auto-updater.
+`scripts/release.mjs` exits non-zero if `packages/backend/package.json.version` does not equal the target version after writing. This prevents releasing a tag that is out of sync with the running version reported by the auto-updater. <!-- path-check:ignore -->
 
 ## Why this matters
 

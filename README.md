@@ -187,7 +187,7 @@ gate-state-client,seed-state-client,staged-intents-client}.mjs`,
   scripts into `~/.claude/scripts/`, the skill trees into `~/.claude/skills/`, the hook into the
   central config tree, and the guideline docs — goes through the **`/sync-guidelines` skill**
   (`node ~/.claude/scripts/sync-guidelines-load.mjs` for the deterministic plan step). There is no
-  force-overwrite deploy script: a previous one, `scripts/deploy-grooming.mjs`, blind-copied with
+  force-overwrite deploy script: a previous one, `scripts/deploy-grooming.mjs`, blind-copied with <!-- path-check:ignore -->
   `cpSync(..., { force: true })` and silently destroyed vendored-local content; it has been
   removed. `/sync-guidelines` diffs the upstream delta since the recorded per-item baseline and
   weaves it into the live copy — preserving any local content (a refined skill instruction, an

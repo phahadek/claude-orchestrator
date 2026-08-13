@@ -20,7 +20,7 @@ must be preserved. Deploying an update to any of these — including the hook �
 three-way merge: run the **`/sync-guidelines`** skill, which diffs the upstream delta since the
 last integration (`<config>/guidelines-baseline.json`) and weaves it into the live copy,
 confirm-gated. See `skills/sync-guidelines/SKILL.md`. There is no force-overwrite deploy path —
-a previous one, `scripts/deploy-grooming.mjs`, blind-copied and silently destroyed vendored-local
+a previous one, `scripts/deploy-grooming.mjs`, blind-copied and silently destroyed vendored-local <!-- path-check:ignore -->
 content; it has been removed.
 
 `<config>` is resolved the same way by the loader: `$ORCHESTRATOR_CONFIG_DIR`, else a `config/`
