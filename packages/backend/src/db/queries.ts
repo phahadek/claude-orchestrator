@@ -1622,10 +1622,7 @@ export function getSessionLastActivityMs(sessionId: string): number | null {
  */
 export function getPendingToolUseCount(sessionId: string): number {
   const row = db
-    .prepare<
-      [string, string],
-      { count: number }
-    >(
+    .prepare<[string, string], { count: number }>(
       `SELECT COUNT(*) AS count FROM session_events
        WHERE session_id = ? AND event_type = 'tool_use'
          AND id > COALESCE(
