@@ -5,7 +5,10 @@ import {
   type DerivedSessionOutcome,
   type SessionStatusDeriverInput,
 } from '../sessionStatusDeriver';
-import { DESIGN_COMPLETING_REASONS } from '../completingSignalRegistry';
+import {
+  DESIGN_COMPLETING_REASONS,
+  PLANNING_OPERATOR_END_REASON,
+} from '../completingSignalRegistry';
 import type { CompletingSignalLedgerRow } from '../../db/types';
 
 function ledgerRow(
@@ -94,7 +97,7 @@ describe('deriveSessionStatus', () => {
           ledgerEntries: [
             ledgerRow({
               id: 1,
-              signal_value: 'planning_operator_end',
+              signal_value: PLANNING_OPERATOR_END_REASON,
               recorded_at: 1000,
             }),
             ledgerRow({
@@ -200,7 +203,9 @@ describe('deriveSessionStatus', () => {
     it('produces a reason that does NOT satisfy DESIGN_COMPLETING_REASONS.has(...) for an operator-ended session', () => {
       const result = deriveSessionStatus(
         baseInput({
-          ledgerEntries: [ledgerRow({ signal_value: 'planning_operator_end' })],
+          ledgerEntries: [
+            ledgerRow({ signal_value: PLANNING_OPERATOR_END_REASON }),
+          ],
         }),
       );
       expect(result).not.toBeNull();
