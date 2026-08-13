@@ -567,9 +567,7 @@ describe('SessionManager.resumeOrphanSessions()', () => {
     // (session/sessionStatusDeriver.ts) rather than writing sessions.status
     // directly: record a 'resume_exhausted' completing signal, derive the
     // outcome, then persist whatever the deriver returns.
-    expect(flagBlock).toMatch(
-      /signal_class:\s*'resume_exhausted'/,
-    );
+    expect(flagBlock).toMatch(/signal_class:\s*'resume_exhausted'/);
     expect(flagBlock).toMatch(/deriveSessionStatus\s*\(/);
     expect(flagBlock).toMatch(
       /updateSessionStatus\s*\(\s*row\.session_id\s*,\s*status\s*,/,
