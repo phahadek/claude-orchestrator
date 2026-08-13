@@ -8,6 +8,10 @@ import {
 import { getGateReadiness } from '../gate/gateService';
 import { getSeedReadiness } from '../seed/seedService';
 import { getOpsReadiness } from './opsReadiness';
+import {
+  listReportsByMilestone,
+  blocksMilestoneConvergence,
+} from '../investigation/reportStore';
 import { getTaskCache } from '../db/queries';
 import { runtimeSettings } from '../config';
 import type { NotionTask } from '../notion/types';
@@ -87,6 +91,18 @@ interface OpsAxis {
   blocking: OpsAxisBlockingItem[];
 }
 
+interface InvestigationReportAxisBlockingItem {
+  id: string;
+  title: string;
+  state: string;
+}
+
+interface InvestigationReportAxis {
+  status: 'green' | 'blocked';
+  blockingCount: number;
+  blocking: InvestigationReportAxisBlockingItem[];
+}
+
 export interface MilestoneConvergence {
   project: string;
   milestone: string;
@@ -97,6 +113,7 @@ export interface MilestoneConvergence {
     gate: GateAxis;
     seed: SeedAxis;
     ops: OpsAxis;
+    investigationReport: InvestigationReportAxis;
   };
 }
 
@@ -198,20 +215,39 @@ export function getMilestoneConvergence(
     blocking: opsReadiness.blocking,
   };
 
+  const reports = listReportsByMilestone(projectId, milestoneRow.id);
+  const blockingReports = reports.filter((r) =>
+    blocksMilestoneConvergence(r.state),
+  );
+  const investigationReport: InvestigationReportAxis = {
+    status: blockingReports.length === 0 ? 'green' : 'blocked',
+    blockingCount: blockingReports.length,
+    blocking: blockingReports.map((r) => ({
+      id: r.id,
+      title: r.title,
+      state: r.state,
+    })),
+  };
+
   const allGreen =
     tasks.status === 'green' &&
     gate.status === 'green' &&
     seed.status === 'green' &&
-    ops.status === 'green';
+    ops.status === 'green' &&
+    investigationReport.status === 'green';
 
-  const distanceToGreen = tasks.open + gate.blockingCount + seed.blockingCount;
+  const distanceToGreen =
+    tasks.open +
+    gate.blockingCount +
+    seed.blockingCount +
+    investigationReport.blockingCount;
 
   return {
     project: projectId,
     milestone: key,
     status: allGreen ? 'green' : 'blocked',
     distanceToGreen,
-    axes: { tasks, gate, seed, ops },
+    axes: { tasks, gate, seed, ops, investigationReport },
   };
 }
 
@@ -224,6 +260,7 @@ export interface MilestoneConvergenceSummary {
     gate: { status: 'green' | 'blocked'; blockingCount: number };
     seed: { status: 'green' | 'blocked'; blockingCount: number };
     ops: { status: 'green' | 'blocked'; blockingCount: number };
+    investigationReport: { status: 'green' | 'blocked'; blockingCount: number };
   };
 }
 
@@ -265,6 +302,10 @@ export function listProjectConvergence(
           ops: {
             status: full.axes.ops.status,
             blockingCount: full.axes.ops.blockingCount,
+          },
+          investigationReport: {
+            status: full.axes.investigationReport.status,
+            blockingCount: full.axes.investigationReport.blockingCount,
           },
         },
       };

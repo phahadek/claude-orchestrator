@@ -62,6 +62,7 @@ function makeConvergence(
       },
       seed: { status: 'green', blockingCount: 0, blocking: [] },
       ops: { status: 'green', blockingCount: 0, blocking: [] },
+      investigationReport: { status: 'green', blockingCount: 0, blocking: [] },
     },
     ...overrides,
   };
@@ -363,6 +364,11 @@ describe('MilestoneBurndown convergence header', () => {
             },
             seed: { status: 'green', blockingCount: 0, blocking: [] },
             ops: { status: 'green', blockingCount: 0, blocking: [] },
+            investigationReport: {
+              status: 'green',
+              blockingCount: 0,
+              blocking: [],
+            },
           },
         })}
         activePhase={null}
