@@ -7314,11 +7314,17 @@ function listFlaggedFlakyTests(
   windowN: number,
   thresholdK: number,
 ): FlaggedFlakyTest[] {
+  // GROUP BY test_id (not DISTINCT test_id, name) — a test's recorded name
+  // can vary across runs, and DISTINCT on both columns would fan out into
+  // duplicate testId rows. MAX(created_at) picks the most recent run's name
+  // per test_id, mirroring getRegressedTestsForProject's same bare-column-
+  // with-MAX() convention.
   _stmtDistinctProjectTestIds ??= db.prepare<{ project_id: string }>(`
-    SELECT DISTINCT trr.test_id AS test_id, trr.name AS name
+    SELECT trr.test_id AS test_id, trr.name AS name, MAX(trr.created_at) AS created_at
     FROM test_run_results trr
     JOIN test_request_runs r ON r.id = trr.test_request_run_id
     WHERE r.project_id = @project_id
+    GROUP BY trr.test_id
   `);
   const rows = _stmtDistinctProjectTestIds.all({
     project_id: projectId,

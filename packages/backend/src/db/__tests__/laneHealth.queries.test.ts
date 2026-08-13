@@ -329,5 +329,34 @@ describe('getLaneHealthRollup', () => {
       const result = getLaneHealthRollup('proj-1', 500, 20, 2);
       expect(result.flakyTests).toEqual({ count: 0, tests: [] });
     });
+
+    it('collapses a test_id into a single entry even when its recorded name varies across runs', () => {
+      const outcomes: Array<'passed' | 'failed'> = [
+        'passed',
+        'failed',
+        'passed',
+        'failed',
+      ];
+      outcomes.forEach((outcome, i) =>
+        insertTestResult({
+          projectId: 'proj-1',
+          testId: 'test-d',
+          name: i < 2 ? 'suite > renamed test (old)' : 'suite > renamed test',
+          outcome,
+          createdAt: i,
+        }),
+      );
+
+      const result = getLaneHealthRollup('proj-1', 500, 20, 2);
+      expect(result.flakyTests.count).toBe(1);
+      expect(result.flakyTests.tests).toEqual([
+        {
+          testId: 'test-d',
+          name: 'suite > renamed test',
+          sampleCount: 4,
+          transitionCount: 3,
+        },
+      ]);
+    });
   });
 });
