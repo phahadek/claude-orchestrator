@@ -73,9 +73,7 @@ function emitSessionEvent(
 }
 
 function runHeartbeatSweep(monitor: StuckSessionMonitor) {
-  (
-    monitor as unknown as { runHeartbeatSweep: () => void }
-  ).runHeartbeatSweep();
+  (monitor as unknown as { runHeartbeatSweep: () => void }).runHeartbeatSweep();
 }
 
 describe('StuckSessionMonitor intra-tool heartbeat', () => {
