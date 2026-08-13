@@ -116,6 +116,7 @@ vi.mock('../../config', () => ({
   GROOM_ALLOWED_TOOLS: [],
   DESIGN_ALLOWED_TOOLS: [],
   OPS_ALLOWED_TOOLS: [],
+  INVESTIGATE_ALLOWED_TOOLS: [],
   DOCS_ALLOWED_TOOLS: [],
   docsWebFetchTools: vi.fn().mockReturnValue([]),
   GITHUB_REPO: 'owner/repo',
