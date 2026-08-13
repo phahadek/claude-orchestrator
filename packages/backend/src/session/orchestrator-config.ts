@@ -635,6 +635,37 @@ export function getSessionAllowedTools(
 }
 
 /**
+ * A test-runner ecosystem: `detect` identifies whether any configured test
+ * command belongs to it (by its invoking package manager / interpreter),
+ * `wrappers` are the ways that ecosystem's coarse `ALLOWED_TOOLS` entries
+ * (`Bash(npm:*)`/`Bash(npx:*)`/`Bash(node:*)`, plus interpreters a project
+ * may add via its own `allowed_tools`) let a runner be invoked directly, and
+ * `runners` are that ecosystem's common test-runner CLI names. Only
+ * wrappers that ride on a prefix already coarse-allowed (or plausibly
+ * project-added, for the Python case) are listed — e.g. `yarn`/`pnpm` are
+ * omitted since neither appears in `ALLOWED_TOOLS`, so a bare `Bash(yarn:*)`
+ * call is already blocked by the allow-list, not by this deny layer.
+ */
+interface TestRunnerEcosystem {
+  detect: RegExp;
+  wrappers: string[];
+  runners: string[];
+}
+
+const TEST_RUNNER_ECOSYSTEMS: TestRunnerEcosystem[] = [
+  {
+    detect: /^(npm|npx|node)\b/,
+    wrappers: ['npx', 'npm exec'],
+    runners: ['vitest', 'jest', 'mocha', 'ava', 'tap', 'jasmine'],
+  },
+  {
+    detect: /^(uv|python3?|poetry|pytest)\b/,
+    wrappers: ['uv run', 'python -m', 'python3 -m', 'poetry run'],
+    runners: ['pytest'],
+  },
+];
+
+/**
  * Argument-level SDK `permissions.deny` rules for a code session, derived
  * from the project's configured `test:` commands (OrchestratorConfig.test —
  * the same list test.request/testRequestLane.ts runs as the authoritative
@@ -644,23 +675,44 @@ export function getSessionAllowedTools(
  * this is what actually enforces that at the tool layer, rather than relying
  * on the injected instructions alone.
  *
- * Each command becomes a `Bash(<command>:*)` prefix rule so trailing args
- * (`-- --run`, extra flags) are still caught. Deliberately narrow: it only
- * denies the exact configured invocations, leaving the coarse
- * `Bash(npm:*)`/`Bash(npx:*)`/`Bash(node:*)`/`Bash(tsc:*)` allow entries in
- * ALLOWED_TOOLS untouched, so install/build/typecheck commands keep working.
- * Only meaningful for `sessionType === 'standard'` (see isCodeSession) —
- * callers should gate on that before calling this with a non-empty list.
+ * Two layers of deny rule are generated:
+ *
+ * 1. Exact: each configured command becomes a `Bash(<command>:*)` prefix
+ *    rule so trailing args (`-- --run`, extra flags) are still caught.
+ * 2. Runner: a configured command like `npm run test -w packages/frontend`
+ *    only denies that literal invocation, leaving the underlying test
+ *    runner (vitest, resolved via the workspace's `package.json`, not
+ *    visible here) reachable directly through the same coarse `npx`/`node`
+ *    allow entries — `npx vitest run` runs the exact same suite without
+ *    matching rule 1. TEST_RUNNER_ECOSYSTEMS closes that gap: once any
+ *    configured command identifies a project as using an ecosystem (npm or
+ *    Python), every common test-runner CLI in that ecosystem is denied
+ *    across the wrapper forms (`npx <runner>`, `uv run <runner>`, bare
+ *    `<runner>`, ...) that ride on already-allowed prefixes.
+ *
+ * Deliberately leaves the coarse `Bash(npm:*)`/`Bash(npx:*)`/`Bash(node:*)`/
+ * `Bash(tsc:*)` allow entries in ALLOWED_TOOLS untouched — only the
+ * specific runner binaries are denied, not the package managers themselves,
+ * so install/build/typecheck commands keep working. Only meaningful for
+ * `sessionType === 'standard'` (see isCodeSession) — callers should gate on
+ * that before calling this with a non-empty list.
  */
 export function getTestCommandDenyPatterns(testCommands: string[]): string[] {
-  return [
-    ...new Set(
-      testCommands
-        .map((cmd) => cmd.trim())
-        .filter(Boolean)
-        .map((cmd) => `Bash(${cmd}:*)`),
-    ),
-  ];
+  const trimmed = testCommands.map((cmd) => cmd.trim()).filter(Boolean);
+  const exact = trimmed.map((cmd) => `Bash(${cmd}:*)`);
+
+  const runnerPatterns: string[] = [];
+  for (const eco of TEST_RUNNER_ECOSYSTEMS) {
+    if (!trimmed.some((cmd) => eco.detect.test(cmd))) continue;
+    for (const runner of eco.runners) {
+      runnerPatterns.push(`Bash(${runner}:*)`);
+      for (const wrapper of eco.wrappers) {
+        runnerPatterns.push(`Bash(${wrapper} ${runner}:*)`);
+      }
+    }
+  }
+
+  return [...new Set([...exact, ...runnerPatterns])];
 }
 
 /**

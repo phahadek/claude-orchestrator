@@ -617,21 +617,36 @@ describe('getSessionAddDirs', () => {
   });
 });
 
+/**
+ * Mirrors the SDK's `Bash(<prefix>:*)` deny-rule matching for test purposes
+ * only: a chained command (`&&`/`;`/`|`) is evaluated per simple command,
+ * and each simple command is denied if it equals, or starts with, one of
+ * the rules' prefixes.
+ */
+function isDeniedByPatterns(patterns: string[], command: string): boolean {
+  const prefixes = patterns
+    .map((p) => /^Bash\((.+):\*\)$/.exec(p)?.[1])
+    .filter((p): p is string => Boolean(p));
+  const simpleCommands = command.split(/&&|;|\|/).map((c) => c.trim());
+  return simpleCommands.some((sc) =>
+    prefixes.some((prefix) => sc === prefix || sc.startsWith(`${prefix} `)),
+  );
+}
+
 describe('getTestCommandDenyPatterns', () => {
   it('returns an empty list when no test commands are configured', () => {
     expect(getTestCommandDenyPatterns([])).toEqual([]);
   });
 
   it('turns each configured test command into a Bash(<command>:*) deny rule', () => {
-    expect(
-      getTestCommandDenyPatterns(['npm test', 'npm run test:unit']),
-    ).toEqual(['Bash(npm test:*)', 'Bash(npm run test:unit:*)']);
+    const denies = getTestCommandDenyPatterns(['npm test', 'npm run test:unit']);
+    expect(denies).toContain('Bash(npm test:*)');
+    expect(denies).toContain('Bash(npm run test:unit:*)');
   });
 
   it('dedupes and trims whitespace', () => {
-    expect(getTestCommandDenyPatterns([' npm test ', 'npm test', ''])).toEqual([
-      'Bash(npm test:*)',
-    ]);
+    const denies = getTestCommandDenyPatterns([' npm test ', 'npm test', '']);
+    expect(denies.filter((p) => p === 'Bash(npm test:*)')).toHaveLength(1);
   });
 
   it('never denies the coarse install/build/typecheck prefixes', () => {
@@ -639,6 +654,46 @@ describe('getTestCommandDenyPatterns', () => {
     expect(denies).not.toContain('Bash(npm:*)');
     expect(denies).not.toContain('Bash(npx:*)');
     expect(denies).not.toContain('Bash(tsc:*)');
+  });
+
+  describe('claude-dashboard-shaped config (npm run test -w <workspace>)', () => {
+    const denies = getTestCommandDenyPatterns([
+      'npm run test -w packages/frontend',
+      'npm run test -w packages/backend',
+    ]);
+
+    it.each([
+      'npx vitest run',
+      'npx vitest run src/routes/__tests__/stagedIntents.dispositionStranded.test.ts',
+      'cd packages/backend && npx vitest run',
+      'cd packages/backend && npx vitest run 2>&1 | tail -150',
+    ])('blocks the direct-runner bypass %s', (command) => {
+      expect(isDeniedByPatterns(denies, command)).toBe(true);
+    });
+
+    it.each([
+      'npx tsc --noEmit -p packages/backend/tsconfig.json',
+      'npm run build',
+      'npm ci',
+    ])('leaves %s permitted', (command) => {
+      expect(isDeniedByPatterns(denies, command)).toBe(false);
+    });
+  });
+
+  describe('polimarket-shaped config (uv run pytest)', () => {
+    const denies = getTestCommandDenyPatterns(['uv run pytest']);
+
+    it.each(['uv run pytest', 'uv run pytest tests/', 'pytest', 'python -m pytest'])(
+      'blocks the direct-runner invocation %s',
+      (command) => {
+        expect(isDeniedByPatterns(denies, command)).toBe(true);
+      },
+    );
+
+    it('does not block other uv run subcommands', () => {
+      expect(isDeniedByPatterns(denies, 'uv run ruff check')).toBe(false);
+      expect(isDeniedByPatterns(denies, 'uv sync')).toBe(false);
+    });
   });
 });
 

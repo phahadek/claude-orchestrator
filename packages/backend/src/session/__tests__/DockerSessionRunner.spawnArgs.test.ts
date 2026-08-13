@@ -62,6 +62,7 @@ import fs from 'fs';
 import os from 'os';
 import { execSync } from 'child_process';
 import { DockerSessionRunner } from '../DockerSessionRunner';
+import { getTestCommandDenyPatterns } from '../orchestrator-config';
 
 const SESSION_ID = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff';
 const RESUME_ID = 'bbbbcccc-dddd-eeee-ffff-aaaaaaaaaaaa';
@@ -406,7 +407,9 @@ describe('DockerSessionRunner test-command deny patterns', () => {
     const settingsIdx = claudeArgs.indexOf('--settings');
     expect(settingsIdx).not.toBe(-1);
     const settings = JSON.parse(claudeArgs[settingsIdx + 1]);
-    expect(settings.permissions.deny).toEqual(['Bash(npm test:*)']);
+    expect(settings.permissions.deny).toEqual(
+      getTestCommandDenyPatterns(['npm test']),
+    );
   });
 
   it('does not deny test commands for a non-code session (e.g. review)', async () => {
