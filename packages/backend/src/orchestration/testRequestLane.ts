@@ -79,9 +79,7 @@ export interface TestRequestRunResult extends TestCommandResult {
   joined: boolean;
 }
 
-function failureReasonFor(
-  result: TestCommandResult,
-): TestRequestFailureReason {
+function failureReasonFor(result: TestCommandResult): TestRequestFailureReason {
   if (result.timedOut) return 'timeout';
   if (result.oomKilled) return 'oom_killed';
   return 'generic';

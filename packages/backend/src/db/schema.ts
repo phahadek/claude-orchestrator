@@ -2076,9 +2076,7 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
   try {
-    target.exec(
-      `ALTER TABLE test_request_runs ADD COLUMN failure_reason TEXT`,
-    );
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN failure_reason TEXT`);
   } catch {
     /* already exists */
   }
