@@ -139,8 +139,9 @@
 .rationale {
   margin: 0;
   font-size: 0.82rem;
-  color: var(--text-muted);
-  font-style: italic;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .withdrawnBadge {

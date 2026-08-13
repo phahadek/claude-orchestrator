@@ -8,9 +8,19 @@ import { useCallback, useMemo, useState } from 'react';
  */
 const DEFAULT_COLLAPSE_LINES = 12;
 
+/**
+ * Character threshold — most staged decision.pickOne proposals and option
+ * descriptions never contain a newline at all (observed mean ~786/~563
+ * chars), so the line-count guard alone never fires on them. This sits
+ * below that mean so a typical single-paragraph proposal collapses.
+ */
+const DEFAULT_COLLAPSE_CHARS = 600;
+
 export interface CollapsibleText {
-  /** Whether the text exceeds the threshold and needs a toggle at all. */
+  /** Whether the text exceeds a threshold and needs a toggle at all. */
   shouldCollapse: boolean;
+  /** Which threshold triggered the collapse, if any — drives the toggle label. */
+  collapseReason: 'lines' | 'chars' | null;
   /** Local, ephemeral UI state — never persisted or WS-driven. */
   expanded: boolean;
   toggle: () => void;
@@ -28,19 +38,35 @@ export interface CollapsibleText {
 export function useCollapsibleText(
   text: string | null | undefined,
   collapseLines: number = DEFAULT_COLLAPSE_LINES,
+  collapseChars: number = DEFAULT_COLLAPSE_CHARS,
 ): CollapsibleText {
   const [expanded, setExpanded] = useState(false);
   const toggle = useCallback(() => setExpanded((e) => !e), []);
 
-  const lines = useMemo(() => (text ?? '').split('\n'), [text]);
-  const shouldCollapse = lines.length > collapseLines;
-  const displayText =
-    shouldCollapse && !expanded
-      ? lines.slice(0, collapseLines).join('\n')
-      : (text ?? '');
+  const value = text ?? '';
+  const lines = useMemo(() => value.split('\n'), [value]);
+  const collapseByLines = lines.length > collapseLines;
+  const collapseByChars = !collapseByLines && value.length > collapseChars;
+  const shouldCollapse = collapseByLines || collapseByChars;
+  const collapseReason: 'lines' | 'chars' | null = collapseByLines
+    ? 'lines'
+    : collapseByChars
+      ? 'chars'
+      : null;
+
+  const displayText = useMemo(() => {
+    if (!shouldCollapse || expanded) return value;
+    if (collapseByLines) {
+      return lines.slice(0, collapseLines).join('\n');
+    }
+    const truncated = value.slice(0, collapseChars);
+    const lastSpace = truncated.lastIndexOf(' ');
+    return value.slice(0, lastSpace > 0 ? lastSpace : collapseChars);
+  }, [shouldCollapse, expanded, collapseByLines, lines, collapseLines, value, collapseChars]);
 
   return {
     shouldCollapse,
+    collapseReason,
     expanded,
     toggle,
     displayText,

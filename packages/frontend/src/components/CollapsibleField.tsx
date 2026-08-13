@@ -13,7 +13,7 @@ interface Props {
  * defaults to collapsed with a ▼/▲ toggle otherwise.
  */
 export function CollapsibleField({ text, 'data-testid': dataTestId }: Props) {
-  const { shouldCollapse, expanded, toggle, displayText, lineCount } =
+  const { shouldCollapse, collapseReason, expanded, toggle, displayText, lineCount } =
     useCollapsibleText(text);
 
   return (
@@ -21,7 +21,11 @@ export function CollapsibleField({ text, 'data-testid': dataTestId }: Props) {
       <span className={styles.text}>{displayText}</span>
       {shouldCollapse && (
         <button type="button" className={styles.expandButton} onClick={toggle}>
-          {expanded ? '▲ Collapse' : `▼ Show all ${lineCount} lines`}
+          {expanded
+            ? '▲ Collapse'
+            : collapseReason === 'lines'
+              ? `▼ Show all ${lineCount} lines`
+              : '▼ Show more'}
         </button>
       )}
     </span>
