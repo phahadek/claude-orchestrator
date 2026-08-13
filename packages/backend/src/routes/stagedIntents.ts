@@ -127,7 +127,7 @@ import {
   defaultFollowupFiler,
   type GateVerificationResult,
 } from '../gate/gateReconciler';
-import type { ServerMessage } from '../ws/types';
+import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
 import { logger } from '../logger';
 import { getMilestoneConvergence } from '../convergence/convergenceService';
 import {
@@ -157,8 +157,10 @@ import {
   getSessionTestRequestCycleCount,
   incrementSessionTestRequestCycleCount,
   setSessionPauseReason,
+  listRunningTestRequestRuns,
+  getLatestTestRequestRun,
 } from '../db/queries';
-import type { TestRequestPayload } from '../db/types';
+import type { TestRequestPayload, TestRequestRunRow } from '../db/types';
 import type {
   PRReviewService,
   PRReviewResult,
@@ -1571,6 +1573,26 @@ function computeGroupBlockedSignals(
     blocked: blockedMemberCount > 0 || sessionIncomplete,
     blockedMemberCount,
     sessionIncomplete,
+  };
+}
+
+/** Maps a test_request_runs row to the same shape testRequestLane.ts broadcasts over WS. */
+function testRequestRunRowToApi(
+  row: TestRequestRunRow,
+): TestRequestRunStatusPayload {
+  return {
+    runId: row.id,
+    projectId: row.project_id,
+    contentHash: row.content_hash,
+    status:
+      row.state === 'running'
+        ? 'running'
+        : row.state === 'passed'
+          ? 'passed'
+          : 'failed-with-cause',
+    output: row.state === 'failed' ? row.output : undefined,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at ?? undefined,
   };
 }
 
@@ -7084,6 +7106,29 @@ export function createStagedIntentsRouter(
   // rankDecisions — joined against that milestone's convergence read-surface
   // where resolvable, unranked-by-blocking (kind/direction + needs-attention
   // only) for the unattributed bucket or an unresolvable milestone.
+  // ── GET /api/test-request-runs ────────────────────────────────────────────
+  // On-load snapshot counterpart to testRequestLane.ts's
+  // test_request_run_status WS broadcast — REST stays the fetch/apply source
+  // of truth (mirrors task_updated / staged_intent_changed), the WS message
+  // only tells a connected client a run transitioned. Deliberately not
+  // gated by isVisibleOnDecisionSurface: a lane run's progress is not a
+  // decision-surface concept, unlike the test.request staged intent itself.
+  router.get('/test-request-runs', (req: Request, res: Response) => {
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    const contentHash =
+      typeof req.query.contentHash === 'string' ? req.query.contentHash : null;
+    if (!projectId || !contentHash) {
+      res.status(400).json({ error: 'projectId and contentHash are required' });
+      return;
+    }
+    const running = listRunningTestRequestRuns().find(
+      (r) => r.project_id === projectId && r.content_hash === contentHash,
+    );
+    const row = running ?? getLatestTestRequestRun(projectId, contentHash);
+    res.json({ run: row ? testRequestRunRowToApi(row) : null });
+  });
+
   router.get('/staged-intents', (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;

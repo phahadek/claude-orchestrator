@@ -91,6 +91,29 @@ export interface AdmissionStallState {
   detail?: Record<string, unknown>;
 }
 
+/**
+ * The test.request lane run lifecycle, as broadcast by testRequestLane.ts on
+ * run-started and run-completed transitions — independent of
+ * isVisibleOnDecisionSurface, since a lane run's progress is not a
+ * decision-surface concept (unlike the test.request staged intent itself,
+ * which staged_intent_changed withholds while `state === 'approved'`).
+ * Mirrors the REST-truth + WS-notification pattern of task_updated: GET
+ * /test-request-runs is the fetch/apply source of truth for an on-load
+ * snapshot, this message only tells a connected client to refetch.
+ */
+type TestRequestRunStatus = 'running' | 'passed' | 'failed-with-cause';
+
+export interface TestRequestRunStatusPayload {
+  runId: string;
+  projectId: string;
+  contentHash: string;
+  status: TestRequestRunStatus;
+  /** Present only when status is 'failed-with-cause' — the run's captured output. */
+  output?: string;
+  startedAt: number;
+  finishedAt?: number;
+}
+
 /** Full live-state snapshot of a task, sent in task_updated WS messages. */
 export interface TaskView {
   taskId: string;
@@ -337,6 +360,7 @@ export type ServerMessage =
       type: 'staged_intent_changed';
       intent: StagedIntent;
     }
+  | ({ type: 'test_request_run_status' } & TestRequestRunStatusPayload)
   | {
       type: 'auto_launch';
       projectId: string;

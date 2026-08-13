@@ -112,6 +112,7 @@ import {
   stageIntent,
   withdrawGateVerifyMirror,
 } from './routes/stagedIntents';
+import { setTestRequestLaneBroadcast } from './orchestration/testRequestLane';
 import { createOrchestratorMcpRouter } from './mcp/orchestratorMcpServer';
 import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
 import { createOpsJournalRouter } from './routes/opsJournal';
@@ -378,6 +379,8 @@ setTaskBroadcast(broadcast);
 setEnrollmentBroadcast(broadcast);
 // Wire broadcast into the staged-intents route (for staged_intent_changed WS messages)
 setStagedIntentBroadcast(broadcast);
+// Wire broadcast into the test.request lane (for test_request_run_status WS messages)
+setTestRequestLaneBroadcast(broadcast);
 
 // Scheduler: constructed once, broadcast wired in, exposed to diagnostics route
 const scheduler = new Scheduler();
