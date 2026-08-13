@@ -85,6 +85,8 @@ import type {
   StagedIntentRow,
   StagedIntentState,
   StagedIntentGroupRow,
+  CompletingSignalLedgerRow,
+  NewCompletingSignalLedgerRow,
   FlowArmRow,
   ConvergenceSnapshotRow,
   NewConvergenceSnapshotRow,
@@ -9365,4 +9367,41 @@ export function clearUsageDeferral(window: UsageDeferralWindow): void {
     `DELETE FROM usage_deferral WHERE window = ?`,
   );
   _stmtDeleteUsageDeferral.run(window);
+}
+
+// ─── completing_signal_ledger ────────────────────────────────────────────────
+// New, additive infrastructure for session/sessionStatusDeriver.ts — no
+// existing writer inserts into this table yet. See the schema comment on
+// completing_signal_ledger in schema.ts.
+
+let _stmtInsertCompletingSignal: Database.Statement | null = null;
+let _stmtListCompletingSignalsForSession: Database.Statement | null = null;
+
+/** Append a completing-signal observation for a session. Synchronous, single-row insert — never batched. */
+export function insertCompletingSignal(
+  entry: NewCompletingSignalLedgerRow,
+): void {
+  _stmtInsertCompletingSignal ??= db.prepare<NewCompletingSignalLedgerRow>(`
+    INSERT INTO completing_signal_ledger
+      (session_id, task_id, session_type, signal_class, signal_value, recorded_at)
+    VALUES
+      (@session_id, @task_id, @session_type, @signal_class, @signal_value, @recorded_at)
+  `);
+  _stmtInsertCompletingSignal.run(entry);
+}
+
+/** All completing-signal ledger rows for a session, oldest first. */
+export function listCompletingSignalsForSession(
+  sessionId: string,
+): CompletingSignalLedgerRow[] {
+  _stmtListCompletingSignalsForSession ??= db.prepare<{
+    session_id: string;
+  }>(`
+    SELECT * FROM completing_signal_ledger
+    WHERE session_id = @session_id
+    ORDER BY recorded_at ASC, id ASC
+  `);
+  return _stmtListCompletingSignalsForSession.all({
+    session_id: sessionId,
+  }) as CompletingSignalLedgerRow[];
 }

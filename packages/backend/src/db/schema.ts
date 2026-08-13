@@ -2158,4 +2158,27 @@ export function runMigrations(target: Database.Database): void {
       updated_at          INTEGER NOT NULL
     );
   `);
+
+  // completing_signal_ledger: durable, append-only record of each
+  // completing-signal observation the (not-yet-wired) session-status
+  // deriver reads from — see session/sessionStatusDeriver.ts and
+  // session/completingSignalRegistry.ts. A row is written synchronously by
+  // whatever call site detects the signal (a staged intent reaching a
+  // terminal state, a PR merge/close event), never polled/batched in
+  // afterward. Additive-only: no existing writer inserts into this table
+  // yet, and nothing reads it to drive real session_status writes yet — see
+  // the migration task that wires real call sites through the deriver.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS completing_signal_ledger (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT    NOT NULL,
+      task_id      TEXT,
+      session_type TEXT    NOT NULL,
+      signal_class TEXT    NOT NULL,
+      signal_value TEXT    NOT NULL,
+      recorded_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_completing_signal_ledger_session
+      ON completing_signal_ledger(session_id, recorded_at DESC);
+  `);
 }
