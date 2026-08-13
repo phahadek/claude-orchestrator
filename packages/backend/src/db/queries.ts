@@ -6963,6 +6963,25 @@ export function listBuildingDependencyCacheEntries(): DependencyCacheEntryRow[] 
     .all() as DependencyCacheEntryRow[];
 }
 
+/** `ready` rows oldest-used first — used by DependencyCacheReconciler's eviction sweep. */
+export function listReadyDependencyCacheEntries(): DependencyCacheEntryRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM dependency_cache_entries WHERE status = 'ready' ORDER BY last_used_at ASC`,
+    )
+    .all() as DependencyCacheEntryRow[];
+}
+
+/** Removes a (project_id, lock_hash) row — used by DependencyCacheReconciler after it deletes the on-disk entry. */
+export function deleteDependencyCacheEntry(
+  projectId: string,
+  lockHash: string,
+): void {
+  db.prepare(
+    `DELETE FROM dependency_cache_entries WHERE project_id = ? AND lock_hash = ?`,
+  ).run(projectId, lockHash);
+}
+
 // ─── session_test_request_cycles ───────────────────────────────────────────
 
 export function getSessionTestRequestCycleCount(sessionId: string): number {

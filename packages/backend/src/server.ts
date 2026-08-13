@@ -75,6 +75,7 @@ import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiv
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
+import { register as registerDependencyCacheReconciler } from './orchestration/DependencyCacheReconciler';
 import { register as registerScheduledAuditSweep } from './orchestration/ScheduledAuditSweep';
 import {
   register as registerGateReconciler,
@@ -594,6 +595,7 @@ stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 convergenceSnapshotJob.register(scheduler);
 registerWorktreeReconciler(scheduler);
+registerDependencyCacheReconciler(scheduler);
 // Daily base-branch dependency/license-audit sweep — independent of any PR,
 // closes the gap the per-PR analyze gate's diff-triggered skip leaves for
 // manifests no PR ever touches.
