@@ -8,6 +8,7 @@ import { phaseForTask } from '../utils/phaseBurndown';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { DecisionPickOnePanel } from './DecisionPickOnePanel';
 import { TriageBatchPanel } from './TriageBatchPanel';
+import { InvestigationReportSection } from './InvestigationReportSection';
 import { GroupCard } from './GroupCard';
 import { taskIdFor } from './triageVerdict';
 import {
@@ -302,7 +303,7 @@ export function MilestoneDecisionInbox({
     };
   }, [gateItemIdsKey]);
 
-  if (!loaded || intents.length === 0) return null;
+  if (!loaded) return null;
 
   const cardOrder = buildCardOrder(intents).filter((card) => {
     const taskId =
@@ -314,15 +315,21 @@ export function MilestoneDecisionInbox({
 
   return (
     <div className={styles.inbox} data-testid="milestone-decision-inbox">
-      <div className={styles.heading}>Decisions ({intents.length})</div>
+      <InvestigationReportSection projectId={projectId} milestone={milestone} />
 
-      <TriageBatchPanel
-        cleanGroupIds={cleanGroupIds}
-        includedCount={includedCleanGroupIds.length}
-        inFlight={batchInFlight}
-        error={batchError}
-        onApprove={() => void handleApproveAllClean()}
-      />
+      {intents.length > 0 && (
+        <>
+          <div className={styles.heading}>Decisions ({intents.length})</div>
+
+          <TriageBatchPanel
+            cleanGroupIds={cleanGroupIds}
+            includedCount={includedCleanGroupIds.length}
+            inFlight={batchInFlight}
+            error={batchError}
+            onApprove={() => void handleApproveAllClean()}
+          />
+        </>
+      )}
 
       {cardOrder.map((card) => {
         if (card.type === 'intent') {
