@@ -734,6 +734,10 @@ export interface RuntimeSettings {
   gate_verify_session_model: string;
   /** Reasoning effort for gate-verify sessions; empty string = fall back to ops_session_effort. */
   gate_verify_session_effort: string;
+  /** Model used for investigate sessions (task_id `report-batch:<id>`); empty string = fall back to ops_session_model. */
+  investigate_session_model: string;
+  /** Reasoning effort for investigate sessions; empty string = fall back to ops_session_effort. */
+  investigate_session_effort: string;
   /** Model used for grooming sessions; empty string = fall back to planning_session_model. */
   groom_session_model: string;
   /** Reasoning effort for grooming sessions; empty string = fall back to planning_session_effort. */
@@ -824,6 +828,8 @@ export const runtimeSettings: RuntimeSettings = {
   ops_session_effort: '',
   gate_verify_session_model: '',
   gate_verify_session_effort: '',
+  investigate_session_model: '',
+  investigate_session_effort: '',
   groom_session_model: '',
   groom_session_effort: '',
   design_session_model: '',

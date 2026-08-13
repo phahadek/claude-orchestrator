@@ -59,6 +59,8 @@ const SETTING_KEYS = [
   'ops_session_effort',
   'gate_verify_session_model',
   'gate_verify_session_effort',
+  'investigate_session_model',
+  'investigate_session_effort',
   'groom_session_model',
   'groom_session_effort',
   'design_session_model',
@@ -199,6 +201,12 @@ function applyToRuntime(
     case 'gate_verify_session_effort':
       runtimeSettings.gate_verify_session_effort = value as string;
       break;
+    case 'investigate_session_model':
+      runtimeSettings.investigate_session_model = value as string;
+      break;
+    case 'investigate_session_effort':
+      runtimeSettings.investigate_session_effort = value as string;
+      break;
     case 'groom_session_model':
       runtimeSettings.groom_session_model = value as string;
       break;
@@ -312,6 +320,8 @@ function runtimeSettingsAsRecord(): {
     ops_session_effort: runtimeSettings.ops_session_effort,
     gate_verify_session_model: runtimeSettings.gate_verify_session_model,
     gate_verify_session_effort: runtimeSettings.gate_verify_session_effort,
+    investigate_session_model: runtimeSettings.investigate_session_model,
+    investigate_session_effort: runtimeSettings.investigate_session_effort,
     groom_session_model: runtimeSettings.groom_session_model,
     groom_session_effort: runtimeSettings.groom_session_effort,
     design_session_model: runtimeSettings.design_session_model,

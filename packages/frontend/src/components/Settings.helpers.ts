@@ -15,6 +15,8 @@ export interface SettingsValues {
   ops_session_effort: string;
   gate_verify_session_model: string;
   gate_verify_session_effort: string;
+  investigate_session_model: string;
+  investigate_session_effort: string;
   groom_session_model: string;
   groom_session_effort: string;
   design_session_model: string;
@@ -71,6 +73,8 @@ const NON_NUMERIC_KEYS = new Set<keyof SettingsValues>([
   'ops_session_effort',
   'gate_verify_session_model',
   'gate_verify_session_effort',
+  'investigate_session_model',
+  'investigate_session_effort',
   'groom_session_model',
   'groom_session_effort',
   'design_session_model',
