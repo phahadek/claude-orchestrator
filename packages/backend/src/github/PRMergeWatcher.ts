@@ -637,6 +637,43 @@ export class PRMergeWatcher extends EventEmitter {
         return; // Gated on failing tests — skip GitHub mergeability evaluation
       }
       // No result yet (test hasn't run) or test passed → fall through
+
+      // ── Test-report acquisition failure (non-blocking) ────────────────────
+      // Independent of the ci_failing branch above: a declared
+      // test_report_glob whose run left structured_result null (missing/
+      // malformed report, or the run was killed before teardown) is a
+      // manifest/config problem for a human to look at — but it must never
+      // block mergeability for a PR whose underlying test exit code passed,
+      // so this never returns early.
+      if (
+        testResult &&
+        config.test_report_glob &&
+        testResult.structured_result === null &&
+        testResult.state !== 'failed'
+      ) {
+        setPauseReason(
+          pr.pr_number,
+          pr.repo,
+          'test_report_acquisition_failed',
+          testResult.output ? testResult.output.slice(0, 1000) : undefined,
+        );
+      } else if (
+        testResult &&
+        testResult.structured_result !== null &&
+        parsePauseReason(pr.pause_reason)?.reason ===
+          'test_report_acquisition_failed'
+      ) {
+        // A subsequent run successfully acquired a report — clear the stale
+        // pause, mirroring tryCIFailingRecovery's clear-on-recovery for
+        // ci_failing.
+        setPauseReason(pr.pr_number, pr.repo, null);
+        this.broadcast({
+          type: 'pr_pause_cleared',
+          prNumber: pr.pr_number,
+          repo: pr.repo,
+        });
+      }
+      // ─────────────────────────────────────────────────────────────────────
     }
     // ─────────────────────────────────────────────────────────────────────────
 

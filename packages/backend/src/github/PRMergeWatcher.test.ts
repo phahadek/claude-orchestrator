@@ -3685,6 +3685,159 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       true,
     );
   });
+
+  it('sets test_report_acquisition_failed and still evaluates mergeability when report is missing but test passed', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_report_glob: '**/junit.xml',
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      structured_result: null,
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'test_report_acquisition_failed',
+      'All tests passed',
+    );
+    // Non-blocking: mergeability evaluation still proceeded
+    expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
+  });
+
+  it('does not set test_report_acquisition_failed when test_report_glob is not configured', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_report_glob: '',
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      structured_result: null,
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'test_report_acquisition_failed',
+      expect.anything(),
+    );
+  });
+
+  it('clears a stale test_report_acquisition_failed pause once a report is successfully acquired', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+      pause_reason: 'test_report_acquisition_failed',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_report_glob: '**/junit.xml',
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-2',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      structured_result: '{"tests":[]}',
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      null,
+    );
+  });
 });
 
 // ── handlePushDetected — post-gate-failure direct enqueue ─────────────────────

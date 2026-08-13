@@ -134,6 +134,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Manual verification required — review the checklist and sign off to allow auto-merge.',
   test_request_cycle_exceeded:
     'Session exceeded its test.request cycle limit — review and resume manually.',
+  test_report_acquisition_failed:
+    'Test report declared but not acquired — the report was missing, malformed, or the run was killed before teardown. Fix the test harness/glob; this does not block merge if tests passed.',
 };
 
 function verdictLabel(verdict: string): string {

@@ -55,7 +55,8 @@ export type CanonicalPauseReason =
   | 'usage_limit_deferred'
   | 'api_overloaded_exhausted'
   | 'manual_verification_pending'
-  | 'test_request_cycle_exceeded';
+  | 'test_request_cycle_exceeded'
+  | 'test_report_acquisition_failed';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -328,6 +329,18 @@ export const PAUSE_REASON_REGISTRY: Record<
   // a one-click redispatch/resume that would just resume the same loop.
   test_request_cycle_exceeded: {
     source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // The project declared test_report_glob but the test.request lane's
+  // JUnit-XML acquisition/parser/normalizer left structured_result null —
+  // a missing/malformed report or a run killed before teardown. This is a
+  // manifest/config problem a human must fix (bad glob, harness not writing
+  // the report, etc.); nothing auto-recovers it. Deliberately independent
+  // of ci_failing: it never blocks mergeability when the underlying test
+  // exit code passed — see PRMergeWatcher's own-branch handling.
+  test_report_acquisition_failed: {
+    source: 'tests',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },

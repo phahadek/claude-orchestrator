@@ -155,6 +155,9 @@ export function CIBadges({
   const showCiFailing =
     mergeState === 'ci_failed' || (isCIPause && !showBillingBlocked);
   const showAnalyzeFailing = pauseStruct?.source === 'analyze';
+  const showTestReportAcquisitionFailed =
+    pauseStruct?.source === 'tests' &&
+    pauseStruct.reason === 'test_report_acquisition_failed';
   const showUnstable = mergeState === 'unstable';
   const showRunning = mergeState === 'ci_running';
 
@@ -162,6 +165,7 @@ export function CIBadges({
     !showCiFailing &&
     !showBillingBlocked &&
     !showAnalyzeFailing &&
+    !showTestReportAcquisitionFailed &&
     !showUnstable &&
     !showRunning &&
     !awaitingReReview
@@ -208,6 +212,14 @@ export function CIBadges({
           title="Static analysis gate failed — fix the reported issues and re-push."
         >
           ❌ Analyze failing
+        </span>
+      )}
+      {showTestReportAcquisitionFailed && (
+        <span
+          className={styles.ciBadge}
+          title="Test report declared but not acquired — the report was missing, malformed, or the run was killed before teardown. Does not block merge if tests passed."
+        >
+          ⚠️ Test report missing
         </span>
       )}
       {showUnstable && (
