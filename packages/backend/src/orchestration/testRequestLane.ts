@@ -37,6 +37,8 @@ import {
   listTestRequestRunsNeedingExtraction,
   hasTestRunResults,
   insertTestRunResults,
+  listRecentValidTestDurations,
+  upsertTestPerfBaseline,
 } from '../db/queries';
 import type {
   TestRequestFailureReason,
@@ -326,6 +328,89 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
     run.concurrent_run_count ?? null,
     !!run.oom_killed,
   );
+
+  for (const testId of new Set(tests.map((t) => t.test_id))) {
+    computeTestPerfBaseline(testId);
+  }
+}
+
+// ─── per-test rolling median/MAD duration baseline ─────────────────────────
+// Locked by the "Design per-test performance monitoring" design task: a
+// rolling median + MAD baseline over the last N *valid* samples
+// (concurrent_run_count = 0, oom_killed = false — see
+// listRecentValidTestDurations), flagging a regression only once a minimum
+// run of MIN_CONSECUTIVE_REGRESSED_SAMPLES consecutive valid samples all
+// exceed median + REGRESSION_K * MAD. The consecutive-run guard is what
+// keeps a single noisy sample from tripping a regression.
+
+/** Size of the trailing valid-sample window the median/MAD baseline is computed over. */
+const BASELINE_WINDOW_SAMPLES = 20;
+/** How many of the most recent valid samples must all exceed the threshold to flag a regression. */
+const MIN_CONSECUTIVE_REGRESSED_SAMPLES = 3;
+/** Number of MADs above the median a sample must be to count as "high". */
+const REGRESSION_K = 3;
+
+function median(sorted: number[]): number {
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
+function medianAbsoluteDeviation(values: number[], center: number): number {
+  const deviations = values.map((v) => Math.abs(v - center)).sort((a, b) => a - b);
+  return median(deviations);
+}
+
+/**
+ * Recomputes and persists the rolling baseline for a single test_id from its
+ * most recent valid samples. Safe to call for any test_id with at least one
+ * valid sample; a no-op (no write) if there are none. Called inline for
+ * every test_id touched by a just-extracted run, per the locked design's
+ * "updated per ingestion" language.
+ */
+export function computeTestPerfBaseline(testId: string): void {
+  const samples = listRecentValidTestDurations(
+    testId,
+    BASELINE_WINDOW_SAMPLES + MIN_CONSECUTIVE_REGRESSED_SAMPLES,
+  );
+  if (samples.length === 0) return;
+
+  const lastDuration = samples[0];
+
+  if (samples.length <= MIN_CONSECUTIVE_REGRESSED_SAMPLES) {
+    // Not enough history yet to separate a baseline window from a
+    // consecutive-run check — persist the aggregate over what exists, never
+    // flagged, so the summary is still queryable once pruning kicks in.
+    const sorted = [...samples].sort((a, b) => a - b);
+    const med = median(sorted);
+    upsertTestPerfBaseline({
+      test_id: testId,
+      median_duration_ms: med,
+      mad_duration_ms: medianAbsoluteDeviation(samples, med),
+      sample_count: samples.length,
+      last_duration_ms: lastDuration,
+      is_regressed: false,
+    });
+    return;
+  }
+
+  const recent = samples.slice(0, MIN_CONSECUTIVE_REGRESSED_SAMPLES);
+  const baselineSamples = samples.slice(MIN_CONSECUTIVE_REGRESSED_SAMPLES);
+  const sortedBaseline = [...baselineSamples].sort((a, b) => a - b);
+  const baselineMedian = median(sortedBaseline);
+  const baselineMad = medianAbsoluteDeviation(baselineSamples, baselineMedian);
+  const threshold = baselineMedian + REGRESSION_K * baselineMad;
+  const isRegressed = recent.every((d) => d > threshold);
+
+  upsertTestPerfBaseline({
+    test_id: testId,
+    median_duration_ms: baselineMedian,
+    mad_duration_ms: baselineMad,
+    sample_count: baselineSamples.length,
+    last_duration_ms: lastDuration,
+    is_regressed: isRegressed,
+  });
 }
 
 /**

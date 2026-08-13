@@ -1089,6 +1089,33 @@ export interface NewTestRunResultRow {
   duration_ms: number;
 }
 
+// ─── test_perf_baselines ────────────────────────────────────────────────────
+
+/**
+ * Rolling per-test duration baseline (median/MAD over the last N valid
+ * samples), persisted so it outlives raw test_run_results row pruning — see
+ * computeTestPerfBaseline in orchestration/testRequestLane.ts. Recomputed
+ * inline at ingestion completion for every test_id touched by that run.
+ */
+export interface TestPerfBaselineRow {
+  test_id: string;
+  median_duration_ms: number;
+  mad_duration_ms: number;
+  sample_count: number;
+  last_duration_ms: number;
+  is_regressed: number;
+  updated_at: number;
+}
+
+export interface NewTestPerfBaselineRow {
+  test_id: string;
+  median_duration_ms: number;
+  mad_duration_ms: number;
+  sample_count: number;
+  last_duration_ms: number;
+  is_regressed: boolean;
+}
+
 // ─── arch_unit ────────────────────────────────────────────────────────────
 
 /** A single titled architecture statement. */

@@ -34,6 +34,7 @@ import {
   recoverInterruptedTestRequestRuns,
   ingestTestRunResults,
   sweepTestRunResultsExtraction,
+  computeTestPerfBaseline,
 } from '../testRequestLane';
 import {
   insertTestRequestRun,
@@ -41,6 +42,8 @@ import {
   listRunningTestRequestRuns,
   getLatestTestRequestRun,
   listTestRunResultsForRun,
+  insertTestRunResults,
+  getTestPerfBaseline,
 } from '../../db/queries';
 
 beforeEach(() => {
@@ -49,7 +52,26 @@ beforeEach(() => {
   mockHasAdmission.mockReturnValue(true);
   db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
+  db.prepare('DELETE FROM test_perf_baselines').run();
 });
+
+let sampleSeq = 0;
+
+/** Inserts one test_run_results row (with a backing test_request_runs row for the FK) for a given test_id/duration/validity. */
+function insertSample(
+  testId: string,
+  durationMs: number,
+  opts: { concurrentRunCount?: number; oomKilled?: boolean } = {},
+): void {
+  const runId = `perf-run-${testId}-${sampleSeq++}`;
+  insertTestRequestRun(runId, 'proj-1', `perf-hash-${runId}`, null, Date.now());
+  insertTestRunResults(
+    runId,
+    [{ test_id: testId, name: testId, outcome: 'passed', duration_ms: durationMs }],
+    opts.concurrentRunCount ?? 0,
+    opts.oomKilled ?? false,
+  );
+}
 
 function baseSpec(
   overrides: Partial<Parameters<typeof runProjectTestRequest>[0]> = {},
@@ -415,5 +437,113 @@ describe('sweepTestRunResultsExtraction', () => {
     sweepTestRunResultsExtraction();
 
     expect(listTestRunResultsForRun('run-sweep-2')).toHaveLength(1);
+  });
+});
+
+// ── computeTestPerfBaseline — rolling per-test median/MAD baseline ─────────
+
+describe('computeTestPerfBaseline', () => {
+  it('excludes concurrent/OOM-marked samples from the baseline', () => {
+    const testId = 'baseline-excludes-invalid';
+    for (let i = 0; i < 10; i++) insertSample(testId, 100);
+    // Invalid samples with wildly different durations must not move the
+    // median/MAD at all.
+    insertSample(testId, 9999, { concurrentRunCount: 2 });
+    insertSample(testId, 1, { oomKilled: true });
+
+    computeTestPerfBaseline(testId);
+
+    const baseline = getTestPerfBaseline(testId)!;
+    expect(baseline.median_duration_ms).toBe(100);
+    expect(baseline.mad_duration_ms).toBe(0);
+    expect(baseline.sample_count).toBe(7); // 10 valid samples minus the 3-sample recent window
+  });
+
+  it('does not flag a regression from a single noisy sample', () => {
+    const testId = 'single-noisy-sample';
+    for (let i = 0; i < 12; i++) insertSample(testId, 100);
+    insertSample(testId, 100);
+    insertSample(testId, 100);
+    insertSample(testId, 1000); // one noisy outlier as the most recent sample
+
+    computeTestPerfBaseline(testId);
+
+    const baseline = getTestPerfBaseline(testId)!;
+    expect(baseline.is_regressed).toBe(0);
+    expect(baseline.last_duration_ms).toBe(1000);
+  });
+
+  it('flags a regression from a sustained duration shift across the minimum consecutive run', () => {
+    const testId = 'sustained-shift';
+    for (let i = 0; i < 15; i++) insertSample(testId, 100);
+    insertSample(testId, 500);
+    insertSample(testId, 500);
+    insertSample(testId, 500);
+
+    computeTestPerfBaseline(testId);
+
+    const baseline = getTestPerfBaseline(testId)!;
+    expect(baseline.is_regressed).toBe(1);
+    expect(baseline.median_duration_ms).toBe(100);
+  });
+
+  it('persists the per-test aggregate, overwriting the previous baseline rather than appending', () => {
+    const testId = 'persists-aggregate';
+    for (let i = 0; i < 10; i++) insertSample(testId, 50);
+
+    computeTestPerfBaseline(testId);
+    const first = getTestPerfBaseline(testId)!;
+    expect(first.sample_count).toBeGreaterThan(0);
+
+    insertSample(testId, 60);
+    computeTestPerfBaseline(testId);
+
+    const rows = db
+      .prepare('SELECT * FROM test_perf_baselines WHERE test_id = ?')
+      .all(testId);
+    expect(rows).toHaveLength(1);
+    const second = getTestPerfBaseline(testId)!;
+    expect(second.last_duration_ms).toBe(60);
+  });
+
+  it('is a no-op when there are no valid samples for the test', () => {
+    computeTestPerfBaseline('never-seen-test');
+    expect(getTestPerfBaseline('never-seen-test')).toBeUndefined();
+  });
+});
+
+describe('ingestTestRunResults — inline baseline recomputation', () => {
+  it('recomputes the per-test baseline for every test_id touched by the extracted run', () => {
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [
+            { id: 'inline-t1', name: 'n1', outcome: 'passed', durationMs: 42 },
+          ],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-inline-baseline',
+      'proj-1',
+      'hash-inline-baseline',
+      null,
+      Date.now(),
+      0,
+    );
+    completeTestRequestRun(
+      'run-inline-baseline',
+      'passed',
+      'ok',
+      null,
+      structured,
+    );
+
+    const run = getLatestTestRequestRun('proj-1', 'hash-inline-baseline')!;
+    ingestTestRunResults(run);
+
+    const baseline = getTestPerfBaseline('inline-t1');
+    expect(baseline).toBeDefined();
+    expect(baseline!.last_duration_ms).toBe(42);
   });
 });
