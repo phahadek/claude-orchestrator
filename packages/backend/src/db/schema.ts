@@ -2177,9 +2177,14 @@ export function runMigrations(target: Database.Database): void {
   // session/completingSignalRegistry.ts. A row is written synchronously by
   // whatever call site detects the signal (a staged intent reaching a
   // terminal state, a PR merge/close event), never polled/batched in
-  // afterward. Additive-only: no existing writer inserts into this table
-  // yet, and nothing reads it to drive real session_status writes yet — see
-  // the migration task that wires real call sites through the deriver.
+  // afterward. As of the shared-primitives dual-write migration, the shared
+  // status-write primitives (db/queries.ts's markSessionDone/markSessionIdle/
+  // updateSessionStatus/markSessionSuperseded/applyPendingDone) and the
+  // type-agnostic sweeps also mirror every real write here under the
+  // 'legacy_status_write' class (see CompletingSignalClass) — additive only,
+  // nothing reads it to drive real session_status writes yet. See the
+  // sibling migration tasks that wire per-session-type call sites through
+  // the deriver.
   target.exec(`
     CREATE TABLE IF NOT EXISTS completing_signal_ledger (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,

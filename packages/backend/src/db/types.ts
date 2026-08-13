@@ -1195,20 +1195,32 @@ export interface ArchUnitQuery {
 
 /**
  * The signal shapes a completing-signal ledger row can carry — see
- * session/completingSignalRegistry.ts, which this vocabulary must stay in
+ * session/completingSignalRegistry.ts, which the first two must stay in
  * sync with. 'staged_intent' rows record a staged intent reaching a
  * terminal, decision-bearing state; 'external_pr_event' rows record a
  * pull_requests outcome (merge or close-without-merge) for a session that
- * opened its own PR; 'resume_exhausted' rows record a session's poke/resume
- * retry budget running out (see SessionManager.flagResumeFailure) — a
- * session-level circuit breaker independent of task type, interpreted
- * directly by session/sessionStatusDeriver.ts rather than via the
- * per-triple registry.
+ * opened its own PR — both read by session/sessionStatusDeriver.ts.
+ * 'resume_exhausted' rows record a session's poke/resume retry budget
+ * running out (see SessionManager.flagResumeFailure) — a session-level
+ * circuit breaker independent of task type, interpreted directly by the
+ * deriver rather than via the per-triple registry.
+ *
+ * 'legacy_status_write' is the dual-write bridge's own class: a mirror of a
+ * legacy sessions.status/archived write made by one of the shared
+ * primitives (markSessionDone, markSessionIdle, updateSessionStatus,
+ * markSessionSuperseded, applyPendingDone) or by the type-agnostic sweeps
+ * (sessionLivenessReconciler, ConcludedSessionArchiver, routes/sessions.ts),
+ * recorded purely for future comparison against the deriver's output.
+ * Deliberately not consumed by sessionStatusDeriver.ts today — it exists so
+ * the ledger has full write coverage ahead of any per-session-type
+ * read-cutover, without that cutover needing to touch these shared writers
+ * again.
  */
 export type CompletingSignalClass =
   | 'staged_intent'
   | 'external_pr_event'
-  | 'resume_exhausted';
+  | 'resume_exhausted'
+  | 'legacy_status_write';
 
 export interface CompletingSignalLedgerRow {
   id: number;

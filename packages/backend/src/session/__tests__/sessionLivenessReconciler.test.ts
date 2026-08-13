@@ -31,6 +31,7 @@ import {
   countLivePlanningSessions,
   insertEvent,
   updateSessionStatus,
+  listCompletingSignalsForSession,
 } from '../../db/queries.js';
 import { runtimeSettings } from '../../config';
 import {
@@ -82,6 +83,16 @@ describe('reconcileSessionLiveness', () => {
       .prepare('SELECT status FROM sessions WHERE session_id = ?')
       .get('ghost-running') as { status: string };
     expect(row.status).toBe('killed');
+
+    // The liveness-sweep kill write goes through updateSessionStatus, which
+    // now mirrors it into completing_signal_ledger — see the shared-primitives
+    // dual-write migration.
+    const signals = listCompletingSignalsForSession('ghost-running');
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toMatchObject({
+      signal_class: 'legacy_status_write',
+      signal_value: 'killed',
+    });
   });
 
   it('reconciles an idle session with no live OS process to a terminal status', () => {
