@@ -73,30 +73,37 @@ export function useTestLaneRunStatus(params: {
 
   useEffect(() => {
     setStatus(null);
-    if (!projectId || !sessionId) return;
+    if (!projectId || !sessionId) return undefined;
     let cancelled = false;
+    // A live WS delta always supersedes the mount-time REST snapshot — set
+    // once a WS message for this (projectId, sessionId) arrives, so the
+    // snapshot fetch's `.then` (which can resolve after a faster WS message,
+    // since the two race independently) never clobbers fresher WS state with
+    // what was already-stale data at the time the fetch was issued.
+    let wsUpdateReceived = false;
+
+    const unsubscribe = subscribeTestRequestRunStatus((payload) => {
+      if (payload.projectId !== projectId || payload.sessionId !== sessionId) {
+        return;
+      }
+      wsUpdateReceived = true;
+      setStatus(toStatus(payload));
+    });
+
     apiRequest<{ run: TestRequestRunStatusPayload | null }>(
       `/api/test-request-runs?projectId=${encodeURIComponent(projectId)}&sessionId=${encodeURIComponent(sessionId)}`,
     )
       .then((res) => {
-        if (!cancelled) setStatus(toStatus(res.run));
+        if (!cancelled && !wsUpdateReceived) setStatus(toStatus(res.run));
       })
       .catch(() => {
         /* no lane run yet for this session, or a transient fetch failure — leave status unset */
       });
+
     return () => {
       cancelled = true;
+      unsubscribe();
     };
-  }, [projectId, sessionId]);
-
-  useEffect(() => {
-    if (!projectId || !sessionId) return undefined;
-    return subscribeTestRequestRunStatus((payload) => {
-      if (payload.projectId !== projectId || payload.sessionId !== sessionId) {
-        return;
-      }
-      setStatus(toStatus(payload));
-    });
   }, [projectId, sessionId]);
 
   if (pauseReason === 'test_request_cycle_exceeded') {
