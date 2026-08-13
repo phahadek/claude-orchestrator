@@ -9,8 +9,10 @@ import { db } from '../db/db.js';
 import {
   markSessionDone,
   markSessionIdle,
-  applyPendingDone,
+  insertStagedIntent,
+  getSessionsWithUnappliedPendingDone,
 } from '../db/queries';
+import type { StagedIntentRow } from '../db/types';
 
 function insertSession(
   sessionId: string,
@@ -63,8 +65,40 @@ function getAuditRows(
   }>;
 }
 
+function stageIntent(
+  sessionId: string,
+  overrides: Partial<StagedIntentRow> = {},
+): StagedIntentRow {
+  const now = Date.now();
+  const row: StagedIntentRow = {
+    id: `intent-${sessionId}`,
+    kind: 'task.setStatus',
+    payload: JSON.stringify({ taskId: `task-${sessionId}`, status: 'Ready' }),
+    payload_hash: `hash-${sessionId}`,
+    task_id: `task-${sessionId}`,
+    project_id: 'proj-1',
+    session_id: sessionId,
+    group_id: null,
+    milestone: null,
+    state: 'staged',
+    supersedes: null,
+    annotation: null,
+    decision_proposal: null,
+    groom_proposal: null,
+    advisory: null,
+    disposition_reason: null,
+    answer: null,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+  insertStagedIntent(row);
+  return row;
+}
+
 beforeEach(() => {
   db.prepare('DELETE FROM session_events').run();
+  db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM audit_log').run();
 });
@@ -125,7 +159,7 @@ describe('markSessionIdle terminal guard', () => {
     expect(row?.pr_url).toBe('https://github.com/o/r/pull/1');
   });
 
-  it("mirrors PlanningOrchestrator.markTerminal's ordering: a markSessionDone call made while the turn is still in flight defers instead of racing the clean-exit chain's markSessionIdle, and the deferred done still wins once applied", () => {
+  it("mirrors PlanningOrchestrator.markTerminal's ordering: a markSessionDone call made while the turn is still in flight defers, and the running-to-idle transition drains it directly instead of parking at idle first", () => {
     insertSession('sess-planning', 'running', { taskId: 'task-plan' });
 
     // Turn still in flight (status='running') — markSessionDone must not
@@ -139,17 +173,82 @@ describe('markSessionIdle terminal guard', () => {
     expect(getRow('sess-planning')?.status).toBe('running');
 
     // Ending the session's subprocess drives a clean exit; AgentSession's
-    // clean-exit chain calls markSessionIdle for a planning session
-    // regardless of the deferred mark above.
-    markSessionIdle('sess-planning', Date.now(), null);
-    expect(getRow('sess-planning')?.status).toBe('idle');
-
-    // SessionManager applies the deferred transition once the turn has
-    // genuinely completed (its run() promise settles) — the deferred 'done'
-    // wins over the idle write that preceded it.
-    expect(applyPendingDone('sess-planning')).toBe(true);
+    // clean-exit chain calls markSessionIdle for a planning session — the
+    // pending done is now drained right here rather than parking at idle
+    // and waiting on a later run()-settle/boot-sweep backstop.
+    const effective = markSessionIdle('sess-planning', Date.now(), null);
+    expect(effective).toBe('done');
     const row = getRow('sess-planning');
     expect(row?.status).toBe('done');
+  });
+
+  it('drains a pending_done directly to done when a running session transitions off running to idle', () => {
+    insertSession('sess-review', 'running', { taskId: 'task-review' });
+
+    markSessionDone(
+      'sess-review',
+      1000,
+      'https://github.com/o/r/pull/9',
+      'auto_merger',
+    );
+    expect(getRow('sess-review')?.status).toBe('running');
+
+    const effective = markSessionIdle('sess-review', 2000, null);
+
+    expect(effective).toBe('done');
+    const row = getRow('sess-review');
+    expect(row?.status).toBe('done');
+  });
+
+  it('preserves the pending pr_url and ended_at over the idle call’s own values when draining', () => {
+    insertSession('sess-pending-pr', 'running');
+
+    markSessionDone(
+      'sess-pending-pr',
+      1000,
+      'https://github.com/o/r/pull/42',
+      'auto_merger',
+    );
+
+    markSessionIdle(
+      'sess-pending-pr',
+      9999,
+      'https://github.com/o/r/pull/should-not-win',
+    );
+
+    const row = getRow('sess-pending-pr');
+    expect(row?.status).toBe('done');
+    expect(row?.ended_at).toBe(1000);
+    expect(row?.pr_url).toBe('https://github.com/o/r/pull/42');
+  });
+
+  it('still transitions to idle, leaving the pending_done intact, when the session holds an undispositioned staged intent', () => {
+    insertSession('sess-staged', 'running', { taskId: 'task-staged' });
+
+    markSessionDone('sess-staged', 1000, null, 'auto_merger');
+    stageIntent('sess-staged', { state: 'staged' });
+
+    const effective = markSessionIdle('sess-staged', 2000, null);
+
+    expect(effective).toBe('idle');
+    const row = getRow('sess-staged');
+    expect(row?.status).toBe('idle');
+
+    // The pending row is left intact for a later drain.
+    const pending = getSessionsWithUnappliedPendingDone();
+    expect(pending.map((s) => s.session_id)).toContain('sess-staged');
+  });
+
+  it('still transitions to idle when the session holds an approved (not yet staged-only) staged intent', () => {
+    insertSession('sess-approved', 'running', { taskId: 'task-approved' });
+
+    markSessionDone('sess-approved', 1000, null, 'auto_merger');
+    stageIntent('sess-approved', { state: 'approved' });
+
+    const effective = markSessionIdle('sess-approved', 2000, null);
+
+    expect(effective).toBe('idle');
+    expect(getRow('sess-approved')?.status).toBe('idle');
   });
 
   it('does not overwrite an existing pr_url when the guard fires', () => {

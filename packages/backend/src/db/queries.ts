@@ -625,9 +625,20 @@ let _stmtBackfillPrUrlIfNull: Database.Statement | null = null;
  * find it.
  *
  * Returns the row's effective status after the call — 'idle' when the write
- * landed, or the pre-existing terminal status when it was skipped — so
- * callers can broadcast what's actually in the database instead of assuming
- * the write always lands.
+ * landed, 'done' when a deferred pending_done was drained instead (see
+ * below), or the pre-existing terminal status when the terminal guard fired
+ * — so callers can broadcast what's actually in the database instead of
+ * assuming the write always lands.
+ *
+ * Pending-done drain: reaching a non-running status is exactly the boundary
+ * markSessionDone's docstring promises the deferred transition drains on
+ * (see applyPendingDone) — a session that parks alive between turns never
+ * exits and never settles a run() promise again, so without this drain
+ * point a pending_done written after a session's last turn boundary is
+ * never applied. Skipped when the session holds an undispositioned staged
+ * intent (staged/approved) — see hasUndispositionedStagedIntentsForSession
+ * — so a planning session parked awaiting operator disposition stays idle,
+ * not done, per boot orphan recovery's same invariant.
  */
 export function markSessionIdle(
   sessionId: string,
@@ -636,7 +647,11 @@ export function markSessionIdle(
   callSite?: string,
 ): SessionStatus {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
-    | { status: SessionStatus; task_id: string | null }
+    | {
+        status: SessionStatus;
+        task_id: string | null;
+        pending_done_ended_at: number | null;
+      }
     | undefined;
   if (current && TERMINAL_SESSION_STATUSES.has(current.status)) {
     recordEvent({
@@ -658,6 +673,13 @@ export function markSessionIdle(
       _stmtBackfillPrUrlIfNull.run({ session_id: sessionId, pr_url: prUrl });
     }
     return current.status;
+  }
+  if (
+    current?.pending_done_ended_at != null &&
+    !hasUndispositionedStagedIntentsForSession(sessionId)
+  ) {
+    applyPendingDone(sessionId);
+    return 'done';
   }
   _stmtMarkSessionIdle ??= db.prepare<{
     session_id: string;
