@@ -373,15 +373,15 @@ function extractChildText(
   content: string,
   tag: 'failure' | 'error' | 'skipped',
 ): { message?: string; text?: string } | null {
-  const re = new RegExp(
-    `<${tag}\\b([^>]*?)(?:/>|>([\\s\\S]*?)</${tag}>)`,
-  );
+  const re = new RegExp(`<${tag}\\b([^>]*?)(?:/>|>([\\s\\S]*?)</${tag}>)`);
   const match = content.match(re);
   if (!match) return null;
   const message = getXmlAttr(match[1] ?? '', 'message');
   const rawText = match[2];
   const text = rawText
-    ? decodeXmlEntities(stripCData(rawText)).trim().slice(0, FAILURE_TRACE_EXCERPT_CAP)
+    ? decodeXmlEntities(stripCData(rawText))
+        .trim()
+        .slice(0, FAILURE_TRACE_EXCERPT_CAP)
     : undefined;
   return { message, text: text || undefined };
 }

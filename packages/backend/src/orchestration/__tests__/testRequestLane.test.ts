@@ -12,12 +12,15 @@ vi.mock('../../db/db', async () => {
   return { db: setupTestDb() };
 });
 
-const { mockRunTestCommands, mockCollectStructuredTestResult, mockHasAdmission } =
-  vi.hoisted(() => ({
-    mockRunTestCommands: vi.fn(),
-    mockCollectStructuredTestResult: vi.fn(() => null),
-    mockHasAdmission: vi.fn(() => true),
-  }));
+const {
+  mockRunTestCommands,
+  mockCollectStructuredTestResult,
+  mockHasAdmission,
+} = vi.hoisted(() => ({
+  mockRunTestCommands: vi.fn(),
+  mockCollectStructuredTestResult: vi.fn(() => null),
+  mockHasAdmission: vi.fn(() => true),
+}));
 
 vi.mock('../../session/test-runner', () => ({
   runTestCommands: mockRunTestCommands,
