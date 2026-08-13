@@ -850,9 +850,9 @@ describe('NotionClient.applyPageEdit()', () => {
   });
 
   it('leaves parseTaskId itself unmodified — a bare uuid still throws (applyPageEdit normalizes before parseTaskId ever sees it)', () => {
-    expect(() =>
-      parseTaskId('3a322f91-52f3-8165-9613-f265dfe4d874'),
-    ).toThrow(/Invalid task ID \(no colon\)/);
+    expect(() => parseTaskId('3a322f91-52f3-8165-9613-f265dfe4d874')).toThrow(
+      /Invalid task ID \(no colon\)/,
+    );
   });
 });
 
