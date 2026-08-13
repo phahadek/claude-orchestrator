@@ -664,12 +664,27 @@ describe('sendOrResume() prune + reattach', () => {
 
 describe('sendOrResume() poke-retry budget for worktree_recreate_failed', () => {
   it('does not touch the task crash budget on a worktree-recreate failure', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if ((cmd as string).includes('worktree add')) {
-        throw makeWorktreeError('fatal: some unrecoverable error');
-      }
-      return '' as never;
-    });
+    // gitWorktreeAddWithRetry uses the promisified async exec, not execSync —
+    // simulate the failure on the actual code path.
+    mockExecCallback.mockImplementation(
+      (
+        cmd: string,
+        opts: unknown,
+        cb?: (err: unknown, result?: unknown) => void,
+      ) => {
+        const callback = (typeof opts === 'function' ? opts : cb) as (
+          err: unknown,
+          result?: unknown,
+        ) => void;
+        if (cmd.includes('worktree add')) {
+          process.nextTick(() =>
+            callback(makeWorktreeError('fatal: some unrecoverable error')),
+          );
+        } else {
+          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+        }
+      },
+    );
 
     const sm = new SessionManager();
     await sm.sendOrResume(SESSION_ID, 'fix this');
@@ -682,12 +697,27 @@ describe('sendOrResume() poke-retry budget for worktree_recreate_failed', () => 
 
   it('does not write task_pause_reasons or terminalize the session below the poke-retry limit', async () => {
     vi.mocked(queries.incrementSessionPokeRetryCount).mockReturnValue(1);
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if ((cmd as string).includes('worktree add')) {
-        throw makeWorktreeError('fatal: some error');
-      }
-      return '' as never;
-    });
+    // gitWorktreeAddWithRetry uses the promisified async exec, not execSync —
+    // simulate the failure on the actual code path.
+    mockExecCallback.mockImplementation(
+      (
+        cmd: string,
+        opts: unknown,
+        cb?: (err: unknown, result?: unknown) => void,
+      ) => {
+        const callback = (typeof opts === 'function' ? opts : cb) as (
+          err: unknown,
+          result?: unknown,
+        ) => void;
+        if (cmd.includes('worktree add')) {
+          process.nextTick(() =>
+            callback(makeWorktreeError('fatal: some error')),
+          );
+        } else {
+          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+        }
+      },
+    );
 
     const sm = new SessionManager();
     await sm.sendOrResume(SESSION_ID, 'fix this');
