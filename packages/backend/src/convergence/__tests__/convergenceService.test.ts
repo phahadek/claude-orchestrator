@@ -2,11 +2,12 @@
  * Tests for the milestone convergence read-surface
  * (packages/backend/src/convergence/convergenceService.ts).
  *
- * AC: green iff every one of the four axes (tasks/gate/seed/ops) is green;
- * distanceToGreen excludes the ops axis; a source_id-null milestone degrades
- * to gate/seed/ops with the task axis reported unavailable; an absent or
- * stale task_cache board row also reports the task axis unavailable, never
- * green.
+ * AC: green iff every one of the five axes (tasks/gate/seed/ops/
+ * investigationReport) is green; distanceToGreen excludes the ops axis but
+ * includes investigationReport; a source_id-null milestone degrades to
+ * gate/seed/ops/investigationReport with the task axis reported unavailable;
+ * an absent or stale task_cache board row also reports the task axis
+ * unavailable, never green.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -16,6 +17,12 @@ const gateServiceMock = vi.hoisted(() => ({ getGateReadiness: vi.fn() }));
 const seedServiceMock = vi.hoisted(() => ({ getSeedReadiness: vi.fn() }));
 const opsReadinessMock = vi.hoisted(() => ({ getOpsReadiness: vi.fn() }));
 const queriesMock = vi.hoisted(() => ({ getTaskCache: vi.fn() }));
+const reportStoreMock = vi.hoisted(() => ({
+  listReportsByMilestone: vi.fn(),
+  blocksMilestoneConvergence: vi.fn(
+    (state: string) => state !== 'resolved' && state !== 'abandoned',
+  ),
+}));
 
 vi.mock('../../projects/ProjectService.js', () => ({
   ProjectService: projectServiceMock,
@@ -24,6 +31,7 @@ vi.mock('../../gate/gateService.js', () => gateServiceMock);
 vi.mock('../../seed/seedService.js', () => seedServiceMock);
 vi.mock('../opsReadiness.js', () => opsReadinessMock);
 vi.mock('../../db/queries.js', () => queriesMock);
+vi.mock('../../investigation/reportStore.js', () => reportStoreMock);
 
 import { runtimeSettings } from '../../config.js';
 import {
@@ -73,16 +81,46 @@ beforeEach(() => {
   seedServiceMock.getSeedReadiness.mockReturnValue(GREEN_SEED);
   opsReadinessMock.getOpsReadiness.mockReturnValue(GREEN_OPS);
   queriesMock.getTaskCache.mockReturnValue(boardRow([]));
+  reportStoreMock.listReportsByMilestone.mockReturnValue([]);
 });
 
 describe('getMilestoneConvergence', () => {
-  it('is green when all four axes are green', () => {
+  it('is green when all five axes are green', () => {
     const result = getMilestoneConvergence('p1', 'M12');
     expect(result.status).toBe('green');
     expect(result.axes.tasks.status).toBe('green');
     expect(result.axes.gate.status).toBe('green');
     expect(result.axes.seed.status).toBe('green');
     expect(result.axes.ops.status).toBe('green');
+    expect(result.axes.investigationReport.status).toBe('green');
+  });
+
+  it('is blocked when an investigation_report is unresolved', () => {
+    reportStoreMock.listReportsByMilestone.mockReturnValue([
+      { id: 'r1', title: 'Weird spike', state: 'committed' },
+    ]);
+    const result = getMilestoneConvergence('p1', 'M12');
+    expect(result.status).toBe('blocked');
+    expect(result.axes.investigationReport.status).toBe('blocked');
+    expect(result.axes.investigationReport.blockingCount).toBe(1);
+    expect(result.axes.investigationReport.blocking).toEqual([
+      { id: 'r1', title: 'Weird spike', state: 'committed' },
+    ]);
+    expect(reportStoreMock.listReportsByMilestone).toHaveBeenCalledWith(
+      'p1',
+      MILESTONE.id,
+    );
+  });
+
+  it('is unaffected by resolved/abandoned investigation_reports', () => {
+    reportStoreMock.listReportsByMilestone.mockReturnValue([
+      { id: 'r1', title: 'Old spike', state: 'resolved' },
+      { id: 'r2', title: 'False alarm', state: 'abandoned' },
+    ]);
+    const result = getMilestoneConvergence('p1', 'M12');
+    expect(result.status).toBe('green');
+    expect(result.axes.investigationReport.status).toBe('green');
+    expect(result.axes.investigationReport.blockingCount).toBe(0);
   });
 
   it('is blocked when the task axis has open tasks', () => {
@@ -203,7 +241,7 @@ describe('getMilestoneConvergence', () => {
     expect(seedServiceMock.getSeedReadiness).toHaveBeenCalledWith('p1', 'M12');
   });
 
-  it('distanceToGreen sums open tasks + gate blocking + seed blocking, excluding ops', () => {
+  it('distanceToGreen sums open tasks + gate blocking + seed blocking + investigationReport blocking, excluding ops', () => {
     queriesMock.getTaskCache.mockReturnValue(
       boardRow([{ id: 'notion:1', title: 'A task', status: '🔲 Backlog' }]),
     );
@@ -253,8 +291,11 @@ describe('getMilestoneConvergence', () => {
       ],
       blockingCount: 3,
     });
+    reportStoreMock.listReportsByMilestone.mockReturnValue([
+      { id: 'r1', title: 'Weird spike', state: 'committed' },
+    ]);
     const result = getMilestoneConvergence('p1', 'M12');
-    expect(result.distanceToGreen).toBe(1 + 2 + 1);
+    expect(result.distanceToGreen).toBe(1 + 2 + 1 + 1);
   });
 
   it('reports the task axis unavailable (not green) for a source_id-null milestone, converging over gate/seed/ops only', () => {
