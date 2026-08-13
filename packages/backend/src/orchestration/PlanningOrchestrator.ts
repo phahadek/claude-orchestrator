@@ -13,6 +13,7 @@ import {
   TERMINAL_SESSION_STATUSES,
   hasActiveCapabilityRequestForSession,
   listIdlePlanningSessionsEligibleForTerminalSweep,
+  insertCompletingSignal,
 } from '../db/queries';
 import type {
   Session,
@@ -623,6 +624,20 @@ export class PlanningOrchestrator {
     // closeDeferredOpsTask, which reads this back well after the session
     // has ended to drive the ops-journal route's deferred close.
     setSessionTerminalCompletionReason(sessionId, reason);
+    // Dual-write bridge (see session/completingSignalRegistry.ts and
+    // sessionStatusDeriver.ts): mirror this session's terminal reason into
+    // completing_signal_ledger as a 'staged_intent' signal, ahead of any
+    // read-side cutover for this session_type. Purely additive — never
+    // gates, alters, or is awaited by the legacy writes above, so it cannot
+    // change their observable behavior.
+    insertCompletingSignal({
+      session_id: sessionId,
+      task_id: row.task_id ?? null,
+      session_type: row.session_type,
+      signal_class: 'staged_intent',
+      signal_value: reason,
+      recorded_at: Date.now(),
+    });
     this.stagedCountAtResume.delete(sessionId);
     this.noDecisionNudgeSent.delete(sessionId);
     this.blockedMembersNudgeSentFor.delete(sessionId);
