@@ -23,6 +23,7 @@ import {
   computeSessionCgroupLimits,
   setupSessionCgroup,
   placeSessionPid,
+  killSessionCgroup,
   reapplySessionCgroupLimits,
   _resetForTesting,
   _setSessionsPathForTesting,
@@ -208,6 +209,137 @@ describe('reapplySessionCgroupLimits', () => {
     );
     expect(writtenPaths).toContain(
       '/sys/fs/cgroup/orchestrator.service/sessions/memory.swap.max',
+    );
+  });
+});
+
+describe('placeSessionPid with a sessionId — per-session sub-cgroup', () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+  });
+
+  it('creates the per-session sub-cgroup dir and writes the pid into its cgroup.procs', () => {
+    _setSessionsPathForTesting(
+      '/sys/fs/cgroup/system.slice/orchestrator.service/sessions',
+    );
+    const mkdirSpy = vi
+      .spyOn(fs, 'mkdirSync')
+      .mockImplementation(() => undefined as any);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+
+    placeSessionPid(4242, 'aaaabbbb-cccc-dddd-eeee-ffffffffffff');
+
+    expect(mkdirSpy).toHaveBeenCalledWith(
+      '/sys/fs/cgroup/system.slice/orchestrator.service/sessions/aaaabbbb-cccc-dddd-eeee-ffffffffffff',
+      { recursive: true },
+    );
+    expect(writeSpy).toHaveBeenCalledWith(
+      '/sys/fs/cgroup/system.slice/orchestrator.service/sessions/aaaabbbb-cccc-dddd-eeee-ffffffffffff/cgroup.procs',
+      '4242',
+    );
+  });
+
+  it('sanitizes a sessionId containing path-unsafe characters', () => {
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined as any);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+
+    placeSessionPid(1, '../../etc/passwd');
+
+    const writtenPath = String(writeSpy.mock.calls[0][0]);
+    expect(writtenPath).not.toContain('..');
+    expect(
+      writtenPath.startsWith('/sys/fs/cgroup/orchestrator.service/sessions/'),
+    ).toBe(true);
+  });
+});
+
+describe('killSessionCgroup', () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+  });
+
+  it('targets a cgroup path derived from the session id, never by process name or scanning', () => {
+    _setSessionsPathForTesting(
+      '/sys/fs/cgroup/system.slice/orchestrator.service/sessions',
+    );
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+    vi.spyOn(fs, 'rmdirSync').mockImplementation(() => undefined as any);
+
+    killSessionCgroup('aaaabbbb-cccc-dddd-eeee-ffffffffffff');
+
+    expect(writeSpy).toHaveBeenCalledWith(
+      '/sys/fs/cgroup/system.slice/orchestrator.service/sessions/aaaabbbb-cccc-dddd-eeee-ffffffffffff/cgroup.kill',
+      '1',
+    );
+  });
+
+  it('removes the per-session sub-cgroup directory after killing it', () => {
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
+    const rmdirSpy = vi
+      .spyOn(fs, 'rmdirSync')
+      .mockImplementation(() => undefined as any);
+
+    killSessionCgroup('session-1');
+
+    expect(rmdirSpy).toHaveBeenCalledWith(
+      '/sys/fs/cgroup/orchestrator.service/sessions/session-1',
+    );
+  });
+
+  it('is idempotent — does not throw and does not write when the sub-cgroup is already gone', () => {
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+    const writeSpy = vi.spyOn(fs, 'writeFileSync');
+
+    expect(() => killSessionCgroup('session-already-gone')).not.toThrow();
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the delegated subtree was never set up', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync');
+    expect(() => killSessionCgroup('some-session')).not.toThrow();
+    expect(existsSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not throw when the cgroup.kill write fails (e.g. dir raced away)', () => {
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    expect(() => killSessionCgroup('session-1')).not.toThrow();
+  });
+
+  it('only ever writes under this session id — a sibling session path is untouched', () => {
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    vi.spyOn(fs, 'existsSync').mockImplementation(
+      (p) => p === '/sys/fs/cgroup/orchestrator.service/sessions/session-a',
+    );
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+    vi.spyOn(fs, 'rmdirSync').mockImplementation(() => undefined as any);
+
+    killSessionCgroup('session-a');
+
+    for (const call of writeSpy.mock.calls) {
+      expect(String(call[0])).not.toContain('session-b');
+    }
+    expect(writeSpy).toHaveBeenCalledWith(
+      '/sys/fs/cgroup/orchestrator.service/sessions/session-a/cgroup.kill',
+      '1',
     );
   });
 });

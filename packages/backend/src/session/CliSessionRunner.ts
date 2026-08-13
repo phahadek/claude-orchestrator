@@ -12,7 +12,7 @@ import type {
   SessionRunnerOptions,
 } from './SessionRunner';
 import { logger } from '../logger';
-import { placeSessionPid } from './sessionCgroup';
+import { placeSessionPid, killSessionCgroup } from './sessionCgroup';
 import { isPlanningSession, isCodeSession } from './sessionPredicates';
 import {
   getSessionAddDirs,
@@ -213,7 +213,7 @@ export class CliSessionRunner implements ISessionRunner {
     });
 
     if (this.proc.pid) {
-      placeSessionPid(this.proc.pid);
+      placeSessionPid(this.proc.pid, this.sessionId);
     }
 
     // Async stdin errors (e.g. EPIPE when the child exits) must not bubble up
@@ -331,7 +331,13 @@ export class CliSessionRunner implements ISessionRunner {
     if (this.proc?.stdin?.writable) {
       this.proc.stdin.end();
     }
-    return this.waitForExitOrEscalate(concludedCleanly);
+    const escalated = await this.waitForExitOrEscalate(concludedCleanly);
+    // Backstop, always run regardless of how the CLI process itself exited:
+    // a daemonized grandchild (setsid()) can outlive this.proc — and thus
+    // outlive the process-group kill above — even when this.proc exited
+    // cleanly on its own and waitForExitOrEscalate never called kill().
+    killSessionCgroup(this.sessionId);
+    return escalated;
   }
 
   /**
@@ -364,26 +370,33 @@ export class CliSessionRunner implements ISessionRunner {
   }
 
   async kill(): Promise<void> {
-    if (!this.proc || this.proc.exitCode !== null) return;
-    try {
-      this.killProcessTree(this.proc.pid!, 'SIGTERM');
-    } catch {
-      // Process may have exited between guard check and here
-    }
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        try {
-          this.killProcessTree(this.proc!.pid!, 'SIGKILL');
-        } catch {
-          // Already gone
-        }
-        resolve();
-      }, 15_000);
-      this.proc!.once('exit', () => {
-        clearTimeout(timeout);
-        resolve();
+    if (this.proc && this.proc.exitCode === null) {
+      try {
+        this.killProcessTree(this.proc.pid!, 'SIGTERM');
+      } catch {
+        // Process may have exited between guard check and here
+      }
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => {
+          try {
+            this.killProcessTree(this.proc!.pid!, 'SIGKILL');
+          } catch {
+            // Already gone
+          }
+          resolve();
+        }, 15_000);
+        this.proc!.once('exit', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
       });
-    });
+    }
+    // Backstop: reaches grandchildren that escaped this.proc's process
+    // group (setsid()) or were re-parented after it exited — the
+    // process-group kill above can never see those. Runs unconditionally
+    // (even when this.proc was already gone above) since such a
+    // grandchild can outlive this.proc entirely.
+    killSessionCgroup(this.sessionId);
   }
 
   private killProcessTree(

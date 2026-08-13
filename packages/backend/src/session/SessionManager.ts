@@ -31,6 +31,7 @@ import {
 } from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
 import { CliSessionRunner } from './CliSessionRunner';
+import { killSessionCgroup } from './sessionCgroup';
 import {
   revokeStageCredential,
   mintStageCredential,
@@ -4074,9 +4075,14 @@ export class SessionManager extends EventEmitter {
     // out of scope here, recovered by resumeOrphanSessions/manual sweep)
     // or a stale reference dropped by reconcileSessionsMap, which now
     // reaps the process before ever evicting the entry. Either way there
-    // is no live handle left in this process to escalate against here, so
-    // only the worktree is finalized.
+    // is no live handle left in this process to escalate the process
+    // itself against, so only the worktree is finalized. The session's
+    // cgroup is keyed by sessionId alone (no live handle required), so it
+    // is torn down here regardless — this is the only path that reaps a
+    // daemonized grandchild left behind when a prior CliSessionRunner
+    // instance (and its in-memory session) is already gone.
     this._teardownIdleSessionWorktree(sessionId);
+    killSessionCgroup(sessionId);
   }
 
   /**
