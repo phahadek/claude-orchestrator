@@ -4,6 +4,8 @@ import { EventEmitter } from 'events';
 vi.mock('../../db/queries', () => ({
   getSession: vi.fn(),
   markSessionDone: vi.fn(),
+  setSessionTerminalCompletionReason: vi.fn(),
+  insertCompletingSignal: vi.fn(),
   hasActiveCapabilityRequestForSession: vi.fn().mockReturnValue(false),
   TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
 }));
@@ -22,6 +24,8 @@ import { SessionGateItemVerifier } from '../gateItemVerifier';
 import {
   getSession,
   markSessionDone,
+  setSessionTerminalCompletionReason,
+  insertCompletingSignal,
   hasActiveCapabilityRequestForSession,
 } from '../../db/queries';
 import { appendGateItemEvent } from '../gateService';
@@ -52,6 +56,8 @@ describe('SessionGateItemVerifier — leaves a reporting session live, archives 
   beforeEach(() => {
     vi.mocked(getSession).mockReset();
     vi.mocked(markSessionDone).mockReset();
+    vi.mocked(setSessionTerminalCompletionReason).mockReset();
+    vi.mocked(insertCompletingSignal).mockReset();
     vi.mocked(appendGateItemEvent).mockReset();
     vi.mocked(hasActiveCapabilityRequestForSession)
       .mockReset()
@@ -358,6 +364,45 @@ describe('SessionGateItemVerifier — leaves a reporting session live, archives 
     expect(result.disposition).toBe('needs-setup');
     expect(markSessionDone).not.toHaveBeenCalled();
     expect(sessionManager.archiveAndEndSession).not.toHaveBeenCalled();
+  });
+
+  it('dual-writes the terminal completion reason and a completing-signal ledger row when the budget tears a still-running session down', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({
+      status: 'running',
+      task_id: 'task-1',
+      session_type: 'ops',
+    } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      pollIntervalMs: 60_000,
+      budgetMs: 5,
+    });
+    const result = await verifier.verify(item);
+
+    expect(result.disposition).toBe('needs-setup');
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'sess-1',
+      expect.any(Number),
+      null,
+      'gate_item_verifier_consumed',
+    );
+    expect(setSessionTerminalCompletionReason).toHaveBeenCalledWith(
+      'sess-1',
+      'gate_item_verifier_consumed',
+    );
+    expect(insertCompletingSignal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: 'sess-1',
+        task_id: 'task-1',
+        session_type: 'ops',
+        signal_class: 'staged_intent',
+        signal_value: 'gate_item_verifier_consumed',
+      }),
+    );
+    expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith(
+      'sess-1',
+    );
   });
 
   it('leaves an already-error session alone: no archive, no status overwrite', async () => {

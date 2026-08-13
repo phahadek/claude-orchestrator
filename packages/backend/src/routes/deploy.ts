@@ -21,6 +21,8 @@ import {
   getSession,
   hasActiveCapabilityRequestForSession,
   markSessionDone,
+  setSessionTerminalCompletionReason,
+  insertCompletingSignal,
   TERMINAL_SESSION_STATUSES,
   getLatestOpsSessionByTaskId,
 } from '../db/queries';
@@ -371,6 +373,18 @@ export class DeployAgenticStepSpawner {
     const row = getSession(sessionId);
     if (row && !TERMINAL_SESSION_STATUSES.has(row.status)) {
       markSessionDone(sessionId, Date.now(), null, reason);
+      setSessionTerminalCompletionReason(sessionId, reason);
+      // Dual-write bridge (see session/completingSignalRegistry.ts and
+      // sessionStatusDeriver.ts) — purely additive ahead of any read-side
+      // cutover; never gates or alters the writes above.
+      insertCompletingSignal({
+        session_id: sessionId,
+        task_id: row.task_id ?? null,
+        session_type: row.session_type,
+        signal_class: 'staged_intent',
+        signal_value: reason,
+        recorded_at: Date.now(),
+      });
       this.sessionManager.archiveAndEndSession(sessionId);
     }
   }

@@ -4,6 +4,8 @@ import {
   getSession,
   hasActiveCapabilityRequestForSession,
   markSessionDone,
+  setSessionTerminalCompletionReason,
+  insertCompletingSignal,
   TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import type { SessionManager } from '../session/SessionManager';
@@ -482,6 +484,21 @@ export class SessionGateItemVerifier implements GateItemVerifier {
             null,
             'gate_item_verifier_consumed',
           );
+          setSessionTerminalCompletionReason(
+            sessionId,
+            'gate_item_verifier_consumed',
+          );
+          // Dual-write bridge (see session/completingSignalRegistry.ts and
+          // sessionStatusDeriver.ts) — purely additive ahead of any
+          // read-side cutover; never gates or alters the writes above.
+          insertCompletingSignal({
+            session_id: sessionId,
+            task_id: row.task_id ?? null,
+            session_type: row.session_type,
+            signal_class: 'staged_intent',
+            signal_value: 'gate_item_verifier_consumed',
+            recorded_at: Date.now(),
+          });
           sessionManager.archiveAndEndSession(sessionId);
         }
         resolve(result);
