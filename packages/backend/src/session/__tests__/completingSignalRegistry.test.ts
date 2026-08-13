@@ -35,9 +35,9 @@ describe('completingSignalRegistry', () => {
     );
     // 'depth_review' sessions never produce a completing signal for this
     // registry — no PR is ever linked to one (see DepthReviewService.ts).
-    expect(() =>
-      resolveCompletingSignal('depth_review', 'any', false),
-    ).toThrow(/no completing-signal descriptor mapped/);
+    expect(() => resolveCompletingSignal('depth_review', 'any', false)).toThrow(
+      /no completing-signal descriptor mapped/,
+    );
   });
 
   it('resolves review sessions to the same external-PR-event descriptor as standard, despite never opening a PR of their own', () => {

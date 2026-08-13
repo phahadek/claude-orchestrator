@@ -859,11 +859,7 @@ export class AutoMerger {
         pr.pr_url ?? null,
         'auto_merger',
       );
-      recordPrAnchoredCompletingSignal(
-        pr.review_session_id,
-        'pr_merged',
-        now,
-      );
+      recordPrAnchoredCompletingSignal(pr.review_session_id, 'pr_merged', now);
     }
   }
 
