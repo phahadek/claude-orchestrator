@@ -103,6 +103,19 @@ vi.mock('../config', () => ({
   },
 }));
 
+vi.mock('../orchestration/memoryAdmission', () => ({
+  // respawnSession's memory-admission gate — real os.freemem() is
+  // unreliable/low in CI/sandboxed hosts, so tests always see headroom
+  // unless a test explicitly overrides this mock.
+  hasMemoryHeadroom: vi.fn().mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  }),
+}));
+
 vi.mock('../session/orchestrator-config', () => ({
   loadOrchestratorConfig: vi.fn(() => ({
     allowedTools: [],

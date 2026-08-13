@@ -1180,14 +1180,21 @@ export interface ArchUnitQuery {
 // ─── completing_signal_ledger ────────────────────────────────────────────────
 
 /**
- * The two signal shapes a completing-signal ledger row can carry — see
+ * The signal shapes a completing-signal ledger row can carry — see
  * session/completingSignalRegistry.ts, which this vocabulary must stay in
  * sync with. 'staged_intent' rows record a staged intent reaching a
  * terminal, decision-bearing state; 'external_pr_event' rows record a
  * pull_requests outcome (merge or close-without-merge) for a session that
- * opened its own PR.
+ * opened its own PR; 'resume_exhausted' rows record a session's poke/resume
+ * retry budget running out (see SessionManager.flagResumeFailure) — a
+ * session-level circuit breaker independent of task type, interpreted
+ * directly by session/sessionStatusDeriver.ts rather than via the
+ * per-triple registry.
  */
-export type CompletingSignalClass = 'staged_intent' | 'external_pr_event';
+export type CompletingSignalClass =
+  | 'staged_intent'
+  | 'external_pr_event'
+  | 'resume_exhausted';
 
 export interface CompletingSignalLedgerRow {
   id: number;

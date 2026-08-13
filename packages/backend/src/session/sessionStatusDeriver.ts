@@ -160,6 +160,15 @@ function latestMatchingSignal(
  * markSessionSuperseded's existing use (retiring a stale row on a
  * same-lineage resume) which today runs independently of any
  * completing-signal interpretation.
+ *
+ * A 'resume_exhausted' ledger entry is checked next, ahead of the registry
+ * lookup, and also wins outright. Unlike 'staged_intent'/'external_pr_event'
+ * rows, it is not a task-type-specific completing decision — it is a
+ * session-level circuit breaker (SessionManager.flagResumeFailure, tripped
+ * once a session's poke/resume retry budget is exhausted) that applies to
+ * every session type, including ones (review, depth_review, a pre-PR
+ * 'standard' session) the registry has no descriptor for. Resolving it here
+ * avoids resolveCompletingSignal throwing for those triples.
  */
 export function deriveSessionStatus(
   input: SessionStatusDeriverInput,
@@ -168,6 +177,17 @@ export function deriveSessionStatus(
     return {
       status: 'superseded',
       terminalCompletionReason: SUPERSEDED_BY_NEWER_SESSION_REASON,
+    };
+  }
+
+  const resumeExhaustedEntry = latestMatchingSignal(
+    input.ledgerEntries,
+    'resume_exhausted',
+  );
+  if (resumeExhaustedEntry) {
+    return {
+      status: 'error',
+      terminalCompletionReason: resumeExhaustedEntry.signal_value,
     };
   }
 
