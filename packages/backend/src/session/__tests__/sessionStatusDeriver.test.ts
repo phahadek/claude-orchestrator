@@ -165,6 +165,27 @@ describe('deriveSessionStatus', () => {
       });
     });
 
+    it('derives done from pr_merged for a review session, even though it never opened a PR of its own', () => {
+      const result = deriveSessionStatus(
+        baseInput({
+          sessionType: 'review',
+          taskTypeCategory: 'any',
+          hasOpenPR: false,
+          ledgerEntries: [
+            ledgerRow({
+              session_type: 'review',
+              signal_class: 'external_pr_event',
+              signal_value: 'pr_merged',
+            }),
+          ],
+        }),
+      );
+      expect(result).toEqual({
+        status: 'done',
+        terminalCompletionReason: 'pr_merged',
+      });
+    });
+
     it('a staged_intent ledger row is ignored for a triple that expects external_pr_event', () => {
       const result = deriveSessionStatus(
         baseInput({
@@ -252,15 +273,15 @@ describe('deriveSessionStatus', () => {
     it('derives error from a resume_exhausted ledger entry, independent of the registry triple', () => {
       const result = deriveSessionStatus(
         baseInput({
-          // 'review' has no registered descriptor at all — resolving it via
-          // the registry would throw. resume_exhausted must short-circuit
-          // before that lookup.
-          sessionType: 'review',
+          // 'depth_review' has no registered descriptor at all — resolving
+          // it via the registry would throw. resume_exhausted must
+          // short-circuit before that lookup.
+          sessionType: 'depth_review',
           taskTypeCategory: 'any',
           hasOpenPR: false,
           ledgerEntries: [
             ledgerRow({
-              session_type: 'review',
+              session_type: 'depth_review',
               signal_class: 'resume_exhausted',
               signal_value: 'resume_failed',
             }),

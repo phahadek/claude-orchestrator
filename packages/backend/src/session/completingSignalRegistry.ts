@@ -114,18 +114,30 @@ function key(
 
 /**
  * Every (session_type, task_type, hasOpenPR) triple in current use.
- * 'review' and 'depth_review' sessions are deliberately absent: they touch
- * no task status and are excluded from sessionDidWork's PR-outcome /
- * stage-only branches (see session/sessionLifecycle.ts's "Not applicable"
- * comment) — they never produce a completing signal for this registry to
- * interpret, so a lookup against them fails loudly rather than being given a
- * default descriptor. A 'standard' session with hasOpenPR=false is likewise
- * absent: a code session is only completable once it has opened a PR (its
- * pre-PR terminal writes, e.g. a crash, are not a "completing signal" this
- * registry governs).
+ *
+ * 'review' sessions never open a PR of their own, but their terminal status
+ * is authoritatively decided by the *paired* coding session's PR outcome
+ * (PRMergeWatcher/AutoMerger/bootIdleReconciliation all transition a review
+ * session alongside its coding session on the same pr_merged /
+ * pr_closed_without_merge event) — so it is mapped here with hasOpenPR=false
+ * to the same EXTERNAL_PR_EVENT_DESCRIPTOR standard's own PR uses, per the
+ * PR-anchored session-type migration task.
+ *
+ * 'depth_review' sessions remain deliberately absent: no PR is ever linked
+ * to a depth-review session at all (see DepthReviewService.ts's
+ * watchForSessionEnd doc comment) — its terminal write is a bare
+ * turn-boundary conclusion with no completing-signal reason to disambiguate,
+ * so it stays on the generic legacy_status_write dual-write mirror rather
+ * than a registry entry; a lookup against it fails loudly rather than being
+ * given a default descriptor. A 'standard' session with hasOpenPR=false is
+ * likewise absent: a code session is only completable once it has opened a
+ * PR (its pre-PR terminal writes, e.g. a crash, are not a "completing
+ * signal" this registry governs).
  */
 const REGISTRY: Partial<Record<RegistryKey, CompletingSignalDescriptor>> = {
   [key('standard', 'code', true)]: EXTERNAL_PR_EVENT_DESCRIPTOR,
+
+  [key('review', 'any', false)]: EXTERNAL_PR_EVENT_DESCRIPTOR,
 
   [key('docs', 'docs_or_assets', true)]: EXTERNAL_PR_EVENT_DESCRIPTOR,
   [key('docs', 'docs_or_assets', false)]: STAGED_INTENT_TERMINAL_DESCRIPTOR,
@@ -147,6 +159,7 @@ export const REGISTERED_TRIPLES: ReadonlyArray<{
   hasOpenPR: boolean;
 }> = [
   { sessionType: 'standard', taskTypeCategory: 'code', hasOpenPR: true },
+  { sessionType: 'review', taskTypeCategory: 'any', hasOpenPR: false },
   {
     sessionType: 'docs',
     taskTypeCategory: 'docs_or_assets',

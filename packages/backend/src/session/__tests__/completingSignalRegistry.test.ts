@@ -28,19 +28,23 @@ describe('completingSignalRegistry', () => {
   });
 
   it('throws rather than silently defaulting for an unmapped triple', () => {
-    // 'review' sessions never produce a completing signal for this registry
-    // — deliberately unmapped (see sessionLifecycle.ts's "Not applicable").
-    expect(() => resolveCompletingSignal('review', 'any', false)).toThrow(
-      /no completing-signal descriptor mapped/,
-    );
     // A standard (code) session with no PR yet has nothing for this
-    // registry to interpret either.
+    // registry to interpret.
     expect(() => resolveCompletingSignal('standard', 'code', false)).toThrow(
       /no completing-signal descriptor mapped/,
     );
-    expect(() => resolveCompletingSignal('depth_review', 'any', false)).toThrow(
-      /no completing-signal descriptor mapped/,
-    );
+    // 'depth_review' sessions never produce a completing signal for this
+    // registry — no PR is ever linked to one (see DepthReviewService.ts).
+    expect(() =>
+      resolveCompletingSignal('depth_review', 'any', false),
+    ).toThrow(/no completing-signal descriptor mapped/);
+  });
+
+  it('resolves review sessions to the same external-PR-event descriptor as standard, despite never opening a PR of their own', () => {
+    const descriptor = resolveCompletingSignal('review', 'any', false);
+    expect(descriptor.kind).toBe('external_pr_event');
+    expect(descriptor.reasons.pr_merged).toBe('done');
+    expect(descriptor.reasons.pr_closed_without_merge).toBe('error');
   });
 
   it('every descriptor reason maps to a terminal DerivedSessionOutcome (no retrying, no non-terminal values)', () => {
