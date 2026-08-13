@@ -188,9 +188,14 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
         payload: expect.objectContaining({ session_id: 'sess-4' }),
       }),
     );
-    // recordEvent is the only persistence path exercised by the sweep — it
-    // writes to audit_log, never to the session_events table.
-    expect(recordEvent).toHaveBeenCalledTimes(1);
+    // recordEvent (audit_log) is the only persistence path the sweep writes
+    // through — no insertEvent/session_events call is made by this module.
+    const heartbeatTicks = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        ([e]) => e.event_type === 'stuck_session_heartbeat_tick',
+      );
+    expect(heartbeatTicks).toHaveLength(1);
   });
 
   it('does not sweep a session suspended for PR review even with an in-flight tool_use', () => {
