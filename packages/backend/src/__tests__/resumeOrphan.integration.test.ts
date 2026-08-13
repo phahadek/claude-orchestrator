@@ -205,6 +205,7 @@ vi.mock('../db/queries', () =>
     markSessionDone: vi.fn(),
     markSessionIdle: vi.fn(),
     getStuckResultSessionRows: vi.fn(() => []),
+    hasUndispositionedStagedIntentsForSession: vi.fn(() => false),
     getRunningSessionsWithMergedOrClosedPR: vi.fn(() => []),
     insertSession: vi.fn(),
     insertEvent: vi.fn(),
@@ -497,6 +498,95 @@ describe('resumeOrphanSessions() — stuck session boot recovery', () => {
     expect(callOrder[0]).toBe('getStuckResultSessionRows');
     expect(callOrder[1]).toBe('getSessionsByStatus');
   });
+});
+
+// ── Test 3b: parked planning session (undispositioned staged intents) ─────
+describe('resumeOrphanSessions() — parked planning session with staged intents', () => {
+  function makeStuckRow(
+    overrides: Partial<queries.StuckResultSessionRow> = {},
+  ) {
+    return {
+      session_id: 'stuck-sess',
+      task_id: 'task-1',
+      task_url: 'https://notion.so/task',
+      project_context_url: 'https://notion.so/ctx',
+      project_id: 'test-project',
+      pr_url: null,
+      worktree_path: '/fake/wt',
+      session_type: 'standard',
+      last_ts: 1_000_000,
+      ...overrides,
+    };
+  }
+
+  it('transitions a planning-family session with undispositioned staged intents to idle, not done', async () => {
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
+    vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([
+      makeStuckRow({ session_type: 'groom' }),
+    ]);
+    vi.mocked(
+      queries.hasUndispositionedStagedIntentsForSession,
+    ).mockReturnValue(true);
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    expect(queries.markSessionIdle).toHaveBeenCalledWith(
+      'stuck-sess',
+      1_000_000,
+      null,
+      expect.stringContaining('parked'),
+    );
+    expect(queries.markSessionDone).not.toHaveBeenCalled();
+    expect(recoverSession).not.toHaveBeenCalled();
+  });
+
+  it('still marks a planning-family session with no staged/approved intents as done', async () => {
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
+    vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([
+      makeStuckRow({ session_type: 'groom' }),
+    ]);
+    vi.mocked(
+      queries.hasUndispositionedStagedIntentsForSession,
+    ).mockReturnValue(false);
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    expect(queries.markSessionDone).toHaveBeenCalledWith(
+      'stuck-sess',
+      1_000_000,
+      null,
+      'boot_orphan_result_event',
+      { skipInFlightGuard: true },
+    );
+    expect(queries.markSessionIdle).not.toHaveBeenCalled();
+  });
+
+  it.each(['standard', 'review', 'depth_review'])(
+    'marks a %s session done regardless of staged intents — PR-anchored path is unchanged',
+    async (sessionType) => {
+      vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
+      vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([
+        makeStuckRow({ session_type: sessionType }),
+      ]);
+      vi.mocked(
+        queries.hasUndispositionedStagedIntentsForSession,
+      ).mockReturnValue(true);
+
+      const sm = new SessionManager();
+      await sm.resumeOrphanSessions();
+
+      expect(queries.markSessionDone).toHaveBeenCalledWith(
+        'stuck-sess',
+        1_000_000,
+        null,
+        'boot_orphan_result_event',
+        { skipInFlightGuard: true },
+      );
+      expect(queries.markSessionIdle).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ── Test 4: pr_url carry-forward ─────────────────────────────────────────
