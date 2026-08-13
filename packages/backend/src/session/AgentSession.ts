@@ -2421,6 +2421,28 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         .attachPR(this.taskId, prUrl)
         .catch((e) => logger.error(`[AgentSession] attachPR failed: ${e}`));
 
+      if (!prShape.title && this.githubClient) {
+        try {
+          const backfilled = await this.githubClient.fetchPR(repo, prNumber);
+          prShape = {
+            ...prShape,
+            title: backfilled.title,
+            body: prShape.body ?? backfilled.body,
+            head: {
+              ...prShape.head,
+              ref: backfilled.headBranch,
+              sha: prShape.head?.sha ?? backfilled.headSha ?? undefined,
+            },
+            base: { ...prShape.base, ref: backfilled.baseBranch },
+          };
+        } catch (e) {
+          logger.warn(
+            `[AgentSession] handlePRDetected: failed to backfill PR #${prNumber} metadata from GitHub — proceeding with URL-only upsert:`,
+            e,
+          );
+        }
+      }
+
       const upsertResult = upsertPullRequest({
         pr_number: prNumber,
         pr_url: prUrl,
