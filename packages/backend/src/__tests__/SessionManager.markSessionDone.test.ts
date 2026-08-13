@@ -428,15 +428,11 @@ describe('expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions 
 describe('hasUndispositionedStagedIntentsForSession — used by boot orphan recovery to park planning sessions', () => {
   it('is true when the session holds a staged or approved intent', () => {
     stageIntent('sess-parked', { state: 'staged' });
-    expect(hasUndispositionedStagedIntentsForSession('sess-parked')).toBe(
-      true,
-    );
+    expect(hasUndispositionedStagedIntentsForSession('sess-parked')).toBe(true);
   });
 
   it('is false when the session has no intents at all', () => {
-    expect(hasUndispositionedStagedIntentsForSession('sess-none')).toBe(
-      false,
-    );
+    expect(hasUndispositionedStagedIntentsForSession('sess-none')).toBe(false);
   });
 
   it('is false once the intent has been disposed (committed/withdrawn/superseded)', () => {
@@ -450,7 +446,10 @@ describe('hasUndispositionedStagedIntentsForSession — used by boot orphan reco
     insertSession('sess-idle-parked', 'idle');
     const staged = stageIntent('sess-idle-parked');
 
-    sweepStagedIntentsForTerminalSessions('session_terminal_backstop', Date.now());
+    sweepStagedIntentsForTerminalSessions(
+      'session_terminal_backstop',
+      Date.now(),
+    );
 
     expect(getStagedIntent(staged)?.state).toBe('staged');
   });

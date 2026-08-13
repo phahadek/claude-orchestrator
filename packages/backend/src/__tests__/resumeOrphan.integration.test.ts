@@ -502,7 +502,9 @@ describe('resumeOrphanSessions() — stuck session boot recovery', () => {
 
 // ── Test 3b: parked planning session (undispositioned staged intents) ─────
 describe('resumeOrphanSessions() — parked planning session with staged intents', () => {
-  function makeStuckRow(overrides: Partial<queries.StuckResultSessionRow> = {}) {
+  function makeStuckRow(
+    overrides: Partial<queries.StuckResultSessionRow> = {},
+  ) {
     return {
       session_id: 'stuck-sess',
       task_id: 'task-1',
@@ -522,9 +524,9 @@ describe('resumeOrphanSessions() — parked planning session with staged intents
     vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([
       makeStuckRow({ session_type: 'groom' }),
     ]);
-    vi.mocked(queries.hasUndispositionedStagedIntentsForSession).mockReturnValue(
-      true,
-    );
+    vi.mocked(
+      queries.hasUndispositionedStagedIntentsForSession,
+    ).mockReturnValue(true);
 
     const sm = new SessionManager();
     await sm.resumeOrphanSessions();
@@ -544,9 +546,9 @@ describe('resumeOrphanSessions() — parked planning session with staged intents
     vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([
       makeStuckRow({ session_type: 'groom' }),
     ]);
-    vi.mocked(queries.hasUndispositionedStagedIntentsForSession).mockReturnValue(
-      false,
-    );
+    vi.mocked(
+      queries.hasUndispositionedStagedIntentsForSession,
+    ).mockReturnValue(false);
 
     const sm = new SessionManager();
     await sm.resumeOrphanSessions();
