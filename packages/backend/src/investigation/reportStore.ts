@@ -15,7 +15,7 @@ export type InvestigationReportState =
   | 'resolved'
   | 'abandoned';
 
-export type InvestigationReportSource = 'operator' | 'session';
+type InvestigationReportSource = 'operator' | 'session';
 
 /**
  * staged_intent states that terminate an intent's disposition — the set
