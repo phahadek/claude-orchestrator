@@ -100,12 +100,14 @@ describe('insert/get/list/update', () => {
       symptomText: 'b',
       createdAt: '2026-08-13T00:00:01Z',
     });
-    expect(listReportsByMilestone('proj-1', 'milestone-uuid-1').map((r) => r.id)).toEqual([
-      r1.id,
-    ]);
-    expect(listReportsByProject('proj-1').map((r) => r.id).sort()).toEqual(
-      [r1.id, r2.id].sort(),
-    );
+    expect(
+      listReportsByMilestone('proj-1', 'milestone-uuid-1').map((r) => r.id),
+    ).toEqual([r1.id]);
+    expect(
+      listReportsByProject('proj-1')
+        .map((r) => r.id)
+        .sort(),
+    ).toEqual([r1.id, r2.id].sort());
   });
 
   it('advances state', () => {
@@ -116,7 +118,11 @@ describe('insert/get/list/update', () => {
       symptomText: 'a',
       createdAt: '2026-08-13T00:00:00Z',
     });
-    const updated = updateReportState(report.id, 'committed', '2026-08-13T00:01:00Z');
+    const updated = updateReportState(
+      report.id,
+      'committed',
+      '2026-08-13T00:01:00Z',
+    );
     expect(updated.state).toBe('committed');
     expect(getReport(report.id)?.state).toBe('committed');
   });

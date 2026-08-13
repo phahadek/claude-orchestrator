@@ -219,9 +219,7 @@ function getSessionStatuses(sessionIds: string[]): Map<string, string> {
  * on the dispatch join table rather than task_id string-matching.
  */
 export function isInFlight(reportId: string): boolean {
-  const sessionIds = listDispatchedSessions(reportId).map(
-    (d) => d.session_id,
-  );
+  const sessionIds = listDispatchedSessions(reportId).map((d) => d.session_id);
   const statuses = getSessionStatuses(sessionIds);
   for (const status of statuses.values()) {
     if (!TERMINAL_SESSION_STATUSES.has(status)) return true;
@@ -240,9 +238,7 @@ export function isInFlight(reportId: string): boolean {
  * (a) requires at least one terminal session.
  */
 export function isResolveEligible(reportId: string): boolean {
-  const sessionIds = listDispatchedSessions(reportId).map(
-    (d) => d.session_id,
-  );
+  const sessionIds = listDispatchedSessions(reportId).map((d) => d.session_id);
   if (sessionIds.length === 0) return false;
 
   const statuses = getSessionStatuses(sessionIds);
