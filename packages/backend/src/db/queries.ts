@@ -12,6 +12,7 @@ import {
   isCodeSession,
   isPlanningSession,
   PLANNING_SESSION_TYPES,
+  type SessionType,
 } from '../session/sessionPredicates';
 import {
   pauseReasonFromCanonical,
@@ -161,13 +162,38 @@ export function insertSession(s: NewSession): void {
   });
 }
 
+/**
+ * Mirrors a legacy sessions.status/archived write into completing_signal_ledger
+ * as a 'legacy_status_write' signal — the dual-write bridge landed by the
+ * shared-primitives migration task, ahead of any read-side cutover onto
+ * session/sessionStatusDeriver.ts. Purely additive: never gates, alters, or
+ * is awaited by the legacy write it mirrors, so it can never change that
+ * write's observable behavior.
+ */
+function recordLegacyStatusSignal(
+  sessionId: string,
+  taskId: string | null,
+  sessionType: SessionType,
+  signalValue: string,
+  recordedAt: number,
+): void {
+  insertCompletingSignal({
+    session_id: sessionId,
+    task_id: taskId,
+    session_type: sessionType,
+    signal_class: 'legacy_status_write',
+    signal_value: signalValue,
+    recorded_at: recordedAt,
+  });
+}
+
 export function updateSessionStatus(
   sessionId: string,
   status: string,
   endedAt?: number,
 ): void {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
-    | { status: string; task_id: string | null }
+    | { status: string; task_id: string | null; session_type: SessionType }
     | undefined;
   _stmtUpdateSessionStatus ??= db.prepare<{
     session_id: string;
@@ -196,6 +222,13 @@ export function updateSessionStatus(
       task_id: current.task_id ?? null,
       payload: { from: current.status, to: status },
     });
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      status,
+      endedAt ?? Date.now(),
+    );
   }
 }
 
@@ -362,7 +395,7 @@ export function markSessionSuperseded(
   endedAt: number,
 ): void {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
-    | { status: string; task_id: string | null }
+    | { status: string; task_id: string | null; session_type: SessionType }
     | undefined;
   _stmtMarkSessionSuperseded ??= db.prepare<{
     session_id: string;
@@ -381,6 +414,13 @@ export function markSessionSuperseded(
       task_id: current.task_id ?? null,
       payload: { from: current.status, to: 'superseded' },
     });
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      'superseded',
+      endedAt,
+    );
   }
 }
 
@@ -450,7 +490,7 @@ export function markSessionDone(
   opts?: { skipInFlightGuard?: boolean },
 ): void {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
-    | { status: string; task_id: string | null }
+    | { status: string; task_id: string | null; session_type: SessionType }
     | undefined;
   if (current?.status === 'running' && !opts?.skipInFlightGuard) {
     logger.warn(
@@ -484,6 +524,13 @@ export function markSessionDone(
         call_site: callSite ?? 'unknown',
       },
     });
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      'done',
+      endedAt,
+    );
   }
 }
 
@@ -508,6 +555,7 @@ export function applyPendingDone(sessionId: string): boolean {
     | {
         status: string;
         task_id: string | null;
+        session_type: SessionType;
         pending_done_ended_at: number | null;
         pending_done_pr_url: string | null;
         pending_done_call_site: string | null;
@@ -518,13 +566,14 @@ export function applyPendingDone(sessionId: string): boolean {
     clearPendingDone(sessionId);
     return false;
   }
+  const terminalizedAt = Date.now();
   getStmtMarkSessionDone().run({
     session_id: sessionId,
     ended_at: current.pending_done_ended_at,
     pr_url: current.pending_done_pr_url,
     // The genuine terminal instant is now (the drain), not the original
     // deferral time preserved in ended_at for backwards compatibility.
-    terminalized_at: Date.now(),
+    terminalized_at: terminalizedAt,
   });
   clearPendingDone(sessionId);
   recordEvent({
@@ -545,6 +594,13 @@ export function applyPendingDone(sessionId: string): boolean {
       call_site: current.pending_done_call_site ?? 'unknown',
     },
   });
+  recordLegacyStatusSignal(
+    sessionId,
+    current.task_id ?? null,
+    current.session_type,
+    'done',
+    terminalizedAt,
+  );
   return true;
 }
 
@@ -650,6 +706,7 @@ export function markSessionIdle(
     | {
         status: SessionStatus;
         task_id: string | null;
+        session_type: SessionType;
         pending_done_ended_at: number | null;
       }
     | undefined;
@@ -707,6 +764,13 @@ export function markSessionIdle(
         call_site: callSite ?? 'unknown',
       },
     });
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      'idle',
+      endedAt,
+    );
   }
   return 'idle';
 }
@@ -1323,16 +1387,40 @@ export function getArchivedSessions(): Session[] {
 }
 
 export function archiveSession(sessionId: string): boolean {
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
+    | { task_id: string | null; session_type: SessionType; archived: number }
+    | undefined;
   const result = db
     .prepare('UPDATE sessions SET archived = 1 WHERE session_id = ?')
     .run(sessionId);
+  if (result.changes > 0 && current && current.archived !== 1) {
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      'archived',
+      Date.now(),
+    );
+  }
   return result.changes > 0;
 }
 
 export function unarchiveSession(sessionId: string): boolean {
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
+    | { task_id: string | null; session_type: SessionType; archived: number }
+    | undefined;
   const result = db
     .prepare('UPDATE sessions SET archived = 0 WHERE session_id = ?')
     .run(sessionId);
+  if (result.changes > 0 && current && current.archived !== 0) {
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      'unarchived',
+      Date.now(),
+    );
+  }
   return result.changes > 0;
 }
 
@@ -1356,11 +1444,34 @@ export function unfavoriteSession(sessionId: string): boolean {
  * must never be swept up by this basis alone.
  */
 export function archiveFinishedSessions(): number {
+  const rows = db
+    .prepare(
+      `SELECT session_id, task_id, session_type FROM sessions
+       WHERE status IN (${BASE_TERMINAL_STATUS_SQL_LIST}) AND archived = 0`,
+    )
+    .all() as {
+    session_id: string;
+    task_id: string | null;
+    session_type: SessionType;
+  }[];
+
   const result = db
     .prepare(
       `UPDATE sessions SET archived = 1 WHERE status IN (${BASE_TERMINAL_STATUS_SQL_LIST})`,
     )
     .run();
+
+  const recordedAt = Date.now();
+  for (const row of rows) {
+    recordLegacyStatusSignal(
+      row.session_id,
+      row.task_id ?? null,
+      row.session_type,
+      'archived',
+      recordedAt,
+    );
+  }
+
   return result.changes;
 }
 
@@ -1373,13 +1484,17 @@ export function archiveFinishedSessions(): number {
 export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
   const rows = db
     .prepare(
-      `SELECT session_id FROM sessions
+      `SELECT session_id, task_id, session_type FROM sessions
        WHERE status IN (${BASE_TERMINAL_STATUS_SQL_LIST})
          AND archived = 0
          AND ended_at IS NOT NULL
          AND ended_at < @cutoff`,
     )
-    .all({ cutoff: cutoffMs }) as { session_id: string }[];
+    .all({ cutoff: cutoffMs }) as {
+    session_id: string;
+    task_id: string | null;
+    session_type: SessionType;
+  }[];
 
   if (rows.length === 0) return [];
 
@@ -1388,6 +1503,17 @@ export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
   db.prepare(
     `UPDATE sessions SET archived = 1 WHERE session_id IN (${placeholders})`,
   ).run(...ids);
+
+  const recordedAt = Date.now();
+  for (const row of rows) {
+    recordLegacyStatusSignal(
+      row.session_id,
+      row.task_id ?? null,
+      row.session_type,
+      'archived',
+      recordedAt,
+    );
+  }
 
   return ids;
 }
