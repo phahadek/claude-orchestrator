@@ -986,6 +986,8 @@ export interface TestRequestRunRow {
   output: string;
   started_at: number;
   finished_at: number | null;
+  /** Normalized test-result JSON (junit-xml parse), populated by the acquisition/parser follow-on. Null for pre-existing rows and until that follow-on runs. */
+  structured_result: string | null;
 }
 
 // ─── arch_unit ────────────────────────────────────────────────────────────

@@ -87,4 +87,28 @@ describe('test_request_runs — F2 shared-cache read/invalidate', () => {
     deleteTestRequestRunsForContentHash('proj-1', 'hash-c');
     expect(getLatestTestRequestRun('proj-1', 'hash-c')).toBeUndefined();
   });
+
+  it('a run recorded with a structured_result round-trips through the UPDATE/read path', () => {
+    const id = nextRunId();
+    const structured = JSON.stringify({
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 1, failed: 0, skipped: 0, errors: 0 },
+      durationMsTotal: 12,
+    });
+    insertTestRequestRun(id, 'proj-1', 'hash-structured');
+    completeTestRequestRun(id, 'passed', 'ok', structured);
+
+    const result = getLatestTestRequestRun('proj-1', 'hash-structured');
+    expect(result?.structured_result).toBe(structured);
+  });
+
+  it('reads back null structured_result when none was provided — pre-existing rows keep working unchanged', () => {
+    const id = nextRunId();
+    insertTestRequestRun(id, 'proj-1', 'hash-no-structured');
+    completeTestRequestRun(id, 'passed', 'ok');
+
+    const result = getLatestTestRequestRun('proj-1', 'hash-no-structured');
+    expect(result?.structured_result).toBeNull();
+  });
 });
