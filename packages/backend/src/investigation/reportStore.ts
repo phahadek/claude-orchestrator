@@ -139,6 +139,97 @@ export function listReportsByProject(
     .all(projectId) as InvestigationReportRow[];
 }
 
+export interface ReportFilter {
+  projectId?: string;
+  milestoneId?: string;
+  state?: string;
+}
+
+function buildReportWhereClause(filter: ReportFilter): {
+  clause: string;
+  params: Record<string, string>;
+} {
+  const conditions: string[] = [];
+  const params: Record<string, string> = {};
+  if (filter.projectId) {
+    conditions.push('project_id = @projectId');
+    params.projectId = filter.projectId;
+  }
+  if (filter.milestoneId) {
+    conditions.push('milestone_id = @milestoneId');
+    params.milestoneId = filter.milestoneId;
+  }
+  if (filter.state) {
+    conditions.push('state = @state');
+    params.state = filter.state;
+  }
+  return {
+    clause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+  };
+}
+
+/** Paginated, filtered read over investigation_report — never an unbounded load; caller supplies limit/offset. */
+export function listReportsFiltered(
+  filter: ReportFilter,
+  limit: number,
+  offset: number,
+): InvestigationReportRow[] {
+  const { clause, params } = buildReportWhereClause(filter);
+  return db
+    .prepare(
+      `SELECT * FROM investigation_report ${clause} ORDER BY created_at DESC, id ASC LIMIT @limit OFFSET @offset`,
+    )
+    .all({ ...params, limit, offset }) as InvestigationReportRow[];
+}
+
+/** Total count matching the same filter as listReportsFiltered — powers the `total` in a paginated response. */
+export function countReportsFiltered(filter: ReportFilter): number {
+  const { clause, params } = buildReportWhereClause(filter);
+  const row = db
+    .prepare(`SELECT COUNT(*) AS count FROM investigation_report ${clause}`)
+    .get(params) as { count: number };
+  return row.count;
+}
+
+export interface ReportFieldUpdate {
+  title?: string;
+  symptomText?: string;
+  evidenceText?: string | null;
+  milestoneId?: string;
+}
+
+/** Updates draft-mutable content fields — callers own restricting this to the draft state. */
+export function updateReportFields(
+  id: string,
+  fields: ReportFieldUpdate,
+  updatedAt: string,
+): InvestigationReportRow {
+  const row = getReport(id);
+  if (!row) {
+    throw new Error(`investigation_report: no report ${id} to update`);
+  }
+  db.prepare(
+    `UPDATE investigation_report
+       SET title = ?, symptom_text = ?, evidence_text = ?, milestone_id = ?, updated_at = ?
+     WHERE id = ?`,
+  ).run(
+    fields.title ?? row.title,
+    fields.symptomText ?? row.symptom_text,
+    fields.evidenceText !== undefined ? fields.evidenceText : row.evidence_text,
+    fields.milestoneId ?? row.milestone_id,
+    updatedAt,
+    id,
+  );
+  const updated = getReport(id);
+  if (!updated) {
+    throw new Error(
+      `investigation_report: failed to read back report ${id} after field update`,
+    );
+  }
+  return updated;
+}
+
 /**
  * Advances the closed-vocabulary state column. No transition validation is
  * enforced here — callers (the intake surface, resolve-eligibility watcher)
