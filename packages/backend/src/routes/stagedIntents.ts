@@ -5299,7 +5299,8 @@ async function routeReportFileStageTimeChecks(
 
   const liveForSession = listStagedIntentsBySession(intent.sessionId).filter(
     (row) =>
-      row.kind === 'report.file' && (row.state === 'staged' || row.state === 'approved'),
+      row.kind === 'report.file' &&
+      (row.state === 'staged' || row.state === 'approved'),
   );
   if (liveForSession.length > REPORT_FILE_SESSION_CAP) {
     const row = getStagedIntentRow(intent.id);
@@ -5315,19 +5316,17 @@ async function routeReportFileStageTimeChecks(
   }
 
   const payload = intent.payload as ReportFilePayload;
-  const duplicate = listStagedIntentsByProject(intent.projectId).find(
-    (row) => {
-      if (row.kind !== 'report.file' || row.id === intent.id) return false;
-      try {
-        return (
-          (JSON.parse(row.payload) as ReportFilePayload).fingerprint ===
-          payload.fingerprint
-        );
-      } catch {
-        return false;
-      }
-    },
-  );
+  const duplicate = listStagedIntentsByProject(intent.projectId).find((row) => {
+    if (row.kind !== 'report.file' || row.id === intent.id) return false;
+    try {
+      return (
+        (JSON.parse(row.payload) as ReportFilePayload).fingerprint ===
+        payload.fingerprint
+      );
+    } catch {
+      return false;
+    }
+  });
   if (duplicate) {
     setStagedIntentAnnotation(
       intent.id,
