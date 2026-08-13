@@ -12,13 +12,16 @@ vi.mock('../../db/db', async () => {
   return { db: setupTestDb() };
 });
 
-const { mockRunTestCommands, mockHasAdmission } = vi.hoisted(() => ({
-  mockRunTestCommands: vi.fn(),
-  mockHasAdmission: vi.fn(() => true),
-}));
+const { mockRunTestCommands, mockCollectStructuredTestResult, mockHasAdmission } =
+  vi.hoisted(() => ({
+    mockRunTestCommands: vi.fn(),
+    mockCollectStructuredTestResult: vi.fn(() => null),
+    mockHasAdmission: vi.fn(() => true),
+  }));
 
 vi.mock('../../session/test-runner', () => ({
   runTestCommands: mockRunTestCommands,
+  collectStructuredTestResult: mockCollectStructuredTestResult,
 }));
 
 // Host memory headroom is real-machine-dependent and irrelevant to most of
@@ -48,6 +51,8 @@ import {
 
 beforeEach(() => {
   mockRunTestCommands.mockReset();
+  mockCollectStructuredTestResult.mockReset();
+  mockCollectStructuredTestResult.mockReturnValue(null);
   mockHasAdmission.mockReset();
   mockHasAdmission.mockReturnValue(true);
   db.prepare('DELETE FROM test_run_results').run();
@@ -303,6 +308,83 @@ describe('oom_killed', () => {
       )
       .get('hash-no-oom') as { oom_killed: number };
     expect(row.oom_killed).toBe(0);
+  });
+});
+
+// ── structured_result acquisition wiring (testReportGlob) ──────────────────
+
+describe('structured_result acquisition', () => {
+  it('leaves structured_result null when testReportGlob is unset, behaving exactly as before', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-no-glob' }));
+
+    expect(mockCollectStructuredTestResult).not.toHaveBeenCalled();
+    const row = db
+      .prepare(
+        `SELECT structured_result FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .get('hash-no-glob') as { structured_result: string | null };
+    expect(row.structured_result).toBeNull();
+  });
+
+  it('persists the acquired structured_result when testReportGlob is set and a report matches', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const structured = {
+      format: 'junit-xml' as const,
+      suites: [
+        {
+          name: 'pytest',
+          tests: [
+            { id: 't1', name: 'test one', outcome: 'passed', durationMs: 10 },
+          ],
+        },
+      ],
+      totals: { passed: 1, failed: 0, skipped: 0, errors: 0 },
+      durationMsTotal: 10,
+    };
+    mockCollectStructuredTestResult.mockReturnValue(structured);
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-with-glob',
+        testReportGlob: 'reports/*.xml',
+      }),
+    );
+
+    expect(mockCollectStructuredTestResult).toHaveBeenCalledWith(
+      '/tmp/wt',
+      'reports/*.xml',
+    );
+    const row = db
+      .prepare(
+        `SELECT structured_result FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .get('hash-with-glob') as { structured_result: string | null };
+    expect(JSON.parse(row.structured_result!)).toEqual(structured);
+  });
+
+  it('still runs to completion and leaves structured_result null when acquisition finds no matching report', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: false, output: 'boom' });
+    mockCollectStructuredTestResult.mockReturnValue(null);
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-glob-no-match',
+        testReportGlob: 'reports/*.xml',
+      }),
+    );
+
+    const row = db
+      .prepare(
+        `SELECT state, structured_result FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .get('hash-glob-no-match') as {
+      state: string;
+      structured_result: string | null;
+    };
+    expect(row.state).toBe('failed');
+    expect(row.structured_result).toBeNull();
   });
 });
 

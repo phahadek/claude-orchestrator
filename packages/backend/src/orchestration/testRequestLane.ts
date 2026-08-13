@@ -26,6 +26,7 @@ import { randomUUID } from 'crypto';
 import { Semaphore } from '../tasks/deferralClassifier';
 import {
   runTestCommands,
+  collectStructuredTestResult,
   type TestCommandResult,
 } from '../session/test-runner';
 import { hasTestRequestAdmission } from './memoryAdmission';
@@ -76,6 +77,13 @@ export interface TestRequestRunSpec {
   failFast: boolean;
   /** Originating session, persisted onto the run row for per-request attribution. */
   sessionId: string | null;
+  /**
+   * Glob (relative to worktreePath) matched for JUnit-XML report file(s)
+   * after the run finishes, regardless of pass/fail. Empty/undefined =
+   * acquisition skipped, structured_result stays null — matches
+   * config.test_report_glob's "feature off" default.
+   */
+  testReportGlob?: string;
 }
 
 /**
@@ -202,12 +210,32 @@ async function executeTestRequestRun(
       { maxRssMb: spec.maxRssMb, failFast: spec.failFast },
     );
     const oomKilled = result.oomKilled ?? false;
+    // Acquisition is attempted regardless of pass/fail — a failing test run
+    // still writes its report file, and that's exactly the case structured
+    // per-test detail matters most for.
+    let structuredResult: StructuredTestResult | null = null;
+    if (spec.testReportGlob) {
+      try {
+        structuredResult = collectStructuredTestResult(
+          spec.worktreePath,
+          spec.testReportGlob,
+        );
+      } catch (err) {
+        logger.warn(
+          `[testRequestLane] structured_result acquisition failed for run ${runId}:`,
+          err,
+        );
+      }
+    }
+    const structuredResultJson = structuredResult
+      ? JSON.stringify(structuredResult)
+      : null;
     completeTestRequestRun(
       runId,
       result.passed ? 'passed' : 'failed',
       result.output,
       result.passed ? null : failureReasonFor(result),
-      null,
+      structuredResultJson,
       oomKilled,
     );
     broadcastRunStatus({
@@ -232,7 +260,7 @@ async function executeTestRequestRun(
       started_at: startedAt,
       finished_at: Date.now(),
       failure_reason: result.passed ? null : failureReasonFor(result),
-      structured_result: null,
+      structured_result: structuredResultJson,
       concurrent_run_count: concurrentRunCount,
       oom_killed: oomKilled ? 1 : 0,
     });

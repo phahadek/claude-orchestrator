@@ -1051,22 +1051,36 @@ export interface DependencyCacheEntryRow {
 
 /**
  * The structured_result contract's shape (junit-xml normalized JSON) as
- * stored on test_request_runs.structured_result — only the fields
- * test_run_results extraction reads.
+ * stored on test_request_runs.structured_result — produced by the
+ * acquisition/parser step (see collectStructuredTestResult in
+ * session/test-runner.ts) and consumed by test_run_results extraction
+ * (ingestTestRunResults in orchestration/testRequestLane.ts), which only
+ * reads id/name/outcome/durationMs off each test.
  */
 interface StructuredTestCase {
   id: string;
   name: string;
   outcome: string;
   durationMs: number;
+  failureMessage?: string;
+  failureTraceExcerpt?: string;
 }
 
 interface StructuredTestSuite {
+  name: string;
   tests: StructuredTestCase[];
 }
 
 export interface StructuredTestResult {
+  format: 'junit-xml';
   suites: StructuredTestSuite[];
+  totals: {
+    passed: number;
+    failed: number;
+    skipped: number;
+    errors: number;
+  };
+  durationMsTotal: number;
 }
 
 /** One row per test, extracted from a completed run's structured_result. */

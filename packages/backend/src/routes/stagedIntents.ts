@@ -5367,6 +5367,7 @@ function resolveTestRequestExecutionInputs(intent: StagedIntent):
       timeoutSec: number;
       maxRssMb: number;
       failFast: boolean;
+      testReportGlob?: string;
     }
   | { ok: false; reason: string } {
   if (!intent.sessionId) {
@@ -5398,6 +5399,7 @@ function resolveTestRequestExecutionInputs(intent: StagedIntent):
     timeoutSec: config.test_timeout_sec,
     maxRssMb: config.test_max_rss_mb,
     failFast: config.test_fail_fast,
+    testReportGlob: config.test_report_glob || undefined,
   };
 }
 
@@ -5446,6 +5448,7 @@ async function triggerTestRequestExecution(
           maxRssMb: inputs.maxRssMb,
           failFast: inputs.failFast,
           sessionId: intent.sessionId ?? null,
+          testReportGlob: inputs.testReportGlob,
         });
         result = runResult;
         joined = runResult.joined;

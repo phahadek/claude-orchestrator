@@ -1,6 +1,9 @@
 import { spawn } from 'child_process';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync, type Dirent } from 'fs';
+import path from 'path';
 import { platform } from 'process';
+import { minimatch } from 'minimatch';
+import type { StructuredTestResult } from '../db/types';
 
 export interface TestCommandResult {
   passed: boolean;
@@ -319,4 +322,216 @@ export async function runTestCommands(
     timedOut: anyTimedOut,
     oomKilled: anyOomKilled,
   };
+}
+
+// ─── JUnit-XML report acquisition ──────────────────────────────────────────
+// Parses a project's declared test_report_glob report file(s) into the
+// normalized StructuredTestResult contract stored on
+// test_request_runs.structured_result. Deliberately dependency-free (no XML
+// library): JUnit XML written by pytest/vitest reporters is a small, regular
+// subset of XML — testsuite(s)/testcase elements with attribute-only
+// metadata and at most one failure/error/skipped child — so a couple of
+// targeted regexes cover it without pulling in a general-purpose parser.
+
+const XML_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
+function decodeXmlEntities(text: string): string {
+  return text.replace(/&(#x?[0-9a-fA-F]+|[a-z]+);/g, (match, ref: string) => {
+    if (ref[0] === '#') {
+      const codePoint =
+        ref[1] === 'x' || ref[1] === 'X'
+          ? parseInt(ref.slice(2), 16)
+          : parseInt(ref.slice(1), 10);
+      return Number.isNaN(codePoint) ? match : String.fromCodePoint(codePoint);
+    }
+    return XML_ENTITIES[ref] ?? match;
+  });
+}
+
+function stripCData(text: string): string {
+  return text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+}
+
+function getXmlAttr(attrsSrc: string, name: string): string | undefined {
+  const match = attrsSrc.match(
+    new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"|\\b${name}\\s*=\\s*'([^']*)'`),
+  );
+  if (!match) return undefined;
+  return decodeXmlEntities(match[1] ?? match[2] ?? '');
+}
+
+/** Max characters retained from a failure/error element's inner text. */
+const FAILURE_TRACE_EXCERPT_CAP = 2_000;
+
+function extractChildText(
+  content: string,
+  tag: 'failure' | 'error' | 'skipped',
+): { message?: string; text?: string } | null {
+  const re = new RegExp(
+    `<${tag}\\b([^>]*?)(?:/>|>([\\s\\S]*?)</${tag}>)`,
+  );
+  const match = content.match(re);
+  if (!match) return null;
+  const message = getXmlAttr(match[1] ?? '', 'message');
+  const rawText = match[2];
+  const text = rawText
+    ? decodeXmlEntities(stripCData(rawText)).trim().slice(0, FAILURE_TRACE_EXCERPT_CAP)
+    : undefined;
+  return { message, text: text || undefined };
+}
+
+interface JUnitTestCase {
+  id: string;
+  name: string;
+  outcome: 'passed' | 'failed' | 'skipped' | 'error';
+  durationMs: number;
+  failureMessage?: string;
+  failureTraceExcerpt?: string;
+}
+
+interface JUnitSuite {
+  name: string;
+  tests: JUnitTestCase[];
+}
+
+/**
+ * Parses one JUnit-XML report file's contents into its testsuite(s). Tolerant
+ * of both a `<testsuites>` wrapper (vitest) and a bare top-level `<testsuite>`
+ * (pytest) since the regex scans for `<testsuite` occurrences directly rather
+ * than requiring a specific root element.
+ */
+export function parseJUnitXml(xml: string): JUnitSuite[] {
+  const suites: JUnitSuite[] = [];
+  const suiteRe = /<testsuite\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testsuite>)/g;
+  let suiteMatch: RegExpExecArray | null;
+  while ((suiteMatch = suiteRe.exec(xml)) !== null) {
+    const [, suiteAttrs, suiteContent = ''] = suiteMatch;
+    const suiteName = getXmlAttr(suiteAttrs, 'name') ?? 'unknown';
+    const tests: JUnitTestCase[] = [];
+
+    const caseRe = /<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g;
+    let caseMatch: RegExpExecArray | null;
+    while ((caseMatch = caseRe.exec(suiteContent)) !== null) {
+      const [, caseAttrs, caseContent = ''] = caseMatch;
+      const name = getXmlAttr(caseAttrs, 'name') ?? 'unknown';
+      const classname = getXmlAttr(caseAttrs, 'classname');
+      const timeSec = parseFloat(getXmlAttr(caseAttrs, 'time') ?? '0');
+      const durationMs = Number.isFinite(timeSec)
+        ? Math.round(timeSec * 1000)
+        : 0;
+      const id = classname ? `${classname}.${name}` : name;
+
+      const error = extractChildText(caseContent, 'error');
+      const failure = extractChildText(caseContent, 'failure');
+      const skipped = extractChildText(caseContent, 'skipped');
+
+      let outcome: JUnitTestCase['outcome'] = 'passed';
+      let failureMessage: string | undefined;
+      let failureTraceExcerpt: string | undefined;
+      if (error) {
+        outcome = 'error';
+        failureMessage = error.message;
+        failureTraceExcerpt = error.text;
+      } else if (failure) {
+        outcome = 'failed';
+        failureMessage = failure.message;
+        failureTraceExcerpt = failure.text;
+      } else if (skipped) {
+        outcome = 'skipped';
+        failureMessage = skipped.message;
+      }
+
+      tests.push({
+        id,
+        name,
+        outcome,
+        durationMs,
+        ...(failureMessage ? { failureMessage } : {}),
+        ...(failureTraceExcerpt ? { failureTraceExcerpt } : {}),
+      });
+    }
+
+    suites.push({ name: suiteName, tests });
+  }
+  return suites;
+}
+
+/** Directories skipped while walking the worktree for report-glob matches. */
+const REPORT_WALK_SKIP_DIRS = new Set(['node_modules', '.git']);
+
+function listWorktreeFiles(worktreePath: string): string[] {
+  const results: string[] = [];
+  function walk(dir: string, relPrefix: string): void {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const rel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (REPORT_WALK_SKIP_DIRS.has(entry.name)) continue;
+        walk(path.join(dir, entry.name), rel);
+      } else if (entry.isFile()) {
+        results.push(rel);
+      }
+    }
+  }
+  walk(worktreePath, '');
+  return results;
+}
+
+/**
+ * Glob-matches report files under `worktreePath`, parses each as JUnit XML,
+ * and merges every matched file's suites into one normalized
+ * StructuredTestResult. No suite/test-id namespacing is applied across
+ * files — pytest's and vitest's junit reporters already qualify names by
+ * file/module, so merging multiple report files under one glob does not
+ * collide (see the parent design task's completeness-critic finding).
+ *
+ * Returns null when the glob matches nothing (report not written — e.g. the
+ * run was killed before teardown) — the caller leaves structured_result
+ * null in that case rather than persisting an empty/misleading result.
+ */
+export function collectStructuredTestResult(
+  worktreePath: string,
+  reportGlob: string,
+): StructuredTestResult | null {
+  const matchedFiles = listWorktreeFiles(worktreePath)
+    .filter((rel) => minimatch(rel, reportGlob, { dot: true }))
+    .sort();
+  if (matchedFiles.length === 0) return null;
+
+  const suites: JUnitSuite[] = [];
+  for (const rel of matchedFiles) {
+    let xml: string;
+    try {
+      xml = readFileSync(path.join(worktreePath, rel), 'utf8');
+    } catch {
+      continue;
+    }
+    suites.push(...parseJUnitXml(xml));
+  }
+  if (suites.length === 0) return null;
+
+  const totals = { passed: 0, failed: 0, skipped: 0, errors: 0 };
+  let durationMsTotal = 0;
+  for (const suite of suites) {
+    for (const test of suite.tests) {
+      durationMsTotal += test.durationMs;
+      if (test.outcome === 'passed') totals.passed++;
+      else if (test.outcome === 'failed') totals.failed++;
+      else if (test.outcome === 'skipped') totals.skipped++;
+      else if (test.outcome === 'error') totals.errors++;
+    }
+  }
+
+  return { format: 'junit-xml', suites, totals, durationMsTotal };
 }
