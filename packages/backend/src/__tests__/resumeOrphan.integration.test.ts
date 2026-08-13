@@ -757,6 +757,12 @@ describe('resumeOrphanSessions() — planning-session resumability pre-check', (
       'error',
       expect.any(Number),
     );
+    // Regression guard: the resolved fallback cwd (projectDir) used to spawn
+    // the CLI must never be written back into worktree_path for a
+    // checkout-only planning session — that would flip the DB column from
+    // null to the bare project checkout path, a shape start() never
+    // produces (see respawnSession's checkoutOnlyPlanning guard).
+    expect(queries.updateSessionWorktreePath).not.toHaveBeenCalled();
   });
 
   it('still fails a standard coding session whose recorded worktree is absent (no regression)', async () => {
