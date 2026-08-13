@@ -1271,7 +1271,8 @@ export function StagedIntentPanel({
   // stuck at staged (cycle-limit escalation) approves directly — there is no
   // separate apply/commit step, and the backend rejects apply for this kind.
   const isTestRequest = intent.kind === 'test.request';
-  const skipsApply = isCapabilityRequest || isCompletenessDisposition || isTestRequest;
+  const skipsApply =
+    isCapabilityRequest || isCompletenessDisposition || isTestRequest;
   // planning.noOp is purely informational/auditable — no operator
   // disposition (commit/approve/reject) is ever offered for it.
   const isNoOp = intent.kind === 'planning.noOp';

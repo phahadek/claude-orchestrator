@@ -1210,7 +1210,9 @@ describe('StagedIntentPanel', () => {
         .mockResolvedValue({ ...makeTestRequestIntent(), state: 'approved' });
       const apply = vi.spyOn(stagedIntentsApi, 'apply');
 
-      render(<StagedIntentPanel intent={makeTestRequestIntent()} highlighted />);
+      render(
+        <StagedIntentPanel intent={makeTestRequestIntent()} highlighted />,
+      );
 
       act(() => fireKey('a'));
 
