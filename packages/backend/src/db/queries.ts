@@ -7293,6 +7293,52 @@ export function computeTestFlipRateFlag(
   };
 }
 
+export interface FlaggedFlakyTest {
+  testId: string;
+  name: string;
+  sampleCount: number;
+  transitionCount: number;
+}
+
+let _stmtDistinctProjectTestIds: Database.Statement | null = null;
+
+/**
+ * Every test under `projectId` currently flagged by computeTestFlipRateFlag —
+ * the lane-health rollup's flaky-test tier, sourced the same way as the
+ * regressed-test tier (per test_id, recomputed live, nothing persisted).
+ * test_run_results carries no project_id column, so scoping joins through
+ * test_request_runs.
+ */
+export function listFlaggedFlakyTests(
+  projectId: string,
+  windowN: number,
+  thresholdK: number,
+): FlaggedFlakyTest[] {
+  _stmtDistinctProjectTestIds ??= db.prepare<{ project_id: string }>(`
+    SELECT DISTINCT trr.test_id AS test_id, trr.name AS name
+    FROM test_run_results trr
+    JOIN test_request_runs r ON r.id = trr.test_request_run_id
+    WHERE r.project_id = @project_id
+  `);
+  const rows = _stmtDistinctProjectTestIds.all({
+    project_id: projectId,
+  }) as { test_id: string; name: string }[];
+
+  const flagged: FlaggedFlakyTest[] = [];
+  for (const row of rows) {
+    const flag = computeTestFlipRateFlag(row.test_id, windowN, thresholdK);
+    if (flag.flagged) {
+      flagged.push({
+        testId: row.test_id,
+        name: row.name,
+        sampleCount: flag.sampleCount,
+        transitionCount: flag.transitionCount,
+      });
+    }
+  }
+  return flagged;
+}
+
 // ─── session_test_request_cycles ───────────────────────────────────────────
 
 export function getSessionTestRequestCycleCount(sessionId: string): number {
@@ -8837,6 +8883,11 @@ export interface LaneHealthRollup {
   executionTimeMs: DurationPercentiles;
   /** Tests currently flagged is_regressed=1 (per-test median/MAD baseline) among this project's tests — display-only, per Open Question 5. */
   regressedTests: RegressedTestSummary[];
+  /** Tests currently flagged by the live per-test flip-rate flag — see listFlaggedFlakyTests. */
+  flakyTests: {
+    count: number;
+    tests: FlaggedFlakyTest[];
+  };
 }
 
 /**
@@ -8910,6 +8961,12 @@ function percentilesOf(samples: number[]): DurationPercentiles {
 export function getLaneHealthRollup(
   projectId: string,
   limit = 500,
+  // Defaults mirror config/settings.ts's flip_rate_window_n/flip_rate_threshold_k
+  // DEFAULT_SETTINGS — not imported here to avoid a circular import (settings.ts
+  // imports getSetting/setSetting from this module). Callers with access to the
+  // configured settings (e.g. the milestones route) should pass them explicitly.
+  flipRateWindowN = 20,
+  flipRateThresholdK = 2,
 ): LaneHealthRollup {
   const rows = db
     .prepare<{ project_id: string; limit: number }>(
@@ -8938,6 +8995,12 @@ export function getLaneHealthRollup(
     .filter((r) => r.finished_at !== null)
     .map((r) => (r.finished_at as number) - r.started_at);
 
+  const flakyTests = listFlaggedFlakyTests(
+    projectId,
+    flipRateWindowN,
+    flipRateThresholdK,
+  );
+
   return {
     project: projectId,
     totalRuns,
@@ -8946,6 +9009,7 @@ export function getLaneHealthRollup(
     queueWaitMs: percentilesOf(queueWaitSamples),
     executionTimeMs: percentilesOf(executionTimeSamples),
     regressedTests: getRegressedTestsForProject(projectId),
+    flakyTests: { count: flakyTests.length, tests: flakyTests },
   };
 }
 

@@ -46,6 +46,7 @@ function insertRun(opts: {
 }
 
 beforeEach(() => {
+  db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
   seq = 0;
 });
@@ -60,6 +61,7 @@ describe('getLaneHealthRollup', () => {
       queueWaitMs: { p50: null, p90: null, p99: null, sampleCount: 0 },
       executionTimeMs: { p50: null, p90: null, p99: null, sampleCount: 0 },
       regressedTests: [],
+      flakyTests: { count: 0, tests: [] },
     });
   });
 
@@ -223,5 +225,109 @@ describe('getLaneHealthRollup', () => {
         lastDurationMs: 900,
       },
     ]);
+  });
+
+  describe('flakyTests', () => {
+    function insertTestResult(opts: {
+      projectId: string;
+      testId: string;
+      name: string;
+      outcome: 'passed' | 'failed';
+      createdAt: number;
+    }): void {
+      seq += 1;
+      const runId = `run-${seq}`;
+      db.prepare(
+        `INSERT INTO test_request_runs
+           (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
+         VALUES (@id, @project_id, @content_hash, NULL, 'passed', '', 0, 0, 0)`,
+      ).run({
+        id: runId,
+        project_id: opts.projectId,
+        content_hash: `hash-${seq}`,
+      });
+      db.prepare(
+        `INSERT INTO test_run_results
+           (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+         VALUES (@run_id, @test_id, @name, @outcome, 1, 0, 0, @created_at)`,
+      ).run({
+        run_id: runId,
+        test_id: opts.testId,
+        name: opts.name,
+        outcome: opts.outcome,
+        created_at: opts.createdAt,
+      });
+    }
+
+    it('includes a flagged test, with its name and flip stats, when its transition count meets the threshold', () => {
+      const outcomes: Array<'passed' | 'failed'> = [
+        'passed',
+        'failed',
+        'passed',
+        'failed',
+      ];
+      outcomes.forEach((outcome, i) =>
+        insertTestResult({
+          projectId: 'proj-1',
+          testId: 'test-a',
+          name: 'suite > flaky test',
+          outcome,
+          createdAt: i,
+        }),
+      );
+
+      const result = getLaneHealthRollup('proj-1', 500, 20, 2);
+      expect(result.flakyTests.count).toBe(1);
+      expect(result.flakyTests.tests).toEqual([
+        {
+          testId: 'test-a',
+          name: 'suite > flaky test',
+          sampleCount: 4,
+          transitionCount: 3,
+        },
+      ]);
+    });
+
+    it('omits a test whose transition count is below the threshold', () => {
+      const outcomes: Array<'passed' | 'failed'> = [
+        'passed',
+        'passed',
+        'failed',
+        'failed',
+      ];
+      outcomes.forEach((outcome, i) =>
+        insertTestResult({
+          projectId: 'proj-1',
+          testId: 'test-b',
+          name: 'suite > stable test',
+          outcome,
+          createdAt: i,
+        }),
+      );
+
+      const result = getLaneHealthRollup('proj-1', 500, 20, 2);
+      expect(result.flakyTests).toEqual({ count: 0, tests: [] });
+    });
+
+    it('scopes flagged tests strictly by project', () => {
+      const outcomes: Array<'passed' | 'failed'> = [
+        'passed',
+        'failed',
+        'passed',
+        'failed',
+      ];
+      outcomes.forEach((outcome, i) =>
+        insertTestResult({
+          projectId: 'proj-other',
+          testId: 'test-c',
+          name: 'suite > other project test',
+          outcome,
+          createdAt: i,
+        }),
+      );
+
+      const result = getLaneHealthRollup('proj-1', 500, 20, 2);
+      expect(result.flakyTests).toEqual({ count: 0, tests: [] });
+    });
   });
 });

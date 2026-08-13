@@ -94,6 +94,28 @@ export function LaneHealthPanel({ projectId, invalidationKey }: Props) {
               </ul>
             </div>
           )}
+          {rollup.flakyTests.count > 0 && (
+            <div
+              className={styles.flaggedSection}
+              data-testid="flaky-tests-section"
+            >
+              <p className={styles.flaggedTitle}>
+                {rollup.flakyTests.count} test
+                {rollup.flakyTests.count === 1 ? '' : 's'} flagged flaky
+              </p>
+              <ul className={styles.flaggedList}>
+                {rollup.flakyTests.tests.map((test) => (
+                  <li key={test.testId} className={styles.flaggedItem}>
+                    <span className={styles.flaggedName}>{test.name}</span>
+                    <span className={styles.flaggedDetail}>
+                      {test.transitionCount} transitions / {test.sampleCount}{' '}
+                      samples
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </div>
