@@ -115,7 +115,9 @@ import { isSessionProcessAlive } from './processLiveness';
 import {
   reconcileSessionLiveness,
   reconcileNonPlanningSessionLiveness,
+  reconcileOrphanProcesses,
   type SessionLivenessReconcileResult,
+  type OrphanProcessReconcileResult,
 } from './sessionLivenessReconciler';
 import { isUsageAdmitted } from '../orchestration/usageAdmission';
 import { hasMemoryHeadroom } from '../orchestration/memoryAdmission';
@@ -4966,6 +4968,19 @@ export class SessionManager extends EventEmitter {
    */
   reconcileNonPlanningSessionLiveness(): SessionLivenessReconcileResult {
     return reconcileNonPlanningSessionLiveness({
+      evictSessionMapEntry: (sessionId) =>
+        this.evictDeadSessionEntry(sessionId),
+    });
+  }
+
+  /**
+   * OS → DB reconciliation sweep: reaps a claude OS process whose session
+   * row is already terminal (or missing entirely) — the fourth cell in the
+   * coverage matrix none of the three sweeps above can reach. See
+   * sessionLivenessReconciler.reconcileOrphanProcesses.
+   */
+  reconcileOrphanProcesses(): OrphanProcessReconcileResult {
+    return reconcileOrphanProcesses({
       evictSessionMapEntry: (sessionId) =>
         this.evictDeadSessionEntry(sessionId),
     });

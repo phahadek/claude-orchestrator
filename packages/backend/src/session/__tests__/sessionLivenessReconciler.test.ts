@@ -25,16 +25,20 @@ vi.mock('../../logger', () => ({
 
 import { db } from '../../db/db.js';
 import { recordEvent } from '../../audit/AuditLog';
+import * as queries from '../../db/queries.js';
 import {
   insertSession,
   countLivePlanningSessions,
   insertEvent,
+  updateSessionStatus,
 } from '../../db/queries.js';
 import { runtimeSettings } from '../../config';
 import {
   reconcileSessionLiveness,
   reconcileNonPlanningSessionLiveness,
+  reconcileOrphanProcesses,
 } from '../sessionLivenessReconciler';
+import type { ClaudeSessionProcess } from '../processLiveness';
 
 const NOW = 1_700_000_000_000;
 const OLD_START = NOW - 60 * 60_000; // 1 hour before "now" — well past the grace floor
@@ -487,5 +491,186 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     expect(result.reconciled.length).toBe(1);
     expect(result.examined).toBe(2);
     expect(result.alive).toBe(1);
+  });
+});
+
+describe('reconcileOrphanProcesses', () => {
+  function proc(
+    overrides: Partial<ClaudeSessionProcess>,
+  ): ClaudeSessionProcess {
+    return { pid: 1234, sessionId: null, etimeSeconds: 10_000, ...overrides };
+  }
+
+  it('reaps a process whose row is terminal (done) past the grace floor', () => {
+    seedSession({ sessionId: 'orphan-done', status: 'running' });
+    updateSessionStatus('orphan-done', 'done', NOW - 60 * 60_000);
+
+    const killed: number[] = [];
+    const result = reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 111, sessionId: 'orphan-done' })],
+      killProcess: (pid) => killed.push(pid),
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(1);
+    expect(result.reaped).toBe(1);
+    expect(result.skippedByGrace).toBe(0);
+    expect(killed).toEqual([111]);
+  });
+
+  it.each(['error', 'killed', 'superseded'])(
+    'reaps a process whose row is terminal (%s) past the grace floor',
+    (status) => {
+      seedSession({ sessionId: `orphan-${status}`, status: 'running' });
+      updateSessionStatus(`orphan-${status}`, status, NOW - 60 * 60_000);
+
+      const killed: number[] = [];
+      const result = reconcileOrphanProcesses({
+        scanProcesses: () => [
+          proc({ pid: 222, sessionId: `orphan-${status}` }),
+        ],
+        killProcess: (pid) => killed.push(pid),
+        nowFn: () => NOW,
+      });
+
+      expect(result.reaped).toBe(1);
+      expect(killed).toEqual([222]);
+    },
+  );
+
+  it('never reaps a process whose row is non-terminal', () => {
+    seedSession({ sessionId: 'live-row', status: 'running' });
+
+    const killed: number[] = [];
+    const result = reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 333, sessionId: 'live-row' })],
+      killProcess: (pid) => killed.push(pid),
+      nowFn: () => NOW,
+    });
+
+    expect(result.reaped).toBe(0);
+    expect(killed).toEqual([]);
+  });
+
+  it('never treats a process with no resolvable session uuid (claude remote-control) as a candidate', () => {
+    const killed: number[] = [];
+    const result = reconcileOrphanProcesses({
+      scanProcesses: () => [
+        // Exact cmdline shape from processLiveness.scanClaudeSessionProcesses
+        // for `/usr/bin/claude remote-control` — no --session-id/--resume flag,
+        // so sessionId comes back null.
+        { pid: 444, sessionId: null, etimeSeconds: 1_000_000 },
+      ],
+      killProcess: (pid) => killed.push(pid),
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(0);
+    expect(result.reaped).toBe(0);
+    expect(killed).toEqual([]);
+  });
+
+  it('reaps a process whose uuid resolves to no session row, only after the grace floor measured from process start', () => {
+    const killed: number[] = [];
+    const result = reconcileOrphanProcesses({
+      scanProcesses: () => [
+        proc({ pid: 555, sessionId: 'no-such-row', etimeSeconds: 10_000 }),
+      ],
+      killProcess: (pid) => killed.push(pid),
+      nowFn: () => NOW,
+    });
+
+    expect(result.reaped).toBe(1);
+    expect(killed).toEqual([555]);
+  });
+
+  it('skips a process with no session row that has not yet cleared the grace floor since process start', () => {
+    const killed: number[] = [];
+    const result = reconcileOrphanProcesses({
+      scanProcesses: () => [
+        // etimeSeconds=5s -> started 5s ago, well inside the 2min grace floor
+        proc({ pid: 666, sessionId: 'brand-new-no-row', etimeSeconds: 5 }),
+      ],
+      killProcess: (pid) => killed.push(pid),
+      nowFn: () => NOW,
+    });
+
+    expect(result.reaped).toBe(0);
+    expect(result.skippedByGrace).toBe(1);
+    expect(killed).toEqual([]);
+  });
+
+  it('skips a terminal row whose ended_at is inside the grace floor, counting it in skippedByGrace', () => {
+    seedSession({ sessionId: 'just-terminalized', status: 'running' });
+    updateSessionStatus('just-terminalized', 'done', NOW - 5_000);
+
+    const killed: number[] = [];
+    const result = reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 777, sessionId: 'just-terminalized' })],
+      killProcess: (pid) => killed.push(pid),
+      nowFn: () => NOW,
+    });
+
+    expect(result.reaped).toBe(0);
+    expect(result.skippedByGrace).toBe(1);
+    expect(killed).toEqual([]);
+  });
+
+  it('is a no-op in api session mode', () => {
+    runtimeSettings.session_mode = 'api';
+    const killed: number[] = [];
+    const result = reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 888, sessionId: 'whatever' })],
+      killProcess: (pid) => killed.push(pid),
+      nowFn: () => NOW,
+    });
+
+    expect(result).toEqual({ examined: 0, reaped: 0, skippedByGrace: 0 });
+    expect(killed).toEqual([]);
+  });
+
+  it('writes no session status — status-writer spy must not be called', () => {
+    seedSession({ sessionId: 'no-status-write', status: 'running' });
+    updateSessionStatus('no-status-write', 'done', NOW - 60 * 60_000);
+
+    const statusWriterSpy = vi.spyOn(queries, 'updateSessionStatus');
+    statusWriterSpy.mockClear();
+
+    reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 999, sessionId: 'no-status-write' })],
+      killProcess: () => {},
+      nowFn: () => NOW,
+    });
+
+    expect(statusWriterSpy).not.toHaveBeenCalled();
+    statusWriterSpy.mockRestore();
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('no-status-write') as { status: string };
+    expect(row.status).toBe('done');
+  });
+
+  it('evicts a stale in-memory map entry for a reaped session', () => {
+    seedSession({ sessionId: 'evict-me', status: 'running' });
+    updateSessionStatus('evict-me', 'killed', NOW - 60 * 60_000);
+    const inMemoryMap = new Map<string, true>([['evict-me', true]]);
+
+    reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 1010, sessionId: 'evict-me' })],
+      killProcess: () => {},
+      evictSessionMapEntry: (sessionId) => inMemoryMap.delete(sessionId),
+      nowFn: () => NOW,
+    });
+
+    expect(inMemoryMap.has('evict-me')).toBe(false);
+  });
+
+  it('reports examined and reaped separately, so a zero is distinguishable from a no-op sweep', () => {
+    const result = reconcileOrphanProcesses({
+      scanProcesses: () => [],
+      nowFn: () => NOW,
+    });
+
+    expect(result).toEqual({ examined: 0, reaped: 0, skippedByGrace: 0 });
   });
 });

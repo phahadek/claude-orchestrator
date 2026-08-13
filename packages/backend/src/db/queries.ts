@@ -583,7 +583,7 @@ export const TERMINAL_SESSION_STATUSES = new Set(['done', 'error', 'killed']);
  * superseded session as concluded. Derived, never re-enumerated, so 'idle' can
  * never silently reappear in one of these collections.
  */
-const TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED = new Set([
+export const TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED = new Set([
   ...TERMINAL_SESSION_STATUSES,
   'superseded',
 ]);
