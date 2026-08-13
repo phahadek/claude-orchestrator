@@ -263,6 +263,7 @@ import * as queries from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 import type { Session } from '../db/types';
 import { recoverSession } from '../session/sessionRecovery';
+import { hasMemoryHeadroom } from '../orchestration/memoryAdmission';
 
 function makeRunningSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -292,6 +293,17 @@ beforeEach(() => {
   vi.clearAllMocks();
   // execSync no-op stub (used for git fetch / git rev-parse / git worktree).
   vi.mocked(execSync).mockReturnValue('');
+  // Re-established every test: the afterEach below calls vi.restoreAllMocks(),
+  // which wipes the mockReturnValue the vi.mock('../orchestration/memoryAdmission')
+  // factory set only once at module init — without this, every test after
+  // the first would see hasMemoryHeadroom() return undefined and throw.
+  vi.mocked(hasMemoryHeadroom).mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  });
 });
 
 afterEach(() => {
