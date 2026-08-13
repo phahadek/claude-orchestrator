@@ -264,8 +264,10 @@ class ReadyPathMissingGroupError extends Error {
  * ReadyPathMissingGroupError above): rejects a live Ready-path member staged
  * with no groupId at all, before the row ever reaches `staged`. Kinds outside
  * the Ready-path member set — decision.pickOne (which cannot belong to a
- * group at all), planning.noOp (a standalone marker), and a Deferred-target
- * task.setStatus — are untouched.
+ * group at all), planning.noOp (which may be staged standalone via the
+ * acknowledge route, or as a member of a design closing-synthesis group —
+ * see assertExpectedTerminalKinds), and a Deferred-target task.setStatus —
+ * are untouched.
  */
 function assertReadyPathGrouped(
   kind: string,
@@ -4700,6 +4702,15 @@ async function applyIntent(
         nextVersion: result.next.version,
       };
     }
+    case 'planning.noOp':
+      // Nothing to apply: the payload IS the decision not to produce an
+      // artifact. Committing it is the whole disposition. A noOp is a normal
+      // member of a design closing-synthesis group (see
+      // assertExpectedTerminalKinds, which counts one as satisfying an
+      // expected terminal kind), so it must commit through the group path;
+      // the /acknowledge route remains the disposition for a standalone
+      // noOp.
+      return {};
     case 'test.request':
     case 'ops.prIntent':
       throw new NotOperatorAppliableError(intent.kind);
@@ -7616,15 +7627,17 @@ export function createStagedIntentsRouter(
   );
 
   // ── POST /api/staged-intents/:id/acknowledge ──────────────────────────────
-  // planning.noOp's sole disposition: the intent proposes nothing, so there
-  // is nothing to route through applyIntent (which has, and must keep, no
-  // case for this kind — see the default: unknown-kind throw). Acknowledging
-  // transitions the row straight to `committed`, records the same
-  // staged_intent_disposition audit event every other disposition uses, and
-  // does not call planningOrchestrator.handleDisposition: a noOp's session
-  // already reached terminal by staging it (checkTerminal's `countable`
-  // filter excludes it), so there is no session left to resume and no
-  // decision for it to act on.
+  // The disposition for a *standalone* planning.noOp (no groupId) — the kind
+  // that arises outside a design closing-synthesis group, e.g. a session
+  // deciding on its own, unprompted, that no artifact is warranted. A grouped
+  // noOp instead commits through applyIntent's group-commit path (see the
+  // 'planning.noOp' case there), since the group cannot partially commit.
+  // Acknowledging transitions the row straight to `committed`, records the
+  // same staged_intent_disposition audit event every other disposition uses,
+  // and does not call planningOrchestrator.handleDisposition: a noOp's
+  // session already reached terminal by staging it (checkTerminal's
+  // `countable` filter excludes it), so there is no session left to resume
+  // and no decision for it to act on.
   router.post(
     '/staged-intents/:id/acknowledge',
     (req: Request, res: Response) => {
