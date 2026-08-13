@@ -149,7 +149,9 @@ describe('FlowArmToggle', () => {
       fireEvent.click(screen.getByTestId('flow-arm-switch-design'));
     });
 
-    expect(setSpy).toHaveBeenCalledWith('m1', 'design', true);
+    await waitFor(() =>
+      expect(setSpy).toHaveBeenCalledWith('m1', 'design', true),
+    );
 
     await waitFor(() =>
       expect(
@@ -271,6 +273,13 @@ describe('FlowArmToggle', () => {
           .getByTestId('flow-arm-switch-groom')
           .getAttribute('aria-checked'),
       ).toBe('false');
+    });
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId('flow-arm-switch-design')
+          .getAttribute('aria-checked'),
+      ).toBe('true');
     });
 
     const disarmed = screen.getByTestId('flow-arm-switch-groom');
