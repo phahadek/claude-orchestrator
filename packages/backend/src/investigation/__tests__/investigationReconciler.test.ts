@@ -130,7 +130,9 @@ describe('runInvestigationReconcilerTick', () => {
     const first = await runInvestigationReconcilerTick(sessionManager as never);
     expect(first.dispatched).toEqual([report.id]);
 
-    const second = await runInvestigationReconcilerTick(sessionManager as never);
+    const second = await runInvestigationReconcilerTick(
+      sessionManager as never,
+    );
     expect(second.dispatched).toEqual([]);
     expect(sessionManager.start).toHaveBeenCalledTimes(1);
   });
@@ -140,7 +142,9 @@ describe('runInvestigationReconcilerTick', () => {
     makeReport();
     const sessionManager = makeSessionManager();
 
-    const result = await runInvestigationReconcilerTick(sessionManager as never);
+    const result = await runInvestigationReconcilerTick(
+      sessionManager as never,
+    );
 
     expect(result.dispatched).toEqual([]);
     expect(sessionManager.start).not.toHaveBeenCalled();
@@ -150,7 +154,9 @@ describe('runInvestigationReconcilerTick', () => {
     makeReport({}, { committed: false });
     const sessionManager = makeSessionManager();
 
-    const result = await runInvestigationReconcilerTick(sessionManager as never);
+    const result = await runInvestigationReconcilerTick(
+      sessionManager as never,
+    );
 
     expect(result.dispatched).toEqual([]);
   });
@@ -162,7 +168,9 @@ describe('runInvestigationReconcilerTick', () => {
     const reportB = makeReport({ title: 'B' });
     const sessionManager = makeSessionManager();
 
-    const result = await runInvestigationReconcilerTick(sessionManager as never);
+    const result = await runInvestigationReconcilerTick(
+      sessionManager as never,
+    );
 
     expect(result.dispatched).toHaveLength(1);
     expect(result.skippedForBudget).toBe(1);
@@ -182,7 +190,9 @@ describe('runInvestigationReconcilerTick', () => {
     makeReport();
     const sessionManager = makeSessionManager();
 
-    const result = await runInvestigationReconcilerTick(sessionManager as never);
+    const result = await runInvestigationReconcilerTick(
+      sessionManager as never,
+    );
 
     expect(result.dispatched).toEqual([]);
     expect(result.skippedForBudget).toBe(1);

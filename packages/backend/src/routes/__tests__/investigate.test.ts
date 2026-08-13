@@ -16,7 +16,10 @@ const investigateDispatcherMock = vi.hoisted(() => ({
   launchInvestigateBatch: vi.fn(),
 }));
 
-vi.mock('../../investigation/investigateDispatcher.js', () => investigateDispatcherMock);
+vi.mock(
+  '../../investigation/investigateDispatcher.js',
+  () => investigateDispatcherMock,
+);
 
 import { createInvestigateRouter } from '../investigate.js';
 
@@ -41,16 +44,20 @@ describe('POST /api/investigate/launch', () => {
       .post('/api/investigate/launch')
       .send({ reportIds: ['r-1', 'r-2'] });
 
-    expect(investigateDispatcherMock.launchInvestigateBatch).toHaveBeenCalledWith(
-      {},
-      ['r-1', 'r-2'],
-    );
+    expect(
+      investigateDispatcherMock.launchInvestigateBatch,
+    ).toHaveBeenCalledWith({}, ['r-1', 'r-2']);
     expect(res.status).toBe(202);
-    expect(res.body).toEqual({ sessionId: 'sess-1', reportIds: ['r-1', 'r-2'] });
+    expect(res.body).toEqual({
+      sessionId: 'sess-1',
+      reportIds: ['r-1', 'r-2'],
+    });
   });
 
   it('400s on a missing reportIds[]', async () => {
-    const res = await request(makeApp()).post('/api/investigate/launch').send({});
+    const res = await request(makeApp())
+      .post('/api/investigate/launch')
+      .send({});
     expect(res.status).toBe(400);
     expect(
       investigateDispatcherMock.launchInvestigateBatch,

@@ -10,7 +10,9 @@ import { asyncHandler } from './asyncHandler';
  * tick, both funneling through the same launchInvestigateBatch dispatcher.
  * Mirrors routes/gateState.ts's `POST /api/gate/verify-launch`.
  */
-export function createInvestigateRouter(sessionManager: SessionManager): Router {
+export function createInvestigateRouter(
+  sessionManager: SessionManager,
+): Router {
   const router = Router();
 
   // POST /api/investigate/launch  { reportIds }
