@@ -9,9 +9,10 @@ export interface JobOptions {
   jitterMs?: number;
   enabled?: () => boolean;
   concurrency?: 'skip-if-running' | 'queue-next' | 'serial-no-overlap';
-  run: (ctx: { signal: AbortSignal }) => Promise<
-    | ({ items_processed?: number } & Record<string, unknown>)
-    | void
+  run: (ctx: {
+    signal: AbortSignal;
+  }) => Promise<
+    ({ items_processed?: number } & Record<string, unknown>) | void
   >;
   onError?: (err: unknown) => void;
 }
