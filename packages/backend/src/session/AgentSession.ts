@@ -696,21 +696,21 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           ? runtimeSettings.investigate_session_model ||
             runtimeSettings.ops_session_model
           : this.sessionType === 'ops'
-          ? runtimeSettings.ops_session_model
-          : this.sessionType === 'groom'
-            ? runtimeSettings.groom_session_model ||
-              runtimeSettings.planning_session_model
-            : this.sessionType === 'design'
-              ? runtimeSettings.design_session_model ||
+            ? runtimeSettings.ops_session_model
+            : this.sessionType === 'groom'
+              ? runtimeSettings.groom_session_model ||
                 runtimeSettings.planning_session_model
-              : this.sessionType === 'docs'
-                ? runtimeSettings.docs_session_model ||
+              : this.sessionType === 'design'
+                ? runtimeSettings.design_session_model ||
                   runtimeSettings.planning_session_model
-                : this.sessionType === 'split'
-                  ? runtimeSettings.planning_session_model
-                  : isCodeSession(this.sessionType)
-                    ? runtimeSettings.code_session_model
-                    : runtimeSettings.review_session_model);
+                : this.sessionType === 'docs'
+                  ? runtimeSettings.docs_session_model ||
+                    runtimeSettings.planning_session_model
+                  : this.sessionType === 'split'
+                    ? runtimeSettings.planning_session_model
+                    : isCodeSession(this.sessionType)
+                      ? runtimeSettings.code_session_model
+                      : runtimeSettings.review_session_model);
     const effortSetting =
       this.launchEffort ||
       (isGateVerifySession(this.taskId)
@@ -720,21 +720,21 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           ? runtimeSettings.investigate_session_effort ||
             runtimeSettings.ops_session_effort
           : this.sessionType === 'ops'
-          ? runtimeSettings.ops_session_effort
-          : this.sessionType === 'groom'
-            ? runtimeSettings.groom_session_effort ||
-              runtimeSettings.planning_session_effort
-            : this.sessionType === 'design'
-              ? runtimeSettings.design_session_effort ||
+            ? runtimeSettings.ops_session_effort
+            : this.sessionType === 'groom'
+              ? runtimeSettings.groom_session_effort ||
                 runtimeSettings.planning_session_effort
-              : this.sessionType === 'docs'
-                ? runtimeSettings.docs_session_effort ||
+              : this.sessionType === 'design'
+                ? runtimeSettings.design_session_effort ||
                   runtimeSettings.planning_session_effort
-                : this.sessionType === 'split'
-                  ? runtimeSettings.planning_session_effort
-                  : isCodeSession(this.sessionType)
-                    ? runtimeSettings.code_session_effort
-                    : runtimeSettings.review_session_effort);
+                : this.sessionType === 'docs'
+                  ? runtimeSettings.docs_session_effort ||
+                    runtimeSettings.planning_session_effort
+                  : this.sessionType === 'split'
+                    ? runtimeSettings.planning_session_effort
+                    : isCodeSession(this.sessionType)
+                      ? runtimeSettings.code_session_effort
+                      : runtimeSettings.review_session_effort);
     if (effortSetting) {
       setSessionEffort(this.sessionId, effortSetting);
     }
@@ -754,24 +754,24 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             ? 'investigate_session_model'
             : 'ops_session_model'
           : this.sessionType === 'ops'
-          ? 'ops_session_model'
-          : this.sessionType === 'groom'
-            ? runtimeSettings.groom_session_model
-              ? 'groom_session_model'
-              : 'planning_session_model'
-            : this.sessionType === 'design'
-              ? runtimeSettings.design_session_model
-                ? 'design_session_model'
+            ? 'ops_session_model'
+            : this.sessionType === 'groom'
+              ? runtimeSettings.groom_session_model
+                ? 'groom_session_model'
                 : 'planning_session_model'
-              : this.sessionType === 'docs'
-                ? runtimeSettings.docs_session_model
-                  ? 'docs_session_model'
+              : this.sessionType === 'design'
+                ? runtimeSettings.design_session_model
+                  ? 'design_session_model'
                   : 'planning_session_model'
-                : this.sessionType === 'split'
-                  ? 'planning_session_model'
-                  : isCodeSession(this.sessionType)
-                    ? 'code_session_model'
-                    : 'review_session_model';
+                : this.sessionType === 'docs'
+                  ? runtimeSettings.docs_session_model
+                    ? 'docs_session_model'
+                    : 'planning_session_model'
+                  : this.sessionType === 'split'
+                    ? 'planning_session_model'
+                    : isCodeSession(this.sessionType)
+                      ? 'code_session_model'
+                      : 'review_session_model';
     const effortSettingKey = this.launchEffort
       ? null
       : isGateVerifySession(this.taskId)
@@ -783,24 +783,24 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             ? 'investigate_session_effort'
             : 'ops_session_effort'
           : this.sessionType === 'ops'
-          ? 'ops_session_effort'
-          : this.sessionType === 'groom'
-            ? runtimeSettings.groom_session_effort
-              ? 'groom_session_effort'
-              : 'planning_session_effort'
-            : this.sessionType === 'design'
-              ? runtimeSettings.design_session_effort
-                ? 'design_session_effort'
+            ? 'ops_session_effort'
+            : this.sessionType === 'groom'
+              ? runtimeSettings.groom_session_effort
+                ? 'groom_session_effort'
                 : 'planning_session_effort'
-              : this.sessionType === 'docs'
-                ? runtimeSettings.docs_session_effort
-                  ? 'docs_session_effort'
+              : this.sessionType === 'design'
+                ? runtimeSettings.design_session_effort
+                  ? 'design_session_effort'
                   : 'planning_session_effort'
-                : this.sessionType === 'split'
-                  ? 'planning_session_effort'
-                  : isCodeSession(this.sessionType)
-                    ? 'code_session_effort'
-                    : 'review_session_effort';
+                : this.sessionType === 'docs'
+                  ? runtimeSettings.docs_session_effort
+                    ? 'docs_session_effort'
+                    : 'planning_session_effort'
+                  : this.sessionType === 'split'
+                    ? 'planning_session_effort'
+                    : isCodeSession(this.sessionType)
+                      ? 'code_session_effort'
+                      : 'review_session_effort';
     if (modelSettingKey) {
       setSessionModelSettingKey(this.sessionId, modelSettingKey);
     }
