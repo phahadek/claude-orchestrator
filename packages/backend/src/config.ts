@@ -2,7 +2,10 @@ import { getSecret } from './security/secrets';
 import { getOrchestratorConfig } from './config/appConfig';
 import type { NonMilestoneSourceConfig } from './tasks/TaskBackend';
 import { orchestratorMcpToolName, notionMcpToolName } from './mcp/toolNaming';
-import { PLANNING_INTENT_KINDS } from './planning/planningIntentKinds';
+import {
+  PLANNING_INTENT_KINDS,
+  INVESTIGATE_INTENT_KINDS,
+} from './planning/planningIntentKinds';
 
 interface Board {
   /** Milestone row id — used as the milestoneId for WS fetch_tasks. */
@@ -486,6 +489,50 @@ export const DESIGN_ALLOWED_TOOLS = [
 export const OPS_ALLOWED_TOOLS = [
   ...PLANNING_READONLY_BASH_TOOLS,
   ...OPS_MCP_TOOLS,
+  'Bash(git log:*)',
+  'Bash(git diff:*)',
+  'Bash(git show:*)',
+  'Bash(git status:*)',
+  'Bash(git blame:*)',
+  'Bash(git ls-files:*)',
+  'Bash(git rev-parse:*)',
+  'Bash(git branch --list:*)',
+  'Bash(git grep:*)',
+];
+
+// The orchestrator MCP tools an investigate-dispatched session (sessionType
+// 'ops', task_id `report-batch:<batchId>` — see
+// sessionPredicates.ts#isInvestigateSession) is allowed to call — derived
+// from INVESTIGATE_INTENT_KINDS (planning/planningIntentKinds.ts) rather than
+// PLANNING_INTENT_KINDS.ops, same precedent as GROOM_MCP_TOOLS/
+// DESIGN_MCP_TOOLS/OPS_MCP_TOOLS above. Deliberately omits gateSeed.getState,
+// deploy.verdict, gate.reclassify, and intent.dispositionStranded — the
+// OPS_MCP_TOOLS entries added explicitly outside PLANNING_INTENT_KINDS.ops —
+// since none of them have an investigate analog either.
+const INVESTIGATE_MCP_TOOLS = [
+  ORCHESTRATOR_MCP_HEALTH_TOOL,
+  ...INVESTIGATE_INTENT_KINDS.map(orchestratorMcpToolName),
+  ...ARCHITECTURE_READ_MCP_TOOLS,
+  ...TASK_READ_MCP_TOOLS,
+  ...PROJECT_READ_MCP_TOOLS,
+  ...TIER_B_READ_MCP_TOOLS,
+];
+
+/**
+ * investigate session tool set: OPS_ALLOWED_TOOLS's domain-agnostic base
+ * (read-only Bash, the always-on read tools) with the ops_journal/gate/
+ * deploy-specific MCP surface swapped out for INVESTIGATE_MCP_TOOLS — no
+ * `journal.setState`, `gate.verify`, `gateSeed.getState`, `deploy.verdict`,
+ * `gate.reclassify`, `intent.dispositionStranded`, or `ops.prIntent`, none
+ * of which have an investigate analog (see investigation/
+ * investigateDispatcher.ts). Investigate sessions are dispatched with
+ * sessionType 'ops' (see sessionPredicates.ts#isInvestigateSession), so
+ * getSessionAllowedTools must special-case this constant in ahead of its
+ * generic 'ops' branch — see orchestrator-config.ts.
+ */
+export const INVESTIGATE_ALLOWED_TOOLS = [
+  ...PLANNING_READONLY_BASH_TOOLS,
+  ...INVESTIGATE_MCP_TOOLS,
   'Bash(git log:*)',
   'Bash(git diff:*)',
   'Bash(git show:*)',

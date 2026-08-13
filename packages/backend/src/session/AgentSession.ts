@@ -897,6 +897,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             { allowed_tools: this.extraAllowedTools },
             getGrantedCapabilities(this.sessionId),
             resolveProjectTaskSource(this.projectId),
+            undefined,
+            this.taskId,
           ),
           sessionType: this.sessionType,
           granted: getGrantedCapabilities(this.sessionId),

@@ -7,13 +7,14 @@ import {
   GROOM_ALLOWED_TOOLS,
   DESIGN_ALLOWED_TOOLS,
   OPS_ALLOWED_TOOLS,
+  INVESTIGATE_ALLOWED_TOOLS,
   DOCS_ALLOWED_TOOLS,
   DEPTH_REVIEW_ALLOWED_TOOLS,
   docsWebFetchTools,
   NOTION_READ_MCP_TOOLS,
   runtimeSettings,
 } from '../config';
-import { isPlanningSession } from './sessionPredicates';
+import { isPlanningSession, isInvestigateSession } from './sessionPredicates';
 
 /**
  * Locates the central config tree (the sibling `config/` checkout holding
@@ -523,20 +524,34 @@ function sanctionedAutoApproveCapabilities(): readonly string[] {
  * auto-approved its own read:session-events grant, used it to run its target
  * Investigation to conclusion, then promoted the task to Ready). A groom
  * request for either capability now falls through to the ordinary
- * operator-park path instead. ops/design/gate-verify sessions are unaffected
- * — those flows are supposed to read the record — and the own-record reader
- * and the allowlist are untouched for every session type, including groom.
+ * operator-park path instead. ops/design/gate-verify/investigate sessions
+ * are unaffected — those flows are supposed to read the record — and the
+ * own-record reader and the allowlist are untouched for every session type,
+ * including groom.
+ *
+ * An investigate-dispatched session (`requestingTaskId` matching
+ * sessionPredicates.ts#isInvestigateSession's `report-batch:` prefix) is
+ * explicitly folded into the non-groom carve-out rather than left to pass it
+ * incidentally by virtue of its sessionType staying 'ops' — the /investigate
+ * skill's read-only-by-default posture makes this record exactly the
+ * evidence an investigate session is dispatched to read (§ Evidence law:
+ * "Session S did / didn't do Y" admits only its session_events transcript),
+ * so this is named as a first-class case rather than relying on "not groom"
+ * to cover it.
  */
 export function isSanctionedAutoApproveCapability(
   capability: string,
   requestingSessionId: string,
   requestingProjectId?: string | null,
   requestingSessionType?: string | null,
+  requestingTaskId?: string | null,
 ): boolean {
+  const nonGroomCarveOut =
+    requestingSessionType !== 'groom' || isInvestigateSession(requestingTaskId);
   return (
     capability === sessionRecordReadCapability(requestingSessionId) ||
     (requestingProjectId != null &&
-      requestingSessionType !== 'groom' &&
+      nonGroomCarveOut &&
       (capability === auditLogReadCapability(requestingProjectId) ||
         capability === sessionEventsReadCapability(requestingProjectId))) ||
     sanctionedAutoApproveCapabilities().includes(capability)
@@ -659,6 +674,14 @@ export function bashCapabilityConfersFileMutation(capability: string): boolean {
  * task-body convention). Only merged in for sessionType 'docs' — every other
  * session type ignores it. Never widens to an open WebFetch/WebSearch: an
  * empty/omitted list grants no WebFetch at all.
+ *
+ * `taskId` distinguishes an investigate-dispatched session from a plain ops
+ * session: both spawn with sessionType 'ops' (see
+ * sessionPredicates.ts#isInvestigateSession — no dedicated SessionType
+ * literal exists for investigate), so the narrower INVESTIGATE_ALLOWED_TOOLS
+ * envelope can only be selected by inspecting `taskId`'s `report-batch:`
+ * prefix, ahead of the generic 'ops' branch below. Omitted (or a non-'ops'
+ * sessionType) has no effect.
  */
 export function getSessionAllowedTools(
   sessionType: string,
@@ -666,6 +689,7 @@ export function getSessionAllowedTools(
   granted: string[] = [],
   taskSource?: 'notion' | 'yaml' | 'jira' | 'github',
   docsSourceDomains: string[] = [],
+  taskId?: string | null,
 ): string[] {
   const grantable = granted.filter(isGrantable).filter(isToolShapedCapability);
   const notionExtras = taskSource === 'notion' ? NOTION_READ_MCP_TOOLS : [];
@@ -674,17 +698,27 @@ export function getSessionAllowedTools(
       ? [...GROOM_ALLOWED_TOOLS, ...notionExtras]
       : sessionType === 'design'
         ? [...DESIGN_ALLOWED_TOOLS, ...notionExtras]
-        : sessionType === 'ops'
-          ? [...OPS_ALLOWED_TOOLS, ...notionExtras, ...orchConfig.allowed_tools]
-          : sessionType === 'docs'
+        : sessionType === 'ops' && isInvestigateSession(taskId)
+          ? [
+              ...INVESTIGATE_ALLOWED_TOOLS,
+              ...notionExtras,
+              ...orchConfig.allowed_tools,
+            ]
+          : sessionType === 'ops'
             ? [
-                ...DOCS_ALLOWED_TOOLS,
+                ...OPS_ALLOWED_TOOLS,
                 ...notionExtras,
-                ...docsWebFetchTools(docsSourceDomains),
+                ...orchConfig.allowed_tools,
               ]
-            : sessionType === 'depth_review'
-              ? [...DEPTH_REVIEW_ALLOWED_TOOLS, ...notionExtras]
-              : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
+            : sessionType === 'docs'
+              ? [
+                  ...DOCS_ALLOWED_TOOLS,
+                  ...notionExtras,
+                  ...docsWebFetchTools(docsSourceDomains),
+                ]
+              : sessionType === 'depth_review'
+                ? [...DEPTH_REVIEW_ALLOWED_TOOLS, ...notionExtras]
+                : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
   return [...new Set([...base, ...grantable])];
 }
 

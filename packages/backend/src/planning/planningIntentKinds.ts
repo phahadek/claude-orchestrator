@@ -102,3 +102,32 @@ export const CODE_INTENT_KINDS: readonly string[] = [
   'test.request',
   'report.file',
 ];
+
+/**
+ * Stage-proposal kinds an investigate-dispatched session (sessionType
+ * 'ops', task_id `report-batch:<batchId>` — see
+ * sessionPredicates.ts#isInvestigateSession) may stage. A sibling constant
+ * to `PLANNING_INTENT_KINDS`, not an entry inside it: that record is keyed
+ * by `SkillId`, which is `Extract<SessionType, 'groom'|'design'|'ops'|
+ * 'split'|'docs'>` and structurally excludes 'investigate' (no such
+ * SessionType literal exists — investigate reuses 'ops'). Deliberately
+ * narrower than `PLANNING_INTENT_KINDS.ops`: no `journal.setState`
+ * (investigate has no ops_journal analog), no `task.setStatus`/
+ * `task.updateBody`/`task.patchBodySection` (an investigate session files
+ * new Backlog tasks, it never edits an existing one — see the /investigate
+ * skill's "Never edit a filed task. File a new one."), no `gate.verify`/
+ * `ops.prIntent` (no gate item or PR to report against). `task.create`
+ * files the grounded Backlog output; `decision.pickOne` resolves an
+ * ambiguous input the skill's "resolve it before acting" rule requires;
+ * `session.requestCapability` is the same mid-session escalation path every
+ * planning workflow gets; `intent.withdraw` retracts a staged intent.
+ * Consumed by config.ts to derive `INVESTIGATE_ALLOWED_TOOLS`'s staged-intent
+ * MCP entries, same precedent as `PLANNING_INTENT_KINDS`/`CODE_INTENT_KINDS`
+ * above.
+ */
+export const INVESTIGATE_INTENT_KINDS: readonly string[] = [
+  'task.create',
+  'decision.pickOne',
+  'session.requestCapability',
+  'intent.withdraw',
+];
