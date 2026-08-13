@@ -118,6 +118,16 @@ longer a live non-Done target) with the **Edit** tool. This is what makes
 **resume** mode work and is unchanged from before the cutover — only the
 _source_ of the bundle moved from a shell-out to the route.
 
+> **`grooming-state.json` is FLAT, keyed by task id — and every entry must carry
+> `project`, `milestone`, `title`.** The shape is a top-level map `{ "<taskId>": { … } }`
+> (not a nested `{ milestone, project, tasks: { … } }` wrapper) — `groom-flip-client.mjs`
+> reads `state[taskId]` directly and **requires** `project`, `milestone`, `title` on that
+> entry (plus `hard_block_deps`, `size_check`, `type_check`, `gate_contribution`,
+> `seed_contribution` at flip time). **Stamp `project`, `milestone`, `title` on every entry
+> when you seed it** — including tasks that arrive in a later wave and get merged in
+> mid-session (a wave-added entry seeded without them fails the flip at payload-build with
+> `missing required field(s): title, project, milestone`).
+
 Read the non-architecture context-page bodies from `contextPages[].markdown`
 (project context, product design doc, dev setup, future scope — always
 populated, regardless of `archSource`). Also read the universal
@@ -198,6 +208,14 @@ before editing.
 Keep the package reads in subagents so the main window stays small (the procedure
 must survive — that is the original failure mode).
 
+> **Fan out, and falsify the first read.** For a milestone of any size, dispatching one read-only
+> Explore agent per stale/missing package (and per unresolved task) in parallel is the **default**, not
+> a heavyweight option — it earns its keep. And **falsify before asserting**: a first read of "this is
+> already done" / "this is subsumed by X" / "the body's anchor is right" is exactly where grooming goes
+> wrong. A real run caught an "already-done" that was a live ordering bug, a "subsumed" that was a real
+> residual, an internal body contradiction, and a wrong anchor — each would have produced bad grooming
+> if trusted. Confirm the claim against the code before you groom on it.
+
 ---
 
 ## Step 2 — Present 🔲 Backlog in batches
@@ -236,9 +254,12 @@ Follow `reference/presentation.md`. In short:
 Do not batch feedback. For each item: stage the write → confirm the change in chat →
 continue.
 
-- Clarification / correction → stage a `task.updateBody` intent for the task now, confirm.
-- New open question → stage a `task.updateBody` intent adding a `> ⚠️ Open question:`
-  callout to the task's Context.
+- Clarification / correction → **patch the affected section** (see § Editing a task body
+  below), confirm.
+- New open question → **while grooming**, resolve it into the spec, don't add a standing
+  `## Open Questions` heading to a 💻 Code task (a live OQ heading blocks promotion — Tier-1).
+  If it's a genuine architectural decision you can't resolve, **route it** (file a 📐 Design
+  task + hard-block edge), per § Cite-or-route.
 - Missing task → **draft it inline for review first**; stage a `task.create` intent
   only after the human okays it.
 - Missing prerequisite (a sibling ingestion/storage/analyzer task the scope doesn't
@@ -247,6 +268,83 @@ continue.
 If grooming reveals a design choice that needs human judgment, **present options
 with pros/cons and stop** — do not pick unilaterally. Load-bearing constraints from
 the architecture pages win over task wording (see `reference/anti-patterns.md`).
+
+### Editing a task body — `task.patchBodySection` first, `task.updateBody` as fallback
+
+Most groom-time body edits touch **one section** — clearing a resolved `## Open Questions`,
+pinning a hedged `## Files / paths affected` line, adding a missing Files section. Do these as a
+**targeted, non-lossy patch**, not a whole-body rewrite. `task.updateBody` is **whole-body-replace**:
+it forces you to reconstruct `Summary + Context-as-BlockModel[] + criteria + Files` from scratch —
+slow, and a single bad reconstruction silently drops content. `task.patchBodySection` edits one
+section in place.
+
+Stage it like any other intent (`staged-intents-client.mjs create task.patchBodySection <payload>
+<projectId> <groupId>`). Payload is a discriminated union on `operation`, keyed by the exact section
+heading text:
+
+- **Clear a resolved Open Questions block** → `{"taskId","section":"Open Questions","operation":"remove"}`
+  (or `replace` its heading with a one-line resolved summary). **Remove it — don't launder it past
+  the gate with a `readiness_override`** (see § Remove Open Questions, don't override).
+- **Pin a hedged Files line** → `{"taskId","section":"Files / paths affected","operation":"replace",
+  "find":"<hedge line, e.g. corresponding __tests__ (update/new)>","replaceWith":"<the concrete path(s)>"}`.
+- **Add a missing Files section** → `{"taskId","section":"Files / paths affected","operation":"append",
+  "content":"<the section lines>"}` (a missing Files section is an auto-dispatch-blocking omission — FM2).
+
+> **Availability.** `task.patchBodySection` is granted to the `groom`/`design`/`ops` workflows and
+> merged to `dev` (PRs #1099/#1102/#1103). It only works against a backend **deployed with that
+> support** — check the deployed SHA (`/investigate`'s loader, or the staged-intents known-kinds) if a
+> `create task.patchBodySection` 400s as an unknown kind. When it isn't available (older deployed
+> backend), fall back to `task.updateBody` and reconstruct the **whole** body carefully — re-emit every
+> existing section verbatim; the whole-body replace drops anything you omit.
+
+### Inline every value the isolated implementer can't research
+
+**The single most-repeated groom-time judgment.** A promoted 💻 Code task is auto-dispatched into an
+**isolated worktree**: that implementer **cannot read** the skill tree (`~/.claude/skills/…`), the prod
+host, or the central config tree. So **any value, format, or decision it would otherwise have to look
+up elsewhere must be inlined into the task body.** Before promoting, ask: *"what does this body assume
+the implementer can go read — and can they, from an isolated worktree?"* If not, inline it. Concrete
+recurring cases: a required **output format** (e.g. embed the verbatim five-part closing-synthesis
+format rather than "follow the /design format"); **prod/environment facts** (exact schedule, retention,
+env-var names, `ExecStart`/`User` conventions — the implementer can't inspect the host); a **corrected
+symbol/anchor/DDL** where the body's guess is wrong. This is **distinct from** "resolve the open
+questions" — a body with every question resolved can still strand an implementer if it points at
+something only readable from outside the worktree.
+
+### Body-authoring gotchas (checklist)
+
+- **Notion code-block language must be from its enum** (`toml` / `shell` / `markdown` / …). `ini` is
+  **rejected** — use `toml`.
+- **The WAF blocks bare `<interpreter> … --flag` command lines** (`python -m …`, `systemctl restart
+  …`) — the create/patch call fails with a Cloudflare *"you have been blocked"* HTML error, not a
+  validation error. Describe the command prosaically (backtick the verb/unit), or prefix it so it
+  isn't a bare interpreter line (a full `ExecStart=/usr/bin/node …` unit line is fine). (Same trap as
+  `procedures.md` § Notion access.)
+- **richText only auto-backticks whole shell-command lines** — inline a symbol/path that contains a
+  Tier-2 lexical trigger (a deferral phrase like "defer", quoted in prose) and it can trip a lexical
+  false-positive; **backtick or rephrase** it so the gate doesn't read prose as a live signal.
+- **Keep body and payload consistent by hand (FM2).** The Files-section gate reads the caller-supplied
+  `filesPathsEntries`, **not** the live body — so a resolved-looking payload over a still-hedged body
+  will pass the gate but mis-drive the implementer. When you pin a Files line in the body, mirror it in
+  the `files_paths_entries` you carry into the flip. Don't rely on the gate to re-derive from the body.
+
+### Remove Open Questions, don't override
+
+For a **💻 Code** task, a live `## Open Questions` heading is a **grooming artifact**, not part of the
+spec — and it **blocks promotion** (readiness Tier-1). The fix is to **resolve each question into the
+body and remove the heading** (`patchBodySection` `remove`), **not** to launder the task past the gate
+with a `readiness_override`. Lean on the *edit*, not the escape. (Contrast the interactive **📐 Design**
+path, where the OQ heading is legitimate — it *is* the `/design` worklist — and promotion carries the
+auto-applied override reason; see Step 4 § approve-by-standard. The override is for that case, not for
+dodging an unresolved Code-task question.)
+
+### A wrong body is worse than a vague one — fix cost is not a reason to ship the error
+
+When grooming surfaces body content that is **wrong or misleading** (a bad symbol, a stale anchor, a
+self-contradiction), **correct it** — the reconstruction/patch cost is never a reason to leave an error
+in place. A vague body makes an implementer ask; a *confidently wrong* one sends an isolated implementer
+down a dead end with no way to notice. Now that `patchBodySection` makes the fix a one-line patch, the
+old excuse ("fixing means rebuilding the whole body") is gone.
 
 ---
 
@@ -302,7 +400,7 @@ accretion source is the task body's pre-groom `### 👁️ Manual verification` 
 when present — a Code task author writes it only when there are real runtime items to
 list, so read whatever the section actually contains (never boilerplate — that
 convention is retired). Call the accretion route through the vendored client, **never**
-a `task.updateBody` body-append for the accretion itself:
+a body-append for the accretion itself:
 
 ```bash
 node ~/.claude/scripts/gate-state-client.mjs accrete \
@@ -322,11 +420,13 @@ the durable record; nothing further needs writing to `grooming-state.json`.
 Confirm the accretion in chat before the Ready-flip.
 
 Once accreted, if the task body still carries a `### 👁️ Manual verification`
-section, stage a `task.updateBody` that **removes it from the body entirely** —
-never leave it behind and never replace it with boilerplate (`Covered by the
-Manual Verification Gate.`). A post-groom 💻 Code task carries no manual-verification
-section at all; runtime/manual verification for it is owned by the gate from that
-point on, and its absence in the body is the correct post-groom state, not a gap.
+section, stage a `task.patchBodySection` (`operation: "remove"`) that **removes it
+from the body entirely** — never leave it behind and never replace it with boilerplate
+(`Covered by the Manual Verification Gate.`). Fall back to a whole-body
+`task.updateBody` only where `patchBodySection` isn't available (see § Editing a task
+body). A post-groom 💻 Code task carries no manual-verification section at all;
+runtime/manual verification for it is owned by the gate from that point on, and its
+absence in the body is the correct post-groom state, not a gap.
 
 **Seed accretion (💻 Code tasks):** The operational twin of Gate accretion.
 Before flipping to Ready, classify each candidate line the pre-groom body's `## Operational
@@ -437,13 +537,21 @@ standard, not per item.** After the consolidated triage (Step 2), the human enga
 the needs-attention + blocked rows; every task left in the **clean** set promotes by
 default (visible + veto-able) — you do **not** collect a per-item positive stamp.
 
-- **Record a `triage` verdict** per interactive task in `grooming-state.json` — one of
-  `clean` / `blocked` / `needs-attention` — alongside `constraints_dispositioned` (see
-  Step 1 § constraint disposition). The flip client carries `triage` in `groomingGate`;
-  the server re-derives the **deterministic floor** and can only ever **downgrade** a
-  proposed `clean` (a hard-block dep not ✅ Done → `blocked`; no `## Open Questions`
-  heading → `needs-attention`; a routed constraint-conflict → `needs-attention`). It
-  never upgrades a judged `blocked` / `needs-attention` back to `clean`.
+- **Record a `triage` *object*** per interactive task in `grooming-state.json` (**not** a bare
+  string) — `groomGate.applyTriageFloor` reads `entry.triage.proposedVerdict` and
+  `entry.triage.hasOpenQuestionsHeading`, so the entry must be:
+  ```json
+  "triage": { "proposedVerdict": "clean" | "blocked" | "needs-attention",
+              "hasOpenQuestionsHeading": true }
+  ```
+  Setting `triage: "clean"` (a string) makes `.proposedVerdict` `undefined` and the task floors to
+  `needs-attention`. `proposedVerdict` is your judgment call; `hasOpenQuestionsHeading` is the
+  structural fact (does the body still carry a `## Open Questions` heading). Record it alongside
+  `constraints_dispositioned` (see Step 1 § constraint disposition). The flip client carries the
+  whole `triage` object in `groomingGate`; the server re-derives the **deterministic floor** and can
+  only ever **downgrade** a proposed `clean` (a hard-block dep not ✅ Done → `blocked`; no
+  `## Open Questions` heading present → `needs-attention`; a routed constraint-conflict →
+  `needs-attention`). It never upgrades a judged `blocked` / `needs-attention` back to `clean`.
 - **The `readiness_override` reason is auto-applied — never hand-typed.** For a 📐 Design
   task promoted clean, the backend supplies the standard template reason (_"Design task —
   open questions are the /design worklist, resolved at execution; triaged clean in the
@@ -471,6 +579,13 @@ the live board** for any 🔲 Backlog tasks not in the original worklist. If any
 Repeat the re-query until a pass finds **no** new Backlog. Only then, when every batch is signed
 off, confirm the milestone board is fully groomed.
 
+> **Expect waves when a `/design` execution session is running concurrently** — it files follow-on
+> 🔲 Backlog Code tasks *into this board while you groom* (a real run saw two waves, 12 + 3 tasks,
+> arrive mid-session). The re-query-until-clean loop is what makes this safe, so treat it as
+> load-bearing, not a formality. **Record the set of task ids from the Step-1 worklist** so each
+> re-query surfaces the *delta* (newly-arrived tasks) at a glance rather than by manual diff — and
+> remember a wave-added entry needs `project`/`milestone`/`title` stamped like any other (Step 1).
+
 ---
 
 ## Rules (hard)
@@ -489,14 +604,21 @@ Edit/Write tool) — canonical source
 - **Never** mark a ✅ Done or ⏭️ Deferred task Ready. **Never** retroactively edit any
   **ordinary** task already at 🗂️ Ready or beyond — file a sibling instead. A Ready task
   may be in-flight: auto-dispatched if 💻 Code, human-run if 🔧 Operational /
-  🔎 Investigation / 🧪 Testing — editing it races a live session. This holds for every ordinary type, **without
-  exception**. The **🚦 Gate** is the lone non-ordinary task: an accumulator that, by its
+  🔎 Investigation / 🧪 Testing — editing it races a live session. This holds for every
+  ordinary type, **without exception**. The **🚦 Gate** is the lone non-ordinary task: an accumulator that, by its
   type's definition, accretes manual-verification items while sitting at Ready —
   appending to it is its lifecycle, not a modify-a-Ready-task exception.
 - **No silent writes** (shared rule, groom-specific mechanics): every change is
   staged through `staged-intents-client.mjs` — never a direct `notion-update-page` call.
 - **Investigate before resolving.** Reading the code comes before deciding what's
   resolved. "Decide at implementation time" is a _defer_, not a _resolve_.
+- **A 💻 Code body must be self-contained for an isolated worktree.** The auto-dispatched
+  implementer cannot read the skill tree, the prod host, or the config tree — so every value,
+  format, or decision it would have to fetch from any of those must be **inlined into the body**
+  before promotion. This is a readiness bar distinct from "open questions resolved," and the single
+  most-repeated groom-time judgment (see Step 3 § Inline every value the isolated implementer can't
+  research). A **wrong** body is worse than a vague one — correct errors regardless of fix cost;
+  `patchBodySection` makes the fix one line.
 - **Cite-or-route, never invent.** An open question that is an **architectural
   decision** is cleared only by (a) **citing a locked decision** (an arch-page rule or
   an already-✅-Done Design task) or (b) **routing to `/design`** — file a 📐 Design task
