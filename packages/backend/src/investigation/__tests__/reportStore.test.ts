@@ -517,9 +517,9 @@ describe('isDispatchEligible / dispatchReportBatchesUpTo', () => {
     expect(dispatchedCount).toBe(0);
     expect(dispatchFn).not.toHaveBeenCalled();
     // Only the raced dispatch is on record — no double-dispatch happened.
-    expect(listDispatchedSessions(report.id).map((d) => d.session_id)).toEqual(
-      ['sess-raced'],
-    );
+    expect(listDispatchedSessions(report.id).map((d) => d.session_id)).toEqual([
+      'sess-raced',
+    ]);
   });
 
   it('dispatches a batch that is still eligible at launch time', () => {
