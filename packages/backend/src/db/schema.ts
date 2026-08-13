@@ -2139,4 +2139,21 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_test_run_results_run_id
       ON test_run_results(test_request_run_id);
   `);
+
+  // test_perf_baselines: one row per test_id holding the current rolling
+  // median/MAD baseline — see computeTestPerfBaseline in testRequestLane.ts.
+  // Recomputed (not appended) on every ingestion that touches the test_id, so
+  // this survives test_run_results pruning independently of the raw rows it
+  // was derived from.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS test_perf_baselines (
+      test_id             TEXT    PRIMARY KEY,
+      median_duration_ms  REAL    NOT NULL,
+      mad_duration_ms     REAL    NOT NULL,
+      sample_count        INTEGER NOT NULL,
+      last_duration_ms    INTEGER NOT NULL,
+      is_regressed        INTEGER NOT NULL DEFAULT 0,
+      updated_at          INTEGER NOT NULL
+    );
+  `);
 }

@@ -51,6 +51,8 @@ import type {
   DependencyCacheEntryStatus,
   TestRunResultRow,
   NewTestRunResultRow,
+  TestPerfBaselineRow,
+  NewTestPerfBaselineRow,
   OpsJournalRow,
   CapabilityDisqualificationRow,
   NewCapabilityDisqualificationRow,
@@ -7051,16 +7053,6 @@ export function listReadyDependencyCacheEntries(): DependencyCacheEntryRow[] {
     .all() as DependencyCacheEntryRow[];
 }
 
-/** Removes a (project_id, lock_hash) row — used by DependencyCacheReconciler after it deletes the on-disk entry. */
-export function deleteDependencyCacheEntry(
-  projectId: string,
-  lockHash: string,
-): void {
-  db.prepare(
-    `DELETE FROM dependency_cache_entries WHERE project_id = ? AND lock_hash = ?`,
-  ).run(projectId, lockHash);
-}
-
 /**
  * Atomically claims a `ready` row for eviction: deletes it only if
  * `last_used_at` still matches `expectedLastUsedAt`, i.e. nothing has
@@ -7152,6 +7144,74 @@ export function listTestRunResultsForRun(
        FROM test_run_results WHERE test_request_run_id = ?`,
     )
     .all(testRequestRunId) as TestRunResultRow[];
+}
+
+// ─── test_perf_baselines ────────────────────────────────────────────────────
+
+/**
+ * Most recent `limit` *valid* (concurrent_run_count = 0 AND oom_killed = 0)
+ * durations for a test_id, newest first — the sample pool
+ * computeTestPerfBaseline draws its baseline window and recent-run guard
+ * from. Excluded samples are never deleted from test_run_results, just
+ * skipped here.
+ */
+export function listRecentValidTestDurations(
+  testId: string,
+  limit: number,
+): number[] {
+  const rows = db
+    .prepare(
+      `SELECT duration_ms FROM test_run_results
+       WHERE test_id = ? AND concurrent_run_count = 0 AND oom_killed = 0
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    )
+    .all(testId, limit) as { duration_ms: number }[];
+  return rows.map((r) => r.duration_ms);
+}
+
+let _stmtUpsertTestPerfBaseline: Database.Statement | null = null;
+
+/** Recomputes (not appends) the single current baseline row for a test_id. */
+export function upsertTestPerfBaseline(row: NewTestPerfBaselineRow): void {
+  _stmtUpsertTestPerfBaseline ??= db.prepare<{
+    test_id: string;
+    median_duration_ms: number;
+    mad_duration_ms: number;
+    sample_count: number;
+    last_duration_ms: number;
+    is_regressed: number;
+    updated_at: number;
+  }>(`
+    INSERT INTO test_perf_baselines
+      (test_id, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
+    VALUES
+      (@test_id, @median_duration_ms, @mad_duration_ms, @sample_count, @last_duration_ms, @is_regressed, @updated_at)
+    ON CONFLICT(test_id) DO UPDATE SET
+      median_duration_ms = excluded.median_duration_ms,
+      mad_duration_ms = excluded.mad_duration_ms,
+      sample_count = excluded.sample_count,
+      last_duration_ms = excluded.last_duration_ms,
+      is_regressed = excluded.is_regressed,
+      updated_at = excluded.updated_at
+  `);
+  _stmtUpsertTestPerfBaseline.run({
+    test_id: row.test_id,
+    median_duration_ms: row.median_duration_ms,
+    mad_duration_ms: row.mad_duration_ms,
+    sample_count: row.sample_count,
+    last_duration_ms: row.last_duration_ms,
+    is_regressed: row.is_regressed ? 1 : 0,
+    updated_at: Date.now(),
+  });
+}
+
+export function getTestPerfBaseline(
+  testId: string,
+): TestPerfBaselineRow | undefined {
+  return db
+    .prepare(`SELECT * FROM test_perf_baselines WHERE test_id = ?`)
+    .get(testId) as TestPerfBaselineRow | undefined;
 }
 
 // ─── session_test_request_cycles ───────────────────────────────────────────
