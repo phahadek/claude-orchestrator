@@ -2015,6 +2015,7 @@ describe('deliverInboxItems', () => {
   });
 
   it('leaves inbox rows undelivered when sendOrResume resolves null (declined/deferred respawn)', async () => {
+    vi.mocked(markInboxItemsDelivered).mockClear();
     const notion = fakeNotionClient();
     vi.mocked(getRules).mockReturnValue([]);
     vi.mocked(listUndeliveredInboxItems).mockReturnValue([
