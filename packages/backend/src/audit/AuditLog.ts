@@ -58,10 +58,7 @@ function resolveProjectId(
       return assignmentRow.project_id;
     }
     const sessionRow = db
-      .prepare<
-        [string],
-        { project_id: string | null }
-      >(
+      .prepare<[string], { project_id: string | null }>(
         `SELECT project_id FROM sessions
          WHERE task_id = ? AND project_id IS NOT NULL
          ORDER BY started_at DESC LIMIT 1`,
