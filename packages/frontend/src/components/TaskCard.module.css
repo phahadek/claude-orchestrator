@@ -164,6 +164,23 @@
   white-space: nowrap;
 }
 
+.test-lane-in-flight {
+  background: rgba(249, 226, 175, 0.15);
+  color: #f9e2af;
+}
+.test-lane-passed {
+  background: rgba(166, 227, 161, 0.15);
+  color: #a6e3a1;
+}
+.test-lane-failed {
+  background: rgba(243, 139, 168, 0.15);
+  color: #f38ba8;
+}
+.test-lane-blocked {
+  background: rgba(243, 139, 168, 0.1);
+  color: #f38ba8;
+}
+
 .lastMessage {
   color: var(--text-muted);
   overflow: hidden;

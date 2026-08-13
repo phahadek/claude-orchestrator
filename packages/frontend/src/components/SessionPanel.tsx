@@ -9,7 +9,15 @@ import { DiffViewer } from './DiffViewer';
 import { SessionControls } from './SessionControls';
 import { Composer } from './Composer';
 import { DecisionPanel } from './DecisionPanel';
+import { useTestLaneRunStatus } from '../hooks/useTestLaneRunStatus';
 import styles from './SessionDetail.module.css';
+
+const TEST_LANE_OUTCOME_LABELS = {
+  'in-flight': '🧪 Governed test run in progress',
+  passed: '🧪 Governed test run passed',
+  failed: '🧪 Governed test run failed',
+  blocked: '🧪 Governed test run blocked',
+} as const;
 
 interface Props {
   session: SessionState;
@@ -47,6 +55,11 @@ export function SessionPanel({
   useEffect(() => {
     setActiveTab('transcript');
   }, [session.sessionId]);
+
+  const testLaneStatus = useTestLaneRunStatus({
+    projectId: session.project_id ?? null,
+    sessionId: session.sessionId,
+  });
 
   const isActive =
     session.status === 'running' ||
@@ -147,6 +160,25 @@ export function SessionPanel({
           </>
         )}
       </div>
+      {testLaneStatus && (
+        <div
+          className={styles.testLaneDetail}
+          data-testid="test-lane-detail"
+          data-test-lane-outcome={testLaneStatus.outcome}
+        >
+          <span className={styles.testLaneOutcome}>
+            {TEST_LANE_OUTCOME_LABELS[testLaneStatus.outcome]}
+          </span>
+          {testLaneStatus.outcome === 'failed' && testLaneStatus.output && (
+            <pre className={styles.testLaneOutput}>{testLaneStatus.output}</pre>
+          )}
+          {testLaneStatus.note && (
+            <span className={styles.testLaneNote} data-testid="test-lane-note">
+              {testLaneStatus.note}
+            </span>
+          )}
+        </div>
+      )}
       {showDecisionPanel && <DecisionPanel sessionId={session.sessionId} />}
     </div>
   );

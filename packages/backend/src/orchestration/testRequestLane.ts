@@ -175,6 +175,8 @@ async function executeTestRequestRun(
       projectId: spec.projectId,
       contentHash: spec.contentHash,
       status: 'running',
+      sessionId: spec.sessionId,
+      requestedAt,
       startedAt,
     });
     const result = await runTestCommands(
@@ -196,6 +198,8 @@ async function executeTestRequestRun(
       contentHash: spec.contentHash,
       status: result.passed ? 'passed' : 'failed-with-cause',
       output: result.passed ? undefined : result.output,
+      sessionId: spec.sessionId,
+      requestedAt,
       startedAt,
       finishedAt: Date.now(),
     });
@@ -210,6 +214,8 @@ async function executeTestRequestRun(
       contentHash: spec.contentHash,
       status: 'failed-with-cause',
       output,
+      sessionId: spec.sessionId,
+      requestedAt,
       startedAt,
       finishedAt: Date.now(),
     });
@@ -242,6 +248,8 @@ export function recoverInterruptedTestRequestRuns(): void {
       contentHash: run.content_hash,
       status: 'failed-with-cause',
       output,
+      sessionId: run.session_id,
+      requestedAt: run.requested_at ?? undefined,
       startedAt: run.started_at,
       finishedAt: Date.now(),
     });

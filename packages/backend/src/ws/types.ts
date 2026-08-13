@@ -110,6 +110,10 @@ export interface TestRequestRunStatusPayload {
   status: TestRequestRunStatus;
   /** Present only when status is 'failed-with-cause' — the run's captured output. */
   output?: string;
+  /** Originating session, when the run was triggered by a test.request staged intent — the correlation key a session-scoped client (TaskCard/SessionPanel) filters on. */
+  sessionId: string | null;
+  /** When the run was requested — startedAt - requestedAt is the admission-wait a session spent queued behind the per-project concurrency cap before execution actually began. */
+  requestedAt?: number;
   startedAt: number;
   finishedAt?: number;
 }
