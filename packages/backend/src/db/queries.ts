@@ -7214,6 +7214,63 @@ export function getTestPerfBaseline(
     .get(testId) as TestPerfBaselineRow | undefined;
 }
 
+export interface TestFlipRateFlag {
+  testId: string;
+  sampleCount: number;
+  transitionCount: number;
+  flagged: boolean;
+}
+
+let _stmtTestFlipRateSamples: Database.Statement | null = null;
+
+/**
+ * Live pass<->fail flip-rate flag for one test id, recomputed from its last
+ * `windowN` valid samples (concurrent_run_count = 0 and oom_killed = false —
+ * a row failing either check never occupies a window slot, so it can't be a
+ * pass, a fail, or a transition). Flagged once transitionCount >= thresholdK.
+ * Nothing is persisted here — every call reflects the current window, so the
+ * flag clears on its own the moment a fresh ingestion's recomputation drops
+ * the transition count back below K; there is no sticky marker to reset.
+ */
+export function computeTestFlipRateFlag(
+  testId: string,
+  windowN: number,
+  thresholdK: number,
+): TestFlipRateFlag {
+  _stmtTestFlipRateSamples ??= db.prepare<{
+    test_id: string;
+    limit: number;
+  }>(`
+    SELECT outcome FROM (
+      SELECT outcome, created_at, id
+      FROM test_run_results
+      WHERE test_id = @test_id
+        AND concurrent_run_count = 0
+        AND oom_killed = 0
+        AND outcome IN ('passed', 'failed')
+      ORDER BY created_at DESC, id DESC
+      LIMIT @limit
+    )
+    ORDER BY created_at ASC, id ASC
+  `);
+  const rows = _stmtTestFlipRateSamples.all({
+    test_id: testId,
+    limit: windowN,
+  }) as { outcome: string }[];
+
+  let transitionCount = 0;
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i].outcome !== rows[i - 1].outcome) transitionCount++;
+  }
+
+  return {
+    testId,
+    sampleCount: rows.length,
+    transitionCount,
+    flagged: transitionCount >= thresholdK,
+  };
+}
+
 // ─── session_test_request_cycles ───────────────────────────────────────────
 
 export function getSessionTestRequestCycleCount(sessionId: string): number {

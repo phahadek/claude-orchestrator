@@ -61,6 +61,8 @@ const SettingsSchema = z.object({
     .number()
     .int()
     .min(0),
+  flip_rate_window_n: z.coerce.number().int().min(1),
+  flip_rate_threshold_k: z.coerce.number().int().min(1),
 
   // Boolean settings (stored as 'true'/'false' strings; also accepts native booleans)
   auto_review: zodBoolCoerce,
@@ -161,6 +163,8 @@ export const SETTING_DEFAULTS: Settings = {
   session_cgroup_memory_high_fraction: 0.9,
   milestone_attention_aging_threshold_seconds: 24 * 60 * 60,
   milestone_attention_flat_convergence_window_seconds: 48 * 60 * 60,
+  flip_rate_window_n: 20,
+  flip_rate_threshold_k: 2,
   auto_review: true,
   auto_archive_enabled: true,
   session_cgroup_deny_swap: true,
