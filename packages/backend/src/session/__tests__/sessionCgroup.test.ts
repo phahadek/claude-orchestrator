@@ -253,9 +253,9 @@ describe('placeSessionPid with a sessionId — per-session sub-cgroup', () => {
 
     const writtenPath = String(writeSpy.mock.calls[0][0]);
     expect(writtenPath).not.toContain('..');
-    expect(writtenPath.startsWith('/sys/fs/cgroup/orchestrator.service/sessions/')).toBe(
-      true,
-    );
+    expect(
+      writtenPath.startsWith('/sys/fs/cgroup/orchestrator.service/sessions/'),
+    ).toBe(true);
   });
 });
 

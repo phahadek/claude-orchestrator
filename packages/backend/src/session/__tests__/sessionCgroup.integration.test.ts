@@ -50,7 +50,10 @@ beforeAll(() => {
   } catch {
     return;
   }
-  testRoot = path.join(ownPath, `cgtest-${process.pid}-${process.hrtime.bigint()}`);
+  testRoot = path.join(
+    ownPath,
+    `cgtest-${process.pid}-${process.hrtime.bigint()}`,
+  );
   try {
     fs.mkdirSync(testRoot);
     available = true;
