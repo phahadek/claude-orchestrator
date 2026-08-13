@@ -1267,7 +1267,12 @@ export function StagedIntentPanel({
   // `proposed` and unblocks the design task's gated arch.*/closing-synthesis
   // writes; there is no separate apply/commit step.
   const isCompletenessDisposition = intent.kind === 'completeness.disposition';
-  const skipsApply = isCapabilityRequest || isCompletenessDisposition;
+  // Same terminal-on-approve shape: the operator override for a test.request
+  // stuck at staged (cycle-limit escalation) approves directly — there is no
+  // separate apply/commit step, and the backend rejects apply for this kind.
+  const isTestRequest = intent.kind === 'test.request';
+  const skipsApply =
+    isCapabilityRequest || isCompletenessDisposition || isTestRequest;
   // planning.noOp is purely informational/auditable — no operator
   // disposition (commit/approve/reject) is ever offered for it.
   const isNoOp = intent.kind === 'planning.noOp';
@@ -1349,7 +1354,7 @@ export function StagedIntentPanel({
   // Mirrors the visible primary action button's own enable condition — 'a'
   // is a no-op whenever that button would be hidden or disabled, never
   // bypassing its gate. For a grouped/capability-request/completeness-
-  // disposition card the primary action is Approve (see the
+  // disposition/test-request card the primary action is Approve (see the
   // "Approve"/"Grant" button below); for an ordinary standalone card it's
   // Commit (see the "✓ Commit" button below) — matching each card's own
   // rendered primary control rather than assuming Approve applies to both.
