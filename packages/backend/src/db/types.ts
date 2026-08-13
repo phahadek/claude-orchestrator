@@ -1176,3 +1176,31 @@ export interface ArchUnitQuery {
   /** When true, includes superseded units. Default false (active-set query). */
   includeSuperseded?: boolean;
 }
+
+// ─── completing_signal_ledger ────────────────────────────────────────────────
+
+/**
+ * The two signal shapes a completing-signal ledger row can carry — see
+ * session/completingSignalRegistry.ts, which this vocabulary must stay in
+ * sync with. 'staged_intent' rows record a staged intent reaching a
+ * terminal, decision-bearing state; 'external_pr_event' rows record a
+ * pull_requests outcome (merge or close-without-merge) for a session that
+ * opened its own PR.
+ */
+export type CompletingSignalClass = 'staged_intent' | 'external_pr_event';
+
+export interface CompletingSignalLedgerRow {
+  id: number;
+  session_id: string;
+  task_id: string | null;
+  session_type: SessionType;
+  signal_class: CompletingSignalClass;
+  /** The completing-signal reason string — e.g. 'planning_approved', 'pr_merged'. Interpreted against the registry's descriptor for this row's (session_type, task_type, hasOpenPR) triple. */
+  signal_value: string;
+  recorded_at: number;
+}
+
+export type NewCompletingSignalLedgerRow = Omit<
+  CompletingSignalLedgerRow,
+  'id'
+>;
