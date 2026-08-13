@@ -91,7 +91,7 @@ describe('updateSessionStatus dual-write', () => {
     expect(listCompletingSignalsForSession('s2')).toHaveLength(0);
   });
 
-  it('reopen-terminal guard: an explicit reopen of a terminal row (respawnSession/sendOrResume\'s allowReopenTerminal path) still flips status and now also records the reopen in the ledger', () => {
+  it("reopen-terminal guard: an explicit reopen of a terminal row (respawnSession/sendOrResume's allowReopenTerminal path) still flips status and now also records the reopen in the ledger", () => {
     insertSession({ session_id: 's3', status: 'done' });
 
     // Mirrors respawnSession/sendOrResume's explicit, audited reopen path —
