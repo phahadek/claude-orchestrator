@@ -103,6 +103,19 @@ vi.mock('../config', () => ({
   },
 }));
 
+vi.mock('../orchestration/memoryAdmission', () => ({
+  // respawnSession's memory-admission gate — real os.freemem() is
+  // unreliable/low in CI/sandboxed hosts, so tests always see headroom
+  // unless a test explicitly overrides this mock.
+  hasMemoryHeadroom: vi.fn().mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  }),
+}));
+
 vi.mock('../session/orchestrator-config', () => ({
   loadOrchestratorConfig: vi.fn(() => ({
     allowedTools: [],
@@ -197,6 +210,7 @@ import { SessionManager } from '../session/SessionManager';
 import * as queries from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 import type { Session } from '../db/types';
+import { hasMemoryHeadroom } from '../orchestration/memoryAdmission';
 
 function makeRunningSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -226,6 +240,17 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(execSync).mockReturnValue('');
   vi.mocked(fs.existsSync).mockReturnValue(true);
+  // Re-established every test: the afterEach below calls vi.restoreAllMocks(),
+  // which wipes the mockReturnValue the vi.mock('../orchestration/memoryAdmission')
+  // factory set only once at module init — without this, every test after
+  // the first would see hasMemoryHeadroom() return undefined and throw.
+  vi.mocked(hasMemoryHeadroom).mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  });
 });
 
 afterEach(() => {

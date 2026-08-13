@@ -194,6 +194,18 @@ export function runMigrations(target: Database.Database): void {
       last_crash_at       INTEGER NOT NULL
     );
 
+    -- session_poke_retry_counts: persisted counter of consecutive failed
+    -- poke/resume attempts on the sendOrResume/_doSendOrResume live path
+    -- (SessionManager.ts), keyed per session_id (not per task, unlike
+    -- task_crash_counts) since a poke targets a specific session. Reset on
+    -- a successful poke; once consecutive_failures reaches the retry limit
+    -- the session is routed to flagResumeFailure instead of being retried.
+    CREATE TABLE IF NOT EXISTS session_poke_retry_counts (
+      session_id           TEXT    PRIMARY KEY,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      last_failure_at      INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS task_repo_assignments (
       task_id      TEXT    PRIMARY KEY,
       project_id   TEXT    NOT NULL,

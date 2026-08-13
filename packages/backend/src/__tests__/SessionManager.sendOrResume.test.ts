@@ -72,6 +72,19 @@ vi.mock('../config', () => ({
   normalizePath: (p: string) => p,
 }));
 
+vi.mock('../orchestration/memoryAdmission', () => ({
+  // respawnSession's memory-admission gate — real os.freemem() is
+  // unreliable/low in CI/sandboxed hosts, so tests always see headroom
+  // unless a test explicitly overrides this mock.
+  hasMemoryHeadroom: vi.fn().mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  }),
+}));
+
 vi.mock('../db/queries', () =>
   mockDbQueries({
     getGrantedCapabilities: vi.fn(() => []),
@@ -91,6 +104,26 @@ vi.mock('../db/queries', () =>
     updateSessionWorktreePath: vi.fn(),
     incrementTaskCrashCount: vi.fn().mockReturnValue(1),
     setTaskPauseReason: vi.fn(),
+    // Defaults to the retry limit so a single worktree-recreate failure
+    // still exhausts the poke-retry budget and routes to flagResumeFailure,
+    // matching most of this file's tests (which simulate one failure and
+    // expect an immediate terminal disposition). Tests exercising the
+    // below-limit retry behavior override this per-test.
+    incrementSessionPokeRetryCount: vi.fn().mockReturnValue(3),
+    resetSessionPokeRetryCount: vi.fn(),
+    insertCompletingSignal: vi.fn(),
+    listCompletingSignalsForSession: vi.fn().mockReturnValue([
+      {
+        id: 1,
+        session_id: 'unused',
+        task_id: null,
+        session_type: 'standard',
+        signal_class: 'resume_exhausted',
+        signal_value: 'resume_failed',
+        recorded_at: 1,
+      },
+    ]),
+    setSessionTerminalCompletionReason: vi.fn(),
   }),
 );
 
@@ -621,42 +654,84 @@ describe('sendOrResume() prune + reattach', () => {
   });
 });
 
-// ── Crash budget: worktree_recreate_failed counts ────────────────────────────
+// ── Poke-retry budget: worktree_recreate_failed counts ───────────────────────
+//
+// worktree_recreate_failed on the live sendOrResume path no longer feeds
+// task_crash_counts directly — it counts against session_poke_retry_counts
+// (see SessionManager.handlePokeFailure) and only reaches flagResumeFailure's
+// terminal disposition once the poke-retry budget (POKE_RETRY_LIMIT) is
+// exhausted.
 
-describe('sendOrResume() crash budget for worktree_recreate_failed', () => {
-  it('increments crash counter when worktree recreation fails', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if ((cmd as string).includes('worktree add')) {
-        throw makeWorktreeError('fatal: some unrecoverable error');
-      }
-      return '' as never;
-    });
+describe('sendOrResume() poke-retry budget for worktree_recreate_failed', () => {
+  it('does not touch the task crash budget on a worktree-recreate failure', async () => {
+    // gitWorktreeAddWithRetry uses the promisified async exec, not execSync —
+    // simulate the failure on the actual code path.
+    mockExecCallback.mockImplementation(
+      (
+        cmd: string,
+        opts: unknown,
+        cb?: (err: unknown, result?: unknown) => void,
+      ) => {
+        const callback = (typeof opts === 'function' ? opts : cb) as (
+          err: unknown,
+          result?: unknown,
+        ) => void;
+        if (cmd.includes('worktree add')) {
+          process.nextTick(() =>
+            callback(makeWorktreeError('fatal: some unrecoverable error')),
+          );
+        } else {
+          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+        }
+      },
+    );
 
     const sm = new SessionManager();
     await sm.sendOrResume(SESSION_ID, 'fix this');
 
-    expect(queries.incrementTaskCrashCount).toHaveBeenCalledWith(
-      IDLE_SESSION_ROW.task_id,
+    expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
+    expect(queries.incrementSessionPokeRetryCount).toHaveBeenCalledWith(
+      SESSION_ID,
     );
   });
 
-  it('does not write task_pause_reasons on first crash (counter=1)', async () => {
-    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if ((cmd as string).includes('worktree add')) {
-        throw makeWorktreeError('fatal: some error');
-      }
-      return '' as never;
-    });
+  it('does not write task_pause_reasons or terminalize the session below the poke-retry limit', async () => {
+    vi.mocked(queries.incrementSessionPokeRetryCount).mockReturnValue(1);
+    // gitWorktreeAddWithRetry uses the promisified async exec, not execSync —
+    // simulate the failure on the actual code path.
+    mockExecCallback.mockImplementation(
+      (
+        cmd: string,
+        opts: unknown,
+        cb?: (err: unknown, result?: unknown) => void,
+      ) => {
+        const callback = (typeof opts === 'function' ? opts : cb) as (
+          err: unknown,
+          result?: unknown,
+        ) => void;
+        if (cmd.includes('worktree add')) {
+          process.nextTick(() =>
+            callback(makeWorktreeError('fatal: some error')),
+          );
+        } else {
+          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+        }
+      },
+    );
 
     const sm = new SessionManager();
     await sm.sendOrResume(SESSION_ID, 'fix this');
 
     expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
+    expect(queries.updateSessionStatus).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
+    );
   });
 
-  it('writes task_pause_reasons and marks Blocked on second consecutive crash', async () => {
-    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+  it('flags resume_failed via flagResumeFailure once the poke-retry limit is reached', async () => {
+    vi.mocked(queries.incrementSessionPokeRetryCount).mockReturnValue(3);
     // gitWorktreeAddWithRetry uses the promisified async exec, not execSync —
     // simulate the failure on the actual code path.
     mockExecCallback.mockImplementation(
@@ -684,8 +759,13 @@ describe('sendOrResume() crash budget for worktree_recreate_failed', () => {
 
     expect(queries.setTaskPauseReason).toHaveBeenCalledWith(
       IDLE_SESSION_ROW.task_id,
-      'launch_failed',
-      'worktree_recreate_failed',
+      'resume_failed',
+      expect.stringContaining('worktree_recreate_failed'),
+    );
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
     );
   });
 });

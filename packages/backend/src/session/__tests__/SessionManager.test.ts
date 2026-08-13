@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
@@ -141,6 +141,25 @@ vi.mock('../../db/queries', () =>
     enqueueFeedbackItem: vi.fn(),
     listUndeliveredInboxItems: vi.fn().mockReturnValue([]),
     markInboxItemsDelivered: vi.fn(),
+    insertCompletingSignal: vi.fn(),
+    // A canned resume_exhausted row so deriveSessionStatus (a real,
+    // unmocked function) derives 'error' from flagResumeFailure's write —
+    // mirrors what insertCompletingSignal would actually persist, without
+    // wiring these tests through the real completing_signal_ledger table.
+    listCompletingSignalsForSession: vi.fn().mockReturnValue([
+      {
+        id: 1,
+        session_id: 'unused',
+        task_id: null,
+        session_type: 'standard',
+        signal_class: 'resume_exhausted',
+        signal_value: 'resume_failed',
+        recorded_at: 1,
+      },
+    ]),
+    setSessionTerminalCompletionReason: vi.fn(),
+    incrementSessionPokeRetryCount: vi.fn().mockReturnValue(1),
+    resetSessionPokeRetryCount: vi.fn(),
   }),
 );
 
@@ -153,6 +172,19 @@ vi.mock('../../config', () => ({
     corporate_mode_enabled: false,
     max_concurrent_code_sessions: 5,
   },
+}));
+
+vi.mock('../../orchestration/memoryAdmission', () => ({
+  // respawnSession's memory-admission gate — real os.freemem() is
+  // unreliable/low in CI/sandboxed hosts, so tests always see headroom
+  // unless a test explicitly overrides this mock.
+  hasMemoryHeadroom: vi.fn().mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  }),
 }));
 
 vi.mock('child_process', () => ({
@@ -236,6 +268,8 @@ import {
   markInboxItemsDelivered,
   setSessionPauseReason,
   getTaskCache,
+  insertCompletingSignal,
+  incrementSessionPokeRetryCount,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
@@ -246,6 +280,7 @@ import { recordEvent } from '../../audit/AuditLog';
 import * as fsModule from 'fs';
 import { loadOrchestratorConfig } from '../orchestrator-config';
 import { getTaskBackend } from '../../tasks/TaskBackend';
+import { hasMemoryHeadroom } from '../../orchestration/memoryAdmission';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -949,6 +984,128 @@ describe('respawnSession shared helper — wires all three events', () => {
     expect(msgHandler).toHaveBeenCalledWith(afterMsg);
     expect(prHandler).toHaveBeenCalledWith({ prNumber: 1, repo: 'org/repo' });
     expect(pushHandler).toHaveBeenCalledWith({ sha: 'def456' });
+  });
+});
+
+// ── respawnSession — memory-admission gate ────────────────────────────────────
+
+describe('respawnSession — memory-admission gate', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: true,
+      freeMemMB: 8192,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 5120,
+    });
+  });
+
+  afterEach(() => {
+    // The sweep test below installs a stateful mockImplementation (not just
+    // a mockReturnValue) — vi.clearAllMocks() in the next test's beforeEach
+    // clears call history but does NOT remove a mockImplementation, so
+    // without this reset it would leak into every subsequent describe block
+    // in this file and silently block every later respawnSession call.
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: true,
+      freeMemMB: 8192,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 5120,
+    });
+  });
+
+  it('refuses to spawn and leaves the row untouched when no memory headroom is reported', async () => {
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: false,
+      freeMemMB: 1000,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: -2072,
+    });
+
+    const result = await sm.sendOrResume(SESSION_ID, 'hello');
+
+    expect(result).toBeNull();
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    // Deferred, not a failure — the row must not be touched or terminalized.
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
+  });
+
+  it('spawns normally once memory headroom is available (existing behavior unaffected)', async () => {
+    const p = sm.sendOrResume(SESSION_ID, 'hello');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
+  });
+
+  it('capacity-gates respawns across a sweep of N stale/dead sessions instead of spawning unboundedly', async () => {
+    // Mirrors AutoMerger.conflictNudgeSweep(): an unLIMITed candidate list of
+    // dead sessions, each poked (respawned) sequentially via sendOrResume —
+    // relaunchFixerForPR's dead-session recovery path routes through the
+    // same respawnSession chokepoint this gate protects.
+    const staleSessionIds = ['stale-1', 'stale-2', 'stale-3', 'stale-4'];
+    // Headroom available for the first two, exhausted from the third onward —
+    // simulates memory pressure building up mid-sweep as prior respawns land.
+    let admittedCount = 0;
+    vi.mocked(hasMemoryHeadroom).mockImplementation(() => {
+      const allowed = admittedCount < 2;
+      if (allowed) admittedCount++;
+      return {
+        allowed,
+        freeMemMB: allowed ? 8192 : 1000,
+        minHostFreeMemoryMB: 4096,
+        perSessionReserveMB: 3072,
+        projectedFreeMB: allowed ? 5120 : -2072,
+      };
+    });
+
+    const results: (string | null)[] = [];
+    for (const staleId of staleSessionIds) {
+      vi.mocked(getSession).mockReturnValue(makeDeadRow(staleId));
+      const sessionsBefore = capturedSessions.length;
+      const p = sm.sendOrResume(staleId, 'rebase please');
+      if (capturedSessions.length === sessionsBefore) {
+        // Spawn is async — give it a tick to register before checking
+        // whether this attempt was admitted. A deferred (not-admitted)
+        // attempt never spawns, so this intentionally times out for those.
+        await vi
+          .waitFor(
+            () =>
+              expect(capturedSessions.length).toBeGreaterThan(sessionsBefore),
+            { timeout: 50, interval: 10 },
+          )
+          .catch(() => {});
+      }
+      if (capturedSessions.length > sessionsBefore) {
+        capturedSessions[capturedSessions.length - 1].emit('message', {
+          type: 'session_event',
+          sessionId: staleId,
+          eventType: 'system',
+          content: 'boot',
+        });
+      }
+      results.push(await p);
+    }
+
+    // Exactly the first two (headroom available) were admitted; the rest
+    // were deferred rather than spawned unboundedly.
+    expect(results.filter((r) => r !== null)).toHaveLength(2);
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -3007,7 +3164,7 @@ describe('sendOrResume — degraded spawn on worktree recreation is a backend-he
     );
   });
 
-  it('classifies as backend_spawn_degraded, does not hit the crash budget, and surfaces a restart-recommending detail', async () => {
+  it('below the poke-retry limit: classifies as backend_spawn_degraded, does not hit the crash budget or terminalize the session', async () => {
     vi.mocked(execCb).mockImplementation(
       (_cmd: string, _opts: unknown, callback: any) => {
         if (String(_cmd).includes('worktree add')) {
@@ -3020,6 +3177,9 @@ describe('sendOrResume — degraded spawn on worktree recreation is a backend-he
         callback(null, { stdout: '', stderr: '' });
       },
     );
+    // Default mock (1) — below POKE_RETRY_LIMIT (3), so this is a retriable
+    // failure, not yet routed to flagResumeFailure.
+    vi.mocked(incrementSessionPokeRetryCount).mockReturnValue(1);
 
     const emittedMessages: any[] = [];
     sm.on('message', (msg) => emittedMessages.push(msg));
@@ -3031,17 +3191,15 @@ describe('sendOrResume — degraded spawn on worktree recreation is a backend-he
     // count against the crash budget (would otherwise misattribute a
     // degraded backend spawn to the session/task).
     expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
-
-    const lastErrorDetailCall = vi
-      .mocked(setSessionLastErrorDetail)
-      .mock.calls.find((call) => call[0] === SESSION_ID);
-    expect(lastErrorDetailCall?.[1]).toMatch(/restart/i);
-
-    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+    expect(vi.mocked(incrementSessionPokeRetryCount)).toHaveBeenCalledWith(
       SESSION_ID,
-      'error',
-      expect.any(Number),
     );
+
+    // Not yet exhausted — the session row must be left untouched so a later
+    // poke can retry, not driven to a terminal 'error' on the first failure.
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
+    expect(vi.mocked(setSessionLastErrorDetail)).not.toHaveBeenCalled();
+    expect(vi.mocked(setTaskPauseReason)).not.toHaveBeenCalled();
 
     // The distinct reason code surfaced to the dashboard, not a generic
     // worktree_recreate_failed — lets the UI/operator recognize this as a
@@ -3050,6 +3208,56 @@ describe('sendOrResume — degraded spawn on worktree recreation is a backend-he
       (m) => m.type === 'session_action_failed',
     );
     expect(actionFailedMsg?.reason).toBe(BACKEND_SPAWN_DEGRADED_REASON);
+    expect(actionFailedMsg?.detail).toMatch(/restart/i);
+  });
+
+  it('poke-retry limit exhausted: routes to flagResumeFailure exactly once instead of retrying indefinitely', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        if (String(_cmd).includes('worktree add')) {
+          const err = Object.assign(new Error('Command failed'), {
+            stderr: '',
+            killed: true,
+          });
+          return callback(err);
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+    // The 3rd consecutive poke failure (N=3, per acceptance criteria).
+    vi.mocked(incrementSessionPokeRetryCount).mockReturnValue(3);
+
+    const result = await sm.sendOrResume(SESSION_ID, 'hello');
+
+    expect(result).toBe(SESSION_ID);
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+
+    // flagResumeFailure's terminal disposition fires exactly once.
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
+    );
+    // The write goes through the single status deriver's completing-signal
+    // ledger, not a bare column write.
+    expect(vi.mocked(insertCompletingSignal)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: SESSION_ID,
+        signal_class: 'resume_exhausted',
+        signal_value: 'resume_failed',
+      }),
+    );
+    expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+      'task-1',
+      'resume_failed',
+      expect.stringMatching(/restart/i),
+    );
+
+    const lastErrorDetailCall = vi
+      .mocked(setSessionLastErrorDetail)
+      .mock.calls.find((call) => call[0] === SESSION_ID);
+    expect(lastErrorDetailCall?.[1]).toMatch(/restart/i);
   });
 });
 
@@ -3113,7 +3321,7 @@ describe('sendOrResume — lock-contention retry in worktree creation', () => {
     expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
   });
 
-  it('persistent lock error (all retries) → worktree_recreate_failed, crash count incremented', async () => {
+  it('persistent lock error (all retries) → worktree_recreate_failed, routed through the poke-retry counter (not the crash budget)', async () => {
     vi.mocked(execCb).mockImplementation(
       (_cmd: string, _opts: unknown, callback: any) => {
         if (String(_cmd).includes('worktree add')) {
@@ -3131,8 +3339,13 @@ describe('sendOrResume — lock-contention retry in worktree creation', () => {
 
     // sendOrResume returns sessionId even on failure.
     expect(result).toBe(SESSION_ID);
-    // After exhausting retries, markSessionErrored is called → crash count incremented.
-    expect(vi.mocked(incrementTaskCrashCount)).toHaveBeenCalledWith('task-1');
+    // This live-poke failure path no longer feeds the task_crash_counts
+    // circuit breaker directly — it goes through the session-scoped
+    // poke-retry counter instead (see handlePokeFailure).
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+    expect(vi.mocked(incrementSessionPokeRetryCount)).toHaveBeenCalledWith(
+      SESSION_ID,
+    );
   });
 });
 

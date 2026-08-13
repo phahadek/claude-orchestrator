@@ -104,6 +104,11 @@ import {
   sweepStagedIntentsForTerminalSessions,
   TERMINAL_SESSION_STATUSES,
   listStagedIntentsBySession,
+  insertCompletingSignal,
+  listCompletingSignalsForSession,
+  setSessionTerminalCompletionReason,
+  incrementSessionPokeRetryCount,
+  resetSessionPokeRetryCount,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import { isSessionProcessAlive } from './processLiveness';
@@ -113,6 +118,7 @@ import {
   type SessionLivenessReconcileResult,
 } from './sessionLivenessReconciler';
 import { isUsageAdmitted } from '../orchestration/usageAdmission';
+import { hasMemoryHeadroom } from '../orchestration/memoryAdmission';
 import { CrashBudget } from '../orchestration/crashBudget';
 import { tryDependencyCachePool } from '../orchestration/dependencyCachePool';
 import {
@@ -122,9 +128,11 @@ import {
   isPlanningSession,
   movesTargetInProgress,
   usesWorktree,
+  type SessionType,
 } from './sessionPredicates';
 import { eventKind } from './eventKind';
 import type { Session, StagedIntentRow } from '../db/types';
+import { deriveSessionStatus } from './sessionStatusDeriver';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { STATUS_DISPLAY } from '../tasks/statusCanonical';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -163,6 +171,18 @@ export function deriveTaskId(taskSource: string, taskUrl: string): string {
 const MAX_FILE_CHARS = 8_000;
 /** Max total chars for all file snippets combined. */
 const MAX_TOTAL_SNIPPET_CHARS = 40_000;
+
+/**
+ * Consecutive-failure budget for the sendOrResume/_doSendOrResume live poke
+ * path before flagResumeFailure's terminal disposition fires — see
+ * session_poke_retry_counts (db/schema.ts) and
+ * incrementSessionPokeRetryCount (db/queries.ts). One higher than
+ * task_crash_counts's circuit breaker (trips at 2, SessionManager.ts:1329,
+ * 1441): a poke/resume failure is more often transient (a stale git
+ * worktree registration, a momentary fetch failure) than a full session
+ * process crash, so it earns one additional retry.
+ */
+const POKE_RETRY_LIMIT = 3;
 
 /**
  * Parse file paths from the task spec's "Files" section, read each file from
@@ -2537,14 +2557,16 @@ export class SessionManager extends EventEmitter {
    * session — resumeSession (boot recovery), sendOrResume (verdict/feedback
    * routing to a dead session), and respawnForCapabilityGrant.
    *
-   * The usage-admission check is applied here rather than in each caller so
-   * that every current and future respawn path is covered without having to
-   * remember to wire the check in individually — see isUsageAdmitted's callers
-   * elsewhere (AutoLauncher, DispatchTriggerEvaluator) for the launch-side
-   * half of this gate. A deferral is not a failure: nothing is spawned and the
-   * session row is left exactly as-is (whatever status it already had) so a
-   * later pass (poller recovery, operator retry, resumeOrphanSessions on next
-   * boot) can respawn once the deferral (persisted in usage_deferral) expires.
+   * The usage-admission and memory-admission checks are applied here rather
+   * than in each caller so that every current and future respawn path is
+   * covered without having to remember to wire the check in individually —
+   * see isUsageAdmitted's callers elsewhere (AutoLauncher,
+   * DispatchTriggerEvaluator) for the launch-side half of the usage gate,
+   * and AutoLauncher.hasCapacity() for the launch-side half of the memory
+   * gate. A deferral is not a failure: nothing is spawned and the session
+   * row is left exactly as-is (whatever status it already had) so a later
+   * pass (poller recovery, operator retry, resumeOrphanSessions on next
+   * boot) can respawn once the deferral expires.
    * Returns null when deferred; callers must not touch the DB row or kill the
    * session in that case.
    *
@@ -2574,6 +2596,38 @@ export class SessionManager extends EventEmitter {
           usageAdmission.window ?? 'unknown',
         );
       }
+      return null;
+    }
+
+    // Memory-admission gate: the same check AutoLauncher.hasCapacity()
+    // applies to fresh dispatch, applied here so every respawn path
+    // (resumeSession boot recovery, sendOrResume live poke,
+    // relaunchFixerForPR's dead-session recovery, respawnForCapabilityGrant)
+    // is covered without having to remember to wire the check into each
+    // caller individually — closes the unbounded-spawn path a sweep like
+    // AutoMerger.conflictNudgeSweep() would otherwise have over an
+    // unLIMITed candidate list. Deferral leaves the row untouched, same as
+    // the usage-admission gate above.
+    const memoryHeadroom = hasMemoryHeadroom();
+    if (!memoryHeadroom.allowed) {
+      logger.warn(
+        `[SessionManager] respawnSession: deferring ${row.session_id.slice(0, 8)} — no memory headroom ` +
+          `(freeMemMB=${memoryHeadroom.freeMemMB.toFixed(1)}, minHostFreeMemoryMB=${memoryHeadroom.minHostFreeMemoryMB}, ` +
+          `perSessionReserveMB=${memoryHeadroom.perSessionReserveMB}, projectedFreeMB=${memoryHeadroom.projectedFreeMB.toFixed(1)})`,
+      );
+      recordEvent({
+        event_type: 'memory_admission_deferred',
+        actor_type: 'system',
+        actor_id: row.session_id,
+        project_id: row.project_id ?? null,
+        task_id: row.task_id ?? null,
+        payload: {
+          freeMemMB: memoryHeadroom.freeMemMB,
+          minHostFreeMemoryMB: memoryHeadroom.minHostFreeMemoryMB,
+          perSessionReserveMB: memoryHeadroom.perSessionReserveMB,
+          projectedFreeMB: memoryHeadroom.projectedFreeMB,
+        },
+      });
       return null;
     }
 
@@ -2785,9 +2839,85 @@ export class SessionManager extends EventEmitter {
    * The session itself is still driven to a terminal DB status ('error') since
    * its process is gone, but the row is never deleted.
    */
+  /**
+   * A poke on the sendOrResume/_doSendOrResume live path failed (worktree
+   * recreation failed, planning checkout missing). Rather than immediately
+   * driving the session terminal on the first failure, count consecutive
+   * failures in session_poke_retry_counts and only escalate to
+   * flagResumeFailure once POKE_RETRY_LIMIT is reached — a poke/resume
+   * failure is often transient (see POKE_RETRY_LIMIT's doc). Below the
+   * limit, the session row is left untouched so a later poke can retry;
+   * resetSessionPokeRetryCount clears the counter on the next successful
+   * poke (see the respawnSession success paths in _doSendOrResume).
+   */
+  private handlePokeFailure(
+    row: Session,
+    reason: string,
+    detail: string,
+  ): void {
+    const count = incrementSessionPokeRetryCount(row.session_id);
+    // Always broadcast the failure so the UI/operator sees it immediately,
+    // whether or not this attempt exhausts the retry budget.
+    this.emit('message', {
+      type: 'session_action_failed',
+      sessionId: row.session_id,
+      action: 'sendOrResume',
+      reason,
+      detail,
+    } satisfies ServerMessage);
+
+    if (count < POKE_RETRY_LIMIT) {
+      logger.warn(
+        `[SessionManager] sendOrResume: poke failed for ${row.session_id.slice(0, 8)} ` +
+          `(attempt ${count}/${POKE_RETRY_LIMIT}, reason=${reason}) — ${detail}`,
+      );
+      return;
+    }
+
+    logger.warn(
+      `[SessionManager] sendOrResume: poke retry budget exhausted (${count}/${POKE_RETRY_LIMIT}) ` +
+        `for ${row.session_id.slice(0, 8)} — routing to flagResumeFailure`,
+    );
+    this.flagResumeFailure(row, `${reason}: ${detail}`);
+  }
+
   private flagResumeFailure(row: Session, detail: string): void {
     const endedAt = Date.now();
-    updateSessionStatus(row.session_id, 'error', endedAt);
+
+    // Route the terminal status write through the single status deriver
+    // (session/sessionStatusDeriver.ts) instead of writing sessions.status
+    // directly: record a 'resume_exhausted' completing signal, then let the
+    // deriver interpret it. See sessionStatusDeriver's resume_exhausted
+    // precedence rule — it applies universally, not per (session_type,
+    // task_type, hasOpenPR) triple, so this is safe for every session type
+    // flagResumeFailure is called for.
+    insertCompletingSignal({
+      session_id: row.session_id,
+      task_id: row.task_id ?? null,
+      session_type: (row.session_type ?? 'standard') as SessionType,
+      signal_class: 'resume_exhausted',
+      signal_value: 'resume_failed',
+      recorded_at: endedAt,
+    });
+    const derived = deriveSessionStatus({
+      sessionId: row.session_id,
+      sessionType: (row.session_type ?? 'standard') as SessionType,
+      taskTypeCategory: 'any',
+      hasOpenPR: false,
+      hasNewerSessionForTask: false,
+      ledgerEntries: listCompletingSignalsForSession(row.session_id),
+    });
+    // Always non-null in practice — the resume_exhausted entry just inserted
+    // above is guaranteed to match on lookup — but fall back to 'error'
+    // defensively rather than throw from within a failure-handling path.
+    const status = derived?.status ?? 'error';
+    updateSessionStatus(row.session_id, status, endedAt);
+    if (derived?.terminalCompletionReason) {
+      setSessionTerminalCompletionReason(
+        row.session_id,
+        derived.terminalCompletionReason,
+      );
+    }
     try {
       setSessionLastErrorDetail(row.session_id, detail);
     } catch {
@@ -2802,7 +2932,7 @@ export class SessionManager extends EventEmitter {
     this.emit('message', {
       type: 'session_ended',
       sessionId: row.session_id,
-      status: 'error',
+      status,
       ...(row.task_id && { taskId: row.task_id }),
     } satisfies ServerMessage);
 
@@ -2814,7 +2944,7 @@ export class SessionManager extends EventEmitter {
       task_id: null,
       payload: {
         sessionId: row.session_id,
-        status: 'error',
+        status,
         reason: 'resume_failed',
       },
     });
@@ -4194,6 +4324,7 @@ export class SessionManager extends EventEmitter {
     if (liveSession && !liveSession.hasEnded) {
       const delivered = this.send(sessionId, text);
       if (delivered) {
+        resetSessionPokeRetryCount(sessionId);
         // Mirror the respawn path: ensure status reflects the resumed activity
         // so the UI doesn't keep rendering this session as idle. Terminal is
         // sticky — a done/error/killed row is never silently overwritten with
@@ -4404,6 +4535,7 @@ export class SessionManager extends EventEmitter {
         } satisfies ServerMessage);
         return null;
       }
+      resetSessionPokeRetryCount(sessionId);
 
       // Proactive ceiling-escalation: if the session's persisted context occupancy
       // is at/over the HWM, spawn directly on large_task_model and deliver the
@@ -4448,19 +4580,7 @@ export class SessionManager extends EventEmitter {
       logger.error(
         `[SessionManager] sendOrResume: ${detail} for planning session ${sessionId}`,
       );
-      this.markSessionErrored(
-        sessionId,
-        'error',
-        'planning_checkout_missing',
-        detail,
-      );
-      this.emit('message', {
-        type: 'session_action_failed',
-        sessionId,
-        action: 'sendOrResume',
-        reason: 'planning_checkout_missing',
-        detail,
-      } satisfies ServerMessage);
+      this.handlePokeFailure(row, 'planning_checkout_missing', detail);
       return sessionId;
     }
 
@@ -4605,15 +4725,7 @@ export class SessionManager extends EventEmitter {
         ? `${BACKEND_SPAWN_DEGRADED_MESSAGE}\nworktree recreation failed: ${(err as Error).message}`
         : `worktree recreation failed: ${(err as Error).message}`;
 
-      this.markSessionErrored(sessionId, 'error', reason, detail);
-
-      this.emit('message', {
-        type: 'session_action_failed',
-        sessionId,
-        action: 'sendOrResume',
-        reason,
-        detail: stderr || (err as Error).message,
-      } satisfies ServerMessage);
+      this.handlePokeFailure(row, reason, stderr || detail);
 
       return sessionId;
     }
@@ -4696,6 +4808,7 @@ export class SessionManager extends EventEmitter {
       } satisfies ServerMessage);
       return null;
     }
+    resetSessionPokeRetryCount(sessionId);
 
     // Register the pending text on the session so that if the resumed context
     // overflows, the escalated spawn re-delivers the original message rather

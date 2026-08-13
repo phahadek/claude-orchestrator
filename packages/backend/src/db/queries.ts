@@ -4878,6 +4878,40 @@ export function resetTaskCrashCount(taskId: string): void {
   db.prepare(`DELETE FROM task_crash_counts WHERE task_id = ?`).run(taskId);
 }
 
+// ─── session_poke_retry_counts ─────────────────────────────────────────────
+
+function getSessionPokeRetryCount(sessionId: string): number {
+  const row = db
+    .prepare<{
+      session_id: string;
+    }>(
+      `SELECT consecutive_failures FROM session_poke_retry_counts WHERE session_id = @session_id`,
+    )
+    .get({ session_id: sessionId }) as
+    | { consecutive_failures: number }
+    | undefined;
+  return row?.consecutive_failures ?? 0;
+}
+
+/** Increment consecutive_failures for a session's poke/resume retry budget and return the new count. */
+export function incrementSessionPokeRetryCount(sessionId: string): number {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO session_poke_retry_counts (session_id, consecutive_failures, last_failure_at)
+     VALUES (?, 1, ?)
+     ON CONFLICT(session_id) DO UPDATE SET
+       consecutive_failures = consecutive_failures + 1,
+       last_failure_at = excluded.last_failure_at`,
+  ).run(sessionId, now);
+  return getSessionPokeRetryCount(sessionId);
+}
+
+export function resetSessionPokeRetryCount(sessionId: string): void {
+  db.prepare(`DELETE FROM session_poke_retry_counts WHERE session_id = ?`).run(
+    sessionId,
+  );
+}
+
 // ─── session_pause_intervals ────────────────────────────────────────────────
 
 export function insertPauseInterval(

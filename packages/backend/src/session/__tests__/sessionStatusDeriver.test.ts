@@ -248,6 +248,69 @@ describe('deriveSessionStatus', () => {
     });
   });
 
+  describe('resume_exhausted circuit breaker', () => {
+    it('derives error from a resume_exhausted ledger entry, independent of the registry triple', () => {
+      const result = deriveSessionStatus(
+        baseInput({
+          // 'review' has no registered descriptor at all — resolving it via
+          // the registry would throw. resume_exhausted must short-circuit
+          // before that lookup.
+          sessionType: 'review',
+          taskTypeCategory: 'any',
+          hasOpenPR: false,
+          ledgerEntries: [
+            ledgerRow({
+              session_type: 'review',
+              signal_class: 'resume_exhausted',
+              signal_value: 'resume_failed',
+            }),
+          ],
+        }),
+      );
+      expect(result).toEqual({
+        status: 'error',
+        terminalCompletionReason: 'resume_failed',
+      });
+    });
+
+    it('loses to the superseded-lineage rule', () => {
+      const result = deriveSessionStatus(
+        baseInput({
+          hasNewerSessionForTask: true,
+          ledgerEntries: [
+            ledgerRow({
+              signal_class: 'resume_exhausted',
+              signal_value: 'resume_failed',
+            }),
+          ],
+        }),
+      );
+      expect(result).toEqual({
+        status: 'superseded',
+        terminalCompletionReason: SUPERSEDED_BY_NEWER_SESSION_REASON,
+      });
+    });
+
+    it('wins over a registry-mapped triple when both signal classes are present, since it is checked first', () => {
+      const result = deriveSessionStatus(
+        baseInput({
+          ledgerEntries: [
+            ledgerRow({ signal_value: 'planning_approved', recorded_at: 500 }),
+            ledgerRow({
+              signal_class: 'resume_exhausted',
+              signal_value: 'resume_failed',
+              recorded_at: 2000,
+            }),
+          ],
+        }),
+      );
+      expect(result).toEqual({
+        status: 'error',
+        terminalCompletionReason: 'resume_failed',
+      });
+    });
+  });
+
   it('the output type has no "retrying" member', () => {
     const impossible: DerivedSessionOutcome[] = [
       'done',
