@@ -4,8 +4,27 @@ import { MilestoneView } from '../MilestoneView';
 import { apiRequest } from '../../api/projects';
 import type { TaskView } from '../../types/taskView';
 
+// MilestoneView fires apiRequest calls from more than one caller on mount
+// (the /api/prs depth-dispositions fetch, and LaneHealthPanel's
+// /api/milestones/.../lane-health fetch) — a single un-keyed
+// mockResolvedValueOnce queue would be consumed by whichever caller's
+// effect happens to run first. Route queued "once" responses by URL prefix
+// instead, so pushOnce('/api/prs', ...) always answers the prs fetch
+// regardless of mount-order races with other apiRequest callers.
+const prsResponses: unknown[] = [];
+function pushPrsResponseOnce(value: unknown): void {
+  prsResponses.push(value);
+}
+
 vi.mock('../../api/projects', () => ({
-  apiRequest: vi.fn().mockResolvedValue([]),
+  apiRequest: vi.fn((url: string) => {
+    if (typeof url === 'string' && url.startsWith('/api/prs')) {
+      return Promise.resolve(
+        prsResponses.length > 0 ? prsResponses.shift() : [],
+      );
+    }
+    return Promise.resolve([]);
+  }),
 }));
 
 vi.mock('../../hooks/useMilestoneConvergence', () => ({
@@ -185,7 +204,7 @@ describe('MilestoneView', () => {
   };
 
   it('renders a failing depth verdict for the milestone in the panel, naming the dimension and PR', async () => {
-    vi.mocked(apiRequest).mockResolvedValueOnce([
+    pushPrsResponseOnce([
       {
         prNumber: 915,
         prUrl: 'https://github.com/org/repo/pull/915',
@@ -213,7 +232,7 @@ describe('MilestoneView', () => {
   });
 
   it('distinguishes an escalated finding from a routed finding', async () => {
-    vi.mocked(apiRequest).mockResolvedValueOnce([
+    pushPrsResponseOnce([
       {
         prNumber: 915,
         prUrl: 'https://github.com/org/repo/pull/915',
@@ -235,7 +254,7 @@ describe('MilestoneView', () => {
       ),
     );
 
-    vi.mocked(apiRequest).mockResolvedValueOnce([
+    pushPrsResponseOnce([
       {
         prNumber: 915,
         prUrl: 'https://github.com/org/repo/pull/915',
@@ -259,7 +278,7 @@ describe('MilestoneView', () => {
   });
 
   it('does not surface a passing depth verdict as an action item', async () => {
-    vi.mocked(apiRequest).mockResolvedValueOnce([
+    pushPrsResponseOnce([
       {
         prNumber: 915,
         prUrl: 'https://github.com/org/repo/pull/915',
@@ -280,7 +299,7 @@ describe('MilestoneView', () => {
   });
 
   it('renders unchanged for a milestone with no depth verdicts', async () => {
-    vi.mocked(apiRequest).mockResolvedValueOnce([
+    pushPrsResponseOnce([
       {
         prNumber: 915,
         prUrl: 'https://github.com/org/repo/pull/915',
@@ -298,7 +317,7 @@ describe('MilestoneView', () => {
   });
 
   it('does not thread depth dispositions into the decision stack — the staged-intent query stays untouched', async () => {
-    vi.mocked(apiRequest).mockResolvedValueOnce([
+    pushPrsResponseOnce([
       {
         prNumber: 915,
         prUrl: 'https://github.com/org/repo/pull/915',

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getArm, listArm, upsertArm } from '../db/queries';
+import { getArm, listArm, upsertArm, getLaneHealthRollup } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { FLOW_IDS, isFlowId } from '../orchestration/flowArm';
 import { ProjectService } from '../projects/ProjectService';
@@ -73,6 +73,29 @@ export function createMilestonesRouter(): Router {
       });
 
       res.json({ milestoneId, flow, armed: getArm(milestoneId, flow) });
+    },
+  );
+
+  // GET /api/milestones/:project/lane-health -> project-scoped test-lane
+  // health rollup (pass rate, timeout rate, queue-wait vs execution-time
+  // distributions). Fleet-scoped, not milestone-scoped — test_request_runs
+  // carries no milestone column — so :project is a project id, matching the
+  // convergence router's convention.
+  router.get(
+    '/milestones/:project/lane-health',
+    (req: Request, res: Response) => {
+      const project = String(req.params.project);
+      const limitParam = req.query.limit;
+      let limit: number | undefined;
+      if (typeof limitParam === 'string' && limitParam.trim() !== '') {
+        const parsed = Number(limitParam);
+        if (Number.isFinite(parsed) && parsed > 0) limit = Math.floor(parsed);
+      }
+      res.json(
+        limit !== undefined
+          ? getLaneHealthRollup(project, limit)
+          : getLaneHealthRollup(project),
+      );
     },
   );
 
