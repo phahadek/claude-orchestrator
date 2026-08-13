@@ -2689,7 +2689,23 @@ export class SessionManager extends EventEmitter {
         status: 'running',
       } satisfies ServerMessage);
     }
-    updateSessionWorktreePath(row.session_id, worktreePath);
+    // Checkout-only planning sessions (groom/design/ops-without-worktree/
+    // split-without-worktree) never own a real per-session worktree —
+    // start() persists worktree_path=null for them (see the comment at
+    // insertSession's call site). Callers of respawnSession resolve a local
+    // fallback cwd (typically projectDir) so the CLI has somewhere to run
+    // `--resume` from, but that resolved fallback must never be written back
+    // into the DB column: doing so silently flips the column from null to
+    // the bare project checkout path, which downstream consumers (e.g.
+    // StuckSessionMonitor) read as "this session owns a real worktree" and
+    // then run git worktree operations directly against the shared project
+    // checkout. Real-worktree sessions keep this refresh — re-anchoring
+    // worktreePath here is legitimate for them.
+    const checkoutOnlyPlanning =
+      isPlanningSession(row.session_type) && !usesWorktree(row.session_type);
+    if (!checkoutOnlyPlanning) {
+      updateSessionWorktreePath(row.session_id, worktreePath);
+    }
     return session;
   }
 

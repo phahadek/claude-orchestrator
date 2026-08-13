@@ -2585,6 +2585,20 @@ describe('sendOrResume — surviving worktree reuse (idle resume fast path)', ()
     );
     expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
   });
+
+  it('a checkout-only planning session (groom, worktree_path=null) never has the resolved projectDir fallback written back to worktree_path', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(SESSION_ID),
+      session_type: 'groom',
+      worktree_path: null,
+    });
+    await doResume();
+    // respawnSession is passed the resolved fallback cwd (projectDir) so the
+    // CLI has somewhere to run --resume from, but that resolved value must
+    // never be persisted — the DB column must stay null for this session
+    // shape, same as start() would leave it.
+    expect(vi.mocked(updateSessionWorktreePath)).not.toHaveBeenCalled();
+  });
 });
 
 describe('sendOrResume — usage admission gate', () => {
