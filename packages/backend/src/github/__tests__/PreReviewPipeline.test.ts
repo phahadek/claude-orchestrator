@@ -414,6 +414,35 @@ describe('PreReviewPipeline — autofix gate', () => {
       }),
     );
   });
+
+  it('records durable autofix_started/autofix_complete audit rows with project_id', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: true,
+      summary: 'fixed',
+      commitSha: null,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'autofix_started',
+        project_id: 'proj-1',
+        task_id: 'task-1',
+      }),
+    );
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'autofix_complete',
+        project_id: 'proj-1',
+        task_id: 'task-1',
+        payload: expect.objectContaining({ success: true }),
+      }),
+    );
+  });
 });
 
 describe('PreReviewPipeline — autofix git infra failure (exit 128)', () => {
@@ -1228,7 +1257,10 @@ describe('PreReviewPipeline — stage transition sequence', () => {
       }),
     );
     expect(mockRecordEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ event_type: 'pipeline_stage_failed' }),
+      expect.objectContaining({
+        event_type: 'pipeline_stage_failed',
+        project_id: 'proj-1',
+      }),
     );
   });
 });

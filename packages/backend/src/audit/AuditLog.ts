@@ -17,10 +17,20 @@ export interface AuditRow {
  * Resolves a project id for an event that didn't supply one, so the write
  * path — not each of its many call sites — is the single place the
  * actor/task → project invariant is enforced. Tries actor_id first (when it
- * names a known session), then falls back to task_id (via
- * task_repo_assignments). Returns null when neither resolves (e.g.
- * process_boot, which is attributed to neither) — recordEvent still writes
- * the row in that case, just without a project_id.
+ * names a known session), then falls back to task_id — first via
+ * task_repo_assignments, then via sessions.task_id. Returns null when none
+ * resolve (e.g. process_boot, which is attributed to neither) —
+ * recordEvent still writes the row in that case, just without a
+ * project_id.
+ *
+ * task_repo_assignments is populated ONLY for multi-repo projects, and only
+ * once a human explicitly assigns a repo via POST /tasks/:taskId/assign-repo
+ * (routes/tasks.ts) — single-repo projects (the common case) never write a
+ * row there at all, so that lookup alone resolves to null for effectively
+ * every task_id on a single-repo project. sessions.task_id + sessions
+ * .project_id are populated unconditionally for every dispatched session
+ * regardless of repo count, so it's tried next as a fallback that actually
+ * covers the common case.
  */
 function resolveProjectId(
   actorId: string | null,
@@ -38,14 +48,27 @@ function resolveProjectId(
     }
   }
   if (taskId) {
-    const row = db
+    const assignmentRow = db
       .prepare<
         [string],
         { project_id: string }
       >(`SELECT project_id FROM task_repo_assignments WHERE task_id = ?`)
       .get(taskId);
-    if (row?.project_id) {
-      return row.project_id;
+    if (assignmentRow?.project_id) {
+      return assignmentRow.project_id;
+    }
+    const sessionRow = db
+      .prepare<
+        [string],
+        { project_id: string | null }
+      >(
+        `SELECT project_id FROM sessions
+         WHERE task_id = ? AND project_id IS NOT NULL
+         ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(taskId);
+    if (sessionRow?.project_id) {
+      return sessionRow.project_id;
     }
   }
   return null;

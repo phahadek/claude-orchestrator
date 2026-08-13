@@ -124,6 +124,13 @@ export class PreReviewPipeline {
           prNumber: ctx.prNumber,
           repo: ctx.repo,
         });
+        recordEvent({
+          event_type: 'autofix_started',
+          actor_type: 'system',
+          project_id: ctx.project.id,
+          task_id: ctx.job.taskId ?? null,
+          payload: { prNumber: ctx.prNumber, repo: ctx.repo },
+        });
 
         let success = true;
         let summary = 'no worktree available — autofix skipped';
@@ -250,6 +257,13 @@ export class PreReviewPipeline {
           repo: ctx.repo,
           success,
           summary,
+        });
+        recordEvent({
+          event_type: 'autofix_complete',
+          actor_type: 'system',
+          project_id: ctx.project.id,
+          task_id: ctx.job.taskId ?? null,
+          payload: { prNumber: ctx.prNumber, repo: ctx.repo, success, summary },
         });
 
         if (!success) {
@@ -759,12 +773,14 @@ export class PreReviewPipeline {
       | 'pipeline_stage_passed'
       | 'pipeline_stage_failed',
     job: ReviewJob,
+    project: ProjectConfig,
     stage: string,
     extra?: { summary?: string; failedCommand?: string },
   ): void {
     recordEvent({
       event_type: eventType,
       actor_type: 'system',
+      project_id: project.id,
       task_id: job.taskId ?? null,
       payload: {
         prNumber: job.prNumber,
@@ -812,7 +828,12 @@ export class PreReviewPipeline {
         repo: job.repo,
         stage: stage.id,
       });
-      this.emitAuditStageEvent('pipeline_stage_entered', job, stage.id);
+      this.emitAuditStageEvent(
+        'pipeline_stage_entered',
+        job,
+        project,
+        stage.id,
+      );
 
       if (stage.mode === 'gate') {
         const failure = await stage.run(ctx);
@@ -828,10 +849,16 @@ export class PreReviewPipeline {
             summary: failure.summary,
             failedCommand: failure.failedCommand,
           });
-          this.emitAuditStageEvent('pipeline_stage_failed', job, stage.id, {
-            summary: failure.summary,
-            failedCommand: failure.failedCommand,
-          });
+          this.emitAuditStageEvent(
+            'pipeline_stage_failed',
+            job,
+            project,
+            stage.id,
+            {
+              summary: failure.summary,
+              failedCommand: failure.failedCommand,
+            },
+          );
           await this.handleGateFailure(stage, job, failure);
           return { passed: false };
         }
@@ -844,7 +871,12 @@ export class PreReviewPipeline {
           repo: job.repo,
           stage: stage.id,
         });
-        this.emitAuditStageEvent('pipeline_stage_passed', job, stage.id);
+        this.emitAuditStageEvent(
+          'pipeline_stage_passed',
+          job,
+          project,
+          stage.id,
+        );
       } else {
         await stage.run(ctx);
         logger.info(
@@ -856,7 +888,12 @@ export class PreReviewPipeline {
           repo: job.repo,
           stage: stage.id,
         });
-        this.emitAuditStageEvent('pipeline_stage_passed', job, stage.id);
+        this.emitAuditStageEvent(
+          'pipeline_stage_passed',
+          job,
+          project,
+          stage.id,
+        );
       }
     }
 
