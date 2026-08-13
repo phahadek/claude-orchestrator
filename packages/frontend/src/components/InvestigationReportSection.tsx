@@ -272,7 +272,10 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
             Clear
           </button>
           {dispatchError && (
-            <span className={styles.actionError} data-testid="report-batch-dispatch-error">
+            <span
+              className={styles.actionError}
+              data-testid="report-batch-dispatch-error"
+            >
               {dispatchError}
             </span>
           )}
