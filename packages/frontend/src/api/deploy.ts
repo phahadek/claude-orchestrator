@@ -32,12 +32,18 @@ export interface BehindItem {
   branchName?: string;
 }
 
+export interface DeployPlanStep {
+  id: string;
+  description: string | null;
+}
+
 export interface DeployStatus {
   run: DeployRun | null;
   events: DeployRunEvent[];
   deployedSha: string | null;
   deployedShaRecordedAt: string | null;
   behind: { count: number; items: BehindItem[] };
+  plan: DeployPlanStep[];
 }
 
 export const deployApi = {

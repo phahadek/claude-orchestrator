@@ -36,6 +36,7 @@ beforeEach(() => {
     deployedSha: null,
     deployedShaRecordedAt: null,
     behind: { count: 0, items: [] },
+    plan: [],
   });
 });
 
@@ -98,12 +99,20 @@ describe('GateReadinessPanel deploy launch control', () => {
       deployedSha: 'def456',
       deployedShaRecordedAt: '2026-07-19T00:00:00.000Z',
       behind: { count: 0, items: [] },
+      plan: [{ id: 'deploy', description: null }],
     });
 
     render(<GateReadinessPanel activeProjectId="proj-1" />);
 
     const status = await screen.findByTestId('deploy-run-status');
     expect(status.textContent).toContain('succeeded');
+
+    const strip = await screen.findByTestId('deploy-step-strip');
+    expect(strip.textContent).toContain('deploy');
+
+    expect(screen.queryByTestId('deploy-run-events')).toBeNull();
+    const toggle = await screen.findByTestId('deploy-run-events-toggle');
+    fireEvent.click(toggle);
     const events = await screen.findByTestId('deploy-run-events');
     expect(events.textContent).toContain('deploy: step_succeeded');
   });
@@ -184,5 +193,40 @@ describe('GateReadinessPanel deploy launch control', () => {
 
     expect(await screen.findByTestId('deploy-review-button')).toBeTruthy();
     expect(screen.queryByTestId('deploy-launch-button')).toBeNull();
+  });
+
+  it('renders one pending cell per plan step when the run has no events yet', async () => {
+    const plan = Array.from({ length: 10 }, (_, i) => ({
+      id: `step-${i}`,
+      description: null,
+    }));
+    deployApiMock.getStatus.mockResolvedValue({
+      run: {
+        run_id: 'run-999',
+        project: 'proj-1',
+        target_sha: 'abc999',
+        current_step: null,
+        status: 'running',
+        started_at: '2026-07-20T00:00:00.000Z',
+        completed_at: null,
+      },
+      events: [],
+      deployedSha: null,
+      deployedShaRecordedAt: null,
+      behind: { count: 0, items: [] },
+      plan,
+    });
+
+    render(<GateReadinessPanel activeProjectId="proj-1" />);
+
+    const strip = await screen.findByTestId('deploy-step-strip');
+    const cells = plan.map((step) =>
+      screen.getByTestId(`deploy-step-cell-${step.id}`),
+    );
+    expect(cells).toHaveLength(10);
+    cells.forEach((cell) => {
+      expect(cell.getAttribute('data-state')).toBe('pending');
+    });
+    expect(strip.querySelectorAll('li')).toHaveLength(10);
   });
 });

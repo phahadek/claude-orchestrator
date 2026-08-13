@@ -13,6 +13,7 @@ import {
   buildDeployAgenticTaskId,
 } from '../deploy/DeployOrchestrator';
 import type { StepDescriptor } from '../deploy/playbookSchema';
+import { loadDeployPlaybook } from '../deploy/loadPlaybook';
 import {
   getProjectRowById,
   getProjectDeployedShaRow,
@@ -518,12 +519,23 @@ export function createDeployRouter(): Router {
       projectId,
       deployedShaRow?.recordedAt ?? null,
     );
+    const project = getProjectRowById(projectId);
+    const playbookResult = project
+      ? loadDeployPlaybook(project.project_dir)
+      : { ok: false as const, reason: `unknown project ${projectId}` };
+    const plan = playbookResult.ok
+      ? playbookResult.playbook.steps.map((step) => ({
+          id: step.id,
+          description: step.command_or_prompt ?? null,
+        }))
+      : [];
     res.status(200).json({
       run,
       events,
       deployedSha: deployedShaRow?.sha ?? null,
       deployedShaRecordedAt: deployedShaRow?.recordedAt ?? null,
       behind: { count: behindItems.length, items: behindItems },
+      plan,
     });
   });
 

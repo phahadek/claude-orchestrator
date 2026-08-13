@@ -18,7 +18,13 @@ import type {
   SeedMilestoneReadiness,
 } from '../api/seed';
 import { deployApi } from '../api/deploy';
-import type { DeployRun, DeployRunEvent, BehindItem } from '../api/deploy';
+import type {
+  DeployRun,
+  DeployRunEvent,
+  BehindItem,
+  DeployPlanStep,
+} from '../api/deploy';
+import { DeployStepStrip } from './DeployStepStrip';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { SessionState } from '../hooks/useSessionStore';
@@ -443,6 +449,8 @@ export function GateReadinessPanel({
   );
   const [deployRun, setDeployRun] = useState<DeployRun | null>(null);
   const [deployEvents, setDeployEvents] = useState<DeployRunEvent[]>([]);
+  const [deployPlan, setDeployPlan] = useState<DeployPlanStep[]>([]);
+  const [deployLogExpanded, setDeployLogExpanded] = useState(false);
   const [dismissedDeployRunId, setDismissedDeployRunId] = useState<
     string | null
   >(null);
@@ -713,6 +721,7 @@ export function GateReadinessPanel({
         setDeployEvents(result.events);
         setDeployedSha(result.deployedSha ?? null);
         setDeployBehind(result.behind ?? { count: 0, items: [] });
+        setDeployPlan(result.plan ?? []);
       })
       .catch(() => {
         /* transient poll failures don't clear the last-known run state */
@@ -724,6 +733,7 @@ export function GateReadinessPanel({
     if (!activeProjectId) {
       setDeployRun(null);
       setDeployEvents([]);
+      setDeployPlan([]);
       setDeployedSha(null);
       setDeployBehind({ count: 0, items: [] });
       setDeployConfirmArmed(false);
@@ -1276,19 +1286,37 @@ export function GateReadinessPanel({
             })()}
           {deployRun &&
             deployRun.run_id !== dismissedDeployRunId &&
+            deployPlan.length > 0 && (
+              <DeployStepStrip plan={deployPlan} events={deployEvents} />
+            )}
+          {deployRun &&
+            deployRun.run_id !== dismissedDeployRunId &&
             deployEvents.length > 0 && (
-              <ul
-                className={styles.deployEventList}
-                data-testid="deploy-run-events"
-              >
-                {deployEvents.map((ev) => (
-                  <li key={ev.id}>
-                    {ev.step}: {ev.event_type}
-                    {ev.disposition ? ` (${ev.disposition})` : ''}
-                    {ev.detail ? ` — ${ev.detail}` : ''}
-                  </li>
-                ))}
-              </ul>
+              <>
+                <button
+                  type="button"
+                  className={styles.deployButton}
+                  onClick={() => setDeployLogExpanded((v) => !v)}
+                  data-testid="deploy-run-events-toggle"
+                >
+                  {deployLogExpanded ? 'Hide' : 'Show'} raw log (
+                  {deployEvents.length})
+                </button>
+                {deployLogExpanded && (
+                  <ul
+                    className={styles.deployEventList}
+                    data-testid="deploy-run-events"
+                  >
+                    {deployEvents.map((ev) => (
+                      <li key={ev.id}>
+                        {ev.step}: {ev.event_type}
+                        {ev.disposition ? ` (${ev.disposition})` : ''}
+                        {ev.detail ? ` — ${ev.detail}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
             )}
         </div>
       )}
