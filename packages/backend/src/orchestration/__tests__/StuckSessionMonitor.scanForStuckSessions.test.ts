@@ -103,6 +103,7 @@ describe('StuckSessionMonitor.scanForStuckSessions — local-only submission', (
       'sess-1',
       baseRow.last_ts,
       null,
+      'stuck_session_alive_subprocess',
     );
     expect(submitLocalBranch).toHaveBeenCalledWith(
       expect.objectContaining({
