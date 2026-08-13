@@ -103,6 +103,10 @@ export interface OrchestratorConfig {
   test_max_rss_mb: number;
   /** Stop running subsequent test commands after the first failure. Default true. */
   test_fail_fast: boolean;
+  /** Structured report format the project's `test:` commands write. Only 'junit-xml' is supported (native to both pytest and vitest). Undefined = no structured report. */
+  test_report_format?: 'junit-xml';
+  /** Glob matched once after every `test:` command finishes, collecting every matching report file into one normalized result. Applies globally across the whole test: list, not per-command. */
+  test_report_glob: string;
   /** Commands the orchestrator runs as static analysis gate, between verify and test. Empty = gate skipped. */
   analyze: AnalyzeCommand[];
   /** Per-command timeout in seconds for analyze commands. Default 300. */
@@ -159,6 +163,8 @@ const DEFAULTS: OrchestratorConfig = {
   test_timeout_sec: 300,
   test_max_rss_mb: 0,
   test_fail_fast: true,
+  test_report_format: undefined,
+  test_report_glob: '',
   analyze: [],
   analyze_timeout_sec: 300,
   analyze_max_rss_mb: 0,
@@ -264,6 +270,14 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.test_fail_fast === 'boolean'
           ? parsed.test_fail_fast
           : DEFAULTS.test_fail_fast,
+      test_report_format:
+        parsed.test_report_format === 'junit-xml'
+          ? parsed.test_report_format
+          : DEFAULTS.test_report_format,
+      test_report_glob:
+        typeof parsed.test_report_glob === 'string'
+          ? parsed.test_report_glob
+          : DEFAULTS.test_report_glob,
       analyze: Array.isArray(parsed.analyze)
         ? (parsed.analyze as unknown[]).filter(isValidAnalyzeEntry)
         : DEFAULTS.analyze,
