@@ -31,6 +31,7 @@ vi.mock('../../config', () => ({
   BASH_MAX_OUTPUT_LENGTH: 30000,
   BASH_DEFAULT_TIMEOUT_MS: 300000,
   runtimeSettings: { corporate_mode_enabled: false },
+  getProjectById: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../../tasks/TaskBackend', () => ({
@@ -81,7 +82,7 @@ import { upsertPullRequest } from '../../db/queries';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function makeSession(): AgentSession {
+function makeSession(githubClient?: unknown): AgentSession {
   const taskBackend = {
     attachPR: vi.fn().mockResolvedValue(undefined),
     getTask: vi.fn().mockResolvedValue(null),
@@ -93,6 +94,11 @@ function makeSession(): AgentSession {
     taskBackend as never,
     '/tmp/worktree',
     'task-123',
+    undefined,
+    undefined,
+    'standard',
+    undefined,
+    githubClient as never,
   );
 }
 
@@ -333,6 +339,150 @@ describe('gh pr create live detection via handleRawEvent', () => {
     await new Promise((r) => setImmediate(r));
 
     expect(upsertPullRequest).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── PR metadata backfill via fetchPR ──────────────────────────────────────────
+
+describe('PR title/branch backfill from URL-only detection', () => {
+  const TOOL_USE_ID = 'toolu_bash_backfill';
+  const CMD = 'gh pr create --draft --base dev --body-file /tmp/pr-body.md';
+
+  beforeEach(() => {
+    vi.mocked(upsertPullRequest).mockClear();
+  });
+
+  function emitToolUse(session: AgentSession) {
+    sendEvent(session, {
+      type: 'assistant',
+      message: {
+        id: 'msg_backfill',
+        content: [
+          {
+            type: 'tool_use',
+            id: TOOL_USE_ID,
+            name: 'Bash',
+            input: { command: CMD },
+          },
+        ],
+      },
+    });
+  }
+
+  function emitToolResult(session: AgentSession, content: unknown) {
+    sendEvent(session, {
+      type: 'tool_result',
+      tool_use_id: TOOL_USE_ID,
+      content,
+    });
+  }
+
+  it('calls fetchPR once and merges title/head_branch/base_branch into the upsert', async () => {
+    // headSha/body are included so the pre-existing headSha/body enrichment
+    // fetch (see needsHeadSha/needsBodyValidation below) has nothing left to
+    // do and does not issue a second fetchPR call.
+    const fetchPR = vi.fn().mockResolvedValue({
+      title: 'Fetched title',
+      headBranch: 'feature/backfilled',
+      headSha: 'abc123',
+      baseBranch: 'dev',
+      body: 'some body',
+    });
+    const session = makeSession({ fetchPR });
+    emitToolUse(session);
+    emitToolResult(session, PR_URL);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(fetchPR).toHaveBeenCalledTimes(1);
+    expect(fetchPR).toHaveBeenCalledWith('owner/repo', 153);
+    expect(upsertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pr_number: 153,
+        pr_url: PR_URL,
+        title: 'Fetched title',
+        head_branch: 'feature/backfilled',
+        base_branch: 'dev',
+      }),
+    );
+  });
+
+  it('does not call the title-backfill fetchPR when the detected shape already carries a title', async () => {
+    const fetchPR = vi.fn().mockResolvedValue({
+      title: 'Should not be used',
+      headBranch: 'nope',
+      headSha: 'nope-sha',
+      baseBranch: 'nope',
+      body: 'nope-body',
+    });
+    const session = makeSession({ fetchPR });
+    emitToolUse(session);
+    // head.sha and body are also present so the pre-existing enrichment
+    // fetch (unrelated to this task) doesn't fire either — isolating the
+    // assertion to the title-backfill call this task adds.
+    emitToolResult(
+      session,
+      JSON.stringify({
+        html_url: PR_URL,
+        title: 'Already known title',
+        body: 'known body',
+        head: { ref: 'known-branch', sha: 'known-sha' },
+      }),
+    );
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(fetchPR).not.toHaveBeenCalled();
+    expect(upsertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Already known title' }),
+    );
+  });
+
+  it('upserts the URL-only row and continues when fetchPR throws', async () => {
+    const fetchPR = vi.fn().mockRejectedValue(new Error('network error'));
+    const session = makeSession({ fetchPR });
+    emitToolUse(session);
+    emitToolResult(session, PR_URL);
+
+    await new Promise((r) => setImmediate(r));
+
+    // Called by both the title-backfill path and the pre-existing
+    // headSha/body enrichment path — both fail the same way and are
+    // independently non-fatal, so the row still upserts URL-only.
+    expect(fetchPR).toHaveBeenCalled();
+    expect(upsertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pr_number: 153,
+        pr_url: PR_URL,
+        title: null,
+        head_branch: null,
+        base_branch: null,
+      }),
+    );
+  });
+
+  it('handles a GitHubRateLimitError from fetchPR without failing PR detection', async () => {
+    class GitHubRateLimitError extends Error {
+      constructor() {
+        super('rate limited');
+        this.name = 'GitHubRateLimitError';
+      }
+    }
+    const fetchPR = vi.fn().mockRejectedValue(new GitHubRateLimitError());
+    const session = makeSession({ fetchPR });
+    emitToolUse(session);
+    emitToolResult(session, PR_URL);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(fetchPR).toHaveBeenCalled();
+    expect(upsertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pr_number: 153,
+        pr_url: PR_URL,
+        title: null,
+      }),
+    );
   });
 });
 
