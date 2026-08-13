@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
@@ -998,6 +998,21 @@ describe('respawnSession — memory-admission gate', () => {
     sm = new SessionManager();
     vi.mocked(getSession).mockReturnValue(makeDeadRow());
     vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: true,
+      freeMemMB: 8192,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 5120,
+    });
+  });
+
+  afterEach(() => {
+    // The sweep test below installs a stateful mockImplementation (not just
+    // a mockReturnValue) — vi.clearAllMocks() in the next test's beforeEach
+    // clears call history but does NOT remove a mockImplementation, so
+    // without this reset it would leak into every subsequent describe block
+    // in this file and silently block every later respawnSession call.
     vi.mocked(hasMemoryHeadroom).mockReturnValue({
       allowed: true,
       freeMemMB: 8192,
@@ -3236,7 +3251,7 @@ describe('sendOrResume — degraded spawn on worktree recreation is a backend-he
     expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
       'task-1',
       'resume_failed',
-      expect.stringContaining('restart'),
+      expect.stringMatching(/restart/i),
     );
 
     const lastErrorDetailCall = vi
