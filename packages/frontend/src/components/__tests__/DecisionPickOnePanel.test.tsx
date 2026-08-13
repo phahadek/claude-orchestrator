@@ -86,6 +86,35 @@ describe('DecisionPickOnePanel', () => {
     expect(screen.queryByTestId('decision-investigation')).toBeNull();
   });
 
+  it('renders an over-threshold decisionProposal through CollapsibleField, showing the expand toggle', () => {
+    const longProposal = 'word '.repeat(180).trim(); // 900 chars, no newlines
+    const intent: StagedIntent = {
+      ...singleOptionIntent(),
+      decisionProposal: longProposal,
+    };
+
+    render(<DecisionPickOnePanel intent={intent} />);
+
+    expect(screen.getByText('Recommendation')).toBeTruthy();
+    expect(screen.getByText('▼ Show more')).toBeTruthy();
+  });
+
+  it('preserves a blank-line paragraph break in decisionProposal', () => {
+    const proposal = 'First paragraph.\n\nSecond paragraph.';
+    const intent: StagedIntent = {
+      ...singleOptionIntent(),
+      decisionProposal: proposal,
+    };
+
+    render(<DecisionPickOnePanel intent={intent} />);
+
+    expect(
+      screen.getByText(proposal, {
+        normalizer: (text) => text,
+      }),
+    ).toBeTruthy();
+  });
+
   it('accepts the single recommendation, optionally carrying free-form pushback text', async () => {
     const answer = vi
       .spyOn(stagedIntentsApi, 'answer')
