@@ -1290,9 +1290,7 @@ function formatOpsJournalApprovedIncompleteMessage(
 ): string {
   const row = getSession(sessionId);
   const taskType = row?.task_id ? getCachedType(row.task_id) : undefined;
-  const remaining = Array.from(sessionTerminalOpsStates(taskType)).join(
-    ' or ',
-  );
+  const remaining = Array.from(sessionTerminalOpsStates(taskType)).join(' or ');
   return (
     `Staged intent ${intent.id} (${intent.kind}) was approved, moving the ops ` +
     `journal to "${state}" — that is the operator's go-ahead to continue, not ` +
