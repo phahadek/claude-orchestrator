@@ -60,6 +60,8 @@ vi.mock('../../db/queries', () =>
     getSessionTags: vi.fn().mockReturnValue([]),
     setSessionTags: vi.fn(),
     resetTaskCrashCount: vi.fn(),
+    listUndeliveredInboxItems: vi.fn().mockReturnValue([]),
+    markInboxItemsDelivered: vi.fn(),
   }),
 );
 
@@ -127,12 +129,19 @@ vi.mock('../../orchestration/planningDecisionKinds', () => ({
 // ── Imports (after mocks) ───────────────────────────────────────────────────
 
 import { AgentSession } from '../AgentSession';
-import { markSessionIdle } from '../../db/queries';
+import {
+  markSessionIdle,
+  listUndeliveredInboxItems,
+  markInboxItemsDelivered,
+} from '../../db/queries';
 import { recoverSession } from '../sessionRecovery';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function makeSession(sessionType = 'standard'): AgentSession {
+function makeSession(
+  sessionType = 'standard',
+  sessionManager?: { sendOrResume: ReturnType<typeof vi.fn> },
+): AgentSession {
   const taskBackend = {
     attachPR: vi.fn().mockResolvedValue(undefined),
     getTask: vi.fn().mockResolvedValue(null),
@@ -147,7 +156,14 @@ function makeSession(sessionType = 'standard'): AgentSession {
     undefined,
     undefined,
     sessionType,
+    sessionManager as never,
   );
+}
+
+async function callDeliverInboxItems(session: AgentSession): Promise<void> {
+  await (
+    session as unknown as { deliverInboxItems(): Promise<void> }
+  ).deliverInboxItems();
 }
 
 async function callHandleCleanExit(session: AgentSession): Promise<void> {
@@ -268,5 +284,49 @@ describe('AgentSession.sendMessage — _turnInFlight only set on confirmed deliv
 
     expect(delivered).toBe(false);
     expect(session.hasActiveTurn()).toBe(false);
+  });
+});
+
+describe('AgentSession.deliverInboxItems — only marks delivered on a confirmed sendOrResume', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const pendingItems = [
+    { id: 1, source: 'feedback', payload: 'do the thing' },
+    { id: 2, source: 'feedback', payload: 'do the other thing' },
+  ];
+
+  it('does not mark items delivered when sendOrResume resolves null', async () => {
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue(pendingItems as never);
+    const sendOrResume = vi.fn().mockResolvedValue(null);
+    const session = makeSession('standard', { sendOrResume });
+
+    await callDeliverInboxItems(session);
+
+    expect(sendOrResume).toHaveBeenCalled();
+    expect(markInboxItemsDelivered).not.toHaveBeenCalled();
+  });
+
+  it('marks exactly the delivered items when sendOrResume resolves a truthy sessionId', async () => {
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue(pendingItems as never);
+    const sendOrResume = vi.fn().mockResolvedValue('test-clean-exit');
+    const session = makeSession('standard', { sendOrResume });
+
+    await callDeliverInboxItems(session);
+
+    expect(sendOrResume).toHaveBeenCalled();
+    expect(markInboxItemsDelivered).toHaveBeenCalledWith([1, 2]);
+  });
+
+  it('does not mark items delivered when sendOrResume throws', async () => {
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue(pendingItems as never);
+    const sendOrResume = vi.fn().mockRejectedValue(new Error('boom'));
+    const session = makeSession('standard', { sendOrResume });
+
+    await callDeliverInboxItems(session);
+
+    expect(sendOrResume).toHaveBeenCalled();
+    expect(markInboxItemsDelivered).not.toHaveBeenCalled();
   });
 });
