@@ -58,6 +58,15 @@ jobs:
       - name: Format check
         run: npm run format:check
 
+      - name: Check markdown paths
+        # Validates that repo-relative paths referenced in tracked markdown
+        # resolve to tracked files, so a rename/delete cannot silently leave
+        # documentation pointing at nothing. Needs the full checkout the
+        # fetch-depth: 0 above already provides — the checker enumerates the
+        # tree with `git ls-files`. Exclusions (deployed/generated paths) and
+        # the `path-check:ignore` line marker live in the script itself.
+        run: npm run check:markdown-paths
+
       - name: Verify systemd unit
         run: |
           # systemd-analyze verify resolves ExecStart's binary and fails if it is
