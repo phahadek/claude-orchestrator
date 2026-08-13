@@ -119,18 +119,44 @@ describe('applyPendingDone — turn-boundary contract', () => {
     );
   });
 
-  it('clean-exit-then-drain converges on done', () => {
+  it('clean-exit-then-drain converges on done — markSessionIdle drains the pending transition itself, rather than parking at idle first', () => {
     insertSession({ session_id: 's4', status: 'running' });
     markSessionDone('s4', 1000, null, 'auto_merger');
 
-    // Clean exit races ahead of the drain — session isn't terminal yet, so this lands as idle.
+    // Clean exit races ahead of the turn-boundary drain — the running-to-idle
+    // transition itself applies the deferred done instead of landing idle.
     const effective = markSessionIdle('s4', 1500, null);
-    expect(effective).toBe('idle');
-    expect(getRow('s4').status).toBe('idle');
-
-    // The deferred done-transition still applies afterward.
-    expect(applyPendingDone('s4')).toBe(true);
+    expect(effective).toBe('done');
     expect(getRow('s4').status).toBe('done');
+
+    // The pending row is already cleared, so a subsequent drain is a no-op.
+    expect(applyPendingDone('s4')).toBe(false);
+    expect(getRow('s4').status).toBe('done');
+  });
+
+  it('regression: turn-boundary result, then a deferred done from auto_merger, then the running-to-idle transition — all converge on done', () => {
+    // Turn-boundary result event: the turn completes and no done was
+    // deferred yet, so the session simply parks alive (status stays
+    // 'running' with no pending_done — this call is a no-op).
+    insertSession({ session_id: 's6', status: 'running' });
+    expect(applyPendingDone('s6')).toBe(false);
+
+    // A caller (auto_merger) asks for done while the session is parked
+    // alive at 'running' — the in-flight guard defers it.
+    markSessionDone('s6', 5000, 'https://github.com/o/r/pull/7', 'auto_merger');
+    expect(getRow('s6').status).toBe('running');
+    expect(getRow('s6').pending_done_ended_at).toBe(5000);
+
+    // The session later transitions off running to idle (e.g. the process
+    // driving it exits) — this is the drain point that used to be missed
+    // entirely for a session that parks alive between turns.
+    const effective = markSessionIdle('s6', 6000, null);
+
+    expect(effective).toBe('done');
+    const row = getRow('s6');
+    expect(row.status).toBe('done');
+    expect(row.pending_done_ended_at).toBeNull();
+    expect(row.pending_done_pr_url).toBeNull();
   });
 
   it('a standard coding session parked idle with an open PR is never given a pending_done_*', () => {
@@ -332,9 +358,12 @@ describe('SessionManager — turn-boundary drain + reap', () => {
   it('boot-sweep backstop (resumeOrphanSessions) still applies a pending done', async () => {
     insertSession({ session_id: 's7', status: 'running' });
     markSessionDone('s7', 1000, null, 'auto_merger');
-    // Simulate a clean exit landing the row at idle before the backend restarted,
-    // leaving pending_done_* unapplied — the scenario getSessionsWithUnappliedPendingDone covers.
-    markSessionIdle('s7', 1500, null);
+    // Simulate the backend restarting mid-way through a clean exit: the row
+    // landed at idle via some path other than markSessionIdle's own drain
+    // (e.g. a crash between the status write and the pending_done clear),
+    // leaving pending_done_* unapplied — the scenario
+    // getSessionsWithUnappliedPendingDone covers.
+    db.prepare(`UPDATE sessions SET status = 'idle' WHERE session_id = 's7'`).run();
     expect(getRow('s7').status).toBe('idle');
     expect(getRow('s7').pending_done_ended_at).not.toBeNull();
 
