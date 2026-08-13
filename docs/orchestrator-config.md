@@ -49,20 +49,39 @@ review_rules: []
 # Path to a script run after worktree creation, relative to the project root.
 # The script receives the worktree path as $1.
 bootstrap_script: ''
+
+# Lockfile path(s), relative to project root, that key the dependency-cache
+# fast-path lookup hash for the governed test lane's per-session worktree
+# bootstrap. Opt-in: empty list = dependency-cache pooling off.
+dependency_lock_paths: []
+
+# Untracked directories, relative to project root, that bootstrap_script
+# populates and that should be cached/restored across sessions. May list
+# more than one entry in a workspace layout. Opt-in: empty list = off.
+dependency_cache_dirs: []
+
+# Project-authored command that exits zero iff the currently-materialized
+# dependency_cache_dirs content satisfies the current lockfile(s), non-zero
+# otherwise. Treated as the correctness gate on every cache hit — a failure
+# is treated exactly like a cache miss. Opt-in: empty string = off.
+dependency_verify_command: ''
 ```
 
 ## Fields
 
-| Field              | Type       | Default | Description                                                                                                                                                                                            |
-| ------------------ | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `autofix`          | `string[]` | `[]`    | Commands run by the orchestrator before the PR is opened. Failures are logged but do not block.                                                                                                        |
-| `verify`           | `string[]` | `[]`    | Commands injected into the CLAUDE.md Pre-PR Gate section. The session is instructed to run these before opening a PR.                                                                                  |
-| `ci_check_name`    | `string[]` | `[]`    | GitHub check-run names the orchestrator treats as authoritative. Empty = all checks count.                                                                                                             |
-| `allowed_tools`    | `string[]` | `[]`    | Extra `claude` CLI tool-permission patterns (e.g. `Bash(dotnet:*)`, `WebFetch(domain:example.com)`) added on top of the base set. Accepts any pattern shape the CLI understands, not just `Bash(...)`. |
-| `bash_rules`       | `string[]` | `[]`    | Replacement Bash rules (Rule 5+) injected into CLAUDE.md. Each string's first line is the heading.                                                                                                     |
-| `session_rules`    | `string[]` | `[]`    | Per-project coding-session guidance, rendered as a "## Project Rules" section (distinct from `bash_rules`).                                                                                            |
-| `review_rules`     | `string[]` | `[]`    | Per-project review-session enforcement criteria, rendered into the review-session prompt. Can drive `escalate` verdicts.                                                                               |
-| `bootstrap_script` | `string`   | `""`    | Relative path to a script executed after worktree creation. Receives the worktree path as `$1`.                                                                                                        |
+| Field                       | Type       | Default | Description                                                                                                                                                                                            |
+| --------------------------- | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `autofix`                   | `string[]` | `[]`    | Commands run by the orchestrator before the PR is opened. Failures are logged but do not block.                                                                                                        |
+| `verify`                    | `string[]` | `[]`    | Commands injected into the CLAUDE.md Pre-PR Gate section. The session is instructed to run these before opening a PR.                                                                                  |
+| `ci_check_name`             | `string[]` | `[]`    | GitHub check-run names the orchestrator treats as authoritative. Empty = all checks count.                                                                                                             |
+| `allowed_tools`             | `string[]` | `[]`    | Extra `claude` CLI tool-permission patterns (e.g. `Bash(dotnet:*)`, `WebFetch(domain:example.com)`) added on top of the base set. Accepts any pattern shape the CLI understands, not just `Bash(...)`. |
+| `bash_rules`                | `string[]` | `[]`    | Replacement Bash rules (Rule 5+) injected into CLAUDE.md. Each string's first line is the heading.                                                                                                     |
+| `session_rules`             | `string[]` | `[]`    | Per-project coding-session guidance, rendered as a "## Project Rules" section (distinct from `bash_rules`).                                                                                            |
+| `review_rules`              | `string[]` | `[]`    | Per-project review-session enforcement criteria, rendered into the review-session prompt. Can drive `escalate` verdicts.                                                                               |
+| `bootstrap_script`          | `string`   | `""`    | Relative path to a script executed after worktree creation. Receives the worktree path as `$1`.                                                                                                        |
+| `dependency_lock_paths`     | `string[]` | `[]`    | Lockfile path(s) that key the dependency-cache fast-path lookup hash. Opt-in: empty = dependency-cache pooling off.                                                                                    |
+| `dependency_cache_dirs`     | `string[]` | `[]`    | Untracked directories `bootstrap_script` populates that should be cached/restored across sessions. Opt-in: empty = off.                                                                                |
+| `dependency_verify_command` | `string`   | `""`    | Command that exits zero iff the materialized `dependency_cache_dirs` satisfy the current lockfile(s); treated as the correctness gate on every cache hit. Opt-in: empty = off.                         |
 
 All fields are optional. Missing fields fall back to their defaults — a partial config is valid.
 
