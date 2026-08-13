@@ -813,6 +813,26 @@ export interface TestRequestPayload {
 }
 
 /**
+ * Payload for the report.file staged-intent kind — a dispatched code/review
+ * session's route to file an inert investigation report about a defect it
+ * must not fix itself. Carries only the report's own content; origin
+ * session/task, project, milestone, and the commit-time HEAD sha are all
+ * backend-derived (see routes/stagedIntents.ts's report.file apply case),
+ * never fields the model's payload supplies. `fingerprint` is a
+ * session-authored dedup key (e.g. a normalized symptom signature) used for
+ * the server-side duplicate check at stage time — see
+ * routeStageTimeBlock's report.file branch, which tags a match via
+ * `annotation: {duplicateOf}` for triage-surfaced grouping only, never
+ * auto-suppression.
+ */
+export interface ReportFilePayload {
+  title: string;
+  symptom_text: string;
+  evidence_text?: string;
+  fingerprint: string;
+}
+
+/**
  * Payload for the ops.prIntent staged-intent kind — a dispatched Ops
  * session's mid-execution "I intend to open a PR for X, here's the diff
  * scope and why" declaration. Unlike a Code task's task-body Files/paths

@@ -92,9 +92,13 @@ export const PLANNING_INTENT_KINDS: Record<
  * it concludes is wrong (see db/types.ts). test.request is how it runs a
  * test command blocked at the CLI permission layer. Consumed by config.ts to
  * derive ALLOWED_TOOLS's matching entries, same precedent as
- * PLANNING_INTENT_KINDS above.
+ * PLANNING_INTENT_KINDS above. report.file is a dispatched code/review
+ * session's route to file an inert investigation report about a defect it
+ * must not fix itself — see mcp/tools/stageProposalTools.ts's report.file
+ * registration and routes/stagedIntents.ts's report.file apply case.
  */
 export const CODE_INTENT_KINDS: readonly string[] = [
   'review.dispute',
   'test.request',
+  'report.file',
 ];

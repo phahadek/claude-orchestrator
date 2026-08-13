@@ -45,6 +45,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'ops.prIntent',
   'test.request',
   'review.dispute',
+  'report.file',
   'completeness.disposition',
   'completeness.traceCoverage',
   'groom.precheck',

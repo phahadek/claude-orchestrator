@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
+import { execSync } from 'child_process';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   BackendTaskWriteCommands,
@@ -46,6 +47,7 @@ import type {
   CompletenessProbedGapClass,
   ReviewDisputePayload,
   OpsPrIntentPayload,
+  ReportFilePayload,
 } from '../db/types';
 import {
   hashIntentPayload,
@@ -133,7 +135,9 @@ import { getMilestoneConvergence } from '../convergence/convergenceService';
 import {
   UnknownMilestoneError,
   resolveMilestoneForProject,
+  resolveMilestoneRowForProject,
 } from '../projects/milestoneResolver';
+import { insertReport, updateReportState } from '../investigation/reportStore';
 import { rankDecisions } from '../convergence/decisionRanking';
 import { resolveSessionCompleteForDisplay } from '../convergence/attentionSignals';
 import {
@@ -2993,6 +2997,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'review.dispute',
   'ops.prIntent',
   'test.request',
+  'report.file',
 ]);
 
 /**
@@ -4733,6 +4738,40 @@ async function applyIntent(
       // the /acknowledge route remains the disposition for a standalone
       // noOp.
       return {};
+    case 'report.file': {
+      const payload = intent.payload as ReportFilePayload;
+      if (!intent.milestone) {
+        throw new Error(
+          `[stagedIntents] report.file apply: intent ${intent.id} has no milestone attribution`,
+        );
+      }
+      const milestoneRow = resolveMilestoneRowForProject(
+        intent.projectId,
+        intent.milestone,
+      );
+      const session = intent.sessionId ? getSession(intent.sessionId) : null;
+      const headSha = resolveReportFileHeadSha(session?.worktree_path ?? null);
+      const evidenceText = [
+        `HEAD: ${headSha ?? 'unknown'}`,
+        payload.evidence_text,
+      ]
+        .filter((part): part is string => Boolean(part))
+        .join('\n\n');
+      const now = new Date().toISOString();
+      const report = insertReport({
+        projectId: intent.projectId,
+        milestoneId: milestoneRow.id,
+        title: payload.title,
+        symptomText: payload.symptom_text,
+        evidenceText,
+        source: 'session',
+        originSessionId: intent.sessionId ?? undefined,
+        originTaskId: session?.task_id ?? undefined,
+        createdAt: now,
+      });
+      const committed = updateReportState(report.id, 'committed', now);
+      return { id: committed.id, state: committed.state };
+    }
     case 'test.request':
     case 'ops.prIntent':
       throw new NotOperatorAppliableError(intent.kind);
@@ -5215,6 +5254,89 @@ async function maybeAutoApproveSeedStage(
 
   const approved = getStagedIntentRow(intent.id);
   return approved ? rowToApi(approved) : intent;
+}
+
+/**
+ * Best-effort HEAD sha for the worktree a report.file intent's owning
+ * session ran in — resolved from the session's own DB row's worktree_path,
+ * the same pattern resolveTestRequestExecutionInputs uses for test.request's
+ * execution inputs (AgentSession.currentHeadSha is private and unreachable
+ * from this apply path). Null (never throws) when there's no worktree path
+ * or git is unavailable — the caller folds that into evidence_text as
+ * "HEAD: unknown" rather than blocking the report from filing.
+ */
+function resolveReportFileHeadSha(worktreePath: string | null): string | null {
+  if (!worktreePath) return null;
+  try {
+    return execSync('git rev-parse HEAD', { cwd: worktreePath })
+      .toString()
+      .trim();
+  } catch {
+    return null;
+  }
+}
+
+/** Hard per-session ceiling on report.file stages — see routeStageTimeBlock's report.file branch. */
+const REPORT_FILE_SESSION_CAP = 5;
+
+/**
+ * Stage-time checks for report.file, run from routeStageTimeBlock: (1) a
+ * hard per-session cap — a session that has already staged
+ * REPORT_FILE_SESSION_CAP live report.file intents has this one declined
+ * outright, the same auto-reject path declineTestRequestAutoGrant uses; (2)
+ * a server-side duplicate check — the payload's session-supplied fingerprint
+ * compared against every other staged/approved report.file intent in the
+ * same project. A match is tagged via the annotation column
+ * (`{duplicateOf}`, mirroring the `{autoApproved}`/`{autoRejected}`
+ * pattern) for triage-surfaced grouping only — it is never rejected or
+ * suppressed on a fingerprint match.
+ */
+async function routeReportFileStageTimeChecks(
+  intent: StagedIntent,
+  sessionManager: SessionManager | undefined,
+): Promise<StagedIntent> {
+  if (!intent.sessionId) return intent;
+
+  const liveForSession = listStagedIntentsBySession(intent.sessionId).filter(
+    (row) =>
+      row.kind === 'report.file' &&
+      (row.state === 'staged' || row.state === 'approved'),
+  );
+  if (liveForSession.length > REPORT_FILE_SESSION_CAP) {
+    const row = getStagedIntentRow(intent.id);
+    if (!row) return intent;
+    return rejectStagedIntentRow(
+      row,
+      'decline',
+      `report.file per-session cap (${REPORT_FILE_SESSION_CAP}) exceeded`,
+      sessionManager,
+      undefined,
+      'auto',
+    );
+  }
+
+  const payload = intent.payload as ReportFilePayload;
+  const duplicate = listStagedIntentsByProject(intent.projectId).find((row) => {
+    if (row.kind !== 'report.file' || row.id === intent.id) return false;
+    try {
+      return (
+        (JSON.parse(row.payload) as ReportFilePayload).fingerprint ===
+        payload.fingerprint
+      );
+    } catch {
+      return false;
+    }
+  });
+  if (duplicate) {
+    setStagedIntentAnnotation(
+      intent.id,
+      JSON.stringify({ duplicateOf: duplicate.id }),
+    );
+    const row = getStagedIntentRow(intent.id);
+    return row ? rowToApi(row) : intent;
+  }
+
+  return intent;
 }
 
 /** Cap on the test.request result delivered into a session's feedback inbox — the durable record in test_request_runs keeps the untruncated output. */
@@ -6126,6 +6248,9 @@ export async function routeStageTimeBlock(
   }
   if (intent.kind === 'test.request') {
     intent = await maybeAutoApproveTestRequest(intent, sessionManager);
+  }
+  if (intent.kind === 'report.file') {
+    intent = await routeReportFileStageTimeChecks(intent, sessionManager);
   }
 
   const checked = await runStageTimeReadyChecks(intent);

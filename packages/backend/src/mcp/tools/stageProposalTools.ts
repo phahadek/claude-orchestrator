@@ -436,6 +436,23 @@ export function registerStageProposalTools(
   );
 
   registerTool(
+    'report.file',
+    {
+      title:
+        'File an investigation report about a defect you must not fix yourself',
+      description:
+        "Stages a report.file intent — files an inert investigation report about a defect this session found but must not fix in-band (out of this task's scope, or a symptom this session cannot safely reproduce/resolve here). Carries only the report's own content: title, symptom_text (what was observed), an optional evidence_text (file:line, logs, repro steps), and a fingerprint (a normalized signature of the symptom, used to tag duplicates against other report.file intents already staged in this project — never to suppress this one). Origin session/task, project, milestone, and the commit-time HEAD sha are all backend-derived, never supplied here. Once operator-approved, becomes a committed investigation_report row for later triage/dispatch. Bounded by a per-session cap.",
+      inputSchema: envelope({
+        title: z.string(),
+        symptom_text: z.string(),
+        evidence_text: z.string().optional(),
+        fingerprint: z.string(),
+      }),
+    },
+    async (args) => stage('report.file', args.payload, ctx, args),
+  );
+
+  registerTool(
     'ops.prIntent',
     {
       title: 'Declare an intent to open a PR for this Ops task',
