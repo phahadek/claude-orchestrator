@@ -59,6 +59,7 @@ describe('getLaneHealthRollup', () => {
       timeoutRate: null,
       queueWaitMs: { p50: null, p90: null, p99: null, sampleCount: 0 },
       executionTimeMs: { p50: null, p90: null, p99: null, sampleCount: 0 },
+      regressedTests: [],
     });
   });
 
@@ -163,5 +164,64 @@ describe('getLaneHealthRollup', () => {
 
     const result = getLaneHealthRollup('proj-1', 2);
     expect(result.totalRuns).toBe(2);
+  });
+
+  it('surfaces a regressed test scoped to the run it belongs to, and excludes non-regressed/other-project tests', () => {
+    insertRun({
+      projectId: 'proj-1',
+      state: 'passed',
+      requestedAt: 0,
+      startedAt: 0,
+      finishedAt: 100,
+    });
+    insertRun({
+      projectId: 'proj-b',
+      state: 'passed',
+      requestedAt: 0,
+      startedAt: 0,
+      finishedAt: 100,
+    });
+
+    db.prepare(
+      `INSERT INTO test_run_results
+         (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+       VALUES ('run-1', 'test-a', 'suite > slow test', 'passed', 900, 0, 0, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO test_run_results
+         (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+       VALUES ('run-1', 'test-b', 'suite > steady test', 'passed', 100, 0, 0, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO test_run_results
+         (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+       VALUES ('run-2', 'test-c', 'other project regressed test', 'passed', 900, 0, 0, 1)`,
+    ).run();
+
+    db.prepare(
+      `INSERT INTO test_perf_baselines
+         (test_id, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
+       VALUES ('test-a', 100, 10, 5, 900, 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO test_perf_baselines
+         (test_id, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
+       VALUES ('test-b', 100, 10, 5, 100, 0, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO test_perf_baselines
+         (test_id, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
+       VALUES ('test-c', 100, 10, 5, 900, 1, 1)`,
+    ).run();
+
+    const result = getLaneHealthRollup('proj-1');
+    expect(result.regressedTests).toEqual([
+      {
+        testId: 'test-a',
+        name: 'suite > slow test',
+        medianDurationMs: 100,
+        lastDurationMs: 900,
+      },
+    ]);
   });
 });
