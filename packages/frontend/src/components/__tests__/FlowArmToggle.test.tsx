@@ -36,6 +36,7 @@ function makeState(overrides: Partial<FlowArmState> = {}): FlowArmState {
     design: { armed: false, source: 'default' },
     ops: { armed: false, source: 'default' },
     docs: { armed: false, source: 'default' },
+    investigate: { armed: false, source: 'default' },
     ...overrides,
   };
 }

@@ -326,6 +326,13 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     reason: 'no frontend intake surface exists yet for investigation_report',
     fixTask: 'investigation_report intake UI (follow-on task)',
   },
+
+  // -- investigate.ts ---------------------------------------------------------
+  'POST /api/investigate/launch': {
+    audience: 'known-gap',
+    reason: 'no frontend dispatch surface exists yet for investigate batches',
+    fixTask: 'investigate dispatch UI (follow-on task)',
+  },
 };
 
 /**
@@ -352,6 +359,7 @@ export const ROUTE_FILE_MOUNT_PREFIX: Record<string, string> = {
   'seedState.ts': '/api',
   'stagedIntents.ts': '/api',
   'reportState.ts': '/api',
+  'investigate.ts': '/api',
 };
 
 /**
