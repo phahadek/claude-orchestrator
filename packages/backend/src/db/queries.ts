@@ -8473,6 +8473,97 @@ export function getFlakeRecoveryMisclassificationRates(
   });
 }
 
+// ─── lane-health rollup ────────────────────────────────────────────────────
+
+/** p50/p90/p99 of a duration distribution, in ms. Null fields mean no samples were available. */
+interface DurationPercentiles {
+  p50: number | null;
+  p90: number | null;
+  p99: number | null;
+  sampleCount: number;
+}
+
+export interface LaneHealthRollup {
+  project: string;
+  totalRuns: number;
+  passRate: number | null;
+  timeoutRate: number | null;
+  /** started_at - requested_at — time spent behind the admission/coalescing semaphore, not test execution. */
+  queueWaitMs: DurationPercentiles;
+  /** finished_at - started_at — actual lane execution time. */
+  executionTimeMs: DurationPercentiles;
+}
+
+function percentilesOf(samples: number[]): DurationPercentiles {
+  if (samples.length === 0) {
+    return { p50: null, p90: null, p99: null, sampleCount: 0 };
+  }
+  const sorted = [...samples].sort((a, b) => a - b);
+  const at = (p: number): number => {
+    const idx = Math.min(
+      sorted.length - 1,
+      Math.max(0, Math.ceil((p / 100) * sorted.length) - 1),
+    );
+    return sorted[idx];
+  };
+  return {
+    p50: at(50),
+    p90: at(90),
+    p99: at(99),
+    sampleCount: sorted.length,
+  };
+}
+
+/**
+ * Project-scoped lane-health rollup over test_request_runs: pass rate,
+ * timeout rate, and — critically — queue-wait vs execution-time kept as
+ * separate distributions (see requested_at/started_at/finished_at split on
+ * TestRequestRunRow) so 'this suite is slow' (execution-time) can be told
+ * apart from 'this run was starved by a concurrent peer' (queue-wait).
+ * Scoped to finished (non-`running`) runs; `limit` bounds how many of the
+ * most recent finished runs are considered (most-recent-first).
+ */
+export function getLaneHealthRollup(
+  projectId: string,
+  limit = 500,
+): LaneHealthRollup {
+  const rows = db
+    .prepare<{ project_id: string; limit: number }>(
+      `SELECT state, requested_at, started_at, finished_at, failure_reason
+       FROM test_request_runs
+       WHERE project_id = @project_id AND state != 'running'
+       ORDER BY finished_at DESC, rowid DESC
+       LIMIT @limit`,
+    )
+    .all({ project_id: projectId, limit }) as Array<{
+    state: TestRequestRunState;
+    requested_at: number | null;
+    started_at: number;
+    finished_at: number | null;
+    failure_reason: TestRequestFailureReason | null;
+  }>;
+
+  const totalRuns = rows.length;
+  const passed = rows.filter((r) => r.state === 'passed').length;
+  const timedOut = rows.filter((r) => r.failure_reason === 'timeout').length;
+
+  const queueWaitSamples = rows
+    .filter((r) => r.requested_at !== null)
+    .map((r) => r.started_at - (r.requested_at as number));
+  const executionTimeSamples = rows
+    .filter((r) => r.finished_at !== null)
+    .map((r) => (r.finished_at as number) - r.started_at);
+
+  return {
+    project: projectId,
+    totalRuns,
+    passRate: totalRuns > 0 ? passed / totalRuns : null,
+    timeoutRate: totalRuns > 0 ? timedOut / totalRuns : null,
+    queueWaitMs: percentilesOf(queueWaitSamples),
+    executionTimeMs: percentilesOf(executionTimeSamples),
+  };
+}
+
 /** The auto-grant kinds the disagreement-rate signal covers. */
 export type AutoGrantKind = 'gate.accrete' | 'seed.stage';
 
