@@ -163,6 +163,7 @@ import {
   setSessionPauseReason,
   listRunningTestRequestRuns,
   getLatestTestRequestRun,
+  getLatestTestRequestRunForSession,
 } from '../db/queries';
 import type { TestRequestPayload, TestRequestRunRow } from '../db/types';
 import type {
@@ -1595,6 +1596,8 @@ function testRequestRunRowToApi(
           ? 'passed'
           : 'failed-with-cause',
     output: row.state === 'failed' ? row.output : undefined,
+    sessionId: row.session_id,
+    requestedAt: row.requested_at ?? undefined,
     startedAt: row.started_at,
     finishedAt: row.finished_at ?? undefined,
   };
@@ -7248,19 +7251,32 @@ export function createStagedIntentsRouter(
   // only tells a connected client a run transitioned. Deliberately not
   // gated by isVisibleOnDecisionSurface: a lane run's progress is not a
   // decision-surface concept, unlike the test.request staged intent itself.
+  // Accepts either ?contentHash= (the original F2/reconnect lens, which a
+  // server-internal caller can compute) or ?sessionId= (the
+  // useTestLaneRunStatus lens — a frontend client knows its own session id
+  // but has no visibility into the server-computed whole-tree content hash).
   router.get('/test-request-runs', (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;
     const contentHash =
       typeof req.query.contentHash === 'string' ? req.query.contentHash : null;
-    if (!projectId || !contentHash) {
-      res.status(400).json({ error: 'projectId and contentHash are required' });
+    const sessionId =
+      typeof req.query.sessionId === 'string' ? req.query.sessionId : null;
+    if (!projectId || (!contentHash && !sessionId)) {
+      res
+        .status(400)
+        .json({ error: 'projectId and (contentHash or sessionId) are required' });
       return;
     }
-    const running = listRunningTestRequestRuns().find(
-      (r) => r.project_id === projectId && r.content_hash === contentHash,
-    );
-    const row = running ?? getLatestTestRequestRun(projectId, contentHash);
+    let row: TestRequestRunRow | undefined;
+    if (contentHash) {
+      const running = listRunningTestRequestRuns().find(
+        (r) => r.project_id === projectId && r.content_hash === contentHash,
+      );
+      row = running ?? getLatestTestRequestRun(projectId, contentHash);
+    } else if (sessionId) {
+      row = getLatestTestRequestRunForSession(projectId, sessionId);
+    }
     res.json({ run: row ? testRequestRunRowToApi(row) : null });
   });
 

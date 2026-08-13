@@ -6896,6 +6896,42 @@ export function getLatestTestRequestRun(
 }
 
 /**
+ * The most recent run (project_id, session_id) originated — session-keyed
+ * counterpart to getLatestTestRequestRun's content-hash keying, for a
+ * frontend consumer (useTestLaneRunStatus) that knows its own session id but
+ * has no client-side visibility into the server-computed whole-tree content
+ * hash. Prefers a currently-`running` row over the latest finished one, same
+ * precedence as the GET /test-request-runs route applies for the
+ * content-hash lens.
+ */
+export function getLatestTestRequestRunForSession(
+  projectId: string,
+  sessionId: string,
+): TestRequestRunRow | undefined {
+  const running = db
+    .prepare<{ project_id: string; session_id: string }>(
+      `SELECT id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result
+       FROM test_request_runs
+       WHERE project_id = @project_id AND session_id = @session_id AND state = 'running'
+       ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get({ project_id: projectId, session_id: sessionId }) as
+    | TestRequestRunRow
+    | undefined;
+  if (running) return running;
+  return db
+    .prepare<{ project_id: string; session_id: string }>(
+      `SELECT id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result
+       FROM test_request_runs
+       WHERE project_id = @project_id AND session_id = @session_id AND state != 'running'
+       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get({ project_id: projectId, session_id: sessionId }) as
+    | TestRequestRunRow
+    | undefined;
+}
+
+/**
  * Invalidate every recorded run for (project_id, content_hash) — F2's
  * flaky.confirm actuation path. Callers must audit this via recordEvent —
  * deletion alone is silent. The subsequent rerun (via runProjectTestRequest)
