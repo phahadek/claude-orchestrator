@@ -36,6 +36,12 @@ const queriesMock = vi.hoisted(() => ({
 
 vi.mock('../../db/queries.js', () => queriesMock);
 
+const loadPlaybookMock = vi.hoisted(() => ({
+  loadDeployPlaybook: vi.fn(),
+}));
+
+vi.mock('../../deploy/loadPlaybook.js', () => loadPlaybookMock);
+
 import { createDeployRouter, setDeployScheduler } from '../deploy.js';
 import { DeployOrchestrator } from '../../deploy/DeployOrchestrator.js';
 
@@ -51,6 +57,11 @@ beforeEach(() => {
   setDeployScheduler(null as never);
   queriesMock.getProjectDeployedShaRow.mockReturnValue(undefined);
   queriesMock.listMergedSince.mockReturnValue([]);
+  queriesMock.getProjectRowById.mockReturnValue(undefined);
+  loadPlaybookMock.loadDeployPlaybook.mockReturnValue({
+    ok: false,
+    reason: 'no playbook',
+  });
 });
 
 describe('POST /api/deploy/report-in', () => {
@@ -196,6 +207,7 @@ describe('GET /api/deploy/status', () => {
       deployedSha: null,
       deployedShaRecordedAt: null,
       behind: { count: 0, items: [] },
+      plan: [],
     });
   });
 
@@ -213,7 +225,64 @@ describe('GET /api/deploy/status', () => {
       deployedSha: null,
       deployedShaRecordedAt: null,
       behind: { count: 0, items: [] },
+      plan: [],
     });
+  });
+
+  it('returns plan as an ordered array matching the playbook step ids for a project with a valid playbook', async () => {
+    deployServiceMock.getLatestDeployRun.mockReturnValue(undefined);
+    deployServiceMock.listDeployRunEvents.mockReturnValue([]);
+    queriesMock.getProjectRowById.mockReturnValue({
+      id: 'claude-orchestrator',
+      project_dir: '/repo/claude-orchestrator',
+    });
+    loadPlaybookMock.loadDeployPlaybook.mockReturnValue({
+      ok: true,
+      playbook: {
+        steps: [
+          { id: 'fetch', kind: 'shell', is_prod_mutating: false },
+          {
+            id: 'build',
+            kind: 'shell',
+            is_prod_mutating: false,
+            command_or_prompt: 'npm run build',
+          },
+        ],
+        hazards: [],
+        failure_diagnoses: [],
+        companions: [],
+      },
+    });
+
+    const res = await request(makeApp()).get(
+      '/api/deploy/status?projectId=claude-orchestrator',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toEqual([
+      { id: 'fetch', description: null },
+      { id: 'build', description: 'npm run build' },
+    ]);
+  });
+
+  it('returns plan: [] with a 200 for a project whose playbook is missing or invalid', async () => {
+    deployServiceMock.getLatestDeployRun.mockReturnValue(undefined);
+    deployServiceMock.listDeployRunEvents.mockReturnValue([]);
+    queriesMock.getProjectRowById.mockReturnValue({
+      id: 'claude-orchestrator',
+      project_dir: '/repo/claude-orchestrator',
+    });
+    loadPlaybookMock.loadDeployPlaybook.mockReturnValue({
+      ok: false,
+      reason: 'invalid playbook',
+    });
+
+    const res = await request(makeApp()).get(
+      '/api/deploy/status?projectId=claude-orchestrator',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toEqual([]);
   });
 
   it('includes deployedSha, deployedShaRecordedAt, and the behind preview from listMergedSince', async () => {
@@ -284,6 +353,7 @@ describe('GET /api/deploy/status', () => {
       deployedSha: null,
       deployedShaRecordedAt: null,
       behind: { count: 0, items: [] },
+      plan: [],
     });
   });
 

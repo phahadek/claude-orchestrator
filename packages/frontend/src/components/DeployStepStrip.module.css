@@ -1,0 +1,58 @@
+.strip {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #313244);
+  background: var(--bg-primary, #11111b);
+  font-size: 0.75rem;
+  font-family: monospace;
+  color: var(--text-muted, #a6adc8);
+}
+
+.glyph {
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.stepId {
+  white-space: nowrap;
+}
+
+.state-pending {
+  color: var(--text-muted, #a6adc8);
+  border-style: dashed;
+}
+
+.state-running {
+  color: var(--accent, #89b4fa);
+  border-color: var(--accent, #89b4fa);
+  border-width: 2px;
+}
+
+.state-awaiting-confirm {
+  color: var(--warning, #f9e2af);
+  border-color: var(--warning, #f9e2af);
+  border-width: 2px;
+}
+
+.state-succeeded {
+  color: var(--success, #a6e3a1);
+  border-color: var(--success, #a6e3a1);
+}
+
+.state-failed {
+  color: var(--error, #f38ba8);
+  border-color: var(--error, #f38ba8);
+  border-width: 2px;
+}
