@@ -119,6 +119,7 @@ type EventType =
   | 'planning_dispatch_launched'
   | 'capability_disposition_investigation_filed'
   | 'stuck_session_notify_checked'
+  | 'stuck_session_heartbeat_tick'
   | 'session_map_entry_dropped'
   | 'planning_sessions_liveness_reconciled'
   | 'non_planning_sessions_liveness_reconciled'

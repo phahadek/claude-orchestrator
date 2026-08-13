@@ -24,6 +24,7 @@ import { recoverSession } from '../session/sessionRecovery';
 import { getCurrentBranch, hasNonEmptyDiff } from './localBranchHelpers';
 import { submitLocalBranch } from './localBranchSubmission';
 import { sessionIsLive } from '../session/sessionLifecycle';
+import { isSessionProcessAlive } from '../session/processLiveness';
 
 interface TimerState {
   taskName: string;
@@ -51,6 +52,18 @@ interface TimerState {
    * observed event-gap recorded alongside both the notify and the
    * explicit did-not-notify audit rows. */
   lastActivityAt: number;
+  /**
+   * Count of tool_use session_events seen with no matching tool_result yet.
+   * Incremented on tool_use, decremented (floored at 0) on tool_result.
+   * While > 0 the intra-tool heartbeat sweep (see runHeartbeatSweep) treats
+   * the session as busy inside a tool call rather than idle, and keeps
+   * resetting the notify/pause deadlines as long as the OS process is still
+   * alive — without this, a single long tool call (e.g. a lengthy Bash
+   * build/test run) emits nothing between its tool_use and tool_result and
+   * would otherwise be misread as a hang. Not persisted across restarts —
+   * purely in-memory, rebuilt from the next tool_use/tool_result pair.
+   */
+  pendingToolUseCount: number;
 }
 
 const PAUSE_MESSAGE =
@@ -108,6 +121,15 @@ function isSessionTerminal(status: string | null | undefined): boolean {
 const PERIODIC_MIN_AGE_MS = 5 * 60 * 1000;
 /** Default cadence for the periodic stuck-session scan. */
 const DEFAULT_SCAN_INTERVAL_MS = 60 * 1000;
+/**
+ * Cadence for the intra-tool heartbeat sweep. Bounded well under the
+ * default notify threshold (3600s) so it always resets the deadline before
+ * it would otherwise elapse, while staying coarse enough that it doesn't
+ * invoke isSessionProcessAlive's ps scan too often under load — the sweep
+ * does one ps check per distinct session with an in-flight tool_use, not
+ * one per tool call.
+ */
+const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 
 export class StuckSessionMonitor {
   private timers = new Map<string, TimerState>();
@@ -130,6 +152,45 @@ export class StuckSessionMonitor {
         await this.scanForStuckSessions();
       },
     });
+    scheduler.register({
+      name: 'stuck_session_heartbeat',
+      intervalMs: HEARTBEAT_INTERVAL_MS,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        this.runHeartbeatSweep();
+      },
+    });
+  }
+
+  /**
+   * Reset notify/pause deadlines for every tracked session that currently
+   * has an in-flight tool_use (see pendingToolUseCount) and whose OS
+   * process is still alive per isSessionProcessAlive — the intra-tool
+   * heartbeat. Reuses recordActivity, the same code path a real
+   * session_event already drives, so a long-running tool call is treated
+   * identically to continuous activity.
+   *
+   * A session with no in-flight tool_use, or whose process has actually
+   * exited mid-call, is left untouched here — its notify/pause/hard-stop
+   * timers keep running exactly as they do today, so a genuinely hung
+   * session still escalates.
+   */
+  private runHeartbeatSweep(): void {
+    for (const [sessionId, state] of this.timers) {
+      if (state.suspended) continue;
+      if (state.pendingToolUseCount <= 0) continue;
+      if (!isSessionProcessAlive(sessionId)) continue;
+      this.recordActivity(sessionId);
+      recordEvent({
+        event_type: 'stuck_session_heartbeat_tick',
+        actor_type: 'system',
+        actor_id: sessionId,
+        payload: {
+          session_id: sessionId,
+          pending_tool_use_count: state.pendingToolUseCount,
+        },
+      });
+    }
   }
 
   /**
@@ -309,6 +370,7 @@ export class StuckSessionMonitor {
         hardStopArmed: row.hard_stop_armed !== 0,
         suspended: row.suspended !== 0,
         lastActivityAt: now,
+        pendingToolUseCount: 0,
       };
       this.timers.set(row.session_id, state);
 
@@ -431,12 +493,29 @@ export class StuckSessionMonitor {
         this.recordActivity(msg.sessionId);
         if (msg.eventType === 'tool_use') {
           this.checkHardStop(msg.sessionId);
+          this.markToolUseStarted(msg.sessionId);
+        } else if (msg.eventType === 'tool_result') {
+          this.markToolUseFinished(msg.sessionId);
         }
         return;
       }
       default:
         return;
     }
+  }
+
+  /** Marks the start of an in-flight tool_use for the intra-tool heartbeat. */
+  private markToolUseStarted(sessionId: string): void {
+    const state = this.timers.get(sessionId);
+    if (!state) return;
+    state.pendingToolUseCount += 1;
+  }
+
+  /** Marks the end of an in-flight tool_use for the intra-tool heartbeat. */
+  private markToolUseFinished(sessionId: string): void {
+    const state = this.timers.get(sessionId);
+    if (!state) return;
+    state.pendingToolUseCount = Math.max(0, state.pendingToolUseCount - 1);
   }
 
   private parseRateLimitStatus(content: string): string | null {
@@ -480,6 +559,7 @@ export class StuckSessionMonitor {
       hardStopArmed: false,
       suspended: false,
       lastActivityAt: Date.now(),
+      pendingToolUseCount: 0,
     };
     this.timers.set(sessionId, state);
     this.scheduleNotifyAndPause(sessionId, state);
