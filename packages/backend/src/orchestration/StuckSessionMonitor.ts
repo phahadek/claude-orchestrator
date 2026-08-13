@@ -231,7 +231,12 @@ export class StuckSessionMonitor {
         const pr = getPRBySessionId(row.session_id);
         if (pr && (pr.state === 'open' || pr.state === 'draft')) {
           const prUrl = row.pr_url ?? pr.pr_url;
-          markSessionIdle(row.session_id, row.last_ts, prUrl);
+          markSessionIdle(
+            row.session_id,
+            row.last_ts,
+            prUrl,
+            'stuck_session_open_pr',
+          );
           this.broadcast({
             type: 'stuck_session_idle_open_pr',
             sessionId: row.session_id,
@@ -246,7 +251,12 @@ export class StuckSessionMonitor {
         // up yet, or the pr_body upsert failed leaving no PR row). Route to idle
         // so the operator can nudge via the composer per Task 10.
         if (this.sessionManager.isAlive(row.session_id)) {
-          markSessionIdle(row.session_id, row.last_ts, row.pr_url ?? null);
+          markSessionIdle(
+            row.session_id,
+            row.last_ts,
+            row.pr_url ?? null,
+            'stuck_session_alive_subprocess',
+          );
           this.broadcast({
             type: 'stuck_session_idle_open_pr',
             sessionId: row.session_id,
