@@ -13,8 +13,14 @@ interface Props {
  * defaults to collapsed with a ▼/▲ toggle otherwise.
  */
 export function CollapsibleField({ text, 'data-testid': dataTestId }: Props) {
-  const { shouldCollapse, collapseReason, expanded, toggle, displayText, lineCount } =
-    useCollapsibleText(text);
+  const {
+    shouldCollapse,
+    collapseReason,
+    expanded,
+    toggle,
+    displayText,
+    lineCount,
+  } = useCollapsibleText(text);
 
   return (
     <span data-testid={dataTestId}>

@@ -62,7 +62,15 @@ export function useCollapsibleText(
     const truncated = value.slice(0, collapseChars);
     const lastSpace = truncated.lastIndexOf(' ');
     return value.slice(0, lastSpace > 0 ? lastSpace : collapseChars);
-  }, [shouldCollapse, expanded, collapseByLines, lines, collapseLines, value, collapseChars]);
+  }, [
+    shouldCollapse,
+    expanded,
+    collapseByLines,
+    lines,
+    collapseLines,
+    value,
+    collapseChars,
+  ]);
 
   return {
     shouldCollapse,
