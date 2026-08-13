@@ -8,7 +8,7 @@ import {
 } from '../db/queries';
 import { NotionTask, NotionApiError, ResolvedTask } from './types';
 import { DependencyResolver } from './DependencyResolver';
-import { toExternalId } from '../tasks/taskId';
+import { toExternalId, normalizeTaskId } from '../tasks/taskId';
 import { markdownToBlocks } from '../tasks/bodyRender';
 import type { PatchBodySectionOperation } from '../tasks/TaskBackend';
 
@@ -1003,7 +1003,10 @@ export class NotionClient {
     pageId: string,
     contentUpdates: { old_str: string; new_str: string }[],
   ): Promise<void> {
-    const externalId = toExternalId(pageId);
+    // Accepts either a bare Notion page uuid or an already-prefixed
+    // `notion:<uuid>` task id — normalizeTaskId wraps a bare id as notion:
+    // (idempotent on an already-prefixed one) before parseTaskId ever sees it.
+    const externalId = toExternalId(normalizeTaskId(pageId));
     const blocks = await fetchBlockChildren(externalId);
     const text = blocks.map(blockToLine).join('\n');
 
