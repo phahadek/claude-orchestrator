@@ -26,10 +26,12 @@ import {
   getLocalBranchBySession,
   listStagedIntentsBySession,
   getOpsJournalEntry,
+  getPendingToolUseCount,
 } from '../db/queries';
 import { isGateVerifySession } from './sessionPredicates';
 import type { SessionType } from './sessionPredicates';
 import type { StagedIntentState } from '../db/types';
+import { isSessionProcessAlive } from './processLiveness';
 
 /**
  * True iff the session has emitted a session_events row more recently than
@@ -50,6 +52,23 @@ export function sessionIsLive(sessionId: string): boolean {
   if (lastActivityMs === null) return false;
   const thresholdMs = runtimeSettings.session_notify_threshold_seconds * 1000;
   return Date.now() - lastActivityMs < thresholdMs;
+}
+
+/**
+ * True iff the session currently has an in-flight tool_use with no matching
+ * tool_result yet AND its OS process is still alive — the same "intra-tool
+ * heartbeat" signal StuckSessionMonitor uses (via its own live in-memory
+ * pendingToolUseCount) to avoid misreading a single long-running tool call
+ * (e.g. a lengthy Bash build/test run) as inertness. This DB-derived variant
+ * (see getPendingToolUseCount) is for pollers like StalledPRReconciler that
+ * only see a session through periodic reads rather than the live message
+ * stream, so they can't maintain StuckSessionMonitor's in-memory counter
+ * themselves.
+ */
+export function sessionBusyInFlightToolCall(sessionId: string): boolean {
+  return (
+    getPendingToolUseCount(sessionId) > 0 && isSessionProcessAlive(sessionId)
+  );
 }
 
 /** True iff a merged/closed pull_requests row or a merged local branch exists for this session. */

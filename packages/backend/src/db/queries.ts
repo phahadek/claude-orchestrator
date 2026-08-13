@@ -1612,6 +1612,28 @@ export function getSessionLastActivityMs(sessionId: string): number | null {
   return row?.ts ?? null;
 }
 
+/**
+ * Count of tool_use session_events with no matching tool_result yet,
+ * derived from event ordering rather than an in-memory counter — every
+ * tool_use row whose id is past the most recent tool_result row's id is
+ * still "in flight". Used by callers (e.g. StalledPRReconciler) that only
+ * see a session through periodic DB polls rather than the live message
+ * stream StuckSessionMonitor's own pendingToolUseCount tracks.
+ */
+export function getPendingToolUseCount(sessionId: string): number {
+  const row = db
+    .prepare<[string, string], { count: number }>(
+      `SELECT COUNT(*) AS count FROM session_events
+       WHERE session_id = ? AND event_type = 'tool_use'
+         AND id > COALESCE(
+           (SELECT MAX(id) FROM session_events WHERE session_id = ? AND event_type = 'tool_result'),
+           0
+         )`,
+    )
+    .get(sessionId, sessionId);
+  return row?.count ?? 0;
+}
+
 export function insertEvent(e: NewSessionEvent): void {
   getStmtInsertEvent().run({
     message_id: null,

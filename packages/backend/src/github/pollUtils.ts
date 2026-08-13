@@ -70,7 +70,11 @@ export function isTerminalStalePR(pr: PullRequestRow): boolean {
  * session (session_id) and is used for the conflict and undelivered-feedback
  * checks below. hasUndeliveredFeedback reports whether session_feedback_inbox
  * has rows still pending delivery to the implementing session — resolved by
- * the caller since inbox lookups are I/O.
+ * the caller since inbox lookups are I/O. sessionBusyInFlightToolCall
+ * reports whether the implementing session is currently mid a single
+ * long-running tool call (pending tool_use + live OS process) — resolved by
+ * the caller via sessionLifecycle.sessionBusyInFlightToolCall — and
+ * suppresses the session_inert fallback below while true.
  */
 export function classifyStalledPR(
   pr: PullRequestRow,
@@ -79,6 +83,7 @@ export function classifyStalledPR(
   hasUndeliveredFeedback = false,
   lastActivityAgeMs: number | null = null,
   inertThresholdMs = Infinity,
+  sessionBusyInFlightToolCall = false,
 ): { kind: StalledPRKind } | null {
   // The docs execution flow's never-auto-merged gate: an open, un-merged
   // human_merge_only PR waits indefinitely for a human to merge it — that is
@@ -181,7 +186,18 @@ export function classifyStalledPR(
   // threshold — regardless of whether it's parked at 'idle' or still shows
   // 'running'. A pruned/never-populated session_events table means
   // lastActivityAgeMs is null (unknown), which must never classify as inert.
-  if (lastActivityAgeMs !== null && lastActivityAgeMs > inertThresholdMs) {
+  // sessionBusyInFlightToolCall (resolved by the caller — see
+  // sessionLifecycle.sessionBusyInFlightToolCall) suppresses this fallback
+  // while the session is legitimately busy inside a single long-running
+  // tool call: a silent stdout stream between that tool_use and its
+  // tool_result is indistinguishable from real inertness by session_events
+  // recency alone, so the classifier also needs the pending-tool-use +
+  // live-process signal to tell them apart.
+  if (
+    lastActivityAgeMs !== null &&
+    lastActivityAgeMs > inertThresholdMs &&
+    !sessionBusyInFlightToolCall
+  ) {
     return { kind: 'session_inert' };
   }
 

@@ -14,6 +14,11 @@ vi.mock('../../db/queries.js', () => ({
   getLocalBranchBySession: vi.fn(),
   listStagedIntentsBySession: vi.fn(),
   getOpsJournalEntry: vi.fn(),
+  getPendingToolUseCount: vi.fn(),
+}));
+
+vi.mock('../processLiveness.js', () => ({
+  isSessionProcessAlive: vi.fn(),
 }));
 
 import {
@@ -23,8 +28,14 @@ import {
   getLocalBranchBySession,
   listStagedIntentsBySession,
   getOpsJournalEntry,
+  getPendingToolUseCount,
 } from '../../db/queries.js';
-import { sessionIsLive, sessionDidWork } from '../sessionLifecycle.js';
+import { isSessionProcessAlive } from '../processLiveness.js';
+import {
+  sessionIsLive,
+  sessionDidWork,
+  sessionBusyInFlightToolCall,
+} from '../sessionLifecycle.js';
 
 const NOTIFY_MS = 3600 * 1000;
 
@@ -57,6 +68,35 @@ describe('sessionIsLive', () => {
       Date.now() - (NOTIFY_MS + 1000),
     );
     expect(sessionIsLive('sess-1')).toBe(false);
+  });
+});
+
+describe('sessionBusyInFlightToolCall', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns true when a tool_use is pending and the process is alive', () => {
+    vi.mocked(getPendingToolUseCount).mockReturnValue(1);
+    vi.mocked(isSessionProcessAlive).mockReturnValue(true);
+    expect(sessionBusyInFlightToolCall('sess-1')).toBe(true);
+  });
+
+  it('returns false when no tool_use is pending, even if the process is alive', () => {
+    vi.mocked(getPendingToolUseCount).mockReturnValue(0);
+    vi.mocked(isSessionProcessAlive).mockReturnValue(true);
+    expect(sessionBusyInFlightToolCall('sess-1')).toBe(false);
+  });
+
+  it('returns false when a tool_use is pending but the process has exited', () => {
+    vi.mocked(getPendingToolUseCount).mockReturnValue(1);
+    vi.mocked(isSessionProcessAlive).mockReturnValue(false);
+    expect(sessionBusyInFlightToolCall('sess-1')).toBe(false);
+  });
+
+  it('short-circuits the process check when nothing is pending', () => {
+    vi.mocked(getPendingToolUseCount).mockReturnValue(0);
+    vi.mocked(isSessionProcessAlive).mockReturnValue(true);
+    sessionBusyInFlightToolCall('sess-1');
+    expect(isSessionProcessAlive).not.toHaveBeenCalled();
   });
 });
 

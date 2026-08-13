@@ -30,6 +30,7 @@ import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import { classifyStalledPR, parseVerdict } from '../github/pollUtils';
 import type { StalledPRKind } from '../github/pollUtils';
+import { sessionBusyInFlightToolCall } from '../session/sessionLifecycle';
 import {
   formatCIFailureFeedback,
   formatMergeConflictFeedback,
@@ -55,7 +56,10 @@ const DEFAULT_RETRY_CAP = 2;
  *  - session_inert: no other kind matched but the implementing session has
  *    emitted no session_events row past the inert threshold, regardless of
  *    its status field (running or idle) → relaunch the coding fixer with a
- *    nudge prompt
+ *    nudge prompt. Suppressed while the session is busy inside a single
+ *    long-running tool call (in-flight tool_use + live OS process — see
+ *    sessionBusyInFlightToolCall), which would otherwise emit nothing to
+ *    session_events for the tool's whole duration and be misread as inert
  *
  * Retry bound: after DEFAULT_RETRY_CAP attempts per head_sha the PR is escalated
  * to pause_reason='stalled_reconcile_cap' and left for human intervention.
@@ -166,6 +170,15 @@ export class StalledPRReconciler {
       const inertThresholdMs =
         typedGetSetting('session_inert_threshold_seconds') * 1000;
 
+      // Suppress the session_inert fallback below while the implementing
+      // session is legitimately busy inside a single long-running tool call
+      // (in-flight tool_use + live OS process) — see the intra-tool
+      // heartbeat mechanism sessionBusyInFlightToolCall shares with
+      // StuckSessionMonitor.
+      const isBusyInFlightToolCall = pr.session_id
+        ? sessionBusyInFlightToolCall(pr.session_id)
+        : false;
+
       const stalled = classifyStalledPR(
         effectivePr,
         reviewSessionStatus,
@@ -173,6 +186,7 @@ export class StalledPRReconciler {
         hasUndeliveredFeedback,
         lastActivityAgeMs,
         inertThresholdMs,
+        isBusyInFlightToolCall,
       );
       if (!stalled) continue;
 
