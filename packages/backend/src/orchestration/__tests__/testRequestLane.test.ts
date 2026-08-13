@@ -67,7 +67,14 @@ function insertSample(
   insertTestRequestRun(runId, 'proj-1', `perf-hash-${runId}`, null, Date.now());
   insertTestRunResults(
     runId,
-    [{ test_id: testId, name: testId, outcome: 'passed', duration_ms: durationMs }],
+    [
+      {
+        test_id: testId,
+        name: testId,
+        outcome: 'passed',
+        duration_ms: durationMs,
+      },
+    ],
     opts.concurrentRunCount ?? 0,
     opts.oomKilled ?? false,
   );

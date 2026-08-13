@@ -358,7 +358,9 @@ function median(sorted: number[]): number {
 }
 
 function medianAbsoluteDeviation(values: number[], center: number): number {
-  const deviations = values.map((v) => Math.abs(v - center)).sort((a, b) => a - b);
+  const deviations = values
+    .map((v) => Math.abs(v - center))
+    .sort((a, b) => a - b);
   return median(deviations);
 }
 
