@@ -7053,16 +7053,6 @@ export function listReadyDependencyCacheEntries(): DependencyCacheEntryRow[] {
     .all() as DependencyCacheEntryRow[];
 }
 
-/** Removes a (project_id, lock_hash) row — used by DependencyCacheReconciler after it deletes the on-disk entry. */
-export function deleteDependencyCacheEntry(
-  projectId: string,
-  lockHash: string,
-): void {
-  db.prepare(
-    `DELETE FROM dependency_cache_entries WHERE project_id = ? AND lock_hash = ?`,
-  ).run(projectId, lockHash);
-}
-
 /**
  * Atomically claims a `ready` row for eviction: deletes it only if
  * `last_used_at` still matches `expectedLastUsedAt`, i.e. nothing has
