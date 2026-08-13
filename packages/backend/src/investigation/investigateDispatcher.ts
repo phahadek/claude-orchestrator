@@ -46,9 +46,9 @@ export function buildInvestigateProcedure(
     'This is an injected, non-interactive, one-shot investigate session ' +
       `dispatched to investigate a batch of ${reports.length} committed ` +
       'investigation report(s) and turn them into grounded `🔲 Backlog` ' +
-      'task(s) — the `/investigate` skill\'s upstream-of-`/groom` mandate, ' +
+      "task(s) — the `/investigate` skill's upstream-of-`/groom` mandate, " +
       'run headlessly. It is not auto-dispatched onto anything else. There ' +
-      'is no PR to open and no filed task to edit — this session\'s only ' +
+      "is no PR to open and no filed task to edit — this session's only " +
       'write surface is staging new intents an operator reviews; it never ' +
       'ends the turn on a chat write-up describing what it plans to file.',
     '',
@@ -68,7 +68,7 @@ export function buildInvestigateProcedure(
     '## The investigate procedure — five stages',
     '',
     'Read-only diagnosis is the default posture: observe the operational ' +
-      'record, root-cause it, file. Never mutate another session\'s git, ' +
+      "record, root-cause it, file. Never mutate another session's git, " +
       'worktree, or PR to learn what you can read — those two lines are ' +
       'forbidden under any grant. Escalate to a write only through ' +
       `\`${orchestratorMcpToolName('session.requestCapability')}\`, exactly ` +
@@ -78,7 +78,7 @@ export function buildInvestigateProcedure(
     '',
     'Ground every claim in this run against what is actually deployed and ' +
       'failing right now, not the checkout HEAD and not memory. Read the ' +
-      'operational record directly through this session\'s granted tools — ' +
+      "operational record directly through this session's granted tools — " +
       'the always-on `architecture.getUnit`/`architecture.queryUnits`, ' +
       '`task.getById`, and `pullRequest.getByTaskId` reads, plus the ' +
       'capability-gated `session.getRecord`/`auditLog.query`/' +
@@ -90,11 +90,11 @@ export function buildInvestigateProcedure(
     '',
     '### 2. Reconstruct the symptom, by value',
     '',
-    'Do not take a report\'s `symptom_text` at face value, and do not ' +
-      'reason from what the code\'s intent looks like — reconstruct what ' +
+    "Do not take a report's `symptom_text` at face value, and do not " +
+      "reason from what the code's intent looks like — reconstruct what " +
       'actually happened from the record, with provenance: a dispatched ' +
-      'session\'s injected prompt and its `session_events` transcript, the ' +
-      'system\'s own audit trail. Every registered number, status, and ' +
+      "session's injected prompt and its `session_events` transcript, the " +
+      "system's own audit trail. Every registered number, status, and " +
       'stated cause in a report is a claim to re-derive, not a fact.',
     '',
     '### 3. Root-cause under an evidence law',
@@ -104,11 +104,11 @@ export function buildInvestigateProcedure(
       'looks like it does X". Match every claim\'s shape to its admissible ' +
       'evidence before stating it: a negative ("X is not wired") needs a ' +
       'scoped repo-wide search, not a single expected-file grep; "session S ' +
-      'did/didn\'t do Y" needs S\'s `session_events` transcript, never its ' +
+      "did/didn't do Y\" needs S's `session_events` transcript, never its " +
       'merged PR\'s file list alone; "X is already fixed" needs the ' +
-      'mechanism\'s runtime input checked by value, never just its presence ' +
+      "mechanism's runtime input checked by value, never just its presence " +
       'at the deployed SHA. A cheap substitute that merely looks consistent ' +
-      'with the hypothesis is not the admissible evidence for that claim\'s ' +
+      "with the hypothesis is not the admissible evidence for that claim's " +
       'shape.',
     '',
     '### 4. Frame',
@@ -126,7 +126,7 @@ export function buildInvestigateProcedure(
     'Decide the Type, and whether a task is the right output at all: ' +
       '`💻 Code` when the approach is clear and a headless worktree session ' +
       '(no browser, no prod access, no live dashboard) can execute it; ' +
-      '`🔎 Investigation` when the finding\'s first step needs an ' +
+      "`🔎 Investigation` when the finding's first step needs an " +
       'instrument this session does not have; `📐 Design` only when ' +
       'resolving the open questions mints a durable architectural decision ' +
       'or the space is genuinely open — check for an already-`✅ Done` ' +
@@ -203,19 +203,15 @@ export async function launchInvestigateBatch(
       ? `Investigate: ${reports[0].title}`
       : `Investigate: ${reports.length} reports`;
 
-  const sessionId = await sessionManager.start(
+  const sessionId = await sessionManager.start(taskId, project.contextUrl, {
+    projectId,
+    taskName,
+    milestoneId,
+    taskKind: 'non_milestone',
     taskId,
-    project.contextUrl,
-    {
-      projectId,
-      taskName,
-      milestoneId,
-      taskKind: 'non_milestone',
-      taskId,
-      sessionType: 'ops',
-      injectedProcedureContent: buildInvestigateProcedure(reports),
-    },
-  );
+    sessionType: 'ops',
+    injectedProcedureContent: buildInvestigateProcedure(reports),
+  });
 
   setSessionMetadata(sessionId, { reportIds: [...reportIds] });
 

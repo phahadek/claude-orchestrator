@@ -705,7 +705,11 @@ export function getSessionAllowedTools(
               ...orchConfig.allowed_tools,
             ]
           : sessionType === 'ops'
-            ? [...OPS_ALLOWED_TOOLS, ...notionExtras, ...orchConfig.allowed_tools]
+            ? [
+                ...OPS_ALLOWED_TOOLS,
+                ...notionExtras,
+                ...orchConfig.allowed_tools,
+              ]
             : sessionType === 'docs'
               ? [
                   ...DOCS_ALLOWED_TOOLS,

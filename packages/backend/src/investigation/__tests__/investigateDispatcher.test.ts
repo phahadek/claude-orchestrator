@@ -66,7 +66,11 @@ describe('buildInvestigateProcedure', () => {
   it('lists every report in the batch by id, title, and symptom', () => {
     const reports = [
       makeReport({ id: 'r-1', title: 'first symptom' }),
-      makeReport({ id: 'r-2', title: 'second symptom', evidence_text: 'the trace' }),
+      makeReport({
+        id: 'r-2',
+        title: 'second symptom',
+        evidence_text: 'the trace',
+      }),
     ];
     const procedure = buildInvestigateProcedure(reports);
     expect(procedure).toContain('id: r-1');
@@ -107,10 +111,9 @@ describe('launchInvestigateBatch', () => {
     });
     const sessionManager = makeSessionManager();
 
-    const sessionId = await launchInvestigateBatch(
-      sessionManager as never,
-      [report.id],
-    );
+    const sessionId = await launchInvestigateBatch(sessionManager as never, [
+      report.id,
+    ]);
 
     expect(sessionId).toBe('sess-1');
     expect(sessionManager.start).toHaveBeenCalledTimes(1);

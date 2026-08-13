@@ -320,9 +320,7 @@ describe('getSessionAllowedTools', () => {
       orchestratorMcpToolName('journal.setState'),
     );
     expect(investigate).not.toContain(orchestratorMcpToolName('gate.verify'));
-    expect(investigate).toContain(
-      orchestratorMcpToolName('decision.pickOne'),
-    );
+    expect(investigate).toContain(orchestratorMcpToolName('decision.pickOne'));
     expect(plainOps).toContain(orchestratorMcpToolName('gate.verify'));
   });
 
