@@ -8012,13 +8012,11 @@ export function sweepStagedIntentsForTerminalSessions(
     WHERE id = @id
   `);
   const stmt = _stmtSupersedeStagedIntentById;
-  const supersedeAll = db.transaction(
-    (items: typeof rows) => {
-      for (const item of items) {
-        stmt.run({ id: item.id, reason, now });
-      }
-    },
-  );
+  const supersedeAll = db.transaction((items: typeof rows) => {
+    for (const item of items) {
+      stmt.run({ id: item.id, reason, now });
+    }
+  });
   supersedeAll(rows);
 
   const bySession = new Map<
