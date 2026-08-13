@@ -821,12 +821,28 @@ export interface RuntimeSettings {
    * real ceiling.
    */
   max_concurrent_verify_sessions: number;
+  /**
+   * Sub-limit of max_concurrent_planning_sessions dedicated to investigate
+   * dispatch (see investigation/investigationReconciler.ts) — investigate
+   * sessions still count against the shared planning pool at
+   * SessionManager.start; this only bounds how many of that pool the
+   * reconciler will claim for investigate in one tick. Mirrors
+   * max_concurrent_verify_sessions's precedent; addresses the "burst of
+   * session-filed reports" concern from the Investigate dispatch flow arm
+   * semantics decision. Setting it above max_concurrent_planning_sessions
+   * does not raise the real ceiling.
+   */
+  max_concurrent_investigate_sessions: number;
   /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
   task_cache_refresh_interval_ms: number;
   /** GateReconciler: built but not activated by default (no-coexistence rule) — off until an operator opts in. */
   gate_verification_enabled: boolean;
   /** GateReconciler: interval in milliseconds between reconcile ticks. */
   gate_verification_interval_ms: number;
+  /** InvestigationReconciler: off until an operator opts in, mirroring gate_verification_enabled. */
+  investigation_reconciler_enabled: boolean;
+  /** InvestigationReconciler: interval in milliseconds between reconcile ticks. */
+  investigation_reconciler_interval_ms: number;
   /** Model used by the Tier-3 semantic readiness advisory (paraphrased-deferral) classifier. */
   tier3_classifier_model: string;
   /**
@@ -898,6 +914,9 @@ export const runtimeSettings: RuntimeSettings = {
   max_concurrent_verify_sessions: Number(
     process.env.MAX_CONCURRENT_VERIFY_SESSIONS ?? 5,
   ),
+  max_concurrent_investigate_sessions: Number(
+    process.env.MAX_CONCURRENT_INVESTIGATE_SESSIONS ?? 5,
+  ),
   session_mode: process.env.SESSION_MODE === 'api' ? 'api' : 'cli',
   auto_launch_concurrency: Number(process.env.AUTO_LAUNCH_CONCURRENCY ?? 1),
   auto_launch_poll_interval_ms: Number(
@@ -966,6 +985,11 @@ export const runtimeSettings: RuntimeSettings = {
   gate_verification_enabled: process.env.GATE_VERIFICATION_ENABLED === 'true',
   gate_verification_interval_ms: Number(
     process.env.GATE_VERIFICATION_INTERVAL_MS ?? 60_000,
+  ),
+  investigation_reconciler_enabled:
+    process.env.INVESTIGATION_RECONCILER_ENABLED === 'true',
+  investigation_reconciler_interval_ms: Number(
+    process.env.INVESTIGATION_RECONCILER_INTERVAL_MS ?? 60_000,
   ),
   tier3_classifier_model: 'claude-haiku-4-5-20251001',
   capability_auto_approve_enabled:

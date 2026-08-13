@@ -86,6 +86,8 @@ import {
 import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
 import { latestDispositionEvidence } from './gate/gateService';
 import { SessionGateItemVerifier } from './gate/gateItemVerifier';
+import { register as registerInvestigationReconciler } from './investigation/investigationReconciler';
+import { createInvestigateRouter } from './routes/investigate';
 import {
   deleteGhostSessions,
   getPRBySessionId,
@@ -336,6 +338,7 @@ app.use(
 );
 app.use('/api', createGateStateRouter());
 app.use('/api', createReportStateRouter());
+app.use('/api', createInvestigateRouter(sessionManager));
 app.use('/api', createDeployRouter());
 app.use('/api', createSeedStateRouter());
 app.use('/api', createConvergenceRouter(sessionManager));
@@ -673,6 +676,13 @@ const gateVerificationOptions = {
 };
 registerGateReconciler(scheduler, gateVerificationOptions);
 configureGateVerification(gateVerificationOptions);
+
+// Investigate reconciler: scans committed investigation reports with no
+// live non-terminal session and auto-dispatches them, gated by the global
+// investigation_reconciler_enabled master switch and, per report, by that
+// report's milestone's (milestone, 'investigate') arm. Mirrors the
+// gate-verification reconciler wired just above.
+registerInvestigationReconciler(scheduler, sessionManager);
 
 // Gate-item mirror sink: surfaces two states that would otherwise be
 // invisible outside GateReadinessPanel as `gate.verify` staged intents in
