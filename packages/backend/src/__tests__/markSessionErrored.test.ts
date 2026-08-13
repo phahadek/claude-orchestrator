@@ -1073,3 +1073,105 @@ describe('SessionManager.markSessionErrored() — expiry notification', () => {
     expect(queries.listUndeliveredInboxItems('test-session')).toHaveLength(0);
   });
 });
+
+// ── Backstop-sweep expiry notification (this task) ──────────────────────────
+
+function insertRealSession(sessionId: string, status: string): void {
+  db.prepare(
+    `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+       status, started_at, session_type)
+     VALUES (?, 'task-1', 'https://notion.so/task', 'https://notion.so/ctx', ?, ?, 'standard')`,
+  ).run(sessionId, status, Date.now() - 10 * 60 * 1000);
+}
+
+describe('SessionManager.reapStagedIntentsBackstopSweep() — expiry notification', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
+    setupFakeBackend();
+    db.prepare('DELETE FROM session_feedback_inbox').run();
+    db.prepare('DELETE FROM sessions').run();
+  });
+
+  it('notifies a session whose staged intents were reaped by the backstop sweep, naming each id and kind', () => {
+    insertRealSession('sess-backstop', 'killed');
+    const staged = stageIntent('sess-backstop', { kind: 'task.create' });
+    const approved = stageIntent('sess-backstop', {
+      kind: 'journal.setState',
+      state: 'approved',
+    });
+
+    const sm = new SessionManager();
+    sm.reapStagedIntentsBackstopSweep();
+
+    const items = queries.listUndeliveredInboxItems('sess-backstop');
+    expect(items).toHaveLength(1);
+    expect(items[0].source).toBe('staged-intent-expiry');
+    expect(items[0].payload).toContain(staged);
+    expect(items[0].payload).toContain('task.create');
+    expect(items[0].payload).toContain(approved);
+    expect(items[0].payload).toContain('journal.setState');
+  });
+
+  it('names the group id when a swept intent belonged to a group', () => {
+    insertRealSession('sess-backstop-group', 'error');
+    stageIntent('sess-backstop-group', {
+      kind: 'decision.pickOne',
+      group_id: 'md-path-validation-descope-1617',
+    });
+
+    const sm = new SessionManager();
+    sm.reapStagedIntentsBackstopSweep();
+
+    const items = queries.listUndeliveredInboxItems('sess-backstop-group');
+    expect(items[0].payload).toContain('md-path-validation-descope-1617');
+  });
+
+  it('sends a bounded, summarized message for a session with many swept intents', () => {
+    insertRealSession('sess-backstop-many', 'killed');
+    const ids: string[] = [];
+    for (let i = 0; i < 15; i++) {
+      ids.push(stageIntent('sess-backstop-many', { kind: 'task.create' }));
+    }
+
+    const sm = new SessionManager();
+    sm.reapStagedIntentsBackstopSweep();
+
+    const items = queries.listUndeliveredInboxItems('sess-backstop-many');
+    expect(items).toHaveLength(1);
+    const listedCount = ids.filter((id) =>
+      items[0].payload.includes(id),
+    ).length;
+    expect(listedCount).toBeLessThan(15);
+    expect(items[0].payload).toMatch(/more expired intent/);
+  });
+
+  it('enqueues no inbox row when the sweep expires nothing', () => {
+    insertRealSession('sess-backstop-clean', 'done');
+
+    const sm = new SessionManager();
+    sm.reapStagedIntentsBackstopSweep();
+
+    expect(
+      queries.listUndeliveredInboxItems('sess-backstop-clean'),
+    ).toHaveLength(0);
+  });
+
+  it('leaves the enqueued row undelivered — the sweep does not attempt an immediate resume', () => {
+    insertRealSession('sess-backstop-undelivered', 'killed');
+    stageIntent('sess-backstop-undelivered', { kind: 'task.create' });
+
+    const sm = new SessionManager();
+    sm.reapStagedIntentsBackstopSweep();
+
+    const row = db
+      .prepare(
+        `SELECT delivered_at FROM session_feedback_inbox WHERE session_id = ? AND source = 'staged-intent-expiry'`,
+      )
+      .get('sess-backstop-undelivered') as
+      | { delivered_at: number | null }
+      | undefined;
+    expect(row).toBeDefined();
+    expect(row?.delivered_at).toBeNull();
+  });
+});

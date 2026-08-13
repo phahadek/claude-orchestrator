@@ -4890,13 +4890,32 @@ export class SessionManager extends EventEmitter {
    * Backstop for expireStagedIntentsForSession: reaps staged/approved intents
    * left behind by sessions that reached a terminal status (done/error/killed)
    * without going through the terminal-transition hook — e.g. a process crash.
-   * Safe to call repeatedly (a scheduled job, or at boot).
+   * Safe to call repeatedly (a scheduled job, or at boot). Tells each swept
+   * session what it lost, reusing markSessionErrored's expiry notice —
+   * persist-only (enqueueFeedbackItem, not the full enqueueFeedback path),
+   * for the same reason markSessionErrored's call site documents: a swept
+   * session is terminal and not necessarily coming back right now, so
+   * delivery is left to reconcileInboxAtBoot / redeliverUndeliveredFeedback
+   * on its next actual resume.
    */
   reapStagedIntentsBackstopSweep(): number {
-    return sweepStagedIntentsForTerminalSessions(
+    const swept = sweepStagedIntentsForTerminalSessions(
       'session_terminal_backstop_sweep',
       Date.now(),
     );
+    for (const { sessionId, expired } of swept) {
+      if (expired.length === 0) continue;
+      try {
+        enqueueFeedbackItem(
+          sessionId,
+          'staged-intent-expiry',
+          formatExpiredIntentsFeedback(expired),
+        );
+      } catch {
+        // Best-effort — DB may be unavailable or mocked without this function.
+      }
+    }
+    return swept.reduce((total, { expired }) => total + expired.length, 0);
   }
 
   /**
