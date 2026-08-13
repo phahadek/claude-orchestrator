@@ -102,9 +102,7 @@ export function registerTaskReadTools(
       }
       if (args.titleContains !== undefined) {
         const needle = args.titleContains.toLowerCase();
-        results = results.filter((r) =>
-          r.title.toLowerCase().includes(needle),
-        );
+        results = results.filter((r) => r.title.toLowerCase().includes(needle));
       }
 
       const limit =
