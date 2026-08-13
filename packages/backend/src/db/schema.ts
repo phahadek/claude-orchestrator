@@ -452,6 +452,18 @@ export function runMigrations(target: Database.Database): void {
       updated_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS dependency_cache_entries (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id   TEXT    NOT NULL,
+      lock_hash    TEXT    NOT NULL,
+      status       TEXT    NOT NULL,
+      created_at   INTEGER NOT NULL,
+      last_used_at INTEGER NOT NULL,
+      UNIQUE(project_id, lock_hash)
+    );
+    CREATE INDEX IF NOT EXISTS idx_dependency_cache_entries_status
+      ON dependency_cache_entries(status);
+
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);
