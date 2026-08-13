@@ -25,7 +25,10 @@ vi.mock('../../db/db', async () => {
 vi.mock('../../tasks/TaskBackend', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('../../tasks/TaskBackend')>();
-  return { ...actual, getTaskBackend: vi.fn().mockReturnValue({ type: 'yaml' }) };
+  return {
+    ...actual,
+    getTaskBackend: vi.fn().mockReturnValue({ type: 'yaml' }),
+  };
 });
 
 import { db } from '../../db/db';
@@ -73,13 +76,7 @@ const VALID_PAYLOAD = {
 };
 
 function stageOpsPrIntent() {
-  return stageIntent(
-    'ops.prIntent',
-    VALID_PAYLOAD,
-    'proj-1',
-    null,
-    SESSION_ID,
-  );
+  return stageIntent('ops.prIntent', VALID_PAYLOAD, 'proj-1', null, SESSION_ID);
 }
 
 function makeApp() {
@@ -138,7 +135,10 @@ describe('ops.prIntent apply route — 409 carve-out', () => {
       )
       .all() as Array<{ payload: string }>;
     const autoPushbacksForThisIntent = rows
-      .map((r) => JSON.parse(r.payload) as { intentId?: string; provenance?: string })
+      .map(
+        (r) =>
+          JSON.parse(r.payload) as { intentId?: string; provenance?: string },
+      )
       .filter((p) => p.intentId === staged.id && p.provenance === 'auto');
     expect(autoPushbacksForThisIntent).toEqual([]);
   });
@@ -189,7 +189,7 @@ describe('approve-terminal kinds all have a matching apply-route 409 carve-out',
     const approveRouteStart = source.indexOf("'/staged-intents/:id/approve'");
     expect(approveRouteStart).toBeGreaterThan(-1);
     const approveRouteEnd = source.indexOf(
-      "router.post(",
+      'router.post(',
       approveRouteStart + 1,
     );
     const approveRouteBody = source.slice(
