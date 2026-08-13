@@ -36,7 +36,7 @@ describe('test_request_runs — F2 shared-cache read/invalidate', () => {
     // Simulates ReviewOrchestrator.runTestPipeline (via runProjectTestRequest)
     // writing the result...
     const id = nextRunId();
-    insertTestRequestRun(id, 'proj-1', 'hash-a');
+    insertTestRequestRun(id, 'proj-1', 'hash-a', null, Date.now());
     completeTestRequestRun(id, 'passed', 'all tests passed');
 
     // ...and PreReviewPipeline.buildTestsStage (or PRMergeWatcher's
@@ -52,25 +52,25 @@ describe('test_request_runs — F2 shared-cache read/invalidate', () => {
 
   it('excludes still-running runs — a run in flight is not a cache hit', () => {
     const id = nextRunId();
-    insertTestRequestRun(id, 'proj-1', 'hash-running');
+    insertTestRequestRun(id, 'proj-1', 'hash-running', null, Date.now());
     expect(getLatestTestRequestRun('proj-1', 'hash-running')).toBeUndefined();
   });
 
   it('scopes by project_id — a hit in one project is not visible to another project with the same content hash', () => {
     const id = nextRunId();
-    insertTestRequestRun(id, 'proj-1', 'shared-hash');
+    insertTestRequestRun(id, 'proj-1', 'shared-hash', null, Date.now());
     completeTestRequestRun(id, 'passed', 'ok');
     expect(getLatestTestRequestRun('proj-2', 'shared-hash')).toBeUndefined();
   });
 
   it('returns the most recent completed run when several exist for the same key', () => {
     const first = nextRunId();
-    insertTestRequestRun(first, 'proj-1', 'hash-b');
+    insertTestRequestRun(first, 'proj-1', 'hash-b', null, Date.now());
     completeTestRequestRun(first, 'failed', 'flaky failure');
     expect(getLatestTestRequestRun('proj-1', 'hash-b')?.state).toBe('failed');
 
     const second = nextRunId();
-    insertTestRequestRun(second, 'proj-1', 'hash-b');
+    insertTestRequestRun(second, 'proj-1', 'hash-b', null, Date.now());
     completeTestRequestRun(second, 'passed', 'passed on rerun');
 
     const result = getLatestTestRequestRun('proj-1', 'hash-b');
@@ -80,7 +80,7 @@ describe('test_request_runs — F2 shared-cache read/invalidate', () => {
 
   it('delete removes every run for the key — the flaky.confirm invalidation path', () => {
     const id = nextRunId();
-    insertTestRequestRun(id, 'proj-1', 'hash-c');
+    insertTestRequestRun(id, 'proj-1', 'hash-c', null, Date.now());
     completeTestRequestRun(id, 'passed', 'ok');
     expect(getLatestTestRequestRun('proj-1', 'hash-c')).toBeDefined();
 
@@ -96,8 +96,8 @@ describe('test_request_runs — F2 shared-cache read/invalidate', () => {
       totals: { passed: 1, failed: 0, skipped: 0, errors: 0 },
       durationMsTotal: 12,
     });
-    insertTestRequestRun(id, 'proj-1', 'hash-structured');
-    completeTestRequestRun(id, 'passed', 'ok', structured);
+    insertTestRequestRun(id, 'proj-1', 'hash-structured', null, Date.now());
+    completeTestRequestRun(id, 'passed', 'ok', null, structured);
 
     const result = getLatestTestRequestRun('proj-1', 'hash-structured');
     expect(result?.structured_result).toBe(structured);
@@ -105,7 +105,7 @@ describe('test_request_runs — F2 shared-cache read/invalidate', () => {
 
   it('reads back null structured_result when none was provided — pre-existing rows keep working unchanged', () => {
     const id = nextRunId();
-    insertTestRequestRun(id, 'proj-1', 'hash-no-structured');
+    insertTestRequestRun(id, 'proj-1', 'hash-no-structured', null, Date.now());
     completeTestRequestRun(id, 'passed', 'ok');
 
     const result = getLatestTestRequestRun('proj-1', 'hash-no-structured');

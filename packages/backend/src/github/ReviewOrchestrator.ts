@@ -577,6 +577,7 @@ export class ReviewOrchestrator {
           timeoutSec,
           maxRssMb,
           failFast,
+          sessionId: null,
         })
       : await runTestCommands(
           worktreePath,

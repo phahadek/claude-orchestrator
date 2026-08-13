@@ -46,6 +46,7 @@ import type {
   FeedbackInboxRow,
   TestRequestRunRow,
   TestRequestRunState,
+  TestRequestFailureReason,
   OpsJournalRow,
   CapabilityDisqualificationRow,
   NewCapabilityDisqualificationRow,
@@ -6837,29 +6838,32 @@ export function insertTestRequestRun(
   id: string,
   projectId: string,
   contentHash: string,
+  sessionId: string | null,
+  requestedAt: number,
 ): void {
   db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, state, output, started_at, finished_at)
-     VALUES (?, ?, ?, 'running', '', ?, NULL)`,
-  ).run(id, projectId, contentHash, Date.now());
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason)
+     VALUES (?, ?, ?, ?, 'running', '', ?, ?, NULL, NULL)`,
+  ).run(id, projectId, contentHash, sessionId, requestedAt, Date.now());
 }
 
 export function completeTestRequestRun(
   id: string,
   state: TestRequestRunState,
   output: string,
+  failureReason: TestRequestFailureReason | null = null,
   structuredResult?: string | null,
 ): void {
   db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, structured_result = ? WHERE id = ?`,
-  ).run(state, output, Date.now(), structuredResult ?? null, id);
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ? WHERE id = ?`,
+  ).run(state, output, Date.now(), failureReason, structuredResult ?? null, id);
 }
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {
   return db
     .prepare(
-      `SELECT id, project_id, content_hash, state, output, started_at, finished_at, structured_result
+      `SELECT id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result
        FROM test_request_runs WHERE state = 'running'`,
     )
     .all() as TestRequestRunRow[];
@@ -6879,7 +6883,7 @@ export function getLatestTestRequestRun(
 ): TestRequestRunRow | undefined {
   return db
     .prepare<{ project_id: string; content_hash: string }>(
-      `SELECT id, project_id, content_hash, state, output, started_at, finished_at, structured_result
+      `SELECT id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result
        FROM test_request_runs
        WHERE project_id = @project_id AND content_hash = @content_hash AND state != 'running'
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,

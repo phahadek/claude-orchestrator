@@ -1331,6 +1331,7 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
       timeoutSec: 300,
       maxRssMb: 0,
       failFast: true,
+      sessionId: null,
     });
   });
 
