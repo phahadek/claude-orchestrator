@@ -59,6 +59,7 @@ import {
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
+import { buildTestResultDigest } from '../session/testResultDigest';
 
 /**
  * Emitted by PRMergeWatcher.handleMerged once a merge commit has been
@@ -616,12 +617,17 @@ export class PRMergeWatcher extends EventEmitter {
             'ci_failing',
             testResult.output ? testResult.output.slice(0, 1000) : undefined,
           );
+          const digest = testResult.structured_result
+            ? buildTestResultDigest(testResult.structured_result)
+            : null;
           const verifyMsg = formatCIFailureFeedback({
             source: 'verify',
             failedCommand: config.test.join(' && '),
-            truncatedOutput: testResult.output
-              ? truncateLog(testResult.output, CI_LOG_EXCERPT_CAP)
-              : undefined,
+            truncatedOutput:
+              digest ??
+              (testResult.output
+                ? truncateLog(testResult.output, CI_LOG_EXCERPT_CAP)
+                : undefined),
             conflicted: pr.merge_state === 'dirty',
             baseBranch: pr.base_branch ?? undefined,
           });

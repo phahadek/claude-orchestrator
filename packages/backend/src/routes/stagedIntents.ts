@@ -164,8 +164,10 @@ import {
   listRunningTestRequestRuns,
   getLatestTestRequestRun,
   getLatestTestRequestRunForSession,
+  getTestRequestRunById,
 } from '../db/queries';
 import type { TestRequestPayload, TestRequestRunRow } from '../db/types';
+import { buildTestResultDigest } from '../session/testResultDigest';
 import type {
   PRReviewService,
   PRReviewResult,
@@ -5416,6 +5418,7 @@ async function triggerTestRequestExecution(
   const inputs = resolveTestRequestExecutionInputs(intent);
   let result: TestCommandResult;
   let joined: boolean | null = null;
+  let runId: string | null = null;
   if (!inputs.ok) {
     result = {
       passed: false,
@@ -5449,6 +5452,7 @@ async function triggerTestRequestExecution(
         });
         result = runResult;
         joined = runResult.joined;
+        runId = runResult.runId;
       } catch (err) {
         result = {
           passed: false,
@@ -5482,10 +5486,12 @@ async function triggerTestRequestExecution(
   });
 
   if (!intent.sessionId || !sessionManager) return;
-  const output = truncateForDelivery(
-    result.output,
-    TEST_REQUEST_DELIVERY_OUTPUT_CAP,
-  );
+  const structuredResult = runId
+    ? getTestRequestRunById(runId)?.structured_result
+    : null;
+  const output =
+    (structuredResult && buildTestResultDigest(structuredResult)) ||
+    truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
   try {
     await sessionManager.enqueueFeedback(
       intent.sessionId,
