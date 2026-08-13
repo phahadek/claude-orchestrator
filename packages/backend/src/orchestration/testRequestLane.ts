@@ -39,6 +39,7 @@ import {
   insertTestRunResults,
   listRecentValidTestDurations,
   upsertTestPerfBaseline,
+  computeTestFlipRateFlag,
 } from '../db/queries';
 import type {
   TestRequestFailureReason,
@@ -329,9 +330,11 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
     !!run.oom_killed,
   );
 
-  for (const testId of new Set(tests.map((t) => t.test_id))) {
+  const touchedTestIds = tests.map((t) => t.test_id);
+  for (const testId of new Set(touchedTestIds)) {
     computeTestPerfBaseline(testId);
   }
+  recomputeFlipRateFlags(touchedTestIds);
 }
 
 // ─── per-test rolling median/MAD duration baseline ─────────────────────────
@@ -413,6 +416,29 @@ export function computeTestPerfBaseline(testId: string): void {
     last_duration_ms: lastDuration,
     is_regressed: isRegressed,
   });
+}
+
+/**
+ * Re-evaluates the flip-rate flag for every test id touched by this
+ * ingestion. The flag is never persisted (see computeTestFlipRateFlag) — this
+ * just surfaces the freshly recomputed state to the log, since a fresh
+ * ingestion is exactly the moment a test's window (and therefore its flag)
+ * can change.
+ */
+function recomputeFlipRateFlags(testIds: string[]): void {
+  const windowN = typedGetSetting('flip_rate_window_n');
+  const thresholdK = typedGetSetting('flip_rate_threshold_k');
+  const seen = new Set<string>();
+  for (const testId of testIds) {
+    if (seen.has(testId)) continue;
+    seen.add(testId);
+    const flag = computeTestFlipRateFlag(testId, windowN, thresholdK);
+    if (flag.flagged) {
+      logger.info(
+        `[testRequestLane] test ${testId} flagged flaky: ${flag.transitionCount} transitions in last ${flag.sampleCount} valid samples`,
+      );
+    }
+  }
 }
 
 /**
