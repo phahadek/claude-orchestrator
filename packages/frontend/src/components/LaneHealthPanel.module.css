@@ -90,3 +90,45 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+.flaggedSection {
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid #313244;
+}
+
+.flaggedTitle {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #f38ba8;
+}
+
+.flaggedList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.flaggedItem {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: #cdd6f4;
+}
+
+.flaggedName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flaggedDetail {
+  color: #a6adc8;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

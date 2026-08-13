@@ -5,6 +5,7 @@ import { recordEvent } from '../audit/AuditLog';
 import { FLOW_IDS, isFlowId } from '../orchestration/flowArm';
 import { ProjectService } from '../projects/ProjectService';
 import { checkMilestoneRegistered } from '../groom/groomLoad';
+import { typedGetSetting } from '../config/settings';
 
 /**
  * Per-flow auto-dispatch arm surface (Technical Architecture § "Per-flow
@@ -91,10 +92,15 @@ export function createMilestonesRouter(): Router {
         const parsed = Number(limitParam);
         if (Number.isFinite(parsed) && parsed > 0) limit = Math.floor(parsed);
       }
+      const flipRateWindowN = typedGetSetting('flip_rate_window_n');
+      const flipRateThresholdK = typedGetSetting('flip_rate_threshold_k');
       res.json(
-        limit !== undefined
-          ? getLaneHealthRollup(project, limit)
-          : getLaneHealthRollup(project),
+        getLaneHealthRollup(
+          project,
+          limit ?? 500,
+          flipRateWindowN,
+          flipRateThresholdK,
+        ),
       );
     },
   );
