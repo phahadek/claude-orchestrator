@@ -2094,4 +2094,49 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // concurrent_run_count: the per-project Semaphore's occupancy at admission
+  // (captured immediately before the run is inserted, see testRequestLane.ts),
+  // not inferred later — nullable for pre-existing rows.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN concurrent_run_count INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+  // oom_killed: copied from TestCommandResult.oomKilled at completion time —
+  // previously discarded by completeTestRequestRun.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN oom_killed INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // test_run_results: one row per test, extracted from a completed run's
+  // structured_result (suites[].tests[]) — see testRequestLane.ts's
+  // ingestTestRunResults. concurrent_run_count/oom_killed are denormalized
+  // from the parent test_request_runs row onto every extracted test row so
+  // per-test validity queries never need a join. Extraction is idempotent:
+  // a run with any existing test_run_results rows is treated as already
+  // ingested (see hasTestRunResults), and all rows for a run are inserted in
+  // a single transaction so a crash mid-ingestion never leaves a partial set.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS test_run_results (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      test_request_run_id  TEXT    NOT NULL,
+      test_id              TEXT    NOT NULL,
+      name                 TEXT    NOT NULL,
+      outcome              TEXT    NOT NULL,
+      duration_ms          INTEGER NOT NULL,
+      concurrent_run_count INTEGER,
+      oom_killed           INTEGER NOT NULL DEFAULT 0,
+      created_at           INTEGER NOT NULL,
+      FOREIGN KEY (test_request_run_id) REFERENCES test_request_runs(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_test_run_results_run_id
+      ON test_run_results(test_request_run_id);
+  `);
 }
