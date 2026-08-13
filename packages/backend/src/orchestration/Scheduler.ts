@@ -11,7 +11,9 @@ export interface JobOptions {
   concurrency?: 'skip-if-running' | 'queue-next' | 'serial-no-overlap';
   run: (ctx: {
     signal: AbortSignal;
-  }) => Promise<{ items_processed?: number } | void>;
+  }) => Promise<
+    ({ items_processed?: number } & Record<string, unknown>) | void
+  >;
   onError?: (err: unknown) => void;
 }
 

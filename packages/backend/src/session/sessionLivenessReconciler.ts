@@ -34,6 +34,10 @@ export interface SessionLivenessReconcilerDeps {
 
 export interface SessionLivenessReconcileResult {
   reconciled: string[];
+  /** Size of the candidate set this sweep examined (before filtering to dead rows). */
+  examined: number;
+  /** Count of candidate rows whose process check reported alive (examined - reconciled.length). */
+  alive: number;
 }
 
 /**
@@ -87,20 +91,29 @@ function runLivenessSweep(
   // found" verdict would be true for every live session in that mode, not
   // just dead ones, so this reconciler does not apply to it.
   if (runtimeSettings.session_mode === 'api') {
-    return { reconciled: [] };
+    return { reconciled: [], examined: 0, alive: 0 };
   }
 
   const isProcessAlive = deps.isProcessAlive ?? isSessionProcessAlive;
   const evictSessionMapEntry = deps.evictSessionMapEntry ?? (() => {});
   const now = deps.nowFn ? deps.nowFn() : Date.now();
 
+  const examined = rows.length;
+  let alive = 0;
   const reconciled: string[] = [];
   for (const row of rows) {
-    if (isProcessAlive(row.session_id)) continue;
+    if (isProcessAlive(row.session_id)) {
+      alive++;
+      continue;
+    }
 
     const lastActivity =
       getSessionLastActivityMs(row.session_id) ?? row.started_at;
-    if (now - lastActivity < LIVENESS_RECONCILE_GRACE_MS) continue;
+    if (now - lastActivity < LIVENESS_RECONCILE_GRACE_MS) {
+      // Not yet clear of the process-race grace floor — neither confirmed
+      // dead nor counted alive; the process check itself did not say alive.
+      continue;
+    }
 
     updateSessionStatus(row.session_id, 'killed', now);
     evictSessionMapEntry(row.session_id);
@@ -136,5 +149,5 @@ function runLivenessSweep(
     );
   }
 
-  return { reconciled };
+  return { reconciled, examined, alive };
 }
