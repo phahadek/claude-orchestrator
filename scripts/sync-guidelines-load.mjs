@@ -80,6 +80,7 @@ const SCRIPT_SOURCES = [
     dir: 'scripts',
     names: [
       'design-load.mjs',
+      'investigate-load.mjs',
       'check-task-status.mjs',
       'sync-guidelines-load.mjs',
       'notion-page.mjs',
