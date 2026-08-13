@@ -6961,9 +6961,13 @@ export function getLatestTestRequestRun(
  * for delivery digest rendering (see testResultDigest.ts) once
  * runProjectTestRequest resolves with only the run's id in hand.
  */
-export function getTestRequestRunById(id: string): TestRequestRunRow | undefined {
+export function getTestRequestRunById(
+  id: string,
+): TestRequestRunRow | undefined {
   return db
-    .prepare(`SELECT ${TEST_REQUEST_RUN_COLUMNS} FROM test_request_runs WHERE id = ?`)
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS} FROM test_request_runs WHERE id = ?`,
+    )
     .get(id) as TestRequestRunRow | undefined;
 }
 
