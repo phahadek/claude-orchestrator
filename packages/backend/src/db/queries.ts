@@ -4508,6 +4508,7 @@ export function listMergedSince(
 ): BehindItem[] {
   const items: BehindItem[] = [];
   const repos = resolveProjectRepos(projectId);
+  const prSessionIds = new Set<string>();
 
   if (repos.length > 0) {
     const placeholders = repos.map(() => '?').join(', ');
@@ -4515,7 +4516,7 @@ export function listMergedSince(
       sinceIso
         ? db
             .prepare(
-              `SELECT pr_number, pr_url, task_id, title, updated_at
+              `SELECT pr_number, pr_url, task_id, title, updated_at, session_id
                FROM pull_requests
                WHERE repo IN (${placeholders}) AND state = 'merged' AND updated_at > ?
                ORDER BY updated_at ASC`,
@@ -4523,7 +4524,7 @@ export function listMergedSince(
             .all(...repos, sinceIso)
         : db
             .prepare(
-              `SELECT pr_number, pr_url, task_id, title, updated_at
+              `SELECT pr_number, pr_url, task_id, title, updated_at, session_id
                FROM pull_requests
                WHERE repo IN (${placeholders}) AND state = 'merged'
                ORDER BY updated_at ASC`,
@@ -4535,8 +4536,12 @@ export function listMergedSince(
       task_id: string | null;
       title: string | null;
       updated_at: string | null;
+      session_id: string | null;
     }>;
     for (const row of prRows) {
+      if (row.session_id) {
+        prSessionIds.add(row.session_id);
+      }
       items.push({
         kind: 'pr',
         taskId: row.task_id,
@@ -4552,7 +4557,7 @@ export function listMergedSince(
     sinceIso
       ? db
           .prepare(
-            `SELECT lb.branch_name, lb.updated_at, s.task_id, s.task_name
+            `SELECT lb.branch_name, lb.updated_at, lb.session_id, s.task_id, s.task_name
              FROM local_branches lb
              LEFT JOIN sessions s ON s.session_id = lb.session_id
              WHERE lb.project_id = ? AND lb.status = 'merged' AND lb.updated_at > ?
@@ -4561,7 +4566,7 @@ export function listMergedSince(
           .all(projectId, sinceIso)
       : db
           .prepare(
-            `SELECT lb.branch_name, lb.updated_at, s.task_id, s.task_name
+            `SELECT lb.branch_name, lb.updated_at, lb.session_id, s.task_id, s.task_name
              FROM local_branches lb
              LEFT JOIN sessions s ON s.session_id = lb.session_id
              WHERE lb.project_id = ? AND lb.status = 'merged'
@@ -4571,10 +4576,14 @@ export function listMergedSince(
   ) as Array<{
     branch_name: string;
     updated_at: string;
+    session_id: string | null;
     task_id: string | null;
     task_name: string | null;
   }>;
   for (const row of branchRows) {
+    if (row.session_id && prSessionIds.has(row.session_id)) {
+      continue;
+    }
     items.push({
       kind: 'local-branch',
       taskId: row.task_id,
