@@ -7263,11 +7263,9 @@ export function createStagedIntentsRouter(
     const sessionId =
       typeof req.query.sessionId === 'string' ? req.query.sessionId : null;
     if (!projectId || (!contentHash && !sessionId)) {
-      res
-        .status(400)
-        .json({
-          error: 'projectId and (contentHash or sessionId) are required',
-        });
+      res.status(400).json({
+        error: 'projectId and (contentHash or sessionId) are required',
+      });
       return;
     }
     let row: TestRequestRunRow | undefined;
