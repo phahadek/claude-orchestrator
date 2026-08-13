@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { InvestigationReport, InvestigationReportState } from '../api/reports';
+import type {
+  InvestigationReport,
+  InvestigationReportState,
+} from '../api/reports';
 import { reportsApi } from '../api/reports';
 import panelStyles from './DecisionPanel.module.css';
 import styles from './InvestigationReportSection.module.css';
@@ -59,12 +62,8 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
   const [draftSymptom, setDraftSymptom] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [actionInFlightId, setActionInFlightId] = useState<string | null>(
-    null,
-  );
-  const [actionErrors, setActionErrors] = useState<Record<string, string>>(
-    {},
-  );
+  const [actionInFlightId, setActionInFlightId] = useState<string | null>(null);
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
 
   const refresh = useCallback(() => {
     return reportsApi
@@ -187,10 +186,7 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
       : reports.filter((r) => r.state === stateFilter);
 
   return (
-    <div
-      className={styles.section}
-      data-testid="investigation-report-section"
-    >
+    <div className={styles.section} data-testid="investigation-report-section">
       <div className={styles.heading}>
         <span>Investigation reports ({reports.length})</span>
         <button

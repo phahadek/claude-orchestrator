@@ -1209,7 +1209,9 @@ describe('MilestoneDecisionInbox', () => {
         }),
       );
 
-      expect(await screen.findByTestId('report-card-report-draft')).toBeTruthy();
+      expect(
+        await screen.findByTestId('report-card-report-draft'),
+      ).toBeTruthy();
       expect(screen.getByTestId('report-card-report-committed')).toBeTruthy();
       expect(screen.getByTestId('report-filter-draft').textContent).toContain(
         '(1)',
@@ -1221,9 +1223,7 @@ describe('MilestoneDecisionInbox', () => {
       // Filtering by state narrows the visible cards.
       fireEvent.click(screen.getByTestId('report-filter-draft'));
       expect(screen.getByTestId('report-card-report-draft')).toBeTruthy();
-      expect(
-        screen.queryByTestId('report-card-report-committed'),
-      ).toBeNull();
+      expect(screen.queryByTestId('report-card-report-committed')).toBeNull();
       fireEvent.click(screen.getByTestId('report-filter-all'));
 
       // Draft: title + symptom, save.
@@ -1283,9 +1283,7 @@ describe('MilestoneDecisionInbox', () => {
       render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
 
       await screen.findByTestId('report-card-r-committed');
-      expect(
-        screen.getByTestId('report-blocking-r-committed'),
-      ).toBeTruthy();
+      expect(screen.getByTestId('report-blocking-r-committed')).toBeTruthy();
       expect(screen.queryByTestId('report-blocking-r-draft')).toBeNull();
       expect(screen.queryByTestId('report-blocking-r-resolved')).toBeNull();
     });
@@ -1308,9 +1306,7 @@ describe('MilestoneDecisionInbox', () => {
       render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
 
       const card = await screen.findByTestId('report-card-r-titled');
-      expect(card.textContent).toContain(
-        'Checkout drops the discount code',
-      );
+      expect(card.textContent).toContain('Checkout drops the discount code');
       expect(card.textContent).not.toContain('Untitled decision');
       // No gate-item lookup is ever issued for a report card — that fetch
       // path (and its known mis-titling defect) is exclusive to gate.verify
