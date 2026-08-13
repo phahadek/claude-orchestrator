@@ -358,32 +358,45 @@ function stripCData(text: string): string {
   return text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
 }
 
-function getXmlAttr(attrsSrc: string, name: string): string | undefined {
-  const match = attrsSrc.match(
-    new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"|\\b${name}\\s*=\\s*'([^']*)'`),
-  );
-  if (!match) return undefined;
-  return decodeXmlEntities(match[1] ?? match[2] ?? '');
+/** Matches every `name="value"`/`name='value'` pair in an XML start-tag's attribute source. */
+const XML_ATTR_RE = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*"([^"]*)"|([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*'([^']*)'/g;
+
+function parseXmlAttrs(attrsSrc: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  XML_ATTR_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = XML_ATTR_RE.exec(attrsSrc)) !== null) {
+    const name = match[1] ?? match[3];
+    const value = match[2] ?? match[4] ?? '';
+    attrs[name] = decodeXmlEntities(value);
+  }
+  return attrs;
 }
 
 /** Max characters retained from a failure/error element's inner text. */
 const FAILURE_TRACE_EXCERPT_CAP = 2_000;
 
-function extractChildText(
+/** Matches a testcase's first failure/error/skipped child, whichever appears — the backreference ties the closing tag to the same name it opened with. */
+const CHILD_OUTCOME_RE =
+  /<(failure|error|skipped)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/;
+
+function extractChildOutcome(
   content: string,
-  tag: 'failure' | 'error' | 'skipped',
-): { message?: string; text?: string } | null {
-  const re = new RegExp(`<${tag}\\b([^>]*?)(?:/>|>([\\s\\S]*?)</${tag}>)`);
-  const match = content.match(re);
+): { tag: 'failure' | 'error' | 'skipped'; message?: string; text?: string } | null {
+  const match = content.match(CHILD_OUTCOME_RE);
   if (!match) return null;
-  const message = getXmlAttr(match[1] ?? '', 'message');
-  const rawText = match[2];
+  const [, tag, childAttrs, rawText] = match;
+  const message = parseXmlAttrs(childAttrs).message;
   const text = rawText
     ? decodeXmlEntities(stripCData(rawText))
         .trim()
         .slice(0, FAILURE_TRACE_EXCERPT_CAP)
     : undefined;
-  return { message, text: text || undefined };
+  return {
+    tag: tag as 'failure' | 'error' | 'skipped',
+    message,
+    text: text || undefined,
+  };
 }
 
 interface JUnitTestCase {
@@ -412,39 +425,38 @@ export function parseJUnitXml(xml: string): JUnitSuite[] {
   let suiteMatch: RegExpExecArray | null;
   while ((suiteMatch = suiteRe.exec(xml)) !== null) {
     const [, suiteAttrs, suiteContent = ''] = suiteMatch;
-    const suiteName = getXmlAttr(suiteAttrs, 'name') ?? 'unknown';
+    const suiteName = parseXmlAttrs(suiteAttrs).name ?? 'unknown';
     const tests: JUnitTestCase[] = [];
 
     const caseRe = /<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g;
     let caseMatch: RegExpExecArray | null;
     while ((caseMatch = caseRe.exec(suiteContent)) !== null) {
-      const [, caseAttrs, caseContent = ''] = caseMatch;
-      const name = getXmlAttr(caseAttrs, 'name') ?? 'unknown';
-      const classname = getXmlAttr(caseAttrs, 'classname');
-      const timeSec = parseFloat(getXmlAttr(caseAttrs, 'time') ?? '0');
+      const [, caseAttrsSrc, caseContent = ''] = caseMatch;
+      const caseAttrs = parseXmlAttrs(caseAttrsSrc);
+      const name = caseAttrs.name ?? 'unknown';
+      const classname = caseAttrs.classname;
+      const timeSec = parseFloat(caseAttrs.time ?? '0');
       const durationMs = Number.isFinite(timeSec)
         ? Math.round(timeSec * 1000)
         : 0;
       const id = classname ? `${classname}.${name}` : name;
 
-      const error = extractChildText(caseContent, 'error');
-      const failure = extractChildText(caseContent, 'failure');
-      const skipped = extractChildText(caseContent, 'skipped');
+      const childOutcome = extractChildOutcome(caseContent);
 
       let outcome: JUnitTestCase['outcome'] = 'passed';
       let failureMessage: string | undefined;
       let failureTraceExcerpt: string | undefined;
-      if (error) {
+      if (childOutcome?.tag === 'error') {
         outcome = 'error';
-        failureMessage = error.message;
-        failureTraceExcerpt = error.text;
-      } else if (failure) {
+        failureMessage = childOutcome.message;
+        failureTraceExcerpt = childOutcome.text;
+      } else if (childOutcome?.tag === 'failure') {
         outcome = 'failed';
-        failureMessage = failure.message;
-        failureTraceExcerpt = failure.text;
-      } else if (skipped) {
+        failureMessage = childOutcome.message;
+        failureTraceExcerpt = childOutcome.text;
+      } else if (childOutcome?.tag === 'skipped') {
         outcome = 'skipped';
-        failureMessage = skipped.message;
+        failureMessage = childOutcome.message;
       }
 
       tests.push({
