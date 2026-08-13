@@ -25,6 +25,8 @@ defaults.
 
 ### Schema
 
+<!-- path-check:ignore -->
+
 ```json
 {
   "allowedTools": ["Bash(dotnet:*)"],
@@ -168,8 +170,10 @@ done
 echo "[bootstrap] done"
 ```
 
-Make sure the script is executable (`chmod +x scripts/bootstrap-worktree.sh`)
+Make sure the script is executable (`chmod +x scripts/bootstrap-worktree.sh`) <!-- path-check:ignore -->
 and reference it from `orchestrator.json`:
+
+<!-- path-check:ignore -->
 
 ```json
 {
