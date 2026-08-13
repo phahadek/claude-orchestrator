@@ -5285,6 +5285,7 @@ async function triggerTestRequestExecution(
 ): Promise<void> {
   const inputs = resolveTestRequestExecutionInputs(intent);
   let result: TestCommandResult;
+  let joined: boolean | null = null;
   if (!inputs.ok) {
     result = {
       passed: false,
@@ -5306,7 +5307,7 @@ async function triggerTestRequestExecution(
       };
     } else {
       try {
-        result = await runProjectTestRequest({
+        const runResult = await runProjectTestRequest({
           projectId: intent.projectId,
           contentHash,
           worktreePath: inputs.worktreePath,
@@ -5314,7 +5315,10 @@ async function triggerTestRequestExecution(
           timeoutSec: inputs.timeoutSec,
           maxRssMb: inputs.maxRssMb,
           failFast: inputs.failFast,
+          sessionId: intent.sessionId ?? null,
         });
+        result = runResult;
+        joined = runResult.joined;
       } catch (err) {
         result = {
           passed: false,
@@ -5342,6 +5346,7 @@ async function triggerTestRequestExecution(
       intentId: intent.id,
       disposition: 'test_request_completed',
       passed: result.passed,
+      joined,
       provenance: 'auto',
     },
   });

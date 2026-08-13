@@ -978,16 +978,29 @@ export interface FeedbackInboxRow {
  */
 export type TestRequestRunState = 'running' | 'passed' | 'failed';
 
+/**
+ * Failure sub-reason for a `failed` run — distinguishes a hard timeout, an
+ * OOM-kill, and a generic non-zero exit (including a lane execution error),
+ * which TestCommandResult's bare `passed: false` otherwise collapses. Null
+ * for `running`/`passed` rows and for historical rows predating this column.
+ */
+export type TestRequestFailureReason = 'timeout' | 'oom_killed' | 'generic';
+
 export interface TestRequestRunRow {
   id: string;
   project_id: string;
   content_hash: string;
+  /** Originating session's id, when the run was triggered by a test.request staged intent. */
+  session_id: string | null;
   state: TestRequestRunState;
   output: string;
+  /** Captured before admission wait / semaphore queueing — independent of started_at, so queue-wait is computable as started_at - requested_at. */
+  requested_at: number | null;
   started_at: number;
   finished_at: number | null;
   /** Normalized test-result JSON (junit-xml parse), populated by the acquisition/parser follow-on. Null for pre-existing rows and until that follow-on runs. */
   structured_result: string | null;
+  failure_reason: TestRequestFailureReason | null;
 }
 
 // ─── arch_unit ────────────────────────────────────────────────────────────

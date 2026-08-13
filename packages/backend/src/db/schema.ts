@@ -2057,4 +2057,29 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_investigation_report_dispatch_session_id
       ON investigation_report_dispatch(session_id);
   `);
+
+  // test_request_runs: link each run back to the originating session, carry
+  // a requestedAt captured before admission/semaphore queueing can delay a
+  // run's started_at, and record a failure sub-reason distinguishing timeout
+  // vs OOM-kill vs generic non-zero-exit — see testRequestLane.ts. All
+  // nullable: historical rows predate these columns.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN session_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN requested_at INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN failure_reason TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
 }

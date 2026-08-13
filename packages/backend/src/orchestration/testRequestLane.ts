@@ -35,6 +35,7 @@ import {
   completeTestRequestRun,
   listRunningTestRequestRuns,
 } from '../db/queries';
+import type { TestRequestFailureReason } from '../db/types';
 import { logger } from '../logger';
 import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
 
@@ -62,6 +63,28 @@ export interface TestRequestRunSpec {
   timeoutSec: number;
   maxRssMb: number;
   failFast: boolean;
+  /** Originating session, persisted onto the run row for per-request attribution. */
+  sessionId: string | null;
+}
+
+/**
+ * runProjectTestRequest's result: the underlying TestCommandResult plus the
+ * durable run's id and whether this particular call joined an already
+ * in-flight run (coalesced) rather than originating it. Two concurrent
+ * callers for the same (project, content-hash) key share one `runId` but
+ * only one of them gets `joined: false`.
+ */
+export interface TestRequestRunResult extends TestCommandResult {
+  runId: string;
+  joined: boolean;
+}
+
+function failureReasonFor(
+  result: TestCommandResult,
+): TestRequestFailureReason {
+  if (result.timedOut) return 'timeout';
+  if (result.oomKilled) return 'oom_killed';
+  return 'generic';
 }
 
 const projectSemaphores = new Map<string, Semaphore>();
@@ -77,7 +100,10 @@ function getProjectSemaphore(projectId: string): Semaphore {
   return sem;
 }
 
-const inFlightRuns = new Map<string, Promise<TestCommandResult>>();
+const inFlightRuns = new Map<
+  string,
+  Promise<TestCommandResult & { runId: string }>
+>();
 
 function coalesceKey(projectId: string, contentHash: string): string {
   return `${projectId}:${contentHash}`;
@@ -111,21 +137,24 @@ async function waitForMemoryAdmission(
  */
 export function runProjectTestRequest(
   spec: TestRequestRunSpec,
-): Promise<TestCommandResult> {
+): Promise<TestRequestRunResult> {
   const key = coalesceKey(spec.projectId, spec.contentHash);
   const existing = inFlightRuns.get(key);
-  if (existing) return existing;
+  if (existing) {
+    return existing.then((result) => ({ ...result, joined: true }));
+  }
 
   const run = executeTestRequestRun(spec).finally(() => {
     if (inFlightRuns.get(key) === run) inFlightRuns.delete(key);
   });
   inFlightRuns.set(key, run);
-  return run;
+  return run.then((result) => ({ ...result, joined: false }));
 }
 
 async function executeTestRequestRun(
   spec: TestRequestRunSpec,
-): Promise<TestCommandResult> {
+): Promise<TestCommandResult & { runId: string }> {
+  const requestedAt = Date.now();
   await waitForMemoryAdmission(
     spec.projectId,
     typedGetSetting('test_request_max_concurrent_per_project'),
@@ -136,7 +165,13 @@ async function executeTestRequestRun(
   const runId = randomUUID();
   const startedAt = Date.now();
   try {
-    insertTestRequestRun(runId, spec.projectId, spec.contentHash);
+    insertTestRequestRun(
+      runId,
+      spec.projectId,
+      spec.contentHash,
+      spec.sessionId,
+      requestedAt,
+    );
     broadcastRunStatus({
       runId,
       projectId: spec.projectId,
@@ -155,6 +190,7 @@ async function executeTestRequestRun(
       runId,
       result.passed ? 'passed' : 'failed',
       result.output,
+      result.passed ? null : failureReasonFor(result),
     );
     broadcastRunStatus({
       runId,
@@ -165,11 +201,11 @@ async function executeTestRequestRun(
       startedAt,
       finishedAt: Date.now(),
     });
-    return result;
+    return { ...result, runId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const output = `[testRequestLane] execution error: ${message}`;
-    completeTestRequestRun(runId, 'failed', output);
+    completeTestRequestRun(runId, 'failed', output, 'generic');
     broadcastRunStatus({
       runId,
       projectId: spec.projectId,
@@ -179,7 +215,7 @@ async function executeTestRequestRun(
       startedAt,
       finishedAt: Date.now(),
     });
-    return { passed: false, output };
+    return { passed: false, output, runId };
   } finally {
     release();
   }

@@ -281,6 +281,7 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', ()
       timeoutSec: 300,
       maxRssMb: 0,
       failFast: true,
+      sessionId: null,
     });
 
     vi.clearAllMocks();
@@ -311,6 +312,7 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', ()
       timeoutSec: 300,
       maxRssMb: 0,
       failFast: true,
+      sessionId: null,
     });
   });
 });
@@ -343,6 +345,7 @@ describe('ReviewOrchestrator.runTestPipeline — persistence via the shared lane
       timeoutSec: 60,
       maxRssMb: 0,
       failFast: true,
+      sessionId: null,
     });
   });
 
