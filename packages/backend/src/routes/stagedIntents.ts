@@ -1859,6 +1859,10 @@ interface GateVerifyIntentPayload {
  * stale-base (old_str no longer matches) rejection behaviour.
  */
 interface NotionPageEditPayload {
+  /**
+   * A bare Notion page uuid or a `notion:<uuid>`-prefixed task id — either
+   * form is accepted; NotionClient.applyPageEdit normalizes it before use.
+   */
   page_id: string;
   content_updates: { old_str: string; new_str: string }[];
 }

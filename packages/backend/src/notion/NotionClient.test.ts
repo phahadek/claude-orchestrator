@@ -25,6 +25,7 @@ import {
   NotionClient,
   NotionPageEditStaleBaseError,
 } from './NotionClient';
+import { parseTaskId } from '../tasks/taskId';
 import {
   updateTaskCacheStatus,
   getCacheAge,
@@ -823,6 +824,35 @@ describe('NotionClient.applyPageEdit()', () => {
 
     // Only the initial children fetch — no insert/delete calls issued.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a bare Notion page uuid (no notion: prefix) and applies unchanged (task 3b522f91 repro)', async () => {
+    mockChildrenFetch();
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ results: [{ id: 'new-h' }, { id: 'new-p' }] }),
+    }); // insert
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete h-summary
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete p-summary
+
+    await expect(
+      client.applyPageEdit('3a322f91-52f3-8165-9613-f265dfe4d874', [
+        { old_str: 'Old summary text', new_str: 'New summary text' },
+      ]),
+    ).resolves.toBeUndefined();
+
+    // Bare uuid is normalized to the same /blocks/<id>/children path a
+    // notion:-prefixed id would hit — assert the children-fetch call used it.
+    const childrenCall = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(childrenCall[0]).toContain(
+      '/blocks/3a322f91-52f3-8165-9613-f265dfe4d874/children',
+    );
+  });
+
+  it('leaves parseTaskId itself unmodified — a bare uuid still throws (applyPageEdit normalizes before parseTaskId ever sees it)', () => {
+    expect(() =>
+      parseTaskId('3a322f91-52f3-8165-9613-f265dfe4d874'),
+    ).toThrow(/Invalid task ID \(no colon\)/);
   });
 });
 
