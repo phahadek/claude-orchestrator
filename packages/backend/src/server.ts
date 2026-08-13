@@ -118,6 +118,7 @@ import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
 import { createOpsJournalRouter } from './routes/opsJournal';
 import { createTaskAbortRouter } from './routes/taskAbort';
 import { createGateStateRouter } from './routes/gateState';
+import { createReportStateRouter } from './routes/reportState';
 import { createSeedStateRouter } from './routes/seedState';
 import { createConvergenceRouter } from './routes/convergence';
 import { createArchitectureRouter } from './routes/architecture';
@@ -333,6 +334,7 @@ app.use(
   ),
 );
 app.use('/api', createGateStateRouter());
+app.use('/api', createReportStateRouter());
 app.use('/api', createDeployRouter());
 app.use('/api', createSeedStateRouter());
 app.use('/api', createConvergenceRouter(sessionManager));
