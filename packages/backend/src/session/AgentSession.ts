@@ -2829,12 +2829,24 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const combined = items
       .map((item) => `[${item.source}]\n${item.payload}`)
       .join('\n\n');
+    let delivered: string | null;
     try {
-      await this.sessionManager?.sendOrResume?.(this.sessionId, combined);
+      delivered =
+        (await this.sessionManager?.sendOrResume?.(
+          this.sessionId,
+          combined,
+        )) ?? null;
     } catch (err) {
       sessionLog(
         this.sessionId,
         `deliverInboxItems: sendOrResume failed: ${err}`,
+      );
+      return;
+    }
+    if (!delivered) {
+      sessionLog(
+        this.sessionId,
+        'deliverInboxItems: sendOrResume did not deliver (resolved null) — leaving items undelivered for retry',
       );
       return;
     }
