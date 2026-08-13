@@ -29,7 +29,7 @@ built here is what that autonomous wiring will reuse.
 A 📝 Docs task's body must declare, before this skill starts writing anything:
 
 - **Target surface** — where the authored content lands. Either:
-  - a **repo path** (e.g. `docs/api/webhooks.md`) — output is a draft PR against that repo,
+  - a **repo path** (e.g. `docs/api/webhooks.md`) — output is a draft PR against that repo, <!-- path-check:ignore -->
     opened by this session (`Bash(gh pr create:*)` / `mcp__github__create_pull_request` —
     see § Output below for why this session, uniquely, carries that capability); or
   - a **Notion page id** — output is a staged `notion.pageEdit` intent (find/replace pairs
