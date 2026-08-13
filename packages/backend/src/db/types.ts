@@ -1054,14 +1054,14 @@ export interface DependencyCacheEntryRow {
  * stored on test_request_runs.structured_result — only the fields
  * test_run_results extraction reads.
  */
-export interface StructuredTestCase {
+interface StructuredTestCase {
   id: string;
   name: string;
   outcome: string;
   durationMs: number;
 }
 
-export interface StructuredTestSuite {
+interface StructuredTestSuite {
   tests: StructuredTestCase[];
 }
 
