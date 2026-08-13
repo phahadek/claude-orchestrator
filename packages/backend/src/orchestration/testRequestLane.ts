@@ -36,6 +36,23 @@ import {
   listRunningTestRequestRuns,
 } from '../db/queries';
 import { logger } from '../logger';
+import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
+
+// ── Broadcast infrastructure ─────────────────────────────────────────────────
+// Mirrors stagedIntents.ts's staged_intent_changed wiring: WS only notifies
+// clients that a lane run transitioned, REST (GET /test-request-runs) stays
+// the fetch/apply source of truth.
+let broadcastFn: ((msg: ServerMessage) => void) | null = null;
+
+export function setTestRequestLaneBroadcast(
+  fn: (msg: ServerMessage) => void,
+): void {
+  broadcastFn = fn;
+}
+
+function broadcastRunStatus(payload: TestRequestRunStatusPayload): void {
+  broadcastFn?.({ type: 'test_request_run_status', ...payload });
+}
 
 export interface TestRequestRunSpec {
   projectId: string;
@@ -117,8 +134,16 @@ async function executeTestRequestRun(
   const semaphore = getProjectSemaphore(spec.projectId);
   const release = await semaphore.acquire();
   const runId = randomUUID();
+  const startedAt = Date.now();
   try {
     insertTestRequestRun(runId, spec.projectId, spec.contentHash);
+    broadcastRunStatus({
+      runId,
+      projectId: spec.projectId,
+      contentHash: spec.contentHash,
+      status: 'running',
+      startedAt,
+    });
     const result = await runTestCommands(
       spec.worktreePath,
       spec.commands,
@@ -131,18 +156,30 @@ async function executeTestRequestRun(
       result.passed ? 'passed' : 'failed',
       result.output,
     );
+    broadcastRunStatus({
+      runId,
+      projectId: spec.projectId,
+      contentHash: spec.contentHash,
+      status: result.passed ? 'passed' : 'failed-with-cause',
+      output: result.passed ? undefined : result.output,
+      startedAt,
+      finishedAt: Date.now(),
+    });
     return result;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    completeTestRequestRun(
+    const output = `[testRequestLane] execution error: ${message}`;
+    completeTestRequestRun(runId, 'failed', output);
+    broadcastRunStatus({
       runId,
-      'failed',
-      `[testRequestLane] execution error: ${message}`,
-    );
-    return {
-      passed: false,
-      output: `[testRequestLane] execution error: ${message}`,
-    };
+      projectId: spec.projectId,
+      contentHash: spec.contentHash,
+      status: 'failed-with-cause',
+      output,
+      startedAt,
+      finishedAt: Date.now(),
+    });
+    return { passed: false, output };
   } finally {
     release();
   }
@@ -162,10 +199,17 @@ export function recoverInterruptedTestRequestRuns(): void {
     logger.warn(
       `[testRequestLane] recovering interrupted run ${run.id} (project ${run.project_id}) as failed`,
     );
-    completeTestRequestRun(
-      run.id,
-      'failed',
-      '[testRequestLane] backend restarted mid-run — treated as failed',
-    );
+    const output =
+      '[testRequestLane] backend restarted mid-run — treated as failed';
+    completeTestRequestRun(run.id, 'failed', output);
+    broadcastRunStatus({
+      runId: run.id,
+      projectId: run.project_id,
+      contentHash: run.content_hash,
+      status: 'failed-with-cause',
+      output,
+      startedAt: run.started_at,
+      finishedAt: Date.now(),
+    });
   }
 }
