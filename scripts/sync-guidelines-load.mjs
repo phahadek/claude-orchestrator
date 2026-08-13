@@ -72,6 +72,8 @@ const SKILLS = [
   'gate',
   'milestone-wrap',
   'docs',
+  'investigate',
+  'milestone-seed',
 ];
 const SCRIPT_SOURCES = [
   {
