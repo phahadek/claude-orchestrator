@@ -8734,7 +8734,7 @@ interface DurationPercentiles {
   sampleCount: number;
 }
 
-export interface RegressedTestSummary {
+interface RegressedTestSummary {
   testId: string;
   name: string;
   medianDurationMs: number;
