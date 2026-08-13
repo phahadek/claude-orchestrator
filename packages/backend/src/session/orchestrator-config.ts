@@ -119,6 +119,29 @@ export interface OrchestratorConfig {
    * projects confirmed to have no required status checks on the base branch.
    */
   autofix_skip_ci: boolean;
+  /**
+   * Lockfile path(s) (relative to project root) that key the dependency-cache
+   * fast-path lookup hash for the governed test lane's per-session worktree
+   * bootstrap (e.g. `['package-lock.json']` for npm, `['uv.lock']` for uv).
+   * Empty = dependency-cache pooling opt-out (default).
+   */
+  dependency_lock_paths: string[];
+  /**
+   * Untracked directories (relative to project root) that `bootstrap_script`
+   * populates and that should be cached/restored across sessions (e.g.
+   * `['node_modules']`, `['.venv']`). May list more than one entry in a
+   * workspace layout. Empty = dependency-cache pooling opt-out (default).
+   */
+  dependency_cache_dirs: string[];
+  /**
+   * Project-authored command that exits zero iff the currently-materialized
+   * `dependency_cache_dirs` content satisfies the current lockfile(s),
+   * non-zero otherwise. Treated as the correctness gate on every cache hit —
+   * a failure is treated exactly like a cache miss. The orchestrator never
+   * interprets lockfile format or ecosystem itself; this command is the
+   * project's own verification. Empty = no verify command (default).
+   */
+  dependency_verify_command: string;
 }
 
 const DEFAULTS: OrchestratorConfig = {
@@ -141,6 +164,9 @@ const DEFAULTS: OrchestratorConfig = {
   analyze_max_rss_mb: 0,
   analyze_fail_fast: true,
   autofix_skip_ci: false,
+  dependency_lock_paths: [],
+  dependency_cache_dirs: [],
+  dependency_verify_command: '',
 };
 
 function isValidAnalyzeEntry(v: unknown): v is AnalyzeCommand {
@@ -261,6 +287,20 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.autofix_skip_ci === 'boolean'
           ? parsed.autofix_skip_ci
           : DEFAULTS.autofix_skip_ci,
+      dependency_lock_paths: Array.isArray(parsed.dependency_lock_paths)
+        ? (parsed.dependency_lock_paths as unknown[])
+            .filter((v) => typeof v === 'string')
+            .map((v) => v as string)
+        : DEFAULTS.dependency_lock_paths,
+      dependency_cache_dirs: Array.isArray(parsed.dependency_cache_dirs)
+        ? (parsed.dependency_cache_dirs as unknown[])
+            .filter((v) => typeof v === 'string')
+            .map((v) => v as string)
+        : DEFAULTS.dependency_cache_dirs,
+      dependency_verify_command:
+        typeof parsed.dependency_verify_command === 'string'
+          ? parsed.dependency_verify_command
+          : DEFAULTS.dependency_verify_command,
       mcp_servers:
         parsed.mcp_servers !== null &&
         typeof parsed.mcp_servers === 'object' &&
