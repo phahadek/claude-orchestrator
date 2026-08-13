@@ -67,6 +67,7 @@ import {
   updateSessionStatus,
   updateSessionWorktreePath,
   markSessionDone,
+  markSessionIdle,
   applyPendingDone,
   getSessionsWithUnappliedPendingDone,
   archiveSession,
@@ -99,6 +100,7 @@ import {
   setSessionDeclaredWrites,
   expireStagedIntentsForSession,
   hasStagedIntentForTask,
+  hasUndispositionedStagedIntentsForSession,
   sweepStagedIntentsForTerminalSessions,
   TERMINAL_SESSION_STATUSES,
   listStagedIntentsBySession,
@@ -3041,6 +3043,28 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] recovering ${stuckRows.length} stuck session(s) from running→done`,
       );
       for (const row of stuckRows) {
+        // A planning session's result event can mean "parked, awaiting the
+        // operator" rather than "finished" — its last event is a result but
+        // its status hasn't made the running→idle transition yet (see
+        // AgentSession's clean-exit handling). If it's still holding staged
+        // intents nobody has dispositioned, marking it done here would feed
+        // sweepStagedIntentsForTerminalSessions a false-terminal status and
+        // it would reap a proposal no human has seen. Route it to idle
+        // instead and skip the done-path recovery below — a PR-anchored
+        // session (standard/review/depth_review) never parks this way, so
+        // this carve-out is inert for those.
+        if (
+          isPlanningSession(row.session_type) &&
+          hasUndispositionedStagedIntentsForSession(row.session_id)
+        ) {
+          markSessionIdle(
+            row.session_id,
+            row.last_ts,
+            row.pr_url ?? null,
+            'boot_orphan_result_event_parked_planning',
+          );
+          continue;
+        }
         // Boot-time recovery: no process for this session exists yet this
         // run, so status='running' here reflects a stale write from before
         // the crash/restart, not a turn actually in flight — safe to bypass

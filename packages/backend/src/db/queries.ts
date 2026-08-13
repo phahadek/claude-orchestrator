@@ -633,6 +633,7 @@ export function markSessionIdle(
   sessionId: string,
   endedAt: number,
   prUrl?: string | null,
+  callSite?: string,
 ): SessionStatus {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: SessionStatus; task_id: string | null }
@@ -678,7 +679,11 @@ export function markSessionIdle(
       actor_type: 'system',
       actor_id: sessionId,
       task_id: current.task_id ?? null,
-      payload: { from: current.status, to: 'idle' },
+      payload: {
+        from: current.status,
+        to: 'idle',
+        call_site: callSite ?? 'unknown',
+      },
     });
   }
   return 'idle';
@@ -7674,6 +7679,34 @@ export function hasStagedIntentForTask(taskId: string): boolean {
     `SELECT 1 FROM staged_intent WHERE task_id = @task_id LIMIT 1`,
   );
   return _stmtHasStagedIntentForTask.get({ task_id: taskId }) !== undefined;
+}
+
+let _stmtHasUndispositionedStagedIntentsForSession: Database.Statement | null =
+  null;
+
+/**
+ * True if this session holds any staged intent still awaiting operator
+ * disposition (state IN staged/approved — the same set
+ * sweepStagedIntentsForTerminalSessions reaps). Used by boot orphan recovery
+ * to distinguish a planning session that merely parked awaiting the operator
+ * from one that genuinely finished with nothing pending: only the latter
+ * should settle to 'done' from a stuck-result row.
+ */
+export function hasUndispositionedStagedIntentsForSession(
+  sessionId: string,
+): boolean {
+  _stmtHasUndispositionedStagedIntentsForSession ??= db.prepare<{
+    session_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE session_id = @session_id AND state IN ('staged', 'approved')
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasUndispositionedStagedIntentsForSession.get({
+      session_id: sessionId,
+    }) !== undefined
+  );
 }
 
 /**

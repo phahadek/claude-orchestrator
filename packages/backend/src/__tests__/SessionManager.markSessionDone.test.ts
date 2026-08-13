@@ -42,12 +42,14 @@ import { StuckSessionMonitor } from '../orchestration/StuckSessionMonitor';
 import type { SessionManager } from '../session/SessionManager';
 import {
   markSessionDone,
+  markSessionIdle,
   applyPendingDone,
   updateSessionStatus,
   insertStagedIntent,
   getStagedIntent,
   expireStagedIntentsForSession,
   sweepStagedIntentsForTerminalSessions,
+  hasUndispositionedStagedIntentsForSession,
 } from '../db/queries';
 import { queryAuditLogByProject } from '../audit/AuditLog';
 import { db } from '../db/db.js';
@@ -418,6 +420,61 @@ describe('expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions 
     // Reading the row back (as the notification path does) must not mutate it.
     expect(getStagedIntent(staged)?.state).toBe('superseded');
     expect(getStagedIntent(staged)?.disposition_reason).toBe('session_killed');
+  });
+});
+
+// ── hasUndispositionedStagedIntentsForSession / markSessionIdle call_site ──
+
+describe('hasUndispositionedStagedIntentsForSession — used by boot orphan recovery to park planning sessions', () => {
+  it('is true when the session holds a staged or approved intent', () => {
+    stageIntent('sess-parked', { state: 'staged' });
+    expect(hasUndispositionedStagedIntentsForSession('sess-parked')).toBe(
+      true,
+    );
+  });
+
+  it('is false when the session has no intents at all', () => {
+    expect(hasUndispositionedStagedIntentsForSession('sess-none')).toBe(
+      false,
+    );
+  });
+
+  it('is false once the intent has been disposed (committed/withdrawn/superseded)', () => {
+    stageIntent('sess-disposed', { state: 'committed' });
+    expect(hasUndispositionedStagedIntentsForSession('sess-disposed')).toBe(
+      false,
+    );
+  });
+
+  it('surviving staged intents are not reaped by a subsequent terminal-session sweep once the session is idle, not done', () => {
+    insertSession('sess-idle-parked', 'idle');
+    const staged = stageIntent('sess-idle-parked');
+
+    sweepStagedIntentsForTerminalSessions('session_terminal_backstop', Date.now());
+
+    expect(getStagedIntent(staged)?.state).toBe('staged');
+  });
+});
+
+describe('markSessionIdle call_site', () => {
+  it('records call_site on the session_status_changed audit row', () => {
+    insertSession('sess-idle-callsite', 'running');
+
+    markSessionIdle(
+      'sess-idle-callsite',
+      Date.now(),
+      null,
+      'boot_orphan_result_event_parked_planning',
+    );
+
+    const rows = getAuditRows('session_status_changed');
+    const row = rows.find((r) => r.actor_id === 'sess-idle-callsite');
+    expect(row).toBeDefined();
+    expect(JSON.parse(row!.payload)).toMatchObject({
+      from: 'running',
+      to: 'idle',
+      call_site: 'boot_orphan_result_event_parked_planning',
+    });
   });
 });
 
