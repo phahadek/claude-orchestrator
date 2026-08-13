@@ -310,14 +310,13 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
     return;
   }
 
-  const tests: NewTestRunResultRow[] = (parsed.suites ?? []).flatMap(
-    (suite) =>
-      (suite.tests ?? []).map((test) => ({
-        test_id: test.id,
-        name: test.name,
-        outcome: test.outcome,
-        duration_ms: test.durationMs,
-      })),
+  const tests: NewTestRunResultRow[] = (parsed.suites ?? []).flatMap((suite) =>
+    (suite.tests ?? []).map((test) => ({
+      test_id: test.id,
+      name: test.name,
+      outcome: test.outcome,
+      duration_ms: test.durationMs,
+    })),
   );
   if (tests.length === 0) return;
 
