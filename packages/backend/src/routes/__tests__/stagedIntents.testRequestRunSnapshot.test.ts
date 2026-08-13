@@ -15,11 +15,11 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
+import { insertTestRequestRun, completeTestRequestRun } from '../../db/queries';
 import {
-  insertTestRequestRun,
-  completeTestRequestRun,
-} from '../../db/queries';
-import { createStagedIntentsRouter, setStagedIntentBroadcast } from '../stagedIntents';
+  createStagedIntentsRouter,
+  setStagedIntentBroadcast,
+} from '../stagedIntents';
 
 function makeApp() {
   const app = express();

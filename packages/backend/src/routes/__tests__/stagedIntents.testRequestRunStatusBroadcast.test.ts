@@ -60,10 +60,7 @@ import {
   setStagedIntentBroadcast,
 } from '../stagedIntents';
 import { setTestRequestLaneBroadcast } from '../../orchestration/testRequestLane';
-import {
-  insertSession,
-  updateSessionWorktreePath,
-} from '../../db/queries';
+import { insertSession, updateSessionWorktreePath } from '../../db/queries';
 import { typedSetSetting } from '../../config/settings';
 import type { ServerMessage } from '../../ws/types';
 
@@ -140,8 +137,7 @@ describe('test_request_run_status broadcast — decoupled from decision-surface 
     });
 
     const statuses = runStatusBroadcast.mock.calls.map(
-      (call: [ServerMessage]) =>
-        (call[0] as { status: string }).status,
+      (call: [ServerMessage]) => (call[0] as { status: string }).status,
     );
     expect(statuses).toEqual(['running', 'passed']);
 

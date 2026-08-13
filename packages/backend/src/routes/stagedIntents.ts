@@ -7106,13 +7106,9 @@ export function createStagedIntentsRouter(
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;
     const contentHash =
-      typeof req.query.contentHash === 'string'
-        ? req.query.contentHash
-        : null;
+      typeof req.query.contentHash === 'string' ? req.query.contentHash : null;
     if (!projectId || !contentHash) {
-      res
-        .status(400)
-        .json({ error: 'projectId and contentHash are required' });
+      res.status(400).json({ error: 'projectId and contentHash are required' });
       return;
     }
     const running = listRunningTestRequestRuns().find(
