@@ -2018,4 +2018,43 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // investigation_report: closed-vocabulary state (draft/committed/resolved/
+  // abandoned) — no persisted 'dispatched' state. In-flight status is a
+  // derived live read from investigation_report_dispatch (mirrors gate_item's
+  // verifyInFlight). milestone_id stores milestones.id (a UUID), matching
+  // flow_arm.milestone_id — NOT the gate_item/seed_item display-name form.
+  // evidence_text and the source/origin_* provenance columns are unused
+  // until the sibling session-filing capability lands, shipped now to avoid
+  // a later migration.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS investigation_report (
+      id                TEXT    PRIMARY KEY,
+      project_id        TEXT    NOT NULL,
+      milestone_id      TEXT    NOT NULL,
+      title             TEXT    NOT NULL,
+      symptom_text      TEXT    NOT NULL,
+      evidence_text     TEXT,
+      state             TEXT    NOT NULL DEFAULT 'draft',
+      source            TEXT    NOT NULL DEFAULT 'operator',
+      origin_session_id TEXT,
+      origin_task_id    TEXT,
+      created_at        TEXT    NOT NULL,
+      updated_at        TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_investigation_report_project_milestone
+      ON investigation_report(project_id, milestone_id);
+
+    CREATE TABLE IF NOT EXISTS investigation_report_dispatch (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      report_id   TEXT    NOT NULL,
+      session_id  TEXT    NOT NULL,
+      dispatched_at TEXT  NOT NULL,
+      FOREIGN KEY (report_id) REFERENCES investigation_report(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_investigation_report_dispatch_report_id
+      ON investigation_report_dispatch(report_id);
+    CREATE INDEX IF NOT EXISTS idx_investigation_report_dispatch_session_id
+      ON investigation_report_dispatch(session_id);
+  `);
 }
