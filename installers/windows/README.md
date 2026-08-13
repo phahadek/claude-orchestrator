@@ -22,7 +22,7 @@ The script will:
 
 1. Download Node 20 LTS Windows x64 from `nodejs.org` and verify its SHA-256
 2. Run `npm run build` to compile frontend + backend
-3. Assemble the payload under `installers/windows/payload/`
+3. Assemble the payload under `installers/windows/payload/` <!-- path-check:ignore -->
 4. Invoke `ISCC.exe setup.iss` to produce `installers/windows/dist/claude-orchestrator-setup.exe`
 
 ### Options

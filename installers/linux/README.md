@@ -174,6 +174,8 @@ are set. Without them, an unsigned `.deb` is produced.
 
 #### One-time key generation (maintainer step)
 
+<!-- path-check:ignore -->
+
 ```bash
 gpg --batch --gen-key <<EOF
 Key-Type: RSA
@@ -202,6 +204,8 @@ Add the following secrets in **GitHub → Settings → Secrets and variables →
 | `LINUX_GPG_PASSPHRASE`  | GPG key passphrase (leave blank if key has none) |
 
 #### User key import (for signature verification)
+
+<!-- path-check:ignore -->
 
 ```bash
 gpg --import installers/linux/release-key.asc

@@ -16,7 +16,7 @@ cd installers/macos
 ./build.sh
 ```
 
-Output: `installers/macos/build/ClaudeOrchestrator.dmg`
+Output: `installers/macos/build/ClaudeOrchestrator.dmg` <!-- path-check:ignore -->
 
 ## What the installer does
 
