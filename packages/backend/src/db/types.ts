@@ -1237,3 +1237,31 @@ export type NewCompletingSignalLedgerRow = Omit<
   CompletingSignalLedgerRow,
   'id'
 >;
+
+/**
+ * One row per test_id ever auto-disposed by the lane-side f2-only flaky
+ * mechanism (see testRequestLane.ts's evaluateF2LaneFlakyDisposition and its
+ * PRMergeWatcher caller) — upsert-by-test_id, following the same
+ * one-linked-task shape as capability_disqualification. `auto_disposition_count`
+ * counts distinct triggering PRs (see flaky_remediation_pr_counts), not raw
+ * actuation calls, so a single PR's retries/force-pushes never alone cross
+ * the filing threshold. `remediation_task_id`/`remediation_task_open` track
+ * the currently linked 💻 Code task, if any — a new task can only be filed
+ * once the previously linked task reaches a terminal status.
+ */
+export interface FlakyRemediationTrackingRow {
+  test_id: string;
+  remediation_task_id: string | null;
+  remediation_task_open: number;
+  auto_disposition_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One row per (test_id, pr_number, repo) that has ever contributed a lane-side auto-disposition — the dedup key that makes the counter per-PR, not per-actuation-call. */
+export interface FlakyRemediationPrCountRow {
+  test_id: string;
+  pr_number: number;
+  repo: string;
+  counted_at: string;
+}

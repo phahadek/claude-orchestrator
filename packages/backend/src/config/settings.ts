@@ -63,6 +63,7 @@ const SettingsSchema = z.object({
     .min(0),
   flip_rate_window_n: z.coerce.number().int().min(1),
   flip_rate_threshold_k: z.coerce.number().int().min(1),
+  flaky_remediation_file_threshold: z.coerce.number().int().min(1),
 
   // Boolean settings (stored as 'true'/'false' strings; also accepts native booleans)
   auto_review: zodBoolCoerce,
@@ -165,6 +166,7 @@ export const SETTING_DEFAULTS: Settings = {
   milestone_attention_flat_convergence_window_seconds: 48 * 60 * 60,
   flip_rate_window_n: 20,
   flip_rate_threshold_k: 2,
+  flaky_remediation_file_threshold: 2,
   auto_review: true,
   auto_archive_enabled: true,
   session_cgroup_deny_swap: true,

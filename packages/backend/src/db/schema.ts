@@ -2220,4 +2220,35 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_completing_signal_ledger_session
       ON completing_signal_ledger(session_id, recorded_at DESC);
   `);
+
+  // flaky_remediation_tracking: one row per test_id ever auto-disposed by the
+  // lane-side f2-only flaky mechanism — upsert-by-test_id, following the same
+  // one-linked-task shape as capability_disqualification. See
+  // flaky_remediation_pr_counts (below) for the per-triggering-PR dedup that
+  // makes auto_disposition_count a distinct-PR count, not a raw actuation
+  // count.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS flaky_remediation_tracking (
+      test_id                 TEXT    PRIMARY KEY,
+      remediation_task_id     TEXT,
+      remediation_task_open   INTEGER NOT NULL DEFAULT 0,
+      auto_disposition_count  INTEGER NOT NULL DEFAULT 0,
+      created_at              TEXT    NOT NULL,
+      updated_at              TEXT    NOT NULL
+    );
+  `);
+
+  // flaky_remediation_pr_counts: dedup key of (test_id, pr_number, repo) —
+  // a row exists once a given PR has ever contributed a lane-side auto-
+  // disposition for that test, so a single PR's retries/force-pushes only
+  // ever increment flaky_remediation_tracking.auto_disposition_count once.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS flaky_remediation_pr_counts (
+      test_id     TEXT    NOT NULL,
+      pr_number   INTEGER NOT NULL,
+      repo        TEXT    NOT NULL,
+      counted_at  TEXT    NOT NULL,
+      PRIMARY KEY (test_id, pr_number, repo)
+    );
+  `);
 }
