@@ -217,6 +217,20 @@ describe('PlanningOrchestrator — surface an ops session going terminal with an
     expect(getTaskPauseReason('gate-item:abc123')).toBeNull();
   });
 
+  it('does not raise a pause reason for an investigate session (synthetic report-batch task_id, no journal.setState in its envelope)', () => {
+    seedSession(SESSION_ID, 'report-batch:batch-1', 'ops');
+    stageRow({
+      kind: 'task.create',
+      group_id: 'g-ops-close',
+      state: 'committed',
+    });
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+
+    expect(() => orchestrator.endSession(SESSION_ID)).not.toThrow();
+    expect(getTaskPauseReason('report-batch:batch-1')).toBeNull();
+  });
+
   it('does not raise a pause reason for an ops session with no groups at all', () => {
     seedSession();
     const sessionManager = makeSessionManager();

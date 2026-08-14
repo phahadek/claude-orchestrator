@@ -24,6 +24,7 @@ import type {
 import {
   isPlanningSession,
   isGateVerifySession,
+  isInvestigateSession,
 } from '../session/sessionPredicates';
 import {
   getEntry,
@@ -589,7 +590,8 @@ export class PlanningOrchestrator {
     if (
       row.task_id &&
       row.session_type === 'ops' &&
-      !isGateVerifySession(row.task_id)
+      !isGateVerifySession(row.task_id) &&
+      !isInvestigateSession(row.task_id)
     ) {
       const incompleteGroups =
         findIncompleteOpsTerminalGroupsForSession(sessionId);

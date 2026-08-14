@@ -37,6 +37,7 @@ import {
   type GroomingGateEntry,
 } from '../groom/groomGate';
 import { isInteractiveTaskType } from '../planning/triage';
+import { isInvestigateSession } from '../session/sessionPredicates';
 import type {
   StagedIntentRow,
   StagedIntentState,
@@ -341,7 +342,9 @@ function isOpsTerminalKind(
   }
   if (!OPS_TERMINAL_KINDS.includes(kind) || !sessionId) return false;
   const session = getSession(sessionId);
-  return session?.session_type === 'ops';
+  return (
+    session?.session_type === 'ops' && !isInvestigateSession(session.task_id)
+  );
 }
 
 /**
