@@ -7532,10 +7532,16 @@ export function computeTestFlipRateFlag(
   testId: string,
   windowN: number,
   thresholdK: number,
+  // Excludes samples at/after this timestamp — the lane-side flaky
+  // auto-disposition's "predates this PR's first run" masking guard
+  // (see PRMergeWatcher.tryF2LaneAutoDisposition). Defaults to "no cutoff"
+  // for every other caller (listFlaggedFlakyTests, the lane-health rollup).
+  beforeMs: number = Number.MAX_SAFE_INTEGER,
 ): TestFlipRateFlag {
   _stmtTestFlipRateSamples ??= db.prepare<{
     test_id: string;
     limit: number;
+    before: number;
   }>(`
     SELECT outcome FROM (
       SELECT outcome, created_at, id
@@ -7544,6 +7550,7 @@ export function computeTestFlipRateFlag(
         AND concurrent_run_count = 0
         AND oom_killed = 0
         AND outcome IN ('passed', 'failed')
+        AND created_at < @before
       ORDER BY created_at DESC, id DESC
       LIMIT @limit
     )
@@ -7552,6 +7559,7 @@ export function computeTestFlipRateFlag(
   const rows = _stmtTestFlipRateSamples.all({
     test_id: testId,
     limit: windowN,
+    before: beforeMs,
   }) as { outcome: string }[];
 
   let transitionCount = 0;
@@ -7565,6 +7573,30 @@ export function computeTestFlipRateFlag(
     transitionCount,
     flagged: transitionCount >= thresholdK,
   };
+}
+
+let _stmtFailingTestIdsForRun: Database.Statement | null = null;
+
+/**
+ * The failed/errored test_run_results rows for one test_request_run — the
+ * per-test failure set the lane-side f2 auto-disposition check evaluates
+ * against computeTestFlipRateFlag and the touched-file masking guard (see
+ * PRMergeWatcher.tryF2LaneAutoDisposition / testRequestLane.ts's
+ * evaluateF2LaneFlakyDisposition). Empty when the run has no per-test
+ * detail (structured_result never ingested) — the caller treats that as
+ * not-eligible, never as "no failures".
+ */
+export function getFailingTestIdsForRun(
+  testRequestRunId: string,
+): { test_id: string; name: string }[] {
+  _stmtFailingTestIdsForRun ??= db.prepare<{ run_id: string }>(`
+    SELECT test_id, name FROM test_run_results
+    WHERE test_request_run_id = @run_id
+      AND outcome IN ('failed', 'error')
+  `);
+  return _stmtFailingTestIdsForRun.all({
+    run_id: testRequestRunId,
+  }) as { test_id: string; name: string }[];
 }
 
 interface FlaggedFlakyTest {

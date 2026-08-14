@@ -11,14 +11,20 @@ import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { getProjectByGithubRepo, AUTO_REVIEW_ENABLED } from '../config';
+import type { ProjectConfig } from '../config';
 import type { Scheduler } from '../orchestration/Scheduler';
 import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
-import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import {
+  loadAutofixCommands,
+  runAutofix,
+  getChangedFiles,
+} from '../session/autofix-runner';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
+import { evaluateF2LaneFlakyDisposition } from '../orchestration/testRequestLane';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
-import type { PullRequestRow } from '../db/types';
+import type { PullRequestRow, TestRequestRunRow } from '../db/types';
 import { parsePauseReason } from '../db/pauseReason';
 import type { AutoMerger } from './AutoMerger';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
@@ -617,35 +623,45 @@ export class PRMergeWatcher extends EventEmitter {
         : undefined;
       if (testResult && testResult.state === 'failed') {
         if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
-          setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
-          setPauseReason(
-            pr.pr_number,
-            pr.repo,
-            'ci_failing',
-            testResult.output ? testResult.output.slice(0, 1000) : undefined,
-          );
-          const digest = testResult.structured_result
-            ? buildTestResultDigest(testResult.structured_result)
-            : null;
-          const verifyMsg = formatCIFailureFeedback({
-            source: 'verify',
-            failedCommand: config.test.join(' && '),
-            truncatedOutput:
-              digest ??
-              (testResult.output
-                ? truncateLog(testResult.output, CI_LOG_EXCERPT_CAP)
-                : undefined),
-            conflicted: pr.merge_state === 'dirty',
-            baseBranch: pr.base_branch ?? undefined,
-          });
-          this.sessions
-            .sendOrResume(pr.session_id!, verifyMsg)
-            .catch((err: unknown) =>
-              logger.warn(
-                `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
-                (err as Error).message,
-              ),
+          const recovered = worktreePath
+            ? await this.tryF2LaneAutoDisposition(
+                pr,
+                project,
+                testResult,
+                worktreePath,
+              )
+            : false;
+          if (!recovered) {
+            setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
+            setPauseReason(
+              pr.pr_number,
+              pr.repo,
+              'ci_failing',
+              testResult.output ? testResult.output.slice(0, 1000) : undefined,
             );
+            const digest = testResult.structured_result
+              ? buildTestResultDigest(testResult.structured_result)
+              : null;
+            const verifyMsg = formatCIFailureFeedback({
+              source: 'verify',
+              failedCommand: config.test.join(' && '),
+              truncatedOutput:
+                digest ??
+                (testResult.output
+                  ? truncateLog(testResult.output, CI_LOG_EXCERPT_CAP)
+                  : undefined),
+              conflicted: pr.merge_state === 'dirty',
+              baseBranch: pr.base_branch ?? undefined,
+            });
+            this.sessions
+              .sendOrResume(pr.session_id!, verifyMsg)
+              .catch((err: unknown) =>
+                logger.warn(
+                  `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
+                  (err as Error).message,
+                ),
+              );
+          }
         }
         return; // Gated on failing tests — skip GitHub mergeability evaluation
       }
@@ -1027,19 +1043,9 @@ export class PRMergeWatcher extends EventEmitter {
     let outcome: FlakeRecoveryOutcome;
 
     if (payload.disposition.gate === 'f2') {
-      if (!project || !pr.session_id || !this.reviewOrchestrator) return;
-      const session = getSession(pr.session_id);
-      const worktreePath = session?.worktree_path ?? '';
-      if (!worktreePath) return;
-      const result = await this.reviewOrchestrator.rerunFlakyTests(
-        pr.pr_number,
-        pr.repo,
-        pr.head_sha,
-        worktreePath,
-        project,
-      );
-      if (!result) return;
-      outcome = result.outcome;
+      const result = await this.actuateF2Rerun(pr, project);
+      if (result === null) return;
+      outcome = result;
     } else if (payload.disposition.gate === 'analyze') {
       if (!project || !pr.session_id || !this.reviewOrchestrator) return;
       const session = getSession(pr.session_id);
@@ -1109,6 +1115,50 @@ export class PRMergeWatcher extends EventEmitter {
       });
     }
 
+    await this.applyFlakeRecoveryOutcome(pr, outcome, maxRetries);
+  }
+
+  /**
+   * Actuate a re-run of the F2 (orchestrator-run test) gate against `pr`'s
+   * current head_sha — the shared f2 actuation path both a session's
+   * flaky.confirm disposition and the lane-side auto-disposition check
+   * (tryF2LaneAutoDisposition) reuse rather than duplicate. Returns null
+   * when the PR/session/project state can't support a re-run (no session
+   * worktree, no reviewOrchestrator wired, etc.) — the caller treats that
+   * as "nothing to actuate", not a failure outcome.
+   */
+  private async actuateF2Rerun(
+    pr: PullRequestRow,
+    project: ProjectConfig | undefined,
+  ): Promise<FlakeRecoveryOutcome | null> {
+    if (!project || !pr.session_id || !this.reviewOrchestrator || !pr.head_sha) {
+      return null;
+    }
+    const session = getSession(pr.session_id);
+    const worktreePath = session?.worktree_path ?? '';
+    if (!worktreePath) return null;
+    const result = await this.reviewOrchestrator.rerunFlakyTests(
+      pr.pr_number,
+      pr.repo,
+      pr.head_sha,
+      worktreePath,
+      project,
+    );
+    return result?.outcome ?? null;
+  }
+
+  /**
+   * Shared tail of a verified-flaky re-run (any gate): consumes/records the
+   * retry budget and, on a passing re-run, clears the pause and re-drives
+   * the merge loop. Used by both handleVerifiedFlakyDisposition (session-
+   * initiated, all three gates) and tryF2LaneAutoDisposition (lane-initiated,
+   * f2 only) so the two callers can't drift on outcome handling.
+   */
+  private async applyFlakeRecoveryOutcome(
+    pr: PullRequestRow,
+    outcome: FlakeRecoveryOutcome,
+    maxRetries: number,
+  ): Promise<void> {
     if (outcome === 'inconclusive') {
       logger.info(
         `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run inconclusive (head_sha drifted) — not consuming retry budget`,
@@ -1138,6 +1188,79 @@ export class PRMergeWatcher extends EventEmitter {
         `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run still failing (attempt ${pr.flake_recovery_attempts + 1}/${maxRetries})`,
       );
     }
+  }
+
+  /**
+   * Lane-side, f2-only auto-disposition: intercepts an F2 (orchestrator-run
+   * test gate) failure right before it would otherwise pause the PR and nudge
+   * the session (poll()'s "Orchestrator-run test gate (F2)" block above).
+   * Per the locked design, this is per-test, not whole-run — every failing
+   * test in `testResult` must clear both masking guards (flip-rate flag +
+   * not-the-flagged-test's-own-file + flip-rate window predating this PR)
+   * before actuation fires; a single unflagged/guard-blocked failure falls
+   * through to the unmodified session pause+nudge path.
+   *
+   * Returns true only when the re-run this triggers actually passed (pause
+   * cleared, merge loop re-driven) — the caller must still pause+nudge on
+   * false, whether that's because no test qualified or because the re-run
+   * (having been attempted) still failed.
+   */
+  private async tryF2LaneAutoDisposition(
+    pr: PullRequestRow,
+    project: ProjectConfig,
+    testResult: TestRequestRunRow,
+    worktreePath: string,
+  ): Promise<boolean> {
+    const maxRetries = typedGetSetting('flake_recovery_max_retries');
+    if (pr.flake_recovery_attempts >= maxRetries) return false;
+
+    // The flip-rate window's masking guard requires samples predating this
+    // PR's first run — pull_requests.created_at (set once, at PR open, always
+    // before any push-triggered F2 run for this PR) is the cutoff.
+    const prCreatedAtMs = pr.created_at ? Date.parse(pr.created_at) : NaN;
+    if (!Number.isFinite(prCreatedAtMs)) return false;
+
+    let changedFiles: string[];
+    try {
+      changedFiles = await getChangedFiles(
+        worktreePath,
+        pr.base_branch ?? 'dev',
+      );
+    } catch (err) {
+      logger.warn(
+        `[PRMergeWatcher] PR #${pr.pr_number}: getChangedFiles failed for f2 lane auto-disposition: ${(err as Error).message}`,
+      );
+      return false;
+    }
+
+    const eligible = evaluateF2LaneFlakyDisposition(
+      testResult.id,
+      prCreatedAtMs,
+      changedFiles,
+      typedGetSetting('flip_rate_window_n'),
+      typedGetSetting('flip_rate_threshold_k'),
+    );
+    if (!eligible) return false;
+
+    recordEvent({
+      event_type: 'flake_recovery_attempted',
+      actor_type: 'system',
+      project_id: project.id,
+      task_id: pr.task_id ?? null,
+      payload: {
+        pr_number: pr.pr_number,
+        repo: pr.repo,
+        sha: pr.head_sha,
+        gate: 'f2',
+        reason: 'lane_auto_disposition',
+        attempt: pr.flake_recovery_attempts + 1,
+      },
+    });
+
+    const outcome = await this.actuateF2Rerun(pr, project);
+    if (outcome === null) return false;
+    await this.applyFlakeRecoveryOutcome(pr, outcome, maxRetries);
+    return outcome === 'passed';
   }
 
   /**
