@@ -6213,6 +6213,40 @@ export function setFlakyRemediationLinkedTask(
   });
 }
 
+let _stmtClaimFlakyRemediationFiling: Database.Statement | null = null;
+
+/**
+ * Atomically claims the right to file a remediation task for `testId`:
+ * flips remediation_task_open 0 -> 1 in a single UPDATE guarded by
+ * `WHERE remediation_task_open = 0`, so two concurrent threshold-crossing
+ * callers (plausible since PRMergeWatcher can process more than one PR
+ * concurrently) can never both observe "no open task" and both file — only
+ * whichever UPDATE's WHERE clause matches first wins (better-sqlite3 is
+ * synchronous, so there is no interleaving within this single statement).
+ * The caller must release the claim (setFlakyRemediationLinkedTask with
+ * open=false) if it fails to actually finish filing — see
+ * recordAndMaybeFileFlakyRemediation. Returns false if another caller (or a
+ * still-open previously filed task) already holds the claim.
+ */
+export function tryClaimFlakyRemediationFiling(
+  testId: string,
+  nowIso: string,
+): boolean {
+  _stmtClaimFlakyRemediationFiling ??= db.prepare<{
+    test_id: string;
+    updated_at: string;
+  }>(`
+    UPDATE flaky_remediation_tracking
+    SET remediation_task_open = 1, remediation_task_id = NULL, updated_at = @updated_at
+    WHERE test_id = @test_id AND remediation_task_open = 0
+  `);
+  const info = _stmtClaimFlakyRemediationFiling.run({
+    test_id: testId,
+    updated_at: nowIso,
+  });
+  return info.changes > 0;
+}
+
 /** The tracking row currently linked to `taskId` as its open remediation task, or undefined. */
 export function getFlakyRemediationTrackingByOpenTaskId(
   taskId: string,

@@ -16,9 +16,9 @@ import { logger } from '../logger';
 import { typedGetSetting } from '../config/settings';
 import {
   recordFlakyLaneAutoDisposition,
-  getFlakyRemediationTracking,
   setFlakyRemediationLinkedTask,
   getFlakyRemediationTrackingByOpenTaskId,
+  tryClaimFlakyRemediationFiling,
 } from '../db/queries';
 import {
   resolveMilestoneDatabaseId,
@@ -77,6 +77,17 @@ function renderRemediationTaskBody(
  * write and the task.create call are sibling operations, consistent with
  * this codebase's existing convention for this class of state (see
  * capability_disqualification's recordDisqualification/upsertCapabilityDisqualification).
+ *
+ * The "no open task yet" check and the eventual task.create call are
+ * separated by an await (milestone resolution + a network call), so the
+ * dedup check alone can't prevent two concurrent threshold-crossing callers
+ * for the same test_id from both filing. tryClaimFlakyRemediationFiling
+ * closes that race with a single atomic UPDATE ... WHERE remediation_task_open
+ * = 0 — only one caller's claim can ever succeed; the loser returns
+ * immediately. Never throws: every failure past the claim (including
+ * backend.createTask itself) is caught, logged, and releases the claim so a
+ * later threshold-crossing can retry — filing is best-effort and must never
+ * block or delay the flaky rerun it's attached to.
  */
 export async function recordAndMaybeFileFlakyRemediation(
   trigger: FlakyRemediationTrigger,
@@ -105,16 +116,47 @@ export async function recordAndMaybeFileFlakyRemediation(
     return { filed: false, reason: 'below-threshold' };
   }
 
-  const tracking = getFlakyRemediationTracking(trigger.testId);
-  if (tracking?.remediation_task_open) {
+  if (!tryClaimFlakyRemediationFiling(trigger.testId, nowIso)) {
     return { filed: false, reason: 'already-open' };
   }
 
+  try {
+    return await fileClaimedRemediationTask(
+      trigger,
+      autoDispositionCount,
+      resolveBackend,
+      now,
+    );
+  } catch (err) {
+    logger.warn(
+      `[flakyRemediationFiling] failed to file remediation task for test ${trigger.testId}: ${(err as Error).message}`,
+    );
+    setFlakyRemediationLinkedTask(trigger.testId, null, false, now());
+    return { filed: false, reason: 'create-task-failed' };
+  }
+}
+
+/**
+ * The claimed tail of recordAndMaybeFileFlakyRemediation: resolves the
+ * triggering task's milestone and files the task, or releases the claim
+ * (returning filed: false) for every recognized "can't file right now"
+ * condition — a missing triggering task, an unresolvable milestone, or a
+ * backend without createTask support. Any other error (including
+ * backend.createTask itself throwing) propagates to the caller's catch,
+ * which releases the claim the same way.
+ */
+async function fileClaimedRemediationTask(
+  trigger: FlakyRemediationTrigger,
+  autoDispositionCount: number,
+  resolveBackend: (projectId: string) => TaskBackend,
+  now: () => string,
+): Promise<FlakyRemediationFilingResult> {
   if (!trigger.triggeringTaskId) {
     logger.warn(
       `[flakyRemediationFiling] test ${trigger.testId} crossed threshold but the triggering PR ` +
         `(#${trigger.prNumber} ${trigger.repo}) has no task_id — skipping filing`,
     );
+    setFlakyRemediationLinkedTask(trigger.testId, null, false, now());
     return { filed: false, reason: 'no-triggering-task' };
   }
 
@@ -127,6 +169,7 @@ export async function recordAndMaybeFileFlakyRemediation(
       `[flakyRemediationFiling] could not resolve milestone for triggering task ` +
         `${trigger.triggeringTaskId} (project ${trigger.projectId}) — skipping filing for test ${trigger.testId}`,
     );
+    setFlakyRemediationLinkedTask(trigger.testId, null, false, now());
     return { filed: false, reason: 'no-resolvable-milestone' };
   }
 
@@ -138,6 +181,7 @@ export async function recordAndMaybeFileFlakyRemediation(
       logger.warn(
         `[flakyRemediationFiling] ${err.message} — skipping filing for test ${trigger.testId}`,
       );
+      setFlakyRemediationLinkedTask(trigger.testId, null, false, now());
       return { filed: false, reason: 'unknown-milestone' };
     }
     throw err;
@@ -148,6 +192,7 @@ export async function recordAndMaybeFileFlakyRemediation(
     logger.warn(
       `[flakyRemediationFiling] task backend for project ${trigger.projectId} does not support createTask`,
     );
+    setFlakyRemediationLinkedTask(trigger.testId, null, false, now());
     return { filed: false, reason: 'backend-unsupported' };
   }
 

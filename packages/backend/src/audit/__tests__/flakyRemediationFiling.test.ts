@@ -177,4 +177,52 @@ describe('recordAndMaybeFileFlakyRemediation', () => {
     expect(fresh.taskId).toBe('notion:remediation-task-2');
     expect(createTaskMock).toHaveBeenCalledTimes(2);
   });
+
+  it('never double-files when two threshold-crossing calls race concurrently for the same test_id', async () => {
+    // Pre-seed the count to 1 so both concurrent calls land on the exact
+    // same threshold-crossing PR-count transition (1 -> 2), maximizing the
+    // TOCTOU window between the dedup check and the eventual createTask call.
+    await trigger('test-e', 501);
+    createTaskMock.mockClear();
+
+    let resolveCreate: (id: string) => void;
+    createTaskMock.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveCreate = resolve)),
+    );
+
+    const raceA = trigger('test-e', 502);
+    const raceB = trigger('test-e', 503);
+
+    // Let both calls reach their claim attempt before the in-flight
+    // createTask resolves — only one should have won the claim.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    resolveCreate!('notion:remediation-task-race');
+
+    const [resultA, resultB] = await Promise.all([raceA, raceB]);
+    const filedResults = [resultA, resultB].filter((r) => r.filed);
+    expect(filedResults).toHaveLength(1);
+    expect(createTaskMock).toHaveBeenCalledTimes(1);
+
+    const tracking = getFlakyRemediationTracking('test-e');
+    expect(tracking?.remediation_task_open).toBe(1);
+    expect(tracking?.remediation_task_id).toBe('notion:remediation-task-race');
+  });
+
+  it('swallows a createTask failure, releases the claim, and lets a later call retry', async () => {
+    await trigger('test-f', 601);
+    createTaskMock.mockRejectedValueOnce(new Error('Notion API timeout'));
+
+    const failed = await trigger('test-f', 602);
+    expect(failed.filed).toBe(false);
+    expect(failed.reason).toBe('create-task-failed');
+
+    const tracking = getFlakyRemediationTracking('test-f');
+    expect(tracking?.remediation_task_open).toBe(0);
+    expect(tracking?.remediation_task_id).toBeNull();
+
+    createTaskMock.mockResolvedValueOnce('notion:remediation-task-retry');
+    const retried = await trigger('test-f', 603);
+    expect(retried.filed).toBe(true);
+    expect(retried.taskId).toBe('notion:remediation-task-retry');
+  });
 });
