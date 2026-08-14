@@ -1131,7 +1131,12 @@ export class PRMergeWatcher extends EventEmitter {
     pr: PullRequestRow,
     project: ProjectConfig | undefined,
   ): Promise<FlakeRecoveryOutcome | null> {
-    if (!project || !pr.session_id || !this.reviewOrchestrator || !pr.head_sha) {
+    if (
+      !project ||
+      !pr.session_id ||
+      !this.reviewOrchestrator ||
+      !pr.head_sha
+    ) {
       return null;
     }
     const session = getSession(pr.session_id);
