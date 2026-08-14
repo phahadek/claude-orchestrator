@@ -3698,7 +3698,10 @@ export class SameStatusSelfTransitionError extends Error {
  * the cache has no row yet (a brand-new task) rather than blocking staging
  * on a cache miss.
  */
-function assertNotSameStatusSelfTransition(kind: string, payload: unknown): void {
+function assertNotSameStatusSelfTransition(
+  kind: string,
+  payload: unknown,
+): void {
   if (kind !== 'task.setStatus') return;
   const p = payload as Partial<SetStatusPayload> | null;
   if (!p?.taskId || !p?.status) return;
