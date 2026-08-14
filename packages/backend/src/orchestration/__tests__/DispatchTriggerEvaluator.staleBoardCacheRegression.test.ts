@@ -12,9 +12,9 @@ import {
   upsertArm,
   upsertTaskCache,
   recordTaskStatusWrite,
-} from '../../db/queries.js';
-import { NotionTaskBackend } from '../../tasks/NotionTaskBackend.js';
-import type { ResolvedTask } from '../../tasks/types.js';
+} from '../../db/queries';
+import { NotionTaskBackend } from '../../tasks/NotionTaskBackend';
+import type { ResolvedTask } from '../../tasks/types';
 
 /**
  * Regression test for TaskCacheRefresher's periodic poll clobbering a

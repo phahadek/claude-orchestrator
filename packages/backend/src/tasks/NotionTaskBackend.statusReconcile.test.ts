@@ -6,7 +6,6 @@ vi.mock('../db/db.js', async () => {
 });
 
 import { NotionTaskBackend } from './NotionTaskBackend';
-import { ProjectService } from '../projects/ProjectService';
 import {
   insertProject,
   insertMilestone,
@@ -14,7 +13,7 @@ import {
   recordTaskStatusWrite,
   upsertTaskCache,
   getTaskCache,
-} from '../db/queries.js';
+} from '../db/queries';
 import type { ResolvedTask } from './types';
 
 /**
