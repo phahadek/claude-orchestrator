@@ -73,15 +73,21 @@ export function createReportStateRouter(): Router {
       const n = Number(raw);
       return Number.isFinite(n) ? n : undefined;
     };
-    res.json(
-      listReports({
-        project: stringParam('project'),
-        milestone: stringParam('milestone'),
-        state: stringParam('state'),
-        page: numberParam('page'),
-        limit: numberParam('limit'),
-      }),
-    );
+    try {
+      res.json(
+        listReports({
+          project: stringParam('project'),
+          milestone: stringParam('milestone'),
+          state: stringParam('state'),
+          page: numberParam('page'),
+          limit: numberParam('limit'),
+        }),
+      );
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'report list failed',
+      });
+    }
   });
 
   // GET /api/reports/:id

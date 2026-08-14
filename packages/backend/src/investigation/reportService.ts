@@ -10,6 +10,10 @@ import {
   blocksMilestoneConvergence,
 } from './reportStore';
 import type { InvestigationReportRow, ReportFilter } from './reportStore';
+import {
+  resolveMilestoneRowForProject,
+  resolveMilestoneRowAnyProject,
+} from '../projects/milestoneResolver';
 
 /**
  * Business logic for investigation_report — the state-machine guards and
@@ -24,6 +28,25 @@ const MAX_LIST_LIMIT = 100;
 export interface InvestigationReportWithDerived extends InvestigationReportRow {
   inFlight: boolean;
   resolveEligible: boolean;
+}
+
+/**
+ * Resolves an inbound milestone reference (display name, board name, or
+ * already-canonical UUID) to the milestones.id UUID key space that
+ * investigation_report.milestone_id is stored in — matching
+ * flow_arm.milestone_id, per the design's write-path lock. Throws
+ * UnknownMilestoneError for anything unresolvable rather than persisting an
+ * unresolved value; an empty/blank input is left as-is (the "no milestone
+ * yet" draft-time sentinel).
+ */
+function resolveMilestoneIdForWrite(
+  projectId: string,
+  milestoneId: string,
+): string {
+  if (!milestoneId.trim()) {
+    return milestoneId;
+  }
+  return resolveMilestoneRowForProject(projectId, milestoneId).id;
 }
 
 function withDerived(
@@ -66,7 +89,10 @@ export function createReport(
   }
   const row = insertReport({
     projectId: input.projectId,
-    milestoneId: input.milestoneId ?? '',
+    milestoneId: resolveMilestoneIdForWrite(
+      input.projectId,
+      input.milestoneId ?? '',
+    ),
     title: input.title,
     symptomText: input.symptomText,
     evidenceText: input.evidenceText,
@@ -99,7 +125,14 @@ export function updateDraftReport(
       `investigation report ${id} is ${existing.state}, not draft — cannot update`,
     );
   }
-  const row = updateReportFields(id, fields, new Date().toISOString());
+  const resolvedFields: UpdateDraftReportInput = { ...fields };
+  if (fields.milestoneId !== undefined) {
+    resolvedFields.milestoneId = resolveMilestoneIdForWrite(
+      existing.project_id,
+      fields.milestoneId,
+    );
+  }
+  const row = updateReportFields(id, resolvedFields, new Date().toISOString());
   return withDerived(row);
 }
 
@@ -174,9 +207,14 @@ export function listReports(
     MAX_LIST_LIMIT,
   );
   const offset = (page - 1) * limit;
+  const resolvedMilestoneId = options.milestone
+    ? options.project
+      ? resolveMilestoneRowForProject(options.project, options.milestone).id
+      : resolveMilestoneRowAnyProject(options.milestone).id
+    : undefined;
   const filter: ReportFilter = {
     projectId: options.project,
-    milestoneId: options.milestone,
+    milestoneId: resolvedMilestoneId,
     state: options.state,
   };
   const items = listReportsFiltered(filter, limit, offset).map(withDerived);

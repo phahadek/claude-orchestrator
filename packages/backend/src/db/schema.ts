@@ -2106,6 +2106,43 @@ export function runMigrations(target: Database.Database): void {
       ON investigation_report_dispatch(report_id, session_id);
   `);
 
+  // investigation_report.milestone_id: canonicalize pre-existing rows written
+  // before createReport/updateDraftReport's resolveMilestoneRowForProject
+  // normalization existed — the operator intake (InvestigationReportSection)
+  // posted the gate_item/seed_item display-name form straight through, while
+  // the column is designed to hold the milestones.id UUID (matching
+  // flow_arm.milestone_id). Left uncanonicalized, such a row is invisible to
+  // every UUID-keyed reader (convergenceService's investigationReport axis,
+  // investigationReconciler's getArm lookup) — the exact false-green /
+  // never-armed class this migration closes. Matches a row's milestone_id
+  // against the milestones table (by id, by exact name, or by canonical
+  // short id case-insensitively) scoped to the row's own project_id —
+  // mirroring findMilestone in milestoneResolver.ts — and rewrites it to
+  // the matched milestone's UUID. Idempotent: once milestone_id already
+  // equals a milestones.id, the same subquery resolves to that same id on a
+  // re-run, a no-op update.
+  target.exec(`
+    UPDATE investigation_report
+    SET milestone_id = (
+      SELECT m.id
+      FROM milestones m
+      WHERE m.project_id = investigation_report.project_id
+        AND (m.id = investigation_report.milestone_id
+             OR m.name = investigation_report.milestone_id
+             OR COALESCE(m.canonical_short_id, m.name) = investigation_report.milestone_id COLLATE NOCASE)
+      LIMIT 1
+    )
+    WHERE milestone_id IS NOT NULL
+      AND milestone_id != ''
+      AND EXISTS (
+        SELECT 1 FROM milestones m
+        WHERE m.project_id = investigation_report.project_id
+          AND (m.id = investigation_report.milestone_id
+               OR m.name = investigation_report.milestone_id
+               OR COALESCE(m.canonical_short_id, m.name) = investigation_report.milestone_id COLLATE NOCASE)
+      );
+  `);
+
   // test_request_runs: link each run back to the originating session, carry
   // a requestedAt captured before admission/semaphore queueing can delay a
   // run's started_at, and record a failure sub-reason distinguishing timeout

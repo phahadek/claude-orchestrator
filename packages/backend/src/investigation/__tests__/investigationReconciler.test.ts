@@ -41,6 +41,7 @@ import {
   updateReportState,
   listDispatchedSessions,
 } from '../reportStore.js';
+import { createReport, commitReport } from '../reportService.js';
 import { runInvestigationReconcilerTick } from '../investigationReconciler.js';
 
 let milestoneId: string;
@@ -176,6 +177,30 @@ describe('runInvestigationReconcilerTick', () => {
     expect(result.skippedForBudget).toBe(1);
     expect(sessionManager.start).toHaveBeenCalledTimes(1);
     expect([reportA.id, reportB.id]).toContain(result.dispatched[0]);
+  });
+
+  it('picks up a report filed through the operator intake (display-name milestone form) as an armed candidate', async () => {
+    // Mirrors the operator intake write path (reportService.createReport,
+    // not reportStore.insertReport directly): the milestone is supplied in
+    // its display-name form and must resolve to the same UUID flow_arm is
+    // armed on above, or the candidate silently falls back to
+    // DEFAULT_ARM.investigate and is never dispatched.
+    const report = commitReport(
+      createReport({
+        projectId: 'proj-a',
+        milestoneId: 'M1',
+        title: 'operator-filed report',
+        symptomText: 'operator observed a live symptom',
+      }).id,
+    );
+    const sessionManager = makeSessionManager();
+
+    const result = await runInvestigationReconcilerTick(
+      sessionManager as never,
+    );
+
+    expect(result.dispatched).toEqual([report.id]);
+    expect(sessionManager.start).toHaveBeenCalledTimes(1);
   });
 
   it('does not exceed the shared max_concurrent_planning_sessions ceiling even with a high investigate sub-limit', async () => {
