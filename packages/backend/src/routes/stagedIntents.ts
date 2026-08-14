@@ -7,6 +7,7 @@ import {
   BackendTaskWriteCommands,
   NotionWriteCommands,
   getCachedType,
+  getCachedStatus,
   type TaskStatus,
   type TaskType,
   type MoveTaskContent,
@@ -3663,6 +3664,50 @@ function assertNotSessionStagedDone(
   throw new SessionStagedDoneError(p.taskId ?? 'unknown');
 }
 
+/**
+ * Thrown at stage time when a `task.setStatus` targets the task's own
+ * current (cached) status — never a legal transition (isValidTransition has
+ * no self-loops; see statusCanonical.ts), so it would only ever fail later
+ * at commit time and land in `needs_revision` as an "invalid status
+ * transition ... X -> X" the staging session has no legal way to retire
+ * (intent.withdraw refuses needs_revision, and the only "corrected" retry is
+ * the exact same self-transition). Refusing here, before the row is ever
+ * inserted, means the caller gets an actionable error synchronously instead
+ * of an orphaned stuck intent.
+ */
+export class SameStatusSelfTransitionError extends Error {
+  constructor(taskId: string, status: string) {
+    super(
+      `[stagedIntents] "task.setStatus" -> ${status} for task "${taskId}" is a no-op: the task is ` +
+        `already at "${status}" — this would only fail later as an invalid ${status} -> ${status} ` +
+        'transition. Do not stage this intent; the task already reflects the desired status.',
+    );
+    this.name = 'SameStatusSelfTransitionError';
+  }
+}
+
+/**
+ * Stage-time twin of TaskWriteCommands.setStatus's apply-time transition
+ * guard, scoped to the same-status case specifically (isValidTransition
+ * already rejects every other illegal transition at commit time, but a
+ * same-status self-transition is common enough — e.g. a corrective
+ * task.setStatus proposed against a stale cached view of the task's status —
+ * to warrant catching it before it becomes a permanently stuck
+ * needs_revision row). Compares against the cached status (the same source
+ * of truth TaskWriteCommands.setStatus itself reads), so it is a no-op when
+ * the cache has no row yet (a brand-new task) rather than blocking staging
+ * on a cache miss.
+ */
+function assertNotSameStatusSelfTransition(kind: string, payload: unknown): void {
+  if (kind !== 'task.setStatus') return;
+  const p = payload as Partial<SetStatusPayload> | null;
+  if (!p?.taskId || !p?.status) return;
+  const current = getCachedStatus(p.taskId);
+  if (current && current === p.status) {
+    throw new SameStatusSelfTransitionError(p.taskId, p.status);
+  }
+}
+
 function applyDesignClosingSynthesisGeneration(
   kind: string,
   payload: unknown,
@@ -3749,6 +3794,7 @@ export function stageIntent(
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
   assertNotSessionStagedDone(kind, payload, sessionId);
+  assertNotSameStatusSelfTransition(kind, payload);
   assertCompletenessApproval(kind, sessionId);
   assertCompletenessRequiresDecision(kind, sessionId);
   assertDesignTaskCreateHasPriority(kind, payload, sessionId);
