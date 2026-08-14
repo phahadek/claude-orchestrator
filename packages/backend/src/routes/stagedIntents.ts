@@ -3675,7 +3675,7 @@ function assertNotSessionStagedDone(
  * inserted, means the caller gets an actionable error synchronously instead
  * of an orphaned stuck intent.
  */
-export class SameStatusSelfTransitionError extends Error {
+class SameStatusSelfTransitionError extends Error {
   constructor(taskId: string, status: string) {
     super(
       `[stagedIntents] "task.setStatus" -> ${status} for task "${taskId}" is a no-op: the task is ` +
