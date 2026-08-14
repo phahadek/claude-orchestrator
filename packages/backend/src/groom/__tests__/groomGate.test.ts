@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -66,6 +66,7 @@ import {
   type AccretionCheckOptions,
 } from '../groomGate';
 import { filesPathsEntryExistsInRepo } from '../groomLoad';
+import { upsertTaskCache, deleteTaskCacheRow } from '../../db/queries';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
 import { BackendTaskWriteCommands } from '../../tasks/TaskWriteCommands';
@@ -1387,6 +1388,116 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
       'notion:fm3-investigation-deferred',
     );
     expect(result.allowed).toBe(true);
+  });
+});
+
+describe('checkGroomingPromotionGate — Depends On re-derives status/type from task_cache', () => {
+  const BASE = {
+    size_check: { decision: 'n/a' },
+    type_check: { decision: 'n/a' },
+    type: '📐 Design',
+    triage: {
+      proposedVerdict: 'clean' as const,
+      hasOpenQuestionsHeading: true,
+    },
+  };
+
+  afterEach(() => {
+    deleteTaskCacheRow('notion:cache-dep');
+  });
+
+  it('resolves from task_cache, not the caller-supplied status, when the caller snapshot is stale/wrong-vocabulary', async () => {
+    upsertTaskCache(
+      'notion:cache-dep',
+      JSON.stringify({ status: '✅ Done', type: '📐 Design' }),
+    );
+
+    // Caller supplies the bare canonical string 'Done' (wrong vocabulary —
+    // DONE_STATUSES only matches the display form '✅ Done') and a stale
+    // pre-Done status; task_cache holds the correct current status.
+    const staleCanonical = await gate(
+      {
+        ...BASE,
+        dependsOnTasks: [
+          { id: 'notion:cache-dep', type: '📐 Design', status: 'Done' },
+        ],
+      },
+      'notion:depends-on-stale-canonical',
+    );
+    expect(staleCanonical.allowed).toBe(true);
+
+    const stalePreDone = await gate(
+      {
+        ...BASE,
+        dependsOnTasks: [
+          {
+            id: 'notion:cache-dep',
+            type: '📐 Design',
+            status: '🔲 Backlog',
+          },
+        ],
+      },
+      'notion:depends-on-stale-pre-done',
+    );
+    expect(stalePreDone.allowed).toBe(true);
+  });
+
+  it('still blocks when task_cache reports the dependency is not yet Done, regardless of a caller claim otherwise', async () => {
+    upsertTaskCache(
+      'notion:cache-dep',
+      JSON.stringify({ status: '🔄 In Progress', type: '📐 Design' }),
+    );
+
+    const result = await gate(
+      {
+        ...BASE,
+        dependsOnTasks: [
+          { id: 'notion:cache-dep', type: '📐 Design', status: '✅ Done' },
+        ],
+      },
+      'notion:depends-on-cache-not-done',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('notion:cache-dep'))).toBe(
+      true,
+    );
+  });
+
+  it('preserves fail-closed behavior, falling back to the caller-supplied value, when the dep id has no task_cache row', async () => {
+    deleteTaskCacheRow('notion:no-cache-dep');
+
+    const blocked = await gate(
+      {
+        ...BASE,
+        dependsOnTasks: [
+          {
+            id: 'notion:no-cache-dep',
+            type: '📐 Design',
+            status: '🔲 Backlog',
+          },
+        ],
+      },
+      'notion:depends-on-no-cache-blocked',
+    );
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reasons.some((r) => r.includes('notion:no-cache-dep'))).toBe(
+      true,
+    );
+
+    const cleared = await gate(
+      {
+        ...BASE,
+        dependsOnTasks: [
+          {
+            id: 'notion:no-cache-dep',
+            type: '📐 Design',
+            status: '✅ Done',
+          },
+        ],
+      },
+      'notion:depends-on-no-cache-cleared',
+    );
+    expect(cleared.allowed).toBe(true);
   });
 });
 
