@@ -33,7 +33,10 @@ vi.mock('../../db/db.js', async () => {
 
 import { db } from '../../db/db.js';
 import { ProjectService } from '../../projects/ProjectService.js';
-import { upsertTaskCache, getFlakyRemediationTracking } from '../../db/queries.js';
+import {
+  upsertTaskCache,
+  getFlakyRemediationTracking,
+} from '../../db/queries.js';
 import type { NotionTask } from '../../notion/types.js';
 import {
   recordAndMaybeFileFlakyRemediation,
@@ -106,7 +109,10 @@ describe('recordAndMaybeFileFlakyRemediation', () => {
     expect(second.taskId).toBe('notion:remediation-task-1');
     expect(createTaskMock).toHaveBeenCalledTimes(1);
     expect(createTaskMock).toHaveBeenCalledWith(
-      expect.objectContaining({ databaseId: MILESTONE_SOURCE_ID, type: '💻 Code' }),
+      expect.objectContaining({
+        databaseId: MILESTONE_SOURCE_ID,
+        type: '💻 Code',
+      }),
     );
 
     const tracking = getFlakyRemediationTracking('test-a');
@@ -158,7 +164,10 @@ describe('recordAndMaybeFileFlakyRemediation', () => {
     await trigger('test-d', 403);
     expect(createTaskMock).toHaveBeenCalledTimes(1);
 
-    closeFlakyRemediationTaskIfLinked('notion:remediation-task-1', new Date(1).toISOString());
+    closeFlakyRemediationTaskIfLinked(
+      'notion:remediation-task-1',
+      new Date(1).toISOString(),
+    );
     const closed = getFlakyRemediationTracking('test-d');
     expect(closed?.remediation_task_open).toBe(0);
 
