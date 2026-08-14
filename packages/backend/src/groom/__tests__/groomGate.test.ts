@@ -1480,9 +1480,9 @@ describe('checkGroomingPromotionGate — Depends On re-derives status/type from 
       'notion:depends-on-no-cache-blocked',
     );
     expect(blocked.allowed).toBe(false);
-    expect(
-      blocked.reasons.some((r) => r.includes('notion:no-cache-dep')),
-    ).toBe(true);
+    expect(blocked.reasons.some((r) => r.includes('notion:no-cache-dep'))).toBe(
+      true,
+    );
 
     const cleared = await gate(
       {
