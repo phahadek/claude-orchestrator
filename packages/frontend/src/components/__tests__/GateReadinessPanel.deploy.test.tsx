@@ -195,6 +195,39 @@ describe('GateReadinessPanel deploy launch control', () => {
     expect(screen.queryByTestId('deploy-launch-button')).toBeNull();
   });
 
+  it('styles the behind-list PR link with the accent token and a distinct hover state', async () => {
+    deployApiMock.getStatus.mockResolvedValue({
+      run: null,
+      events: [],
+      deployedSha: null,
+      deployedShaRecordedAt: null,
+      behind: {
+        count: 1,
+        items: [
+          {
+            kind: 'pr',
+            prNumber: 42,
+            prUrl: 'https://github.com/example/repo/pull/42',
+            title: 'Some merged PR',
+          },
+        ],
+      },
+      plan: [],
+    });
+
+    render(<GateReadinessPanel activeProjectId="proj-1" />);
+
+    const reviewButton = await screen.findByTestId('deploy-review-button');
+    fireEvent.click(reviewButton);
+
+    const list = await screen.findByTestId('deploy-behind-list');
+    const link = list.querySelector('a') as HTMLAnchorElement;
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noreferrer');
+    expect(link.className).toMatch(/deployPrLink/);
+  });
+
   it('renders one pending cell per plan step when the run has no events yet', async () => {
     const plan = Array.from({ length: 10 }, (_, i) => ({
       id: `step-${i}`,
