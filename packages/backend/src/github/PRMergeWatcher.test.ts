@@ -3920,7 +3920,13 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     outcome: 'passed' | 'failed' = 'passed',
   ): ReviewOrchestrator {
     return {
-      rerunFlakyTests: vi.fn().mockResolvedValue({ outcome, passed: outcome === 'passed', output: '' }),
+      rerunFlakyTests: vi
+        .fn()
+        .mockResolvedValue({
+          outcome,
+          passed: outcome === 'passed',
+          output: '',
+        }),
     } as unknown as ReviewOrchestrator;
   }
 
@@ -4057,7 +4063,9 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
 
     await watcher.poll();
 
-    expect(vi.mocked(reviewOrchestrator.rerunFlakyTests)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(reviewOrchestrator.rerunFlakyTests),
+    ).not.toHaveBeenCalled();
     expect(vi.mocked(setCiRemediationAttemptedSha)).toHaveBeenCalledWith(
       42,
       'owner/repo',
@@ -4072,7 +4080,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalled();
   });
 
-  it('does not auto-recover when the diff touches the flagged test\'s own file', async () => {
+  it("does not auto-recover when the diff touches the flagged test's own file", async () => {
     flagTest('tests.unit.test_foo.test_bar', PR_CREATED_AT_MS);
     const runId = 'f2-run-touched';
     seedRunFailures(runId, [
@@ -4111,7 +4119,9 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
 
     await watcher.poll();
 
-    expect(vi.mocked(reviewOrchestrator.rerunFlakyTests)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(reviewOrchestrator.rerunFlakyTests),
+    ).not.toHaveBeenCalled();
     expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
       42,
       'owner/repo',
@@ -4121,7 +4131,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalled();
   });
 
-  it('does not auto-recover when the flip-rate window would only flag using a sample from this PR\'s own runs', async () => {
+  it("does not auto-recover when the flip-rate window would only flag using a sample from this PR's own runs", async () => {
     const testId = 'tests.unit.test_foo.test_bar';
     // Two stable (non-flapping) samples predate the PR.
     insertHistorySample({
@@ -4181,7 +4191,9 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
 
     await watcher.poll();
 
-    expect(vi.mocked(reviewOrchestrator.rerunFlakyTests)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(reviewOrchestrator.rerunFlakyTests),
+    ).not.toHaveBeenCalled();
     expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
       42,
       'owner/repo',
@@ -4210,8 +4222,11 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
     vi.mocked(
-      (github as unknown as { categorizeMergeability: (...a: unknown[]) => Promise<unknown> })
-        .categorizeMergeability,
+      (
+        github as unknown as {
+          categorizeMergeability: (...a: unknown[]) => Promise<unknown>;
+        }
+      ).categorizeMergeability,
     ).mockResolvedValue({
       category: 'ci_failed',
       mergeState: 'ci_failed',

@@ -143,7 +143,7 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     expect(eligible).toBe(false);
   });
 
-  it('is not eligible when the diff touches the flagged test\'s own file', () => {
+  it("is not eligible when the diff touches the flagged test's own file", () => {
     flagTest('tests.unit.test_foo.test_bar', CUTOFF);
     const runId = insertTestRequestRun('failed');
     seedRunFailures(runId, [
@@ -160,7 +160,7 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     expect(eligible).toBe(false);
   });
 
-  it('is not eligible when the flip-rate window would only flag using a sample from this PR\'s own runs', () => {
+  it("is not eligible when the flip-rate window would only flag using a sample from this PR's own runs", () => {
     const testId = 'tests.unit.test_foo.test_bar';
     // Two stable (non-flapping) samples predate the PR.
     insertHistorySample({ testId, outcome: 'passed', createdAt: CUTOFF - 200 });

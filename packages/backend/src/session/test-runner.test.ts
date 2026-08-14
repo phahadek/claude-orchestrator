@@ -13,9 +13,9 @@ import {
 
 describe('classnameFromTestId', () => {
   it('recovers the classname when testId is classname.name', () => {
-    expect(classnameFromTestId('tests.unit.test_foo.test_bar', 'test_bar')).toBe(
-      'tests.unit.test_foo',
-    );
+    expect(
+      classnameFromTestId('tests.unit.test_foo.test_bar', 'test_bar'),
+    ).toBe('tests.unit.test_foo');
   });
 
   it('returns null when testId has no classname (testId === name)', () => {
