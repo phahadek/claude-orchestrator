@@ -6220,7 +6220,9 @@ export function getFlakyRemediationTrackingByOpenTaskId(
   return db
     .prepare<{
       remediation_task_id: string;
-    }>(`SELECT * FROM flaky_remediation_tracking WHERE remediation_task_id = @remediation_task_id AND remediation_task_open = 1`)
+    }>(
+      `SELECT * FROM flaky_remediation_tracking WHERE remediation_task_id = @remediation_task_id AND remediation_task_open = 1`,
+    )
     .get({ remediation_task_id: taskId }) as
     | FlakyRemediationTrackingRow
     | undefined;
