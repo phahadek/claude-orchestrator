@@ -1257,11 +1257,3 @@ export interface FlakyRemediationTrackingRow {
   created_at: string;
   updated_at: string;
 }
-
-/** One row per (test_id, pr_number, repo) that has ever contributed a lane-side auto-disposition — the dedup key that makes the counter per-PR, not per-actuation-call. */
-export interface FlakyRemediationPrCountRow {
-  test_id: string;
-  pr_number: number;
-  repo: string;
-  counted_at: string;
-}
