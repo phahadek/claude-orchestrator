@@ -87,7 +87,12 @@ export class NotionTaskBackend implements TaskBackend {
       );
       return {
         ...r,
-        task: { ...r.task, id: prefixedId, status, dependsOn: prefixedDependsOn },
+        task: {
+          ...r.task,
+          id: prefixedId,
+          status,
+          dependsOn: prefixedDependsOn,
+        },
         source: 'notion' as const,
       };
     });
