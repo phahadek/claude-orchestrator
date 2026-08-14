@@ -196,19 +196,22 @@ function defaultKillProcess(pid: number): void {
  * OS → DB reconciliation sweep: the fourth cell in the reconciler coverage
  * matrix. reconcileSessionsMap (memory → DB) only iterates in-memory map
  * entries; the liveness sweeps above (DB → OS) only iterate non-terminal
- * rows. A claude OS process whose session row is already terminal (or
- * whose row is gone entirely) is invisible to all three — this sweep
- * enumerates the OS process table directly and closes that gap.
+ * rows. A claude OS process whose session row is already terminal is
+ * invisible to all three — this sweep enumerates the OS process table
+ * directly and closes that gap.
  *
- * Deliberately writes no session status: the row (when one exists) is
- * already terminal, so the only correct action is terminating the orphaned
- * process and dropping any stale in-memory map entry — never
- * re-terminalizing a row, which could stomp a status another path had
- * legitimately written.
+ * Deliberately writes no session status: the row is already terminal, so
+ * the only correct action is terminating the orphaned process and dropping
+ * any stale in-memory map entry — never re-terminalizing a row, which could
+ * stomp a status another path had legitimately written.
  *
  * A process with no resolvable `--session-id`/`--resume` uuid (e.g. `claude
  * remote-control`, the operator's own console) is never a candidate, under
- * any circumstance — there is nothing to resolve it against. A process
+ * any circumstance — there is nothing to resolve it against. Nor is a
+ * process whose uuid resolves to no row at all: ownership ("is this row
+ * mine?") is the invariant, and a process this sweep does not own must
+ * never be reaped, even if it looks orphaned — see e.g. Remote Control
+ * sessions, whose cloud session ids never have a row in this DB. A process
  * whose uuid resolves to a non-terminal row is never reaped either; that
  * case belongs to the liveness sweeps above, which reconcile the row
  * instead of touching the process.
@@ -239,15 +242,21 @@ export function reconcileOrphanProcesses(
     examined++;
 
     const row = getSessionRow(proc.sessionId);
-    if (row && !TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(row.status)) {
+    if (!row) {
+      // No row means it's not ours — e.g. a Remote Control session with a
+      // cloud session id. Never reap what we don't own.
+      continue;
+    }
+    if (!TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(row.status)) {
       // Belongs to the liveness sweeps (they reconcile the row); not ours.
       continue;
     }
 
-    // Grace floor: for a terminal row, measured from its own ended_at (the
-    // row may still be mid-teardown); for a process with no row at all,
-    // measured from the process's own start time.
-    const referenceMs = row?.ended_at ?? now - proc.etimeSeconds * 1000;
+    // Grace floor, measured from the row's own ended_at — the row may still
+    // be mid-teardown. A terminal row should always carry ended_at; fall
+    // back to now (i.e. always within grace) in the fail-safe direction if
+    // it somehow doesn't.
+    const referenceMs = row.ended_at ?? now;
     if (now - referenceMs < LIVENESS_RECONCILE_GRACE_MS) {
       skippedByGrace++;
       continue;
@@ -257,7 +266,7 @@ export function reconcileOrphanProcesses(
     evictSessionMapEntry(proc.sessionId);
     reaped++;
     logger.warn(
-      `[sessionLivenessReconciler] reaped orphaned process pid=${proc.pid} for session ${proc.sessionId.slice(0, 8)} (${row ? `status=${row.status}` : 'no DB row'})`,
+      `[sessionLivenessReconciler] reaped orphaned process pid=${proc.pid} for session ${proc.sessionId.slice(0, 8)} (status=${row.status})`,
     );
   }
 
@@ -265,10 +274,10 @@ export function reconcileOrphanProcesses(
     recordEvent({
       event_type: 'orphan_processes_reaped',
       actor_type: 'system',
-      payload: { reaped_count: reaped, reason: 'terminal_or_missing_row' },
+      payload: { reaped_count: reaped, reason: 'terminal_row' },
     });
     logger.info(
-      `[sessionLivenessReconciler] reaped ${reaped} orphaned process(es) with a terminal or missing session row`,
+      `[sessionLivenessReconciler] reaped ${reaped} orphaned process(es) with a terminal session row`,
     );
   }
 

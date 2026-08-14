@@ -581,33 +581,25 @@ describe('reconcileOrphanProcesses', () => {
     expect(killed).toEqual([]);
   });
 
-  it('reaps a process whose uuid resolves to no session row, only after the grace floor measured from process start', () => {
+  it('never reaps a process whose sessionId resolves to no row — e.g. a Remote Control cloud session id', () => {
     const killed: number[] = [];
     const result = reconcileOrphanProcesses({
       scanProcesses: () => [
-        proc({ pid: 555, sessionId: 'no-such-row', etimeSeconds: 10_000 }),
+        // Remote Control sessions carry a cse_-prefixed cloud session id
+        // that never has a row in this DB — it must never be reaped.
+        proc({
+          pid: 555,
+          sessionId: 'cse_01HoHJzea111waLofaBDYimz',
+          etimeSeconds: 10_000,
+        }),
       ],
       killProcess: (pid) => killed.push(pid),
       nowFn: () => NOW,
     });
 
-    expect(result.reaped).toBe(1);
-    expect(killed).toEqual([555]);
-  });
-
-  it('skips a process with no session row that has not yet cleared the grace floor since process start', () => {
-    const killed: number[] = [];
-    const result = reconcileOrphanProcesses({
-      scanProcesses: () => [
-        // etimeSeconds=5s -> started 5s ago, well inside the 2min grace floor
-        proc({ pid: 666, sessionId: 'brand-new-no-row', etimeSeconds: 5 }),
-      ],
-      killProcess: (pid) => killed.push(pid),
-      nowFn: () => NOW,
-    });
-
+    expect(result.examined).toBe(1);
     expect(result.reaped).toBe(0);
-    expect(result.skippedByGrace).toBe(1);
+    expect(result.skippedByGrace).toBe(0);
     expect(killed).toEqual([]);
   });
 
