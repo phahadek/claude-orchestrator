@@ -57,6 +57,17 @@ export function runMigrations(target: Database.Database): void {
       raw_json   TEXT    NOT NULL
     );
 
+    -- Short-lived ledger of the most recent status a write-path applied to a
+    -- task, keyed independently of task_cache so a stale bulk board fetch
+    -- (NotionClient's own board-level cache, or a TaskCacheRefresher poll
+    -- racing an in-flight status write) can be reconciled against the value
+    -- we know we just wrote, rather than silently clobbering it.
+    CREATE TABLE IF NOT EXISTS task_status_writes (
+      task_id    TEXT    PRIMARY KEY,
+      status     TEXT    NOT NULL,
+      written_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS settings (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL

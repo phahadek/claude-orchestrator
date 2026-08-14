@@ -21,6 +21,7 @@ import {
   upsertTaskCache,
   updateTaskStatusInBoardCaches,
   getTaskStatusFromCache,
+  recordTaskStatusWrite,
 } from '../db/queries';
 
 /**
@@ -320,6 +321,7 @@ export class AuditingTaskBackend implements TaskBackend {
     }
     await this.inner.updateStatus(taskId, status);
     updateTaskStatusInBoardCaches(taskId, status);
+    recordTaskStatusWrite(taskId, status);
     const source = options?.source ?? 'orchestrator';
     const sessionId = options?.sessionId ?? null;
     recordEvent({

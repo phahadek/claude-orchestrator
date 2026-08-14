@@ -15,6 +15,7 @@ import {
   upsertTaskCache,
   getTaskCache,
   getTasksByStatusFromCache,
+  getRecentTaskStatusWrite,
 } from '../db/queries';
 import {
   renderTaskBody,
@@ -64,6 +65,15 @@ export class NotionTaskBackend implements TaskBackend {
       const prefixedDependsOn = r.task.dependsOn.map((dep) =>
         formatTaskId('notion', dep),
       );
+      // Reconcile against any status write recorded more recently than this
+      // fetch — guards against a stale/racing board fetch (this backend's
+      // own or NotionClient's internal board cache) silently reverting a
+      // status change that already landed via updateStatus.
+      const recentStatus = getRecentTaskStatusWrite(prefixedId);
+      const status =
+        recentStatus !== null && recentStatus !== r.task.status
+          ? recentStatus
+          : r.task.status;
       // Also cache under the prefixed key so getTaskTitleFromCache works with
       // prefixed session.task_id lookups.
       upsertTaskCache(
@@ -71,12 +81,13 @@ export class NotionTaskBackend implements TaskBackend {
         JSON.stringify({
           ...r.task,
           id: prefixedId,
+          status,
           dependsOn: prefixedDependsOn,
         }),
       );
       return {
         ...r,
-        task: { ...r.task, id: prefixedId, dependsOn: prefixedDependsOn },
+        task: { ...r.task, id: prefixedId, status, dependsOn: prefixedDependsOn },
         source: 'notion' as const,
       };
     });
