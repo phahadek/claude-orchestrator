@@ -27,6 +27,7 @@ import { Semaphore } from '../tasks/deferralClassifier';
 import {
   runTestCommands,
   collectStructuredTestResult,
+  isTestIdTouchedByChangedFiles,
   type TestCommandResult,
 } from '../session/test-runner';
 import { hasTestRequestAdmission } from './memoryAdmission';
@@ -41,6 +42,7 @@ import {
   listRecentValidTestDurations,
   upsertTestPerfBaseline,
   computeTestFlipRateFlag,
+  getFailingTestIdsForRun,
 } from '../db/queries';
 import type {
   TestRequestFailureReason,
@@ -363,6 +365,51 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
     computeTestPerfBaseline(testId);
   }
   recomputeFlipRateFlags(touchedTestIds);
+}
+
+/**
+ * The lane-side f2-only auto-disposition eligibility check (see
+ * PRMergeWatcher.tryF2LaneAutoDisposition, the sole caller): a failing F2 run
+ * is only eligible for auto-recovery when EVERY one of its failing tests
+ * (getFailingTestIdsForRun) clears both masking guards —
+ *  1. flip-rate flagged, using only samples predating this PR's own runs
+ *     (`beforeMs`, keyed off the PR's created_at)
+ *  2. the PR's diff (`changedFiles`) does not touch the test's own file,
+ *     confidently resolved (isTestIdTouchedByChangedFiles fails closed —
+ *     an unmappable test_id blocks auto-disposition, same as a touched file)
+ *
+ * A run with no per-test detail (structured_result never ingested) is never
+ * eligible — there's nothing to individually clear, so it must route through
+ * the unmodified session pause+nudge path per the locked design.
+ */
+export function evaluateF2LaneFlakyDisposition(
+  testRequestRunId: string,
+  beforeMs: number,
+  changedFiles: string[],
+  flipRateWindowN: number,
+  flipRateThresholdK: number,
+): boolean {
+  const failing = getFailingTestIdsForRun(testRequestRunId);
+  if (failing.length === 0) return false;
+
+  for (const test of failing) {
+    const flag = computeTestFlipRateFlag(
+      test.test_id,
+      flipRateWindowN,
+      flipRateThresholdK,
+      beforeMs,
+    );
+    if (!flag.flagged) return false;
+
+    const { touched, confident } = isTestIdTouchedByChangedFiles(
+      test.test_id,
+      test.name,
+      changedFiles,
+    );
+    if (!confident || touched) return false;
+  }
+
+  return true;
 }
 
 // ─── per-test rolling median/MAD duration baseline ─────────────────────────

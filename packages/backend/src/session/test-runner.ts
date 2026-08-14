@@ -411,6 +411,52 @@ interface JUnitTestCase {
   failureTraceExcerpt?: string;
 }
 
+/**
+ * Recovers the `classname` component of a `${classname}.${name}` test id (see
+ * the JUnit-XML parse below) — the inverse of that id's construction. Returns
+ * null when `testId` carries no classname (id === name, e.g. a runner that
+ * emitted no classname attribute), since there's then nothing to derive a
+ * file path from.
+ */
+export function classnameFromTestId(
+  testId: string,
+  name: string,
+): string | null {
+  if (testId === name) return null;
+  const suffix = `.${name}`;
+  return testId.endsWith(suffix) ? testId.slice(0, -suffix.length) : null;
+}
+
+/**
+ * The flaky-disposition touched-file masking guard (see
+ * testRequestLane.ts's evaluateF2LaneFlakyDisposition): whether `testId`
+ * can be confidently resolved to a file, and if so whether that file is
+ * among `changedFiles` (the PR's diff, from getChangedFiles). classname is
+ * dot-separated module/path segments by JUnit convention (pytest's dotted
+ * module path, vitest's file-derived classname) — reasonable, but not
+ * certain, so callers must fail closed (treat as touched) when `confident`
+ * is false rather than assume "not touched".
+ */
+export function isTestIdTouchedByChangedFiles(
+  testId: string,
+  name: string,
+  changedFiles: string[],
+): { touched: boolean; confident: boolean } {
+  const classname = classnameFromTestId(testId, name);
+  if (!classname) return { touched: true, confident: false };
+
+  const candidatePath = classname.replace(/\./g, '/');
+  const touched = changedFiles.some((f) => {
+    const noExt = f.replace(/\.[^./]+$/, '');
+    return (
+      noExt === candidatePath ||
+      candidatePath.startsWith(`${noExt}/`) ||
+      noExt.endsWith(`/${candidatePath}`)
+    );
+  });
+  return { touched, confident: true };
+}
+
 interface JUnitSuite {
   name: string;
   tests: JUnitTestCase[];
