@@ -2212,7 +2212,7 @@ let _stmtGetTaskStatusWrite: Database.Statement | null = null;
  * data fully rather than pinning a write indefinitely (e.g. a later
  * out-of-band Notion edit should eventually take effect).
  */
-export const STATUS_WRITE_RECONCILE_WINDOW_MS = 120_000;
+const STATUS_WRITE_RECONCILE_WINDOW_MS = 120_000;
 
 /**
  * Record that a status write for `taskId` landed. Called from the write path
