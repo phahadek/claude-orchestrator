@@ -3920,13 +3920,11 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     outcome: 'passed' | 'failed' = 'passed',
   ): ReviewOrchestrator {
     return {
-      rerunFlakyTests: vi
-        .fn()
-        .mockResolvedValue({
-          outcome,
-          passed: outcome === 'passed',
-          output: '',
-        }),
+      rerunFlakyTests: vi.fn().mockResolvedValue({
+        outcome,
+        passed: outcome === 'passed',
+        output: '',
+      }),
     } as unknown as ReviewOrchestrator;
   }
 

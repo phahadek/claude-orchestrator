@@ -23,6 +23,11 @@ import {
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import { evaluateF2LaneFlakyDisposition } from '../orchestration/testRequestLane';
 import { recordEvent } from '../audit/AuditLog';
+import { getFailingTestIdsForRun } from '../db/queries';
+import {
+  recordAndMaybeFileFlakyRemediation,
+  closeFlakyRemediationTaskIfLinked,
+} from '../audit/flakyRemediationFiling';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow, TestRequestRunRow } from '../db/types';
 import { parsePauseReason } from '../db/pauseReason';
@@ -1247,6 +1252,22 @@ export class PRMergeWatcher extends EventEmitter {
     );
     if (!eligible) return false;
 
+    // Every failing test this run is about to auto-dispose counts toward its
+    // own remediation-filing threshold — see flakyRemediationFiling.ts. Never
+    // blocks or delays the rerun below: filing failures are logged and
+    // swallowed there, per the locked design's "no merge-blocking ceiling".
+    const failingTests = getFailingTestIdsForRun(testResult.id);
+    for (const test of failingTests) {
+      await recordAndMaybeFileFlakyRemediation({
+        projectId: project.id,
+        testId: test.test_id,
+        testName: test.name,
+        prNumber: pr.pr_number,
+        repo: pr.repo,
+        triggeringTaskId: pr.task_id ?? null,
+      });
+    }
+
     recordEvent({
       event_type: 'flake_recovery_attempted',
       actor_type: 'system',
@@ -1800,6 +1821,10 @@ export class PRMergeWatcher extends EventEmitter {
         await backend
           .updateStatus(pr.task_id, '✅ Done')
           .then(() => {
+            closeFlakyRemediationTaskIfLinked(
+              pr.task_id!,
+              new Date().toISOString(),
+            );
             this.broadcast({
               type: 'task_status_changed',
               notionTaskId: pr.task_id!,

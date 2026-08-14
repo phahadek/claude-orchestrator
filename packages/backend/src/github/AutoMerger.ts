@@ -4,6 +4,7 @@ import {
   runtimeSettings,
 } from '../config';
 import { recordEvent } from '../audit/AuditLog';
+import { closeFlakyRemediationTaskIfLinked } from '../audit/flakyRemediationFiling';
 import {
   getPRByNumber,
   setHeadSha,
@@ -435,6 +436,12 @@ export class AutoMerger {
         const backend = getTaskBackend(row.project_id);
         backend
           .updateStatus(session.task_id, '✅ Done')
+          .then(() => {
+            closeFlakyRemediationTaskIfLinked(
+              session.task_id!,
+              new Date().toISOString(),
+            );
+          })
           .catch((err: unknown) =>
             logger.warn(
               `[AutoMerger] local branch #${row.id}: updateStatus failed: ${(err as Error).message}`,
