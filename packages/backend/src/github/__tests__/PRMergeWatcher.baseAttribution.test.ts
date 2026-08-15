@@ -100,7 +100,6 @@ import {
 import type { GitHubClient } from '../GitHubClient';
 import type { SessionManager } from '../../session/SessionManager';
 import type { AutoMerger } from '../AutoMerger';
-import type { ReviewOrchestrator } from '../ReviewOrchestrator';
 import type { PullRequestRow } from '../../db/types';
 import type { VerifiedFlakyDispositionPayload } from '../types';
 
