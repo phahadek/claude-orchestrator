@@ -359,6 +359,15 @@ export interface PullRequestRow {
   /** Count of verified-flaky same-SHA gate re-runs attempted for the current
    *  ci_failing pause; resets to 0 when the pause clears or head_sha advances. */
   flake_recovery_attempts: number;
+  /** 0 | 1 — set when stalled_pr_retry_count's most recent exhaustion (the
+   *  gate_failed stall that triggered stalled_reconcile_cap escalation) was
+   *  confirmed base-attributable (see baseAttribution.ts) — the sole scoping
+   *  signal the base-recovery reset consults; cleared on any reset. */
+  stalled_retry_base_exhausted: number;
+  /** 0 | 1 — the flake_recovery_attempts counterpart to
+   *  stalled_retry_base_exhausted, set when the most recent flake-recovery
+   *  re-run failure was confirmed base-attributable. */
+  flake_recovery_base_exhausted: number;
   /** 0 | 1 — the docs execution flow's never-auto-merged output gate: set at
    *  PR-open for repo-file docs PRs. Excluded from getApprovedOpenPRs and
    *  independently refused at AutoMerger's merge-attempt choke point; never

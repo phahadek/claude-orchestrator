@@ -67,8 +67,13 @@ import {
   clearSessionInitiatedPRClose,
   incrementFlakeRecoveryAttempts,
   resetFlakeRecoveryAttempts,
+  setFlakeRecoveryBaseExhausted,
   recordMergeCommitForSession,
 } from '../db/queries';
+import {
+  isBaseTotalFail,
+  isProjectBaseHealthy,
+} from '../orchestration/baseAttribution';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
 import { buildTestResultDigest } from '../session/testResultDigest';
@@ -1005,7 +1010,7 @@ export class PRMergeWatcher extends EventEmitter {
   async handleVerifiedFlakyDisposition(
     payload: VerifiedFlakyDispositionPayload,
   ): Promise<void> {
-    const pr = getPRByNumber(payload.prNumber, payload.repo);
+    let pr = getPRByNumber(payload.prNumber, payload.repo);
     if (!pr) return;
 
     // Stale disposition — a new push landed since the session diagnosed the
@@ -1030,6 +1035,29 @@ export class PRMergeWatcher extends EventEmitter {
     const projectId = project?.id ?? null;
 
     const maxRetries = typedGetSetting('flake_recovery_max_retries');
+    if (pr.flake_recovery_attempts >= maxRetries) {
+      // Restore, once — scoped to this PR alone — if its most recent
+      // exhaustion was itself confirmed base-attributable and the base
+      // branch has since recovered. Never a blanket reset of every open
+      // PR's counter.
+      if (pr.flake_recovery_base_exhausted && project) {
+        const healthy = await isProjectBaseHealthy(project);
+        if (healthy) {
+          resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
+          recordEvent({
+            event_type: 'flake_recovery_base_recovery_reset',
+            actor_type: 'system',
+            project_id: projectId,
+            task_id: pr.task_id ?? null,
+            payload: { pr_number: pr.pr_number, repo: pr.repo },
+          });
+          logger.info(
+            `[PRMergeWatcher] PR #${pr.pr_number}: base recovered — restoring flake_recovery_attempts budget`,
+          );
+          pr = getPRByNumber(pr.pr_number, pr.repo) ?? pr;
+        }
+      }
+    }
     if (pr.flake_recovery_attempts >= maxRetries) {
       setPauseReason(
         pr.pr_number,
@@ -1209,7 +1237,22 @@ export class PRMergeWatcher extends EventEmitter {
       return;
     }
 
-    incrementFlakeRecoveryAttempts(pr.pr_number, pr.repo);
+    // A 'failed' re-run confirmed base-attributable never charges the
+    // budget — the PR's own change isn't what's failing. Never affects
+    // GitHub's own check-run conclusion, only this internal counter.
+    let baseAttributable = false;
+    if (outcome === 'failed') {
+      const project = getProjectByGithubRepo(pr.repo);
+      if (project) {
+        baseAttributable = await isBaseTotalFail(project);
+        if (baseAttributable) {
+          setFlakeRecoveryBaseExhausted(pr.pr_number, pr.repo, true);
+        }
+      }
+    }
+    if (!baseAttributable) {
+      incrementFlakeRecoveryAttempts(pr.pr_number, pr.repo);
+    }
 
     if (outcome === 'passed') {
       resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
@@ -1233,8 +1276,11 @@ export class PRMergeWatcher extends EventEmitter {
         this.flakeRecoveryRedriving.delete(redriveKey);
       }
     } else {
+      const attempt = baseAttributable
+        ? pr.flake_recovery_attempts
+        : pr.flake_recovery_attempts + 1;
       logger.info(
-        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run still failing (attempt ${pr.flake_recovery_attempts + 1}/${maxRetries})`,
+        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run still failing (attempt ${attempt}/${maxRetries})${baseAttributable ? ' — base-attributable, not charged' : ''}`,
       );
     }
   }
@@ -1261,7 +1307,29 @@ export class PRMergeWatcher extends EventEmitter {
     worktreePath: string,
   ): Promise<boolean> {
     const maxRetries = typedGetSetting('flake_recovery_max_retries');
-    if (pr.flake_recovery_attempts >= maxRetries) return false;
+    if (pr.flake_recovery_attempts >= maxRetries) {
+      // Restore, scoped to this PR alone, if its most recent exhaustion was
+      // itself confirmed base-attributable and the base branch has since
+      // recovered — mirrors handleVerifiedFlakyDisposition's own restore.
+      if (
+        pr.flake_recovery_base_exhausted &&
+        (await isProjectBaseHealthy(project))
+      ) {
+        resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
+        recordEvent({
+          event_type: 'flake_recovery_base_recovery_reset',
+          actor_type: 'system',
+          project_id: project.id,
+          task_id: pr.task_id ?? null,
+          payload: { pr_number: pr.pr_number, repo: pr.repo },
+        });
+        logger.info(
+          `[PRMergeWatcher] PR #${pr.pr_number}: base recovered — restoring flake_recovery_attempts budget (f2 lane)`,
+        );
+      } else {
+        return false;
+      }
+    }
 
     // The flip-rate window's masking guard requires samples predating this
     // PR's first run — pull_requests.created_at (set once, at PR open, always

@@ -18,6 +18,8 @@ import {
   linkPRTaskAndSession,
   setPendingPush,
   getSessionLastActivityMs,
+  setStalledRetryBaseExhausted,
+  resetStalledPRRetryCountForBaseRecovery,
 } from '../db/queries';
 import { parsePauseReason } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
@@ -31,6 +33,7 @@ import type { PullRequestRow } from '../db/types';
 import { classifyStalledPR, parseVerdict } from '../github/pollUtils';
 import type { StalledPRKind } from '../github/pollUtils';
 import { sessionBusyInFlightToolCall } from '../session/sessionLifecycle';
+import { isBaseTotalFail, isProjectBaseHealthy } from './baseAttribution';
 import {
   formatCIFailureFeedback,
   formatMergeConflictFeedback,
@@ -121,9 +124,40 @@ export class StalledPRReconciler {
       // relying on that alone).
       if (pr.human_merge_only) continue;
 
-      // Skip PRs already escalated to the human-attention queue
+      // Skip PRs already escalated to the human-attention queue — unless
+      // this PR's own most recent exhaustion was confirmed base-attributable
+      // (stalled_retry_base_exhausted) and the base branch has since
+      // recovered, in which case restore the budget via the same reset
+      // primitive setHeadSha's head_sha-change trigger already uses, then
+      // fall through to reconcile this PR fresh this cycle. Scoped to this
+      // PR alone — never a blanket reset of every escalated PR's counter.
       const existing = parsePauseReason(pr.pause_reason);
-      if (existing?.reason === 'stalled_reconcile_cap') continue;
+      if (existing?.reason === 'stalled_reconcile_cap') {
+        if (pr.stalled_retry_base_exhausted) {
+          const project = getProjectByGithubRepo(pr.repo);
+          if (project && (await isProjectBaseHealthy(project))) {
+            resetStalledPRRetryCountForBaseRecovery(pr.pr_number, pr.repo);
+            setPauseReason(pr.pr_number, pr.repo, null);
+            recordEvent({
+              event_type: 'stalled_pr_base_recovery_reset',
+              actor_type: 'system',
+              actor_id: null,
+              project_id: project.id,
+              task_id: pr.task_id ?? null,
+              payload: { pr_number: pr.pr_number, repo: pr.repo },
+            });
+            this.broadcast({
+              type: 'pr_pause_cleared',
+              prNumber: pr.pr_number,
+              repo: pr.repo,
+            });
+            logger.info(
+              `[StalledPRReconciler] PR #${pr.pr_number} (${pr.repo}): base recovered — restoring stalled_pr_retry_count budget`,
+            );
+          }
+        }
+        continue;
+      }
 
       // A pause reason declaring retry_strategy: 'manual_action' (e.g.
       // depth_review_escalation) is already an operator action item, parked
@@ -192,6 +226,20 @@ export class StalledPRReconciler {
 
       const count = effectivePr.stalled_pr_retry_count ?? 0;
       if (count >= retryCap) {
+        // Only a gate_failed stall is a test/build failure a base-branch
+        // health check can speak to — record whether this escalation was
+        // base-attributable so a later base-recovery pass knows this PR (and
+        // only this PR) is eligible to have its budget restored.
+        if (stalled.kind === 'gate_failed') {
+          const project = getProjectByGithubRepo(effectivePr.repo);
+          if (project && (await isBaseTotalFail(project))) {
+            setStalledRetryBaseExhausted(
+              effectivePr.pr_number,
+              effectivePr.repo,
+              true,
+            );
+          }
+        }
         this.escalate(
           effectivePr.pr_number,
           effectivePr.repo,
@@ -522,7 +570,7 @@ export class StalledPRReconciler {
 
     if (kind === 'gate_failed') {
       if (pr.pending_push) {
-        return this.reDriveViaPendingPushConsume(pr);
+        return await this.reDriveViaPendingPushConsume(pr);
       }
       const pushed = await this.reDriveIfPushDetected(pr);
       if (pushed !== null) return pushed;
@@ -535,11 +583,20 @@ export class StalledPRReconciler {
       return false;
     }
 
-    const newCount = incrementStalledPRRetryCount(prNumber, repo);
     const project = getProjectByGithubRepo(repo);
+    const baseAttributable =
+      kind === 'gate_failed' && project
+        ? await isBaseTotalFail(project)
+        : false;
+    if (baseAttributable) {
+      setStalledRetryBaseExhausted(prNumber, repo, true);
+    }
+    const newCount = baseAttributable
+      ? (pr.stalled_pr_retry_count ?? 0)
+      : incrementStalledPRRetryCount(prNumber, repo);
 
     logger.info(
-      `[StalledPRReconciler] PR #${prNumber} (${repo}): re-driving kind=${kind} via fixer relaunch (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): re-driving kind=${kind} via fixer relaunch (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP}${baseAttributable ? ', base-attributable — not charged' : ''})`,
     );
 
     recordEvent({
@@ -634,7 +691,9 @@ export class StalledPRReconciler {
    * hasn't evaluated, so a fresh review (not a fixer relaunch) is the correct
    * re-drive.
    */
-  private reDriveViaPendingPushConsume(pr: PullRequestRow): boolean {
+  private async reDriveViaPendingPushConsume(
+    pr: PullRequestRow,
+  ): Promise<boolean> {
     const { pr_number: prNumber, repo } = pr;
 
     if (!this.reviewOrchestrator) {
@@ -644,11 +703,17 @@ export class StalledPRReconciler {
       return false;
     }
 
-    const newCount = incrementStalledPRRetryCount(prNumber, repo);
     const project = getProjectByGithubRepo(repo);
+    const baseAttributable = project ? await isBaseTotalFail(project) : false;
+    if (baseAttributable) {
+      setStalledRetryBaseExhausted(prNumber, repo, true);
+    }
+    const newCount = baseAttributable
+      ? (pr.stalled_pr_retry_count ?? 0)
+      : incrementStalledPRRetryCount(prNumber, repo);
 
     logger.info(
-      `[StalledPRReconciler] PR #${prNumber} (${repo}): consuming stuck pending_push and re-driving gate_failed pipeline (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): consuming stuck pending_push and re-driving gate_failed pipeline (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP}${baseAttributable ? ', base-attributable — not charged' : ''})`,
     );
 
     recordEvent({

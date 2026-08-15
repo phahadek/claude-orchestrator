@@ -1057,6 +1057,25 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  // stalled_retry_base_exhausted / flake_recovery_base_exhausted: set when a
+  // PR's most recent stalled_pr_retry_count / flake_recovery_attempts
+  // exhaustion was confirmed base-attributable (see baseAttribution.ts) —
+  // the sole scoping signal the base-recovery reset trigger consults, so
+  // recovery never blanket-resets every open PR's counter.
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN stalled_retry_base_exhausted INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN flake_recovery_base_exhausted INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 
   target.exec(`
     CREATE TABLE IF NOT EXISTS seed_item (

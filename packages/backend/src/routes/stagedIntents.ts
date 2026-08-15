@@ -159,6 +159,7 @@ import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import type { TestCommandResult } from '../session/test-runner';
 import { truncateForDelivery } from '../session/test-runner';
 import { runProjectTestRequest } from '../orchestration/testRequestLane';
+import { isRunFailureBaseAttributable } from '../orchestration/baseAttribution';
 import {
   getSessionTestRequestCycleCount,
   incrementSessionTestRequestCycleCount,
@@ -5616,7 +5617,24 @@ async function maybeAutoApproveTestRequest(
   }
 
   const priorCount = getSessionTestRequestCycleCount(intent.sessionId);
-  incrementSessionTestRequestCycleCount(intent.sessionId);
+  // Skip the charge when the run that prompted this cycle failed for a
+  // confirmed base-attributable reason (see baseAttribution.ts) — the
+  // session's own change isn't what's failing, so an iterate-on-red loop
+  // forced entirely by a broken base branch must not burn this budget.
+  // Unlike stalled_pr_retry_count/flake_recovery_attempts, no reset
+  // primitive exists for this counter — an already-exhausted session always
+  // requires a fresh dispatch, per the locked design.
+  const project = getProjectById(intent.projectId);
+  const priorRun = project
+    ? getLatestTestRequestRunForSession(project.id, intent.sessionId)
+    : undefined;
+  const priorFailureBaseAttributable =
+    project && priorRun?.state === 'failed'
+      ? await isRunFailureBaseAttributable(project, priorRun)
+      : false;
+  if (!priorFailureBaseAttributable) {
+    incrementSessionTestRequestCycleCount(intent.sessionId);
+  }
   if (priorCount >= typedGetSetting('test_request_cycle_limit')) {
     setSessionPauseReason(intent.sessionId, 'test_request_cycle_exceeded');
     return intent;
