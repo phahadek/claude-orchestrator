@@ -1266,3 +1266,15 @@ export interface FlakyRemediationTrackingRow {
   created_at: string;
   updated_at: string;
 }
+
+/**
+ * One row per base-branch content hash ever confirmed unhealthy — see
+ * queries.ts's tryClaimBaseHealthRemediationFiling / audit/baseHealthRemediationFiling.ts.
+ */
+export interface BaseHealthRemediationTrackingRow {
+  content_hash: string;
+  remediation_task_id: string | null;
+  remediation_task_open: number;
+  created_at: string;
+  updated_at: string;
+}

@@ -58,6 +58,7 @@ import type {
   CapabilityDisqualificationRow,
   NewCapabilityDisqualificationRow,
   FlakyRemediationTrackingRow,
+  BaseHealthRemediationTrackingRow,
   GateItemRow,
   GateItemSourceRow,
   NewGateItemSourceRow,
@@ -6383,6 +6384,114 @@ export function getFlakyRemediationTrackingByOpenTaskId(
     | undefined;
 }
 
+// ─── base_health_remediation_tracking ──────────────────────────────────────
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle. Mirrors
+// flaky_remediation_tracking's atomic-claim/dedup shape, keyed by base
+// content_hash instead of test_id — see audit/baseHealthRemediationFiling.ts.
+
+let _stmtGetBaseHealthRemediationTracking: Database.Statement | null = null;
+let _stmtEnsureBaseHealthRemediationTrackingRow: Database.Statement | null =
+  null;
+let _stmtClaimBaseHealthRemediationFiling: Database.Statement | null = null;
+let _stmtSetBaseHealthRemediationLinkedTask: Database.Statement | null = null;
+
+/** The current tracking row for one base content_hash, or undefined if it was never confirmed unhealthy. */
+export function getBaseHealthRemediationTracking(
+  contentHash: string,
+): BaseHealthRemediationTrackingRow | undefined {
+  _stmtGetBaseHealthRemediationTracking ??= db.prepare<{
+    content_hash: string;
+  }>(
+    `SELECT * FROM base_health_remediation_tracking WHERE content_hash = @content_hash`,
+  );
+  return _stmtGetBaseHealthRemediationTracking.get({
+    content_hash: contentHash,
+  }) as BaseHealthRemediationTrackingRow | undefined;
+}
+
+/**
+ * Atomically claims the right to file a remediation task for `contentHash`:
+ * ensures a tracking row exists (INSERT OR IGNORE, starting closed), then
+ * flips remediation_task_open 0 -> 1 in a single UPDATE guarded by
+ * `WHERE remediation_task_open = 0` — mirrors
+ * tryClaimFlakyRemediationFiling's race-closing shape exactly, so two
+ * concurrent base-health confirmations for the same content hash can never
+ * both file. The caller must release the claim
+ * (setBaseHealthRemediationLinkedTask with open=false) if it fails to
+ * actually finish filing. Returns false if another caller (or a previously
+ * filed task) already holds the claim.
+ */
+export function tryClaimBaseHealthRemediationFiling(
+  contentHash: string,
+  nowIso: string,
+): boolean {
+  _stmtEnsureBaseHealthRemediationTrackingRow ??= db.prepare<{
+    content_hash: string;
+    created_at: string;
+    updated_at: string;
+  }>(`
+    INSERT OR IGNORE INTO base_health_remediation_tracking
+      (content_hash, remediation_task_id, remediation_task_open, created_at, updated_at)
+    VALUES
+      (@content_hash, NULL, 0, @created_at, @updated_at)
+  `);
+  _stmtEnsureBaseHealthRemediationTrackingRow.run({
+    content_hash: contentHash,
+    created_at: nowIso,
+    updated_at: nowIso,
+  });
+
+  _stmtClaimBaseHealthRemediationFiling ??= db.prepare<{
+    content_hash: string;
+    updated_at: string;
+  }>(`
+    UPDATE base_health_remediation_tracking
+    SET remediation_task_open = 1, updated_at = @updated_at
+    WHERE content_hash = @content_hash AND remediation_task_open = 0
+  `);
+  const info = _stmtClaimBaseHealthRemediationFiling.run({
+    content_hash: contentHash,
+    updated_at: nowIso,
+  });
+  return info.changes > 0;
+}
+
+/**
+ * Links (or unlinks) `contentHash`'s tracking row to a remediation task, and
+ * records whether that task is currently open. Called once at filing time
+ * (open = true), or to release a failed claim (open = false, remediation_task_id
+ * null) — see recordAndMaybeFileBaseHealthRemediation.
+ */
+export function setBaseHealthRemediationLinkedTask(
+  contentHash: string,
+  remediationTaskId: string | null,
+  open: boolean,
+  nowIso: string,
+): void {
+  _stmtSetBaseHealthRemediationLinkedTask ??= db.prepare<{
+    content_hash: string;
+    remediation_task_id: string | null;
+    remediation_task_open: number;
+    updated_at: string;
+  }>(`
+    INSERT INTO base_health_remediation_tracking
+      (content_hash, remediation_task_id, remediation_task_open, created_at, updated_at)
+    VALUES
+      (@content_hash, @remediation_task_id, @remediation_task_open, @updated_at, @updated_at)
+    ON CONFLICT(content_hash) DO UPDATE SET
+      remediation_task_id = @remediation_task_id,
+      remediation_task_open = @remediation_task_open,
+      updated_at = @updated_at
+  `);
+  _stmtSetBaseHealthRemediationLinkedTask.run({
+    content_hash: contentHash,
+    remediation_task_id: remediationTaskId,
+    remediation_task_open: open ? 1 : 0,
+    updated_at: nowIso,
+  });
+}
+
 // ─── gate_item ────────────────────────────────────────────────────────────
 // Statements are cached lazily (prepared on first use, not at module load) so
 // importing this module doesn't fail on a not-yet-migrated db handle.
@@ -7968,6 +8077,25 @@ export function incrementSessionTestRequestCycleCount(
        count = count + 1,
        updated_at = excluded.updated_at`,
   ).run(sessionId, now);
+  return getSessionTestRequestCycleCount(sessionId);
+}
+
+/**
+ * Undoes one prior increment — used when a test.request cycle's only
+ * failure(s) turned out to be confirmed base-attributable via a
+ * whole-process-crash base break (baseAttributableFilter's `inconclusive`
+ * outcome), so that run doesn't count against test_request_cycle_limit.
+ * Floors at 0 rather than going negative.
+ */
+export function decrementSessionTestRequestCycleCount(
+  sessionId: string,
+): number {
+  const now = Date.now();
+  db.prepare(
+    `UPDATE session_test_request_cycles
+     SET count = MAX(0, count - 1), updated_at = ?
+     WHERE session_id = ?`,
+  ).run(now, sessionId);
   return getSessionTestRequestCycleCount(sessionId);
 }
 
