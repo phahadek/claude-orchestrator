@@ -2200,6 +2200,67 @@ export function updateTaskStatusInBoardCaches(
   }
 }
 
+let _stmtRecordTaskStatusWrite: Database.Statement | null = null;
+let _stmtGetTaskStatusWrite: Database.Statement | null = null;
+
+/**
+ * Window a recorded status write stays authoritative over a bulk board
+ * fetch. Bounded to comfortably exceed NotionClient's 60s board-cache TTL
+ * (see CACHE_TTL_MS in notion/NotionClient.ts) — the race this guards
+ * against is a bulk fetch started before the write and resolved after it, or
+ * a cache-hit still inside that TTL window. Past this window, trust fetched
+ * data fully rather than pinning a write indefinitely (e.g. a later
+ * out-of-band Notion edit should eventually take effect).
+ */
+const STATUS_WRITE_RECONCILE_WINDOW_MS = 120_000;
+
+/**
+ * Record that a status write for `taskId` landed. Called from the write path
+ * (AuditingTaskBackend.updateStatus) alongside updateTaskStatusInBoardCaches
+ * so bulk board-fetch reconciliation has a ground-truth timestamp to compare
+ * against.
+ */
+export function recordTaskStatusWrite(taskId: string, status: string): void {
+  const normalized = normalizeTaskId(taskId);
+  _stmtRecordTaskStatusWrite ??= db.prepare<{
+    task_id: string;
+    status: string;
+    written_at: number;
+  }>(`
+    INSERT INTO task_status_writes (task_id, status, written_at)
+    VALUES (@task_id, @status, @written_at)
+    ON CONFLICT(task_id) DO UPDATE SET
+      status     = excluded.status,
+      written_at = excluded.written_at
+  `);
+  _stmtRecordTaskStatusWrite.run({
+    task_id: normalized,
+    status,
+    written_at: Date.now(),
+  });
+}
+
+/**
+ * Returns the most recently written status for `taskId` if it was recorded
+ * within STATUS_WRITE_RECONCILE_WINDOW_MS, else null. Used to reconcile a
+ * bulk board fetch that may have raced a status write — see
+ * recordTaskStatusWrite.
+ */
+export function getRecentTaskStatusWrite(taskId: string): string | null {
+  const normalized = normalizeTaskId(taskId);
+  _stmtGetTaskStatusWrite ??= db.prepare<{ task_id: string }>(`
+    SELECT status, written_at FROM task_status_writes WHERE task_id = @task_id
+  `);
+  const row = _stmtGetTaskStatusWrite.get({ task_id: normalized }) as
+    | { status: string; written_at: number }
+    | undefined;
+  if (!row) return null;
+  if (Date.now() - row.written_at > STATUS_WRITE_RECONCILE_WINDOW_MS) {
+    return null;
+  }
+  return row.status;
+}
+
 /** Minimal shape read out of cached board blobs — just enough for reverse-dependency lookup. */
 export interface CachedBoardTaskEntry {
   id: string;

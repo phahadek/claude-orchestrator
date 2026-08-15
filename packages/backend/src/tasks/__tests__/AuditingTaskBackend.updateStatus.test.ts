@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockRecordEvent = vi.fn();
 const mockUpdateTaskStatusInBoardCaches = vi.fn();
 const mockGetTaskStatusFromCache = vi.fn();
+const mockRecordTaskStatusWrite = vi.fn();
 
 vi.mock('../../audit/AuditLog', () => ({
   recordEvent: (...args: unknown[]) => mockRecordEvent(...args),
@@ -14,6 +15,8 @@ vi.mock('../../db/queries', () => ({
     mockUpdateTaskStatusInBoardCaches(...args),
   getTaskStatusFromCache: (...args: unknown[]) =>
     mockGetTaskStatusFromCache(...args),
+  recordTaskStatusWrite: (...args: unknown[]) =>
+    mockRecordTaskStatusWrite(...args),
 }));
 
 import { AuditingTaskBackend } from '../TaskBackend';
@@ -39,6 +42,7 @@ beforeEach(() => {
   mockRecordEvent.mockReset();
   mockUpdateTaskStatusInBoardCaches.mockReset();
   mockGetTaskStatusFromCache.mockReset();
+  mockRecordTaskStatusWrite.mockReset();
 });
 
 describe('AuditingTaskBackend.updateStatus', () => {

@@ -5,6 +5,7 @@ import {
   getTaskCache,
   updateTaskCacheStatus,
   deleteTaskCacheRow,
+  getRecentTaskStatusWrite,
 } from '../db/queries';
 import { NotionTask, NotionApiError, ResolvedTask } from './types';
 import { DependencyResolver } from './DependencyResolver';
@@ -155,6 +156,26 @@ function readBoardCache(boardId: string): NotionTask[] | null {
 
 function writeBoardCache(boardId: string, tasks: NotionTask[]): void {
   upsertTaskCache(boardCacheKey(boardId), JSON.stringify(tasks));
+}
+
+/**
+ * Reconciles a bulk board fetch (whether served from cache or freshly
+ * queried) against any status write recorded more recently than the fetch
+ * itself — guards against a stale board snapshot silently reverting a status
+ * change that already landed via updateStatus. See
+ * recordTaskStatusWrite/getRecentTaskStatusWrite in db/queries.ts.
+ */
+function reconcileTaskStatuses(tasks: NotionTask[]): NotionTask[] {
+  let changed = false;
+  const reconciled = tasks.map((task) => {
+    const recentStatus = getRecentTaskStatusWrite(task.id);
+    if (recentStatus !== null && recentStatus !== task.status) {
+      changed = true;
+      return { ...task, status: recentStatus };
+    }
+    return task;
+  });
+  return changed ? reconciled : tasks;
 }
 
 // ─── Notion API helpers ─────────────────────────────────────────────────────
@@ -533,7 +554,7 @@ export class NotionClient {
   ): Promise<NotionTask[]> {
     if (!skipCache && isBoardCacheFresh(boardId)) {
       const cached = readBoardCache(boardId);
-      if (cached) return cached;
+      if (cached) return reconcileTaskStatuses(cached);
     }
 
     // Fetch all pages from the board (paginate through all results)
@@ -564,8 +585,9 @@ export class NotionClient {
           : undefined;
     } while (startCursor);
 
-    writeBoardCache(boardId, tasks);
-    return tasks;
+    const reconciled = reconcileTaskStatuses(tasks);
+    writeBoardCache(boardId, reconciled);
+    return reconciled;
   }
 
   /**

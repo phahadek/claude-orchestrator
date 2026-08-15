@@ -14,6 +14,7 @@ vi.mock('../db/queries', () => ({
   getTaskCache: vi.fn(() => null),
   updateTaskCacheStatus: vi.fn(),
   deleteTaskCacheRow: vi.fn(),
+  getRecentTaskStatusWrite: vi.fn(() => null),
 }));
 
 import {
@@ -30,6 +31,7 @@ import {
   updateTaskCacheStatus,
   getCacheAge,
   getTaskCache,
+  getRecentTaskStatusWrite,
 } from '../db/queries';
 
 const source = fs.readFileSync(
@@ -982,5 +984,83 @@ describe('NotionClient.fetchReadyTasks — readBoardCache strips notion: prefix'
     const tasks = await client.fetchReadyTasks(BOARD_ID_STRIP);
 
     expect(tasks[0].task.dependsOn).toEqual([DEP_RAW]);
+  });
+});
+
+// ─── NotionClient.fetchBoardTasks — status-write reconciliation ──────────────
+
+describe('NotionClient.fetchBoardTasks — reconciles against a recent status write', () => {
+  const BOARD_ID_RECONCILE = 'reconcile-test-board-id';
+  const RAW_TASK_ID = 'cccc3333-dddd-4444-eeee-ffff00001111';
+
+  let client: NotionClient;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.mocked(getCacheAge).mockReset();
+    vi.mocked(getTaskCache).mockReset();
+    vi.mocked(getRecentTaskStatusWrite).mockReset();
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    client = new NotionClient();
+  });
+
+  it('overrides a fresh cache-hit board snapshot with the more recent written status', async () => {
+    // Board cache is fresh (within TTL) and still holds the pre-write
+    // status — the exact race a bulk fetch that started before (or is
+    // simply still caching) a status write can serve.
+    vi.mocked(getCacheAge).mockReturnValue(0);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${BOARD_ID_RECONCILE}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify([
+        {
+          id: RAW_TASK_ID,
+          title: 'Task A',
+          status: '🔲 Backlog',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/x',
+          priority: '',
+        },
+      ]),
+    });
+    // reconcileTaskStatuses looks up each task by its (already
+    // prefix-stripped, per readBoardCache) raw id — the same raw id
+    // production code would pass to the real getRecentTaskStatusWrite,
+    // which normalizes it internally.
+    vi.mocked(getRecentTaskStatusWrite).mockImplementation((taskId: string) =>
+      taskId === RAW_TASK_ID ? '🗂️ Ready' : null,
+    );
+
+    const tasks = await client.fetchReadyTasks(BOARD_ID_RECONCILE);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].task.status).toBe('🗂️ Ready');
+  });
+
+  it('leaves the status unchanged when no recent write is recorded for the task', async () => {
+    vi.mocked(getCacheAge).mockReturnValue(0);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${BOARD_ID_RECONCILE}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify([
+        {
+          id: RAW_TASK_ID,
+          title: 'Task A',
+          status: '🔲 Backlog',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/x',
+          priority: '',
+        },
+      ]),
+    });
+    vi.mocked(getRecentTaskStatusWrite).mockReturnValue(null);
+
+    const tasks = await client.fetchReadyTasks(BOARD_ID_RECONCILE);
+
+    expect(tasks[0].task.status).toBe('🔲 Backlog');
   });
 });
