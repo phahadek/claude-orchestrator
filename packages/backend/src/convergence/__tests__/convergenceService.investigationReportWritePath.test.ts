@@ -18,7 +18,10 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { ProjectService } from '../../projects/ProjectService.js';
-import { createReport, commitReport } from '../../investigation/reportService.js';
+import {
+  createReport,
+  commitReport,
+} from '../../investigation/reportService.js';
 import { getMilestoneConvergence } from '../convergenceService.js';
 
 beforeAll(() => {
