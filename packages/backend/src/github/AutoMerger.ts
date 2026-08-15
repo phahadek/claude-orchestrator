@@ -31,7 +31,10 @@ import {
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError, GitHubRateLimitError } from './types';
 import { getCorporateMode } from '../config/corporateMode';
-import { pauseReasonFromCanonical, isMergeBlockingPause } from '../db/pauseReason';
+import {
+  pauseReasonFromCanonical,
+  isMergeBlockingPause,
+} from '../db/pauseReason';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { PullRequestRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';

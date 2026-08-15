@@ -322,9 +322,9 @@ describe('isMergeBlockingPause', () => {
   });
 
   it('test_report_acquisition_failed is classified non-blocking', () => {
-    expect(PAUSE_REASON_REGISTRY.test_report_acquisition_failed.blocks_merge).toBe(
-      false,
-    );
+    expect(
+      PAUSE_REASON_REGISTRY.test_report_acquisition_failed.blocks_merge,
+    ).toBe(false);
     expect(isMergeBlockingPause('test_report_acquisition_failed')).toBe(false);
     const serialized = serializePauseReason(
       pauseReasonFromCanonical('test_report_acquisition_failed'),
