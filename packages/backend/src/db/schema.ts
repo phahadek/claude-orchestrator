@@ -2288,4 +2288,22 @@ export function runMigrations(target: Database.Database): void {
       PRIMARY KEY (test_id, pr_number, repo)
     );
   `);
+
+  // base_health_remediation_tracking: one row per base-branch content hash
+  // ever confirmed unhealthy (see orchestration/baseHealthCheck.ts) —
+  // reuses flaky_remediation_tracking's atomic-claim/dedup shape
+  // (remediation_task_open flipped 0 -> 1 by a single guarded UPDATE) so two
+  // concurrent confirmations for the same content hash can't both file.
+  // Unlike flaky_remediation_tracking, there is no reopen-on-task-close path
+  // — a fixed base tree gets a new content hash, which is a fresh row, not a
+  // reused one.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS base_health_remediation_tracking (
+      content_hash            TEXT    PRIMARY KEY,
+      remediation_task_id     TEXT,
+      remediation_task_open   INTEGER NOT NULL DEFAULT 0,
+      created_at              TEXT    NOT NULL,
+      updated_at              TEXT    NOT NULL
+    );
+  `);
 }

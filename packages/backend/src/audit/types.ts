@@ -144,7 +144,8 @@ type EventType =
   | 'depth_review_completed'
   | 'gate_item_schedule_changed'
   | 'gate_item_min_deployed_commit_changed'
-  | 'deploy_run_status_changed';
+  | 'deploy_run_status_changed'
+  | 'base_health_remediation_task_filed';
 
 type ActorType = 'ai' | 'human' | 'system';
 

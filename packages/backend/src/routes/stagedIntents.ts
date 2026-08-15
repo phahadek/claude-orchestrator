@@ -162,6 +162,7 @@ import { runProjectTestRequest } from '../orchestration/testRequestLane';
 import {
   getSessionTestRequestCycleCount,
   incrementSessionTestRequestCycleCount,
+  decrementSessionTestRequestCycleCount,
   setSessionPauseReason,
   listRunningTestRequestRuns,
   getLatestTestRequestRun,
@@ -170,6 +171,10 @@ import {
 } from '../db/queries';
 import type { TestRequestPayload, TestRequestRunRow } from '../db/types';
 import { buildTestResultDigest } from '../session/testResultDigest';
+import {
+  filterBaseAttributableFailures,
+  renderBaseAttributableFilterDigest,
+} from '../orchestration/baseAttributableFilter';
 import type {
   PRReviewService,
   PRReviewResult,
@@ -5517,6 +5522,38 @@ async function triggerTestRequestExecution(
     }
   }
 
+  // Filter a raw failure against the project's current base-branch health
+  // before anything downstream (commit annotation, audit event, session
+  // feedback) sees `result.passed` — a confirmed base-attributable failure
+  // must never charge the session or read to it as its own fault. See
+  // orchestration/baseAttributableFilter.ts.
+  let filterResult: Awaited<
+    ReturnType<typeof filterBaseAttributableFailures>
+  > | null = null;
+  if (runId && !result.passed) {
+    const project = getProjectById(intent.projectId);
+    const run = getTestRequestRunById(runId);
+    if (project && run) {
+      try {
+        filterResult = await filterBaseAttributableFailures(
+          project,
+          run,
+          (intent.payload as TestRequestPayload).taskId ?? null,
+        );
+      } catch (err) {
+        logger.error(
+          `[stagedIntents] base-attributable filter failed for test.request ${intent.id}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+  }
+  if (filterResult && filterResult.outcome !== 'unfiltered') {
+    result = { ...result, passed: filterResult.passed };
+  }
+  if (filterResult?.outcome === 'inconclusive' && intent.sessionId) {
+    decrementSessionTestRequestCycleCount(intent.sessionId);
+  }
+
   const row = getStagedIntentRow(intent.id);
   if (row && (row.state === 'staged' || row.state === 'approved')) {
     const committed = transitionStagedIntent(intent.id, 'committed', {
@@ -5537,6 +5574,9 @@ async function triggerTestRequestExecution(
       passed: result.passed,
       joined,
       provenance: 'auto',
+      ...(filterResult && filterResult.outcome !== 'unfiltered'
+        ? { baseAttributableFilterOutcome: filterResult.outcome }
+        : {}),
     },
   });
 
@@ -5545,13 +5585,23 @@ async function triggerTestRequestExecution(
     ? getTestRequestRunById(runId)?.structured_result
     : null;
   const output =
+    (filterResult &&
+      filterResult.outcome !== 'unfiltered' &&
+      renderBaseAttributableFilterDigest(filterResult)) ||
     (structuredResult && buildTestResultDigest(structuredResult)) ||
     truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
   try {
     await sessionManager.enqueueFeedback(
       intent.sessionId,
       'test_request',
-      JSON.stringify({ intentId: intent.id, passed: result.passed, output }),
+      JSON.stringify({
+        intentId: intent.id,
+        passed: result.passed,
+        output,
+        ...(filterResult?.outcome === 'inconclusive'
+          ? { inconclusive: true }
+          : {}),
+      }),
     );
   } catch (err) {
     logger.error(
