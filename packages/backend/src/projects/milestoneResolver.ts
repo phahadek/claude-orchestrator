@@ -198,3 +198,20 @@ export function resolveMilestoneAnyProject(milestone: string): string {
     `"${milestone}" is not a known milestone display name for any project`,
   );
 }
+
+/**
+ * Same as resolveMilestoneRowForProject, without a project scope — for read
+ * surfaces (e.g. the investigation_report list filter) that accept a bare
+ * `milestone` query param with no `project` alongside it.
+ */
+export function resolveMilestoneRowAnyProject(
+  milestone: string,
+): ProjectMilestone {
+  for (const project of ProjectService.list()) {
+    const match = findMilestone(project.milestones, milestone);
+    if (match) return match;
+  }
+  throw new UnknownMilestoneError(
+    `"${milestone}" is not a known milestone display name for any project`,
+  );
+}
