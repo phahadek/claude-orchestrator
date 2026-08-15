@@ -46,7 +46,9 @@ import type { TestRequestRunRow } from '../../db/types';
 
 const PROJECT = { id: 'proj-1', projectDir: '/tmp/x' } as ProjectConfig;
 
-function makeRun(overrides: Partial<TestRequestRunRow> = {}): TestRequestRunRow {
+function makeRun(
+  overrides: Partial<TestRequestRunRow> = {},
+): TestRequestRunRow {
   return {
     id: 'run-session-1',
     project_id: 'proj-1',

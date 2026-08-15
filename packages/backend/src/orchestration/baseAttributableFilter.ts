@@ -190,7 +190,7 @@ export function renderBaseAttributableFilterDigest(
     return (
       '**Test results:** inconclusive — the base branch itself is currently broken ' +
       '(whole-process crash, no per-test breakdown), so this run cannot be attributed ' +
-      "to your changes. Not counted against your test-request budget. A remediation task " +
+      'to your changes. Not counted against your test-request budget. A remediation task ' +
       'has been filed against the base branch.'
     );
   }

@@ -63,7 +63,9 @@ function renderRemediationTaskBody(
       : `- On-demand base-branch health check: ${trigger.failingTestIds.length} failing test(s) on the base tree itself.`,
   ];
   if (trigger.failingTestIds.length > 0) {
-    lines.push(`- Failing tests: ${trigger.failingTestIds.slice(0, 20).join(', ')}`);
+    lines.push(
+      `- Failing tests: ${trigger.failingTestIds.slice(0, 20).join(', ')}`,
+    );
   }
   lines.push(
     '',
@@ -146,7 +148,12 @@ async function fileClaimedRemediationTask(
       logger.warn(
         `[baseHealthRemediationFiling] ${err.message} — skipping filing for content hash ${trigger.contentHash}`,
       );
-      setBaseHealthRemediationLinkedTask(trigger.contentHash, null, false, now());
+      setBaseHealthRemediationLinkedTask(
+        trigger.contentHash,
+        null,
+        false,
+        now(),
+      );
       return { filed: false, reason: 'unknown-milestone' };
     }
     throw err;

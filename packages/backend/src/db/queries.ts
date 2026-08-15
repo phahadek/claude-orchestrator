@@ -6281,7 +6281,9 @@ export function getBaseHealthRemediationTracking(
 ): BaseHealthRemediationTrackingRow | undefined {
   _stmtGetBaseHealthRemediationTracking ??= db.prepare<{
     content_hash: string;
-  }>(`SELECT * FROM base_health_remediation_tracking WHERE content_hash = @content_hash`);
+  }>(
+    `SELECT * FROM base_health_remediation_tracking WHERE content_hash = @content_hash`,
+  );
   return _stmtGetBaseHealthRemediationTracking.get({
     content_hash: contentHash,
   }) as BaseHealthRemediationTrackingRow | undefined;
