@@ -132,6 +132,11 @@ function isSessionTerminal(status: string | null | undefined): boolean {
   return status != null && TERMINAL_SESSION_STATUSES.has(status);
 }
 
+/** Per-PR key for in-flight guards, matching AutoMerger's own key shape. */
+function flakeRecoveryKey(prNumber: number, repo: string): string {
+  return `${repo}#${prNumber}`;
+}
+
 export class PRMergeWatcher extends EventEmitter {
   /**
    * True until the first poll after boot completes. On that first poll, PRs
@@ -146,6 +151,16 @@ export class PRMergeWatcher extends EventEmitter {
   private prReviewService: PRReviewService | undefined;
   private reviewOrchestrator: ReviewOrchestrator | undefined;
   private readonly pendingReReviews = new Map<string, number>();
+  /**
+   * PRs whose flake-recovery re-drive is currently in flight, keyed by
+   * `${repo}#${prNumber}` (same shape as AutoMerger's own in-flight guard).
+   * applyFlakeRecoveryOutcome re-drives through checkMergeabilityNow, which
+   * re-enters the F2 gate and can reach tryF2LaneAutoDisposition again for
+   * the same PR. That pair has no other bound: the retry budget the
+   * disposition checks is reset to 0 immediately before the re-drive, so
+   * without this guard the two recurse into each other until the heap dies.
+   */
+  private readonly flakeRecoveryRedriving = new Set<string>();
 
   constructor(
     private github: GitHubClient,
@@ -611,8 +626,18 @@ export class PRMergeWatcher extends EventEmitter {
     // cached verdict instead. Skipped for terminally-paused PRs so we fall
     // through to the read-only GitHub merge-state refresh below instead of
     // remediating.
+    //
+    // Skipped on the same terms while a flake-recovery re-drive for this PR
+    // is in flight (see flakeRecoveryRedriving): that re-drive arrives here
+    // from applyFlakeRecoveryOutcome, whose whole point was clearing the
+    // pause this block would immediately re-apply — and re-entering the
+    // lane-side auto-disposition from inside it recurses without bound,
+    // since a passing re-run resets the retry budget that would cap it.
     if (
       !terminalPause &&
+      !this.flakeRecoveryRedriving.has(
+        flakeRecoveryKey(pr.pr_number, pr.repo),
+      ) &&
       config &&
       config.test.length > 0 &&
       pr.head_sha &&
@@ -1189,10 +1214,16 @@ export class PRMergeWatcher extends EventEmitter {
       logger.info(
         `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run passed — pause cleared, re-driving merge loop`,
       );
-      // checkMergeabilityNow bypasses the approved-verdict gate that
-      // checkMergeability enforces, so a not-yet-approved PR is re-driven too.
-      await this.checkMergeabilityNow(pr.pr_number, pr.repo);
-      this.autoMerger?.attempt(pr.pr_number, pr.repo);
+      const redriveKey = flakeRecoveryKey(pr.pr_number, pr.repo);
+      this.flakeRecoveryRedriving.add(redriveKey);
+      try {
+        // checkMergeabilityNow bypasses the approved-verdict gate that
+        // checkMergeability enforces, so a not-yet-approved PR is re-driven too.
+        await this.checkMergeabilityNow(pr.pr_number, pr.repo);
+        this.autoMerger?.attempt(pr.pr_number, pr.repo);
+      } finally {
+        this.flakeRecoveryRedriving.delete(redriveKey);
+      }
     } else {
       logger.info(
         `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run still failing (attempt ${pr.flake_recovery_attempts + 1}/${maxRetries})`,
