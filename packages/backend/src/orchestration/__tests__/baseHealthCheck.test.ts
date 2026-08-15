@@ -147,7 +147,13 @@ describe('checkBaseBranchHealth', () => {
     let runSeq = 0;
     mockRunProjectTestRequest.mockImplementation(async (spec) => {
       const runId = `run-${++runSeq}`;
-      insertTestRequestRun(runId, spec.projectId, spec.contentHash, null, Date.now());
+      insertTestRequestRun(
+        runId,
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+      );
       completeTestRequestRun(runId, 'passed', '');
       return { runId, joined: false, passed: true, output: '' };
     });
@@ -166,7 +172,13 @@ describe('checkBaseBranchHealth', () => {
     const project = makeProject();
     mockComputeWholeTreeContentHash.mockResolvedValue('hash-clean');
     mockRunProjectTestRequest.mockImplementation(async (spec) => {
-      insertTestRequestRun('run-clean', spec.projectId, spec.contentHash, null, Date.now());
+      insertTestRequestRun(
+        'run-clean',
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+      );
       completeTestRequestRun('run-clean', 'passed', '');
       return { runId: 'run-clean', joined: false, passed: true, output: '' };
     });
@@ -179,7 +191,13 @@ describe('checkBaseBranchHealth', () => {
     const project = makeProject();
     mockComputeWholeTreeContentHash.mockResolvedValue('hash-partial');
     mockRunProjectTestRequest.mockImplementation(async (spec) => {
-      insertTestRequestRun('run-partial', spec.projectId, spec.contentHash, null, Date.now());
+      insertTestRequestRun(
+        'run-partial',
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+      );
       completeTestRequestRun(
         'run-partial',
         'failed',
@@ -188,7 +206,12 @@ describe('checkBaseBranchHealth', () => {
         structuredResultWith(18, 2),
         false,
       );
-      return { runId: 'run-partial', joined: false, passed: false, output: 'some tests failed' };
+      return {
+        runId: 'run-partial',
+        joined: false,
+        passed: false,
+        output: 'some tests failed',
+      };
     });
 
     const result = await checkBaseBranchHealth(project);
@@ -199,9 +222,27 @@ describe('checkBaseBranchHealth', () => {
     const project = makeProject();
     mockComputeWholeTreeContentHash.mockResolvedValue('hash-total');
     mockRunProjectTestRequest.mockImplementation(async (spec) => {
-      insertTestRequestRun('run-total', spec.projectId, spec.contentHash, null, Date.now());
-      completeTestRequestRun('run-total', 'failed', 'killed', 'oom_killed', null, true);
-      return { runId: 'run-total', joined: false, passed: false, output: 'killed' };
+      insertTestRequestRun(
+        'run-total',
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+      );
+      completeTestRequestRun(
+        'run-total',
+        'failed',
+        'killed',
+        'oom_killed',
+        null,
+        true,
+      );
+      return {
+        runId: 'run-total',
+        joined: false,
+        passed: false,
+        output: 'killed',
+      };
     });
 
     const result = await checkBaseBranchHealth(project);
@@ -210,7 +251,9 @@ describe('checkBaseBranchHealth', () => {
 
   it('returns unknown, distinct from total_fail, when worktree provisioning fails', async () => {
     const project = makeProject();
-    mockEnsureAuditWorktree.mockRejectedValue(new Error('git worktree add failed'));
+    mockEnsureAuditWorktree.mockRejectedValue(
+      new Error('git worktree add failed'),
+    );
 
     const result = await checkBaseBranchHealth(project);
     expect(result.outcome).toBe('unknown');
@@ -243,7 +286,7 @@ describe('checkBaseBranchHealth', () => {
 });
 
 describe('getBaseHealthWorktreePath', () => {
-  it('is namespaced outside ScheduledAuditSweep\'s own worktree and outside a bare worktreesDir/<sessionId> path', () => {
+  it("is namespaced outside ScheduledAuditSweep's own worktree and outside a bare worktreesDir/<sessionId> path", () => {
     const project = makeProject();
     const healthPath = getBaseHealthWorktreePath(project);
     const auditPath = getAuditWorktreePath(project);
