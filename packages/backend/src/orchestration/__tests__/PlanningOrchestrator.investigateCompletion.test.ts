@@ -162,8 +162,16 @@ describe('PlanningOrchestrator.checkTerminal — investigate sessions', () => {
     // kind set — proves this path is driven by isInvestigateSession, not
     // by having staged something that counts as a decision.
     vi.mocked(listStagedIntentsBySession).mockReturnValue([
-      makeIntent({ id: 'intent-1', kind: 'decision.pickOne', state: 'committed' }),
-      makeIntent({ id: 'intent-2', kind: 'decision.pickOne', state: 'rejected' }),
+      makeIntent({
+        id: 'intent-1',
+        kind: 'decision.pickOne',
+        state: 'committed',
+      }),
+      makeIntent({
+        id: 'intent-2',
+        kind: 'decision.pickOne',
+        state: 'rejected',
+      }),
     ]);
     const orch = new PlanningOrchestrator(sm as any);
 

@@ -58,7 +58,9 @@ beforeEach(() => {
   db.prepare('DELETE FROM audit_log').run();
 });
 
-function makeReport(overrides: Partial<Parameters<typeof insertReport>[0]> = {}) {
+function makeReport(
+  overrides: Partial<Parameters<typeof insertReport>[0]> = {},
+) {
   const report = insertReport({
     projectId: 'proj-a',
     milestoneId,
@@ -81,11 +83,7 @@ function insertSession(
   ).run(sessionId, overrides.taskId ?? 'report-batch:b1', status, Date.now());
 }
 
-function insertIntent(
-  id: string,
-  sessionId: string,
-  state: string,
-) {
+function insertIntent(id: string, sessionId: string, state: string) {
   db.prepare(
     `INSERT INTO staged_intent (id, kind, payload, payload_hash, task_id, project_id, session_id, state, created_at, updated_at)
      VALUES (?, 'task.create', '{}', 'hash', 'report-batch:b1', 'proj-a', ?, ?, ?, ?)`,
