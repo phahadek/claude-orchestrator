@@ -716,6 +716,12 @@ export class PRMergeWatcher extends EventEmitter {
           'test_report_acquisition_failed',
           testResult.output ? testResult.output.slice(0, 1000) : undefined,
         );
+        // This pause is non-blocking (blocks_merge: false) — if the PR was
+        // already GitHub-mergeable before this pause landed, merge_state
+        // won't transition and the becomes-clean re-drive below never fires.
+        // Kick AutoMerger directly so an advisory pause never strands an
+        // otherwise-mergeable PR waiting on a state change that isn't coming.
+        this.autoMerger?.attempt(pr.pr_number, pr.repo);
       } else if (
         testResult &&
         testResult.structured_result !== null &&
@@ -862,8 +868,10 @@ export class PRMergeWatcher extends EventEmitter {
     // category was 'unknown') never gets re-driven once GitHub settles to
     // clean. Fire unconditionally on the transition — including for PRs
     // carrying a non-CI pause — so those rows are considered too. This never
-    // clears pause_reason itself; run()'s pause_reason !== null guard still
-    // blocks the merge until an already-trusted channel clears the pause.
+    // clears pause_reason itself; run()'s isMergeBlockingPause() guard still
+    // blocks the merge for a merge-blocking pause until an already-trusted
+    // channel clears it (a non-blocking pause, e.g.
+    // test_report_acquisition_failed, does not hold the merge back at all).
     // Keyed off the transition (merge_state changing into 'clean'), not the
     // level, so an already-clean PR isn't re-driven on every poll.
     if (category.category === 'clean' && pr.merge_state !== 'clean') {

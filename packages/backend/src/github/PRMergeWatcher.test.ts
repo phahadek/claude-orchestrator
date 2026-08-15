@@ -3745,6 +3745,63 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
   });
 
+  it('kicks AutoMerger.attempt() directly when setting test_report_acquisition_failed, since merge_state may already be clean and never transition', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+      merge_state: 'clean',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_report_glob: '**/junit.xml',
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      structured_result: null,
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    const autoMerger = makeMockAutoMerger();
+    watcher.setAutoMerger(autoMerger);
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'test_report_acquisition_failed',
+      'All tests passed',
+    );
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
+  });
+
   it('does not set test_report_acquisition_failed when test_report_glob is not configured', async () => {
     const pr = makePRRow({
       head_sha: 'sha-pass',
