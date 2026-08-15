@@ -165,9 +165,7 @@ describe('detectBaseBreakDispatchHoldSignal', () => {
   });
 
   it('does not fire once the dispatch hold clears (no rows carrying the reason)', () => {
-    expect(detectBaseBreakDispatchHoldSignal([], 'proj-1:M12')).toHaveLength(
-      0,
-    );
+    expect(detectBaseBreakDispatchHoldSignal([], 'proj-1:M12')).toHaveLength(0);
   });
 });
 
