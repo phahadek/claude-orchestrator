@@ -20,7 +20,7 @@ import type { SessionManager } from '../session/SessionManager';
  * useNotifications.ts already dedups WS-driven notifications.
  */
 
-type AttentionTier2Type = 'aging' | 'blocked' | 'flat';
+type AttentionTier2Type = 'aging' | 'blocked' | 'flat' | 'base_break';
 
 export interface AttentionTier2Signal {
   key: string;
@@ -124,6 +124,31 @@ export function detectBlockedSignals(
     }));
 }
 
+/**
+ * Pure: whether the project is currently held under the whole-suite/build-level
+ * base-break dispatch gate (AutoLauncher.applyBaseHealthGate's base_branch_broken
+ * pause — see db/pauseReason.ts). That pause is deliberately 'recoverable', so it
+ * never surfaces via detectBlockedSignals (needs_attention/terminal only); a
+ * partial base break never sets this reason at all, so it produces nothing here
+ * either — it's already visible as its own filed remediation Code task. One
+ * project-wide dispatch hold produces exactly one signal, not one per held task.
+ */
+export function detectBaseBreakDispatchHoldSignal(
+  rows: { task_id: string; parsed: PauseReasonStruct }[],
+  key: string,
+): AttentionTier2Signal[] {
+  const held = rows.some((row) => row.parsed.reason === 'base_branch_broken');
+  if (!held) return [];
+  return [
+    {
+      key: `base_break:${key}`,
+      type: 'base_break',
+      message:
+        'Base branch total-break — new session dispatch held until it clears',
+    },
+  ];
+}
+
 /** Pure: no burndown progress (distance_to_green) over the trailing `windowMs`. */
 export function detectFlatSignal(
   history: ConvergenceSnapshotRow[],
@@ -194,6 +219,10 @@ export function computeMilestoneAttentionSignals(
     tier2: [
       ...detectAgingSignals(pending, now, agingThresholdMs()),
       ...detectBlockedSignals(blockedRows),
+      ...detectBaseBreakDispatchHoldSignal(
+        blockedRows,
+        `${projectId}:${milestone}`,
+      ),
       ...detectFlatSignal(
         history,
         now,
