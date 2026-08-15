@@ -7,6 +7,12 @@ export type InvestigationReportState =
   | 'resolved'
   | 'abandoned';
 
+export interface ReportDispatchedSession {
+  sessionId: string;
+  sessionStatus: string;
+  dispatchedAt: string;
+}
+
 export interface InvestigationReport {
   id: string;
   project_id: string;
@@ -24,6 +30,8 @@ export interface InvestigationReport {
   inFlight: boolean;
   /** True once at least one dispatched session has ended and every staged_intent it produced has reached a terminal disposition. */
   resolveEligible: boolean;
+  /** Every session ever dispatched for this report, most recent first. */
+  dispatchedSessions: ReportDispatchedSession[];
 }
 
 export interface ListReportsResult {

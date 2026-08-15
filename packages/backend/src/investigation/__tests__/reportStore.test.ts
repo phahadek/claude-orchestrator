@@ -26,6 +26,7 @@ import {
   recordBatchDispatch,
   reconcileOrphanedDispatches,
   listDispatchedSessions,
+  getDispatchedSessionsForReport,
   isInFlight,
   isResolveEligible,
   isDispatchEligible,
@@ -159,6 +160,37 @@ describe('dispatch tracking', () => {
       'sess-1',
       'sess-2',
     ]);
+  });
+});
+
+describe('getDispatchedSessionsForReport', () => {
+  it('carries session id and status for both an in-flight and a terminal session, most recent first', () => {
+    const report = insertReport({
+      projectId: 'proj-1',
+      milestoneId: 'milestone-uuid-1',
+      title: 'A',
+      symptomText: 'a',
+      createdAt: '2026-08-13T00:00:00Z',
+    });
+    insertSession('sess-1', 'done');
+    insertSession('sess-2', 'running');
+    recordDispatch(report.id, 'sess-1', '2026-08-13T00:00:01Z');
+    recordDispatch(report.id, 'sess-2', '2026-08-13T00:00:02Z');
+    expect(getDispatchedSessionsForReport(report.id)).toEqual([
+      { sessionId: 'sess-2', sessionStatus: 'running', dispatchedAt: '2026-08-13T00:00:02Z' },
+      { sessionId: 'sess-1', sessionStatus: 'done', dispatchedAt: '2026-08-13T00:00:01Z' },
+    ]);
+  });
+
+  it('is empty with no dispatch history', () => {
+    const report = insertReport({
+      projectId: 'proj-1',
+      milestoneId: 'milestone-uuid-1',
+      title: 'A',
+      symptomText: 'a',
+      createdAt: '2026-08-13T00:00:00Z',
+    });
+    expect(getDispatchedSessionsForReport(report.id)).toEqual([]);
   });
 });
 
