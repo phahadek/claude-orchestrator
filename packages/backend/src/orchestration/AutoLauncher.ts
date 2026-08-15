@@ -698,8 +698,11 @@ export class AutoLauncher {
 
     if (result.outcome === 'total_fail') {
       for (const { task } of readyCodeTasks) {
-        if (getTaskPauseReason(task.id)?.reason === 'base_branch_broken')
-          continue;
+        // Never clobber an existing persisted pause — for an unrelated
+        // reason (crash-budget cooldown, needs_attention escalation, etc.)
+        // that would silently discard a still-active block, and for
+        // base_branch_broken itself there's nothing to refresh.
+        if (getTaskPauseReason(task.id) != null) continue;
         setTaskPauseReason(
           task.id,
           'base_branch_broken',
