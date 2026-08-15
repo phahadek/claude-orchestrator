@@ -9,7 +9,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { minimatch } from 'minimatch';
 import { parseJUnitXml, collectStructuredTestResult } from '../test-runner';
+import { loadOrchestratorConfig } from '../orchestrator-config';
+
+const REPO_ROOT = path.resolve(__dirname, '../../../../..');
 
 let worktree: string;
 
@@ -141,5 +145,58 @@ describe('collectStructuredTestResult', () => {
     const result = collectStructuredTestResult(worktree, 'reports/*.xml');
 
     expect(result).toBeNull();
+  });
+
+  it('matches reports nested under packages/<pkg>/.test-reports (the shape the test: scripts actually produce)', () => {
+    write('packages/frontend/.test-reports/frontend.xml', VITEST_REPORT);
+    write('packages/backend/.test-reports/backend.xml', PYTEST_REPORT);
+
+    const config = loadOrchestratorConfig(REPO_ROOT);
+    const result = collectStructuredTestResult(
+      worktree,
+      config.test_report_glob,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.suites.map((s) => s.name).sort()).toEqual(
+      ['pytest', 'src/foo.test.ts'].sort(),
+    );
+  });
+
+  it('still matches a root-level report path (no regression for projects that write to the repo root)', () => {
+    write('.test-reports/report.xml', PYTEST_REPORT);
+
+    const result = collectStructuredTestResult(
+      worktree,
+      '**/.test-reports/*.xml',
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.suites).toHaveLength(1);
+  });
+});
+
+describe("this repo's configured test_report_glob", () => {
+  it('matches both packages/frontend/.test-reports/frontend.xml and packages/backend/.test-reports/backend.xml, so config and the test: scripts cannot drift apart', () => {
+    const config = loadOrchestratorConfig(REPO_ROOT);
+
+    expect(
+      minimatch(
+        'packages/frontend/.test-reports/frontend.xml',
+        config.test_report_glob,
+        {
+          dot: true,
+        },
+      ),
+    ).toBe(true);
+    expect(
+      minimatch(
+        'packages/backend/.test-reports/backend.xml',
+        config.test_report_glob,
+        {
+          dot: true,
+        },
+      ),
+    ).toBe(true);
   });
 });
