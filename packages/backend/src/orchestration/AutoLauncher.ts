@@ -34,6 +34,7 @@ import {
   isUsageThresholdAdmitted,
   parseThresholdPercent,
 } from './usageAdmission';
+import type { BaseHealthCheckResult } from './baseHealthCheck';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -147,6 +148,10 @@ export class AutoLauncher {
       resolveBackend?: (projectId: string) => TaskBackend;
       /** Whether to immediately run a poll cycle when start() is called. Defaults to true. */
       pollOnStart?: boolean;
+      /** Base-branch health checker — defaulted to checkBaseBranchHealth for production. */
+      checkBaseHealth?: (
+        project: ProjectConfig,
+      ) => Promise<BaseHealthCheckResult>;
     } = {},
   ) {
     // Subscribe to SessionManager events so launch_failed notifications trigger
@@ -432,6 +437,18 @@ export class AutoLauncher {
       this.maybeClearStaleReadyTransitionPauses(resolved.task.id);
     }
 
+    // Base-health gate: only evaluated when at least one task is otherwise
+    // ready to dispatch — never proactively on an idle project. Applies (or
+    // clears) the base_branch_broken pause on every otherwise-ready task, so
+    // the existing pause-reason check in isLaunchCandidate does the actual
+    // blocking below.
+    const readyCodeTasks = allTasks.filter((t) =>
+      this.isReadyCodeCandidate(t),
+    );
+    if (readyCodeTasks.length > 0) {
+      await this.applyBaseHealthGate(project, readyCodeTasks);
+    }
+
     const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
     if (candidates.length === 0)
       return { eligible: 0, launched: 0, skipped: 0, readyTaskIds };
@@ -515,8 +532,14 @@ export class AutoLauncher {
     return firstWithSource?.id ?? null;
   }
 
-  /** Decide whether a ResolvedTask is eligible for auto-launch this cycle. */
-  private isLaunchCandidate(resolved: ResolvedTask): boolean {
+  /**
+   * Status/type/dependency/manual-pause eligibility, ignoring the persisted
+   * task_pause_reasons check — used both as the first half of
+   * isLaunchCandidate and to decide which tasks the base-health gate applies
+   * to (a task already excluded here shouldn't have its pause reason touched
+   * by a base-health check).
+   */
+  private isReadyCodeCandidate(resolved: ResolvedTask): boolean {
     const { task } = resolved;
     if (task.status !== READY_STATUS) return false;
     if (task.type !== CODE_TYPE) return false;
@@ -527,6 +550,13 @@ export class AutoLauncher {
     const maybePauseReason = (task as { pause_reason?: string | null })
       .pause_reason;
     if (maybePauseReason != null && maybePauseReason !== '') return false;
+    return true;
+  }
+
+  /** Decide whether a ResolvedTask is eligible for auto-launch this cycle. */
+  private isLaunchCandidate(resolved: ResolvedTask): boolean {
+    const { task } = resolved;
+    if (!this.isReadyCodeCandidate(resolved)) return false;
     // Skip tasks blocked by the crash budget or escalated to needs_attention (persisted).
     if (getTaskPauseReason(task.id) != null) return false;
     // Skip tasks in launch_failed cooldown (in-memory, resets on process restart).
@@ -626,6 +656,72 @@ export class AutoLauncher {
       };
     }
     return { allowed: true };
+  }
+
+  /**
+   * Holds new dispatch for a project when its base branch is broken at a
+   * whole-suite/build level (checkBaseBranchHealth's `total_fail` outcome —
+   * a crash/OOM-kill with no per-test breakdown), and lifts the hold as soon
+   * as a subsequent check comes back anything else. `partial_fail` (an
+   * ordinary per-test breakdown, however large) and `unknown` (provisioning
+   * failure/timeout) must never block — both fall through to the else branch
+   * below, matching today's pre-this-design behavior. Applied per-task via
+   * the existing task_pause_reasons mechanism so isLaunchCandidate's
+   * pre-existing pause check does the actual blocking.
+   */
+  private async applyBaseHealthGate(
+    project: ProjectConfig,
+    readyCodeTasks: ResolvedTask[],
+  ): Promise<void> {
+    // Dynamically imported rather than statically — baseHealthCheck.ts pulls
+    // in ScheduledAuditSweep.ts, whose module-level defaultDeps reads
+    // getAllProjects from '../config' at import time. A static import here
+    // would make every existing test's `vi.mock('../config.js', ...)`
+    // — most of them intentionally partial, since they never needed
+    // getAllProjects before — throw at module-load time. Deferring to a
+    // dynamic import keeps that failure (if it ever happens) inside this
+    // function's own try/catch, which already treats a thrown check as
+    // fail-open.
+    const checkBaseHealth =
+      this.options.checkBaseHealth ??
+      (async (p: ProjectConfig) => {
+        const { checkBaseBranchHealth } = await import('./baseHealthCheck');
+        return checkBaseBranchHealth(p);
+      });
+    let result: BaseHealthCheckResult;
+    try {
+      result = await checkBaseHealth(project);
+    } catch (err) {
+      logger.warn(
+        `[AutoLauncher] project ${project.id}: base-health check threw — treating as unknown (fail-open): ${err}`,
+      );
+      return;
+    }
+
+    if (result.outcome === 'total_fail') {
+      for (const { task } of readyCodeTasks) {
+        if (getTaskPauseReason(task.id)?.reason === 'base_branch_broken')
+          continue;
+        setTaskPauseReason(
+          task.id,
+          'base_branch_broken',
+          result.contentHash ?? '',
+        );
+        logger.warn(
+          `[AutoLauncher] project ${project.id}: base branch total_fail (contentHash=${result.contentHash}) — holding task ${task.id} from dispatch`,
+        );
+      }
+      return;
+    }
+
+    for (const { task } of readyCodeTasks) {
+      if (getTaskPauseReason(task.id)?.reason !== 'base_branch_broken')
+        continue;
+      clearTaskPauseReason(task.id);
+      logger.info(
+        `[AutoLauncher] project ${project.id}: base-health cleared (${result.outcome}) — resuming dispatch for task ${task.id}`,
+      );
+    }
   }
 
   /**
