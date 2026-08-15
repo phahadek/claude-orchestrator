@@ -28,6 +28,7 @@ import type { StagedIntentRow } from '../../db/types.js';
 import {
   detectAgingSignals,
   detectBlockedSignals,
+  detectBaseBreakDispatchHoldSignal,
   detectFlatSignal,
   computeMilestoneAttentionSignals,
   isMilestoneActionable,
@@ -116,6 +117,55 @@ describe('detectBlockedSignals', () => {
       { task_id: 'task-1', parsed: pause({ severity: 'recoverable' }) },
     ]);
     expect(signals).toHaveLength(0);
+  });
+});
+
+describe('detectBaseBreakDispatchHoldSignal', () => {
+  function pause(
+    overrides: Partial<PauseReasonStruct> = {},
+  ): PauseReasonStruct {
+    return {
+      reason: 'base_branch_broken',
+      source: 'launch',
+      severity: 'recoverable',
+      retry_strategy: 'automatic',
+      ...overrides,
+    };
+  }
+
+  it('fires exactly one signal for a project held under the total-break dispatch gate', () => {
+    const signals = detectBaseBreakDispatchHoldSignal(
+      [
+        { task_id: 'task-1', parsed: pause() },
+        { task_id: 'task-2', parsed: pause() },
+      ],
+      'proj-1:M12',
+    );
+    expect(signals).toHaveLength(1);
+    expect(signals[0].key).toBe('base_break:proj-1:M12');
+    expect(signals[0].type).toBe('base_break');
+  });
+
+  it('does not fire for a partial break (no base_branch_broken pause reason present)', () => {
+    const signals = detectBaseBreakDispatchHoldSignal(
+      [
+        {
+          task_id: 'task-1',
+          parsed: pause({
+            reason: 'ci_failing',
+            source: 'ci',
+            severity: 'needs_attention',
+            retry_strategy: 'automatic',
+          }),
+        },
+      ],
+      'proj-1:M12',
+    );
+    expect(signals).toHaveLength(0);
+  });
+
+  it('does not fire once the dispatch hold clears (no rows carrying the reason)', () => {
+    expect(detectBaseBreakDispatchHoldSignal([], 'proj-1:M12')).toHaveLength(0);
   });
 });
 
