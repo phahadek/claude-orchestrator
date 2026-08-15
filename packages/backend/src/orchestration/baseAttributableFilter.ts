@@ -30,13 +30,13 @@ import { getFailingTestIdsForRun } from '../db/queries';
 import { checkBaseBranchHealth } from './baseHealthCheck';
 import { recordAndMaybeFileBaseHealthRemediation } from '../audit/baseHealthRemediationFiling';
 
-export type BaseAttributableFilterOutcome =
+type BaseAttributableFilterOutcome =
   | 'unfiltered'
   | 'filtered_pass'
   | 'filtered_partial'
   | 'inconclusive';
 
-export interface FailingTest {
+interface FailingTest {
   test_id: string;
   name: string;
 }

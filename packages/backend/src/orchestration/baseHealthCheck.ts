@@ -76,7 +76,7 @@ const defaultDeps: BaseHealthCheckDeps = {
   gitRunner: defaultGitRunner,
 };
 
-export type BaseHealthOutcome =
+type BaseHealthOutcome =
   | 'clean_pass'
   | 'partial_fail'
   | 'total_fail'
