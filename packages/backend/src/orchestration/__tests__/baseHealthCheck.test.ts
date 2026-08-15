@@ -304,7 +304,12 @@ describe('checkBaseBranchHealth', () => {
         Date.now(),
       );
       completeTestRequestRun('run-concurrent', 'passed', '');
-      return { runId: 'run-concurrent', joined: false, passed: true, output: '' };
+      return {
+        runId: 'run-concurrent',
+        joined: false,
+        passed: true,
+        output: '',
+      };
     });
 
     const [first, second] = await Promise.all([
