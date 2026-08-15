@@ -208,6 +208,9 @@ const reviewOrchestrator = new ReviewOrchestrator(
 reviewOrchestrator.setDepthReviewService(depthReviewService);
 setSettingsReviewOrchestrator(reviewOrchestrator);
 const planningOrchestrator = new PlanningOrchestrator(sessionManager);
+sessionManager.setPlanningTerminalChecker((sessionId) =>
+  planningOrchestrator.tryTerminalizeIfComplete(sessionId),
+);
 
 // Wire sessionManager into the deploy-agentic-step spawner before any
 // deploy_run resume below could reach an `agentic` step.

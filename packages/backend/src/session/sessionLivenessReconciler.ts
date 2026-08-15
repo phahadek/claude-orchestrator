@@ -36,6 +36,22 @@ export interface SessionLivenessReconcilerDeps {
   /** Drops the session's stale in-memory entry, if any — SessionManager wires this to evictDeadSessionEntry. */
   evictSessionMapEntry?: (sessionId: string) => void;
   nowFn?: () => number;
+  /**
+   * Only consulted by the planning population (reconcileSessionLiveness):
+   * a last-chance completeness check tried before this sweep would
+   * otherwise overwrite a dead-process row with a bare 'killed' status.
+   * SessionManager wires this to PlanningOrchestrator.tryTerminalizeIfComplete
+   * — a session whose staged work had actually settled (e.g. an
+   * investigate session that staged nothing, or dispositioned everything)
+   * before its process died is driven to 'done' with a proper
+   * terminal_completion_reason via markTerminal instead of being reaped as
+   * an unexplained 'killed', closing the restart race where a session never
+   * lived long enough to reach its own onSessionParked/checkTerminal path.
+   * Returns true if it terminalized the session itself (the sweep then
+   * skips its own 'killed' write for that row); false leaves the row to the
+   * normal 'killed' fallback below.
+   */
+  tryMarkPlanningTerminal?: (sessionId: string) => boolean;
 }
 
 export interface SessionLivenessReconcileResult {
@@ -107,6 +123,7 @@ function runLivenessSweep(
   const examined = rows.length;
   let alive = 0;
   const reconciled: string[] = [];
+  const terminalizedViaCompletion: string[] = [];
   for (const row of rows) {
     if (isProcessAlive(row.session_id)) {
       alive++;
@@ -118,6 +135,26 @@ function runLivenessSweep(
     if (now - lastActivity < LIVENESS_RECONCILE_GRACE_MS) {
       // Not yet clear of the process-race grace floor — neither confirmed
       // dead nor counted alive; the process check itself did not say alive.
+      continue;
+    }
+
+    if (
+      population === 'planning' &&
+      deps.tryMarkPlanningTerminal?.(row.session_id)
+    ) {
+      evictSessionMapEntry(row.session_id);
+      revokeStageCredential(
+        row.session_id,
+        'liveness_reconciler_process_not_found',
+      );
+      revokeRouteCredential(
+        row.session_id,
+        'liveness_reconciler_process_not_found',
+      );
+      terminalizedViaCompletion.push(row.session_id);
+      logger.info(
+        `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} had no live OS process but its staged work had already settled — reconciled to done rather than killed`,
+      );
       continue;
     }
 
@@ -155,7 +192,11 @@ function runLivenessSweep(
     );
   }
 
-  return { reconciled, examined, alive };
+  return {
+    reconciled: [...reconciled, ...terminalizedViaCompletion],
+    examined,
+    alive,
+  };
 }
 
 export interface OrphanProcessReconcilerDeps {

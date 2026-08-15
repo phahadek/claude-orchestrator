@@ -10,11 +10,14 @@ import type { SessionManager } from '../session/SessionManager';
 import {
   listReportsFiltered,
   isDispatchEligible,
+  isResolveEligible,
+  updateReportState,
   type InvestigationReportRow,
 } from './reportStore';
 import { launchInvestigateBatch } from './investigateDispatcher';
 
 const DEFAULT_SCAN_LIMIT = 50;
+const DEFAULT_RESOLVE_SCAN_LIMIT = 200;
 
 /**
  * Count of live (non-terminal) investigate-dispatched sessions — task_id
@@ -118,6 +121,73 @@ export async function runInvestigationReconcilerTick(
   return { dispatched, skippedForBudget };
 }
 
+export interface ReportResolveWatcherOptions {
+  /** Max number of committed reports scanned per page. */
+  scanLimit?: number;
+}
+
+export interface ReportResolveWatcherTickResult {
+  /** Report ids advanced committed -> resolved this tick. */
+  resolved: string[];
+}
+
+/**
+ * One resolve-watcher tick: the closure the design locked but no code path
+ * ever drove — advances every committed report whose full dispatch history
+ * (investigation_report_dispatch, aggregated across every session ever
+ * dispatched for it) has settled from committed -> resolved. Deliberately a
+ * Scheduler job over isResolveEligible rather than a staged-intent
+ * disposition hook: a disposition hook structurally cannot see the
+ * zero-intent case (a session that investigated and staged nothing),
+ * because there is no disposition event to hook for a report with no
+ * intents at all — isResolveEligible's own docstring calls this case out by
+ * name. Idempotent across ticks: only 'committed' rows are scanned, so a
+ * report already advanced to 'resolved' on a prior tick is never
+ * re-examined, and 'abandoned' rows are never touched (excluded by the same
+ * state filter) — this watcher has no authority to move a report out of
+ * 'abandoned'.
+ */
+export function runReportResolveWatcherTick(
+  options: ReportResolveWatcherOptions = {},
+): ReportResolveWatcherTickResult {
+  const scanLimit = options.scanLimit ?? DEFAULT_RESOLVE_SCAN_LIMIT;
+  const resolved: string[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = listReportsFiltered({ state: 'committed' }, scanLimit, offset);
+    for (const report of page) {
+      if (isResolveEligible(report.id)) {
+        updateReportState(report.id, 'resolved', new Date().toISOString());
+        resolved.push(report.id);
+      }
+    }
+    if (page.length < scanLimit) break;
+    offset += scanLimit;
+  }
+  return { resolved };
+}
+
+/**
+ * Registers the resolve watcher with the Scheduler, beside the dispatch
+ * reconciler below — same master switch/cadence, since both are aspects of
+ * the same committed-report lifecycle.
+ */
+function registerResolveWatcher(
+  scheduler: Scheduler,
+  options: ReportResolveWatcherOptions = {},
+): void {
+  scheduler.register({
+    name: 'investigation_resolve_watcher',
+    intervalMs: () => runtimeSettings.investigation_reconciler_interval_ms,
+    concurrency: 'skip-if-running',
+    enabled: () => runtimeSettings.investigation_reconciler_enabled,
+    run: async () => {
+      const { resolved } = runReportResolveWatcherTick(options);
+      return { items_processed: resolved.length };
+    },
+  });
+}
+
 /**
  * Registers the reconciler with the Scheduler, gated by the
  * investigation_reconciler_enabled master switch and, per milestone, the
@@ -148,4 +218,5 @@ export function register(
       return { items_processed };
     },
   });
+  registerResolveWatcher(scheduler);
 }

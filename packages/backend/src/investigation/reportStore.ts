@@ -388,24 +388,28 @@ export function isInFlight(reportId: string): boolean {
 }
 
 /**
- * Resolve-eligibility: at least one dispatched session has reached a
- * terminal session status, AND every staged_intent tied to any session ever
- * recorded in investigation_report_dispatch for this report (aggregated
- * across the report's entire dispatch history) is in a terminal disposition
- * state. Vacuously true for a session that stages nothing — a report
- * investigated and found not-actionable still resolves once its session
- * ends. A report with no dispatch history at all is never eligible: clause
- * (a) requires at least one terminal session.
+ * Resolve-eligibility: every session ever dispatched for this report
+ * (across its full dispatch history, via investigation_report_dispatch) has
+ * reached a terminal session status — equivalent to !isInFlight(reportId) —
+ * AND every staged_intent tied to any of those sessions is in a terminal
+ * disposition state. Vacuously true for a session that stages nothing — a
+ * report investigated and found not-actionable still resolves once its
+ * session ends. A report with no dispatch history at all is never eligible.
+ * Requiring the *whole* dispatch history to be terminal (not merely one
+ * session) matters for a batched dispatch — a report sharing a session with
+ * others, later re-dispatched on its own while a sibling's session is still
+ * live, must not resolve on the strength of an already-terminal sibling
+ * session alone.
  */
 export function isResolveEligible(reportId: string): boolean {
   const sessionIds = listDispatchedSessions(reportId).map((d) => d.session_id);
   if (sessionIds.length === 0) return false;
 
   const statuses = getSessionStatuses(sessionIds);
-  const hasTerminalSession = [...statuses.values()].some((status) =>
+  const allSessionsTerminal = [...statuses.values()].every((status) =>
     TERMINAL_SESSION_STATUSES.has(status),
   );
-  if (!hasTerminalSession) return false;
+  if (!allSessionsTerminal) return false;
 
   const placeholders = sessionIds.map(() => '?').join(', ');
   const intentStates = db

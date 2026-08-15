@@ -24,6 +24,7 @@ import type {
 import {
   isPlanningSession,
   isGateVerifySession,
+  isInvestigateSession,
 } from '../session/sessionPredicates';
 import {
   getEntry,
@@ -477,8 +478,22 @@ export class PlanningOrchestrator {
       return false;
     }
 
+    // An investigate-dispatched session (task_id `report-batch:<batchId>`)
+    // is a one-shot batch with no resume purpose once concluded (mirrors
+    // isGateVerifySession) — it never has a legitimate "did this turn just
+    // stage something new that still needs a further look" concern the
+    // stagedNothingNew comparison below exists to protect, so it is exempt
+    // from that comparison entirely (not just from the no-decision nudge
+    // further down): a fresh session whose very first checkTerminal call
+    // finds every staged intent already terminal must resolve on that call,
+    // not require a priming call first.
+    const investigateSession = isInvestigateSession(
+      getSession(sessionId)?.task_id,
+    );
+
     const priorCount = this.stagedCountAtResume.get(sessionId) ?? 0;
-    const stagedNothingNew = countable.length <= priorCount;
+    const stagedNothingNew =
+      investigateSession || countable.length <= priorCount;
     const reachedTerminal =
       blockedBudgetExhausted ||
       (!stillPending && stagedNothingNew && !owesGatedArtifacts);
@@ -488,7 +503,16 @@ export class PlanningOrchestrator {
       return false;
     }
 
-    if (hasStagedDecision(all)) {
+    // A stages-nothing (or nothing-that-counts-as-a-decision) investigate
+    // session is not a backstop case to nudge past — a not-actionable
+    // finding is a legitimate, common investigation outcome (see
+    // isResolveEligible's own docstring: "a report investigated and found
+    // not-actionable still resolves once its session ends"). Routing it
+    // through the no-decision nudge/second-occurrence dance below would
+    // make its terminalization depend on in-memory nudge state that a
+    // backend restart wipes — so it goes straight to markTerminal on the
+    // very first park, the same as a session that did stage a decision.
+    if (hasStagedDecision(all) || investigateSession) {
       const incompleteJournalState =
         this.incompleteOpsJournalStateFor(sessionId);
       if (incompleteJournalState) {
@@ -1167,6 +1191,42 @@ export class PlanningOrchestrator {
       (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
     );
     return blocked ? 'blocked' : 'terminal';
+  }
+
+  /**
+   * Cold-path terminal attempt for a single session, keyed off
+   * isSessionCompleteForIdleSweep's same DB-only completeness predicate —
+   * usable from a caller that has no live turn/park event to drive
+   * checkTerminal (e.g. a liveness-reconciler sweep about to write a bare
+   * 'killed' status over a session whose OS process is gone but whose work
+   * actually settled before it died). Returns true iff the session was
+   * driven to terminal via markTerminal with the same
+   * 'planning_no_pending_dispositions' reason the live checkTerminal path
+   * uses — so a report's isResolveEligible / a task's design-completion
+   * wiring sees the identical, already-audited signal regardless of which
+   * path reached it. A 'blocked' verdict surfaces the pause reason (the
+   * session can never resolve those members itself once its process is
+   * gone) and returns false, same as the idle sweep; 'not_ready' also
+   * returns false, leaving the caller's own fallback (e.g. writing
+   * 'killed') untouched.
+   */
+  tryTerminalizeIfComplete(sessionId: string): boolean {
+    const row = getSession(sessionId);
+    if (!row || !isPlanningSession(row.session_type ?? '')) return false;
+    const outcome = this.isSessionCompleteForIdleSweep(sessionId);
+    if (outcome === 'not_ready') return false;
+    if (outcome === 'blocked') {
+      this.surfaceBlockedMembersPauseReason(
+        sessionId,
+        row,
+        'planning_liveness_reconciler_blocked',
+      );
+      return false;
+    }
+    this.markTerminal(sessionId, 'planning_no_pending_dispositions', {
+      skipInFlightGuard: true,
+    });
+    return true;
   }
 
   /**

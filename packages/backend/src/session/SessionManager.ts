@@ -1077,6 +1077,19 @@ export class SessionManager extends EventEmitter {
   /** Concurrency guard: prevents double-spawning when two concurrent sendOrResume calls race. */
   private resumesInFlight = new Map<string, Promise<string | null>>();
 
+  /**
+   * Late-bound hook to PlanningOrchestrator.tryTerminalizeIfComplete — unset
+   * until server.ts wires it via setPlanningTerminalChecker, since
+   * PlanningOrchestrator's constructor takes this SessionManager instance
+   * and so cannot be constructed first. Consulted by
+   * reconcilePlanningSessionLiveness (see sessionLivenessReconciler.ts's
+   * tryMarkPlanningTerminal dep) before that sweep would otherwise reap a
+   * dead-process planning session as a bare 'killed' with no completion
+   * reason recorded.
+   */
+  private planningTerminalChecker: ((sessionId: string) => boolean) | null =
+    null;
+
   /** Last known DisplayStatus per taskId — used to skip no-op broadcasts. */
   private _lastDisplayStatus = new Map<string, DisplayStatus>();
   /** Timestamp of last lastMessage-only task_updated per taskId. */
@@ -4979,7 +4992,18 @@ export class SessionManager extends EventEmitter {
     return reconcileSessionLiveness({
       evictSessionMapEntry: (sessionId) =>
         this.evictDeadSessionEntry(sessionId),
+      tryMarkPlanningTerminal: this.planningTerminalChecker ?? undefined,
     });
+  }
+
+  /**
+   * Wires PlanningOrchestrator.tryTerminalizeIfComplete in — called once
+   * from server.ts after both instances exist (PlanningOrchestrator takes
+   * this SessionManager in its own constructor, so the dependency can't run
+   * the other direction).
+   */
+  setPlanningTerminalChecker(checker: (sessionId: string) => boolean): void {
+    this.planningTerminalChecker = checker;
   }
 
   /**

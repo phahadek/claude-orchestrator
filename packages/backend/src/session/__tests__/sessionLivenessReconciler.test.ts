@@ -279,6 +279,68 @@ describe('reconcileSessionLiveness', () => {
     expect(result.examined).toBe(3);
     expect(result.alive).toBe(1);
   });
+
+  it('routes a dead planning session through tryMarkPlanningTerminal instead of writing a bare killed status, when the hook reports it terminalized the session itself', () => {
+    seedSession({ sessionId: 'settled-investigate', status: 'running' });
+    const tryMarkPlanningTerminal = vi.fn().mockImplementation(() => {
+      // Simulate PlanningOrchestrator.tryTerminalizeIfComplete's own write.
+      updateSessionStatus('settled-investigate', 'done', NOW);
+      return true;
+    });
+
+    const result = reconcileSessionLiveness({
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      tryMarkPlanningTerminal,
+    });
+
+    expect(tryMarkPlanningTerminal).toHaveBeenCalledWith('settled-investigate');
+    expect(result.reconciled).toEqual(['settled-investigate']);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('settled-investigate') as { status: string };
+    expect(row.status).toBe('done');
+  });
+
+  it('falls back to writing killed when tryMarkPlanningTerminal reports the session was not eligible', () => {
+    seedSession({ sessionId: 'still-pending', status: 'running' });
+    const tryMarkPlanningTerminal = vi.fn().mockReturnValue(false);
+
+    const result = reconcileSessionLiveness({
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      tryMarkPlanningTerminal,
+    });
+
+    expect(tryMarkPlanningTerminal).toHaveBeenCalledWith('still-pending');
+    expect(result.reconciled).toEqual(['still-pending']);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('still-pending') as { status: string };
+    expect(row.status).toBe('killed');
+  });
+
+  it('never consults tryMarkPlanningTerminal for the non-planning population', () => {
+    insertSession({
+      session_id: 'standard-ghost',
+      task_id: 'task-standard-ghost',
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: OLD_START,
+      session_type: 'standard',
+      task_name: null,
+    } as never);
+    const tryMarkPlanningTerminal = vi.fn().mockReturnValue(true);
+
+    reconcileNonPlanningSessionLiveness({
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      tryMarkPlanningTerminal,
+    });
+
+    expect(tryMarkPlanningTerminal).not.toHaveBeenCalled();
+  });
 });
 
 describe('reconcileNonPlanningSessionLiveness', () => {
