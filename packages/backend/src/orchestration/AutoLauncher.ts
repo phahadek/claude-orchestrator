@@ -442,9 +442,7 @@ export class AutoLauncher {
     // clears) the base_branch_broken pause on every otherwise-ready task, so
     // the existing pause-reason check in isLaunchCandidate does the actual
     // blocking below.
-    const readyCodeTasks = allTasks.filter((t) =>
-      this.isReadyCodeCandidate(t),
-    );
+    const readyCodeTasks = allTasks.filter((t) => this.isReadyCodeCandidate(t));
     if (readyCodeTasks.length > 0) {
       await this.applyBaseHealthGate(project, readyCodeTasks);
     }
