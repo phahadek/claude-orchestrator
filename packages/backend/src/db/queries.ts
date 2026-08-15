@@ -2401,9 +2401,11 @@ export function upsertPullRequest(
     | 'ci_remediation_attempted_sha'
     | 'pre_review_stage'
     | 'stalled_pr_retry_count'
+    | 'stalled_retry_base_exhausted'
     | 'session_initiated_close_at'
     | 'reviewer_requested_at'
     | 'flake_recovery_attempts'
+    | 'flake_recovery_base_exhausted'
     | 'human_merge_only'
     | 'pr_intent_id'
   > & {
@@ -2563,6 +2565,39 @@ export function incrementStalledPRRetryCount(
     `UPDATE pull_requests SET stalled_pr_retry_count = stalled_pr_retry_count + 1 WHERE pr_number = @pr_number AND repo = @repo`,
   ).run({ pr_number: prNumber, repo });
   return getPRByNumber(prNumber, repo)?.stalled_pr_retry_count ?? 0;
+}
+
+/**
+ * Marks (or clears) whether the current stalled_pr_retry_count's most recent
+ * gate_failed escalation was confirmed base-attributable — the sole scoping
+ * signal the base-recovery reset in StalledPRReconciler consults before
+ * restoring this PR's budget, so recovery never resets an unrelated PR's
+ * counter.
+ */
+export function setStalledRetryBaseExhausted(
+  prNumber: number,
+  repo: string,
+  value: boolean,
+): void {
+  db.prepare<{ pr_number: number; repo: string; value: number }>(
+    `UPDATE pull_requests SET stalled_retry_base_exhausted = @value WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo, value: value ? 1 : 0 });
+}
+
+/**
+ * Resets stalled_pr_retry_count to 0 once the project's base branch
+ * recovers, for a PR whose most recent exhaustion was itself confirmed
+ * base-attributable (see baseAttribution.ts) — the head_sha-change reset
+ * (setHeadSha) is this counter's other, pre-existing reset trigger. Always
+ * clears stalled_retry_base_exhausted alongside the count.
+ */
+export function resetStalledPRRetryCountForBaseRecovery(
+  prNumber: number,
+  repo: string,
+): void {
+  db.prepare<{ pr_number: number; repo: string }>(
+    `UPDATE pull_requests SET stalled_pr_retry_count = 0, stalled_retry_base_exhausted = 0 WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo });
 }
 
 export function clearReviewSessionId(prNumber: number, repo: string): void {
@@ -3184,13 +3219,38 @@ export function incrementFlakeRecoveryAttempts(
   ).run(prNumber, repo);
 }
 
+/**
+ * Resets flake_recovery_attempts to 0 — called both on a passing verified-
+ * flaky re-run (the original trigger) and, per the base-attributable-
+ * failures exemption, once the project's base branch recovers for a PR
+ * whose most recent exhaustion was itself base-attributable. Always clears
+ * flake_recovery_base_exhausted alongside the count — a reset counter can
+ * never legitimately be marked "exhausted for a base reason" a moment later.
+ */
 export function resetFlakeRecoveryAttempts(
   prNumber: number,
   repo: string,
 ): void {
   db.prepare(
-    `UPDATE pull_requests SET flake_recovery_attempts = 0 WHERE pr_number = ? AND repo = ?`,
+    `UPDATE pull_requests SET flake_recovery_attempts = 0, flake_recovery_base_exhausted = 0 WHERE pr_number = ? AND repo = ?`,
   ).run(prNumber, repo);
+}
+
+/**
+ * Marks (or clears) whether the current flake_recovery_attempts count's most
+ * recent charge-worthy failure was confirmed base-attributable — the sole
+ * scoping signal the base-recovery reset in PRMergeWatcher consults before
+ * restoring this PR's budget, so recovery never resets an unrelated PR's
+ * counter.
+ */
+export function setFlakeRecoveryBaseExhausted(
+  prNumber: number,
+  repo: string,
+  value: boolean,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET flake_recovery_base_exhausted = ? WHERE pr_number = ? AND repo = ?`,
+  ).run(value ? 1 : 0, prNumber, repo);
 }
 
 export function setConflictNudgeSha(

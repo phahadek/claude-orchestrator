@@ -61,6 +61,15 @@ vi.mock('../pollUtils', () => ({
   isTerminalStalePR: vi.fn().mockReturnValue(false),
 }));
 
+// Never base-attributable / never base-healthy in this suite — preserves
+// this file's pre-exemption assertions untouched. See
+// PRMergeWatcher.baseAttribution.test.ts for the exemption/restore behavior
+// itself.
+vi.mock('../../orchestration/baseAttribution', () => ({
+  isBaseTotalFail: vi.fn().mockResolvedValue(false),
+  isProjectBaseHealthy: vi.fn().mockResolvedValue(false),
+}));
+
 // db/pauseReason is left un-mocked — real parse/serialize logic exercises the
 // actual ci_failing registry entry.
 
