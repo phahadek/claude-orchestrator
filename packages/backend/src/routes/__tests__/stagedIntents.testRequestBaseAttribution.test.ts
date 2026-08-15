@@ -122,7 +122,13 @@ describe('session_test_request_cycles base-attributable-failures exemption', () 
   it('does not increment the cycle counter when the prior failing run is confirmed base-attributable', async () => {
     mockIsRunFailureBaseAttributable.mockResolvedValue(true);
     setUpSession('session-base-fail');
-    insertTestRequestRun('run-1', 'proj-1', 'hash-0', 'session-base-fail', Date.now());
+    insertTestRequestRun(
+      'run-1',
+      'proj-1',
+      'hash-0',
+      'session-base-fail',
+      Date.now(),
+    );
     completeTestRequestRun('run-1', 'failed', 'boom');
 
     const intent = stageTestRequest('session-base-fail');
@@ -134,7 +140,13 @@ describe('session_test_request_cycles base-attributable-failures exemption', () 
   it('increments the cycle counter normally when the prior failing run is not base-attributable', async () => {
     mockIsRunFailureBaseAttributable.mockResolvedValue(false);
     setUpSession('session-own-fail');
-    insertTestRequestRun('run-2', 'proj-1', 'hash-0', 'session-own-fail', Date.now());
+    insertTestRequestRun(
+      'run-2',
+      'proj-1',
+      'hash-0',
+      'session-own-fail',
+      Date.now(),
+    );
     completeTestRequestRun('run-2', 'failed', 'boom');
 
     const intent = stageTestRequest('session-own-fail');
@@ -166,7 +178,13 @@ describe('session_test_request_cycles base-attributable-failures exemption', () 
     // (so this 4th cycle itself would not have been charged), the count
     // accumulated before that confirmation is never rolled back.
     mockIsRunFailureBaseAttributable.mockResolvedValue(true);
-    insertTestRequestRun('run-3', 'proj-1', 'hash-1', 'session-exhausted', Date.now());
+    insertTestRequestRun(
+      'run-3',
+      'proj-1',
+      'hash-1',
+      'session-exhausted',
+      Date.now(),
+    );
     completeTestRequestRun('run-3', 'failed', 'boom');
     const overLimit = stageTestRequest('session-exhausted');
     const checked = await routeStageTimeBlock(overLimit, undefined);

@@ -70,7 +70,10 @@ import {
   setFlakeRecoveryBaseExhausted,
   recordMergeCommitForSession,
 } from '../db/queries';
-import { isBaseTotalFail, isProjectBaseHealthy } from '../orchestration/baseAttribution';
+import {
+  isBaseTotalFail,
+  isProjectBaseHealthy,
+} from '../orchestration/baseAttribution';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
 import { buildTestResultDigest } from '../session/testResultDigest';
@@ -1308,7 +1311,10 @@ export class PRMergeWatcher extends EventEmitter {
       // Restore, scoped to this PR alone, if its most recent exhaustion was
       // itself confirmed base-attributable and the base branch has since
       // recovered — mirrors handleVerifiedFlakyDisposition's own restore.
-      if (pr.flake_recovery_base_exhausted && (await isProjectBaseHealthy(project))) {
+      if (
+        pr.flake_recovery_base_exhausted &&
+        (await isProjectBaseHealthy(project))
+      ) {
         resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
         recordEvent({
           event_type: 'flake_recovery_base_recovery_reset',

@@ -64,26 +64,26 @@ describe('isProjectBaseHealthy', () => {
 describe('isRunFailureBaseAttributable', () => {
   it('is true on a total_fail base regardless of the run', async () => {
     mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'total_fail' });
-    expect(
-      await isRunFailureBaseAttributable(PROJECT, { id: 'run-x' }),
-    ).toBe(true);
+    expect(await isRunFailureBaseAttributable(PROJECT, { id: 'run-x' })).toBe(
+      true,
+    );
   });
 
   it('is false on an unknown base outcome (defaults to charge normally)', async () => {
     mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'unknown' });
-    expect(
-      await isRunFailureBaseAttributable(PROJECT, { id: 'run-x' }),
-    ).toBe(false);
+    expect(await isRunFailureBaseAttributable(PROJECT, { id: 'run-x' })).toBe(
+      false,
+    );
   });
 
   it('is false on a clean_pass base', async () => {
     mockCheckBaseBranchHealth.mockResolvedValue({ outcome: 'clean_pass' });
-    expect(
-      await isRunFailureBaseAttributable(PROJECT, { id: 'run-x' }),
-    ).toBe(false);
+    expect(await isRunFailureBaseAttributable(PROJECT, { id: 'run-x' })).toBe(
+      false,
+    );
   });
 
-  it('is true on a partial_fail base whose failing tests are a superset of the run\'s own failing tests', async () => {
+  it("is true on a partial_fail base whose failing tests are a superset of the run's own failing tests", async () => {
     insertTestRequestRun('run-own', 'proj-1', 'hash-a', null, Date.now());
     insertTestRunResults(
       'run-own',
@@ -106,12 +106,12 @@ describe('isRunFailureBaseAttributable', () => {
       run: { id: 'run-base' },
     });
 
-    expect(
-      await isRunFailureBaseAttributable(PROJECT, { id: 'run-own' }),
-    ).toBe(true);
+    expect(await isRunFailureBaseAttributable(PROJECT, { id: 'run-own' })).toBe(
+      true,
+    );
   });
 
-  it('is false on a partial_fail base that does not cover all of the run\'s own failing tests', async () => {
+  it("is false on a partial_fail base that does not cover all of the run's own failing tests", async () => {
     insertTestRequestRun('run-own-2', 'proj-1', 'hash-a', null, Date.now());
     insertTestRunResults(
       'run-own-2',

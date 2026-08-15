@@ -195,7 +195,10 @@ function makeMockSessions(): SessionManager {
 }
 
 function makeMockAutoMerger(): AutoMerger {
-  return { attempt: vi.fn(), clearStalePauses: vi.fn() } as unknown as AutoMerger;
+  return {
+    attempt: vi.fn(),
+    clearStalePauses: vi.fn(),
+  } as unknown as AutoMerger;
 }
 
 function makeWatcher(github: GitHubClient) {
@@ -279,10 +282,7 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
 
     await watcher.handleVerifiedFlakyDisposition(makePayload());
 
-    expect(resetFlakeRecoveryAttempts).toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-    );
+    expect(resetFlakeRecoveryAttempts).toHaveBeenCalledWith(PR_NUMBER, REPO);
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'flake_recovery_base_recovery_reset',

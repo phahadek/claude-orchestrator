@@ -223,9 +223,7 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
         event_type: 'stalled_pr_base_recovery_reset',
       }),
     );
-    expect(
-      messages.find((m) => m.type === 'pr_pause_cleared'),
-    ).toBeDefined();
+    expect(messages.find((m) => m.type === 'pr_pause_cleared')).toBeDefined();
   });
 
   it('never restores an escalated PR whose exhaustion was not base-attributable, even once base recovers', async () => {
@@ -246,7 +244,7 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     expect(setPauseReason).not.toHaveBeenCalled();
   });
 
-  it("never restores a base-attributable-exhausted PR while base is still unhealthy", async () => {
+  it('never restores a base-attributable-exhausted PR while base is still unhealthy', async () => {
     vi.mocked(isProjectBaseHealthy).mockResolvedValue(false);
     const pr = makePR({
       stalled_pr_retry_count: 2,
