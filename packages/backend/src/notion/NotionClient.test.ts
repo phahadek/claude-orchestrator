@@ -992,7 +992,6 @@ describe('NotionClient.fetchReadyTasks — readBoardCache strips notion: prefix'
 describe('NotionClient.fetchBoardTasks — reconciles against a recent status write', () => {
   const BOARD_ID_RECONCILE = 'reconcile-test-board-id';
   const RAW_TASK_ID = 'cccc3333-dddd-4444-eeee-ffff00001111';
-  const PREFIXED_TASK_ID = `notion:${RAW_TASK_ID}`;
 
   let client: NotionClient;
   let fetchSpy: ReturnType<typeof vi.fn>;
@@ -1026,8 +1025,12 @@ describe('NotionClient.fetchBoardTasks — reconciles against a recent status wr
         },
       ]),
     });
+    // reconcileTaskStatuses looks up each task by its (already
+    // prefix-stripped, per readBoardCache) raw id — the same raw id
+    // production code would pass to the real getRecentTaskStatusWrite,
+    // which normalizes it internally.
     vi.mocked(getRecentTaskStatusWrite).mockImplementation((taskId: string) =>
-      taskId === PREFIXED_TASK_ID ? '🗂️ Ready' : null,
+      taskId === RAW_TASK_ID ? '🗂️ Ready' : null,
     );
 
     const tasks = await client.fetchReadyTasks(BOARD_ID_RECONCILE);
