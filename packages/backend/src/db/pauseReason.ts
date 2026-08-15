@@ -32,6 +32,7 @@ export type CanonicalPauseReason =
   | 'stalled_idle'
   | 'notion_done_update_stuck'
   | 'launch_failed'
+  | 'base_branch_broken'
   | 'diverged_branch'
   | 'diverged_branch_unresolved'
   | 'analyze_failing'
@@ -173,6 +174,15 @@ export const PAUSE_REASON_REGISTRY: Record<
     source: 'launch',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
+  },
+  // Base branch itself is broken at a whole-suite/build level (total_fail —
+  // no per-test breakdown, e.g. a crash or OOM-kill before any report was
+  // written). Clears itself the moment a subsequent base-health check comes
+  // back clean/partial — never requires a human, unlike launch_failed above.
+  base_branch_broken: {
+    source: 'launch',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
   },
   diverged_branch: {
     source: 'merge',

@@ -86,6 +86,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'PR merged but Notion status update failed repeatedly — update Notion to Done manually and clear the pause.',
   launch_failed:
     'Launch failed repeatedly — fix the underlying issue (e.g. delete the stale branch) then restart the backend.',
+  base_branch_broken:
+    'Base branch is broken (whole-suite/build-level failure) — new session dispatch is held for this project until a subsequent base-health check clears it. No action needed.',
   diverged_branch:
     'Branch has diverged from origin — manual reconciliation needed before auto-push can resume.',
   diverged_branch_unresolved:
