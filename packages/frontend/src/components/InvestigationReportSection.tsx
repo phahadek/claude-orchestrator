@@ -381,7 +381,9 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
                 <button
                   type="button"
                   className={styles.viewSessionButton}
-                  onClick={() => jumpToSession(report.dispatchedSessions[0].sessionId)}
+                  onClick={() =>
+                    jumpToSession(report.dispatchedSessions[0].sessionId)
+                  }
                   data-testid={`report-view-session-${report.id}`}
                 >
                   View session ({report.dispatchedSessions[0].sessionStatus})

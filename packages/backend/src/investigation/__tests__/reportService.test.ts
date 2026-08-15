@@ -281,8 +281,16 @@ describe('listReports / getReportWithDerived', () => {
 
     const withSessions = getReportWithDerived(report.id);
     expect(withSessions?.dispatchedSessions).toEqual([
-      { sessionId: 'sess-running', sessionStatus: 'running', dispatchedAt: '2026-08-13T00:00:02Z' },
-      { sessionId: 'sess-done', sessionStatus: 'done', dispatchedAt: '2026-08-13T00:00:01Z' },
+      {
+        sessionId: 'sess-running',
+        sessionStatus: 'running',
+        dispatchedAt: '2026-08-13T00:00:02Z',
+      },
+      {
+        sessionId: 'sess-done',
+        sessionStatus: 'done',
+        dispatchedAt: '2026-08-13T00:00:01Z',
+      },
     ]);
   });
 

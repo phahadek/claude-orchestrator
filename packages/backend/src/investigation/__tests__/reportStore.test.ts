@@ -177,8 +177,16 @@ describe('getDispatchedSessionsForReport', () => {
     recordDispatch(report.id, 'sess-1', '2026-08-13T00:00:01Z');
     recordDispatch(report.id, 'sess-2', '2026-08-13T00:00:02Z');
     expect(getDispatchedSessionsForReport(report.id)).toEqual([
-      { sessionId: 'sess-2', sessionStatus: 'running', dispatchedAt: '2026-08-13T00:00:02Z' },
-      { sessionId: 'sess-1', sessionStatus: 'done', dispatchedAt: '2026-08-13T00:00:01Z' },
+      {
+        sessionId: 'sess-2',
+        sessionStatus: 'running',
+        dispatchedAt: '2026-08-13T00:00:02Z',
+      },
+      {
+        sessionId: 'sess-1',
+        sessionStatus: 'done',
+        dispatchedAt: '2026-08-13T00:00:01Z',
+      },
     ]);
   });
 

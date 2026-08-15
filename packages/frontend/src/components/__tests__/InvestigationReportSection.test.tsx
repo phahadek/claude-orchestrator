@@ -47,9 +47,7 @@ describe('InvestigationReportSection — dispatched session affordance', () => {
       page: 1,
     });
 
-    render(
-      <InvestigationReportSection projectId="proj-1" milestone="M1" />,
-    );
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
 
     await screen.findByTestId('report-card-r1');
     expect(screen.queryByTestId('report-view-session-r1')).toBeNull();
@@ -77,9 +75,7 @@ describe('InvestigationReportSection — dispatched session affordance', () => {
     const listener = vi.fn();
     window.addEventListener('selectSession', listener);
 
-    render(
-      <InvestigationReportSection projectId="proj-1" milestone="M1" />,
-    );
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
 
     const button = await screen.findByTestId('report-view-session-r1');
     expect(button.textContent).toContain('running');
@@ -118,9 +114,7 @@ describe('InvestigationReportSection — dispatched session affordance', () => {
     const listener = vi.fn();
     window.addEventListener('selectSession', listener);
 
-    render(
-      <InvestigationReportSection projectId="proj-1" milestone="M1" />,
-    );
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
 
     const button = await screen.findByTestId('report-view-session-r2');
     expect(button.textContent).toContain('done');
