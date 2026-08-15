@@ -5,6 +5,7 @@ import {
   serializePauseReason,
   pauseReasonFromCanonical,
   deriveRecoveryDescriptor,
+  isMergeBlockingPause,
 } from '../db/pauseReason.js';
 import type { CanonicalPauseReason } from '../db/pauseReason.js';
 
@@ -310,6 +311,61 @@ describe('deriveRecoveryDescriptor', () => {
     expect(deriveRecoveryDescriptor('stuck_timeout')).toEqual({
       available: false,
     });
+  });
+});
+
+// ── isMergeBlockingPause ──────────────────────────────────────────────────────
+
+describe('isMergeBlockingPause', () => {
+  it('returns false for no pause (null)', () => {
+    expect(isMergeBlockingPause(null)).toBe(false);
+  });
+
+  it('test_report_acquisition_failed is classified non-blocking', () => {
+    expect(PAUSE_REASON_REGISTRY.test_report_acquisition_failed.blocks_merge).toBe(
+      false,
+    );
+    expect(isMergeBlockingPause('test_report_acquisition_failed')).toBe(false);
+    const serialized = serializePauseReason(
+      pauseReasonFromCanonical('test_report_acquisition_failed'),
+    );
+    expect(isMergeBlockingPause(serialized)).toBe(false);
+  });
+
+  it.each(['merge_conflict', 'max_reviews', 'stalled_reconcile_cap'] as const)(
+    '%s remains merge-blocking',
+    (reason) => {
+      expect(isMergeBlockingPause(reason)).toBe(true);
+      const serialized = serializePauseReason(pauseReasonFromCanonical(reason));
+      expect(isMergeBlockingPause(serialized)).toBe(true);
+    },
+  );
+
+  it('defaults to blocking (fail-closed) for an unclassified/unknown reason', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(isMergeBlockingPause('totally_unknown_reason')).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it('defaults to blocking for a legacy-persisted JSON blob missing blocks_merge', () => {
+    // Simulates a row written before blocks_merge existed on the struct.
+    const legacyRaw = JSON.stringify({
+      reason: 'ci_failing',
+      source: 'ci',
+      severity: 'needs_attention',
+      retry_strategy: 'automatic',
+    });
+    expect(isMergeBlockingPause(legacyRaw)).toBe(true);
+  });
+
+  it('re-derives false from the registry for a legacy test_report_acquisition_failed blob missing blocks_merge', () => {
+    const legacyRaw = JSON.stringify({
+      reason: 'test_report_acquisition_failed',
+      source: 'tests',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+    expect(isMergeBlockingPause(legacyRaw)).toBe(false);
   });
 });
 

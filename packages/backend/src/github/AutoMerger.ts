@@ -31,7 +31,7 @@ import {
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError, GitHubRateLimitError } from './types';
 import { getCorporateMode } from '../config/corporateMode';
-import { pauseReasonFromCanonical } from '../db/pauseReason';
+import { pauseReasonFromCanonical, isMergeBlockingPause } from '../db/pauseReason';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { PullRequestRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';
@@ -57,7 +57,10 @@ const CONFLICT_NUDGE_SWEEP_INTERVAL_MS = 120_000;
  * paused with a pause_reason so a human picks it up.
  *
  * Per-project — only runs for projects with `autoMergeEnabled === true`.
- * Skips PRs already paused (honors any existing pause_reason).
+ * Skips PRs paused for a merge-blocking reason. A pause classified as
+ * non-blocking (PAUSE_REASON_REGISTRY[reason].blocks_merge === false, e.g.
+ * test_report_acquisition_failed) is advisory — it stays visible for
+ * operators but does not stop the merge. See isMergeBlockingPause().
  */
 export class AutoMerger {
   /** In-flight auto-merge loops keyed by `${repo}#${prNumber}` to prevent double-runs. */
@@ -267,7 +270,7 @@ export class AutoMerger {
     for (const pr of approvedPRs) {
       // run() checks pause_reason too, but filtering here avoids spawning the
       // active-set entry for a goroutine that would exit immediately.
-      if (pr.pause_reason !== null) continue;
+      if (isMergeBlockingPause(pr.pause_reason)) continue;
       this.attempt(pr.pr_number, pr.repo);
     }
 
@@ -533,7 +536,7 @@ export class AutoMerger {
 
     const initialRow = getPRByNumber(prNumber, repo);
     if (!initialRow) return;
-    if (initialRow.pause_reason !== null) {
+    if (isMergeBlockingPause(initialRow.pause_reason)) {
       logger.info(
         `[AutoMerger] PR #${prNumber}: paused (${initialRow.pause_reason}) — skipping`,
       );
@@ -573,7 +576,7 @@ export class AutoMerger {
       // Re-read the PR row each iteration so external pause/close updates are honored.
       const row = getPRByNumber(prNumber, repo);
       if (!row) return;
-      if (row.pause_reason !== null) {
+      if (isMergeBlockingPause(row.pause_reason)) {
         logger.info(
           `[AutoMerger] PR #${prNumber}: pause_reason set to '${row.pause_reason}' externally — aborting`,
         );
@@ -689,7 +692,7 @@ export class AutoMerger {
 
     // Timed out waiting for CI — pause as ci_failing (semantically: CI did not pass).
     const finalRow = getPRByNumber(prNumber, repo);
-    if (finalRow && finalRow.pause_reason === null) {
+    if (finalRow && !isMergeBlockingPause(finalRow.pause_reason)) {
       logger.info(
         `[AutoMerger] PR #${prNumber}: timed out after ${runtimeSettings.ci_poll_max_minutes}m — pausing`,
       );

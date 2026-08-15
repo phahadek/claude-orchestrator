@@ -417,6 +417,166 @@ describe('AutoMerger — human_merge_only gate', () => {
   });
 });
 
+// ── pause-reason semantics: advisory (non-blocking) vs merge-blocking ────────
+
+describe('AutoMerger — pause-reason semantics govern mergeability, not mere presence', () => {
+  it('regression #1718/#1719: an approved, clean PR paused with test_report_acquisition_failed is still merged (:536 initial check + :576 loop re-check)', async () => {
+    // pause_reason is present on every getPRByNumber call (initial fetch AND
+    // the loop's per-iteration re-fetch) — reproduces the live PR state where
+    // review_result.verdict=approved, merge_state=clean, mergeable=1, and the
+    // pause was already set before the poll loop started.
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ pause_reason: 'test_report_acquisition_failed' }),
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).toHaveBeenCalledWith(42, 'feat: test', 'owner/repo');
+    expect(watcher.handleMerged).toHaveBeenCalled();
+  });
+
+  it.each(['merge_conflict', 'max_reviews', 'stalled_reconcile_cap'] as const)(
+    'a merge-blocking pause reason (%s) still skips merge on an otherwise clean/approved PR',
+    async (reason) => {
+      vi.mocked(getPRByNumber).mockReturnValue(
+        makePRRow({ pause_reason: reason }),
+      );
+      const github = makeMockGitHub([
+        {
+          status: 'ok',
+          etag: 'W/"a"',
+          state: 'open',
+          mergeability: makeMergeability('clean'),
+          headSha: 'sha-abc',
+        },
+      ]);
+      const watcher = makeMockWatcher();
+
+      const merger = new AutoMerger(github, watcher, () => {});
+      merger.attempt(42, 'owner/repo');
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(github.fetchPRStatusConditional).not.toHaveBeenCalled();
+      expect(github.mergePR).not.toHaveBeenCalled();
+    },
+  );
+
+  it('defaults to blocking (fail-closed) for an unclassified pause reason', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ pause_reason: 'some_future_reason_not_in_registry' }),
+    );
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.fetchPRStatusConditional).not.toHaveBeenCalled();
+    expect(github.mergePR).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it(':270 pollOnce() scan filter dispatches attempt() for a PR carrying a non-blocking pause reason', async () => {
+    const pr = makePRRow({ pause_reason: 'test_report_acquisition_failed' });
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([]);
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    await merger.pollOnce();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).toHaveBeenCalledWith(42, 'feat: test', 'owner/repo');
+  });
+
+  it(':270 pollOnce() scan filter skips a PR carrying a merge-blocking pause reason', async () => {
+    const pr = makePRRow({ pause_reason: 'merge_conflict' });
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([]);
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    await merger.pollOnce();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.fetchPRStatusConditional).not.toHaveBeenCalled();
+  });
+
+  it(':576 external-set abort still fires for a pause set mid-loop with a merge-blocking reason', async () => {
+    let call = 0;
+    vi.mocked(getPRByNumber).mockImplementation(() => {
+      call += 1;
+      // First read (initial check, :536): no pause. Second read (loop
+      // re-check, :576): a merge-blocking reason was set externally between
+      // iterations.
+      return call === 1
+        ? makePRRow()
+        : makePRRow({ pause_reason: 'merge_conflict' });
+    });
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.fetchPRStatusConditional).not.toHaveBeenCalled();
+    expect(github.mergePR).not.toHaveBeenCalled();
+  });
+
+  it(':576 loop re-check does not abort when a non-blocking reason is set mid-loop', async () => {
+    let call = 0;
+    vi.mocked(getPRByNumber).mockImplementation(() => {
+      call += 1;
+      return call === 1
+        ? makePRRow()
+        : makePRRow({ pause_reason: 'test_report_acquisition_failed' });
+    });
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).toHaveBeenCalledWith(42, 'feat: test', 'owner/repo');
+  });
+});
+
 describe('AutoMerger.attempt() — failure modes', () => {
   it('pauses with ci_failing on ci_failed category', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(makePRRow());

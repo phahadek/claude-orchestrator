@@ -63,6 +63,13 @@ export interface PauseReasonStruct {
   source: PauseSource;
   severity: PauseSeverity;
   retry_strategy: PauseRetryStrategy;
+  /**
+   * Whether this pause should block AutoMerger from merging the PR. Absent
+   * (undefined) on a registry entry means true — fail-closed, so a reason
+   * that hasn't been explicitly classified never silently becomes advisory.
+   * Only set false for a reason deliberately designed to be non-blocking.
+   */
+  blocks_merge: boolean;
   detail?: string;
 }
 
@@ -70,6 +77,8 @@ type RegistryEntry = {
   source: PauseSource;
   severity: PauseSeverity;
   retry_strategy: PauseRetryStrategy;
+  /** See PauseReasonStruct.blocks_merge. Omit to default to true (blocking). */
+  blocks_merge?: boolean;
 };
 
 export const PAUSE_REASON_REGISTRY: Record<
@@ -343,6 +352,7 @@ export const PAUSE_REASON_REGISTRY: Record<
     source: 'tests',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
+    blocks_merge: false,
   },
 };
 
@@ -400,10 +410,11 @@ export function deriveRecoveryDescriptor(
 
 const CANONICAL_SET = new Set<string>(Object.keys(PAUSE_REASON_REGISTRY));
 
-const UNKNOWN_FALLBACK: RegistryEntry = {
+const UNKNOWN_FALLBACK: Required<RegistryEntry> = {
   source: 'session',
   severity: 'needs_attention',
   retry_strategy: 'manual_action',
+  blocks_merge: true,
 };
 
 export function pauseReasonFromCanonical(
@@ -411,9 +422,26 @@ export function pauseReasonFromCanonical(
   detail?: string,
 ): PauseReasonStruct {
   const entry = PAUSE_REASON_REGISTRY[reason];
-  const struct: PauseReasonStruct = { reason, ...entry };
+  const struct: PauseReasonStruct = {
+    reason,
+    ...entry,
+    blocks_merge: entry.blocks_merge !== false,
+  };
   if (detail !== undefined) struct.detail = detail;
   return struct;
+}
+
+/**
+ * Whether a stored pause_reason should block AutoMerger from merging the PR.
+ * Consults the reason's classification (blocks_merge), not merely whether a
+ * pause is present — an advisory pause (e.g. test_report_acquisition_failed)
+ * must not halt a merge whose underlying tests passed. Fails closed: no
+ * pause blocks nothing (returns false), but any pause that fails to parse or
+ * carries no explicit blocks_merge:false is treated as blocking.
+ */
+export function isMergeBlockingPause(pauseReasonRaw: string | null): boolean {
+  const parsed = parsePauseReason(pauseReasonRaw);
+  return parsed !== null && parsed.blocks_merge !== false;
 }
 
 export function serializePauseReason(struct: PauseReasonStruct): string {
@@ -455,6 +483,16 @@ export function parsePauseReason(raw: string | null): PauseReasonStruct | null {
         typeof parsed.severity === 'string' &&
         typeof parsed.retry_strategy === 'string'
       ) {
+        // Rows persisted before blocks_merge existed lack the field — re-derive
+        // it from the registry (fail-closed to true if the reason is unknown)
+        // rather than trusting an absent value as non-blocking.
+        if (typeof parsed.blocks_merge !== 'boolean') {
+          const registryEntry =
+            PAUSE_REASON_REGISTRY[parsed.reason as CanonicalPauseReason];
+          parsed.blocks_merge = registryEntry
+            ? registryEntry.blocks_merge !== false
+            : true;
+        }
         return parsed as unknown as PauseReasonStruct;
       }
     } catch {
