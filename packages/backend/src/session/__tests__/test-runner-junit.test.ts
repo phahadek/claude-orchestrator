@@ -152,7 +152,10 @@ describe('collectStructuredTestResult', () => {
     write('packages/backend/.test-reports/backend.xml', PYTEST_REPORT);
 
     const config = loadOrchestratorConfig(REPO_ROOT);
-    const result = collectStructuredTestResult(worktree, config.test_report_glob);
+    const result = collectStructuredTestResult(
+      worktree,
+      config.test_report_glob,
+    );
 
     expect(result).not.toBeNull();
     expect(result!.suites.map((s) => s.name).sort()).toEqual(
@@ -163,26 +166,37 @@ describe('collectStructuredTestResult', () => {
   it('still matches a root-level report path (no regression for projects that write to the repo root)', () => {
     write('.test-reports/report.xml', PYTEST_REPORT);
 
-    const result = collectStructuredTestResult(worktree, '**/.test-reports/*.xml');
+    const result = collectStructuredTestResult(
+      worktree,
+      '**/.test-reports/*.xml',
+    );
 
     expect(result).not.toBeNull();
     expect(result!.suites).toHaveLength(1);
   });
 });
 
-describe('this repo\'s configured test_report_glob', () => {
+describe("this repo's configured test_report_glob", () => {
   it('matches both packages/frontend/.test-reports/frontend.xml and packages/backend/.test-reports/backend.xml, so config and the test: scripts cannot drift apart', () => {
     const config = loadOrchestratorConfig(REPO_ROOT);
 
     expect(
-      minimatch('packages/frontend/.test-reports/frontend.xml', config.test_report_glob, {
-        dot: true,
-      }),
+      minimatch(
+        'packages/frontend/.test-reports/frontend.xml',
+        config.test_report_glob,
+        {
+          dot: true,
+        },
+      ),
     ).toBe(true);
     expect(
-      minimatch('packages/backend/.test-reports/backend.xml', config.test_report_glob, {
-        dot: true,
-      }),
+      minimatch(
+        'packages/backend/.test-reports/backend.xml',
+        config.test_report_glob,
+        {
+          dot: true,
+        },
+      ),
     ).toBe(true);
   });
 });
