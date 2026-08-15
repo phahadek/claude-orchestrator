@@ -283,6 +283,41 @@ describe('checkBaseBranchHealth', () => {
     const result = await checkBaseBranchHealth(project);
     expect(result.outcome).toBe('unknown');
   });
+
+  it('serializes concurrent calls for the same project so worktree provisioning never overlaps', async () => {
+    const project = makeProject();
+    let concurrentCount = 0;
+    let maxConcurrentSeen = 0;
+    mockEnsureAuditWorktree.mockImplementation(async () => {
+      concurrentCount++;
+      maxConcurrentSeen = Math.max(maxConcurrentSeen, concurrentCount);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      concurrentCount--;
+    });
+    mockComputeWholeTreeContentHash.mockResolvedValue('hash-concurrent');
+    mockRunProjectTestRequest.mockImplementation(async (spec) => {
+      insertTestRequestRun(
+        'run-concurrent',
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+      );
+      completeTestRequestRun('run-concurrent', 'passed', '');
+      return { runId: 'run-concurrent', joined: false, passed: true, output: '' };
+    });
+
+    const [first, second] = await Promise.all([
+      checkBaseBranchHealth(project),
+      checkBaseBranchHealth(project),
+    ]);
+
+    expect(maxConcurrentSeen).toBe(1);
+    expect(first.outcome).toBe('clean_pass');
+    expect(second.outcome).toBe('clean_pass');
+    // The second call, serialized behind the first, resolves as a cache hit.
+    expect([first.cacheHit, second.cacheHit].sort()).toEqual([false, true]);
+  });
 });
 
 describe('getBaseHealthWorktreePath', () => {

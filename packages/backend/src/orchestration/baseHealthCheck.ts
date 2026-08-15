@@ -41,6 +41,7 @@ import {
   type GitRunner,
 } from './ScheduledAuditSweep';
 import { runProjectTestRequest } from './testRequestLane';
+import { Semaphore } from '../tasks/deferralClassifier';
 import { getLatestTestRequestRun, getTestRequestRunById } from '../db/queries';
 import type { TestRequestRunRow, StructuredTestResult } from '../db/types';
 
@@ -140,15 +141,52 @@ function classifyRun(run: TestRequestRunRow): BaseHealthOutcome {
 }
 
 /**
+ * Per-project serialization for the base-health worktree — this check is
+ * triggered lazily by any task's test-request failure, so multiple tasks in
+ * the same project can trigger it near-simultaneously. ensureAuditWorktree's
+ * fs.exists → mkdir/worktree-add or reset --hard/clean -fd sequence has no
+ * locking of its own; without this, two concurrent calls for the same
+ * project could race on the same worktree path (concurrent `git worktree
+ * add` vs `reset --hard`, or one process cleaning the tree while another's
+ * test run reads it). A Semaphore(1) per project.id — mirroring
+ * testRequestLane.ts's own per-project Semaphore idiom — queues the second
+ * call behind the first instead; the second call typically resolves as a
+ * cache hit off the row the first call just wrote.
+ */
+const projectLocks = new Map<string, Semaphore>();
+
+function getProjectLock(projectId: string): Semaphore {
+  let lock = projectLocks.get(projectId);
+  if (!lock) {
+    lock = new Semaphore(1);
+    projectLocks.set(projectId, lock);
+  }
+  return lock;
+}
+
+/**
  * Runs (or reuses a cached) test.request execution against the project's
  * own base branch tree, keyed by that tree's whole-tree content hash — the
  * same (project_id, content_hash) cache every other test.request lane call
  * shares. Never throws; every failure mode collapses into the `unknown`
- * outcome so callers can treat this as a plain lookup.
+ * outcome so callers can treat this as a plain lookup. Serialized per
+ * project.id — see getProjectLock.
  */
 export async function checkBaseBranchHealth(
   project: ProjectConfig,
   deps: BaseHealthCheckDeps = defaultDeps,
+): Promise<BaseHealthCheckResult> {
+  const release = await getProjectLock(project.id).acquire();
+  try {
+    return await checkBaseBranchHealthLocked(project, deps);
+  } finally {
+    release();
+  }
+}
+
+async function checkBaseBranchHealthLocked(
+  project: ProjectConfig,
+  deps: BaseHealthCheckDeps,
 ): Promise<BaseHealthCheckResult> {
   const worktreePath = getBaseHealthWorktreePath(project);
 
