@@ -14,8 +14,8 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 44 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(44);
+  it('contains exactly 45 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(45);
   });
 
   it('includes depth_review_pending as a recoverable, automatic reason, distinct from depth_review_escalation', () => {
@@ -328,6 +328,15 @@ describe('isMergeBlockingPause', () => {
     expect(isMergeBlockingPause('test_report_acquisition_failed')).toBe(false);
     const serialized = serializePauseReason(
       pauseReasonFromCanonical('test_report_acquisition_failed'),
+    );
+    expect(isMergeBlockingPause(serialized)).toBe(false);
+  });
+
+  it('ci_not_completing is classified non-blocking', () => {
+    expect(PAUSE_REASON_REGISTRY.ci_not_completing.blocks_merge).toBe(false);
+    expect(isMergeBlockingPause('ci_not_completing')).toBe(false);
+    const serialized = serializePauseReason(
+      pauseReasonFromCanonical('ci_not_completing'),
     );
     expect(isMergeBlockingPause(serialized)).toBe(false);
   });
