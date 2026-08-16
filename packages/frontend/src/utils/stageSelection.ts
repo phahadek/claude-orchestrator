@@ -2,12 +2,7 @@ import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 
 export type StageId = 'planning' | 'implementation' | 'tests' | 'review' | 'pr';
 
-export type StageStatus =
-  | 'not_started'
-  | 'active'
-  | 'waiting'
-  | 'done'
-  | 'error';
+type StageStatus = 'not_started' | 'active' | 'waiting' | 'done' | 'error';
 
 export interface StageInfo {
   id: StageId;
@@ -26,7 +21,7 @@ export const STAGE_ORDER: StageId[] = [
   'pr',
 ];
 
-export const STAGE_LABELS: Record<StageId, string> = {
+const STAGE_LABELS: Record<StageId, string> = {
   planning: 'Planning',
   implementation: 'Implementation',
   tests: 'Tests',
