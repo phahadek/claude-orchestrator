@@ -498,6 +498,10 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_sessions_notion_task_id_session_type ON sessions(task_id, session_type, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pull_requests_task_id_pr_number ON pull_requests(task_id, pr_number DESC);
     CREATE INDEX IF NOT EXISTS idx_pull_requests_repo_state ON pull_requests(repo, state);
+    -- Covers getPRBySessionId's WHERE session_id = ? lookup, which otherwise
+    -- scans the table. Cheap today (2.3k rows) but the same defect class as
+    -- the test_run_results index above, on a table that also only grows.
+    CREATE INDEX IF NOT EXISTS idx_pull_requests_session_id ON pull_requests(session_id);
   `);
 
   // Idempotent column additions for existing databases
@@ -2245,6 +2249,17 @@ export function runMigrations(target: Database.Database): void {
       ON test_run_results(test_request_run_id);
     CREATE INDEX IF NOT EXISTS idx_test_run_results_created_at
       ON test_run_results(created_at);
+    -- Covers the two per-test_id reads ingestTestRunResults runs for EVERY
+    -- test in a completed run (computeTestPerfBaseline and
+    -- computeTestFlipRateFlag, ~9.5k tests per run here). Without this both
+    -- fall back to walking idx_test_run_results_created_at and filtering,
+    -- so each lookup scales with the whole table: measured at 52 ms each on
+    -- 134,951 rows, i.e. ~17 minutes of synchronous main-thread work after
+    -- every test run, lengthening by ~7% per run as the table grows.
+    -- created_at is the second column so it also serves both queries'
+    -- ORDER BY created_at DESC without a temp B-tree.
+    CREATE INDEX IF NOT EXISTS idx_test_run_results_test_id_created_at
+      ON test_run_results(test_id, created_at DESC);
   `);
 
   // test_perf_baselines: one row per test_id holding the current rolling
