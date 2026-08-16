@@ -10,17 +10,21 @@ import supertest from 'supertest';
 import { mockDbQueries } from './helpers/mockDbQueries';
 import type { Session } from '../db/types';
 
-const { mockGetArchivedSessions, mockGetLastActivityMsForArchivedSessions, mockGetSessionLastActivityMs } =
-  vi.hoisted(() => ({
-    mockGetArchivedSessions: vi.fn(),
-    mockGetLastActivityMsForArchivedSessions: vi.fn(),
-    mockGetSessionLastActivityMs: vi.fn(),
-  }));
+const {
+  mockGetArchivedSessions,
+  mockGetLastActivityMsForArchivedSessions,
+  mockGetSessionLastActivityMs,
+} = vi.hoisted(() => ({
+  mockGetArchivedSessions: vi.fn(),
+  mockGetLastActivityMsForArchivedSessions: vi.fn(),
+  mockGetSessionLastActivityMs: vi.fn(),
+}));
 
 vi.mock('../db/queries', () =>
   mockDbQueries({
     getArchivedSessions: mockGetArchivedSessions,
-    getLastActivityMsForArchivedSessions: mockGetLastActivityMsForArchivedSessions,
+    getLastActivityMsForArchivedSessions:
+      mockGetLastActivityMsForArchivedSessions,
     getSessionLastActivityMs: mockGetSessionLastActivityMs,
   }),
 );
@@ -65,9 +69,13 @@ describe('GET /api/sessions/archived', () => {
   });
 
   it('issues exactly one bulk last-activity lookup regardless of how many archived sessions there are, and never falls back to the per-row lookup', async () => {
-    const sessions = Array.from({ length: 50 }, (_, i) => fakeSession(`sess-${i}`));
+    const sessions = Array.from({ length: 50 }, (_, i) =>
+      fakeSession(`sess-${i}`),
+    );
     mockGetArchivedSessions.mockReturnValue(sessions);
-    const activityMap = new Map(sessions.map((s, i) => [s.session_id, 5000 + i]));
+    const activityMap = new Map(
+      sessions.map((s, i) => [s.session_id, 5000 + i]),
+    );
     mockGetLastActivityMsForArchivedSessions.mockReturnValue(activityMap);
 
     const res = await supertest(buildApp()).get('/api/sessions/archived');

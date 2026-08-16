@@ -1801,8 +1801,7 @@ export function getSessionLastActivityMs(sessionId: string): number | null {
   return row?.ts ?? null;
 }
 
-let _stmtGetLastActivityMsForArchivedSessions: Database.Statement | null =
-  null;
+let _stmtGetLastActivityMsForArchivedSessions: Database.Statement | null = null;
 
 /**
  * Bulk counterpart to getSessionLastActivityMs for the archived-sessions
