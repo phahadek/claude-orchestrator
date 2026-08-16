@@ -361,6 +361,34 @@ export function listDispatchedSessions(
     .all(reportId) as InvestigationReportDispatchRow[];
 }
 
+export interface ReportDispatchedSession {
+  sessionId: string;
+  sessionStatus: string;
+  dispatchedAt: string;
+}
+
+/**
+ * Every session ever dispatched for a report, joined with its live status —
+ * the read the report card's session-view affordance is built from. Most
+ * recent dispatch first. Mirrors gateService.ts's
+ * getVerifySessionsForGateItem(s), keyed on investigation_report_dispatch
+ * rather than task_id string-matching.
+ */
+export function getDispatchedSessionsForReport(
+  reportId: string,
+): ReportDispatchedSession[] {
+  const dispatches = listDispatchedSessions(reportId);
+  const statuses = getSessionStatuses(dispatches.map((d) => d.session_id));
+  return dispatches
+    .slice()
+    .reverse()
+    .map((d) => ({
+      sessionId: d.session_id,
+      sessionStatus: statuses.get(d.session_id) ?? 'unknown',
+      dispatchedAt: d.dispatched_at,
+    }));
+}
+
 function getSessionStatuses(sessionIds: string[]): Map<string, string> {
   if (sessionIds.length === 0) return new Map();
   const placeholders = sessionIds.map(() => '?').join(', ');

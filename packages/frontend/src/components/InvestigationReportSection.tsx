@@ -172,6 +172,12 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
       .finally(() => setActionInFlightId(null));
   };
 
+  const jumpToSession = useCallback((sessionId: string) => {
+    window.dispatchEvent(
+      new CustomEvent('selectSession', { detail: { sessionId } }),
+    );
+  }, []);
+
   const toggleSelected = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -370,6 +376,18 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
                 >
                   ● dispatched
                 </span>
+              )}
+              {report.dispatchedSessions.length > 0 && (
+                <button
+                  type="button"
+                  className={styles.viewSessionButton}
+                  onClick={() =>
+                    jumpToSession(report.dispatchedSessions[0].sessionId)
+                  }
+                  data-testid={`report-view-session-${report.id}`}
+                >
+                  View session ({report.dispatchedSessions[0].sessionStatus})
+                </button>
               )}
             </div>
             <div className={styles.symptomText}>{report.symptom_text}</div>

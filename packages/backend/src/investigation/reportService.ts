@@ -8,8 +8,13 @@ import {
   isInFlight,
   isResolveEligible,
   blocksMilestoneConvergence,
+  getDispatchedSessionsForReport,
 } from './reportStore';
-import type { InvestigationReportRow, ReportFilter } from './reportStore';
+import type {
+  InvestigationReportRow,
+  ReportFilter,
+  ReportDispatchedSession,
+} from './reportStore';
 import {
   resolveMilestoneRowForProject,
   resolveMilestoneRowAnyProject,
@@ -28,6 +33,8 @@ const MAX_LIST_LIMIT = 100;
 export interface InvestigationReportWithDerived extends InvestigationReportRow {
   inFlight: boolean;
   resolveEligible: boolean;
+  /** Every session ever dispatched for this report, most recent first — powers the report card's session-view affordance. */
+  dispatchedSessions: ReportDispatchedSession[];
 }
 
 /**
@@ -56,6 +63,7 @@ function withDerived(
     ...row,
     inFlight: isInFlight(row.id),
     resolveEligible: isResolveEligible(row.id),
+    dispatchedSessions: getDispatchedSessionsForReport(row.id),
   };
 }
 

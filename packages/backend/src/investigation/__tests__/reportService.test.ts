@@ -30,6 +30,14 @@ import {
   getReportWithDerived,
   listReports,
 } from '../reportService.js';
+import { recordDispatch } from '../reportStore.js';
+
+function insertSession(sessionId: string, status: string): void {
+  db.prepare(
+    `INSERT INTO sessions (session_id, task_id, status, started_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(sessionId, `report-batch:${sessionId}`, status, 1000);
+}
 
 let m1Id: string;
 let m2Id: string;
@@ -68,6 +76,7 @@ beforeAll(() => {
 beforeEach(() => {
   db.prepare('DELETE FROM investigation_report_dispatch').run();
   db.prepare('DELETE FROM investigation_report').run();
+  db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM audit_log').run();
 });
 
@@ -256,6 +265,33 @@ describe('listReports / getReportWithDerived', () => {
 
   it('returns undefined for a missing report', () => {
     expect(getReportWithDerived('nope')).toBeUndefined();
+  });
+
+  it('carries dispatched session id and status for both an in-flight and a terminal session', () => {
+    const report = createReport({
+      projectId: 'proj-1',
+      milestoneId: 'M1',
+      title: 'a',
+      symptomText: 's',
+    });
+    insertSession('sess-running', 'running');
+    insertSession('sess-done', 'done');
+    recordDispatch(report.id, 'sess-done', '2026-08-13T00:00:01Z');
+    recordDispatch(report.id, 'sess-running', '2026-08-13T00:00:02Z');
+
+    const withSessions = getReportWithDerived(report.id);
+    expect(withSessions?.dispatchedSessions).toEqual([
+      {
+        sessionId: 'sess-running',
+        sessionStatus: 'running',
+        dispatchedAt: '2026-08-13T00:00:02Z',
+      },
+      {
+        sessionId: 'sess-done',
+        sessionStatus: 'done',
+        dispatchedAt: '2026-08-13T00:00:01Z',
+      },
+    ]);
   });
 
   it('returns the same set for a display-name and a UUID milestone filter', () => {
