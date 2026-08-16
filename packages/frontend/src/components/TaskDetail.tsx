@@ -16,6 +16,7 @@ import { TaskMoveDialog } from './TaskMoveDialog';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import type { StagedIntent } from '../api/stagedIntents';
 import { StageBar } from './StageBar';
+import { TestsTab } from './TestsTab';
 import {
   computeStages,
   selectAutoStage,
@@ -748,9 +749,12 @@ export function TaskDetail({
           </div>
         )}
 
-        {/* ── Tests stage — no test-result data source yet ── */}
+        {/* ── Tests stage ── */}
         {selectedStage === 'tests' && (
-          <p className={styles.noTranscript}>No test results yet.</p>
+          <TestsTab
+            projectId={projectId ?? null}
+            sessionId={task.codeSession?.sessionId ?? null}
+          />
         )}
 
         {/* ── Abort — destructive action to kill session + reset to Ready ── */}

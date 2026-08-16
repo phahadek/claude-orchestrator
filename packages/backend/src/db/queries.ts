@@ -7725,6 +7725,49 @@ export function getLatestTestRequestRunForSession(
 }
 
 /**
+ * Full run history for one (project_id, session_id) — the Tests tab's
+ * run-history table. Newest first; `limit` bounds the page size since a
+ * long-lived session can accumulate many test.request cycles.
+ */
+export function listTestRequestRunsForSession(
+  projectId: string,
+  sessionId: string,
+  limit = 50,
+): TestRequestRunRow[] {
+  return db
+    .prepare<{ project_id: string; session_id: string; limit: number }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id AND session_id = @session_id
+       ORDER BY started_at DESC, rowid DESC LIMIT @limit`,
+    )
+    .all({
+      project_id: projectId,
+      session_id: sessionId,
+      limit,
+    }) as TestRequestRunRow[];
+}
+
+/**
+ * computeTestFlipRateFlag scoped to a caller-supplied set of test ids — the
+ * Tests tab's per-test flip-rate annotation, restricted to test ids seen in
+ * a task's own runs rather than every test in the project (listFlaggedFlakyTests'
+ * scope). Reuses the same live-recompute engine and the same default
+ * window/threshold settings as the lane's own auto-disposition check; no new
+ * comparison logic.
+ */
+export function getTaskTestFlipRateFlags(
+  testIds: string[],
+  windowN: number,
+  thresholdK: number,
+): TestFlipRateFlag[] {
+  const uniqueIds = [...new Set(testIds)];
+  return uniqueIds.map((testId) =>
+    computeTestFlipRateFlag(testId, windowN, thresholdK),
+  );
+}
+
+/**
  * Invalidate every recorded run for (project_id, content_hash) — F2's
  * flaky.confirm actuation path. Callers must audit this via recordEvent —
  * deletion alone is silent. The subsequent rerun (via runProjectTestRequest)

@@ -169,7 +169,11 @@ import {
   getLatestTestRequestRun,
   getLatestTestRequestRunForSession,
   getTestRequestRunById,
+  listTestRequestRunsForSession,
+  listTestRunResultsForRun,
+  getTaskTestFlipRateFlags,
 } from '../db/queries';
+import { classifyTestRunOutcome } from '../orchestration/baseHealthCheck';
 import type { TestRequestPayload, TestRequestRunRow } from '../db/types';
 import { buildTestResultDigest } from '../session/testResultDigest';
 import {
@@ -7407,6 +7411,74 @@ export function createStagedIntentsRouter(
       row = getLatestTestRequestRunForSession(projectId, sessionId);
     }
     res.json({ run: row ? testRequestRunRowToApi(row) : null });
+  });
+
+  // ── GET /api/test-request-runs/history ────────────────────────────────────
+  // Run-history feed for the task detail panel's Tests tab: every
+  // test_request_runs row for one (projectId, sessionId), classified with
+  // the Tests-tab 6-value outcome taxonomy (classifyTestRunOutcome) and
+  // annotated per-test with the flip-rate flag (computeTestFlipRateFlag,
+  // scoped to test ids seen in this session's own runs) plus the session's
+  // test.request cycle count/limit — all data that already exists server-side.
+  router.get('/test-request-runs/history', (req: Request, res: Response) => {
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    const sessionId =
+      typeof req.query.sessionId === 'string' ? req.query.sessionId : null;
+    const limit =
+      typeof req.query.limit === 'string' ? Number(req.query.limit) : 50;
+    if (!projectId || !sessionId) {
+      res.status(400).json({ error: 'projectId and sessionId are required' });
+      return;
+    }
+
+    const runs = listTestRequestRunsForSession(
+      projectId,
+      sessionId,
+      Number.isFinite(limit) && limit > 0 ? limit : 50,
+    );
+
+    const windowN = typedGetSetting('flip_rate_window_n');
+    const thresholdK = typedGetSetting('flip_rate_threshold_k');
+    const seenTestIds = new Set<string>();
+    const runsWithResults = runs.map((run) => {
+      const testResults = listTestRunResultsForRun(run.id);
+      testResults.forEach((t) => seenTestIds.add(t.test_id));
+      return { run, testResults };
+    });
+    const flipRateFlags = getTaskTestFlipRateFlags(
+      [...seenTestIds],
+      windowN,
+      thresholdK,
+    );
+    const flipRateByTestId = new Map(flipRateFlags.map((f) => [f.testId, f]));
+
+    res.json({
+      cycleCount: getSessionTestRequestCycleCount(sessionId),
+      cycleLimit: typedGetSetting('test_request_cycle_limit'),
+      runs: runsWithResults.map(({ run, testResults }) => {
+        const classification = classifyTestRunOutcome(run);
+        return {
+          id: run.id,
+          sessionId: run.session_id,
+          contentHash: run.content_hash,
+          startedAt: run.started_at,
+          finishedAt: run.finished_at,
+          durationMs:
+            run.finished_at != null ? run.finished_at - run.started_at : null,
+          concurrentRunCount: run.concurrent_run_count,
+          outcome: classification.outcome,
+          nextAction: classification.nextAction,
+          testResults: testResults.map((t) => ({
+            testId: t.test_id,
+            name: t.name,
+            outcome: t.outcome,
+            durationMs: t.duration_ms,
+            flipRate: flipRateByTestId.get(t.test_id) ?? null,
+          })),
+        };
+      }),
+    });
   });
 
   router.get('/staged-intents', (req: Request, res: Response) => {

@@ -141,6 +141,59 @@ function classifyRun(run: TestRequestRunRow): BaseHealthOutcome {
 }
 
 /**
+ * The Tests tab's 6-value run outcome taxonomy — reuses classifyFailedRun's
+ * clean/partial/total split, splitting `total_fail` further via
+ * failure_reason and oom_killed (both already recorded per run) into its
+ * three distinct causes. Each outcome carries its own next-action string
+ * for the tab to render alongside the run.
+ */
+type TestRunOutcome =
+  | 'passed'
+  | 'failed-with-named-tests'
+  | 'failed-with-no-report-acquired'
+  | 'crashed-oom'
+  | 'timed-out'
+  | 'running';
+
+export interface TestRunOutcomeInfo {
+  outcome: TestRunOutcome;
+  nextAction: string;
+}
+
+const TEST_RUN_NEXT_ACTIONS: Record<TestRunOutcome, string> = {
+  passed: 'No action needed — all tests passed.',
+  'failed-with-named-tests':
+    'Review the named failing tests below and fix them.',
+  'failed-with-no-report-acquired':
+    'No per-test report was produced — check the raw run output for a crash before any report was written.',
+  'crashed-oom':
+    'The test run was OOM-killed — reduce test memory usage/parallelism, or retry.',
+  'timed-out':
+    'The test run exceeded its time limit — investigate a hang or split the run.',
+  running: 'Run is still in progress — wait for it to finish.',
+};
+
+export function classifyTestRunOutcome(
+  run: TestRequestRunRow,
+): TestRunOutcomeInfo {
+  let outcome: TestRunOutcome;
+  if (run.state === 'running') {
+    outcome = 'running';
+  } else if (run.state === 'passed') {
+    outcome = 'passed';
+  } else if (run.oom_killed || run.failure_reason === 'oom_killed') {
+    outcome = 'crashed-oom';
+  } else if (run.failure_reason === 'timeout') {
+    outcome = 'timed-out';
+  } else if (classifyFailedRun(run) === 'partial_fail') {
+    outcome = 'failed-with-named-tests';
+  } else {
+    outcome = 'failed-with-no-report-acquired';
+  }
+  return { outcome, nextAction: TEST_RUN_NEXT_ACTIONS[outcome] };
+}
+
+/**
  * Per-project serialization for the base-health worktree — this check is
  * triggered lazily by any task's test-request failure, so multiple tasks in
  * the same project can trigger it near-simultaneously. ensureAuditWorktree's
