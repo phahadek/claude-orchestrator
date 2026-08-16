@@ -3,7 +3,8 @@ import type { Request, Response } from 'express';
 import {
   getSession,
   getActiveSessions,
-  getArchivedSessions,
+  getArchivedSessionsPage,
+  ARCHIVED_SESSIONS_MAX_PAGE_SIZE,
   getSessionsByStatus,
   getSessionsByProject,
   deleteSession,
@@ -56,12 +57,26 @@ export function setSessionManager(sm: SessionManager): void {
 
 export const sessionsRouter = Router();
 
-// GET /api/sessions/archived
-sessionsRouter.get('/archived', (_req: Request, res: Response) => {
-  const sessions = getArchivedSessions();
+// GET /api/sessions/archived?limit=&offset=
+sessionsRouter.get('/archived', (req: Request, res: Response) => {
+  const limit =
+    typeof req.query.limit === 'string' && req.query.limit.trim() !== ''
+      ? Number(req.query.limit)
+      : ARCHIVED_SESSIONS_MAX_PAGE_SIZE;
+  const offset =
+    typeof req.query.offset === 'string' && req.query.offset.trim() !== ''
+      ? Number(req.query.offset)
+      : 0;
+  const page = getArchivedSessionsPage(
+    Number.isFinite(limit) ? limit : ARCHIVED_SESSIONS_MAX_PAGE_SIZE,
+    Number.isFinite(offset) ? offset : 0,
+  );
   const activityMsBySessionId = getLastActivityMsForArchivedSessions();
+  res.set('X-Total-Count', String(page.total));
+  res.set('X-Page-Limit', String(page.limit));
+  res.set('X-Page-Offset', String(page.offset));
   res.json(
-    sessions.map((session) => {
+    page.sessions.map((session) => {
       const lastActivityTs =
         activityMsBySessionId.get(session.session_id) ?? null;
       return {

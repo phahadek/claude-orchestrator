@@ -2,27 +2,30 @@
  * Route-level test for GET /api/sessions/archived: the route must fetch
  * last-activity via a single bulk lookup (getLastActivityMsForArchivedSessions)
  * rather than one getSessionLastActivityMs call per archived session — that
- * per-row fan-out is what previously saturated the event loop.
+ * per-row fan-out is what previously saturated the event loop. It must also
+ * return a bounded page (never the full archived table, measured at 8.7 MB /
+ * 6,571 rows live) rather than the whole table in one response.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
 import { mockDbQueries } from './helpers/mockDbQueries';
 import type { Session } from '../db/types';
+import type { ArchivedSessionsPage } from '../db/queries';
 
 const {
-  mockGetArchivedSessions,
+  mockGetArchivedSessionsPage,
   mockGetLastActivityMsForArchivedSessions,
   mockGetSessionLastActivityMs,
 } = vi.hoisted(() => ({
-  mockGetArchivedSessions: vi.fn(),
+  mockGetArchivedSessionsPage: vi.fn(),
   mockGetLastActivityMsForArchivedSessions: vi.fn(),
   mockGetSessionLastActivityMs: vi.fn(),
 }));
 
 vi.mock('../db/queries', () =>
   mockDbQueries({
-    getArchivedSessions: mockGetArchivedSessions,
+    getArchivedSessionsPage: mockGetArchivedSessionsPage,
     getLastActivityMsForArchivedSessions:
       mockGetLastActivityMsForArchivedSessions,
     getSessionLastActivityMs: mockGetSessionLastActivityMs,
@@ -63,6 +66,16 @@ function fakeSession(id: string): Session {
   } as unknown as Session;
 }
 
+function page(sessions: Session[], overrides: Partial<ArchivedSessionsPage> = {}): ArchivedSessionsPage {
+  return {
+    sessions,
+    total: sessions.length,
+    limit: 200,
+    offset: 0,
+    ...overrides,
+  };
+}
+
 describe('GET /api/sessions/archived', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -72,7 +85,7 @@ describe('GET /api/sessions/archived', () => {
     const sessions = Array.from({ length: 50 }, (_, i) =>
       fakeSession(`sess-${i}`),
     );
-    mockGetArchivedSessions.mockReturnValue(sessions);
+    mockGetArchivedSessionsPage.mockReturnValue(page(sessions));
     const activityMap = new Map(
       sessions.map((s, i) => [s.session_id, 5000 + i]),
     );
@@ -86,7 +99,7 @@ describe('GET /api/sessions/archived', () => {
   });
 
   it('returns the same payload shape as before: each session plus lastActivityAgeMs derived from its last-activity timestamp', async () => {
-    mockGetArchivedSessions.mockReturnValue([fakeSession('sess-1')]);
+    mockGetArchivedSessionsPage.mockReturnValue(page([fakeSession('sess-1')]));
     mockGetLastActivityMsForArchivedSessions.mockReturnValue(
       new Map([['sess-1', 1_700_000_000_000]]),
     );
@@ -104,12 +117,43 @@ describe('GET /api/sessions/archived', () => {
   });
 
   it('reports lastActivityAgeMs as null when the session has no recorded activity', async () => {
-    mockGetArchivedSessions.mockReturnValue([fakeSession('sess-none')]);
+    mockGetArchivedSessionsPage.mockReturnValue(
+      page([fakeSession('sess-none')]),
+    );
     mockGetLastActivityMsForArchivedSessions.mockReturnValue(new Map());
 
     const res = await supertest(buildApp()).get('/api/sessions/archived');
 
     expect(res.status).toBe(200);
     expect(res.body[0].lastActivityAgeMs).toBeNull();
+  });
+
+  it('is bounded to the page returned by getArchivedSessionsPage, not the full archived table', async () => {
+    const sessions = Array.from({ length: 5 }, (_, i) =>
+      fakeSession(`sess-${i}`),
+    );
+    mockGetArchivedSessionsPage.mockReturnValue(
+      page(sessions, { total: 6571, limit: 5, offset: 0 }),
+    );
+    mockGetLastActivityMsForArchivedSessions.mockReturnValue(new Map());
+
+    const res = await supertest(buildApp()).get('/api/sessions/archived');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(5);
+    expect(res.headers['x-total-count']).toBe('6571');
+    expect(res.headers['x-page-limit']).toBe('5');
+    expect(res.headers['x-page-offset']).toBe('0');
+  });
+
+  it('forwards limit/offset query params to getArchivedSessionsPage', async () => {
+    mockGetArchivedSessionsPage.mockReturnValue(page([], { limit: 25, offset: 50 }));
+    mockGetLastActivityMsForArchivedSessions.mockReturnValue(new Map());
+
+    await supertest(buildApp()).get(
+      '/api/sessions/archived?limit=25&offset=50',
+    );
+
+    expect(mockGetArchivedSessionsPage).toHaveBeenCalledWith(25, 50);
   });
 });
