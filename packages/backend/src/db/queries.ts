@@ -7741,8 +7741,11 @@ export function listTestRequestRunsForSession(
        WHERE project_id = @project_id AND session_id = @session_id
        ORDER BY started_at DESC, rowid DESC LIMIT @limit`,
     )
-    .all({ project_id: projectId, session_id: sessionId, limit }) as
-    | TestRequestRunRow[];
+    .all({
+      project_id: projectId,
+      session_id: sessionId,
+      limit,
+    }) as TestRequestRunRow[];
 }
 
 /**

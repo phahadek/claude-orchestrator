@@ -102,9 +102,7 @@ export function TestsTab({ projectId, sessionId }: Props) {
   if (!projectId || !sessionId) {
     return (
       <div className={styles.container}>
-        <p className={styles.emptyState}>
-          No code session for this task yet.
-        </p>
+        <p className={styles.emptyState}>No code session for this task yet.</p>
       </div>
     );
   }
@@ -139,7 +137,10 @@ export function TestsTab({ projectId, sessionId }: Props) {
 
   return (
     <div className={styles.container} data-testid="tests-tab">
-      <div className={styles.cycleCounter} data-testid="tests-tab-cycle-counter">
+      <div
+        className={styles.cycleCounter}
+        data-testid="tests-tab-cycle-counter"
+      >
         {data.cycleCount} of {data.cycleLimit} test.request cycles used
       </div>
       <div className={styles.runList}>
@@ -157,7 +158,8 @@ export function TestsTab({ projectId, sessionId }: Props) {
                 {OUTCOME_LABELS[run.outcome]}
               </span>
               <span className={styles.runMeta}>
-                {formatTimestamp(run.startedAt)} → {formatTimestamp(run.finishedAt)}
+                {formatTimestamp(run.startedAt)} →{' '}
+                {formatTimestamp(run.finishedAt)}
               </span>
               <span className={styles.runMeta}>
                 {formatDuration(run.durationMs)}

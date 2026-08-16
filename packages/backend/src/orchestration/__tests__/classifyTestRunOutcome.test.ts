@@ -7,7 +7,9 @@ import { describe, it, expect } from 'vitest';
 import { classifyTestRunOutcome } from '../baseHealthCheck';
 import type { TestRequestRunRow } from '../../db/types';
 
-function makeRun(overrides: Partial<TestRequestRunRow> = {}): TestRequestRunRow {
+function makeRun(
+  overrides: Partial<TestRequestRunRow> = {},
+): TestRequestRunRow {
   return {
     id: 'run-1',
     project_id: 'proj-1',
