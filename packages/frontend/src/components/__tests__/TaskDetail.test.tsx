@@ -111,14 +111,7 @@ function makeReview(
   };
 }
 
-// ── useIsMobile mock ────────────────────────────────────────────────
-let isMobileValue = false;
-vi.mock('../../hooks/useIsMobile', () => ({
-  useIsMobile: () => isMobileValue,
-}));
-
 beforeEach(() => {
-  isMobileValue = false;
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: vi.fn((query: string) => ({
@@ -616,7 +609,7 @@ describe('TaskDetail', () => {
     expect(screen.queryByRole('button', { name: 'Diff' })).toBeNull();
   });
 
-  it('PR section is always visible without tabs', () => {
+  it('PR section auto-selects and is visible when it is the only stage with content', () => {
     const pr = makePr();
     render(
       <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} />,
@@ -728,7 +721,7 @@ describe('TaskDetail', () => {
         onClose={vi.fn()}
       />,
     );
-    expect(screen.queryByText('Review')).toBeNull();
+    expect(screen.queryByTestId('review-session-section')).toBeNull();
   });
 
   it('renders review verdict badge', () => {
@@ -982,20 +975,9 @@ describe('TaskDetail', () => {
     expect(screen.getByText('Working on the fix…')).toBeTruthy();
   });
 
-  // ── Mobile accordion ──
+  // ── Stage bar — one active stage at a time ──
 
-  function setMobileViewport(matches: boolean) {
-    window.matchMedia = vi.fn((query: string) => ({
-      matches,
-      media: query,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    })) as unknown as typeof window.matchMedia;
-  }
-
-  it('desktop: both REVIEW and PULL REQUEST sections can be expanded simultaneously', () => {
-    setMobileViewport(false);
+  it('shows REVIEW content only when the review stage is selected, PULL REQUEST only when the pr stage is selected', () => {
     const pr = makePr();
     const review = makeReview({ verdict: 'approved' });
     render(
@@ -1005,122 +987,21 @@ describe('TaskDetail', () => {
         onClose={vi.fn()}
       />,
     );
-    expect(screen.getByText('Review')).toBeTruthy();
-    expect(screen.getByText('Pull Request')).toBeTruthy();
+    // Approved + open PR auto-selects the pr stage (waiting-on-you: ready to merge).
+    expect(screen.getByText('#42')).toBeTruthy();
+    expect(screen.queryByTestId('review-session-section')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('stage-chip-review'));
+    expect(screen.getByTestId('review-session-section')).toBeTruthy();
     expect(screen.getByText('✅ Approved')).toBeTruthy();
-    expect(screen.getByText('#42')).toBeTruthy();
-  });
-
-  it('mobile: expanding REVIEW collapses PULL REQUEST', () => {
-    isMobileValue = true;
-    const pr = makePr();
-    const review = makeReview({ verdict: 'approved' });
-    render(
-      <TaskDetail
-        task={makeTask({ pr, review })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        sessions={[]}
-      />,
-    );
-    // Initially REVIEW is open (body visible), PR body is collapsed
-    expect(screen.getByText(/Review transcript not available/)).toBeTruthy();
     expect(screen.queryByText('#42')).toBeNull();
 
-    // Expand PR section → REVIEW body should collapse
-    fireEvent.click(
-      screen.getByRole('button', { name: /pull request/i, hidden: true }),
-    );
-    expect(screen.queryByText(/Review transcript not available/)).toBeNull();
+    fireEvent.click(screen.getByTestId('stage-chip-pr'));
     expect(screen.getByText('#42')).toBeTruthy();
+    expect(screen.queryByTestId('review-session-section')).toBeNull();
   });
 
-  it('mobile: expanding PULL REQUEST collapses REVIEW', () => {
-    isMobileValue = true;
-    const pr = makePr();
-    const review = makeReview({ verdict: 'needs_changes' });
-    render(
-      <TaskDetail
-        task={makeTask({ pr, review })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        sessions={[]}
-      />,
-    );
-    fireEvent.click(
-      screen.getByRole('button', { name: /pull request/i, hidden: true }),
-    );
-    expect(screen.getByText('#42')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /^review/i }));
-    expect(screen.queryByText('#42')).toBeNull();
-    expect(screen.getByText('⚠️ Needs Changes')).toBeTruthy();
-  });
-
-  it('mobile: section-toggle handlers track which section is open', () => {
-    isMobileValue = true;
-    const pr = makePr();
-    const review = makeReview({ verdict: 'approved' });
-    render(
-      <TaskDetail
-        task={makeTask({ pr, review })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        sessions={[]}
-      />,
-    );
-    const reviewHeader = screen.getByRole('button', { name: /^review/i });
-    expect(reviewHeader.getAttribute('aria-expanded')).toBe('true');
-
-    const prHeader = screen.getByRole('button', {
-      name: /pull request/i,
-      hidden: true,
-    });
-    fireEvent.click(prHeader);
-    expect(prHeader.getAttribute('aria-expanded')).toBe('true');
-    expect(reviewHeader.getAttribute('aria-expanded')).toBe('false');
-  });
-
-  // ── Mobile accordion — PR reachability ──
-
-  it('mobile: PULL REQUEST header accessible without hidden flag when review is expanded', () => {
-    isMobileValue = true;
-    const pr = makePr();
-    const review = makeReview({ verdict: 'approved' });
-    render(
-      <TaskDetail
-        task={makeTask({ pr, review })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-    // Review is expanded by default; PR header should be findable without hidden:true
-    const prHeader = screen.getByRole('button', { name: /pull request/i });
-    expect(prHeader).toBeTruthy();
-    expect(prHeader.getAttribute('aria-expanded')).toBe('false');
-  });
-
-  it('mobile: tapping PR header from review-open state expands PR and collapses review', () => {
-    isMobileValue = true;
-    const pr = makePr();
-    const review = makeReview({ verdict: 'approved' });
-    render(
-      <TaskDetail
-        task={makeTask({ pr, review })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        sessions={[]}
-      />,
-    );
-    // Review is expanded by default
-    expect(screen.getByText(/Review transcript not available/)).toBeTruthy();
-    const prHeader = screen.getByRole('button', { name: /pull request/i });
-    fireEvent.click(prHeader);
-    // PR is now expanded, review is collapsed
-    expect(screen.getByText('#42')).toBeTruthy();
-    expect(screen.queryByText(/Review transcript not available/)).toBeNull();
-  });
-
-  it('renders planning, code, and review sections together without one crowding out another', () => {
+  it('renders planning, code, and review content behind their own stage chip without one crowding out another', () => {
     const codeSession = makeCodeSession();
     const planningSession = makePlanningSession();
     const review = makeReview();
@@ -1133,9 +1014,13 @@ describe('TaskDetail', () => {
       />,
     );
     expect(screen.getByTestId('planning-session-section')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('stage-chip-implementation'));
     expect(
       screen.getByText(/Transcript not available — session not loaded\./),
     ).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('stage-chip-review'));
     expect(screen.getByTestId('review-session-section')).toBeTruthy();
   });
 
@@ -1157,7 +1042,7 @@ describe('TaskDetail', () => {
     expect(screen.queryByTestId('planning-session-body')).toBeNull();
   });
 
-  it('expanding and collapsing the planning section leaves the code section and its transcript container intact', () => {
+  it('switching from the planning stage to the implementation stage and back leaves each session panel intact', () => {
     const codeSession = makeCodeSession({ sessionId: 'sess-1' });
     const planningSession = makePlanningSession();
     const sessions: SessionState[] = [
@@ -1171,12 +1056,13 @@ describe('TaskDetail', () => {
         sessions={sessions}
       />,
     );
+    expect(screen.getByTestId('planning-session-section')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('stage-chip-implementation'));
     expect(screen.getByText('No events yet.')).toBeTruthy();
-    const planningHeader = screen.getByTestId('planning-session-header');
-    fireEvent.click(planningHeader);
-    expect(screen.getByText('No events yet.')).toBeTruthy();
-    fireEvent.click(planningHeader);
-    expect(screen.getByText('No events yet.')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('stage-chip-planning'));
+    expect(screen.getByTestId('planning-session-section')).toBeTruthy();
   });
 
   // ── Shared task-views source — detail pane AC tests ──

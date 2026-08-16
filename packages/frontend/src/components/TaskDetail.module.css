@@ -749,33 +749,6 @@
   cursor: not-allowed;
 }
 
-/* ── Empty state ─────────────────────────────────────────────────── */
-.emptyState {
-  padding: 32px 16px;
-  text-align: center;
-  color: var(--text-faint);
-  font-size: 0.88rem;
-}
-
-.emptyState p {
-  margin: 0;
-}
-
-/* ── PR section header — mobile accordion variant ────────────────── */
-.prSectionHeaderMobile {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  cursor: pointer;
-  user-select: none;
-  flex-shrink: 0;
-}
-
-.prSectionHeaderMobile:hover .sectionTitle {
-  color: var(--text-muted);
-}
-
 /* ── Mobile: compact header chrome ──────────────────────────────── */
 @media (max-width: 768px) {
   .panel {
