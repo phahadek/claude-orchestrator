@@ -147,7 +147,7 @@ function classifyRun(run: TestRequestRunRow): BaseHealthOutcome {
  * three distinct causes. Each outcome carries its own next-action string
  * for the tab to render alongside the run.
  */
-export type TestRunOutcome =
+type TestRunOutcome =
   | 'passed'
   | 'failed-with-named-tests'
   | 'failed-with-no-report-acquired'

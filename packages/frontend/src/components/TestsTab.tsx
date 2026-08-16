@@ -17,7 +17,7 @@ interface TestResultEntry {
   flipRate: FlipRateFlag | null;
 }
 
-export type TestRunOutcome =
+type TestRunOutcome =
   | 'passed'
   | 'failed-with-named-tests'
   | 'failed-with-no-report-acquired'
