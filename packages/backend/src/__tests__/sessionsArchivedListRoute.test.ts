@@ -66,7 +66,10 @@ function fakeSession(id: string): Session {
   } as unknown as Session;
 }
 
-function page(sessions: Session[], overrides: Partial<ArchivedSessionsPage> = {}): ArchivedSessionsPage {
+function page(
+  sessions: Session[],
+  overrides: Partial<ArchivedSessionsPage> = {},
+): ArchivedSessionsPage {
   return {
     sessions,
     total: sessions.length,
@@ -147,7 +150,9 @@ describe('GET /api/sessions/archived', () => {
   });
 
   it('forwards limit/offset query params to getArchivedSessionsPage', async () => {
-    mockGetArchivedSessionsPage.mockReturnValue(page([], { limit: 25, offset: 50 }));
+    mockGetArchivedSessionsPage.mockReturnValue(
+      page([], { limit: 25, offset: 50 }),
+    );
     mockGetLastActivityMsForArchivedSessions.mockReturnValue(new Map());
 
     await supertest(buildApp()).get(
