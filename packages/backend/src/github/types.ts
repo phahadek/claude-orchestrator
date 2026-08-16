@@ -45,6 +45,11 @@ export interface PullRequest {
   draft: boolean;
 }
 
+export interface PRFileEntry {
+  filename: string;
+  status: string; // 'added' | 'modified' | 'removed' | 'renamed' | etc, from GET /pulls/:id/files
+}
+
 export interface PRDiff {
   prId: number;
   diff: string; // raw unified diff text

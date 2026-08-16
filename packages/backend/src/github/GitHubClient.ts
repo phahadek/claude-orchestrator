@@ -11,6 +11,7 @@ import {
   Issue,
   IssueComment,
   Milestone,
+  PRFileEntry,
 } from './types';
 import { getPRByNumber } from '../db/queries';
 
@@ -879,14 +880,14 @@ export class GitHubClient {
   }
 
   /** Fetch the full list of changed files for a pull request (paginated). */
-  async getPRFiles(repo: string, prNumber: number): Promise<string[]> {
-    const files: string[] = [];
+  async getPRFiles(repo: string, prNumber: number): Promise<PRFileEntry[]> {
+    const files: PRFileEntry[] = [];
     let page = 1;
     while (true) {
-      const data = await this.request<Array<{ filename: string }>>(
+      const data = await this.request<Array<{ filename: string; status: string }>>(
         `/repos/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`,
       );
-      for (const f of data) files.push(f.filename);
+      for (const f of data) files.push({ filename: f.filename, status: f.status });
       if (data.length < 100) break;
       page++;
     }

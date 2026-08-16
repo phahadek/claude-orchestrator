@@ -102,10 +102,23 @@ describe('HARD_BANNED_PATTERNS', () => {
   });
 });
 
+// Converts bare filenames into the status-bearing shape validatePRFiles expects,
+// defaulting to 'added' since most existing tests exercise the addition path.
+function added(...files: string[]): Array<{ filename: string; status: string }> {
+  return files.map((filename) => ({ filename, status: 'added' }));
+}
+
+function withStatus(
+  filename: string,
+  status: string,
+): { filename: string; status: string } {
+  return { filename, status };
+}
+
 describe('validatePRFiles()', () => {
   it('accepts a PR diff with no banned files and no gitignored paths', () => {
     const result = validatePRFiles(
-      ['src/index.ts', 'packages/backend/src/foo.ts'],
+      added('src/index.ts', 'packages/backend/src/foo.ts'),
       [],
     );
     expect(result.valid).toBe(true);
@@ -114,102 +127,105 @@ describe('validatePRFiles()', () => {
   });
 
   it('rejects CLAUDE.md (exact case)', () => {
-    const result = validatePRFiles(['src/foo.ts', 'CLAUDE.md'], []);
+    const result = validatePRFiles(added('src/foo.ts', 'CLAUDE.md'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('CLAUDE.md');
     expect(result.reason).toBe('hard_banned');
   });
 
   it('rejects CLAUDE.MD (uppercase variant)', () => {
-    const result = validatePRFiles(['CLAUDE.MD'], []);
+    const result = validatePRFiles(added('CLAUDE.MD'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('CLAUDE.MD');
   });
 
   it('rejects claude.md (lowercase variant)', () => {
-    const result = validatePRFiles(['claude.md'], []);
+    const result = validatePRFiles(added('claude.md'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('claude.md');
   });
 
   it('rejects .commit-msg', () => {
-    const result = validatePRFiles(['.commit-msg'], []);
+    const result = validatePRFiles(added('.commit-msg'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('.commit-msg');
   });
 
   it('rejects .commit_msg', () => {
-    const result = validatePRFiles(['.commit_msg'], []);
+    const result = validatePRFiles(added('.commit_msg'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('.commit_msg');
   });
 
   it('rejects commit-msg.txt', () => {
-    const result = validatePRFiles(['commit-msg.txt'], []);
+    const result = validatePRFiles(added('commit-msg.txt'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('commit-msg.txt');
     expect(result.reason).toBe('hard_banned');
   });
 
   it('rejects commit_msg.txt', () => {
-    const result = validatePRFiles(['commit_msg.txt'], []);
+    const result = validatePRFiles(added('commit_msg.txt'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('commit_msg.txt');
     expect(result.reason).toBe('hard_banned');
   });
 
   it('rejects case-insensitive Commit-Msg.TXT', () => {
-    const result = validatePRFiles(['Commit-Msg.TXT'], []);
+    const result = validatePRFiles(added('Commit-Msg.TXT'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('Commit-Msg.TXT');
   });
 
   it('rejects case-insensitive COMMIT_MSG.txt', () => {
-    const result = validatePRFiles(['COMMIT_MSG.txt'], []);
+    const result = validatePRFiles(added('COMMIT_MSG.txt'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('COMMIT_MSG.txt');
   });
 
   it('rejects commit-msg.draft (pattern match)', () => {
-    const result = validatePRFiles(['commit-msg.draft'], []);
+    const result = validatePRFiles(added('commit-msg.draft'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('commit-msg.draft');
   });
 
   it('rejects commit_msg.md (pattern match)', () => {
-    const result = validatePRFiles(['commit_msg.md'], []);
+    const result = validatePRFiles(added('commit_msg.md'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('commit_msg.md');
   });
 
   it('rejects pr-body.md (exact file match)', () => {
-    const result = validatePRFiles(['src/foo.ts', 'pr-body.md'], []);
+    const result = validatePRFiles(added('src/foo.ts', 'pr-body.md'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('pr-body.md');
     expect(result.reason).toBe('hard_banned');
   });
 
   it('rejects pr_body.txt (pattern match)', () => {
-    const result = validatePRFiles(['pr_body.txt'], []);
+    const result = validatePRFiles(added('pr_body.txt'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('pr_body.txt');
     expect(result.reason).toBe('hard_banned');
   });
 
   it('accepts non-scratch .txt files', () => {
-    const result = validatePRFiles(['README.txt', 'docs/notes.txt'], []);
+    const result = validatePRFiles(added('README.txt', 'docs/notes.txt'), []);
     expect(result.valid).toBe(true);
     expect(result.bannedFiles).toHaveLength(0);
   });
 
   it('rejects commit-msg.txt nested in a subdirectory', () => {
-    const result = validatePRFiles(['some/nested/commit-msg.txt'], []);
+    const result = validatePRFiles(added('some/nested/commit-msg.txt'), []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('some/nested/commit-msg.txt');
   });
 
   it('rejects .env via gitignore pattern', () => {
-    const result = validatePRFiles(['.env'], [{ dir: '', content: '.env\n' }]);
+    const result = validatePRFiles(
+      added('.env'),
+      [{ dir: '', content: '.env\n' }],
+    );
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('.env');
     expect(result.reason).toBe('gitignore_match');
@@ -217,7 +233,7 @@ describe('validatePRFiles()', () => {
 
   it('rejects node_modules/foo via gitignore', () => {
     const result = validatePRFiles(
-      ['node_modules/foo/index.js'],
+      added('node_modules/foo/index.js'),
       [{ dir: '', content: 'node_modules/\n' }],
     );
     expect(result.valid).toBe(false);
@@ -226,7 +242,7 @@ describe('validatePRFiles()', () => {
 
   it('rejects dist/bar.js via gitignore', () => {
     const result = validatePRFiles(
-      ['dist/bar.js'],
+      added('dist/bar.js'),
       [{ dir: '', content: 'dist/\n' }],
     );
     expect(result.valid).toBe(false);
@@ -240,29 +256,32 @@ describe('validatePRFiles()', () => {
     ];
 
     // packages/x/debug.log should be caught by packages/x/.gitignore
-    const inner = validatePRFiles(['packages/x/debug.log'], gitignoreSources);
+    const inner = validatePRFiles(
+      added('packages/x/debug.log'),
+      gitignoreSources,
+    );
     expect(inner.valid).toBe(false);
     expect(inner.bannedFiles).toContain('packages/x/debug.log');
 
     // top-level debug.log should NOT be caught by packages/x/.gitignore
-    const outer = validatePRFiles(['debug.log'], gitignoreSources);
+    const outer = validatePRFiles(added('debug.log'), gitignoreSources);
     expect(outer.valid).toBe(true);
 
     // top-level foo.db caught by root .gitignore
-    const root = validatePRFiles(['foo.db'], gitignoreSources);
+    const root = validatePRFiles(added('foo.db'), gitignoreSources);
     expect(root.valid).toBe(false);
   });
 
   it('nested .gitignore does not match paths outside its subtree', () => {
     const gitignoreSources = [{ dir: 'packages/x', content: 'build/\n' }];
     // path outside subtree — should not match
-    const result = validatePRFiles(['build/output.js'], gitignoreSources);
+    const result = validatePRFiles(added('build/output.js'), gitignoreSources);
     expect(result.valid).toBe(true);
   });
 
   it('returns reason=mixed when both hard-banned and gitignore-matched files are present', () => {
     const result = validatePRFiles(
-      ['CLAUDE.md', '.env'],
+      added('CLAUDE.md', '.env'),
       [{ dir: '', content: '.env\n' }],
     );
     expect(result.valid).toBe(false);
@@ -271,7 +290,7 @@ describe('validatePRFiles()', () => {
 
   it('returns the full list of banned files when multiple are present', () => {
     const result = validatePRFiles(
-      ['CLAUDE.md', '.commit-msg', 'packages/backend/dist/server.js'],
+      added('CLAUDE.md', '.commit-msg', 'packages/backend/dist/server.js'),
       [{ dir: '', content: 'packages/backend/dist/\n' }],
     );
     expect(result.valid).toBe(false);
@@ -279,5 +298,53 @@ describe('validatePRFiles()', () => {
     expect(result.bannedFiles).toContain('.commit-msg');
     expect(result.bannedFiles).toContain('packages/backend/dist/server.js');
     expect(result.bannedFiles).toHaveLength(3);
+  });
+
+  it('exempts a removed gitignored file from the check', () => {
+    const result = validatePRFiles(
+      [withStatus('generated/output.json', 'removed')],
+      [{ dir: '', content: 'generated/\n' }],
+    );
+    expect(result.valid).toBe(true);
+    expect(result.bannedFiles).toHaveLength(0);
+  });
+
+  it('still rejects the same gitignored path when added', () => {
+    const result = validatePRFiles(
+      [withStatus('generated/output.json', 'added')],
+      [{ dir: '', content: 'generated/\n' }],
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('gitignore_match');
+  });
+
+  it('still rejects the same gitignored path when modified', () => {
+    const result = validatePRFiles(
+      [withStatus('generated/output.json', 'modified')],
+      [{ dir: '', content: 'generated/\n' }],
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('gitignore_match');
+  });
+
+  it('exempts a removed hard-banned file from the check', () => {
+    const result = validatePRFiles([withStatus('CLAUDE.md', 'removed')], []);
+    expect(result.valid).toBe(true);
+    expect(result.bannedFiles).toHaveLength(0);
+  });
+
+  it('still rejects a hard-banned file when added', () => {
+    const result = validatePRFiles([withStatus('CLAUDE.md', 'added')], []);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('hard_banned');
+  });
+
+  it('keeps a renamed file (new path) subject to the gitignore check', () => {
+    const result = validatePRFiles(
+      [withStatus('generated/renamed.json', 'renamed')],
+      [{ dir: '', content: 'generated/\n' }],
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBe('gitignore_match');
   });
 });
