@@ -28,8 +28,13 @@ export function isHardBanned(filePath: string): boolean {
   return HARD_BANNED_PATTERNS.some((p) => p.test(basename));
 }
 
+export interface PRFileEntryLike {
+  filename: string;
+  status: string;
+}
+
 export function validatePRFiles(
-  changedFiles: string[],
+  changedFiles: PRFileEntryLike[],
   gitignoreSources: Array<{ dir: string; content: string }>,
 ): PRFileValidationResult {
   const hardBanned: string[] = [];
@@ -42,7 +47,10 @@ export function validatePRFiles(
       ig: ignore().add(content),
     }));
 
-  for (const file of changedFiles) {
+  for (const { filename: file, status } of changedFiles) {
+    // A deletion cannot pollute a diff — the path is no longer tracked.
+    if (status === 'removed') continue;
+
     const normalised = file.replace(/\\/g, '/');
 
     if (isHardBanned(normalised)) {
