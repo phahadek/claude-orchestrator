@@ -490,6 +490,10 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);
+    -- Covers getSessionLastActivityMs's MAX(timestamp) WHERE session_id = ?
+    -- lookup so it resolves as a reverse index seek instead of one table
+    -- B-tree seek per event in the session.
+    CREATE INDEX IF NOT EXISTS idx_session_events_session_id_timestamp ON session_events(session_id, timestamp);
     CREATE INDEX IF NOT EXISTS idx_sessions_archived_started_at ON sessions(archived, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_sessions_notion_task_id_session_type ON sessions(task_id, session_type, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pull_requests_task_id_pr_number ON pull_requests(task_id, pr_number DESC);
