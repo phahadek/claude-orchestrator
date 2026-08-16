@@ -1086,6 +1086,62 @@ describe('TaskDetail', () => {
     expect(screen.queryByText('Task A')).toBeNull();
   });
 
+  // ── Stage auto-selection: fires on task switch only, never on a live update ──
+
+  it('does not re-select the stage on a live WS-driven prop update to the same task, only on task switch', () => {
+    const planningSession = makePlanningSession({ status: 'running' });
+    const taskV1 = makeTask({
+      taskId: 'task-live',
+      planningSession,
+      codeSession: null,
+    });
+    const { rerender } = render(
+      <TaskDetail task={taskV1} send={vi.fn()} onClose={vi.fn()} />,
+    );
+    // Only the planning stage has content — it auto-selects.
+    expect(
+      screen.getByTestId('stage-chip-planning').getAttribute('aria-selected'),
+    ).toBe('true');
+
+    // Operator manually switches to a stage the auto-selector would not have picked.
+    fireEvent.click(screen.getByTestId('stage-chip-tests'));
+    expect(
+      screen.getByTestId('stage-chip-tests').getAttribute('aria-selected'),
+    ).toBe('true');
+
+    // A live WS update lands for the SAME task: a code session now needs a
+    // permission decision — a new demand badge appears. This must not yank
+    // the operator's manual selection away.
+    const taskV2 = makeTask({
+      taskId: 'task-live',
+      planningSession,
+      codeSession: makeCodeSession({ status: 'needs_permission' }),
+    });
+    rerender(<TaskDetail task={taskV2} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByTestId('stage-demand-implementation')).toBeTruthy();
+    expect(
+      screen.getByTestId('stage-chip-tests').getAttribute('aria-selected'),
+    ).toBe('true');
+    expect(
+      screen
+        .getByTestId('stage-chip-implementation')
+        .getAttribute('aria-selected'),
+    ).toBe('false');
+
+    // Switching to a different task DOES re-run auto-selection — the new
+    // task's implementation stage has a demand badge, so it wins.
+    const taskOther = makeTask({
+      taskId: 'task-other',
+      codeSession: makeCodeSession({ status: 'needs_permission' }),
+    });
+    rerender(<TaskDetail task={taskOther} send={vi.fn()} onClose={vi.fn()} />);
+    expect(
+      screen
+        .getByTestId('stage-chip-implementation')
+        .getAttribute('aria-selected'),
+    ).toBe('true');
+  });
+
   // ── In-flight state reset on task navigation ──
 
   it('resets reviewInFlight when taskId changes — Run Review re-enables', async () => {
