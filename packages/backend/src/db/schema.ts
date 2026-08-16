@@ -1283,6 +1283,13 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_staged_intent_project_state ON staged_intent(project_id, state);
     CREATE INDEX IF NOT EXISTS idx_staged_intent_group ON staged_intent(group_id);
     CREATE INDEX IF NOT EXISTS idx_staged_intent_dedup ON staged_intent(project_id, kind, task_id, state);
+    -- Covers the session-scoped reads on the decision surface's hot path
+    -- (listStagedIntentsBySession, hasBlockedStagedIntentForSession,
+    -- hasActiveStagedIntentForSession via isSessionComplete) which otherwise
+    -- fall back to a bare SCAN staged_intent. state is the second column so
+    -- the two state-filtered probes (LIMIT 1 lookups) are answered from the
+    -- index alone.
+    CREATE INDEX IF NOT EXISTS idx_staged_intent_session_id ON staged_intent(session_id, state);
 
     CREATE TABLE IF NOT EXISTS staged_intent_group (
       group_id         TEXT    PRIMARY KEY,

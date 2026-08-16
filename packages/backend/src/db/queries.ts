@@ -1419,12 +1419,56 @@ export function getActiveSessions(): Session[] {
     .all() as Session[];
 }
 
-export function getArchivedSessions(): Session[] {
-  return db
+/**
+ * Default/maximum page size for getArchivedSessionsPage — bounds the
+ * /api/sessions/archived response so it no longer returns every archived
+ * row's full record on every dashboard load (measured at 8.7 MB / 6,571 rows
+ * live). Also trims the column set to what the history list actually
+ * renders, dropping heavy fields (metadata, note, tags) a list view never
+ * needs.
+ */
+export const ARCHIVED_SESSIONS_MAX_PAGE_SIZE = 200;
+
+export interface ArchivedSessionsPage {
+  sessions: Session[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Bounded, projected page of archived sessions for the /archived list route. */
+export function getArchivedSessionsPage(
+  limit: number,
+  offset: number,
+): ArchivedSessionsPage {
+  const boundedLimit = Math.min(
+    Math.max(1, Math.trunc(limit)),
+    ARCHIVED_SESSIONS_MAX_PAGE_SIZE,
+  );
+  const boundedOffset = Math.max(0, Math.trunc(offset));
+
+  const sessions = db
     .prepare(
-      'SELECT * FROM sessions WHERE archived = 1 ORDER BY started_at DESC',
+      `
+    SELECT
+      session_id, task_id, task_url, project_context_url,
+      project_id, status, started_at, ended_at, worktree_path,
+      archived, favorited, session_type, note, tags,
+      total_input_tokens, total_output_tokens, model, effort, task_name,
+      pr_url
+    FROM sessions
+    WHERE archived = 1
+    ORDER BY started_at DESC
+    LIMIT @limit OFFSET @offset
+  `,
     )
-    .all() as Session[];
+    .all({ limit: boundedLimit, offset: boundedOffset }) as Session[];
+
+  const { count } = db
+    .prepare('SELECT COUNT(*) AS count FROM sessions WHERE archived = 1')
+    .get() as { count: number };
+
+  return { sessions, total: count, limit: boundedLimit, offset: boundedOffset };
 }
 
 export function archiveSession(sessionId: string): boolean {
