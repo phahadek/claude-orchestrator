@@ -7,7 +7,7 @@ export type InvestigationReportState =
   | 'resolved'
   | 'abandoned';
 
-export interface ReportDispatchedSession {
+interface ReportDispatchedSession {
   sessionId: string;
   sessionStatus: string;
   dispatchedAt: string;
