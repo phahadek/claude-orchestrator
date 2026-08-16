@@ -1801,6 +1801,34 @@ export function getSessionLastActivityMs(sessionId: string): number | null {
   return row?.ts ?? null;
 }
 
+let _stmtGetLastActivityMsForArchivedSessions: Database.Statement | null =
+  null;
+
+/**
+ * Bulk counterpart to getSessionLastActivityMs for the archived-sessions
+ * route: one aggregate query for every archived session's last activity
+ * instead of one query per row, so the route's cost no longer scales with
+ * the number of archived sessions.
+ */
+export function getLastActivityMsForArchivedSessions(): Map<string, number> {
+  _stmtGetLastActivityMsForArchivedSessions ??= db.prepare(`
+    SELECT se.session_id AS session_id, MAX(se.timestamp) AS ts
+    FROM session_events se
+    JOIN sessions s ON s.session_id = se.session_id
+    WHERE s.archived = 1
+    GROUP BY se.session_id
+  `);
+  const rows = _stmtGetLastActivityMsForArchivedSessions.all() as {
+    session_id: string;
+    ts: number;
+  }[];
+  const result = new Map<string, number>();
+  for (const row of rows) {
+    result.set(row.session_id, row.ts);
+  }
+  return result;
+}
+
 /**
  * Count of tool_use session_events with no matching tool_result yet,
  * derived from event ordering rather than an in-memory counter — every

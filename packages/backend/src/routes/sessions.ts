@@ -19,6 +19,7 @@ import {
   removeGrantedCapability,
   getGrantedCapabilities,
   getSessionLastActivityMs,
+  getLastActivityMsForArchivedSessions,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { getProjectById } from '../config';
@@ -57,7 +58,19 @@ export const sessionsRouter = Router();
 
 // GET /api/sessions/archived
 sessionsRouter.get('/archived', (_req: Request, res: Response) => {
-  res.json(getArchivedSessions().map(withActivityAge));
+  const sessions = getArchivedSessions();
+  const activityMsBySessionId = getLastActivityMsForArchivedSessions();
+  res.json(
+    sessions.map((session) => {
+      const lastActivityTs =
+        activityMsBySessionId.get(session.session_id) ?? null;
+      return {
+        ...session,
+        lastActivityAgeMs:
+          lastActivityTs !== null ? Date.now() - lastActivityTs : null,
+      };
+    }),
+  );
 });
 
 // GET /api/sessions?status=running,done&projectId=claude-orchestrator
