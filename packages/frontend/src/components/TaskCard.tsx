@@ -138,6 +138,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Session exceeded its test.request cycle limit — review and resume manually.',
   test_report_acquisition_failed:
     'Test report declared but not acquired — the report was missing, malformed, or the run was killed before teardown. Fix the test harness/glob; this does not block merge if tests passed.',
+  ci_not_completing:
+    'CI is taking longer than usual to report a result — the merge sweep keeps retrying automatically and will merge once the PR goes clean. No action needed.',
 };
 
 function verdictLabel(verdict: string): string {

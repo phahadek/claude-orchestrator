@@ -57,7 +57,8 @@ export type CanonicalPauseReason =
   | 'api_overloaded_exhausted'
   | 'manual_verification_pending'
   | 'test_request_cycle_exceeded'
-  | 'test_report_acquisition_failed';
+  | 'test_report_acquisition_failed'
+  | 'ci_not_completing';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -362,6 +363,20 @@ export const PAUSE_REASON_REGISTRY: Record<
     source: 'tests',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
+    blocks_merge: false,
+  },
+  // AutoMerger's per-PR loop hit its deadline (ci_poll_max_minutes) without
+  // CI ever actually reporting failure — still running/pending/unknown. This
+  // is advisory only: the scheduled sweep (register()'s poll job) keeps
+  // re-attempting on its own interval and merges automatically once the PR
+  // goes clean, or this pause is superseded by a genuine ci_failing pause if
+  // CI subsequently fails for real. No RECOVERY_ACTION_MAP entry — same as
+  // test_report_acquisition_failed/awaiting_human_approval, there is nothing
+  // for an operator to click.
+  ci_not_completing: {
+    source: 'ci',
+    severity: 'needs_attention',
+    retry_strategy: 'automatic',
     blocks_merge: false,
   },
 };

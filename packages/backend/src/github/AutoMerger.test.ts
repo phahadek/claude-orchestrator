@@ -1224,7 +1224,7 @@ describe('AutoMerger.sweepApprovedLocalBranches() — scheduled local-branch mer
     expect(github.fetchPRStatusConditional).not.toHaveBeenCalled();
   });
 
-  it('does NOT call attempt() for PRs — register() only schedules the local-branch sweep', () => {
+  it('the local-branch sweep job only sweeps local branches, never the PR path', () => {
     const github = makeMockGitHub([]);
     const watcher = makeMockWatcher();
     const merger = new AutoMerger(github, watcher, () => {});
@@ -1250,7 +1250,7 @@ describe('AutoMerger.sweepApprovedLocalBranches() — scheduled local-branch mer
       fakeScheduler as unknown as import('../orchestration/Scheduler').Scheduler,
     );
 
-    expect(fakeScheduler.register).toHaveBeenCalledTimes(2);
+    expect(fakeScheduler.register).toHaveBeenCalledTimes(3);
     const localBranchJob = registered.find(
       (j) => j.name === 'auto_merger_local_branch_sweep',
     );
@@ -1261,10 +1261,51 @@ describe('AutoMerger.sweepApprovedLocalBranches() — scheduled local-branch mer
     vi.mocked(getApprovedOpenPRs).mockReturnValue([makePRRow()]);
     vi.mocked(getApprovedLocalBranches).mockReturnValue([]);
 
-    // Running the registered job must only sweep local branches, never touch
-    // the PR path — that stays driven by PRMergeWatcher/PRReviewService.
+    // Running the local-branch job must only sweep local branches, never
+    // touch the PR path — that is the separately-registered PR merge sweep.
     return localBranchJob!.run().then(() => {
       expect(attemptSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it('register() also schedules the PR merge-attempt sweep, invoking attempt() for an eligible approved PR', () => {
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    const registered: {
+      name: string;
+      concurrency?: string;
+      run: () => Promise<void>;
+    }[] = [];
+    const fakeScheduler = {
+      register: vi.fn(
+        (opts: {
+          name: string;
+          concurrency?: string;
+          run: () => Promise<void>;
+        }) => {
+          registered.push(opts);
+        },
+      ),
+    };
+
+    merger.register(
+      fakeScheduler as unknown as import('../orchestration/Scheduler').Scheduler,
+    );
+
+    const prSweepJob = registered.find(
+      (j) => j.name === 'auto_merger_pr_merge_sweep',
+    );
+    expect(prSweepJob).toBeDefined();
+    expect(prSweepJob?.concurrency).toBe('skip-if-running');
+
+    const attemptSpy = vi.spyOn(merger, 'attempt');
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([makePRRow()]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([]);
+
+    return prSweepJob!.run().then(() => {
+      expect(attemptSpy).toHaveBeenCalledWith(42, 'owner/repo');
     });
   });
 
@@ -1307,6 +1348,197 @@ describe('AutoMerger.sweepApprovedLocalBranches() — scheduled local-branch mer
     return conflictJob!.run().then(() => {
       expect(sweepSpy).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+// ── PR merge-attempt sweep — the stranding fix ────────────────────────────────
+
+function getRegisteredPollJob(merger: AutoMerger): {
+  run: () => Promise<void>;
+} {
+  const registered: { name: string; run: () => Promise<void> }[] = [];
+  const fakeScheduler = {
+    register: vi.fn((opts: { name: string; run: () => Promise<void> }) => {
+      registered.push(opts);
+    }),
+  };
+  merger.register(
+    fakeScheduler as unknown as import('../orchestration/Scheduler').Scheduler,
+  );
+  const job = registered.find((j) => j.name === 'auto_merger_pr_merge_sweep');
+  if (!job) throw new Error('auto_merger_pr_merge_sweep was not registered');
+  return job;
+}
+
+describe('AutoMerger — scheduled PR merge sweep merges a PR no event ever drove', () => {
+  it('merges an approved, unpaused, mergeable PR on a sweep tick even though attempt() was never called', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([makePRRow()]);
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    const job = getRegisteredPollJob(merger);
+    await job.run();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).toHaveBeenCalledWith(42, 'feat: test', 'owner/repo');
+    expect(watcher.handleMerged).toHaveBeenCalled();
+  });
+
+  it('skips a PR carrying a merge-blocking pause', async () => {
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([
+      makePRRow({ pause_reason: 'ci_failing' }),
+    ]);
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    const job = getRegisteredPollJob(merger);
+    await job.run();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(github.mergePR).not.toHaveBeenCalled();
+    expect(getPRByNumber).not.toHaveBeenCalledWith(42, 'owner/repo');
+  });
+
+  it('merges a PR carrying a non-blocking pause (e.g. ci_not_completing)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ pause_reason: 'ci_not_completing' }),
+    );
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([
+      makePRRow({ pause_reason: 'ci_not_completing' }),
+    ]);
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    const job = getRegisteredPollJob(merger);
+    await job.run();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).toHaveBeenCalledWith(42, 'feat: test', 'owner/repo');
+  });
+
+  it('never merges a human_merge_only PR via the sweep', async () => {
+    // getApprovedOpenPRs' own SQL excludes human_merge_only rows, but the
+    // sweep must not rely on that alone — run()/attemptMerge() re-check
+    // independently, mirroring the existing human_merge_only gate tests.
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ human_merge_only: 1 }),
+    );
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([
+      makePRRow({ human_merge_only: 1 }),
+    ]);
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    const job = getRegisteredPollJob(merger);
+    await job.run();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).not.toHaveBeenCalled();
+    expect(watcher.handleMerged).not.toHaveBeenCalled();
+  });
+
+  it('does not double-merge a PR already merged by the per-PR loop between sweep ticks', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([makePRRow()]);
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    // First tick starts the merge loop for PR #42 and merges it.
+    const job = getRegisteredPollJob(merger);
+    await job.run();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(github.mergePR).toHaveBeenCalledTimes(1);
+
+    // A second sweep tick, before getApprovedOpenPRs' view catches up (still
+    // returns the same row), must not re-dispatch a second in-flight loop —
+    // attempt()'s `active` set guard is per PR#repo key and the first loop
+    // has already exited by this point, so this exercises the idempotent
+    // re-fetch inside run() rather than a same-tick double-dispatch.
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow({ state: 'merged' }));
+    await job.run();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Loop-deadline expiry — ci_not_completing, not ci_failing ─────────────────
+
+describe('AutoMerger.attempt() — loop-deadline expiry', () => {
+  it('pauses with the non-blocking ci_not_completing reason (not ci_failing) when CI never reports failure before the deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      runtimeSettingsFixture.ci_poll_interval_seconds = 1;
+      runtimeSettingsFixture.ci_poll_max_minutes = 1;
+      vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+      // Every poll comes back 'not_modified' — CI never actually reports
+      // failure, it just never finishes before the deadline.
+      const github = makeMockGitHub([]);
+      const watcher = makeMockWatcher();
+
+      const merger = new AutoMerger(github, watcher, () => {});
+      merger.attempt(42, 'owner/repo');
+      await vi.advanceTimersByTimeAsync(65_000);
+
+      expect(setPauseReason).toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'ci_not_completing',
+      );
+      expect(setPauseReason).not.toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'ci_failing',
+      );
+      // Non-blocking: merge_state must not be misreported as ci_failed.
+      expect(updateMergeState).not.toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        0,
+        'ci_failed',
+        expect.anything(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

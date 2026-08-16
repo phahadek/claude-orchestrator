@@ -50,6 +50,7 @@ import { logger } from '../logger';
 import type { Scheduler } from '../orchestration/Scheduler';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
+const PR_MERGE_SWEEP_INTERVAL_MS = 30_000;
 const LOCAL_BRANCH_SWEEP_INTERVAL_MS = 15_000;
 const CONFLICT_NUDGE_SWEEP_INTERVAL_MS = 120_000;
 
@@ -256,11 +257,14 @@ export class AutoMerger {
    * dispatch to the appropriate merge handler. PRs go through the existing
    * attempt() loop; local branches are squash-merged immediately.
    *
-   * Nothing in production src/ calls this method directly — the PR path is
-   * driven by PRMergeWatcher/PRReviewService events (attempt()), and the
-   * local-branch path is driven independently by the scheduled
-   * sweepApprovedLocalBranches() job registered via register(). This method
-   * remains for tests and for callers that want both paths swept together.
+   * Scheduled as the auto_merger_pr_merge_sweep job via register() — this is
+   * the backstop that ensures an approved, unpaused, mergeable PR always
+   * eventually merges even if the event that would normally drive it
+   * (verdict=approved, ci_failing -> clean) fired before the PR was actually
+   * mergeable. The local-branch and conflict-nudge sweeps it also performs
+   * here are each independently scheduled at their own cadence via
+   * register(), so this call is redundant-but-harmless for those two paths;
+   * only the PR-attempt path above is otherwise undriven between events.
    */
   async pollOnce(): Promise<void> {
     if (this.pausedUntil !== null) {
@@ -283,20 +287,33 @@ export class AutoMerger {
   }
 
   /**
-   * Registers the local-branch merge sweep and the conflict-nudge sweep with
-   * the Scheduler. Deliberately does NOT schedule the PR merge-attempt path
-   * (getApprovedOpenPRs -> attempt()) here — that path is already
-   * event-driven via PRMergeWatcher/PRReviewService, and attempt() is
-   * idempotent per PR via the `active` set, so scheduling it again here would
-   * be redundant rather than harmful, but keeping the two paths separate
-   * avoids coupling local-branch merging to GitHub polling cadence.
+   * Registers the PR merge-attempt sweep, the local-branch merge sweep, and
+   * the conflict-nudge sweep with the Scheduler.
    *
-   * The conflict-nudge sweep IS scheduled here (unlike the PR merge-attempt
-   * path above) because attempt() deliberately no-ops on category='conflict'
-   * — conflictNudgeSweep() is the only component that re-nudges a live
-   * session, and without a recurring job it only ran at boot.
+   * The PR merge-attempt sweep (getApprovedOpenPRs -> attempt(), via
+   * pollOnce()) is a backstop for the event-driven path
+   * (PRMergeWatcher/PRReviewService): if the triggering event fires before
+   * the PR is actually mergeable — approval landing while CI still runs, a
+   * pause clearing after the per-PR loop already exited — nothing re-attempts
+   * it, and it can strand indefinitely with no visible blocker. attempt() is
+   * idempotent per PR via the `active` set, so this sweep never double-runs
+   * or double-merges a PR the event-driven path (or an operator) is already
+   * handling.
+   *
+   * The conflict-nudge sweep is scheduled here because attempt() deliberately
+   * no-ops on category='conflict' — conflictNudgeSweep() is the only
+   * component that re-nudges a live session, and without a recurring job it
+   * only ran at boot.
    */
   register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'auto_merger_pr_merge_sweep',
+      intervalMs: PR_MERGE_SWEEP_INTERVAL_MS,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.pollOnce();
+      },
+    });
     scheduler.register({
       name: 'auto_merger_local_branch_sweep',
       intervalMs: LOCAL_BRANCH_SWEEP_INTERVAL_MS,
@@ -693,13 +710,21 @@ export class AutoMerger {
       }
     }
 
-    // Timed out waiting for CI — pause as ci_failing (semantically: CI did not pass).
+    // Timed out waiting for CI. Every branch above that observed an actual
+    // CI failure ('ci_failed' category, or a 409/405 merge failure that
+    // categorizes as ci_failed) already paused as 'ci_failing' and returned —
+    // so reaching here means CI simply never finished reporting within the
+    // deadline (still running/pending/unknown), not that it failed. Pause
+    // with the non-blocking ci_not_completing reason so this loop's exit
+    // frees the goroutine without stranding the PR as falsely CI-failed and
+    // blocked — the scheduled sweep (register()) keeps re-attempting it
+    // regardless of what this per-PR loop did.
     const finalRow = getPRByNumber(prNumber, repo);
     if (finalRow && !isMergeBlockingPause(finalRow.pause_reason)) {
       logger.info(
-        `[AutoMerger] PR #${prNumber}: timed out after ${runtimeSettings.ci_poll_max_minutes}m — pausing`,
+        `[AutoMerger] PR #${prNumber}: timed out after ${runtimeSettings.ci_poll_max_minutes}m — pausing as ci_not_completing`,
       );
-      await this.pauseWithReason(finalRow, 'ci_failing');
+      await this.pauseWithReason(finalRow, 'ci_not_completing');
     }
   }
 
@@ -950,6 +975,7 @@ export class AutoMerger {
     pr: PullRequestRow,
     reason:
       | 'ci_failing'
+      | 'ci_not_completing'
       | 'auto_merge_failed'
       | 'pr_closed'
       | 'awaiting_human_approval'
@@ -958,7 +984,12 @@ export class AutoMerger {
   ): Promise<void> {
     const struct = pauseReasonFromCanonical(reason);
     setPauseReason(pr.pr_number, pr.repo, reason);
-    if (struct.source === 'ci') {
+    // ci_not_completing is source: 'ci' but semantically distinct from
+    // ci_failing — CI hasn't reported a failure, it's just slow — so it must
+    // not report a 'ci_failed' merge state (that would misreport the cause
+    // and, per isMergeBlockingPause, is what the non-blocking classification
+    // is specifically meant to avoid).
+    if (reason === 'ci_failing') {
       const names = failingCheckNames ?? [];
       updateMergeState(
         pr.pr_number,
@@ -976,10 +1007,10 @@ export class AutoMerger {
       type: 'pr_mergeability_changed',
       prNumber: pr.pr_number,
       repo: pr.repo,
-      mergeable: false,
-      mergeState: struct.source === 'ci' ? 'ci_failed' : null,
+      mergeable: !struct.blocks_merge,
+      mergeState: reason === 'ci_failing' ? 'ci_failed' : null,
       failingChecks:
-        struct.source === 'ci' &&
+        reason === 'ci_failing' &&
         failingCheckNames &&
         failingCheckNames.length > 0
           ? failingCheckNames
