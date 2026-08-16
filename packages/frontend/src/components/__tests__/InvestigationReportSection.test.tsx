@@ -1,13 +1,13 @@
 /**
  * Tests for InvestigationReportSection.tsx.
  *
- * AC: a dispatched report's card renders a session-view affordance (not
- * just the static "● dispatched" badge), and activating it fires the
- * app-wide 'selectSession' navigation event with the dispatched session's
- * id — mirroring GateReadinessPanel's jumpToSession precedent.
+ * AC: a dispatched report's card is selectable as a whole — like every
+ * other milestone decision card — and clicking it fires onSelectReport with
+ * that report, rather than a bespoke "View session" button dispatching a
+ * global navigation event.
  */
 
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { InvestigationReportSection } from '../InvestigationReportSection';
 import { reportsApi } from '../../api/reports';
@@ -39,8 +39,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('InvestigationReportSection — dispatched session affordance', () => {
-  it('renders no session-view affordance for a report with no dispatch history', async () => {
+describe('InvestigationReportSection — card selection', () => {
+  it('renders no "View session" button for a report with no dispatch history', async () => {
     vi.spyOn(reportsApi, 'list').mockResolvedValue({
       items: [makeReport({ id: 'r1' })],
       total: 1,
@@ -53,80 +53,100 @@ describe('InvestigationReportSection — dispatched session affordance', () => {
     expect(screen.queryByTestId('report-view-session-r1')).toBeNull();
   });
 
-  it('renders a session-view affordance for an in-flight dispatched report, and clicking it fires selectSession', async () => {
-    vi.spyOn(reportsApi, 'list').mockResolvedValue({
-      items: [
-        makeReport({
-          id: 'r1',
-          inFlight: true,
-          dispatchedSessions: [
-            {
-              sessionId: 'sess-running',
-              sessionStatus: 'running',
-              dispatchedAt: '2026-01-01T00:00:01Z',
-            },
-          ],
-        }),
+  it("fires onSelectReport with the report when clicking an in-flight dispatched report's card", async () => {
+    const report = makeReport({
+      id: 'r1',
+      inFlight: true,
+      dispatchedSessions: [
+        {
+          sessionId: 'sess-running',
+          sessionStatus: 'running',
+          dispatchedAt: '2026-01-01T00:00:01Z',
+        },
       ],
+    });
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [report],
       total: 1,
       page: 1,
     });
 
-    const listener = vi.fn();
-    window.addEventListener('selectSession', listener);
+    const onSelectReport = vi.fn();
+    render(
+      <InvestigationReportSection
+        projectId="proj-1"
+        milestone="M1"
+        onSelectReport={onSelectReport}
+      />,
+    );
 
-    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+    const card = await screen.findByTestId('report-card-r1');
+    expect(screen.queryByTestId('report-view-session-r1')).toBeNull();
 
-    const button = await screen.findByTestId('report-view-session-r1');
-    expect(button.textContent).toContain('running');
+    fireEvent.click(card);
 
-    fireEvent.click(button);
-
-    await waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
-    const event = listener.mock.calls[0][0] as CustomEvent<{
-      sessionId: string;
-    }>;
-    expect(event.detail.sessionId).toBe('sess-running');
-
-    window.removeEventListener('selectSession', listener);
+    expect(onSelectReport).toHaveBeenCalledTimes(1);
+    expect(onSelectReport).toHaveBeenCalledWith(report);
   });
 
-  it('renders a session-view affordance for a report whose dispatched session has ended (terminal)', async () => {
-    vi.spyOn(reportsApi, 'list').mockResolvedValue({
-      items: [
-        makeReport({
-          id: 'r2',
-          inFlight: false,
-          resolveEligible: true,
-          dispatchedSessions: [
-            {
-              sessionId: 'sess-done',
-              sessionStatus: 'done',
-              dispatchedAt: '2026-01-01T00:00:01Z',
-            },
-          ],
-        }),
+  it('fires onSelectReport when clicking a report card whose dispatched session has ended (terminal)', async () => {
+    const report = makeReport({
+      id: 'r2',
+      inFlight: false,
+      resolveEligible: true,
+      dispatchedSessions: [
+        {
+          sessionId: 'sess-done',
+          sessionStatus: 'done',
+          dispatchedAt: '2026-01-01T00:00:01Z',
+        },
       ],
+    });
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [report],
       total: 1,
       page: 1,
     });
 
-    const listener = vi.fn();
-    window.addEventListener('selectSession', listener);
+    const onSelectReport = vi.fn();
+    render(
+      <InvestigationReportSection
+        projectId="proj-1"
+        milestone="M1"
+        onSelectReport={onSelectReport}
+      />,
+    );
 
-    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+    const card = await screen.findByTestId('report-card-r2');
+    fireEvent.click(card);
 
-    const button = await screen.findByTestId('report-view-session-r2');
-    expect(button.textContent).toContain('done');
+    expect(onSelectReport).toHaveBeenCalledWith(report);
+  });
 
-    fireEvent.click(button);
+  it('does not fire onSelectReport when clicking the commit/abandon action buttons', async () => {
+    const report = makeReport({ id: 'r3', state: 'draft' });
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [report],
+      total: 1,
+      page: 1,
+    });
+    vi.spyOn(reportsApi, 'commit').mockResolvedValue({
+      ...report,
+      state: 'committed',
+    });
 
-    await waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
-    const event = listener.mock.calls[0][0] as CustomEvent<{
-      sessionId: string;
-    }>;
-    expect(event.detail.sessionId).toBe('sess-done');
+    const onSelectReport = vi.fn();
+    render(
+      <InvestigationReportSection
+        projectId="proj-1"
+        milestone="M1"
+        onSelectReport={onSelectReport}
+      />,
+    );
 
-    window.removeEventListener('selectSession', listener);
+    const commitButton = await screen.findByTestId('report-commit-r3');
+    fireEvent.click(commitButton);
+
+    expect(onSelectReport).not.toHaveBeenCalled();
   });
 });

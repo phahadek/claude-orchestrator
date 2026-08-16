@@ -247,25 +247,31 @@ export function MilestoneDrilldown({
     ? null
     : fallbackSessionTaskId;
 
-  const taskId = isGateSelection
-    ? null
-    : selection?.type === 'task'
-      ? selection.task.taskId
-      : selection
-        ? taskIdForIntentDisplay(selection.intent, safeFallbackSessionTaskId)
-        : null;
+  const taskId =
+    isGateSelection || selection?.type === 'report'
+      ? null
+      : selection?.type === 'task'
+        ? selection.task.taskId
+        : selection
+          ? taskIdForIntentDisplay(selection.intent, safeFallbackSessionTaskId)
+          : null;
 
   const resolvedTask: TaskView | null =
     selection?.type === 'task'
       ? selection.task
       : (tasks.find((t) => t.taskId === taskId) ?? null);
 
+  // A report has no task ref at all — its session comes from the most
+  // recently dispatched investigation session (dispatchedSessions is
+  // already most-recent-first, per reportStore.ts).
   const sessionId =
     selection?.type === 'task'
       ? (selection.task.codeSession?.sessionId ?? null)
-      : (selection?.intent.sessionId ??
-        resolvedTask?.codeSession?.sessionId ??
-        null);
+      : selection?.type === 'report'
+        ? (selection.report.dispatchedSessions[0]?.sessionId ?? null)
+        : (selection?.intent.sessionId ??
+          resolvedTask?.codeSession?.sessionId ??
+          null);
 
   const {
     markdown: taskMarkdown,
@@ -425,6 +431,17 @@ export function MilestoneDrilldown({
                 </div>
               </div>
             )}
+        </div>
+      ) : mode === 'task' && selection.type === 'report' ? (
+        <div
+          className={styles.taskReader}
+          data-testid="milestone-report-reader"
+        >
+          <div className={styles.headingRow}>
+            <div className={styles.heading}>{selection.report.title}</div>
+            <span className={styles.headingType}>{selection.report.state}</span>
+          </div>
+          <p className={styles.taskMarkdown}>{selection.report.symptom_text}</p>
         </div>
       ) : mode === 'task' ? (
         <div className={styles.taskReader} data-testid="milestone-task-reader">

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { StagedIntent } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { gateApi } from '../api/gate';
+import type { InvestigationReport } from '../api/reports';
 import type { TaskView } from '../types/taskView';
 import type { SessionTaskNameLookup } from '../utils/milestoneStack';
 import { phaseForTask } from '../utils/phaseBurndown';
@@ -36,10 +37,14 @@ interface Props {
   sessions?: SessionTaskNameLookup[];
   /** The currently drill-down-selected intent/group card id, if any — highlights that card. */
   selectedCardId?: string | null;
+  /** The currently drill-down-selected investigation report id, if any — highlights that card. */
+  selectedReportId?: string | null;
   /** Drives the middle-stack selection -> right drill-down wiring. Omit to render read-only (no selection affordance). */
   onSelectIntent?: (intent: StagedIntent) => void;
   /** Selects the intent's owning card *and* switches the drill-down to session mode — the "View session" button's handler. Distinct from onSelectIntent, which only selects. */
   onViewSession?: (intent: StagedIntent) => void;
+  /** Selects a report card *and* jumps the drill-down straight to session mode, in one step — mirrors onViewSession, but a report card has no separate plain-select step. */
+  onSelectReport?: (report: InvestigationReport) => void;
   /** The shared phase filter emitted by the burndown (left column) — matched against each card's target task's derived phase. A card with no resolvable task ref stays visible under every phase. */
   phaseFilter?: string | null;
   /** True when phaseFilter was activated via a phase's ⚠ warning badge — narrows to cards whose target task is blocked, same as the task rows. */
@@ -175,8 +180,10 @@ export function MilestoneDecisionInbox({
   tasks = [],
   sessions = [],
   selectedCardId = null,
+  selectedReportId = null,
   onSelectIntent,
   onViewSession,
+  onSelectReport,
   phaseFilter = null,
   flaggedOnly = false,
   registerScrollTarget,
@@ -315,7 +322,12 @@ export function MilestoneDecisionInbox({
 
   return (
     <div className={styles.inbox} data-testid="milestone-decision-inbox">
-      <InvestigationReportSection projectId={projectId} milestone={milestone} />
+      <InvestigationReportSection
+        projectId={projectId}
+        milestone={milestone}
+        selectedReportId={selectedReportId}
+        onSelectReport={onSelectReport}
+      />
 
       {intents.length > 0 && (
         <>

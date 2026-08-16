@@ -119,9 +119,9 @@ function selectionKey(
   selection: MilestoneStackSelection | null,
 ): string | null {
   if (!selection) return null;
-  return selection.type === 'task'
-    ? `task:${selection.task.taskId}`
-    : `intent:${selection.intent.id}`;
+  if (selection.type === 'task') return `task:${selection.task.taskId}`;
+  if (selection.type === 'report') return `report:${selection.report.id}`;
+  return `intent:${selection.intent.id}`;
 }
 
 interface Props {

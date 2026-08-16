@@ -11,6 +11,10 @@ import styles from './InvestigationReportSection.module.css';
 interface Props {
   projectId: string;
   milestone: string;
+  /** The currently drill-down-selected report id, if any — highlights that card. */
+  selectedReportId?: string | null;
+  /** Selects a report card *and* jumps the drill-down straight to session mode — the card-level click handler, mirroring the inbox's onSelectIntent wiring. */
+  onSelectReport?: (report: InvestigationReport) => void;
 }
 
 const STATE_ORDER: InvestigationReportState[] = [
@@ -51,7 +55,12 @@ function isDispatchEligible(report: InvestigationReport): boolean {
  * useDecisionQueue's staged-intent staleness handling (the inbox's other
  * known defect) — this section shares no fetch/refresh code path with it.
  */
-export function InvestigationReportSection({ projectId, milestone }: Props) {
+export function InvestigationReportSection({
+  projectId,
+  milestone,
+  selectedReportId = null,
+  onSelectReport,
+}: Props) {
   const [reports, setReports] = useState<InvestigationReport[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [stateFilter, setStateFilter] = useState<
@@ -171,12 +180,6 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
       )
       .finally(() => setActionInFlightId(null));
   };
-
-  const jumpToSession = useCallback((sessionId: string) => {
-    window.dispatchEvent(
-      new CustomEvent('selectSession', { detail: { sessionId } }),
-    );
-  }, []);
 
   const toggleSelected = (id: string) => {
     setSelected((prev) => {
@@ -339,7 +342,8 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
             key={report.id}
             className={`${panelStyles.group}${
               blocking ? ` ${styles.blockingCard}` : ''
-            }`}
+            }${selectedReportId === report.id ? ` ${styles.selectedCard}` : ''}`}
+            onClick={onSelectReport ? () => onSelectReport(report) : undefined}
             data-testid={`report-card-${report.id}`}
           >
             <div className={panelStyles.groupHeader}>
@@ -348,6 +352,7 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
                   type="checkbox"
                   checked={selected.has(report.id)}
                   onChange={() => toggleSelected(report.id)}
+                  onClick={(e) => e.stopPropagation()}
                   aria-label={`Select ${report.title}`}
                   data-testid={`report-select-${report.id}`}
                 />
@@ -377,18 +382,6 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
                   ● dispatched
                 </span>
               )}
-              {report.dispatchedSessions.length > 0 && (
-                <button
-                  type="button"
-                  className={styles.viewSessionButton}
-                  onClick={() =>
-                    jumpToSession(report.dispatchedSessions[0].sessionId)
-                  }
-                  data-testid={`report-view-session-${report.id}`}
-                >
-                  View session ({report.dispatchedSessions[0].sessionStatus})
-                </button>
-              )}
             </div>
             <div className={styles.symptomText}>{report.symptom_text}</div>
             {actionErrors[report.id] && (
@@ -400,7 +393,10 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
               {report.state === 'draft' && (
                 <button
                   type="button"
-                  onClick={() => commit(report.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    commit(report.id);
+                  }}
                   disabled={actionInFlightId === report.id}
                   data-testid={`report-commit-${report.id}`}
                 >
@@ -410,7 +406,10 @@ export function InvestigationReportSection({ projectId, milestone }: Props) {
               {(report.state === 'draft' || report.state === 'committed') && (
                 <button
                   type="button"
-                  onClick={() => abandon(report.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    abandon(report.id);
+                  }}
                   disabled={actionInFlightId === report.id}
                   data-testid={`report-abandon-${report.id}`}
                 >

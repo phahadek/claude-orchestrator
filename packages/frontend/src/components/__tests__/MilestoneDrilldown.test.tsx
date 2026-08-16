@@ -7,6 +7,30 @@ import { sessionsApi } from '../../api/projects';
 import { gateApi } from '../../api/gate';
 import type { StagedIntent } from '../../api/stagedIntents';
 import type { TaskView } from '../../types/taskView';
+import type { InvestigationReport } from '../../api/reports';
+import type { Session } from '@claude-orchestrator/backend/src/db/types';
+
+function makeReport(
+  overrides: Partial<InvestigationReport> & { id: string },
+): InvestigationReport {
+  return {
+    project_id: 'proj-1',
+    milestone_id: 'M1',
+    title: 'Report title',
+    symptom_text: 'Symptom text',
+    evidence_text: null,
+    state: 'committed',
+    source: 'operator',
+    origin_session_id: null,
+    origin_task_id: null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    inFlight: false,
+    resolveEligible: false,
+    dispatchedSessions: [],
+    ...overrides,
+  };
+}
 
 vi.mock('../../hooks/stagedIntentBus', () => ({
   subscribeStagedIntentChange: () => () => {},
@@ -869,6 +893,150 @@ describe('MilestoneDrilldown', () => {
           screen.getByTestId('milestone-gate-item-reader').textContent,
         ).toContain('Verify the widget renders'),
       );
+    });
+  });
+
+  describe('report selection', () => {
+    it("renders the report's title/symptom/state as a fallback pane in task mode (no task spec to show)", () => {
+      const report = makeReport({
+        id: 'report-1',
+        title: 'Something is broken',
+        symptom_text: 'Users see a 500 on checkout',
+        state: 'committed',
+      });
+
+      render(
+        <MilestoneDrilldown
+          selection={{ type: 'report', report }}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="task"
+          onModeChange={noop}
+        />,
+      );
+
+      const reader = screen.getByTestId('milestone-report-reader');
+      expect(reader.textContent).toContain('Something is broken');
+      expect(reader.textContent).toContain('Users see a 500 on checkout');
+      expect(reader.textContent).toContain('committed');
+    });
+
+    it('resolves sessionId from dispatchedSessions[0] (most recent first) and renders the running session inline, with no extra click needed', async () => {
+      const report = makeReport({
+        id: 'report-2',
+        dispatchedSessions: [
+          {
+            sessionId: 'sess-running',
+            sessionStatus: 'running',
+            dispatchedAt: '2026-01-02T00:00:00Z',
+          },
+          {
+            sessionId: 'sess-older',
+            sessionStatus: 'done',
+            dispatchedAt: '2026-01-01T00:00:00Z',
+          },
+        ],
+      });
+
+      render(
+        <MilestoneDrilldown
+          selection={{ type: 'report', report }}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[
+            {
+              sessionId: 'sess-running',
+              taskName: 'Investigate the widget',
+              notionTaskUrl: '',
+              status: 'running',
+              events: [],
+            },
+          ]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="session"
+          onModeChange={noop}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByText('No events yet.')).toBeTruthy(),
+      );
+      const embed = screen.getByTestId('milestone-session-embed');
+      expect(embed.textContent).not.toContain('No associated session');
+    });
+
+    it('resolves a completed session no longer in the live store via the by-id fallback fetch, and renders it inline', async () => {
+      const report = makeReport({
+        id: 'report-3',
+        inFlight: false,
+        resolveEligible: true,
+        dispatchedSessions: [
+          {
+            sessionId: 'sess-completed',
+            sessionStatus: 'done',
+            dispatchedAt: '2026-01-01T00:00:00Z',
+          },
+        ],
+      });
+
+      vi.spyOn(sessionsApi, 'getById').mockResolvedValue({
+        session: {
+          session_id: 'sess-completed',
+          task_id: null,
+          task_url: null,
+          project_context_url: null,
+          project_id: 'proj-1',
+          status: 'done',
+          started_at: 1,
+          ended_at: 2,
+          pr_url: null,
+          worktree_path: null,
+          archived: 0,
+          favorited: 0,
+          session_type: 'standard',
+          note: null,
+          tags: null,
+          total_input_tokens: 0,
+          total_output_tokens: 0,
+          compaction_count: 0,
+          context_occupancy_tokens: 0,
+          model: null,
+          task_name: 'Investigate the widget',
+          metadata: null,
+          review_result: null,
+          pause_reason: null,
+          last_error_detail: null,
+          events_pruned_at: null,
+          granted_capabilities: '[]',
+        } as Session,
+        events: [],
+      });
+
+      render(
+        <MilestoneDrilldown
+          selection={{ type: 'report', report }}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="session"
+          onModeChange={noop}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByText('No events yet.')).toBeTruthy(),
+      );
+      const embed = screen.getByTestId('milestone-session-embed');
+      expect(embed.textContent).not.toContain('Transcript not available');
     });
   });
 });
