@@ -505,7 +505,7 @@ export interface AuditSweepDeps {
 }
 
 const defaultDeps: AuditSweepDeps = {
-  listProjects: getAllProjects,
+  listProjects: () => getAllProjects(),
   gitRunner: defaultGitRunner,
   runAnalyzeCommand: defaultRunAnalyzeCommand,
   retryCap: DEFAULT_RETRY_CAP,

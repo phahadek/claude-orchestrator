@@ -891,6 +891,7 @@ export function runMigrations(target: Database.Database): void {
         CREATE INDEX idx_session_events_session_id_id ON session_events(session_id, id DESC);
         CREATE INDEX idx_session_events_session_id_event_type ON session_events(session_id, event_type);
         CREATE INDEX idx_session_events_timestamp ON session_events(timestamp DESC);
+        CREATE INDEX idx_session_events_session_id_timestamp ON session_events(session_id, timestamp);
         COMMIT;
       `);
     }
