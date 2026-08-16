@@ -884,10 +884,11 @@ export class GitHubClient {
     const files: PRFileEntry[] = [];
     let page = 1;
     while (true) {
-      const data = await this.request<Array<{ filename: string; status: string }>>(
-        `/repos/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`,
-      );
-      for (const f of data) files.push({ filename: f.filename, status: f.status });
+      const data = await this.request<
+        Array<{ filename: string; status: string }>
+      >(`/repos/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`);
+      for (const f of data)
+        files.push({ filename: f.filename, status: f.status });
       if (data.length < 100) break;
       page++;
     }

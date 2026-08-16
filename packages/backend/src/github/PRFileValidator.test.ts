@@ -104,7 +104,9 @@ describe('HARD_BANNED_PATTERNS', () => {
 
 // Converts bare filenames into the status-bearing shape validatePRFiles expects,
 // defaulting to 'added' since most existing tests exercise the addition path.
-function added(...files: string[]): Array<{ filename: string; status: string }> {
+function added(
+  ...files: string[]
+): Array<{ filename: string; status: string }> {
   return files.map((filename) => ({ filename, status: 'added' }));
 }
 
@@ -222,29 +224,26 @@ describe('validatePRFiles()', () => {
   });
 
   it('rejects .env via gitignore pattern', () => {
-    const result = validatePRFiles(
-      added('.env'),
-      [{ dir: '', content: '.env\n' }],
-    );
+    const result = validatePRFiles(added('.env'), [
+      { dir: '', content: '.env\n' },
+    ]);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('.env');
     expect(result.reason).toBe('gitignore_match');
   });
 
   it('rejects node_modules/foo via gitignore', () => {
-    const result = validatePRFiles(
-      added('node_modules/foo/index.js'),
-      [{ dir: '', content: 'node_modules/\n' }],
-    );
+    const result = validatePRFiles(added('node_modules/foo/index.js'), [
+      { dir: '', content: 'node_modules/\n' },
+    ]);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('node_modules/foo/index.js');
   });
 
   it('rejects dist/bar.js via gitignore', () => {
-    const result = validatePRFiles(
-      added('dist/bar.js'),
-      [{ dir: '', content: 'dist/\n' }],
-    );
+    const result = validatePRFiles(added('dist/bar.js'), [
+      { dir: '', content: 'dist/\n' },
+    ]);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('dist/bar.js');
   });
@@ -280,10 +279,9 @@ describe('validatePRFiles()', () => {
   });
 
   it('returns reason=mixed when both hard-banned and gitignore-matched files are present', () => {
-    const result = validatePRFiles(
-      added('CLAUDE.md', '.env'),
-      [{ dir: '', content: '.env\n' }],
-    );
+    const result = validatePRFiles(added('CLAUDE.md', '.env'), [
+      { dir: '', content: '.env\n' },
+    ]);
     expect(result.valid).toBe(false);
     expect(result.reason).toBe('mixed');
   });
