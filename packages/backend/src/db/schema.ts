@@ -2363,4 +2363,28 @@ export function runMigrations(target: Database.Database): void {
       updated_at              TEXT    NOT NULL
     );
   `);
+
+  // Index audit follow-up: five unindexed lookups plus two FK-cascade scans
+  // found by an EXPLAIN QUERY PLAN sweep of every static statement in
+  // packages/backend/src. Query text is unchanged everywhere — only the
+  // access path was wrong.
+  target.exec(`
+    -- getAuditLogByActorId (AuditLog.ts), reached from the
+    -- capabilities/getRecord/sessionRecordRead read paths, otherwise scans
+    -- the full audit_log table (387,891 rows and growing).
+    CREATE INDEX IF NOT EXISTS idx_audit_log_actor_id ON audit_log(actor_id);
+    -- hasStagedIntentForTask-shaped WHERE task_id = ? probes, otherwise scan
+    -- staged_intent; idx_staged_intent_dedup doesn't cover a task_id-only
+    -- lookup since task_id isn't its leading column.
+    CREATE INDEX IF NOT EXISTS idx_staged_intent_task_id ON staged_intent(task_id);
+    -- getDenialsBySession's WHERE session_id = ? read, and the ON DELETE
+    -- CASCADE from sessions that fires on every session delete.
+    CREATE INDEX IF NOT EXISTS idx_permission_denials_session_id ON permission_denials(session_id);
+    -- The pr_intent_id -> (pr_number, repo) lookup used to resolve a staged
+    -- intent's PR.
+    CREATE INDEX IF NOT EXISTS idx_pull_requests_pr_intent_id ON pull_requests(pr_intent_id);
+    -- session_audits carries no session_id index, so the ON DELETE CASCADE
+    -- from sessions scans it end to end on every session delete.
+    CREATE INDEX IF NOT EXISTS idx_session_audits_session_id ON session_audits(session_id);
+  `);
 }
