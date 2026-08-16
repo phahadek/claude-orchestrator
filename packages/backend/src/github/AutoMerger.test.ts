@@ -1353,7 +1353,9 @@ describe('AutoMerger.sweepApprovedLocalBranches() — scheduled local-branch mer
 
 // ── PR merge-attempt sweep — the stranding fix ────────────────────────────────
 
-function getRegisteredPollJob(merger: AutoMerger): { run: () => Promise<void> } {
+function getRegisteredPollJob(merger: AutoMerger): {
+  run: () => Promise<void>;
+} {
   const registered: { name: string; run: () => Promise<void> }[] = [];
   const fakeScheduler = {
     register: vi.fn((opts: { name: string; run: () => Promise<void> }) => {
