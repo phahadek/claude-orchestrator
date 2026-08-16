@@ -1436,14 +1436,6 @@ export interface ArchivedSessionsPage {
   offset: number;
 }
 
-export function getArchivedSessions(): Session[] {
-  return db
-    .prepare(
-      'SELECT * FROM sessions WHERE archived = 1 ORDER BY started_at DESC',
-    )
-    .all() as Session[];
-}
-
 /** Bounded, projected page of archived sessions for the /archived list route. */
 export function getArchivedSessionsPage(
   limit: number,
