@@ -96,7 +96,11 @@ describe('computeStages', () => {
 
   it('marks tests as not_started — no test data source exists yet', () => {
     const stages = computeStages(
-      makeTask({ codeSession: makeCodeSession(), pr: makePr(), review: makeReview() }),
+      makeTask({
+        codeSession: makeCodeSession(),
+        pr: makePr(),
+        review: makeReview(),
+      }),
     );
     expect(stages.find((s) => s.id === 'tests')?.status).toBe('not_started');
   });

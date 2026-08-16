@@ -942,91 +942,89 @@ export function TaskDetail({
             </div>
 
             {/* Line 1: PR number + title (truncated) + state badge */}
-                <div className={styles.prTitleRow}>
-                  <div className={styles.prTitleLeft}>
-                    <span className={styles.prNumber}>#{task.pr.prNumber}</span>
-                    <span className={styles.prTitleText}>{task.pr.title}</span>
-                  </div>
-                  <span
-                    className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
-                  >
-                    {prStateLabel(task.pr.state, task.pr.draft)}
-                  </span>
-                </div>
+            <div className={styles.prTitleRow}>
+              <div className={styles.prTitleLeft}>
+                <span className={styles.prNumber}>#{task.pr.prNumber}</span>
+                <span className={styles.prTitleText}>{task.pr.title}</span>
+              </div>
+              <span
+                className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
+              >
+                {prStateLabel(task.pr.state, task.pr.draft)}
+              </span>
+            </div>
 
-                {/* Line 2: branch info + GitHub link */}
-                <div className={styles.prBranchRow}>
-                  <span className={styles.prBranch}>
-                    {task.pr.headBranch} → {task.pr.baseBranch}
-                  </span>
-                  <a
-                    href={task.pr.prUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className={styles.githubLink}
-                  >
-                    GitHub ↗
-                  </a>
-                </div>
+            {/* Line 2: branch info + GitHub link */}
+            <div className={styles.prBranchRow}>
+              <span className={styles.prBranch}>
+                {task.pr.headBranch} → {task.pr.baseBranch}
+              </span>
+              <a
+                href={task.pr.prUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={styles.githubLink}
+              >
+                GitHub ↗
+              </a>
+            </div>
 
-                {reviewError && (
-                  <div className={styles.errorBanner}>{reviewError}</div>
+            {reviewError && (
+              <div className={styles.errorBanner}>{reviewError}</div>
+            )}
+
+            {task.pr.mergeState === 'dirty' && (
+              <div className={styles.conflictBanner}>
+                ⚠ Merge conflicts detected — use Fix Conflicts to have the code
+                session rebase and resolve them.
+              </div>
+            )}
+
+            {/* Line 3 (conditional): action buttons only when PR is open */}
+            {task.pr.state === 'open' && (
+              <div className={styles.prActions}>
+                {task.pr.mergeState !== 'dirty' && (
+                  <button
+                    className={styles.reviewButton}
+                    disabled={reviewInFlight || !projectId}
+                    onClick={() => void handleRunReview()}
+                    title={!projectId ? 'Project ID unavailable' : undefined}
+                  >
+                    {reviewInFlight ? 'Reviewing…' : 'Run Review'}
+                  </button>
                 )}
-
                 {task.pr.mergeState === 'dirty' && (
-                  <div className={styles.conflictBanner}>
-                    ⚠ Merge conflicts detected — use Fix Conflicts to have the
-                    code session rebase and resolve them.
-                  </div>
+                  <button
+                    className={styles.reReviewButton}
+                    disabled={fixConflictsInFlight}
+                    onClick={() => void handleFixConflicts()}
+                    title="Send rebase instructions to the code session to resolve merge conflicts"
+                  >
+                    {fixConflictsInFlight ? 'Fixing…' : '↺ Fix Conflicts'}
+                  </button>
                 )}
-
-                {/* Line 3 (conditional): action buttons only when PR is open */}
-                {task.pr.state === 'open' && (
-                  <div className={styles.prActions}>
-                    {task.pr.mergeState !== 'dirty' && (
-                      <button
-                        className={styles.reviewButton}
-                        disabled={reviewInFlight || !projectId}
-                        onClick={() => void handleRunReview()}
-                        title={
-                          !projectId ? 'Project ID unavailable' : undefined
-                        }
-                      >
-                        {reviewInFlight ? 'Reviewing…' : 'Run Review'}
-                      </button>
-                    )}
-                    {task.pr.mergeState === 'dirty' && (
-                      <button
-                        className={styles.reReviewButton}
-                        disabled={fixConflictsInFlight}
-                        onClick={() => void handleFixConflicts()}
-                        title="Send rebase instructions to the code session to resolve merge conflicts"
-                      >
-                        {fixConflictsInFlight ? 'Fixing…' : '↺ Fix Conflicts'}
-                      </button>
-                    )}
-                    {task.review?.verdict === 'approved' &&
-                      task.pr.mergeState !== 'dirty' && (
-                        <button
-                          className={styles.mergeButton}
-                          disabled={mergeInFlight}
-                          onClick={() => void handleMerge()}
-                        >
-                          {mergeInFlight ? 'Merging…' : 'Merge ↓'}
-                        </button>
-                      )}
-                    {task.review?.verdict === 'approved' &&
-                      task.pr.mergeState === 'dirty' && (
-                        <button
-                          className={styles.mergeButton}
-                          disabled={true}
-                          title="Cannot merge — PR has merge conflicts"
-                        >
-                          Merge ↓
-                        </button>
-                      )}
-                  </div>
-                )}
+                {task.review?.verdict === 'approved' &&
+                  task.pr.mergeState !== 'dirty' && (
+                    <button
+                      className={styles.mergeButton}
+                      disabled={mergeInFlight}
+                      onClick={() => void handleMerge()}
+                    >
+                      {mergeInFlight ? 'Merging…' : 'Merge ↓'}
+                    </button>
+                  )}
+                {task.review?.verdict === 'approved' &&
+                  task.pr.mergeState === 'dirty' && (
+                    <button
+                      className={styles.mergeButton}
+                      disabled={true}
+                      title="Cannot merge — PR has merge conflicts"
+                    >
+                      Merge ↓
+                    </button>
+                  )}
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -1,13 +1,13 @@
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 
-export type StageId =
-  | 'planning'
-  | 'implementation'
-  | 'tests'
-  | 'review'
-  | 'pr';
+export type StageId = 'planning' | 'implementation' | 'tests' | 'review' | 'pr';
 
-export type StageStatus = 'not_started' | 'active' | 'waiting' | 'done' | 'error';
+export type StageStatus =
+  | 'not_started'
+  | 'active'
+  | 'waiting'
+  | 'done'
+  | 'error';
 
 export interface StageInfo {
   id: StageId;
@@ -39,21 +39,51 @@ const ACTIVE_SESSION_STATUSES = new Set(['starting', 'running', 'idle']);
 function planningStage(task: TaskView): StageInfo {
   const session = task.planningSession;
   if (!session) {
-    return { id: 'planning', label: STAGE_LABELS.planning, status: 'not_started', demand: false };
+    return {
+      id: 'planning',
+      label: STAGE_LABELS.planning,
+      status: 'not_started',
+      demand: false,
+    };
   }
   if (session.status === 'needs_permission') {
-    return { id: 'planning', label: STAGE_LABELS.planning, status: 'waiting', demand: true };
+    return {
+      id: 'planning',
+      label: STAGE_LABELS.planning,
+      status: 'waiting',
+      demand: true,
+    };
   }
   if (session.status === 'done') {
-    return { id: 'planning', label: STAGE_LABELS.planning, status: 'done', demand: false };
+    return {
+      id: 'planning',
+      label: STAGE_LABELS.planning,
+      status: 'done',
+      demand: false,
+    };
   }
   if (session.status === 'error' || session.status === 'killed') {
-    return { id: 'planning', label: STAGE_LABELS.planning, status: 'error', demand: true };
+    return {
+      id: 'planning',
+      label: STAGE_LABELS.planning,
+      status: 'error',
+      demand: true,
+    };
   }
   if (ACTIVE_SESSION_STATUSES.has(session.status)) {
-    return { id: 'planning', label: STAGE_LABELS.planning, status: 'active', demand: false };
+    return {
+      id: 'planning',
+      label: STAGE_LABELS.planning,
+      status: 'active',
+      demand: false,
+    };
   }
-  return { id: 'planning', label: STAGE_LABELS.planning, status: 'active', demand: false };
+  return {
+    id: 'planning',
+    label: STAGE_LABELS.planning,
+    status: 'active',
+    demand: false,
+  };
 }
 
 function implementationStage(task: TaskView): StageInfo {
@@ -100,30 +130,65 @@ function implementationStage(task: TaskView): StageInfo {
 
 function testsStage(): StageInfo {
   // No test-result data source exists yet — the Tests tab follow-on task wires this up.
-  return { id: 'tests', label: STAGE_LABELS.tests, status: 'not_started', demand: false };
+  return {
+    id: 'tests',
+    label: STAGE_LABELS.tests,
+    status: 'not_started',
+    demand: false,
+  };
 }
 
 function reviewStage(task: TaskView): StageInfo {
   const review = task.review;
   if (!review) {
-    return { id: 'review', label: STAGE_LABELS.review, status: 'not_started', demand: false };
+    return {
+      id: 'review',
+      label: STAGE_LABELS.review,
+      status: 'not_started',
+      demand: false,
+    };
   }
   if (review.verdict === 'approved') {
-    return { id: 'review', label: STAGE_LABELS.review, status: 'done', demand: false };
+    return {
+      id: 'review',
+      label: STAGE_LABELS.review,
+      status: 'done',
+      demand: false,
+    };
   }
   if (review.verdict === 'needs_changes' || review.verdict === 'incomplete') {
-    return { id: 'review', label: STAGE_LABELS.review, status: 'error', demand: true };
+    return {
+      id: 'review',
+      label: STAGE_LABELS.review,
+      status: 'error',
+      demand: true,
+    };
   }
   if (review.status === 'running' || review.status === 'starting') {
-    return { id: 'review', label: STAGE_LABELS.review, status: 'active', demand: false };
+    return {
+      id: 'review',
+      label: STAGE_LABELS.review,
+      status: 'active',
+      demand: false,
+    };
   }
-  return { id: 'review', label: STAGE_LABELS.review, status: 'active', demand: false };
+  return {
+    id: 'review',
+    label: STAGE_LABELS.review,
+    status: 'active',
+    demand: false,
+  };
 }
 
 function prStage(task: TaskView): StageInfo {
   const pr = task.pr;
   if (!pr) {
-    return { id: 'pr', label: STAGE_LABELS.pr, status: 'not_started', demand: false };
+    return {
+      id: 'pr',
+      label: STAGE_LABELS.pr,
+      status: 'not_started',
+      demand: false,
+    };
   }
   if (pr.state === 'merged') {
     return { id: 'pr', label: STAGE_LABELS.pr, status: 'done', demand: false };
@@ -136,7 +201,12 @@ function prStage(task: TaskView): StageInfo {
   }
   if (!pr.draft && task.review?.verdict === 'approved') {
     // Approved and open — ready to merge, waiting on the operator.
-    return { id: 'pr', label: STAGE_LABELS.pr, status: 'waiting', demand: true };
+    return {
+      id: 'pr',
+      label: STAGE_LABELS.pr,
+      status: 'waiting',
+      demand: true,
+    };
   }
   return { id: 'pr', label: STAGE_LABELS.pr, status: 'active', demand: false };
 }
