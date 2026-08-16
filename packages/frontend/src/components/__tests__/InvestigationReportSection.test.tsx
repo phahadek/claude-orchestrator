@@ -53,7 +53,7 @@ describe('InvestigationReportSection — card selection', () => {
     expect(screen.queryByTestId('report-view-session-r1')).toBeNull();
   });
 
-  it('fires onSelectReport with the report when clicking an in-flight dispatched report\'s card', async () => {
+  it("fires onSelectReport with the report when clicking an in-flight dispatched report's card", async () => {
     const report = makeReport({
       id: 'r1',
       inFlight: true,

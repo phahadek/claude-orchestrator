@@ -439,9 +439,7 @@ export function MilestoneDrilldown({
         >
           <div className={styles.headingRow}>
             <div className={styles.heading}>{selection.report.title}</div>
-            <span className={styles.headingType}>
-              {selection.report.state}
-            </span>
+            <span className={styles.headingType}>{selection.report.state}</span>
           </div>
           <p className={styles.taskMarkdown}>{selection.report.symptom_text}</p>
         </div>
