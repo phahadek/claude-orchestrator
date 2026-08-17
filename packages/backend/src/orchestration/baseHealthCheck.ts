@@ -115,7 +115,11 @@ function unknownResult(
  * A failed run is `partial_fail` only when its structured_result carries an
  * actual per-test breakdown (at least one recorded test outcome) —
  * otherwise (structured_result null/unparseable/empty, e.g. an OOM-kill
- * before any report was written) it's `total_fail`.
+ * before any report was written) it's `total_fail`. This split is agnostic
+ * to whether acquisition was attempted — see classifyRun, its dispatch-
+ * gating caller, for that distinction; the Tests-tab taxonomy
+ * (classifyTestRunOutcome) intentionally treats "never attempted" and
+ * "attempted and empty" alike as "no report acquired".
  */
 function classifyFailedRun(
   run: TestRequestRunRow,
@@ -135,9 +139,23 @@ function classifyFailedRun(
   return 'total_fail';
 }
 
+/**
+ * `total_fail` is reserved for a failed run whose acquisition was actually
+ * attempted (test_report_acquisition_attempted) and still came up empty — a
+ * crash or OOM-kill before any report was written. When acquisition was
+ * never attempted (project declares no test_report_glob, or a historical
+ * row predates the attempted column), a null structured_result is
+ * ambiguous — it does not mean the run crashed — so classifyFailedRun's
+ * total_fail is downgraded to `partial_fail` here (normal failure, does not
+ * escalate to the base-branch dispatch hold) rather than read as a crash.
+ */
 function classifyRun(run: TestRequestRunRow): BaseHealthOutcome {
   if (run.state === 'passed') return 'clean_pass';
-  return classifyFailedRun(run);
+  const failed = classifyFailedRun(run);
+  if (failed === 'total_fail' && !run.test_report_acquisition_attempted) {
+    return 'partial_fail';
+  }
+  return failed;
 }
 
 /**
@@ -302,7 +320,6 @@ async function checkBaseBranchHealthLocked(
       maxRssMb: config.test_max_rss_mb,
       failFast: config.test_fail_fast,
       sessionId: null,
-      testReportGlob: config.test_report_glob || undefined,
     });
     runId = result.runId;
   } catch (err) {

@@ -16,15 +16,21 @@ const {
   mockRunTestCommands,
   mockCollectStructuredTestResult,
   mockHasAdmission,
+  mockLoadOrchestratorConfig,
 } = vi.hoisted(() => ({
   mockRunTestCommands: vi.fn(),
   mockCollectStructuredTestResult: vi.fn(() => null),
   mockHasAdmission: vi.fn(() => true),
+  mockLoadOrchestratorConfig: vi.fn(() => ({ test_report_glob: '' })),
 }));
 
 vi.mock('../../session/test-runner', () => ({
   runTestCommands: mockRunTestCommands,
   collectStructuredTestResult: mockCollectStructuredTestResult,
+}));
+
+vi.mock('../../session/orchestrator-config', () => ({
+  loadOrchestratorConfig: mockLoadOrchestratorConfig,
 }));
 
 // Host memory headroom is real-machine-dependent and irrelevant to most of
@@ -58,6 +64,8 @@ beforeEach(() => {
   mockCollectStructuredTestResult.mockReturnValue(null);
   mockHasAdmission.mockReset();
   mockHasAdmission.mockReturnValue(true);
+  mockLoadOrchestratorConfig.mockReset();
+  mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
   db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
@@ -347,11 +355,13 @@ describe('structured_result acquisition', () => {
       durationMsTotal: 10,
     };
     mockCollectStructuredTestResult.mockReturnValue(structured);
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
 
     await runProjectTestRequest(
       baseSpec({
         contentHash: 'hash-with-glob',
-        testReportGlob: 'reports/*.xml',
       }),
     );
 
@@ -370,11 +380,13 @@ describe('structured_result acquisition', () => {
   it('still runs to completion and leaves structured_result null when acquisition finds no matching report', async () => {
     mockRunTestCommands.mockResolvedValue({ passed: false, output: 'boom' });
     mockCollectStructuredTestResult.mockReturnValue(null);
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
 
     await runProjectTestRequest(
       baseSpec({
         contentHash: 'hash-glob-no-match',
-        testReportGlob: 'reports/*.xml',
       }),
     );
 

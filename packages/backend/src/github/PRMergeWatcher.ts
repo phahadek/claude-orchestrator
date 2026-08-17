@@ -703,15 +703,18 @@ export class PRMergeWatcher extends EventEmitter {
       // No result yet (test hasn't run) or test passed → fall through
 
       // ── Test-report acquisition failure (non-blocking) ────────────────────
-      // Independent of the ci_failing branch above: a declared
-      // test_report_glob whose run left structured_result null (missing/
-      // malformed report, or the run was killed before teardown) is a
-      // manifest/config problem for a human to look at — but it must never
-      // block mergeability for a PR whose underlying test exit code passed,
-      // so this never returns early.
+      // Independent of the ci_failing branch above: a run whose producer
+      // actually attempted JUnit-XML acquisition (test_report_acquisition_attempted)
+      // and still left structured_result null (missing/malformed report, or
+      // the run was killed before teardown) is a manifest/config problem for
+      // a human to look at — but it must never block mergeability for a PR
+      // whose underlying test exit code passed, so this never returns early.
+      // Gating on the attempted flag (not just structured_result === null)
+      // is what keeps a run that never tried acquisition (no test_report_glob
+      // declared) from being misread as a failed acquisition.
       if (
         testResult &&
-        config.test_report_glob &&
+        testResult.test_report_acquisition_attempted === 1 &&
         testResult.structured_result === null &&
         testResult.state !== 'failed'
       ) {

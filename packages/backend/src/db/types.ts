@@ -1034,6 +1034,15 @@ export interface TestRequestRunRow {
   concurrent_run_count: number | null;
   /** Copied from TestCommandResult.oomKilled at completion time. */
   oom_killed: number;
+  /**
+   * Whether the producer actually attempted JUnit-XML acquisition for this
+   * run (i.e. the project declared test_report_glob) — independent of
+   * whether that attempt matched anything. Null for `running` rows and for
+   * rows predating this column. See PRMergeWatcher's acquisition-failure
+   * gate and baseHealthCheck's classifyFailedRun for the consumers this
+   * disambiguates for.
+   */
+  test_report_acquisition_attempted: number | null;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────

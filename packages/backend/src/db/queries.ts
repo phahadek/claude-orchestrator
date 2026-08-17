@@ -7602,9 +7602,10 @@ export function completeTestRequestRun(
   failureReason: TestRequestFailureReason | null = null,
   structuredResult?: string | null,
   oomKilled?: boolean,
+  acquisitionAttempted?: boolean,
 ): void {
   db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ? WHERE id = ?`,
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ? WHERE id = ?`,
   ).run(
     state,
     output,
@@ -7612,11 +7613,12 @@ export function completeTestRequestRun(
     failureReason,
     structuredResult ?? null,
     oomKilled ? 1 : 0,
+    acquisitionAttempted === undefined ? null : acquisitionAttempted ? 1 : 0,
     id,
   );
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted`;
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {

@@ -236,6 +236,7 @@ describe('checkBaseBranchHealth', () => {
         'oom_killed',
         null,
         true,
+        true,
       );
       return {
         runId: 'run-total',
@@ -247,6 +248,40 @@ describe('checkBaseBranchHealth', () => {
 
     const result = await checkBaseBranchHealth(project);
     expect(result.outcome).toBe('total_fail');
+  });
+
+  it('classifies a failed run whose acquisition was never attempted as partial_fail, not total_fail', async () => {
+    const project = makeProject();
+    mockComputeWholeTreeContentHash.mockResolvedValue('hash-unattempted');
+    mockRunProjectTestRequest.mockImplementation(async (spec) => {
+      insertTestRequestRun(
+        'run-unattempted',
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+      );
+      // No test_report_glob configured — structured_result stays null, but
+      // that null must not be read as a total_fail crash signal.
+      completeTestRequestRun(
+        'run-unattempted',
+        'failed',
+        'some tests failed',
+        'generic',
+        null,
+        false,
+        false,
+      );
+      return {
+        runId: 'run-unattempted',
+        joined: false,
+        passed: false,
+        output: 'some tests failed',
+      };
+    });
+
+    const result = await checkBaseBranchHealth(project);
+    expect(result.outcome).toBe('partial_fail');
   });
 
   it('returns unknown, distinct from total_fail, when worktree provisioning fails', async () => {

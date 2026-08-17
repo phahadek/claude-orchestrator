@@ -2387,4 +2387,20 @@ export function runMigrations(target: Database.Database): void {
     -- from sessions scans it end to end on every session delete.
     CREATE INDEX IF NOT EXISTS idx_session_audits_session_id ON session_audits(session_id);
   `);
+
+  // test_report_acquisition_attempted: whether this run's producer actually
+  // tried to collect a JUnit-XML report (i.e. the project declared
+  // test_report_glob), independent of whether that attempt found anything.
+  // Distinguishes "acquisition ran and matched nothing" from "acquisition
+  // was never attempted" — both previously collapsed onto the same
+  // structured_result IS NULL, which made an unconfigured/skipped run
+  // indistinguishable from a genuine acquisition failure. NULL for rows
+  // predating this column and for `running` rows not yet completed.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN test_report_acquisition_attempted INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
 }
