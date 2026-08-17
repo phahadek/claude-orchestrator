@@ -1285,9 +1285,9 @@ describe('resumeOrphanSessions — max concurrent code sessions admission gate',
     await sm.resumeOrphanSessions();
 
     expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(6);
-    expect(
-      vi.mocked(AgentSession).mock.calls.map((c) => c[0]),
-    ).toContain('review-0');
+    expect(vi.mocked(AgentSession).mock.calls.map((c) => c[0])).toContain(
+      'review-0',
+    );
   });
 });
 

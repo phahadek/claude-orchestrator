@@ -588,7 +588,9 @@ describe('SessionManager.resumeOrphanSessions()', () => {
     // stuck, only outnumbering this boot pass's admission cap, so they must
     // never be routed through markSessionErrored.
     expect(source).toMatch(/for\s*\(.*of\s+toDefer/);
-    expect(source).not.toMatch(/this\.markSessionErrored\s*\(\s*row\.session_id/);
+    expect(source).not.toMatch(
+      /this\.markSessionErrored\s*\(\s*row\.session_id/,
+    );
   });
 
   it('always resumes review orphans regardless of code session count', () => {
