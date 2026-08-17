@@ -177,13 +177,19 @@ describe('Ready-flip gate resolves a group-pending task.setType', () => {
     const app = makeApp();
     const agent = supertest(app);
 
-    const group = await stageRetypeGroup(agent, 'proj-retype', 't-retype', 'g-retype', {
-      setType: '📐 Design',
-      updateBodySections: sections(),
-      groomingGate: {
-        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+    const group = await stageRetypeGroup(
+      agent,
+      'proj-retype',
+      't-retype',
+      'g-retype',
+      {
+        setType: '📐 Design',
+        updateBodySections: sections(),
+        groomingGate: {
+          triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+        },
       },
-    });
+    );
 
     // Stage-time (runStageTimeReadyChecks): the setStatus intent must not
     // carry a blocked annotation from the stale Code-typed resolution.
@@ -242,7 +248,11 @@ describe('Ready-flip gate resolves a group-pending task.setType', () => {
       },
     );
 
-    await approveAll(agent, [group.dependsOn, group.updateBody, group.setStatus]);
+    await approveAll(agent, [
+      group.dependsOn,
+      group.updateBody,
+      group.setStatus,
+    ]);
 
     const commit = await agent
       .post('/api/staged-intents/group/g-no-retype/commit')
