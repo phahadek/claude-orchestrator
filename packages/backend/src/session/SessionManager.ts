@@ -4257,9 +4257,7 @@ export class SessionManager extends EventEmitter {
         continue;
       }
 
-      const attemptsSoFar = countMcpUnreachableRespawnAttempts(
-        row.session_id,
-      );
+      const attemptsSoFar = countMcpUnreachableRespawnAttempts(row.session_id);
       const attemptNumber = attemptsSoFar + 1;
 
       recordEvent({
