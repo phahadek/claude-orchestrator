@@ -121,15 +121,17 @@ export function getCachedType(taskId: string): string | null {
  * gate violation: an explicit caller-supplied override, or — for a 📐 Design
  * task promoted approve-by-standard (`options.triageCleanDesign`) — the
  * standard template reason. `triageCleanDesign` is only honored when the
- * task's authoritative (cached) type resolves to 📐 Design, so it is inert
- * for auto-dispatched types (💻 Code stays per-task-gated, unaffected).
+ * task's authoritative type (the same resolved value setStatus's own
+ * grooming/readiness checks just gated against — see `authoritativeType` in
+ * setStatus below) resolves to 📐 Design, so it is inert for auto-dispatched
+ * types (💻 Code stays per-task-gated, unaffected).
  */
 function resolveReadinessOverride(
-  taskId: string,
+  authoritativeType: string | undefined,
   options?: TaskWriteOptions,
 ): { reason: string } | undefined {
   if (options?.readinessOverride) return options.readinessOverride;
-  if (options?.triageCleanDesign && getCachedType(taskId) === '📐 Design') {
+  if (options?.triageCleanDesign && authoritativeType === '📐 Design') {
     return {
       reason: standardTriageCleanDesignOverrideReason(
         options.triageCleanDesign.milestoneLabel,
@@ -533,10 +535,12 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     }
     if (status === 'Ready') {
       const body = (await this.backend.fetchTaskPage(taskId)) ?? '';
+      const authoritativeType =
+        options?.authoritativeType ?? getCachedType(taskId) ?? undefined;
       const gateResult = await checkGroomingPromotionGate(
         options?.groomingGate ?? {},
         taskId,
-        getCachedType(taskId) ?? undefined,
+        authoritativeType,
         undefined,
         this.projectId,
         body,
@@ -544,9 +548,12 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       if (!gateResult.allowed) {
         throw new GroomingGateError(gateResult.reasons);
       }
-      const violations = checkReadiness(body, getCachedType(taskId));
+      const violations = checkReadiness(body, authoritativeType);
       if (violations.length > 0) {
-        const readinessOverride = resolveReadinessOverride(taskId, options);
+        const readinessOverride = resolveReadinessOverride(
+          authoritativeType,
+          options,
+        );
         if (!readinessOverride) {
           throw new ReadinessGateError(violations);
         }

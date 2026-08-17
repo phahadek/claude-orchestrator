@@ -66,6 +66,17 @@ export interface UpdateStatusOptions {
    * (💻 Code) stay per-task-gated and ignore this field.
    */
   triageCleanDesign?: { milestoneLabel: string };
+  /**
+   * The Type to gate a Ready transition against, resolved by the caller from
+   * a group-pending task.setType when one is staged alongside this
+   * task.setStatus, falling back to the committed board cache otherwise (see
+   * resolveEffectiveType in routes/stagedIntents.ts). Only honored by
+   * TaskWriteCommands.setStatus, which otherwise falls back to its own
+   * getCachedType(taskId) lookup — that fallback alone is what let a
+   * same-pass retype-and-promote gate against the stale, about-to-be-
+   * superseded type.
+   */
+  authoritativeType?: string;
 }
 
 /** Provenance options shared by the write-side port methods (create / deps). */
