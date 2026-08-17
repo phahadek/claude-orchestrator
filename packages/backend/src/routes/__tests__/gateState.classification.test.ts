@@ -72,13 +72,11 @@ describe('POST /api/gate/items/:id/classification', () => {
     const updated = { id: 'gi-1', classification: 'Read-Only' };
     gateServiceMock.reclassifyGateItem.mockReturnValue(updated);
 
-    await request(makeApp())
-      .post('/api/gate/items/gi-1/classification')
-      .send({
-        classification: 'Read-Only',
-        operator: 'pedro',
-        reason: 'It is actually readable.',
-      });
+    await request(makeApp()).post('/api/gate/items/gi-1/classification').send({
+      classification: 'Read-Only',
+      operator: 'pedro',
+      reason: 'It is actually readable.',
+    });
 
     expect(gateServiceMock.reclassifyGateItem).toHaveBeenCalledWith(
       'gi-1',

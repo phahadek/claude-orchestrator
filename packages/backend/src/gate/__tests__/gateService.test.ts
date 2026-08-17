@@ -1199,7 +1199,12 @@ describe('reclassifyGateItem — pending lifecycle', () => {
 
   it('persists a passed reason on the classification-change event evidence', () => {
     const item = makeItem({ classification: 'Human-Observation' });
-    reclassifyGateItem(item.id, 'Read-Only', 'pedro', 'It is actually readable.');
+    reclassifyGateItem(
+      item.id,
+      'Read-Only',
+      'pedro',
+      'It is actually readable.',
+    );
 
     const events = getGateItemDetail(item.id)!.events;
     const latest = events[events.length - 1];

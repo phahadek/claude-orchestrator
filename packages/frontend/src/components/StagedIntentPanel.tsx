@@ -1686,7 +1686,9 @@ export function StagedIntentPanel({
                   className={styles.approveButton}
                   disabled={inFlight !== null || disabled}
                   data-testid="staged-intent-gate-verify-mirror-pass"
-                  onClick={() => void handleApply(undefined, 'pass', gateEvidence)}
+                  onClick={() =>
+                    void handleApply(undefined, 'pass', gateEvidence)
+                  }
                 >
                   {inFlight === 'apply' ? 'Applying…' : 'Pass'}
                 </button>
@@ -1695,7 +1697,9 @@ export function StagedIntentPanel({
                   className={styles.approveButton}
                   disabled={inFlight !== null || disabled}
                   data-testid="staged-intent-gate-verify-mirror-fail"
-                  onClick={() => void handleApply(undefined, 'fail', gateEvidence)}
+                  onClick={() =>
+                    void handleApply(undefined, 'fail', gateEvidence)
+                  }
                 >
                   {inFlight === 'apply' ? 'Applying…' : 'Fail'}
                 </button>
@@ -1744,7 +1748,9 @@ export function StagedIntentPanel({
                   title="Reclassifies this item as Read-Only, making it auto-runnable by a verifier."
                   onClick={() => void handleReclassifyReadOnly()}
                 >
-                  {reclassifyInFlight ? 'Reclassifying…' : 'Reclassify: Read-Only'}
+                  {reclassifyInFlight
+                    ? 'Reclassifying…'
+                    : 'Reclassify: Read-Only'}
                 </button>
               </>
             )}

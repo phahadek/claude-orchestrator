@@ -1028,9 +1028,9 @@ describe('StagedIntentPanel', () => {
 
       const textareas = screen.getAllByRole('textbox');
       expect(textareas.length).toBe(1);
-      expect(
-        (textareas[0] as HTMLTextAreaElement).placeholder,
-      ).not.toMatch(/park/i);
+      expect((textareas[0] as HTMLTextAreaElement).placeholder).not.toMatch(
+        /park/i,
+      );
     });
 
     it('does not render the Pushback/Decline radio pair or its revise textarea', () => {
@@ -1054,7 +1054,9 @@ describe('StagedIntentPanel', () => {
         { target: { value: 'confirmed via dashboard' } },
       );
 
-      fireEvent.click(screen.getByTestId('staged-intent-gate-verify-mirror-pass'));
+      fireEvent.click(
+        screen.getByTestId('staged-intent-gate-verify-mirror-pass'),
+      );
       await waitFor(() =>
         expect(apply).toHaveBeenLastCalledWith('intent-1', {
           override: false,
@@ -1064,7 +1066,9 @@ describe('StagedIntentPanel', () => {
         }),
       );
 
-      fireEvent.click(screen.getByTestId('staged-intent-gate-verify-mirror-fail'));
+      fireEvent.click(
+        screen.getByTestId('staged-intent-gate-verify-mirror-fail'),
+      );
       await waitFor(() =>
         expect(apply).toHaveBeenLastCalledWith('intent-1', {
           override: false,
@@ -1074,7 +1078,9 @@ describe('StagedIntentPanel', () => {
         }),
       );
 
-      fireEvent.click(screen.getByTestId('staged-intent-gate-verify-mirror-defer'));
+      fireEvent.click(
+        screen.getByTestId('staged-intent-gate-verify-mirror-defer'),
+      );
       await waitFor(() =>
         expect(apply).toHaveBeenLastCalledWith('intent-1', {
           override: false,
