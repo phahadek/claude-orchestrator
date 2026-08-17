@@ -2032,6 +2032,7 @@ export class SessionManager extends EventEmitter {
 
       let handledByCachePool = false;
       if (dependencyCachePoolConfigured) {
+        const cachePoolStart = Date.now();
         try {
           handledByCachePool = await tryDependencyCachePool({
             projectId,
@@ -2043,6 +2044,11 @@ export class SessionManager extends EventEmitter {
             verifyCommand: orchConfig.dependency_verify_command,
             sessionId,
           });
+          if (handledByCachePool) {
+            logger.info(
+              `[SessionManager] dependency bootstrap duration: path=cache-pool session=${sessionId.slice(0, 8)} durationMs=${Date.now() - cachePoolStart}`,
+            );
+          }
         } catch (err) {
           logger.warn(
             `[SessionManager] dependency cache pool errored for ${sessionId.slice(0, 8)}, falling back to bootstrap_script: ${err}`,
@@ -2056,6 +2062,7 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] dependency cache pool provisioned dependencies for ${sessionId.slice(0, 8)}`,
         );
       } else {
+        const bootstrapStart = Date.now();
         try {
           await exec(
             `bash "${orchConfig.bootstrap_script}" "${worktreePath}"`,
@@ -2066,6 +2073,9 @@ export class SessionManager extends EventEmitter {
           );
           logger.info(
             `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,
+          );
+          logger.info(
+            `[SessionManager] dependency bootstrap duration: path=fallback session=${sessionId.slice(0, 8)} durationMs=${Date.now() - bootstrapStart}`,
           );
         } catch (err) {
           const e = err as { stderr?: string | Buffer; message?: string };
