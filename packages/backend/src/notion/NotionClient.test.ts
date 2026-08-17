@@ -25,6 +25,7 @@ import {
   truncateForError,
   NotionClient,
   NotionPageEditStaleBaseError,
+  NotionPageEditUnpatchableTargetError,
 } from './NotionClient';
 import { parseTaskId } from '../tasks/taskId';
 import {
@@ -764,11 +765,35 @@ describe('NotionClient.applyPageEdit()', () => {
     ];
   }
 
-  function mockChildrenFetch() {
+  /** A page with a table (no rich_text) and a has_children bullet, alongside a plain paragraph. */
+  function fixtureChildrenWithTableAndNestedBullet() {
+    return [
+      {
+        id: 'table-1',
+        type: 'table',
+        has_children: true,
+        table: { table_width: 2, has_column_header: true, has_row_header: false },
+      },
+      {
+        id: 'bullet-nested',
+        type: 'bulleted_list_item',
+        has_children: true,
+        bulleted_list_item: { rich_text: [{ plain_text: 'Parent bullet' }] },
+      },
+      {
+        id: 'p-unrelated',
+        type: 'paragraph',
+        has_children: false,
+        paragraph: { rich_text: [{ plain_text: 'Old summary text' }] },
+      },
+    ];
+  }
+
+  function mockChildrenFetch(children: unknown[] = fixtureChildren()) {
     fetchSpy.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        results: fixtureChildren(),
+        results: children,
         has_more: false,
         next_cursor: null,
       }),
@@ -781,38 +806,32 @@ describe('NotionClient.applyPageEdit()', () => {
     client = new NotionClient();
   });
 
-  it('applies matching content_updates: inserts new blocks then deletes stale ones', async () => {
+  it('patches only the single matched block (PATCH /v1/blocks/{id}) — no insert, no delete', async () => {
     mockChildrenFetch();
-    fetchSpy.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ results: [{ id: 'new-h' }, { id: 'new-p' }] }),
-    }); // insert
-    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete h-summary
-    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete p-summary
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // PATCH p-summary
 
     await client.applyPageEdit('notion:abc', [
       { old_str: 'Old summary text', new_str: 'New summary text' },
     ]);
 
-    const insertCall = fetchSpy.mock.calls[1] as [string, RequestInit];
-    const insertBody = JSON.parse(insertCall[1].body as string);
-    const renderedText = insertBody.children
-      .map(
-        (b: { paragraph?: { rich_text: { text: { content: string } }[] } }) =>
-          b.paragraph?.rich_text[0]?.text.content,
-      )
-      .filter(Boolean)
-      .join('\n');
-    expect(renderedText).toContain('New summary text');
-    expect(renderedText).not.toContain('Old summary text');
-
-    const deleteCalls = fetchSpy.mock.calls.slice(2);
-    expect(deleteCalls.map((c) => c[0])).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('/blocks/h-summary'),
-        expect.stringContaining('/blocks/p-summary'),
-      ]),
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const patchCall = fetchSpy.mock.calls[1] as [string, RequestInit];
+    expect(patchCall[0]).toContain('/blocks/p-summary');
+    expect(patchCall[1].method).toBe('PATCH');
+    const patchBody = JSON.parse(patchCall[1].body as string);
+    expect(patchBody.paragraph.rich_text[0].text.content).toBe(
+      'New summary text',
     );
+
+    // Nothing else was touched: no insert onto /children, no DELETE at all.
+    expect(
+      fetchSpy.mock.calls.some(
+        (c) => (c[1] as RequestInit).method === 'DELETE',
+      ),
+    ).toBe(false);
+    expect(
+      fetchSpy.mock.calls.some((c) => (c[0] as string).endsWith('/children')),
+    ).toBe(false);
   });
 
   it('rejects with NotionPageEditStaleBaseError when old_str no longer matches, without writing anything', async () => {
@@ -824,18 +843,13 @@ describe('NotionClient.applyPageEdit()', () => {
       ]),
     ).rejects.toBeInstanceOf(NotionPageEditStaleBaseError);
 
-    // Only the initial children fetch — no insert/delete calls issued.
+    // Only the initial children fetch — no insert/delete/patch calls issued.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('accepts a bare Notion page uuid (no notion: prefix) and applies unchanged (task 3b522f91 repro)', async () => {
     mockChildrenFetch();
-    fetchSpy.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ results: [{ id: 'new-h' }, { id: 'new-p' }] }),
-    }); // insert
-    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete h-summary
-    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete p-summary
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // PATCH p-summary
 
     await expect(
       client.applyPageEdit('3a322f91-52f3-8165-9613-f265dfe4d874', [
@@ -855,6 +869,50 @@ describe('NotionClient.applyPageEdit()', () => {
     expect(() => parseTaskId('3a322f91-52f3-8165-9613-f265dfe4d874')).toThrow(
       /Invalid task ID \(no colon\)/,
     );
+  });
+
+  it('a page with a table and a has_children bullet: a content_update matching an unrelated paragraph issues exactly one block-update call and zero block-delete calls', async () => {
+    mockChildrenFetch(fixtureChildrenWithTableAndNestedBullet());
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // PATCH p-unrelated
+
+    await client.applyPageEdit('notion:abc', [
+      { old_str: 'Old summary text', new_str: 'New summary text' },
+    ]);
+
+    const patchCalls = fetchSpy.mock.calls.filter(
+      (c) => (c[1] as RequestInit).method === 'PATCH',
+    );
+    const deleteCalls = fetchSpy.mock.calls.filter(
+      (c) => (c[1] as RequestInit).method === 'DELETE',
+    );
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0][0]).toContain('/blocks/p-unrelated');
+    expect(deleteCalls).toHaveLength(0);
+  });
+
+  it('rejects with NotionPageEditUnpatchableTargetError when old_str spans two blocks, without writing anything', async () => {
+    mockChildrenFetch();
+
+    await expect(
+      client.applyPageEdit('notion:abc', [
+        // Crosses the '\n' joiner between the heading_2 line and the paragraph line.
+        { old_str: 'Summary\nOld summary', new_str: 'replacement' },
+      ]),
+    ).rejects.toBeInstanceOf(NotionPageEditUnpatchableTargetError);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects with NotionPageEditUnpatchableTargetError when old_str matches a block with children, without writing anything', async () => {
+    mockChildrenFetch(fixtureChildrenWithTableAndNestedBullet());
+
+    await expect(
+      client.applyPageEdit('notion:abc', [
+        { old_str: 'Parent bullet', new_str: 'replacement' },
+      ]),
+    ).rejects.toBeInstanceOf(NotionPageEditUnpatchableTargetError);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
 
