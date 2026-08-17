@@ -16,7 +16,10 @@ vi.mock('../db.js', async () => {
 });
 
 import { db } from '../db.js';
-import { getLaneHealthRollup } from '../queries.js';
+import {
+  getLaneHealthRollup,
+  replaceFlaggedFlakyTestsRollup,
+} from '../queries.js';
 
 let seq = 0;
 
@@ -48,6 +51,7 @@ function insertRun(opts: {
 beforeEach(() => {
   db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
+  db.prepare('DELETE FROM flagged_flaky_tests_rollup').run();
   seq = 0;
 });
 
@@ -259,6 +263,13 @@ describe('getLaneHealthRollup', () => {
       });
     }
 
+    // getLaneHealthRollup reads flakyTests off the precomputed
+    // flagged_flaky_tests_rollup table rather than recomputing live — see
+    // replaceFlaggedFlakyTestsRollup. Mirrors FlakyTestRollupJob's write.
+    function refreshRollup(projectId: string): void {
+      replaceFlaggedFlakyTestsRollup(projectId, 20, 2, 0);
+    }
+
     it('includes a flagged test, with its name and flip stats, when its transition count meets the threshold', () => {
       const outcomes: Array<'passed' | 'failed'> = [
         'passed',
@@ -276,7 +287,8 @@ describe('getLaneHealthRollup', () => {
         }),
       );
 
-      const result = getLaneHealthRollup('proj-1', 500, 20, 2);
+      refreshRollup('proj-1');
+      const result = getLaneHealthRollup('proj-1', 500);
       expect(result.flakyTests.count).toBe(1);
       expect(result.flakyTests.tests).toEqual([
         {
@@ -305,7 +317,8 @@ describe('getLaneHealthRollup', () => {
         }),
       );
 
-      const result = getLaneHealthRollup('proj-1', 500, 20, 2);
+      refreshRollup('proj-1');
+      const result = getLaneHealthRollup('proj-1', 500);
       expect(result.flakyTests).toEqual({ count: 0, tests: [] });
     });
 
@@ -326,7 +339,9 @@ describe('getLaneHealthRollup', () => {
         }),
       );
 
-      const result = getLaneHealthRollup('proj-1', 500, 20, 2);
+      refreshRollup('proj-other');
+      refreshRollup('proj-1');
+      const result = getLaneHealthRollup('proj-1', 500);
       expect(result.flakyTests).toEqual({ count: 0, tests: [] });
     });
 
@@ -347,7 +362,8 @@ describe('getLaneHealthRollup', () => {
         }),
       );
 
-      const result = getLaneHealthRollup('proj-1', 500, 20, 2);
+      refreshRollup('proj-1');
+      const result = getLaneHealthRollup('proj-1', 500);
       expect(result.flakyTests.count).toBe(1);
       expect(result.flakyTests.tests).toEqual([
         {
