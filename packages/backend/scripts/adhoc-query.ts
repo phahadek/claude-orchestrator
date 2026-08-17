@@ -32,7 +32,7 @@ import { resolveDbPath } from '../src/config/resolveDbPath';
 export const ADHOC_QUERY_ROW_CAP = 200;
 
 /** Character cap on the formatted JSON output, independent of row count. */
-export const ADHOC_QUERY_MAX_OUTPUT_CHARS = 200_000;
+const ADHOC_QUERY_MAX_OUTPUT_CHARS = 200_000;
 
 export class AdhocQueryValidationError extends Error {}
 
@@ -200,7 +200,6 @@ function resolveConfiguredDbPath(): string {
 function main(): void {
   const sql = process.argv.slice(2).join(' ').trim();
   if (!sql) {
-    // eslint-disable-next-line no-console
     console.error(
       'Usage: npx ts-node packages/backend/scripts/adhoc-query.ts "<SELECT ...>"',
     );
@@ -210,10 +209,8 @@ function main(): void {
   try {
     const dbPath = resolveConfiguredDbPath();
     const result = executeAdhocQuery(sql, dbPath);
-    // eslint-disable-next-line no-console
     console.log(formatAdhocQueryOutput(result));
   } catch (err) {
-    // eslint-disable-next-line no-console
     console.error(`[adhoc-query] ${(err as Error).message}`);
     process.exit(1);
   }
