@@ -23,6 +23,11 @@ const PROCEDURES_MD_PATH = join(
   '../../../../../config-template/procedures.md',
 );
 
+const GATE_SKILL_MD_PATH = join(
+  __dirname,
+  '../../../../../skills/gate/SKILL.md',
+);
+
 describe('config-template/procedures.md gate-item classification parity', () => {
   const procedures = readFileSync(PROCEDURES_MD_PATH, 'utf8');
 
@@ -52,6 +57,40 @@ describe('config-template/procedures.md gate-item classification parity', () => 
     expect(procedures).toContain('pending');
     expect(procedures.toLowerCase()).toContain('non-blocking');
     expect(procedures).toMatch(
+      /not-yet-triggerable.*evidence|evidence.*not-yet-triggerable/s,
+    );
+  });
+});
+
+describe('skills/gate/SKILL.md gate-item classification parity', () => {
+  const skill = readFileSync(GATE_SKILL_MD_PATH, 'utf8');
+
+  it('names every member of the GateItemClassification union', () => {
+    for (const classification of GATE_ITEM_CLASSIFICATIONS) {
+      expect(skill).toContain(classification);
+    }
+  });
+
+  it('mentions the retired Opportunistic tier only in an explicit "retired" note', () => {
+    const opportunisticLines = skill
+      .split('\n')
+      .filter((line) => line.includes('Opportunistic'));
+
+    expect(opportunisticLines.length).toBeGreaterThan(0);
+    for (const line of opportunisticLines) {
+      expect(line.toLowerCase()).toContain('retired');
+    }
+  });
+
+  it('does not instruct a Prod-Mutating -> Opportunistic reclassification', () => {
+    expect(skill).not.toMatch(/Prod-Mutating.{0,40}Opportunistic/s);
+  });
+
+  it('documents not-yet-triggerable -> pending as non-blocking and evidence-mandatory', () => {
+    expect(skill).toContain('not-yet-triggerable');
+    expect(skill).toContain('pending');
+    expect(skill.toLowerCase()).toContain('non-blocking');
+    expect(skill).toMatch(
       /not-yet-triggerable.*evidence|evidence.*not-yet-triggerable/s,
     );
   });
