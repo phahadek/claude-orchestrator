@@ -395,6 +395,7 @@ describe('runTestCommands — externally signal-killed process (host/container O
     _spawnHook = () => makeProc(null as unknown as number, '', '', 0, 'SIGKILL');
 
     const promise = runTestCommands('/worktree', ['npm run test -w backend'], 300, () => {});
+    await vi.runAllTimersAsync();
     const result = await promise;
 
     expect(result.passed).toBe(false);
@@ -406,6 +407,7 @@ describe('runTestCommands — externally signal-killed process (host/container O
     _spawnHook = () => makeProc(1, 'failure output', '', 0, null);
 
     const promise = runTestCommands('/worktree', ['npm test'], 300, () => {});
+    await vi.runAllTimersAsync();
     const result = await promise;
 
     expect(result.passed).toBe(false);
@@ -416,6 +418,7 @@ describe('runTestCommands — externally signal-killed process (host/container O
     _spawnHook = () => makeProc(null as unknown as number, '', '', 0, 'SIGTERM');
 
     const promise = runTestCommands('/worktree', ['npm test'], 300, () => {});
+    await vi.runAllTimersAsync();
     const result = await promise;
 
     expect(result.passed).toBe(false);
