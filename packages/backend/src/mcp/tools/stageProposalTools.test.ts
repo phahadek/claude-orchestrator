@@ -215,7 +215,8 @@ describe('stage-proposal MCP tools — delegation', () => {
         payload: {
           taskId: 't-1',
           state: 'blocked',
-          standDownReason: 'No sanctioned capability request could unblock this task.',
+          standDownReason:
+            'No sanctioned capability request could unblock this task.',
         },
       },
     });
@@ -225,9 +226,9 @@ describe('stage-proposal MCP tools — delegation', () => {
     expect(intent.kind).toBe('journal.setState');
     const stored = getStagedIntent(intent.id as string);
     expect(stored).toBeTruthy();
-    expect(
-      JSON.parse(stored!.payload as string).standDownReason,
-    ).toBe('No sanctioned capability request could unblock this task.');
+    expect(JSON.parse(stored!.payload as string).standDownReason).toBe(
+      'No sanctioned capability request could unblock this task.',
+    );
     await close();
   });
 
