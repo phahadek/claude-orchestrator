@@ -353,9 +353,9 @@ describe('MilestoneView', () => {
       .mocked(apiRequest)
       .mock.calls.map((call) => call[0])
       .filter((u): u is string => typeof u === 'string');
-    expect(
-      urls.some((u) => u.startsWith('/api/prs/depth-dispositions')),
-    ).toBe(true);
+    expect(urls.some((u) => u.startsWith('/api/prs/depth-dispositions'))).toBe(
+      true,
+    );
     expect(urls.some((u) => /^\/api\/prs\?/.test(u))).toBe(false);
   });
 
