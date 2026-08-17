@@ -31,6 +31,7 @@ import {
 } from './routes/tasks';
 import { TaskCacheRefresher } from './orchestration/TaskCacheRefresher';
 import { ConvergenceSnapshotJob } from './orchestration/ConvergenceSnapshotJob';
+import { FlakyTestRollupJob } from './orchestration/FlakyTestRollupJob';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
 import { validateWsToken, isLoopbackIp } from './auth/DeviceAuth';
@@ -584,6 +585,11 @@ const sessionEventsPruner = new SessionEventsPruner();
 // minutes and writes a durable burndown row only when it changes.
 const convergenceSnapshotJob = new ConvergenceSnapshotJob();
 
+// Flaky-test rollup: recomputes flagged_flaky_tests_rollup for every project
+// every 15 minutes so lane-health reads a precomputed table instead of
+// scanning full test_run_results history on the request path.
+const flakyTestRollupJob = new FlakyTestRollupJob();
+
 const stalledPRReconciler = new StalledPRReconciler(broadcast);
 stalledPRReconciler.setReviewOrchestrator(reviewOrchestrator);
 stalledPRReconciler.setSessionManager(sessionManager);
@@ -614,6 +620,7 @@ sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 convergenceSnapshotJob.register(scheduler);
+flakyTestRollupJob.register(scheduler);
 registerWorktreeReconciler(scheduler);
 registerDependencyCacheReconciler(scheduler);
 // Daily base-branch dependency/license-audit sweep — independent of any PR,

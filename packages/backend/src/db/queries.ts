@@ -8204,7 +8204,7 @@ export function getFailingTestIdsForRun(
   }) as { test_id: string; name: string }[];
 }
 
-interface FlaggedFlakyTest {
+export interface FlaggedFlakyTest {
   testId: string;
   name: string;
   sampleCount: number;
@@ -8215,12 +8215,16 @@ let _stmtDistinctProjectTestIds: Database.Statement | null = null;
 
 /**
  * Every test under `projectId` currently flagged by computeTestFlipRateFlag —
- * the lane-health rollup's flaky-test tier, sourced the same way as the
- * regressed-test tier (per test_id, recomputed live, nothing persisted).
- * test_run_results carries no project_id column, so scoping joins through
- * test_request_runs.
+ * computed from full test_run_results history. This is the expensive
+ * from-scratch computation (unbounded aggregate over every row ever recorded
+ * for the project) — see the module comment on flagged_flaky_tests_rollup in
+ * schema.ts. NOT called on the lane-health request path; only
+ * replaceFlaggedFlakyTestsRollup (driven by FlakyTestRollupJob's scheduler
+ * cadence) calls this. The request path reads getFlaggedFlakyTestsRollup
+ * instead. test_run_results carries no project_id column, so scoping joins
+ * through test_request_runs.
  */
-function listFlaggedFlakyTests(
+export function listFlaggedFlakyTests(
   projectId: string,
   windowN: number,
   thresholdK: number,
@@ -8254,6 +8258,94 @@ function listFlaggedFlakyTests(
     }
   }
   return flagged;
+}
+
+let _stmtDeleteFlaggedFlakyTestsRollup: Database.Statement | null = null;
+let _stmtInsertFlaggedFlakyTestsRollup: Database.Statement | null = null;
+let _txReplaceFlaggedFlakyTestsRollup: ((...args: unknown[]) => void) | null =
+  null;
+
+/**
+ * Recomputes `projectId`'s flagged-flaky set from full history via
+ * listFlaggedFlakyTests and replaces its rows in flagged_flaky_tests_rollup
+ * wholesale, inside one transaction. Called on FlakyTestRollupJob's
+ * scheduler cadence, never on the lane-health request path.
+ */
+export function replaceFlaggedFlakyTestsRollup(
+  projectId: string,
+  windowN: number,
+  thresholdK: number,
+  computedAt: number,
+): { itemsProcessed: number } {
+  const flagged = listFlaggedFlakyTests(projectId, windowN, thresholdK);
+
+  _stmtDeleteFlaggedFlakyTestsRollup ??= db.prepare<{ project_id: string }>(`
+    DELETE FROM flagged_flaky_tests_rollup WHERE project_id = @project_id
+  `);
+  _stmtInsertFlaggedFlakyTestsRollup ??= db.prepare<{
+    project_id: string;
+    test_id: string;
+    name: string;
+    sample_count: number;
+    transition_count: number;
+    computed_at: number;
+  }>(`
+    INSERT INTO flagged_flaky_tests_rollup
+      (project_id, test_id, name, sample_count, transition_count, computed_at)
+    VALUES
+      (@project_id, @test_id, @name, @sample_count, @transition_count, @computed_at)
+  `);
+  _txReplaceFlaggedFlakyTestsRollup ??= db.transaction(
+    (pid: string, tests: FlaggedFlakyTest[], at: number) => {
+      _stmtDeleteFlaggedFlakyTestsRollup!.run({ project_id: pid });
+      for (const t of tests) {
+        _stmtInsertFlaggedFlakyTestsRollup!.run({
+          project_id: pid,
+          test_id: t.testId,
+          name: t.name,
+          sample_count: t.sampleCount,
+          transition_count: t.transitionCount,
+          computed_at: at,
+        });
+      }
+    },
+  ) as unknown as (...args: unknown[]) => void;
+  _txReplaceFlaggedFlakyTestsRollup(projectId, flagged, computedAt);
+
+  return { itemsProcessed: flagged.length };
+}
+
+let _stmtGetFlaggedFlakyTestsRollup: Database.Statement | null = null;
+
+/**
+ * The lane-health rollup's flaky-test tier, read from the precomputed
+ * flagged_flaky_tests_rollup table (project_id-indexed) rather than
+ * recomputed from full test_run_results history. See
+ * replaceFlaggedFlakyTestsRollup for the write side.
+ */
+export function getFlaggedFlakyTestsRollup(
+  projectId: string,
+): FlaggedFlakyTest[] {
+  _stmtGetFlaggedFlakyTestsRollup ??= db.prepare<{ project_id: string }>(`
+    SELECT test_id, name, sample_count, transition_count
+    FROM flagged_flaky_tests_rollup
+    WHERE project_id = @project_id
+    ORDER BY test_id ASC
+  `);
+  const rows = _stmtGetFlaggedFlakyTestsRollup.all({
+    project_id: projectId,
+  }) as {
+    test_id: string;
+    name: string;
+    sample_count: number;
+    transition_count: number;
+  }[];
+  return rows.map((r) => ({
+    testId: r.test_id,
+    name: r.name,
+    sampleCount: r.sample_count,
+    transitionCount: r.transition_count,
+  }));
 }
 
 // ─── session_test_request_cycles ───────────────────────────────────────────
@@ -9852,7 +9944,7 @@ export interface LaneHealthRollup {
   executionTimeMs: DurationPercentiles;
   /** Tests currently flagged is_regressed=1 (per-test median/MAD baseline) among this project's tests — display-only, per Open Question 5. */
   regressedTests: RegressedTestSummary[];
-  /** Tests currently flagged by the live per-test flip-rate flag — see listFlaggedFlakyTests. */
+  /** Tests currently flagged by the per-test flip-rate flag — see getFlaggedFlakyTestsRollup. */
   flakyTests: {
     count: number;
     tests: FlaggedFlakyTest[];
@@ -9867,9 +9959,19 @@ export interface LaneHealthRollup {
  * `name`/`last_duration_ms`-adjacent columns to the max(created_at) row per
  * the GROUP BY per its documented bare-column-with-MAX() behavior.
  */
+let _stmtHasRegressedTests: Database.Statement | null = null;
+
 function getRegressedTestsForProject(
   projectId: string,
 ): RegressedTestSummary[] {
+  // Guard the three-way join: test_perf_baselines is 0 rows until the
+  // baseline job populates it, and the join costs nothing to skip when
+  // there's nothing regressed anywhere in the table, project or not.
+  _stmtHasRegressedTests ??= db.prepare(
+    `SELECT 1 FROM test_perf_baselines WHERE is_regressed = 1 LIMIT 1`,
+  );
+  if (!_stmtHasRegressedTests.get()) return [];
+
   const rows = db
     .prepare<{ project_id: string }>(
       `SELECT tpb.test_id AS test_id, trr.name AS name,
@@ -9930,12 +10032,6 @@ function percentilesOf(samples: number[]): DurationPercentiles {
 export function getLaneHealthRollup(
   projectId: string,
   limit = 500,
-  // Defaults mirror config/settings.ts's flip_rate_window_n/flip_rate_threshold_k
-  // DEFAULT_SETTINGS — not imported here to avoid a circular import (settings.ts
-  // imports getSetting/setSetting from this module). Callers with access to the
-  // configured settings (e.g. the milestones route) should pass them explicitly.
-  flipRateWindowN = 20,
-  flipRateThresholdK = 2,
 ): LaneHealthRollup {
   const rows = db
     .prepare<{ project_id: string; limit: number }>(
@@ -9964,11 +10060,7 @@ export function getLaneHealthRollup(
     .filter((r) => r.finished_at !== null)
     .map((r) => (r.finished_at as number) - r.started_at);
 
-  const flakyTests = listFlaggedFlakyTests(
-    projectId,
-    flipRateWindowN,
-    flipRateThresholdK,
-  );
+  const flakyTests = getFlaggedFlakyTestsRollup(projectId);
 
   return {
     project: projectId,
