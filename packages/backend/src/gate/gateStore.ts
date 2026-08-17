@@ -28,6 +28,7 @@ import type { GateItemFilter, GateItemListOrder } from '../db/queries';
 import type {
   GateItemClassification,
   GateAccretionDecision,
+  GateItemRow,
 } from '../db/types';
 import { normalizeTaskId } from '../tasks/taskId';
 
@@ -123,6 +124,51 @@ export function getItem(id: string): GateItem | undefined {
       at: e.at,
     })),
   };
+}
+
+/**
+ * Denormalized-fields-only view of a row, with `sources`/`events` left
+ * empty — for readiness rollups that never read either association and
+ * would otherwise pay two prepared-statement queries per item for no
+ * reason. Never return this from a route or hand it to a caller that
+ * inspects `.sources`/`.events` — those two fields are simply wrong on this
+ * shape, not merely absent.
+ */
+function rowToShallowItem(row: GateItemRow): GateItem {
+  return {
+    id: row.id,
+    project: row.project,
+    milestone: row.milestone,
+    text: row.text,
+    classification: row.classification,
+    minDeployedCommit: row.min_deployed_commit ?? undefined,
+    state: row.state,
+    currentDisposition: row.current_disposition ?? undefined,
+    latestDisposition: row.latest_disposition ?? undefined,
+    nextAttemptAt: row.next_attempt_at ?? undefined,
+    pendingAttemptCount: row.pending_attempt_count,
+    updatedAt: row.updated_at,
+    sources: [],
+    events: [],
+  };
+}
+
+/** Shallow (no sources/events hydration) equivalent of listByMilestone — for readiness rollups only. */
+export function listByMilestoneShallow(
+  project: string,
+  milestone: string,
+): GateItem[] {
+  return listGateItemsByMilestone(project, milestone).map(rowToShallowItem);
+}
+
+/** Shallow (no sources/events hydration) equivalent of listAll — for readiness rollups only. */
+export function listAllShallow(): GateItem[] {
+  return listAllGateItems().map(rowToShallowItem);
+}
+
+/** Shallow (no sources/events hydration) equivalent of listByProject — for readiness rollups only. */
+export function listByProjectShallow(project: string): GateItem[] {
+  return listGateItemsByProject(project).map(rowToShallowItem);
 }
 
 export interface GateItemDetail {

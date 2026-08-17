@@ -177,7 +177,7 @@ export function getGateReadiness(
   project: string,
   milestone: string,
 ): GateReadiness {
-  const items = gateStore.listByMilestone(project, milestone);
+  const items = gateStore.listByMilestoneShallow(project, milestone);
   const toBlockingItem = (item: GateItem): GateBlockingItem => ({
     id: item.id,
     project: item.project,
@@ -581,8 +581,8 @@ export function listMilestoneReadiness(
   options: ListMilestoneReadinessOptions = {},
 ): MilestoneReadiness[] {
   const items = options.project
-    ? gateStore.listByProject(options.project)
-    : gateStore.listAll();
+    ? gateStore.listByProjectShallow(options.project)
+    : gateStore.listAllShallow();
 
   const groups = new Map<string, MilestoneGroup>();
   for (const item of items) {

@@ -16,9 +16,13 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
+import * as queries from '../../db/queries.js';
 import {
   getItem,
   listByMilestone,
+  listByMilestoneShallow,
+  listByProjectShallow,
+  listAllShallow,
   insertItem,
   appendEvent,
   advanceState,
@@ -757,5 +761,42 @@ describe('gateStore.rollbackContribution', () => {
     expect(getItem(rolledBack.id)).toBeUndefined();
     expect(getItem(untouched.id)).toBeDefined();
     expect(getAccretionMarker('notion:src-2')?.decision).toBe('items');
+  });
+});
+
+describe('listByMilestoneShallow / listByProjectShallow / listAllShallow', () => {
+  it('never call listGateItemSources/listGateItemEvents, unlike their full-hydration counterparts', () => {
+    const a = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'a',
+      classification: 'Read-Only',
+      sources: [{ sourceTaskId: 'notion:s1', sourceTaskTitle: 'Task one' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+    appendEvent(a.id, { disposition: 'pass', at: new Date(1).toISOString() });
+    advanceState(a.id, 'pass', 'pass', new Date(1).toISOString());
+
+    const sourcesSpy = vi.spyOn(queries, 'listGateItemSources');
+    const eventsSpy = vi.spyOn(queries, 'listGateItemEvents');
+
+    const byMilestone = listByMilestoneShallow('polimarket-analyser', 'M12');
+    const byProject = listByProjectShallow('polimarket-analyser');
+    const all = listAllShallow();
+
+    expect(sourcesSpy).not.toHaveBeenCalled();
+    expect(eventsSpy).not.toHaveBeenCalled();
+    sourcesSpy.mockRestore();
+    eventsSpy.mockRestore();
+
+    for (const items of [byMilestone, byProject, all]) {
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        id: a.id,
+        state: 'pass',
+        sources: [],
+        events: [],
+      });
+    }
   });
 });
