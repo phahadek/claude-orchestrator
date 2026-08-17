@@ -3722,6 +3722,7 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       state: 'passed',
       output: 'All tests passed',
       structured_result: null,
+      test_report_acquisition_attempted: 1,
       started_at: 1000,
       finished_at: 2000,
     } as any);
@@ -3776,6 +3777,7 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       state: 'passed',
       output: 'All tests passed',
       structured_result: null,
+      test_report_acquisition_attempted: 1,
       started_at: 1000,
       finished_at: 2000,
     } as any);
@@ -3832,6 +3834,62 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       state: 'passed',
       output: 'All tests passed',
       structured_result: null,
+      test_report_acquisition_attempted: 0,
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'test_report_acquisition_failed',
+      expect.anything(),
+    );
+  });
+
+  it('does not set test_report_acquisition_failed when acquisition was never attempted, even if structured_result is null', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_report_glob: '**/junit.xml',
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    // Historical/unattempted run: the producer never tried acquisition for
+    // this particular row (e.g. it predates the attempted column), even
+    // though the project currently declares a glob — this null must not be
+    // misread as an acquisition failure.
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      structured_result: null,
+      test_report_acquisition_attempted: null,
       started_at: 1000,
       finished_at: 2000,
     } as any);

@@ -31,6 +31,7 @@ import {
   type TestCommandResult,
 } from '../session/test-runner';
 import { hasTestRequestAdmission } from './memoryAdmission';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { typedGetSetting } from '../config/settings';
 import {
   insertTestRequestRun,
@@ -79,13 +80,6 @@ export interface TestRequestRunSpec {
   failFast: boolean;
   /** Originating session, persisted onto the run row for per-request attribution. */
   sessionId: string | null;
-  /**
-   * Glob (relative to worktreePath) matched for JUnit-XML report file(s)
-   * after the run finishes, regardless of pass/fail. Empty/undefined =
-   * acquisition skipped, structured_result stays null — matches
-   * config.test_report_glob's "feature off" default.
-   */
-  testReportGlob?: string;
 }
 
 /**
@@ -214,13 +208,20 @@ async function executeTestRequestRun(
     const oomKilled = result.oomKilled ?? false;
     // Acquisition is attempted regardless of pass/fail — a failing test run
     // still writes its report file, and that's exactly the case structured
-    // per-test detail matters most for.
+    // per-test detail matters most for. The glob is resolved here, from the
+    // worktree's own config, rather than trusted from the caller — every
+    // caller that runs against a project declaring test_report_glob gets
+    // acquisition, with no call site able to silently opt out.
+    const testReportGlob = loadOrchestratorConfig(
+      spec.worktreePath,
+    ).test_report_glob;
+    const acquisitionAttempted = !!testReportGlob;
     let structuredResult: StructuredTestResult | null = null;
-    if (spec.testReportGlob) {
+    if (testReportGlob) {
       try {
         structuredResult = collectStructuredTestResult(
           spec.worktreePath,
-          spec.testReportGlob,
+          testReportGlob,
         );
       } catch (err) {
         logger.warn(
@@ -239,6 +240,7 @@ async function executeTestRequestRun(
       result.passed ? null : failureReasonFor(result),
       structuredResultJson,
       oomKilled,
+      acquisitionAttempted,
     );
     broadcastRunStatus({
       runId,
@@ -265,6 +267,7 @@ async function executeTestRequestRun(
       structured_result: structuredResultJson,
       concurrent_run_count: concurrentRunCount,
       oom_killed: oomKilled ? 1 : 0,
+      test_report_acquisition_attempted: acquisitionAttempted ? 1 : 0,
     });
     return { ...result, runId };
   } catch (err) {
