@@ -201,3 +201,75 @@ describe('boot chain — gate_verify_reattachment step', () => {
     expect(deps.scheduler.start).toHaveBeenCalledTimes(1);
   });
 });
+
+// ── token_backfill and session_events_pruner_at_boot are fully awaited ────────
+
+describe('boot chain — token_backfill and session_events_pruner_at_boot are awaited', () => {
+  it('announces both steps in the boot step list', async () => {
+    const { deps, broadcast } = makeDeps();
+
+    await runAndDrain(deps);
+
+    const startedCall = vi
+      .mocked(broadcast)
+      .mock.calls.find(([msg]) => msg.type === 'boot_reconciliation_started');
+    const steps = (
+      startedCall![0] as Extract<
+        ServerMessage,
+        { type: 'boot_reconciliation_started' }
+      >
+    ).steps;
+    expect(steps).toContain('token_backfill');
+    expect(steps).toContain('session_events_pruner_at_boot');
+  });
+
+  it('runs jsonlReader.backfillTokens as a timed, tracked step', async () => {
+    const { deps, broadcast } = makeDeps();
+
+    await runAndDrain(deps);
+
+    expect(deps.jsonlReader.backfillTokens).toHaveBeenCalledTimes(1);
+    const stepCalls = vi
+      .mocked(broadcast)
+      .mock.calls.filter(([msg]) => msg.type === 'boot_reconciliation_step');
+    const stepNames = stepCalls.map(
+      ([msg]) =>
+        (msg as Extract<ServerMessage, { type: 'boot_reconciliation_step' }>)
+          .step,
+    );
+    expect(stepNames).toContain('token_backfill');
+  });
+
+  it('boot_reconciliation_completed does not fire until a slow session_events_pruner_at_boot settles', async () => {
+    const { deps, eventLog } = makeDeps();
+    let resolvePruner: () => void = () => {};
+    vi.mocked(deps.sessionEventsPruner.runAtBoot).mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolvePruner = resolve;
+      }),
+    );
+
+    const runPromise = runBootSequence(deps);
+    await runPromise;
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    expect(eventLog).not.toContain('boot_reconciliation_completed');
+    expect(deps.scheduler.start).not.toHaveBeenCalled();
+
+    resolvePruner();
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    expect(eventLog).toContain('boot_reconciliation_completed');
+    expect(deps.scheduler.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('a rejection from session_events_pruner_at_boot does not block boot completion (non-fatal)', async () => {
+    const { deps } = makeDeps();
+    vi.mocked(deps.sessionEventsPruner.runAtBoot).mockRejectedValue(
+      new Error('pruner boom'),
+    );
+
+    await expect(runAndDrain(deps)).resolves.toBeUndefined();
+    expect(deps.scheduler.start).toHaveBeenCalledTimes(1);
+  });
+});
