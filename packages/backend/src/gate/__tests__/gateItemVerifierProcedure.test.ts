@@ -63,4 +63,24 @@ describe('buildGateVerifyProcedure', () => {
     expect(procedure).toMatch(/a human must (act|perform)/i);
     expect(procedure).toMatch(/hasn't happened yet|has not happened yet/i);
   });
+
+  it('names the read-only ad hoc query capability as the sanctioned route for a DB table with no dedicated MCP tool, before a needs-setup abstain', () => {
+    const procedure = buildGateVerifyProcedure(makeItem());
+    expect(procedure).toContain('packages/backend/scripts/adhoc-query.ts');
+    expect(procedure).toMatch(
+      /Bash\(npx ts-node packages\/backend\/scripts\/adhoc-query\.ts:\*\)/,
+    );
+    expect(procedure).toMatch(/no dedicated MCP read tool/);
+    expect(procedure).toMatch(
+      /needs-setup.+should mean this specific request is pending, refused/s,
+    );
+
+    // Offered before a needs-setup abstain: the capability mention must
+    // appear ahead of the "Two abstains" needs-setup/not-yet-triggerable
+    // discussion in the Procedure section.
+    const capIdx = procedure.indexOf('adhoc-query.ts');
+    const abstainIdx = procedure.indexOf('Two abstains, not one');
+    expect(capIdx).toBeGreaterThanOrEqual(0);
+    expect(abstainIdx).toBeGreaterThan(capIdx);
+  });
 });
