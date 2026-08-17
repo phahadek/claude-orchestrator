@@ -75,6 +75,7 @@ import { CapabilityDispositionMiner } from './orchestration/CapabilityDispositio
 import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
+import { WalCheckpointJob } from './orchestration/WalCheckpointJob';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
 import { register as registerDependencyCacheReconciler } from './orchestration/DependencyCacheReconciler';
@@ -581,6 +582,11 @@ const capabilityDispositionMiner = new CapabilityDispositionMiner();
 
 const sessionEventsPruner = new SessionEventsPruner();
 
+// WAL checkpoint: truncates the write-ahead log on a schedule so passive
+// checkpoints starved by overlapping reader transactions don't let it grow
+// unbounded (see WalCheckpointJob).
+const walCheckpointJob = new WalCheckpointJob();
+
 // Convergence snapshot: samples the live milestone convergence every 5
 // minutes and writes a durable burndown row only when it changes.
 const convergenceSnapshotJob = new ConvergenceSnapshotJob();
@@ -617,6 +623,7 @@ capabilityDispositionMiner.register(scheduler);
 stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);
+walCheckpointJob.register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 convergenceSnapshotJob.register(scheduler);
