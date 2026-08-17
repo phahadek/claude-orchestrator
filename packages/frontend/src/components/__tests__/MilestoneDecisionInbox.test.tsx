@@ -1228,13 +1228,22 @@ describe('MilestoneDecisionInbox', () => {
       expect(screen.queryByTestId('report-card-report-committed')).toBeNull();
       fireEvent.click(screen.getByTestId('report-filter-all'));
 
-      // Draft: title + symptom, save.
+      // File a new report: title + symptom, single action creates and commits it.
       const created = makeReport({
         id: 'report-new',
         title: 'New symptom',
         state: 'draft',
       });
+      const createdCommitted = { ...created, state: 'committed' as const };
+      const draftCommitted = { ...draftReport, state: 'committed' as const };
       vi.spyOn(reportsApi, 'create').mockResolvedValue(created);
+      const commitSpy = vi
+        .spyOn(reportsApi, 'commit')
+        .mockImplementation((id: string) =>
+          Promise.resolve(
+            id === 'report-new' ? createdCommitted : draftCommitted,
+          ),
+        );
       fireEvent.click(screen.getByTestId('report-start-draft'));
       fireEvent.change(screen.getByTestId('report-draft-title'), {
         target: { value: 'New symptom' },
@@ -1253,15 +1262,17 @@ describe('MilestoneDecisionInbox', () => {
           source: 'operator',
         }),
       );
+      await waitFor(() => expect(commitSpy).toHaveBeenCalledWith('report-new'));
       expect(await screen.findByTestId('report-card-report-new')).toBeTruthy();
+      expect(screen.getByTestId('report-state-report-new').textContent).toBe(
+        'Committed',
+      );
 
-      // Commit the draft report.
-      const committed = { ...draftReport, state: 'committed' as const };
-      vi.spyOn(reportsApi, 'commit').mockResolvedValue(committed);
+      // Commit the pre-existing draft report.
       fireEvent.click(screen.getByTestId('report-commit-report-draft'));
 
       await waitFor(() =>
-        expect(reportsApi.commit).toHaveBeenCalledWith('report-draft'),
+        expect(commitSpy).toHaveBeenCalledWith('report-draft'),
       );
       await waitFor(() =>
         expect(
