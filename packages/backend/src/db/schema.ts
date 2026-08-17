@@ -1414,7 +1414,6 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_arch_unit_topic ON arch_unit(topic);
     CREATE INDEX IF NOT EXISTS idx_arch_unit_kind ON arch_unit(kind);
     CREATE INDEX IF NOT EXISTS idx_arch_unit_status ON arch_unit(status);
-    CREATE INDEX IF NOT EXISTS idx_arch_unit_project ON arch_unit(project);
 
     CREATE TABLE IF NOT EXISTS arch_unit_event (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1657,6 +1656,10 @@ export function runMigrations(target: Database.Database): void {
         COMMIT;
       `);
     }
+
+    target.exec(
+      `CREATE INDEX IF NOT EXISTS idx_arch_unit_project ON arch_unit(project)`,
+    );
   }
 
   // ── sessions.granted_capabilities: durable per-session capability grants ──
