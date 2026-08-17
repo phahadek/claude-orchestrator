@@ -39,29 +39,42 @@ interface PrsApiItem {
 }
 
 /**
- * Fetches the project's PRs and reduces them to non-passing depth-review
- * dispositions for the milestone's own PRs (matched against `tasks`, which
- * the caller already scopes to the active milestone). Not milestone-scoped
- * server-side — pull_requests carries no milestone column — so the match
- * happens against the milestone's task set instead.
+ * Fetches non-passing depth-review dispositions for the milestone's own PRs,
+ * resolved by PR number against `tasks` (which the caller already scopes to
+ * the active milestone). Hits the DB-only /api/prs/depth-dispositions
+ * endpoint — scoped to exactly the PR numbers this milestone's tasks
+ * reference — rather than the project-wide, live-GitHub-reconciling
+ * /api/prs endpoint. Since `tasks` is already milestone-scoped upstream, the
+ * derived PR-number set (and thus this effect) only changes on updates
+ * relevant to this milestone — a task/staged-intent change belonging to a
+ * different milestone never touches `tasks` and so never re-fires it.
  */
 function useMilestoneDepthDispositions(
   projectId: string | null,
   tasks: TaskView[],
-  invalidationKey: unknown,
 ): DepthReviewDisposition[] {
   const [dispositions, setDispositions] = useState<DepthReviewDisposition[]>(
     [],
   );
 
+  const prNumbersKey = useMemo(() => {
+    const nums = new Set<number>();
+    for (const t of tasks) {
+      if (t.pr) nums.add(t.pr.prNumber);
+    }
+    return Array.from(nums)
+      .sort((a, b) => a - b)
+      .join(',');
+  }, [tasks]);
+
   useEffect(() => {
-    if (!projectId) {
+    if (!projectId || !prNumbersKey) {
       setDispositions([]);
       return;
     }
     let cancelled = false;
     apiRequest<PrsApiItem[]>(
-      `/api/prs?projectId=${encodeURIComponent(projectId)}`,
+      `/api/prs/depth-dispositions?projectId=${encodeURIComponent(projectId)}&prNumbers=${encodeURIComponent(prNumbersKey)}`,
     )
       .then((items) => {
         if (cancelled) return;
@@ -71,10 +84,7 @@ function useMilestoneDepthDispositions(
         }
         const next = items
           .filter(
-            (item) =>
-              prToTaskName.has(item.prNumber) &&
-              item.depthVerdict &&
-              item.depthVerdict.verdict !== 'pass',
+            (item) => item.depthVerdict && item.depthVerdict.verdict !== 'pass',
           )
           .map((item) => ({
             prNumber: item.prNumber,
@@ -97,7 +107,7 @@ function useMilestoneDepthDispositions(
     return () => {
       cancelled = true;
     };
-  }, [projectId, tasks, invalidationKey]);
+  }, [projectId, prNumbersKey, tasks]);
 
   return dispositions;
 }
@@ -211,7 +221,6 @@ export function MilestoneView({
   const depthDispositions = useMilestoneDepthDispositions(
     activeProjectId,
     tasks,
-    invalidationKey,
   );
 
   const [middleWidthPct, setMiddleWidthPct] = useState(

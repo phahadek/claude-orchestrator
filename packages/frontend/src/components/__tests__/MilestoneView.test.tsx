@@ -3,6 +3,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { MilestoneView } from '../MilestoneView';
 import { apiRequest } from '../../api/projects';
 import type { TaskView } from '../../types/taskView';
+import type { TaskView as BackendTaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type { StagedIntent } from '../../api/stagedIntents';
 
 // MilestoneView fires apiRequest calls from more than one caller on mount
 // (the /api/prs depth-dispositions fetch, and LaneHealthPanel's
@@ -339,6 +341,64 @@ describe('MilestoneView', () => {
     expect(
       screen.getByTestId('milestone-decision-stack').textContent,
     ).not.toContain('reliability');
+  });
+
+  it('fetches PR depth dispositions from the DB-only endpoint, never the project-wide live-GitHub /api/prs list', async () => {
+    pushPrsResponseOnce([]);
+
+    render(<MilestoneView {...baseProps} tasks={[depthTask]} />);
+
+    await waitFor(() => expect(vi.mocked(apiRequest)).toHaveBeenCalled());
+    const urls = vi
+      .mocked(apiRequest)
+      .mock.calls.map((call) => call[0])
+      .filter((u): u is string => typeof u === 'string');
+    expect(
+      urls.some((u) => u.startsWith('/api/prs/depth-dispositions')),
+    ).toBe(true);
+    expect(urls.some((u) => /^\/api\/prs\?/.test(u))).toBe(false);
+  });
+
+  it('does not re-fetch depth dispositions when a task/staged-intent change belongs to a different milestone', async () => {
+    pushPrsResponseOnce([]);
+    // Same array reference across renders — mirrors the real component tree,
+    // where `tasks` is already scoped to the active milestone upstream and
+    // is unaffected by a change belonging to a different milestone's board.
+    const sameTasks = [depthTask];
+
+    const { rerender } = render(
+      <MilestoneView {...baseProps} tasks={sameTasks} />,
+    );
+    await waitFor(() => expect(vi.mocked(apiRequest)).toHaveBeenCalled());
+    const countBefore = vi
+      .mocked(apiRequest)
+      .mock.calls.filter(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].startsWith('/api/prs/depth-dispositions'),
+      ).length;
+
+    rerender(
+      <MilestoneView
+        {...baseProps}
+        tasks={sameTasks}
+        lastTaskUpdate={
+          { taskId: 'other-milestone-task' } as unknown as BackendTaskView
+        }
+        lastStagedIntentChange={
+          { id: 'other-milestone-intent' } as unknown as StagedIntent
+        }
+      />,
+    );
+
+    const countAfter = vi
+      .mocked(apiRequest)
+      .mock.calls.filter(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].startsWith('/api/prs/depth-dispositions'),
+      ).length;
+    expect(countAfter).toBe(countBefore);
   });
 
   it('renders the decision stack, filtered by phase, when a task phase is selected', () => {
