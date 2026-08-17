@@ -2813,6 +2813,7 @@ const SUBJECT_TASK_ID_KINDS: ReadonlySet<string> = new Set([
   'task.updateBody',
   'task.patchBodySection',
   'task.setProperties',
+  'task.setType',
   'task.setDependsOn',
   'planning.noOp',
 ]);
@@ -4591,6 +4592,11 @@ async function applyIntent(
         readinessOverride: override,
         groomingGate: payload.groomingGate,
         triageCleanDesign,
+        authoritativeType: resolveEffectiveType(
+          intent.groupId,
+          payload.taskId,
+          payload.groomingGate?.type,
+        ),
       });
       return { ok: true };
     }
@@ -6222,11 +6228,32 @@ function resolveEffectiveType(
   taskId: string,
   fallbackType: string | undefined,
 ): string | undefined {
+  // Exact string equality — safe because validateAndNormalizeTaskReferences
+  // normalizes task.setType's payload.taskId the same way it normalizes
+  // task.setStatus's, the same convergence rule gate.accrete's sourceTask.id
+  // already relies on to correlate with a sibling task.setStatus by string
+  // equality (see that block's comment).
+  //
+  // Deliberately checks 'committed' alongside ACTIVE_STATES (staged/
+  // approved): commitGroupIntents applies a group's non-arming members
+  // (setDependsOn, setType, updateBody, ...) before its arming
+  // task.setStatus->Ready, transitioning each to 'committed' as it lands —
+  // so by the time the Ready flip itself applies (this function's 4th call
+  // site, TaskWriteCommands.setStatus's authoritativeType), a same-group
+  // task.setType has often already committed moments earlier in the very
+  // same pass. Excluding 'committed' would make the Ready flip see its own
+  // sibling's just-applied retype as if it had never happened. It also
+  // covers the halted-then-retried case: a prior partial commit of this
+  // same group that already landed the retype before failing elsewhere.
+  const relevantSetTypeStates: readonly StagedIntentState[] = [
+    ...ACTIVE_STATES,
+    'committed',
+  ];
   const setTypeRow = groupId
     ? listStagedIntentsByGroup(groupId).find(
         (row) =>
           row.kind === 'task.setType' &&
-          ACTIVE_STATES.includes(row.state) &&
+          relevantSetTypeStates.includes(row.state) &&
           (JSON.parse(row.payload) as SetTypePayload).taskId === taskId,
       )
     : undefined;
