@@ -277,7 +277,12 @@ export function buildMcpServer(
   registerGateReclassifyTool(server, { sessionId, workflow });
   registerStrandedIntentTool(server, { sessionId, workflow });
 
-  registerArchitectureReadTools(server, { workflow });
+  if (session?.project_id) {
+    registerArchitectureReadTools(server, {
+      workflow,
+      projectId: session.project_id,
+    });
+  }
 
   registerSessionRecordReadTool(server, { sessionId });
   registerAuditLogReadTools(server, { sessionId });

@@ -324,6 +324,7 @@ describe('loadOpsContext — architecture dual-read', () => {
   it('resolves archUnits/archSource via selectUnitsFromStore({}) (no regions/topic) to exactly the active-invariant set when archStoreAdopted is true', async () => {
     updateProject(PROJECT, { arch_store_adopted: 1 });
     createUnit({
+      project: PROJECT,
       title: 'Sessions dispatch through the SessionManager invariant',
       kind: 'invariant',
       topic: 'general',
@@ -335,6 +336,7 @@ describe('loadOpsContext — architecture dual-read', () => {
     // file scope and no topic (see selectUnitsFromStore's no-regions/no-topic
     // behaviour).
     createUnit({
+      project: PROJECT,
       title: 'Region-matched unit that must not surface',
       kind: 'subsystem',
       topic: 'sessions',
@@ -366,6 +368,7 @@ describe('loadOpsContext — architecture dual-read', () => {
 
   it("keeps returning the project's Notion architecture pages (source: notion) when archStoreAdopted is not set", async () => {
     createUnit({
+      project: PROJECT,
       title: 'Should never surface — project has not adopted the store',
       kind: 'invariant',
       topic: 'general',
@@ -404,6 +407,7 @@ describe('loadOpsContext — architecture dual-read', () => {
     db.prepare('DELETE FROM arch_unit').run();
     db.prepare('DELETE FROM arch_unit_event').run();
     createUnit({
+      project: PROJECT,
       title: 'Ops-region unit',
       kind: 'subsystem',
       topic: 'ops',
@@ -412,6 +416,7 @@ describe('loadOpsContext — architecture dual-read', () => {
       at: '2026-01-01T00:00:00Z',
     });
     createUnit({
+      project: PROJECT,
       title: 'Planning-region unit',
       kind: 'subsystem',
       topic: 'planning',
@@ -450,6 +455,46 @@ describe('loadOpsContext — architecture dual-read', () => {
     expect(taskA?.archUnits.map((u) => u.title)).toEqual(['Ops-region unit']);
     expect(taskB?.archUnits.map((u) => u.title)).toEqual([
       'Planning-region unit',
+    ]);
+  });
+
+  it("never surfaces another project's arch_unit rows, including its active invariants", async () => {
+    updateProject(PROJECT, { arch_store_adopted: 1 });
+    createUnit({
+      project: PROJECT,
+      title: 'This project invariant',
+      kind: 'invariant',
+      topic: 'general',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+    createUnit({
+      project: 'some-other-project',
+      title: 'Other project invariant',
+      kind: 'invariant',
+      topic: 'general',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    rows = [
+      {
+        id: 'task-op-ready',
+        name: 'Op ready no deps',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+
+    const result = await loadOpsContext(MILESTONE);
+
+    const task = result.worklist.executable.find(
+      (t) => t.id === 'task-op-ready',
+    );
+    expect(task?.archUnits.map((u) => u.title)).toEqual([
+      'This project invariant',
     ]);
   });
 });

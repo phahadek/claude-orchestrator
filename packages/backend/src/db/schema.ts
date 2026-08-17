@@ -1398,6 +1398,7 @@ export function runMigrations(target: Database.Database): void {
   target.exec(`
     CREATE TABLE IF NOT EXISTS arch_unit (
       id            TEXT    PRIMARY KEY,
+      project       TEXT    NOT NULL,
       title         TEXT    NOT NULL,
       kind          TEXT    NOT NULL,
       topic         TEXT    NOT NULL,
@@ -1413,6 +1414,7 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_arch_unit_topic ON arch_unit(topic);
     CREATE INDEX IF NOT EXISTS idx_arch_unit_kind ON arch_unit(kind);
     CREATE INDEX IF NOT EXISTS idx_arch_unit_status ON arch_unit(status);
+    CREATE INDEX IF NOT EXISTS idx_arch_unit_project ON arch_unit(project);
 
     CREATE TABLE IF NOT EXISTS arch_unit_event (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1575,6 +1577,86 @@ export function runMigrations(target: Database.Database): void {
     );
   } catch {
     /* already exists */
+  }
+
+  // ── arch_unit.project: project-scope the previously-global store ────────
+  // arch_unit carried no project column, so every active invariant was
+  // injected into every archStoreAdopted project's sessions regardless of
+  // which project authored it. Backfill: rows regioned under
+  // src/polimarket_analyser/ are polimarket-analyser's; three rows a region
+  // glob can't classify (concept-token or abbreviated-path regions) are
+  // assigned explicitly by title; every remaining row is the orchestrator's
+  // own (claude-dashboard) — the only other project that had authored into
+  // the store as of this migration.
+  try {
+    target.exec(`ALTER TABLE arch_unit ADD COLUMN project TEXT`);
+  } catch {
+    /* already exists */
+  }
+  {
+    target.exec(`
+      UPDATE arch_unit
+      SET project = 'polimarket-analyser'
+      WHERE project IS NULL
+        AND EXISTS (
+          SELECT 1 FROM json_each(arch_unit.regions) AS r
+          WHERE r.value LIKE 'src/polimarket_analyser/%'
+        );
+    `);
+    target.exec(`
+      UPDATE arch_unit
+      SET project = 'claude-dashboard'
+      WHERE project IS NULL
+        AND title IN (
+          'Planning Session Filesystem Isolation',
+          'Deploy report-in''s credential is engine-owned, not playbook-authored'
+        );
+    `);
+    target.exec(`
+      UPDATE arch_unit SET project = 'claude-dashboard' WHERE project IS NULL;
+    `);
+
+    const getArchUnitTableSql = (): string =>
+      (
+        target
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='arch_unit'",
+          )
+          .get() as { sql: string } | undefined
+      )?.sql ?? '';
+
+    if (!/project\s+TEXT\s+NOT NULL/.test(getArchUnitTableSql())) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS arch_unit__new;
+        CREATE TABLE arch_unit__new (
+          id            TEXT    PRIMARY KEY,
+          project       TEXT    NOT NULL,
+          title         TEXT    NOT NULL,
+          kind          TEXT    NOT NULL,
+          topic         TEXT    NOT NULL,
+          regions       TEXT    NOT NULL DEFAULT '[]',
+          status        TEXT    NOT NULL DEFAULT 'active',
+          body          TEXT    NOT NULL,
+          supersedes    TEXT,
+          superseded_by TEXT,
+          version       INTEGER NOT NULL DEFAULT 1,
+          created_at    TEXT    NOT NULL,
+          updated_at    TEXT    NOT NULL
+        );
+        INSERT INTO arch_unit__new
+          (id, project, title, kind, topic, regions, status, body, supersedes, superseded_by, version, created_at, updated_at)
+          SELECT id, project, title, kind, topic, regions, status, body, supersedes, superseded_by, version, created_at, updated_at
+          FROM arch_unit;
+        DROP TABLE arch_unit;
+        ALTER TABLE arch_unit__new RENAME TO arch_unit;
+        CREATE INDEX idx_arch_unit_topic ON arch_unit(topic);
+        CREATE INDEX idx_arch_unit_kind ON arch_unit(kind);
+        CREATE INDEX idx_arch_unit_status ON arch_unit(status);
+        CREATE INDEX idx_arch_unit_project ON arch_unit(project);
+        COMMIT;
+      `);
+    }
   }
 
   // ── sessions.granted_capabilities: durable per-session capability grants ──

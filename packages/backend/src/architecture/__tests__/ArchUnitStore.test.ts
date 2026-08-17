@@ -47,6 +47,7 @@ describe('arch_unit schema', () => {
 describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
   it('creates a unit, reads it back, and logs a created event', () => {
     const unit = createUnit({
+      project: 'proj-1',
       title: 'Session lifecycle',
       kind: 'subsystem',
       topic: 'sessions',
@@ -68,6 +69,7 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
 
   it('updates a unit and appends an updated event', () => {
     const unit = createUnit({
+      project: 'proj-1',
       title: 'Gate item shape',
       kind: 'invariant',
       topic: 'gate',
@@ -92,6 +94,7 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
 
   it('supersedes a unit: old retained as superseded, new unit created linking back', () => {
     const original = createUnit({
+      project: 'proj-1',
       title: 'Old decision',
       kind: 'decision',
       topic: 'architecture-store',
@@ -103,6 +106,7 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
     const { previous, next } = supersedeUnit(
       original.id,
       {
+        project: 'proj-1',
         title: 'New decision',
         kind: 'decision',
         topic: 'architecture-store',
@@ -131,6 +135,7 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
 describe('queryUnits', () => {
   beforeEach(() => {
     createUnit({
+      project: 'proj-1',
       title: 'Sessions subsystem',
       kind: 'subsystem',
       topic: 'sessions',
@@ -139,6 +144,7 @@ describe('queryUnits', () => {
       at: '2026-01-01T00:00:00Z',
     });
     createUnit({
+      project: 'proj-1',
       title: 'Gate invariant',
       kind: 'invariant',
       topic: 'gate',
@@ -147,6 +153,7 @@ describe('queryUnits', () => {
       at: '2026-01-01T00:00:00Z',
     });
     const deferred = createUnit({
+      project: 'proj-1',
       title: 'Deferred reference',
       kind: 'reference',
       topic: 'gate',
@@ -157,6 +164,7 @@ describe('queryUnits', () => {
     });
     void deferred;
     const superseded = createUnit({
+      project: 'proj-1',
       title: 'Old contract',
       kind: 'contract',
       topic: 'sessions',
@@ -167,6 +175,7 @@ describe('queryUnits', () => {
     supersedeUnit(
       superseded.id,
       {
+        project: 'proj-1',
         title: 'New contract',
         kind: 'contract',
         topic: 'sessions',
@@ -222,5 +231,36 @@ describe('queryUnits', () => {
   it('includes superseded when includeSuperseded is set with no status filter', () => {
     const all = queryUnits({ includeSuperseded: true });
     expect(all.some((u) => u.status === 'superseded')).toBe(true);
+  });
+});
+
+describe('project scoping', () => {
+  it('stamps a created unit with its project and filters queryUnits by project', () => {
+    createUnit({
+      project: 'proj-a',
+      title: 'Proj A unit',
+      kind: 'subsystem',
+      topic: 'x',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+    createUnit({
+      project: 'proj-b',
+      title: 'Proj B unit',
+      kind: 'subsystem',
+      topic: 'x',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const projA = queryUnits({ project: 'proj-a' });
+    expect(projA.map((u) => u.title)).toEqual(['Proj A unit']);
+
+    const all = queryUnits();
+    expect(all.map((u) => u.title).sort()).toEqual(
+      ['Proj A unit', 'Proj B unit'].sort(),
+    );
   });
 });

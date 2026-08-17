@@ -29,9 +29,9 @@ beforeEach(() => {
   db.prepare('DELETE FROM audit_log').run();
 });
 
-async function connectedClient() {
+async function connectedClient(projectId = 'proj-1') {
   const server = new McpServer({ name: 'test', version: '1.0.0' });
-  registerArchitectureReadTools(server, { workflow: 'groom' });
+  registerArchitectureReadTools(server, { workflow: 'groom', projectId });
   const [serverTransport, clientTransport] =
     InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-client', version: '1.0.0' });
@@ -51,6 +51,7 @@ async function connectedClient() {
 describe('architecture.getUnit', () => {
   it('returns the unit body unchanged for a known id', async () => {
     const unit = createUnit({
+      project: 'proj-1',
       title: 'Session credential scope',
       kind: 'invariant',
       topic: 'session-auth',
@@ -125,6 +126,31 @@ describe('architecture.getUnit', () => {
     expect(result.content[0]?.text).toMatch(/not found/i);
     expect(result.content[0]?.text).not.toMatch(/binding-constraint/i);
   });
+
+  it('returns not-found for a unit that belongs to another project', async () => {
+    const unit = createUnit({
+      project: 'proj-other',
+      title: 'Another project unit',
+      kind: 'invariant',
+      topic: 'session-auth',
+      regions: ['packages/backend'],
+      body: 'body',
+      at: '2024-01-01T00:00:00Z',
+    });
+
+    const { client, close } = await connectedClient('proj-1');
+    const result = (await client.callTool({
+      name: 'architecture.getUnit',
+      arguments: { id: unit.id },
+    })) as {
+      content: Array<{ type: string; text?: string }>;
+      isError?: boolean;
+    };
+    await close();
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toMatch(/not found/i);
+  });
 });
 
 describe('architecture.queryUnits', () => {
@@ -140,6 +166,7 @@ describe('architecture.queryUnits', () => {
 
   it('returns a bare array for a successful topic query', async () => {
     createUnit({
+      project: 'proj-1',
       title: 'Session credential scope',
       kind: 'invariant',
       topic: 'session-auth',
@@ -156,6 +183,7 @@ describe('architecture.queryUnits', () => {
 
   it('names the available topics for a topic not in the vocabulary at all', async () => {
     createUnit({
+      project: 'proj-1',
       title: 'Session credential scope',
       kind: 'invariant',
       topic: 'session-auth',
@@ -172,6 +200,7 @@ describe('architecture.queryUnits', () => {
 
   it('distinguishes a topic that exists but has no active units from one that is not recognized', async () => {
     const unit = createUnit({
+      project: 'proj-1',
       title: 'Deferred design note',
       kind: 'reference',
       topic: 'deferred-topic',
@@ -182,6 +211,7 @@ describe('architecture.queryUnits', () => {
     supersedeUnit(
       unit.id,
       {
+        project: 'proj-1',
         title: 'Replacement note',
         kind: unit.kind,
         topic: 'other-topic',
@@ -200,6 +230,7 @@ describe('architecture.queryUnits', () => {
 
   it('names the available regions for a region that substring-matches nothing stored', async () => {
     createUnit({
+      project: 'proj-1',
       title: 'Session credential scope',
       kind: 'invariant',
       topic: 'session-auth',
@@ -221,6 +252,7 @@ describe('architecture.queryUnits', () => {
 
   it('distinguishes a region that substring-matches something from one that matches nothing, when other filters still yield zero', async () => {
     createUnit({
+      project: 'proj-1',
       title: 'Session credential scope',
       kind: 'invariant',
       topic: 'session-auth',
@@ -239,5 +271,20 @@ describe('architecture.queryUnits', () => {
       recognized: true,
     });
     expect(parsed.region.availableRegions).toBeUndefined();
+  });
+
+  it("never returns another project's units, even with a matching topic", async () => {
+    createUnit({
+      project: 'proj-other',
+      title: 'Another project unit',
+      kind: 'invariant',
+      topic: 'session-auth',
+      regions: ['packages/backend'],
+      body: 'body',
+      at: '2024-01-01T00:00:00Z',
+    });
+
+    const parsed = await callQueryUnits({ topic: 'session-auth' });
+    expect(parsed.units).toEqual([]);
   });
 });

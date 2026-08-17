@@ -29,6 +29,8 @@ import type {
  */
 export interface ArchUnit {
   id: string;
+  /** Owning project's registry id — arch_unit is project-scoped, never global. */
+  project: string;
   title: string;
   kind: ArchUnitKind;
   topic: string;
@@ -64,6 +66,7 @@ function stringifyJson(value: unknown): string | null {
 
 function toArchUnit(row: {
   id: string;
+  project: string;
   title: string;
   kind: ArchUnitKind;
   topic: string;
@@ -78,6 +81,7 @@ function toArchUnit(row: {
 }): ArchUnit {
   return {
     id: row.id,
+    project: row.project,
     title: row.title,
     kind: row.kind,
     topic: row.topic,
@@ -108,6 +112,7 @@ export function getUnitEvents(id: string): ArchUnitEvent[] {
 }
 
 export interface NewArchUnitInput {
+  project: string;
   title: string;
   kind: ArchUnitKind;
   topic: string;
@@ -122,6 +127,7 @@ export function createUnit(input: NewArchUnitInput): ArchUnit {
   const id = crypto.randomUUID();
   insertArchUnit({
     id,
+    project: input.project,
     title: input.title,
     kind: input.kind,
     topic: input.topic,
@@ -217,6 +223,7 @@ export function supersedeUnit(
   const newId = crypto.randomUUID();
   insertArchUnit({
     id: newId,
+    project: replacement.project,
     title: replacement.title,
     kind: replacement.kind,
     topic: replacement.topic,
@@ -269,11 +276,11 @@ export function queryUnits(query: ArchUnitQuery = {}): ArchUnit[] {
 }
 
 /** Live distinct topic vocabulary, across all statuses — see queries.listArchUnitTopics. */
-export function listTopics(): string[] {
-  return listArchUnitTopics();
+export function listTopics(project?: string): string[] {
+  return listArchUnitTopics(project);
 }
 
 /** Live distinct region vocabulary, across all statuses — see queries.listArchUnitRegions. */
-export function listRegions(): string[] {
-  return listArchUnitRegions();
+export function listRegions(project?: string): string[] {
+  return listArchUnitRegions(project);
 }

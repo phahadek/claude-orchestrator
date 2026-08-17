@@ -547,6 +547,7 @@ describe('loadGroomContext', () => {
       ({ repoDir } = setupRepo());
       setupProject(true);
       createUnit({
+        project: PROJECT_ID,
         title: 'Always-binding invariant',
         kind: 'invariant',
         topic: 'general',
@@ -555,6 +556,7 @@ describe('loadGroomContext', () => {
         at: '2026-01-01T00:00:00Z',
       });
       createUnit({
+        project: PROJECT_ID,
         title: 'Notion-client subsystem unit',
         kind: 'subsystem',
         topic: 'notion',
@@ -563,6 +565,7 @@ describe('loadGroomContext', () => {
         at: '2026-01-01T00:00:00Z',
       });
       createUnit({
+        project: PROJECT_ID,
         title: 'Unrelated subsystem unit',
         kind: 'subsystem',
         topic: 'unrelated',
@@ -612,6 +615,7 @@ describe('loadGroomContext', () => {
       ({ repoDir } = setupRepo());
       setupProject(false);
       createUnit({
+        project: PROJECT_ID,
         title: 'Should never surface — project has not adopted the store',
         kind: 'invariant',
         topic: 'general',
@@ -647,6 +651,7 @@ describe('loadGroomContext', () => {
       ({ repoDir } = setupRepo());
       setupProject(true);
       createUnit({
+        project: PROJECT_ID,
         title: 'Notion-client subsystem unit',
         kind: 'subsystem',
         topic: 'notion',
@@ -676,6 +681,41 @@ describe('loadGroomContext', () => {
       expect(codeTask?.archSource).toBe('store');
       expect(codeTask?.archUnits.map((u) => u.title)).toEqual([
         'Notion-client subsystem unit',
+      ]);
+    });
+
+    it("never surfaces another project's arch_unit rows, including its active invariants", async () => {
+      ({ repoDir } = setupRepo());
+      setupProject(true);
+      createUnit({
+        project: PROJECT_ID,
+        title: 'This project invariant',
+        kind: 'invariant',
+        topic: 'general',
+        regions: [],
+        body: 'body',
+        at: '2026-01-01T00:00:00Z',
+      });
+      createUnit({
+        project: 'some-other-project',
+        title: 'Other project invariant',
+        kind: 'invariant',
+        topic: 'general',
+        regions: [],
+        body: 'body',
+        at: '2026-01-01T00:00:00Z',
+      });
+
+      const result = await loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST,
+        notionClient: fakeNotion(),
+        projectId: PROJECT_ID,
+      });
+
+      const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id);
+      expect(codeTask?.archUnits.map((u) => u.title)).toEqual([
+        'This project invariant',
       ]);
     });
   });

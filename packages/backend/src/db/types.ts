@@ -1172,6 +1172,8 @@ export type ArchUnitStatus = 'active' | 'deferred' | 'superseded';
 
 export interface ArchUnitRow {
   id: string;
+  /** Owning project's registry id — arch_unit is project-scoped, never global. */
+  project: string;
   title: string;
   kind: ArchUnitKind;
   topic: string;
@@ -1210,6 +1212,8 @@ export interface ArchUnitEventRow {
 export type NewArchUnitEventRow = Omit<ArchUnitEventRow, 'id'>;
 
 export interface ArchUnitQuery {
+  /** Scope to one project's units. Omit only for cross-project admin surfaces. */
+  project?: string;
   topic?: string;
   kind?: ArchUnitKind;
   /** Region substring filter — matches units whose regions array contains a path prefix match. */

@@ -54,8 +54,8 @@ export type SelectiveInjectionResult =
 export interface SelectiveInjectionDeps {
   /** Defaults to reading Project.archStoreAdopted. */
   isArchStoreAdopted?: (projectId: string) => boolean;
-  /** Defaults to querying the arch_unit store's active set. */
-  queryActiveUnits?: () => ArchUnit[];
+  /** Defaults to querying the arch_unit store's active set, scoped to the given project. */
+  queryActiveUnits?: (projectId: string) => ArchUnit[];
   /** Defaults to fetching the project's grooming-manifest context pages via NotionClient. */
   fetchNotionArchitecturePages?: (
     projectId: string,
@@ -81,8 +81,8 @@ function defaultIsArchStoreAdopted(projectId: string): boolean {
   return ProjectService.getById(projectId)?.archStoreAdopted ?? false;
 }
 
-function defaultQueryActiveUnits(): ArchUnit[] {
-  return queryUnits({ status: 'active' });
+function defaultQueryActiveUnits(projectId: string): ArchUnit[] {
+  return queryUnits({ status: 'active', project: projectId });
 }
 
 /** Current, pre-migration behaviour: the project's full set of fixed Notion architecture pages. */
@@ -113,7 +113,7 @@ async function defaultFetchNotionArchitecturePages(
  * the session carries no file scope) the units under its topic.
  */
 export function selectUnitsFromStore(
-  input: Pick<SelectiveInjectionInput, 'regions' | 'topic'>,
+  input: Pick<SelectiveInjectionInput, 'projectId' | 'regions' | 'topic'>,
   deps: Pick<SelectiveInjectionDeps, 'queryActiveUnits'> = {},
 ): ArchUnit[] {
   const queryActiveUnits = deps.queryActiveUnits ?? defaultQueryActiveUnits;
@@ -124,7 +124,7 @@ export function selectUnitsFromStore(
   const hasRegions = resolvedRegions.length > 0;
 
   const selected = new Map<string, ArchUnit>();
-  for (const unit of queryActiveUnits()) {
+  for (const unit of queryActiveUnits(input.projectId)) {
     if (unit.kind === 'invariant') {
       selected.set(unit.id, unit);
       continue;
