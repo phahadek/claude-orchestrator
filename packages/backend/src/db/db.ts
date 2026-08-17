@@ -86,6 +86,51 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 applyPerformancePragmas(db, dbPath);
 
+export interface WalTruncateCheckpointResult {
+  walSizeBeforeBytes: number;
+  walSizeAfterBytes: number;
+  busy: number;
+  log: number;
+  checkpointed: number;
+}
+
+function walFileSizeBytes(targetPath: string): number {
+  if (targetPath === ':memory:') return 0;
+  try {
+    return fs.statSync(`${targetPath}-wal`).size;
+  } catch {
+    return 0;
+  }
+}
+
+// PASSIVE autocheckpoints (SQLite's default wal_autocheckpoint of 1000
+// pages) already write every committed page back to the main database file
+// correctly on their own — a live measurement on 2026-08-17 against the
+// deployed database (busy=0, log=0, checkpointed=0 on a manual TRUNCATE
+// against a then-103.5 MB WAL) ruled out reader overlap as ever having
+// blocked one. What a PASSIVE checkpoint never does is shrink the file: it
+// only resets the WAL write position, so the file stays at its historic
+// high-water mark indefinitely until something runs a TRUNCATE. See
+// wal_truncate_checkpoint in server.ts for the schedule that does this.
+export function runWalTruncateCheckpoint(
+  database: Database.Database,
+  targetPath: string,
+): WalTruncateCheckpointResult {
+  const walSizeBeforeBytes = walFileSizeBytes(targetPath);
+  const rows = database.pragma('wal_checkpoint(TRUNCATE)') as
+    | { busy: number; log: number; checkpointed: number }[]
+    | undefined;
+  const result = rows?.[0] ?? { busy: 0, log: 0, checkpointed: 0 };
+  const walSizeAfterBytes = walFileSizeBytes(targetPath);
+  return {
+    walSizeBeforeBytes,
+    walSizeAfterBytes,
+    busy: result.busy,
+    log: result.log,
+    checkpointed: result.checkpointed,
+  };
+}
+
 assertDatabaseSchema(db, dbPath, dbFileExistedBeforeOpen);
 
 // Run migrations immediately so prepared statements in queries.ts compile at import time.

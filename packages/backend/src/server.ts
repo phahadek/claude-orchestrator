@@ -5,7 +5,7 @@ import http from 'http';
 import path from 'path';
 import os from 'os';
 import { runMigrations } from './db/schema';
-import { db } from './db/db';
+import { db, dbPath, runWalTruncateCheckpoint } from './db/db';
 import { SessionManager } from './session/SessionManager';
 import { handleMessage, setWsRouterRefreshFn } from './ws/router';
 import { setTaskWriteRefreshFn } from './tasks/TaskWriteCommands';
@@ -75,7 +75,6 @@ import { CapabilityDispositionMiner } from './orchestration/CapabilityDispositio
 import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
-import { WalCheckpointJob } from './orchestration/WalCheckpointJob';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
 import { register as registerDependencyCacheReconciler } from './orchestration/DependencyCacheReconciler';
@@ -421,6 +420,41 @@ scheduler.register({
     pruneTestRunResults(TEST_RUN_RESULTS_RETENTION_MS);
   },
 });
+// Scheduled WAL truncate: PASSIVE autocheckpoints already write every
+// committed page back to the main database correctly on their own — what
+// never happens on its own is truncation, so the WAL file sits at its
+// historic high-water mark indefinitely (see runWalTruncateCheckpoint in
+// db.ts for the 2026-08-17 measurement that ruled out reader overlap as the
+// blocker). Hourly comfortably keeps it bounded against the measured
+// hours-to-days growth to 103.5 MB between manual checkpoints.
+scheduler.register({
+  name: 'wal_truncate_checkpoint',
+  intervalMs: 60 * 60 * 1000,
+  runOnBoot: false,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const result = runWalTruncateCheckpoint(db, dbPath);
+    const bytesFreed = Math.max(
+      0,
+      result.walSizeBeforeBytes - result.walSizeAfterBytes,
+    );
+    if (result.busy) {
+      // A busy checkpoint is an expected, non-error outcome — a reader held
+      // the WAL open at the moment this ran. It's logged distinctly (not as
+      // a success) and simply retried on the next hourly tick.
+      logger.warn(
+        `[wal_truncate_checkpoint] blocked by a reader (busy=1): log=${result.log} checkpointed=${result.checkpointed}, ` +
+          `wal size ${result.walSizeBeforeBytes} -> ${result.walSizeAfterBytes} bytes`,
+      );
+      return { items_processed: 0 };
+    }
+    logger.info(
+      `[wal_truncate_checkpoint] wal size ${result.walSizeBeforeBytes} -> ${result.walSizeAfterBytes} bytes ` +
+        `[busy=0 log=${result.log} checkpointed=${result.checkpointed}]`,
+    );
+    return { items_processed: bytesFreed };
+  },
+});
 // Backstop for the terminal-status reap hook in SessionManager: catches
 // staged intents left behind by sessions that crashed past the hook.
 scheduler.register({
@@ -582,11 +616,6 @@ const capabilityDispositionMiner = new CapabilityDispositionMiner();
 
 const sessionEventsPruner = new SessionEventsPruner();
 
-// WAL checkpoint: truncates the write-ahead log on a schedule so passive
-// checkpoints starved by overlapping reader transactions don't let it grow
-// unbounded (see WalCheckpointJob).
-const walCheckpointJob = new WalCheckpointJob();
-
 // Convergence snapshot: samples the live milestone convergence every 5
 // minutes and writes a durable burndown row only when it changes.
 const convergenceSnapshotJob = new ConvergenceSnapshotJob();
@@ -623,7 +652,6 @@ capabilityDispositionMiner.register(scheduler);
 stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);
-walCheckpointJob.register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 convergenceSnapshotJob.register(scheduler);
