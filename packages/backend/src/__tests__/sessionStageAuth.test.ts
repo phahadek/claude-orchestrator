@@ -5,6 +5,7 @@ import {
   mintStageCredential,
   revokeStageCredential,
   requireSessionStageAuth,
+  setRevokedStageCredentialHandler,
   _resetStageCredentialsForTesting,
 } from '../auth/SessionStageAuth';
 
@@ -49,13 +50,29 @@ describe('SessionStageAuth — requireSessionStageAuth middleware', () => {
     expect(res.body.code).toBe('invalid_stage_credential');
   });
 
-  it('rejects a revoked credential on the stage endpoint', async () => {
+  it('rejects a revoked credential on the stage endpoint with a distinguishable code, distinct from an unknown/never-minted token', async () => {
     const token = mintStageCredential('session-2');
     revokeStageCredential('session-2');
     const res = await supertest(buildApp())
       .get('/api/stage-only')
       .set('Authorization', `Bearer ${token}`);
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(410);
+    expect(res.body.code).toBe('session_credential_revoked');
+  });
+
+  it('invokes the revoked-credential handler with the owning session id when a revoked token is presented', async () => {
+    const token = mintStageCredential('session-2b');
+    revokeStageCredential('session-2b');
+    const seen: string[] = [];
+    setRevokedStageCredentialHandler((sessionId) => seen.push(sessionId));
+    try {
+      await supertest(buildApp())
+        .get('/api/stage-only')
+        .set('Authorization', `Bearer ${token}`);
+      expect(seen).toEqual(['session-2b']);
+    } finally {
+      setRevokedStageCredentialHandler(() => {});
+    }
   });
 
   it('is only meaningful where wired: a valid session credential grants nothing on an endpoint the middleware is not mounted on', async () => {

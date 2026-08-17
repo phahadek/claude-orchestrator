@@ -36,10 +36,12 @@ import { killSessionCgroup } from './sessionCgroup';
 import {
   revokeStageCredential,
   mintStageCredential,
+  setRevokedStageCredentialHandler,
 } from '../auth/SessionStageAuth';
 import {
   revokeRouteCredential,
   writeRouteCredentialFile,
+  setRevokedRouteCredentialHandler,
 } from '../auth/SessionRouteAuth';
 import {
   buildOrchestratorMcpServerEntry,
@@ -1130,6 +1132,20 @@ export class SessionManager extends EventEmitter {
         this.applyPendingDoneOnTurnBoundary(msg.sessionId);
       }
     });
+
+    // A still-live OS process presenting a credential this backend already
+    // revoked has no path to recover — it can never obtain a new one (see
+    // terminateSessionForRevokedCredential) — so leaving it running only
+    // buys it an infinite retry/backoff loop against a server that will
+    // never accept it again. Terminate it outright the moment that's
+    // detected, rather than relying on the process to infer it from a
+    // generic connection failure.
+    setRevokedStageCredentialHandler((sessionId) =>
+      this.terminateSessionForRevokedCredential(sessionId, 'mcp'),
+    );
+    setRevokedRouteCredentialHandler((sessionId) =>
+      this.terminateSessionForRevokedCredential(sessionId, 'route'),
+    );
   }
 
   /**
@@ -4127,6 +4143,59 @@ export class SessionManager extends EventEmitter {
       .catch((e) =>
         logger.error(`[SessionManager] abortSession updateStatus failed: ${e}`),
       );
+  }
+
+  /**
+   * Terminate a session whose stage or route credential was presented after
+   * being revoked — see setRevokedStageCredentialHandler/
+   * setRevokedRouteCredentialHandler wiring in the constructor above. A
+   * session cannot request or refresh a new credential once its own is
+   * revoked, so if its process is still calling in with the old one, the
+   * only honest outcome is termination: leaving it running only buys it an
+   * infinite retry/backoff loop against a server that will never accept it
+   * again (the failure this task exists to close — see
+   * sessionLivenessReconciler.ts's doc comment on the false-positive
+   * incident this guards against).
+   *
+   * Safe to call for a row that's already terminal (idempotent — most calls
+   * land here because the row went 'killed' moments earlier via the
+   * liveness reconciler, and this only catches the process not actually
+   * having exited yet).
+   */
+  private terminateSessionForRevokedCredential(
+    sessionId: string,
+    surface: 'mcp' | 'route',
+  ): void {
+    const row = getSession(sessionId);
+    const now = Date.now();
+    const reason = `credential_revoked_${surface}`;
+    if (!row || !TERMINAL_STATUSES.has(row.status)) {
+      updateSessionStatus(sessionId, 'killed', now);
+    }
+    setSessionTerminalCompletionReason(sessionId, reason);
+
+    recordEvent({
+      event_type: 'session_terminated_revoked_credential',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: row?.project_id ?? null,
+      task_id: row?.task_id ?? null,
+      payload: { sessionId, surface, reason },
+    });
+
+    const liveSession = this.sessions.get(sessionId);
+    if (liveSession) {
+      liveSession.hasEnded = true;
+      liveSession.kill().catch((err) => {
+        logger.error(
+          `[SessionManager] terminateSessionForRevokedCredential kill error for ${sessionId.slice(0, 8)}: ${err}`,
+        );
+      });
+    }
+    this.evictSession(sessionId);
+    logger.warn(
+      `[SessionManager] session ${sessionId.slice(0, 8)} presented a revoked ${surface} credential — terminated`,
+    );
   }
 
   /**

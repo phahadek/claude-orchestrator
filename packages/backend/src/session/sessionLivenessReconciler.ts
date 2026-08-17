@@ -3,7 +3,9 @@ import {
   listLiveSessionRows,
   getSessionLastActivityMs,
   updateSessionStatus,
+  setSessionTerminalCompletionReason,
   getSession,
+  hasUndispositionedStagedIntentsForSession,
   TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED,
 } from '../db/queries';
 import { isPlanningSession } from './sessionPredicates';
@@ -30,12 +32,36 @@ import type { Session } from '../db/types';
  */
 const LIVENESS_RECONCILE_GRACE_MS = 2 * 60_000;
 
+/**
+ * Minimum time since *backend process boot* (not session activity) before
+ * this reconciler will act on a process-not-found verdict at all. In the
+ * first moments after a restart the in-memory session/process map is empty
+ * or still rehydrating, so a failed process lookup is indistinguishable
+ * from a process that genuinely exited — this settle window keeps the
+ * reconciler from treating that rehydration gap as mass process death.
+ * Measured independently of LIVENESS_RECONCILE_GRACE_MS, which is anchored
+ * to the session's own last activity and says nothing about how long the
+ * backend itself has been up.
+ */
+const LIVENESS_RECONCILE_SETTLE_MS = 2 * 60_000;
+
+/**
+ * Captured once at module load, which happens once per backend process
+ * lifetime as part of server startup — this process's stand-in for "boot
+ * time". Overridable per-call via deps.bootTimeMs for tests.
+ */
+const BACKEND_BOOT_MS = Date.now();
+
 export interface SessionLivenessReconcilerDeps {
   /** Overridable for tests; defaults to the real `ps`-backed check. */
   isProcessAlive?: (sessionId: string) => boolean;
   /** Drops the session's stale in-memory entry, if any — SessionManager wires this to evictDeadSessionEntry. */
   evictSessionMapEntry?: (sessionId: string) => void;
   nowFn?: () => number;
+  /** Overridable for tests; defaults to BACKEND_BOOT_MS (module-load time). */
+  bootTimeMs?: number;
+  /** Overridable for tests; defaults to the real staged_intent lookup. */
+  hasUndispositionedStagedIntents?: (sessionId: string) => boolean;
   /**
    * Only consulted by the planning population (reconcileSessionLiveness):
    * a last-chance completeness check tried before this sweep would
@@ -119,11 +145,24 @@ function runLivenessSweep(
   const isProcessAlive = deps.isProcessAlive ?? isSessionProcessAlive;
   const evictSessionMapEntry = deps.evictSessionMapEntry ?? (() => {});
   const now = deps.nowFn ? deps.nowFn() : Date.now();
+  const bootTimeMs = deps.bootTimeMs ?? BACKEND_BOOT_MS;
+  const hasUndispositionedStagedIntents =
+    deps.hasUndispositionedStagedIntents ??
+    hasUndispositionedStagedIntentsForSession;
 
   const examined = rows.length;
   let alive = 0;
   const reconciled: string[] = [];
   const terminalizedViaCompletion: string[] = [];
+
+  if (now - bootTimeMs < LIVENESS_RECONCILE_SETTLE_MS) {
+    // Backend hasn't been up long enough for the in-memory session/process
+    // map to have rehydrated — a process-not-found verdict right now can't
+    // be trusted for anyone, no matter how long any individual session has
+    // been quiet. Skip the entire sweep rather than risk mass reap.
+    return { reconciled: [], examined, alive: 0 };
+  }
+
   for (const row of rows) {
     if (isProcessAlive(row.session_id)) {
       alive++;
@@ -135,6 +174,13 @@ function runLivenessSweep(
     if (now - lastActivity < LIVENESS_RECONCILE_GRACE_MS) {
       // Not yet clear of the process-race grace floor — neither confirmed
       // dead nor counted alive; the process check itself did not say alive.
+      continue;
+    }
+
+    if (hasUndispositionedStagedIntents(row.session_id)) {
+      // Legitimately quiet by design: blocked on a staged intent (e.g. a
+      // test.request) awaiting disposition. Event silence during that wait
+      // is expected, not a liveness signal — never reap on it.
       continue;
     }
 
@@ -159,6 +205,10 @@ function runLivenessSweep(
     }
 
     updateSessionStatus(row.session_id, 'killed', now);
+    setSessionTerminalCompletionReason(
+      row.session_id,
+      'liveness_reconciler_process_not_found',
+    );
     evictSessionMapEntry(row.session_id);
     revokeStageCredential(
       row.session_id,
