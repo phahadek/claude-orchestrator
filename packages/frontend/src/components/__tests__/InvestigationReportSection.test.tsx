@@ -333,4 +333,147 @@ describe('InvestigationReportSection — filing a report is a single action', ()
     expect(commitSpy).not.toHaveBeenCalled();
     expect(screen.queryAllByTestId(/^report-card-/)).toHaveLength(0);
   });
+
+  it('saves a draft without committing when "Save draft" is clicked', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+    const draft = makeReport({
+      id: 'r-draft-new',
+      title: 'New symptom',
+      state: 'draft',
+    });
+    const createSpy = vi.spyOn(reportsApi, 'create').mockResolvedValue(draft);
+    const commitSpy = vi.spyOn(reportsApi, 'commit');
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('investigation-report-section');
+    fireEvent.click(screen.getByTestId('report-start-draft'));
+    fireEvent.change(screen.getByTestId('report-draft-title'), {
+      target: { value: 'New symptom' },
+    });
+    fireEvent.change(screen.getByTestId('report-draft-symptom'), {
+      target: { value: 'It broke in prod' },
+    });
+    fireEvent.click(screen.getByTestId('report-draft-save'));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
+    expect(commitSpy).not.toHaveBeenCalled();
+
+    const card = await screen.findByTestId('report-card-r-draft-new');
+    expect(card).toBeTruthy();
+    expect(screen.getByTestId('report-state-r-draft-new').textContent).toBe(
+      'Draft',
+    );
+    expect(screen.queryByTestId('report-draft-form')).toBeNull();
+  });
+});
+
+describe('InvestigationReportSection — Ctrl+Enter shortcut', () => {
+  it('files the report when pressing Ctrl+Enter in the title input', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+    const draft = makeReport({
+      id: 'r-shortcut',
+      title: 'New symptom',
+      state: 'draft',
+    });
+    const committed = { ...draft, state: 'committed' as const };
+    const createSpy = vi.spyOn(reportsApi, 'create').mockResolvedValue(draft);
+    const commitSpy = vi
+      .spyOn(reportsApi, 'commit')
+      .mockResolvedValue(committed);
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('investigation-report-section');
+    fireEvent.click(screen.getByTestId('report-start-draft'));
+    fireEvent.change(screen.getByTestId('report-draft-title'), {
+      target: { value: 'New symptom' },
+    });
+    fireEvent.change(screen.getByTestId('report-draft-symptom'), {
+      target: { value: 'It broke in prod' },
+    });
+    fireEvent.keyDown(screen.getByTestId('report-draft-title'), {
+      key: 'Enter',
+      ctrlKey: true,
+    });
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(commitSpy).toHaveBeenCalledWith('r-shortcut'));
+    expect(await screen.findByTestId('report-card-r-shortcut')).toBeTruthy();
+  });
+
+  it('files the report when pressing Cmd+Enter in the symptom textarea', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+    const draft = makeReport({
+      id: 'r-shortcut-2',
+      title: 'New symptom',
+      state: 'draft',
+    });
+    const committed = { ...draft, state: 'committed' as const };
+    const createSpy = vi.spyOn(reportsApi, 'create').mockResolvedValue(draft);
+    const commitSpy = vi
+      .spyOn(reportsApi, 'commit')
+      .mockResolvedValue(committed);
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('investigation-report-section');
+    fireEvent.click(screen.getByTestId('report-start-draft'));
+    fireEvent.change(screen.getByTestId('report-draft-title'), {
+      target: { value: 'New symptom' },
+    });
+    fireEvent.change(screen.getByTestId('report-draft-symptom'), {
+      target: { value: 'It broke in prod' },
+    });
+    fireEvent.keyDown(screen.getByTestId('report-draft-symptom'), {
+      key: 'Enter',
+      metaKey: true,
+    });
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(commitSpy).toHaveBeenCalledWith('r-shortcut-2'),
+    );
+    expect(
+      await screen.findByTestId('report-card-r-shortcut-2'),
+    ).toBeTruthy();
+  });
+
+  it('shows the validation error and creates nothing on Ctrl+Enter when fields are blank', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+    const createSpy = vi.spyOn(reportsApi, 'create');
+    const commitSpy = vi.spyOn(reportsApi, 'commit');
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('investigation-report-section');
+    fireEvent.click(screen.getByTestId('report-start-draft'));
+    fireEvent.keyDown(screen.getByTestId('report-draft-title'), {
+      key: 'Enter',
+      ctrlKey: true,
+    });
+
+    expect(
+      await screen.findByText('Title and symptom are both required'),
+    ).toBeTruthy();
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(commitSpy).not.toHaveBeenCalled();
+    expect(screen.queryAllByTestId(/^report-card-/)).toHaveLength(0);
+  });
 });
