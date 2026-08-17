@@ -703,7 +703,7 @@ describe('orchestratorMcpServer — MCP lifecycle instrumentation', () => {
       .set('Authorization', `Bearer ${token}`)
       .set('Accept', 'application/json, text/event-stream')
       .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(410);
 
     const { entries } = queryAuditLogByProject('proj-lifecycle-revoked', {
       eventType: 'mcp_stage_credential_rejected',

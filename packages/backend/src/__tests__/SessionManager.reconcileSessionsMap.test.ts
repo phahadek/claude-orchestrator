@@ -21,6 +21,7 @@ vi.mock('../db/queries', () =>
 
 vi.mock('../auth/SessionStageAuth', () => ({
   revokeStageCredential: vi.fn(),
+  setRevokedStageCredentialHandler: vi.fn(),
 }));
 
 import { SessionManager } from '../session/SessionManager';

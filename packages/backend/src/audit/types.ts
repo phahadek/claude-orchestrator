@@ -121,6 +121,7 @@ type EventType =
   | 'mcp_session_credential_revoked'
   | 'route_session_credential_revoked'
   | 'route_session_credential_rejected'
+  | 'session_terminated_revoked_credential'
   | 'memory_admission_deferred'
   | 'task_aborted'
   | 'planning_dispatch_launched'

@@ -43,6 +43,9 @@ import type { ClaudeSessionProcess } from '../processLiveness';
 
 const NOW = 1_700_000_000_000;
 const OLD_START = NOW - 60 * 60_000; // 1 hour before "now" — well past the grace floor
+// Backend "up" for well over the post-boot settle window, unless a test
+// overrides bootTimeMs itself to exercise that gate directly.
+const BOOT_LONG_AGO = NOW - 60 * 60_000;
 
 beforeEach(() => {
   db.prepare('DELETE FROM sessions').run();
@@ -74,6 +77,7 @@ describe('reconcileSessionLiveness', () => {
     seedSession({ sessionId: 'ghost-running', status: 'running' });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -99,6 +103,7 @@ describe('reconcileSessionLiveness', () => {
     seedSession({ sessionId: 'ghost-idle', status: 'idle' });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -120,6 +125,7 @@ describe('reconcileSessionLiveness', () => {
     });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => true,
       nowFn: () => NOW,
     });
@@ -140,6 +146,7 @@ describe('reconcileSessionLiveness', () => {
     const inMemoryMap = new Map<string, true>([['stale-map-entry', true]]);
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
       evictSessionMapEntry: (sessionId) => inMemoryMap.delete(sessionId),
@@ -154,6 +161,7 @@ describe('reconcileSessionLiveness', () => {
     expect(countLivePlanningSessions()).toBe(1);
 
     reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -166,6 +174,7 @@ describe('reconcileSessionLiveness', () => {
     seedSession({ sessionId: 'ghost-2', status: 'idle' });
 
     reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -198,6 +207,7 @@ describe('reconcileSessionLiveness', () => {
     });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -210,6 +220,7 @@ describe('reconcileSessionLiveness', () => {
     seedSession({ sessionId: 'api-mode-session', status: 'running' });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -227,6 +238,7 @@ describe('reconcileSessionLiveness', () => {
     seedSession({ sessionId: 'alive-3', status: 'idle' });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => true,
       nowFn: () => NOW,
     });
@@ -238,6 +250,7 @@ describe('reconcileSessionLiveness', () => {
 
   it('records examined = 0 for an empty candidate set — distinguishable from an all-alive sweep', () => {
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => true,
       nowFn: () => NOW,
     });
@@ -253,6 +266,7 @@ describe('reconcileSessionLiveness', () => {
     // isSessionProcessAlive returns true on an unreadable ps — simulate that
     // fail-open verdict directly via the injected isProcessAlive dep.
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => true,
       nowFn: () => NOW,
     });
@@ -271,6 +285,7 @@ describe('reconcileSessionLiveness', () => {
     seedSession({ sessionId: 'alive-4', status: 'running' });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: (sessionId) => sessionId === 'alive-4',
       nowFn: () => NOW,
     });
@@ -289,6 +304,7 @@ describe('reconcileSessionLiveness', () => {
     });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
       tryMarkPlanningTerminal,
@@ -307,6 +323,7 @@ describe('reconcileSessionLiveness', () => {
     const tryMarkPlanningTerminal = vi.fn().mockReturnValue(false);
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
       tryMarkPlanningTerminal,
@@ -318,6 +335,108 @@ describe('reconcileSessionLiveness', () => {
       .prepare('SELECT status FROM sessions WHERE session_id = ?')
       .get('still-pending') as { status: string };
     expect(row.status).toBe('killed');
+  });
+
+  it('sets terminal_completion_reason naming the reap when a genuinely dead session is reconciled', () => {
+    seedSession({ sessionId: 'reason-ghost', status: 'running' });
+
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    const row = db
+      .prepare(
+        'SELECT terminal_completion_reason FROM sessions WHERE session_id = ?',
+      )
+      .get('reason-ghost') as { terminal_completion_reason: string | null };
+    expect(row.terminal_completion_reason).toBe(
+      'liveness_reconciler_process_not_found',
+    );
+  });
+
+  it('does not revoke credentials for any quiet session when the backend has been up for less than the settle window', () => {
+    // Quiet for 21 minutes — well past the activity grace floor — but the
+    // backend itself only booted 30 seconds ago (e.g. right after a
+    // restart, before the in-memory session/process map has rehydrated).
+    seedSession({
+      sessionId: 'quiet-across-restart',
+      status: 'running',
+      startedAt: NOW - 21 * 60_000,
+    });
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: NOW - 30_000,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual([]);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('quiet-across-restart') as { status: string };
+    expect(row.status).toBe('running');
+  });
+
+  it('resumes normal reap behavior for a genuinely dead session once the settle window has elapsed', () => {
+    seedSession({
+      sessionId: 'dead-after-settle',
+      status: 'running',
+      startedAt: NOW - 21 * 60_000,
+    });
+
+    const result = reconcileSessionLiveness({
+      // Backend booted well over the settle window ago.
+      bootTimeMs: NOW - 5 * 60_000,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual(['dead-after-settle']);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('dead-after-settle') as { status: string };
+    expect(row.status).toBe('killed');
+  });
+
+  it('does not treat a session with an undispositioned staged intent as inactive, even past the activity grace floor', () => {
+    seedSession({
+      sessionId: 'blocked-on-staged-intent',
+      status: 'running',
+      startedAt: NOW - 21 * 60_000,
+    });
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      hasUndispositionedStagedIntents: (sessionId) =>
+        sessionId === 'blocked-on-staged-intent',
+    });
+
+    expect(result.reconciled).toEqual([]);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('blocked-on-staged-intent') as { status: string };
+    expect(row.status).toBe('running');
+  });
+
+  it('reaps a quiet session with no staged intents even when the hook is wired', () => {
+    seedSession({
+      sessionId: 'quiet-no-staged-intent',
+      status: 'running',
+      startedAt: NOW - 21 * 60_000,
+    });
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      hasUndispositionedStagedIntents: () => false,
+    });
+
+    expect(result.reconciled).toEqual(['quiet-no-staged-intent']);
   });
 
   it('never consults tryMarkPlanningTerminal for the non-planning population', () => {
@@ -334,6 +453,7 @@ describe('reconcileSessionLiveness', () => {
     const tryMarkPlanningTerminal = vi.fn().mockReturnValue(true);
 
     reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
       tryMarkPlanningTerminal,
@@ -352,6 +472,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -375,6 +496,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -390,6 +512,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -405,6 +528,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => true,
       nowFn: () => NOW,
     });
@@ -424,6 +548,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -444,6 +569,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -460,6 +586,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -475,6 +602,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -504,6 +632,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => true,
       nowFn: () => NOW,
     });
@@ -515,6 +644,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
 
   it('records examined = 0 for an empty candidate set — distinguishable from an all-alive sweep', () => {
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => true,
       nowFn: () => NOW,
     });
@@ -532,6 +662,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => true,
       nowFn: () => NOW,
     });
@@ -557,6 +688,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: (sessionId) => sessionId === 'np-alive-3',
       nowFn: () => NOW,
     });

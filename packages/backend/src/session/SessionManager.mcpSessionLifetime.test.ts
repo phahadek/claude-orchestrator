@@ -132,7 +132,7 @@ describe('MCP session lifetime — dispatched session credential survives backen
       .post('/api/mcp')
       .set('Authorization', `Bearer ${tokenA}`)
       .send({});
-    expect(revokedRes.status).toBe(401);
+    expect(revokedRes.status).toBe(410);
 
     // The other session's credential is untouched — revocation and restart
     // recovery are both scoped per session, never shared across sessions.
