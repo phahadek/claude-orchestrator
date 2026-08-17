@@ -238,7 +238,7 @@ function runCommandWithTimeout(
       escalate(true, false, '\n[test-runner] TIMEOUT');
     }, timeoutMs);
 
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       if (escalation !== null) {
         settle({
           exitCode: code ?? 1,
@@ -248,11 +248,21 @@ function runCommandWithTimeout(
         });
         return;
       }
+      // A SIGKILL we did not initiate ourselves (no escalation in flight) is
+      // the signature of the host/container OOM-killer reclaiming memory —
+      // distinguishable from a normal nonzero exit purely via the `signal`
+      // arg Node's close event provides, independent of whether the RSS
+      // poller (maxRssMb > 0) is enabled for this run.
+      const oomKilled = signal === 'SIGKILL';
       settle({
         exitCode: code ?? 1,
-        output: collectedOutput(),
+        output:
+          collectedOutput() +
+          (oomKilled
+            ? `\n[test-runner] process terminated by signal ${signal} (likely OOM-kill)`
+            : ''),
         timedOut: false,
-        oomKilled: false,
+        oomKilled,
       });
     });
 
@@ -560,10 +570,19 @@ function listWorktreeFiles(worktreePath: string): string[] {
  * Returns null when the glob matches nothing (report not written — e.g. the
  * run was killed before teardown) — the caller leaves structured_result
  * null in that case rather than persisting an empty/misleading result.
+ *
+ * `expectedReportCount` is the number of test commands that were run (each
+ * command conventionally writes its own report file under the shared glob —
+ * see .claude-orchestrator.yml's test_report_glob comment). When fewer
+ * report files are found than commands ran, at least one command's report
+ * never got written (e.g. it crashed/OOM-killed before its runner's normal
+ * teardown) — the returned result is marked `incomplete: true` so this
+ * partial merge is never indistinguishable from a genuinely complete one.
  */
 export function collectStructuredTestResult(
   worktreePath: string,
   reportGlob: string,
+  expectedReportCount = 1,
 ): StructuredTestResult | null {
   const matchedFiles = listWorktreeFiles(worktreePath)
     .filter((rel) => minimatch(rel, reportGlob, { dot: true }))
@@ -594,5 +613,11 @@ export function collectStructuredTestResult(
     }
   }
 
-  return { format: 'junit-xml', suites, totals, durationMsTotal };
+  return {
+    format: 'junit-xml',
+    suites,
+    totals,
+    durationMsTotal,
+    ...(matchedFiles.length < expectedReportCount ? { incomplete: true } : {}),
+  };
 }

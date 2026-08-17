@@ -368,6 +368,7 @@ describe('structured_result acquisition', () => {
     expect(mockCollectStructuredTestResult).toHaveBeenCalledWith(
       '/tmp/wt',
       'reports/*.xml',
+      1,
     );
     const row = db
       .prepare(

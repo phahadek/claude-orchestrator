@@ -31,8 +31,9 @@ function makeProc(
   stdout = '',
   stderr = '',
   delayMs = 0,
+  signal: string | null = null,
 ): MockProc {
-  const closeCbs: Array<(c: number | null) => void> = [];
+  const closeCbs: Array<(c: number | null, s: string | null) => void> = [];
   const outCbs: Array<(d: Buffer) => void> = [];
   const errCbs: Array<(d: Buffer) => void> = [];
 
@@ -49,14 +50,15 @@ function makeProc(
       },
     },
     on: (e, cb) => {
-      if (e === 'close') closeCbs.push(cb as (c: number | null) => void);
+      if (e === 'close')
+        closeCbs.push(cb as (c: number | null, s: string | null) => void);
     },
   };
 
   setTimeout(() => {
     if (stdout) outCbs.forEach((cb) => cb(Buffer.from(stdout)));
     if (stderr) errCbs.forEach((cb) => cb(Buffer.from(stderr)));
-    closeCbs.forEach((cb) => cb(exitCode));
+    closeCbs.forEach((cb) => cb(exitCode, signal));
   }, delayMs);
 
   return proc;
@@ -381,6 +383,53 @@ describe('runTestCommands — RSS kill', () => {
     expect(callCount).toBe(1);
     expect(result.passed).toBe(false);
     expect(result.output).toContain('OOM_KILL');
+  });
+});
+
+describe('runTestCommands — externally signal-killed process (host/container OOM-killer)', () => {
+  it('marks oomKilled:true on an unescalated SIGKILL close even when the RSS poller is disabled (maxRssMb: 0)', async () => {
+    // No maxRssMb passed — the RSS poller never starts — yet the subprocess
+    // still exits via SIGKILL (the OS/container OOM-killer, not our own
+    // escalate()), so this must be caught purely from the close event's
+    // signal arg.
+    _spawnHook = () =>
+      makeProc(null as unknown as number, '', '', 0, 'SIGKILL');
+
+    const promise = runTestCommands(
+      '/worktree',
+      ['npm run test -w backend'],
+      300,
+      () => {},
+    );
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.passed).toBe(false);
+    expect(result.oomKilled).toBe(true);
+    expect(result.output).toContain('SIGKILL');
+  });
+
+  it('does not mark oomKilled for an ordinary nonzero exit with no signal', async () => {
+    _spawnHook = () => makeProc(1, 'failure output', '', 0, null);
+
+    const promise = runTestCommands('/worktree', ['npm test'], 300, () => {});
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.passed).toBe(false);
+    expect(result.oomKilled).toBe(false);
+  });
+
+  it('does not mark oomKilled for a non-SIGKILL signal (e.g. SIGTERM)', async () => {
+    _spawnHook = () =>
+      makeProc(null as unknown as number, '', '', 0, 'SIGTERM');
+
+    const promise = runTestCommands('/worktree', ['npm test'], 300, () => {});
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.passed).toBe(false);
+    expect(result.oomKilled).toBe(false);
   });
 });
 

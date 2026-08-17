@@ -113,11 +113,13 @@ function unknownResult(
 
 /**
  * A failed run is `partial_fail` only when its structured_result carries an
- * actual per-test breakdown (at least one recorded test outcome) —
- * otherwise (structured_result null/unparseable/empty, e.g. an OOM-kill
- * before any report was written) it's `total_fail`. This split is agnostic
- * to whether acquisition was attempted — see classifyRun, its dispatch-
- * gating caller, for that distinction; the Tests-tab taxonomy
+ * actual per-test breakdown (at least one recorded test outcome) AND that
+ * breakdown is complete (structured_result.incomplete is not set) —
+ * otherwise (structured_result null/unparseable/empty, or a partial
+ * multi-command merge missing an expected suite's report entirely, e.g. an
+ * OOM-kill before that report was written) it's `total_fail`. This split is
+ * agnostic to whether acquisition was attempted — see classifyRun, its
+ * dispatch-gating caller, for that distinction; the Tests-tab taxonomy
  * (classifyTestRunOutcome) intentionally treats "never attempted" and
  * "attempted and empty" alike as "no report acquired".
  */
@@ -127,6 +129,11 @@ function classifyFailedRun(
   if (!run.structured_result) return 'total_fail';
   try {
     const parsed = JSON.parse(run.structured_result) as StructuredTestResult;
+    // A merge missing one or more expected report files (e.g. a command
+    // crashed/OOM-killed before writing its report) is never a mere partial
+    // failure of the suites it did capture — an entire suite never ran, so
+    // this must not look identical to an ordinary named-test failure.
+    if (parsed.incomplete) return 'total_fail';
     const totalTests =
       (parsed.totals?.passed ?? 0) +
       (parsed.totals?.failed ?? 0) +

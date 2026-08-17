@@ -174,6 +174,38 @@ describe('collectStructuredTestResult', () => {
     expect(result).not.toBeNull();
     expect(result!.suites).toHaveLength(1);
   });
+
+  it('marks the result incomplete when fewer report files are found than commands were run (e.g. a second suite crashed before writing its report)', () => {
+    write('reports/frontend.xml', VITEST_REPORT);
+    // backend.xml never written — its command crashed before teardown.
+
+    const result = collectStructuredTestResult(worktree, 'reports/*.xml', 2);
+
+    expect(result).not.toBeNull();
+    expect(result!.incomplete).toBe(true);
+    // The suite that DID produce a report must still be preserved, not
+    // discarded — only the missing-suite signal is new.
+    expect(result!.suites).toHaveLength(1);
+  });
+
+  it('does not mark the result incomplete when every expected report file is present', () => {
+    write('reports/frontend.xml', VITEST_REPORT);
+    write('reports/backend.xml', PYTEST_REPORT);
+
+    const result = collectStructuredTestResult(worktree, 'reports/*.xml', 2);
+
+    expect(result).not.toBeNull();
+    expect(result!.incomplete).toBeUndefined();
+  });
+
+  it('defaults expectedReportCount to 1, so a single-command project is unaffected', () => {
+    write('reports/junit.xml', PYTEST_REPORT);
+
+    const result = collectStructuredTestResult(worktree, 'reports/*.xml');
+
+    expect(result).not.toBeNull();
+    expect(result!.incomplete).toBeUndefined();
+  });
 });
 
 describe("this repo's configured test_report_glob", () => {
