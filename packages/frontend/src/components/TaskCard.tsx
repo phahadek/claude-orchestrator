@@ -10,10 +10,6 @@ import { ContextBadge } from './ContextBadge';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import { TaskMoveDialog } from './TaskMoveDialog';
 import type { StagedIntent } from '../api/stagedIntents';
-import {
-  useTestLaneRunStatus,
-  type TestLaneOutcome,
-} from '../hooks/useTestLaneRunStatus';
 import styles from './TaskCard.module.css';
 
 interface Props {
@@ -149,13 +145,6 @@ function verdictLabel(verdict: string): string {
   return verdict;
 }
 
-const TEST_LANE_OUTCOME_LABELS: Record<TestLaneOutcome, string> = {
-  'in-flight': '🧪 Tests running',
-  passed: '🧪 Tests passed',
-  failed: '🧪 Tests failed',
-  blocked: '🧪 Tests blocked',
-};
-
 function planningSessionTypeLabel(sessionType: string): string {
   if (sessionType === 'groom') return 'Grooming';
   if (sessionType === 'design') return 'Design';
@@ -199,11 +188,6 @@ export function TaskCard({
   const isNonCode = !task.taskType.includes('💻');
   const pauseStruct = parsePauseReason(task.pauseReason);
   const [verifyInFlight, setVerifyInFlight] = useState(false);
-  const testLaneStatus = useTestLaneRunStatus({
-    projectId: project?.id ?? null,
-    sessionId: codeSession?.sessionId ?? null,
-    pauseReason: task.pauseReason,
-  });
 
   const handleRecover = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -325,25 +309,6 @@ export function TaskCard({
             )}
 
           {!codeSession && <span className={styles.placeholder}>—</span>}
-
-          {testLaneStatus && (
-            <div className={styles.sessionRow}>
-              <span
-                className={`${styles.sessionStatus} ${styles[`test-lane-${testLaneStatus.outcome}`] ?? ''}`}
-                title={
-                  testLaneStatus.outcome === 'blocked'
-                    ? `[pause] ${PAUSE_REASON_LABELS.test_request_cycle_exceeded}`
-                    : testLaneStatus.outcome === 'failed'
-                      ? testLaneStatus.output
-                      : testLaneStatus.note
-                }
-                data-testid="test-lane-status"
-                data-test-lane-outcome={testLaneStatus.outcome}
-              >
-                {TEST_LANE_OUTCOME_LABELS[testLaneStatus.outcome]}
-              </span>
-            </div>
-          )}
 
           {pr ? (
             <div className={styles.prRow}>
