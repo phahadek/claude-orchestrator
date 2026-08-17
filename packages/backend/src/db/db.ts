@@ -11,7 +11,7 @@ const _configDbPath = getOrchestratorConfig().db.path || './dashboard.db';
 // path is set by whatever launched the process (e.g. a systemd drop-in), not
 // by the operator, and silently pointed a production install at an empty
 // database at the wrong location.
-const dbPath = resolveDbPath(_configDbPath, getDataDir());
+export const dbPath = resolveDbPath(_configDbPath, getDataDir());
 
 // A test process (vitest, or anything with NODE_ENV=test) must never bind a
 // real on-disk database file: an inherited/misconfigured DB_PATH pointing at
@@ -34,9 +34,57 @@ if (isTestMode && dbPath !== ':memory:') {
 // would otherwise make a pre-existing file indistinguishable from a fresh one.
 const dbFileExistedBeforeOpen = dbPath !== ':memory:' && fs.existsSync(dbPath);
 
+// Chosen at grooming (2026-08-17) against this host's live `free -h`: 30 GiB
+// total, 9.9 GiB available, 9.6 GiB of 23 GiB swap already in use — real
+// memory pressure alongside a large postgres instance sharing the box.
+// cache_size covers ~6% and mmap_size ~23% of the 4.4 GB db file, enough to
+// hold a real working set without competing meaningfully with postgres for
+// the already-strained remaining headroom. See applyPerformancePragmas below
+// for why the defaults (16 MB cache, mmap disabled) caused 30.8M read()
+// syscalls and pinned the disk at 100% utilisation.
+export const DB_CACHE_SIZE_PRAGMA_KB = -262144; // 256 MB (negative = KiB, per SQLite pragma semantics)
+export const DB_MMAP_SIZE_BYTES = 1073741824; // 1 GB
+
+// Applied to every connection the backend opens against the on-disk database
+// (not just the primary `db` export below) — a connection left on SQLite's
+// defaults (16 MB cache, mmap disabled) re-reads the whole working set from
+// disk on every query. Values are read back and asserted so a future edit to
+// this file, or a driver upgrade that changes pragma defaults, fails loudly
+// at startup instead of silently reverting to the pathological defaults.
+export function applyPerformancePragmas(
+  database: Database.Database,
+  targetPath: string,
+): void {
+  database.pragma(`cache_size = ${DB_CACHE_SIZE_PRAGMA_KB}`);
+  const actualCacheSize = (
+    database.pragma('cache_size') as { cache_size: number }[]
+  )[0]?.cache_size;
+  if (actualCacheSize !== DB_CACHE_SIZE_PRAGMA_KB) {
+    throw new Error(
+      `[db] cache_size pragma did not apply: expected ${DB_CACHE_SIZE_PRAGMA_KB}, got ${actualCacheSize}`,
+    );
+  }
+
+  // mmap_size has no effect on an in-memory database (no file to map) and
+  // better-sqlite3 returns an empty pragma result for it there — skip the
+  // (otherwise-failing) assertion in that case rather than the pragma itself.
+  database.pragma(`mmap_size = ${DB_MMAP_SIZE_BYTES}`);
+  if (targetPath !== ':memory:') {
+    const actualMmapSize = (
+      database.pragma('mmap_size') as { mmap_size: number }[]
+    )[0]?.mmap_size;
+    if (actualMmapSize !== DB_MMAP_SIZE_BYTES) {
+      throw new Error(
+        `[db] mmap_size pragma did not apply: expected ${DB_MMAP_SIZE_BYTES}, got ${actualMmapSize}`,
+      );
+    }
+  }
+}
+
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+applyPerformancePragmas(db, dbPath);
 
 assertDatabaseSchema(db, dbPath, dbFileExistedBeforeOpen);
 
