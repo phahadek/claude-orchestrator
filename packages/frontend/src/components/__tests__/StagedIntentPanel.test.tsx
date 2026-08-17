@@ -1469,7 +1469,10 @@ describe('StagedIntentPanel', () => {
     it('renders Approve (not Commit) for every kind in the shared terminal-on-approve set', () => {
       for (const kind of TERMINAL_ON_APPROVE_INTENT_KINDS) {
         const payload = PAYLOAD_BY_KIND[kind];
-        expect(payload, `add a PAYLOAD_BY_KIND entry for "${kind}"`).toBeDefined();
+        expect(
+          payload,
+          `add a PAYLOAD_BY_KIND entry for "${kind}"`,
+        ).toBeDefined();
 
         const { unmount } = render(
           <StagedIntentPanel intent={makeIntent({ kind, payload })} />,
@@ -1478,7 +1481,9 @@ describe('StagedIntentPanel', () => {
         expect(
           screen.getByRole('button', { name: /^approve$|^✓ grant$/i }),
         ).toBeTruthy();
-        expect(screen.queryByRole('button', { name: /^✓ commit$/i })).toBeNull();
+        expect(
+          screen.queryByRole('button', { name: /^✓ commit$/i }),
+        ).toBeNull();
 
         unmount();
       }
