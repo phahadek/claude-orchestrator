@@ -135,13 +135,14 @@ export function InvestigationReportSection({
         symptomText: draftSymptom.trim(),
         source: 'operator',
       })
+      .then((report) => reportsApi.commit(report.id))
       .then((report) => {
         setReports((prev) => [report, ...prev]);
         setDrafting(false);
       })
       .catch((err) =>
         setCreateError(
-          err instanceof Error ? err.message : 'failed to create report',
+          err instanceof Error ? err.message : 'failed to file report',
         ),
       )
       .finally(() => setCreating(false));
@@ -321,7 +322,7 @@ export function InvestigationReportSection({
               disabled={creating}
               data-testid="report-draft-submit"
             >
-              {creating ? 'Saving…' : 'Save draft'}
+              {creating ? 'Filing…' : 'File report'}
             </button>
             <button
               type="button"

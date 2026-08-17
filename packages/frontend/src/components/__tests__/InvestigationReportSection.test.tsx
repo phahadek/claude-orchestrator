@@ -7,7 +7,7 @@
  * global navigation event.
  */
 
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { InvestigationReportSection } from '../InvestigationReportSection';
 import { reportsApi } from '../../api/reports';
@@ -148,5 +148,85 @@ describe('InvestigationReportSection — card selection', () => {
     fireEvent.click(commitButton);
 
     expect(onSelectReport).not.toHaveBeenCalled();
+  });
+});
+
+describe('InvestigationReportSection — filing a report is a single action', () => {
+  it('creates and commits the report in one click, rendering exactly one committed card', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+    const draft = makeReport({ id: 'r-new', title: 'New symptom', state: 'draft' });
+    const committed = { ...draft, state: 'committed' as const };
+    const createSpy = vi.spyOn(reportsApi, 'create').mockResolvedValue(draft);
+    const commitSpy = vi.spyOn(reportsApi, 'commit').mockResolvedValue(committed);
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('investigation-report-section');
+    fireEvent.click(screen.getByTestId('report-start-draft'));
+    fireEvent.change(screen.getByTestId('report-draft-title'), {
+      target: { value: 'New symptom' },
+    });
+    fireEvent.change(screen.getByTestId('report-draft-symptom'), {
+      target: { value: 'It broke in prod' },
+    });
+    fireEvent.click(screen.getByTestId('report-draft-submit'));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(commitSpy).toHaveBeenCalledWith('r-new'));
+
+    const card = await screen.findByTestId('report-card-r-new');
+    expect(card).toBeTruthy();
+    expect(screen.getByTestId('report-state-r-new').textContent).toBe(
+      'Committed',
+    );
+    expect(screen.queryAllByTestId(/^report-card-/)).toHaveLength(1);
+  });
+
+  it('does not call create when Cancel is clicked before submission', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+    const createSpy = vi.spyOn(reportsApi, 'create');
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('investigation-report-section');
+    fireEvent.click(screen.getByTestId('report-start-draft'));
+    fireEvent.change(screen.getByTestId('report-draft-title'), {
+      target: { value: 'New symptom' },
+    });
+    fireEvent.click(screen.getByTestId('report-draft-cancel'));
+
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('report-draft-title')).toBeNull();
+  });
+
+  it('shows the validation error and creates nothing when title/symptom are missing', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+    const createSpy = vi.spyOn(reportsApi, 'create');
+    const commitSpy = vi.spyOn(reportsApi, 'commit');
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('investigation-report-section');
+    fireEvent.click(screen.getByTestId('report-start-draft'));
+    fireEvent.click(screen.getByTestId('report-draft-submit'));
+
+    expect(
+      await screen.findByText('Title and symptom are both required'),
+    ).toBeTruthy();
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(commitSpy).not.toHaveBeenCalled();
+    expect(screen.queryAllByTestId(/^report-card-/)).toHaveLength(0);
   });
 });
