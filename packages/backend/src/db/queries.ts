@@ -8862,6 +8862,75 @@ export function isPlanningKillSuppressed(
 }
 
 /**
+ * True when at least one mcp_connection_established audit event exists for
+ * this session with ts > sinceMs — the detection signal
+ * SessionManager.reconcileMcpUnreachableSessions checks per spawn/respawn
+ * window (see AgentSession.isMcpUnreachable).
+ */
+export function hasMcpConnectionEstablishedSince(
+  sessionId: string,
+  sinceMs: number,
+): boolean {
+  const row = db
+    .prepare<[string, number], { cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM audit_log
+       WHERE event_type = 'mcp_connection_established' AND actor_id = ? AND ts > ?`,
+    )
+    .get(sessionId, sinceMs);
+  return (row?.cnt ?? 0) > 0;
+}
+
+/**
+ * Count of session_mcp_unreachable_respawned audit events recorded for this
+ * session — doubles as both the respawn-attempt counter (next attempt
+ * number = this + 1) and the grace-window anchor's fallback source (see
+ * getLatestMcpUnreachableRespawnTimestamp).
+ */
+export function countMcpUnreachableRespawnAttempts(sessionId: string): number {
+  const row = db
+    .prepare<[string], { cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM audit_log
+       WHERE event_type = 'session_mcp_unreachable_respawned' AND actor_id = ?`,
+    )
+    .get(sessionId);
+  return row?.cnt ?? 0;
+}
+
+/**
+ * ts of the most recent session_mcp_unreachable_respawned event for this
+ * session, or null if it has never been respawned for MCP-unreachability —
+ * the reconciler's grace-window anchor falls back to the session's own
+ * started_at in that case.
+ */
+export function getLatestMcpUnreachableRespawnTimestamp(
+  sessionId: string,
+): number | null {
+  const row = db
+    .prepare<[string], { ts: number | null }>(
+      `SELECT MAX(ts) AS ts FROM audit_log
+       WHERE event_type = 'session_mcp_unreachable_respawned' AND actor_id = ?`,
+    )
+    .get(sessionId);
+  return row?.ts ?? null;
+}
+
+/**
+ * True when a session_mcp_unreachable_respawn_exhausted event has already
+ * been recorded for this session — once true, reconcileMcpUnreachableSessions
+ * leaves the session alone permanently rather than re-surfacing it every
+ * sweep.
+ */
+export function hasMcpUnreachableExhaustedEvent(sessionId: string): boolean {
+  const row = db
+    .prepare<[string], { cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM audit_log
+       WHERE event_type = 'session_mcp_unreachable_respawn_exhausted' AND actor_id = ?`,
+    )
+    .get(sessionId);
+  return (row?.cnt ?? 0) > 0;
+}
+
+/**
  * True if this session has an unresolved `session.requestCapability` intent
  * (state `staged` or `approved`) awaiting an operator decision — the sanctioned
  * ask-permission path a dispatched verify/ops session uses instead of being
