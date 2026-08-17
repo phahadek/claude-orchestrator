@@ -206,7 +206,12 @@ export class NoOpInvestigator {
       if (firstHeading) taskTitle = firstHeading[1];
     } catch (e) {
       logger.error(`[NoOpInvestigator] fetchTaskPage failed for ${taskId}:`, e);
-      recordInvestigationFailure(ctx, investigatorSessionId, 'fetch_task_page', String(e));
+      recordInvestigationFailure(
+        ctx,
+        investigatorSessionId,
+        'fetch_task_page',
+        String(e),
+      );
     }
 
     const noOpSessionEvents = getEventsBySession(noOpSessionId);
@@ -233,7 +238,12 @@ export class NoOpInvestigator {
         );
       } catch (e) {
         logger.error(`[NoOpInvestigator] listMergedPRsSince failed:`, e);
-        recordInvestigationFailure(ctx, investigatorSessionId, 'list_merged_prs_since', String(e));
+        recordInvestigationFailure(
+          ctx,
+          investigatorSessionId,
+          'list_merged_prs_since',
+          String(e),
+        );
       }
       try {
         recentCommits = await this.githubClient.listCommitsSince(
@@ -243,7 +253,12 @@ export class NoOpInvestigator {
         );
       } catch (e) {
         logger.error(`[NoOpInvestigator] listCommitsSince failed:`, e);
-        recordInvestigationFailure(ctx, investigatorSessionId, 'list_commits_since', String(e));
+        recordInvestigationFailure(
+          ctx,
+          investigatorSessionId,
+          'list_commits_since',
+          String(e),
+        );
       }
     }
 
@@ -276,7 +291,12 @@ export class NoOpInvestigator {
       logger.error(
         `[NoOpInvestigator] sessionManager.start failed — sessionId=${investigatorSessionId} taskId=${taskId} reason=${String(e)}`,
       );
-      recordInvestigationFailure(ctx, investigatorSessionId, 'session_manager_start', String(e));
+      recordInvestigationFailure(
+        ctx,
+        investigatorSessionId,
+        'session_manager_start',
+        String(e),
+      );
       return;
     }
 
@@ -292,7 +312,12 @@ export class NoOpInvestigator {
       logger.error(
         `[NoOpInvestigator] verdict wait failed — sessionId=${investigatorSessionId} taskId=${taskId} reason=${String(e)}`,
       );
-      recordInvestigationFailure(ctx, investigatorSessionId, 'verdict_wait', String(e));
+      recordInvestigationFailure(
+        ctx,
+        investigatorSessionId,
+        'verdict_wait',
+        String(e),
+      );
       return;
     }
 

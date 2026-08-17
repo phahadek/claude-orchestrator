@@ -442,7 +442,9 @@ describe('recoverSession', () => {
 
   describe('NoOpInvestigator gate', () => {
     function fakeSessionManager() {
-      return { start: vi.fn() } as unknown as RecoverSessionOpts['sessionManager'];
+      return {
+        start: vi.fn(),
+      } as unknown as RecoverSessionOpts['sessionManager'];
     }
 
     it('launches the investigator when scope=clean_exit, no PR, no diff, and a sessionManager is wired', async () => {
