@@ -104,42 +104,72 @@ export async function recoverSession(
       }
 
       // No-op detection: skipped for periodic scope (StuckSessionMonitor handles retries differently).
-      if (
-        scope !== 'periodic' &&
-        !prUrl &&
-        !hasDiff &&
-        taskId &&
-        sessionManager &&
-        'start' in sessionManager
-      ) {
-        const project = projectId ? getProjectRowById(projectId) : undefined;
-        const repo = project?.github_repo ?? '';
-        const sessionRow = getSession(sessionId);
-        const taskCreatedAt = sessionRow
-          ? new Date(sessionRow.started_at).toISOString()
-          : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-        const investigator = new NoOpInvestigator(
-          sessionManager as unknown as INoOpSessionManager,
-          taskBackend,
-          githubClient,
-        );
-        investigator
-          .investigate({
-            taskId,
-            taskUrl,
-            projectContextUrl,
-            projectId,
-            noOpSessionId: sessionId,
-            baseBranch,
-            featureBranchName,
-            repo,
-            taskCreatedAt,
-          })
-          .catch((e) => {
+      if (scope !== 'periodic') {
+        const hasSessionManager = !!sessionManager && 'start' in sessionManager;
+        if (!prUrl && !hasDiff && taskId && hasSessionManager) {
+          const project = projectId ? getProjectRowById(projectId) : undefined;
+          const repo = project?.github_repo ?? '';
+          const sessionRow = getSession(sessionId);
+          const taskCreatedAt = sessionRow
+            ? new Date(sessionRow.started_at).toISOString()
+            : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+          const investigator = new NoOpInvestigator(
+            sessionManager as unknown as INoOpSessionManager,
+            taskBackend,
+            githubClient,
+          );
+          investigator
+            .investigate({
+              taskId,
+              taskUrl,
+              projectContextUrl,
+              projectId,
+              noOpSessionId: sessionId,
+              baseBranch,
+              featureBranchName,
+              repo,
+              taskCreatedAt,
+            })
+            .catch((e) => {
+              logger.error(
+                `[recoverSession] NoOpInvestigator.investigate failed for ${sessionId}: ${e}`,
+              );
+              try {
+                recordEvent({
+                  event_type: 'no_op_investigation_failed',
+                  actor_type: 'system',
+                  actor_id: sessionId,
+                  project_id: projectId || null,
+                  task_id: taskId || null,
+                  payload: { stage: 'investigate_rejected', reason: String(e) },
+                });
+              } catch (recordErr) {
+                logger.error(
+                  `[recoverSession] recordEvent(no_op_investigation_failed) failed: ${recordErr}`,
+                );
+              }
+            });
+        } else {
+          const reasons: string[] = [];
+          if (prUrl) reasons.push('has_pr_url');
+          if (hasDiff) reasons.push('has_diff');
+          if (!taskId) reasons.push('missing_task_id');
+          if (!hasSessionManager) reasons.push('missing_session_manager');
+          try {
+            recordEvent({
+              event_type: 'no_op_investigation_skipped',
+              actor_type: 'system',
+              actor_id: sessionId,
+              project_id: projectId || null,
+              task_id: taskId || null,
+              payload: { scope, reasons, hasDiff, hasPrUrl: !!prUrl },
+            });
+          } catch (e) {
             logger.error(
-              `[recoverSession] NoOpInvestigator.investigate failed for ${sessionId}: ${e}`,
+              `[recoverSession] recordEvent(no_op_investigation_skipped) failed: ${e}`,
             );
-          });
+          }
+        }
       }
 
       if (prUrl && !prDetectedLive) {

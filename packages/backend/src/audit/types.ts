@@ -148,7 +148,9 @@ type EventType =
   | 'gate_item_schedule_changed'
   | 'gate_item_min_deployed_commit_changed'
   | 'deploy_run_status_changed'
-  | 'base_health_remediation_task_filed';
+  | 'base_health_remediation_task_filed'
+  | 'no_op_investigation_skipped'
+  | 'no_op_investigation_failed';
 
 type ActorType = 'ai' | 'human' | 'system';
 
