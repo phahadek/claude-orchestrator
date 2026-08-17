@@ -59,7 +59,10 @@ export async function applyResolvedNoOp(
   try {
     await taskBackend.updateStatus(taskId, '✅ Done');
   } catch (e) {
-    logger.error(`[NoOpInvestigator] updateStatus(Done) failed for ${taskId}:`, e);
+    logger.error(
+      `[NoOpInvestigator] updateStatus(Done) failed for ${taskId}:`,
+      e,
+    );
   }
   try {
     await taskBackend.appendImplementationNote(taskId, evidenceText);
