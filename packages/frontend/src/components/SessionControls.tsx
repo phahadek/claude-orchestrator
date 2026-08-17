@@ -399,12 +399,12 @@ export function SessionControls({
             {visibleCapabilities.map(({ capability, provenance }) => (
               <span
                 key={capability}
-                className={`${styles.capabilityChip} ${provenance === 'auto' ? styles['capabilityChip--auto'] : styles['capabilityChip--operator']}`}
+                className={`${styles.capabilityChip} ${styles[`capabilityChip--${provenance}`]}`}
                 title={capability}
               >
                 <span className={styles.capabilityText}>{capability}</span>
                 <span className={styles.capabilityProvenance}>
-                  {provenance === 'auto' ? 'auto' : 'operator'}
+                  {provenance}
                 </span>
                 <button
                   className={styles.capabilityRemove}

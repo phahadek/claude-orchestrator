@@ -75,6 +75,7 @@ import {
   clearStagedIntentGroup,
   getTaskCache,
   getSession,
+  getGrantedCapabilities,
   hasActiveCapabilityRequestForSession,
   hasDecisionPickOneForTask,
   updateCompletenessDispositionApproval,
@@ -5253,6 +5254,13 @@ async function resumeReviewDisputeAuthor(
  * in the task's declared-writes section — declaration only ever narrows an
  * already-grantable request down to auto-approved, it never widens what's
  * grantable.
+ *
+ * Checked before either auto-approve path: a request for a capability the
+ * session already holds (config-pre-granted or previously approved) is an
+ * immediate no-op — transitioned straight to `withdrawn`, never staged as a
+ * fresh `pending`/`approved` intent and never re-run through
+ * `resumeCapabilityRequester` (no redundant grant, respawn, or
+ * capability_request_disposition audit entry).
  */
 async function maybeAutoApproveCapabilityRequest(
   intent: StagedIntent,
@@ -5268,6 +5276,15 @@ async function maybeAutoApproveCapabilityRequest(
 
   const payload = intent.payload as CapabilityRequestPayload;
   const requestingSession = getSession(intent.sessionId);
+
+  if (getGrantedCapabilities(intent.sessionId).includes(payload.capability)) {
+    const withdrawn = transitionStagedIntent(intent.id, 'withdrawn', {
+      dispositionReason: `"${payload.capability}" is already granted to this session — no request needed.`,
+    });
+    const withdrawnIntent = rowToApi(withdrawn);
+    broadcastIntentChange(withdrawnIntent);
+    return withdrawnIntent;
+  }
 
   const sanctioned = isSanctionedAutoApproveCapability(
     payload.capability,
