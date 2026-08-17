@@ -42,6 +42,7 @@ import { NotionClient } from '../../notion/NotionClient.js';
 
 function unit(overrides: Partial<ArchUnit> & { id: string }): ArchUnit {
   return {
+    project: 'proj-1',
     title: overrides.id,
     kind: 'subsystem',
     topic: 'general',
@@ -71,7 +72,10 @@ describe('selectUnitsFromStore', () => {
     });
 
     const result = selectUnitsFromStore(
-      { regions: { packages: ['packages/backend/src/sessions'] } },
+      {
+        projectId: 'proj-1',
+        regions: { packages: ['packages/backend/src/sessions'] },
+      },
       { queryActiveUnits: () => [sessions, unrelated, nested] },
     );
 
@@ -90,7 +94,10 @@ describe('selectUnitsFromStore', () => {
     });
 
     const result = selectUnitsFromStore(
-      { regions: { packages: ['packages/backend/src/sessions'] } },
+      {
+        projectId: 'proj-1',
+        regions: { packages: ['packages/backend/src/sessions'] },
+      },
       { queryActiveUnits: () => [invariant, matched] },
     );
 
@@ -102,7 +109,7 @@ describe('selectUnitsFromStore', () => {
     const otherTopic = unit({ id: 'b', topic: 'sessions' });
 
     const result = selectUnitsFromStore(
-      { topic: 'design-signoff' },
+      { projectId: 'proj-1', topic: 'design-signoff' },
       { queryActiveUnits: () => [sameTopic, otherTopic] },
     );
 
@@ -118,6 +125,7 @@ describe('selectUnitsFromStore', () => {
 
     const result = selectUnitsFromStore(
       {
+        projectId: 'proj-1',
         topic: 'design-signoff',
         regions: { packages: ['packages/backend'] },
       },
@@ -125,6 +133,20 @@ describe('selectUnitsFromStore', () => {
     );
 
     expect(result).toEqual([]);
+  });
+
+  it('passes projectId through to queryActiveUnits, scoping the underlying query', () => {
+    const seen: string[] = [];
+    selectUnitsFromStore(
+      { projectId: 'proj-only-this-one', regions: {} },
+      {
+        queryActiveUnits: (projectId) => {
+          seen.push(projectId);
+          return [];
+        },
+      },
+    );
+    expect(seen).toEqual(['proj-only-this-one']);
   });
 });
 
@@ -137,6 +159,7 @@ describe('selectUnitsFromStore against the real arch_unit store', () => {
 
   it('excludes superseded and deferred units via the default active-only query', () => {
     createUnit({
+      project: 'proj-1',
       title: 'Always-on invariant',
       kind: 'invariant',
       topic: 'general',
@@ -145,6 +168,7 @@ describe('selectUnitsFromStore against the real arch_unit store', () => {
       at: '2026-01-01T00:00:00Z',
     });
     const toSupersede = createUnit({
+      project: 'proj-1',
       title: 'Old subsystem note',
       kind: 'subsystem',
       topic: 'sessions',
@@ -155,6 +179,7 @@ describe('selectUnitsFromStore against the real arch_unit store', () => {
     supersedeUnit(
       toSupersede.id,
       {
+        project: 'proj-1',
         title: 'New subsystem note',
         kind: 'subsystem',
         topic: 'sessions',
@@ -165,6 +190,7 @@ describe('selectUnitsFromStore against the real arch_unit store', () => {
       '2026-01-02T00:00:00Z',
     );
     const deferred = createUnit({
+      project: 'proj-1',
       title: 'Deferred idea',
       kind: 'subsystem',
       topic: 'sessions',
@@ -175,6 +201,7 @@ describe('selectUnitsFromStore against the real arch_unit store', () => {
     });
 
     const result = selectUnitsFromStore({
+      projectId: 'proj-1',
       regions: { packages: ['packages/backend/src/sessions'] },
     });
 
@@ -184,6 +211,34 @@ describe('selectUnitsFromStore against the real arch_unit store', () => {
     expect(titles).not.toContain('Old subsystem note');
     expect(titles).not.toContain('Deferred idea');
     expect(result.some((u) => u.id === deferred.id)).toBe(false);
+  });
+
+  it('never returns another project\'s units, even active invariants', () => {
+    createUnit({
+      project: 'proj-1',
+      title: 'proj-1 invariant',
+      kind: 'invariant',
+      topic: 'general',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+    createUnit({
+      project: 'proj-2',
+      title: 'proj-2 invariant',
+      kind: 'invariant',
+      topic: 'general',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const result = selectUnitsFromStore({
+      projectId: 'proj-2',
+      regions: { packages: ['packages/backend/src/sessions'] },
+    });
+
+    expect(result.map((u) => u.title)).toEqual(['proj-2 invariant']);
   });
 });
 

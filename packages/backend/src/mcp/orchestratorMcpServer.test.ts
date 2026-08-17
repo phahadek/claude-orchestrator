@@ -324,6 +324,7 @@ describe('architecture.getUnit / architecture.queryUnits', () => {
       session_type: 'groom',
     });
     const unit = createUnit({
+      project: 'proj-1',
       title: 'Test Invariant',
       kind: 'invariant',
       topic: 'system-architecture',

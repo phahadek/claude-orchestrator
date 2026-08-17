@@ -10112,9 +10112,9 @@ export function getArchUnit(id: string): ArchUnitRow | undefined {
 export function insertArchUnit(row: NewArchUnitRow): void {
   _stmtInsertArchUnit ??= db.prepare<ArchUnitRow>(`
     INSERT INTO arch_unit
-      (id, title, kind, topic, regions, status, body, supersedes, superseded_by, version, created_at, updated_at)
+      (id, project, title, kind, topic, regions, status, body, supersedes, superseded_by, version, created_at, updated_at)
     VALUES
-      (@id, @title, @kind, @topic, @regions, @status, @body, @supersedes, @superseded_by, @version, @created_at, @updated_at)
+      (@id, @project, @title, @kind, @topic, @regions, @status, @body, @supersedes, @superseded_by, @version, @created_at, @updated_at)
   `);
   _stmtInsertArchUnit.run({
     ...row,
@@ -10168,6 +10168,10 @@ export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
   const clauses: string[] = [];
   const params: Record<string, string> = {};
 
+  if (query.project) {
+    clauses.push('project = @project');
+    params.project = query.project;
+  }
   if (query.topic) {
     clauses.push('topic = @topic');
     params.topic = query.topic;
@@ -10199,10 +10203,16 @@ export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
  * "topic recognized but currently empty" when a queryArchUnits call by
  * topic returns zero rows.
  */
-export function listArchUnitTopics(): string[] {
-  const rows = db
-    .prepare(`SELECT DISTINCT topic FROM arch_unit ORDER BY topic`)
-    .all() as { topic: string }[];
+export function listArchUnitTopics(project?: string): string[] {
+  const rows = project
+    ? (db
+        .prepare(
+          `SELECT DISTINCT topic FROM arch_unit WHERE project = @project ORDER BY topic`,
+        )
+        .all({ project }) as { topic: string }[])
+    : (db
+        .prepare(`SELECT DISTINCT topic FROM arch_unit ORDER BY topic`)
+        .all() as { topic: string }[]);
   return rows.map((r) => r.topic);
 }
 
@@ -10211,14 +10221,23 @@ export function listArchUnitTopics(): string[] {
  * flattened out of each row's JSON regions array — the live region
  * vocabulary a region substring filter is checked against.
  */
-export function listArchUnitRegions(): string[] {
-  const rows = db
-    .prepare(
-      `SELECT DISTINCT r.value AS region
-       FROM arch_unit, json_each(arch_unit.regions) AS r
-       ORDER BY region`,
-    )
-    .all() as { region: string }[];
+export function listArchUnitRegions(project?: string): string[] {
+  const rows = project
+    ? (db
+        .prepare(
+          `SELECT DISTINCT r.value AS region
+           FROM arch_unit, json_each(arch_unit.regions) AS r
+           WHERE arch_unit.project = @project
+           ORDER BY region`,
+        )
+        .all({ project }) as { region: string }[])
+    : (db
+        .prepare(
+          `SELECT DISTINCT r.value AS region
+           FROM arch_unit, json_each(arch_unit.regions) AS r
+           ORDER BY region`,
+        )
+        .all() as { region: string }[]);
   return rows.map((r) => r.region);
 }
 

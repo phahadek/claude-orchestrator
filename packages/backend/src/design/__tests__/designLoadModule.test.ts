@@ -227,6 +227,7 @@ describe('loadDesignContext', () => {
   it('resolves architecture units from the arch_unit store (source: store) once the project has archStoreAdopted set', async () => {
     updateProject(PROJECT, { arch_store_adopted: 1 });
     createUnit({
+      project: PROJECT,
       title: 'Sessions dispatch through the SessionManager invariant',
       kind: 'invariant',
       topic: 'general',
@@ -235,6 +236,7 @@ describe('loadDesignContext', () => {
       at: '2026-01-01T00:00:00Z',
     });
     createUnit({
+      project: PROJECT,
       title: 'Non-invariant unit outside a design task scope',
       kind: 'subsystem',
       topic: 'sessions',
@@ -273,9 +275,43 @@ describe('loadDesignContext', () => {
     }
   });
 
+  it("never surfaces another project's arch_unit rows, including its active invariants", async () => {
+    updateProject(PROJECT, { arch_store_adopted: 1 });
+    createUnit({
+      project: PROJECT,
+      title: 'This project invariant',
+      kind: 'invariant',
+      topic: 'general',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+    createUnit({
+      project: 'some-other-project',
+      title: 'Other project invariant',
+      kind: 'invariant',
+      topic: 'general',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const result = await loadDesignContext(MILESTONE, TASK_ID, {
+      repoRoot: '/tmp/design-load-test-nonexistent-repo',
+      manifest: {
+        context_pages: [{ id: ARCH_PAGE_ID, title: 'Technical Architecture' }],
+      },
+    });
+
+    expect(result.archUnits.map((u) => u.title)).toEqual([
+      'This project invariant',
+    ]);
+  });
+
   it("resolves the task's topic from its 'Notion pages affected' references and includes that topic's active units alongside the active invariants", async () => {
     updateProject(PROJECT, { arch_store_adopted: 1 });
     createUnit({
+      project: PROJECT,
       title: 'Sessions dispatch through the SessionManager invariant',
       kind: 'invariant',
       topic: 'general',
@@ -286,6 +322,7 @@ describe('loadDesignContext', () => {
     // Matches the task body's "Technical Architecture" page reference
     // (fuzzy substring match against the store's own unit titles).
     createUnit({
+      project: PROJECT,
       title: 'Technical Architecture reference document',
       kind: 'reference',
       topic: 'architecture-store',
@@ -294,6 +331,7 @@ describe('loadDesignContext', () => {
       at: '2026-01-01T00:00:00Z',
     });
     createUnit({
+      project: PROJECT,
       title: 'Another unit filed under the architecture-store topic',
       kind: 'decision',
       topic: 'architecture-store',
@@ -302,6 +340,7 @@ describe('loadDesignContext', () => {
       at: '2026-01-01T00:00:00Z',
     });
     createUnit({
+      project: PROJECT,
       title: 'Unit filed under an unrelated topic',
       kind: 'subsystem',
       topic: 'sessions',
@@ -335,6 +374,7 @@ describe('loadDesignContext', () => {
   it('excludes non-active units from both the invariant and topic paths', async () => {
     updateProject(PROJECT, { arch_store_adopted: 1 });
     createUnit({
+      project: PROJECT,
       title: 'Deferred invariant that must not surface',
       kind: 'invariant',
       topic: 'general',
@@ -344,6 +384,7 @@ describe('loadDesignContext', () => {
       at: '2026-01-01T00:00:00Z',
     });
     createUnit({
+      project: PROJECT,
       title: 'Technical Architecture reference document',
       kind: 'reference',
       topic: 'architecture-store',
@@ -367,6 +408,7 @@ describe('loadDesignContext', () => {
   it('degrades to the invariant-only selection, without erroring, when the topic cannot be resolved', async () => {
     updateProject(PROJECT, { arch_store_adopted: 1 });
     createUnit({
+      project: PROJECT,
       title: 'Sessions dispatch through the SessionManager invariant',
       kind: 'invariant',
       topic: 'general',
@@ -375,6 +417,7 @@ describe('loadDesignContext', () => {
       at: '2026-01-01T00:00:00Z',
     });
     createUnit({
+      project: PROJECT,
       title: 'Unit filed under a topic no referenced page resolves to',
       kind: 'subsystem',
       topic: 'unrelated-topic',
@@ -405,6 +448,7 @@ describe('loadDesignContext', () => {
   it("keeps returning the project's Notion architecture pages (source: notion) when archStoreAdopted is not set", async () => {
     // No updateProject call — archStoreAdopted defaults to false at insertProject.
     createUnit({
+      project: PROJECT,
       title: 'Should never surface — project has not adopted the store',
       kind: 'invariant',
       topic: 'general',

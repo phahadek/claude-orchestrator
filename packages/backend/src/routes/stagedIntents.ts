@@ -2018,8 +2018,10 @@ interface ArchSupersedeUnitPayload {
 
 function toNewArchUnitFields(
   payload: ArchCreateUnitPayload,
+  projectId: string,
 ): NewArchUnitCommandFields {
   return {
+    project: projectId,
     title: payload.title,
     kind: payload.metadata.kind,
     topic: payload.metadata.topic,
@@ -4845,7 +4847,9 @@ async function applyIntent(
         }
       }
       const payload = intent.payload as ArchCreateUnitPayload;
-      const unit = await archCommands.createUnit(toNewArchUnitFields(payload));
+      const unit = await archCommands.createUnit(
+        toNewArchUnitFields(payload, intent.projectId),
+      );
       setStagedIntentAppliedTaskId(intent.id, unit.id);
       return { id: unit.id, version: unit.version };
     }
@@ -4863,7 +4867,7 @@ async function applyIntent(
       const result = await archCommands.supersedeUnit(
         payload.unitId,
         payload.baseVersion,
-        toNewArchUnitFields(payload.replacement),
+        toNewArchUnitFields(payload.replacement, intent.projectId),
       );
       return {
         previousId: result.previous.id,

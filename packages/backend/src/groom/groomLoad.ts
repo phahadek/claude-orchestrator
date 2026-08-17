@@ -729,9 +729,10 @@ export async function loadGroomContext(
       ),
       archSource,
       archUnits: archStoreAdopted
-        ? selectUnitsFromStore({ regions: regionsForBinding(regions) }).map(
-            (u) => ({ id: u.id, title: u.title, body: u.body }),
-          )
+        ? selectUnitsFromStore({
+            projectId: opts?.projectId as string,
+            regions: regionsForBinding(regions),
+          }).map((u) => ({ id: u.id, title: u.title, body: u.body }))
         : notionArchUnits,
       filesPathsEntries: parseFilesPathsEntries(
         page.filesSection,
