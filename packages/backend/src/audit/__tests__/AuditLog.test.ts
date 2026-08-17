@@ -3,7 +3,7 @@
  * production edit events (task_body_updated / task_deps_updated) are written
  * with a `source:`-prefixed task_id by TaskBackend.updateBody/updateBodyRaw/
  * patchBodySection, but callers such as isPlanningKillSuppressed and
- * isGroomNoOpSuppressed (db/queries.ts) query with the bare board-cache id.
+ * isNoOpSuppressed (db/queries.ts) query with the bare board-cache id.
  * A literal `task_id = ?` match silently misses every edit recorded in the
  * other id form. hasTaskEditSinceTimestamp must compare via normalizeBoardId
  * so either form finds the other.

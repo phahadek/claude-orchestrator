@@ -212,6 +212,16 @@ export const ALLOWED_TOOLS = [
   // orchestratorMcpToolName so it emits the underscore CLI form the model
   // actually calls.
   orchestratorMcpToolName('report.file'),
+  // planning.noOp is a code session's terminal declaration that a
+  // dispatched task's work is already satisfied elsewhere — the scaffold
+  // now directs it to stage this instead of stopping silently, which would
+  // otherwise leave the task to be re-dispatched forever (see
+  // CODE_INTENT_KINDS, planningIntentKinds.ts, and routes/stagedIntents.ts's
+  // maybeAutoResolveCodeNoOp). Same failure mode as test.request/
+  // review.dispute/report.file above without this entry: registered
+  // server-side but unlisted here, every call denied by the CLI before it
+  // reaches the MCP server.
+  orchestratorMcpToolName('planning.noOp'),
   ...TIER_B_READ_MCP_TOOLS,
 ];
 

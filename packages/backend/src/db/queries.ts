@@ -8650,9 +8650,10 @@ let _stmtGetLatestNoOpForTask: Database.Statement | null = null;
 
 /**
  * The task's most recent planning.noOp staged intent (by creation order),
- * in whatever state it currently holds. isGroomNoOpSuppressed reads its
- * state/updated_at to decide whether the deliberate "leave it at Backlog"
- * decision it recorded still stands.
+ * in whatever state it currently holds. isNoOpSuppressed reads its
+ * state/updated_at to decide whether the deliberate decision it recorded —
+ * a groom/design "leave it at Backlog", or a standard/ops session's
+ * "already resolved elsewhere" — still stands.
  */
 function getLatestNoOpForTask(taskId: string): StagedIntentRow | undefined {
   _stmtGetLatestNoOpForTask ??= db.prepare<{ task_id: string }>(
@@ -8668,17 +8669,21 @@ function getLatestNoOpForTask(taskId: string): StagedIntentRow | undefined {
 
 /**
  * True while a task's most recent planning.noOp still suppresses
- * auto-grooming candidacy. Only a no-op that reached `committed` represents
- * an accepted operator decision — staged, rejected and superseded carry no
- * acceptance and never suppress. Suppression is derived from the committed
- * intent itself, not from the staging session's status, so it holds after
- * that session reaches a terminal state (see isGroomCandidate). It retires
- * the moment a task_body_updated or task_deps_updated audit event lands for
- * the task after the no-op's commit timestamp (its `updated_at`) — the
- * conditions the no-op was reasoned against changing reopens candidacy with
- * no operator action required.
+ * auto-grooming candidacy AND re-dispatch/orphan-revert candidacy (see
+ * orchestration/planningCandidates.ts, orchestration/AutoLauncher.ts, and
+ * orchestration/OrphanedTaskSweeper.ts — the single predicate every
+ * candidacy/revert check must consult, never a parallel one). Only a no-op
+ * that reached `committed` represents an accepted decision — staged,
+ * rejected and superseded carry no acceptance and never suppress.
+ * Suppression is derived from the committed intent itself, not from the
+ * staging session's status, so it holds after that session reaches a
+ * terminal state (see isGroomCandidate). It retires the moment a
+ * task_body_updated or task_deps_updated audit event lands for the task
+ * after the no-op's commit timestamp (its `updated_at`) — the conditions the
+ * no-op was reasoned against changing reopens candidacy with no operator
+ * action required.
  */
-export function isGroomNoOpSuppressed(taskId: string): boolean {
+export function isNoOpSuppressed(taskId: string): boolean {
   const noOp = getLatestNoOpForTask(taskId);
   if (!noOp || noOp.state !== 'committed') return false;
   return !hasTaskEditSinceTimestamp(taskId, noOp.updated_at);
@@ -8694,7 +8699,7 @@ export type KillSuppressiblePlanningFlow = 'groom' | 'design' | 'ops';
  * True while a task's most recent planning session of `flow` was ended by an
  * explicit operator kill (reason `user_kill`) and no orchestrator-authored
  * edit (task_body_updated / task_deps_updated) has landed for the task since
- * that kill — the deliberate-kill analog of isGroomNoOpSuppressed, generalized
+ * that kill — the deliberate-kill analog of isNoOpSuppressed, generalized
  * across groom/design/ops. A kill is deliberately excluded from the crash
  * budget (SessionManager's UNCOUNTED_REASONS) so it never triggers a revert or
  * needs_attention; without this gate that exclusion left the task fully

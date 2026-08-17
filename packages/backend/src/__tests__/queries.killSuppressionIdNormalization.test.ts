@@ -1,6 +1,6 @@
 /**
  * Regression coverage for the id-space mismatch in isPlanningKillSuppressed /
- * isGroomNoOpSuppressed: both call hasTaskEditSinceTimestamp, which used to
+ * isNoOpSuppressed: both call hasTaskEditSinceTimestamp, which used to
  * do a literal task_id match against audit_log — but edit events are written
  * with a `source:`-prefixed task_id (TaskBackend.updateBody/updateBodyRaw/
  * patchBodySection) while the evaluator supplies the bare board-cache id.
@@ -20,7 +20,7 @@ import {
   insertSession,
   insertStagedIntent,
   isPlanningKillSuppressed,
-  isGroomNoOpSuppressed,
+  isNoOpSuppressed,
 } from '../db/queries.js';
 import { recordEvent } from '../audit/AuditLog';
 
@@ -107,7 +107,7 @@ describe('isPlanningKillSuppressed id-form normalization', () => {
   });
 });
 
-describe('isGroomNoOpSuppressed id-form normalization', () => {
+describe('isNoOpSuppressed id-form normalization', () => {
   function seedCommittedNoOp(taskId: string, updatedAt: number) {
     insertStagedIntent({
       id: `noop-${Math.random()}`,
@@ -136,7 +136,7 @@ describe('isGroomNoOpSuppressed id-form normalization', () => {
   it('clears when the edit was recorded with a notion:-prefixed id but queried with the bare id', () => {
     const committedAt = Date.now() - 60_000;
     seedCommittedNoOp(UUID, committedAt);
-    expect(isGroomNoOpSuppressed(UUID)).toBe(true);
+    expect(isNoOpSuppressed(UUID)).toBe(true);
 
     recordEvent({
       event_type: 'task_body_updated',
@@ -147,13 +147,13 @@ describe('isGroomNoOpSuppressed id-form normalization', () => {
       payload: {},
     });
 
-    expect(isGroomNoOpSuppressed(UUID)).toBe(false);
+    expect(isNoOpSuppressed(UUID)).toBe(false);
   });
 
   it('clears when the edit was recorded with the bare id but queried with the notion:-prefixed id', () => {
     const committedAt = Date.now() - 60_000;
     seedCommittedNoOp(NOTION_ID, committedAt);
-    expect(isGroomNoOpSuppressed(NOTION_ID)).toBe(true);
+    expect(isNoOpSuppressed(NOTION_ID)).toBe(true);
 
     recordEvent({
       event_type: 'task_deps_updated',
@@ -164,6 +164,6 @@ describe('isGroomNoOpSuppressed id-form normalization', () => {
       payload: {},
     });
 
-    expect(isGroomNoOpSuppressed(NOTION_ID)).toBe(false);
+    expect(isNoOpSuppressed(NOTION_ID)).toBe(false);
   });
 });

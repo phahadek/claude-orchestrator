@@ -63,6 +63,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'intent.withdraw',
     'gate.verify',
     'ops.prIntent',
+    'planning.noOp',
   ],
   split: [
     'task.updateBody',
@@ -96,11 +97,18 @@ export const PLANNING_INTENT_KINDS: Record<
  * session's route to file an inert investigation report about a defect it
  * must not fix itself — see mcp/tools/stageProposalTools.ts's report.file
  * registration and routes/stagedIntents.ts's report.file apply case.
+ * planning.noOp is a code session's terminal declaration that a dispatched
+ * task's work is already satisfied elsewhere (a re-dispatch of an
+ * already-settled task) — see routes/stagedIntents.ts's
+ * maybeAutoResolveCodeNoOp, which auto-commits it and closes the task on
+ * stage rather than waiting on an operator Acknowledge the way a
+ * groom/design no-op does.
  */
 export const CODE_INTENT_KINDS: readonly string[] = [
   'review.dispute',
   'test.request',
   'report.file',
+  'planning.noOp',
 ];
 
 /**

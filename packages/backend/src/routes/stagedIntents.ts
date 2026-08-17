@@ -86,6 +86,8 @@ import {
   getSessionDeclaredWrites,
   getLatestOpsSessionByTaskId,
   getAllBoardCacheTasks,
+  markSessionDone,
+  setSessionTerminalCompletionReason,
 } from '../db/queries';
 import type { OpsReconciliationAssertion } from '../db/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
@@ -186,6 +188,7 @@ import type {
   PRReviewService,
   PRReviewResult,
 } from '../github/PRReviewService';
+import { applyResolvedNoOp } from '../github/NoOpInvestigator';
 import { asyncHandler } from './asyncHandler';
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
@@ -6504,10 +6507,92 @@ export function formatStageTimeBlockFeedback(
  * looping forever, mirroring PlanningOrchestrator.verifyAndRoutePendingGroups
  * only feeding back non-escalated outcomes.
  */
+/**
+ * The distinct terminal_completion_reason a standard/ops session's
+ * auto-resolved planning.noOp leaves on its session row — deliberately not
+ * 'idle' (the silent-stop shape this task exists to close off) and
+ * deliberately not shared with any PR-driven completing reason, so a later
+ * query can tell "closed because its own no-op resolved the task" apart from
+ * every other terminal path.
+ */
+export const NO_OP_RESOLVED_REASON = 'no_op_resolved';
+
+/**
+ * Auto-resolves a standalone planning.noOp staged by a standard or ops
+ * session declaring the dispatched task's work is already satisfied
+ * elsewhere — the dispatched-session analog of NoOpInvestigator's
+ * `resolved` verdict, reached directly rather than through a secondary
+ * investigator session, since the staging session already did that
+ * investigation itself and named the evidence in `reason` (see the
+ * scaffold text in orchestrator-claudemd.ts).
+ *
+ * Deliberately narrower than the general planning.noOp path: a groom/
+ * design/split/docs no-op declares "nothing to change this turn", not "this
+ * task is already done" — those still commit only via the operator's
+ * Acknowledge (see StagedIntentPanel.tsx's isNoOp branch and the
+ * /staged-intents/:id/acknowledge route), unchanged. Gated on the staging
+ * session's session_type rather than on the intent's kind-eligibility list,
+ * since groom/design/ops all list `planning.noOp` as an allowed kind but
+ * only standard/ops sessions get this auto-close semantics. A grouped
+ * planning.noOp (part of a design closing-synthesis pass) is untouched —
+ * it commits only through the group-commit path (see applyIntent's
+ * 'planning.noOp' case).
+ */
+async function maybeAutoResolveCodeNoOp(
+  intent: StagedIntent,
+): Promise<StagedIntent> {
+  if (
+    intent.kind !== 'planning.noOp' ||
+    intent.groupId ||
+    !intent.sessionId ||
+    intent.state !== 'staged'
+  ) {
+    return intent;
+  }
+  const session = getSession(intent.sessionId);
+  if (
+    !session ||
+    (session.session_type !== 'standard' && session.session_type !== 'ops')
+  ) {
+    return intent;
+  }
+  const payload = intent.payload as { taskId?: string; reason?: string };
+  if (!payload?.taskId || !payload.reason) return intent;
+
+  const committed = transitionStagedIntent(intent.id, 'committed');
+  const committedIntent = rowToApi(committed);
+  broadcastIntentChange(committedIntent);
+
+  recordEvent({
+    event_type: 'staged_intent_disposition',
+    actor_type: 'system',
+    actor_id: null,
+    project_id: committedIntent.projectId,
+    task_id: payload.taskId,
+    payload: { intentId: committedIntent.id, disposition: 'auto_committed' },
+  });
+
+  await applyResolvedNoOp(
+    getTaskBackend(intent.projectId),
+    payload.taskId,
+    `Auto-resolved via planning.noOp — this task's work was already satisfied: ${payload.reason}`,
+  );
+
+  markSessionDone(intent.sessionId, Date.now(), null, NO_OP_RESOLVED_REASON);
+  setSessionTerminalCompletionReason(intent.sessionId, NO_OP_RESOLVED_REASON);
+
+  return committedIntent;
+}
+
 export async function routeStageTimeBlock(
   intent: StagedIntent,
   sessionManager: SessionManager | undefined,
 ): Promise<StagedIntent> {
+  if (intent.kind === 'planning.noOp') {
+    const resolved = await maybeAutoResolveCodeNoOp(intent);
+    if (resolved.state === 'committed') return resolved;
+    intent = resolved;
+  }
   if (intent.kind === 'session.requestCapability') {
     return maybeAutoApproveCapabilityRequest(intent, sessionManager);
   }

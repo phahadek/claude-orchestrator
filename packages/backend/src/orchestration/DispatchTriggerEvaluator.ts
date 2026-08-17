@@ -16,7 +16,7 @@ import {
   getTaskCache,
   hasActivePlanningSessionForTask,
   hasActiveSessionForTask,
-  isGroomNoOpSuppressed,
+  isNoOpSuppressed,
   isPlanningKillSuppressed,
   listMilestonesByProject,
   setTaskPauseReason,
@@ -273,7 +273,7 @@ export class DispatchTriggerEvaluator {
             hasActiveGroomSession: (taskId) =>
               hasActivePlanningSessionForTask(taskId, 'groom'),
             inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
-            isNoOpSuppressed: isGroomNoOpSuppressed,
+            isNoOpSuppressed,
             isKillSuppressed: (taskId) =>
               isPlanningKillSuppressed(taskId, 'groom'),
           })
@@ -425,7 +425,7 @@ export class DispatchTriggerEvaluator {
       hasActiveGroomSession: (taskId) =>
         hasActivePlanningSessionForTask(taskId, 'groom'),
       inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
-      isNoOpSuppressed: isGroomNoOpSuppressed,
+      isNoOpSuppressed,
       isKillSuppressed: (taskId) => isPlanningKillSuppressed(taskId, 'groom'),
     });
   }
