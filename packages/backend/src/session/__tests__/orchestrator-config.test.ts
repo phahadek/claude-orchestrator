@@ -569,6 +569,32 @@ describe('isGrantable', () => {
       isGrantable(pathReadCapability('/some/dir/containing/apply/or/resolve')),
     ).toBe(true);
   });
+
+  it('returns true for a Bash(...) capability whose quoted query-argument text embeds "resolve" as a column-name substring, not the command verb', () => {
+    expect(
+      isGrantable(
+        'Bash(node readonly-db-query.js "SELECT resolved_at FROM capability_disqualification")',
+      ),
+    ).toBe(true);
+  });
+
+  it.each(['apply', 'resolve', 'done', 'task-intent'])(
+    'returns true when "%s" only appears inside quoted query text, not as the command verb',
+    (word) => {
+      expect(
+        isGrantable(`Bash(psql -c "SELECT * FROM t WHERE col = '${word}'")`),
+      ).toBe(true);
+    },
+  );
+
+  it.each(['apply', 'resolve', 'done', 'task-intent'])(
+    'still returns false when "%s" appears unquoted as the command verb/action',
+    (word) => {
+      expect(isGrantable(`Bash(scripts/${word}-staged-intent.sh:*)`)).toBe(
+        false,
+      );
+    },
+  );
 });
 
 describe('pathReadCapability / parsePathReadCapability', () => {
