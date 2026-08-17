@@ -213,7 +213,7 @@ describe('selectUnitsFromStore against the real arch_unit store', () => {
     expect(result.some((u) => u.id === deferred.id)).toBe(false);
   });
 
-  it('never returns another project\'s units, even active invariants', () => {
+  it("never returns another project's units, even active invariants", () => {
     createUnit({
       project: 'proj-1',
       title: 'proj-1 invariant',
