@@ -179,15 +179,15 @@ export function formatAdhocQueryOutput(
 ): string {
   let rows = result.rows;
   let truncated = result.truncated;
-  let json = JSON.stringify({ rows, rowCount: rows.length, truncated }, null, 2);
+  let json = JSON.stringify(
+    { rows, rowCount: rows.length, truncated },
+    null,
+    2,
+  );
   while (json.length > maxChars && rows.length > 0) {
     rows = rows.slice(0, Math.ceil(rows.length / 2));
     truncated = true;
-    json = JSON.stringify(
-      { rows, rowCount: rows.length, truncated },
-      null,
-      2,
-    );
+    json = JSON.stringify({ rows, rowCount: rows.length, truncated }, null, 2);
   }
   return json;
 }

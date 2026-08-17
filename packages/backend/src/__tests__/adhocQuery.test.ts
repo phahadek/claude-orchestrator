@@ -15,9 +15,9 @@ import {
 
 describe('adhoc-query — statement validation', () => {
   it('accepts a single SELECT statement', () => {
-    expect(
-      assertSingleReadOnlyStatement('SELECT id FROM sessions'),
-    ).toBe('SELECT id FROM sessions');
+    expect(assertSingleReadOnlyStatement('SELECT id FROM sessions')).toBe(
+      'SELECT id FROM sessions',
+    );
   });
 
   it('accepts a single WITH ... SELECT statement', () => {
