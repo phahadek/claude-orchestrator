@@ -30,7 +30,10 @@ describe('SessionManager.completeStart() — dependency bootstrap duration loggi
 
   it('logs the cache-pool duration only when the pool call reports a hit', () => {
     const durationIdx = block.indexOf('path=cache-pool');
-    const handledIdx = block.lastIndexOf('if (handledByCachePool) {', durationIdx);
+    const handledIdx = block.lastIndexOf(
+      'if (handledByCachePool) {',
+      durationIdx,
+    );
     expect(handledIdx).toBeGreaterThan(-1);
     expect(durationIdx).toBeGreaterThan(handledIdx);
   });
