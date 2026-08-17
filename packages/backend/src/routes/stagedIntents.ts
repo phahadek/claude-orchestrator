@@ -6515,7 +6515,7 @@ export function formatStageTimeBlockFeedback(
  * query can tell "closed because its own no-op resolved the task" apart from
  * every other terminal path.
  */
-export const NO_OP_RESOLVED_REASON = 'no_op_resolved';
+const NO_OP_RESOLVED_REASON = 'no_op_resolved';
 
 /**
  * Auto-resolves a standalone planning.noOp staged by a standard or ops
