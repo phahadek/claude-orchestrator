@@ -170,17 +170,29 @@ describe('InvestigationReportSection — state filter', () => {
     expect(screen.getByTestId('report-card-r-committed')).toBeTruthy();
     expect(screen.queryByTestId('report-card-r-resolved')).toBeNull();
     expect(screen.queryByTestId('report-card-r-abandoned')).toBeNull();
-    expect(
-      screen.getByTestId('report-filter-active').className,
-    ).toContain('stateTabActive');
+    expect(screen.getByTestId('report-filter-active').className).toContain(
+      'stateTabActive',
+    );
   });
 
   it('shows only in-flight reports, regardless of state, when Dispatched is selected', async () => {
     vi.spyOn(reportsApi, 'list').mockResolvedValue({
       items: [
-        makeReport({ id: 'r-committed-inflight', state: 'committed', inFlight: true }),
-        makeReport({ id: 'r-resolved-inflight', state: 'resolved', inFlight: true }),
-        makeReport({ id: 'r-committed-idle', state: 'committed', inFlight: false }),
+        makeReport({
+          id: 'r-committed-inflight',
+          state: 'committed',
+          inFlight: true,
+        }),
+        makeReport({
+          id: 'r-resolved-inflight',
+          state: 'resolved',
+          inFlight: true,
+        }),
+        makeReport({
+          id: 'r-committed-idle',
+          state: 'committed',
+          inFlight: false,
+        }),
         makeReport({ id: 'r-draft-idle', state: 'draft', inFlight: false }),
       ],
       total: 4,

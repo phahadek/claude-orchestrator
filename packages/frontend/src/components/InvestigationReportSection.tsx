@@ -248,7 +248,8 @@ export function InvestigationReportSection({
           onClick={() => setStateFilter('active')}
           data-testid="report-filter-active"
         >
-          Active ({reports.filter((r) => ACTIVE_STATES.includes(r.state)).length})
+          Active (
+          {reports.filter((r) => ACTIVE_STATES.includes(r.state)).length})
         </button>
         <button
           type="button"
