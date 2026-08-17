@@ -257,7 +257,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('jsonl_import', () => deps.jsonlReader.importAll(), {
     fatalOnError: true,
   });
-  await tracker.runStep('token_backfill', () => deps.jsonlReader.backfillTokens());
+  await tracker.runStep('token_backfill', () =>
+    deps.jsonlReader.backfillTokens(),
+  );
   await tracker.runStep('session_events_pruner_at_boot', () =>
     deps.sessionEventsPruner.runAtBoot(),
   );
