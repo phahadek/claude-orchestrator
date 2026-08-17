@@ -348,12 +348,18 @@ export function registerStageProposalTools(
         'journal straight to "resolved" with no operator involvement, a failure stages an ' +
         'interrupting intent naming the mismatch. Perform the actual check yourself (re-read the ' +
         'config row, count the backfill) before staging — reconciliation.passed is your own ' +
-        'verdict, not re-derived by the orchestrator.',
+        'verdict, not re-derived by the orchestrator. A transition to "blocked" staged by an ops ' +
+        'session that has never staged a session.requestCapability intent requires a non-empty ' +
+        '`standDownReason` — a substantive attestation naming why no capability request could ' +
+        'unblock the task (a design decision, a change ops must not make itself, an external ' +
+        'dependency with no sanctioned request path); it is unread when the session did request ' +
+        'a capability.',
       inputSchema: envelope({
         taskId: z.string(),
         state: opsStateSchema,
         fields: z.record(z.string(), z.unknown()).optional(),
         reconciliation: opsReconciliationAssertionSchema.optional(),
+        standDownReason: z.string().optional(),
       }),
     },
     async (args) => stage('journal.setState', args.payload, ctx, args),
