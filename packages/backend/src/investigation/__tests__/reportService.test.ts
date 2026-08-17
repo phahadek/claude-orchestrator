@@ -96,9 +96,16 @@ describe('createReport', () => {
   it.each([
     [{ title: 't', symptomText: 's' }, /projectId/],
     [{ projectId: 'p', symptomText: 's' }, /title/],
-    [{ projectId: 'p', title: 't' }, /symptomText/],
   ])('rejects a request missing a required core field', (input, msg) => {
     expect(() => createReport(input as never)).toThrow(msg);
+  });
+
+  it('creates a report with an omitted symptomText, defaulting to an empty string', () => {
+    const report = createReport({
+      projectId: 'proj-1',
+      title: 't',
+    });
+    expect(report.symptom_text).toBe('');
   });
 
   it.each([

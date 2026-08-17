@@ -125,8 +125,8 @@ export function InvestigationReportSection({
   };
 
   const submitDraft = () => {
-    if (!draftTitle.trim() || !draftSymptom.trim()) {
-      setCreateError('Title and symptom are both required');
+    if (!draftTitle.trim()) {
+      setCreateError('Title is required');
       return;
     }
     setCreating(true);
@@ -153,8 +153,8 @@ export function InvestigationReportSection({
   };
 
   const saveDraft = () => {
-    if (!draftTitle.trim() || !draftSymptom.trim()) {
-      setCreateError('Title and symptom are both required');
+    if (!draftTitle.trim()) {
+      setCreateError('Title is required');
       return;
     }
     setCreating(true);

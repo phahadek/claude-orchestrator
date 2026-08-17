@@ -311,7 +311,7 @@ describe('InvestigationReportSection — filing a report is a single action', ()
     expect(screen.queryByTestId('report-draft-title')).toBeNull();
   });
 
-  it('shows the validation error and creates nothing when title/symptom are missing', async () => {
+  it('shows the validation error and creates nothing when title is missing', async () => {
     vi.spyOn(reportsApi, 'list').mockResolvedValue({
       items: [],
       total: 0,
@@ -326,12 +326,42 @@ describe('InvestigationReportSection — filing a report is a single action', ()
     fireEvent.click(screen.getByTestId('report-start-draft'));
     fireEvent.click(screen.getByTestId('report-draft-submit'));
 
-    expect(
-      await screen.findByText('Title and symptom are both required'),
-    ).toBeTruthy();
+    expect(await screen.findByText('Title is required')).toBeTruthy();
     expect(createSpy).not.toHaveBeenCalled();
     expect(commitSpy).not.toHaveBeenCalled();
     expect(screen.queryAllByTestId(/^report-card-/)).toHaveLength(0);
+  });
+
+  it('files the report when only the title is populated (symptom left blank)', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
+    const draft = makeReport({
+      id: 'r-no-symptom',
+      title: 'New symptom',
+      symptom_text: '',
+      state: 'draft',
+    });
+    const committed = { ...draft, state: 'committed' as const };
+    const createSpy = vi.spyOn(reportsApi, 'create').mockResolvedValue(draft);
+    const commitSpy = vi
+      .spyOn(reportsApi, 'commit')
+      .mockResolvedValue(committed);
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('investigation-report-section');
+    fireEvent.click(screen.getByTestId('report-start-draft'));
+    fireEvent.change(screen.getByTestId('report-draft-title'), {
+      target: { value: 'New symptom' },
+    });
+    fireEvent.click(screen.getByTestId('report-draft-submit'));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(commitSpy).toHaveBeenCalledWith('r-no-symptom'));
+    expect(await screen.findByTestId('report-card-r-no-symptom')).toBeTruthy();
   });
 
   it('saves a draft without committing when "Save draft" is clicked', async () => {
@@ -447,7 +477,7 @@ describe('InvestigationReportSection — Ctrl+Enter shortcut', () => {
     expect(await screen.findByTestId('report-card-r-shortcut-2')).toBeTruthy();
   });
 
-  it('shows the validation error and creates nothing on Ctrl+Enter when fields are blank', async () => {
+  it('shows the validation error and creates nothing on Ctrl+Enter when title is blank', async () => {
     vi.spyOn(reportsApi, 'list').mockResolvedValue({
       items: [],
       total: 0,
@@ -465,9 +495,7 @@ describe('InvestigationReportSection — Ctrl+Enter shortcut', () => {
       ctrlKey: true,
     });
 
-    expect(
-      await screen.findByText('Title and symptom are both required'),
-    ).toBeTruthy();
+    expect(await screen.findByText('Title is required')).toBeTruthy();
     expect(createSpy).not.toHaveBeenCalled();
     expect(commitSpy).not.toHaveBeenCalled();
     expect(screen.queryAllByTestId(/^report-card-/)).toHaveLength(0);

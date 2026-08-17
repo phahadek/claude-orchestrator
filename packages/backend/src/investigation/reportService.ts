@@ -71,7 +71,8 @@ export interface CreateReportInput {
   projectId: string;
   milestoneId?: string;
   title: string;
-  symptomText: string;
+  /** Optional at draft time — defaults to '' (the NOT NULL column still has a value). */
+  symptomText?: string;
   evidenceText?: string;
   source?: 'operator' | 'session';
   originSessionId?: string;
@@ -92,9 +93,6 @@ export function createReport(
   if (!input.title || !input.title.trim()) {
     throw new Error('title is required');
   }
-  if (!input.symptomText || !input.symptomText.trim()) {
-    throw new Error('symptomText is required');
-  }
   const row = insertReport({
     projectId: input.projectId,
     milestoneId: resolveMilestoneIdForWrite(
@@ -102,7 +100,7 @@ export function createReport(
       input.milestoneId ?? '',
     ),
     title: input.title,
-    symptomText: input.symptomText,
+    symptomText: input.symptomText ?? '',
     evidenceText: input.evidenceText,
     source: input.source,
     originSessionId: input.originSessionId,
