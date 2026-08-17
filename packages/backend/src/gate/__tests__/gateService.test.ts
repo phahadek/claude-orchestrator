@@ -1765,7 +1765,9 @@ describe('readiness rollups skip the per-item sources/events hydration', () => {
 
     const sourcesSpy = vi.spyOn(queries, 'listGateItemSources');
 
-    await reconcileGateRunnability('sha-a', { ancestrySource: orderedAncestry });
+    await reconcileGateRunnability('sha-a', {
+      ancestrySource: orderedAncestry,
+    });
 
     expect(sourcesSpy).toHaveBeenCalled();
     sourcesSpy.mockRestore();
