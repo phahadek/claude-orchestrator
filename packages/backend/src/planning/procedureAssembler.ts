@@ -465,6 +465,22 @@ export function renderOpsCapabilities(): string[] {
       '`{"projectId":"<project-id>"}` (optionally narrowed by `taskId` / `eventType` / ' +
       "`since` / `until`) to read this project's audit_log rows.",
     '',
+    'For a DB table with no dedicated MCP read tool and no brokered read above (e.g. ' +
+      '`ops_journal`, `gate_item`, `deploy_run`) — the case most likely to look ' +
+      'unreachable — request the read-only ad hoc query capability instead of ' +
+      'abstaining: call `session.requestCapability` with `{"payload":{"capability":' +
+      '"Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)","plan":"<what ' +
+      'this session will do with the result>","evidence":"<the exact SELECT/WITH ' +
+      'query text and why it settles this>"}}`. This runs ' +
+      '`packages/backend/scripts/adhoc-query.ts`, which enforces read-only at two ' +
+      'independent layers — `assertSingleReadOnlyStatement` rejects anything but one ' +
+      '`SELECT`/`WITH` statement before it ever opens a connection, and the ' +
+      'connection itself is opened `readonly: true` at the SQLite driver level — so ' +
+      'an operator can approve the exact query text on sight. This is the sanctioned ' +
+      'route for exactly this gap: for a claim about DB state, `needs-setup` should ' +
+      'mean this specific request is pending, refused, or the tooling is not ' +
+      "installed — never that this class of claim can't be settled at all.",
+    '',
     'Some things are never grantable this way, no matter what an operator approves: ' +
       'anything that reaches the resolved / ✅ Done / task-intent-apply transition ' +
       '(that stays device-auth/operator-only — see "Granted writes are idempotent ' +
