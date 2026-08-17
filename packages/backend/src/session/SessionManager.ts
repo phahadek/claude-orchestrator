@@ -3352,13 +3352,23 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Reap orphaned Docker containers/networks from sessions no longer active.
+    const orphans = getSessionsByStatus(['running']);
+
+    // Reap orphaned Docker containers/networks from sessions no longer
+    // active. `status='running'` orphan rows are about to be resumed below
+    // and must be excluded here — this.sessions is empty for them this
+    // early in boot (they haven't been resumed yet), so without folding
+    // their IDs into the live set, the reap call below would treat their
+    // still-live containers as orphans and destroy them before the resume
+    // loop below ever gets to reattach.
     if (getCorporateMode().gates.dockerMandatory) {
-      const liveIds = new Set(this.sessions.keys());
+      const liveIds = new Set([
+        ...this.sessions.keys(),
+        ...orphans.map((row) => row.session_id),
+      ]);
       reapOrphanContainers(liveIds);
     }
 
-    const orphans = getSessionsByStatus(['running']);
     if (orphans.length === 0) return;
     logger.info(
       `[SessionManager] found ${orphans.length} orphan session(s) — resuming`,

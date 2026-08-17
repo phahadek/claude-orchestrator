@@ -64,6 +64,7 @@ export class DockerSessionRunner implements ISessionRunner {
   private networkName: string;
   private execProc: ChildProcess | null = null;
   private _killed = false;
+  private _paused = false;
   private _isPlanning = false;
   private _scratchDir: string | undefined;
 
@@ -379,7 +380,24 @@ export class DockerSessionRunner implements ISessionRunner {
   async kill(): Promise<void> {
     if (this._killed) return;
     this._killed = true;
+    await this._killExecProc();
+    await this._teardown();
+  }
 
+  /**
+   * Pause for a graceful backend restart: stop the `docker exec` process
+   * driving the session but deliberately skip `_teardown()` — the session
+   * container, proxy container, and network must survive so
+   * `resumeOrphanSessions` can `docker exec` back into the same container
+   * on next boot instead of every restart destroying live work.
+   */
+  async pause(): Promise<void> {
+    if (this._killed || this._paused) return;
+    this._paused = true;
+    await this._killExecProc();
+  }
+
+  private async _killExecProc(): Promise<void> {
     if (this.execProc && this.execProc.exitCode === null) {
       try {
         this.execProc.kill('SIGTERM');
@@ -401,8 +419,6 @@ export class DockerSessionRunner implements ISessionRunner {
         });
       });
     }
-
-    await this._teardown();
   }
 
   private async _teardown(): Promise<void> {

@@ -216,4 +216,9 @@ export class ApiSessionRunner implements ISessionRunner {
     this.abortController.abort();
     this.messageQueue?.close();
   }
+
+  /** API mode has no destructible durable state beyond the in-flight request. */
+  async pause(): Promise<void> {
+    await this.kill();
+  }
 }

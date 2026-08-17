@@ -135,6 +135,16 @@ export interface ISessionRunner {
   kill(): Promise<void>;
 
   /**
+   * Pause the session for a graceful backend restart: stop whatever
+   * ephemeral process is driving it, but preserve any durable state a
+   * resume needs (on-disk session state, Docker containers/networks, etc.).
+   * Unlike `kill()`, this must never destroy resources `resumeOrphanSessions`
+   * needs to reattach to on next boot. For runners with no destructible
+   * durable state (CLI-mode), this is equivalent to `kill()`.
+   */
+  pause(): Promise<void>;
+
+  /**
    * True if the underlying transport failed to start
    * (e.g. spawn error, missing binary, invalid API key).
    */

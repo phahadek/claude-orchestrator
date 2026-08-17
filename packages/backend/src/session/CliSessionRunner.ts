@@ -399,6 +399,16 @@ export class CliSessionRunner implements ISessionRunner {
     killSessionCgroup(this.sessionId);
   }
 
+  /**
+   * CLI mode has no destructible durable state beyond the OS process itself
+   * — killing it is exactly what a graceful-restart pause needs, since
+   * `resumeOrphanSessions` reattaches via `claude --resume <session-id>`
+   * against the same on-disk state regardless of how the prior process exited.
+   */
+  async pause(): Promise<void> {
+    await this.kill();
+  }
+
   private killProcessTree(
     pid: number,
     signal: 'SIGTERM' | 'SIGKILL' = 'SIGTERM',
