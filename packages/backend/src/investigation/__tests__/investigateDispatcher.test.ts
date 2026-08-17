@@ -92,6 +92,25 @@ describe('buildInvestigateProcedure', () => {
       /never mutate another session's git, worktree, or PR/i,
     );
   });
+
+  it('tells the session to end the turn with no tool call when nothing is actionable, not to stage a note', () => {
+    const procedure = buildInvestigateProcedure([makeReport()]);
+    expect(procedure).toMatch(/do not stage anything for it/i);
+    expect(procedure).toMatch(
+      /end the turn having called no tool for that report/i,
+    );
+    expect(procedure).toMatch(
+      /stages nothing at all is itself the correct, terminal outcome/i,
+    );
+  });
+
+  it('does not reference planning.noOp or any other unregistered tool for the no-finding case', () => {
+    const procedure = buildInvestigateProcedure([makeReport()]);
+    const fileSection = procedure.slice(procedure.indexOf('### File'));
+    expect(fileSection).not.toMatch(/planning\.noOp/);
+    expect(fileSection).not.toMatch(/planning_noOp/);
+    expect(fileSection).not.toMatch(/no actionable finding" note/i);
+  });
 });
 
 describe('launchInvestigateBatch', () => {
