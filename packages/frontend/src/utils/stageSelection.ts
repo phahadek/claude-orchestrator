@@ -135,6 +135,14 @@ function testsStage(): StageInfo {
 
 function reviewStage(task: TaskView): StageInfo {
   const review = task.review;
+  if (task.pauseReason === 'depth_review_escalation') {
+    return {
+      id: 'review',
+      label: STAGE_LABELS.review,
+      status: 'error',
+      demand: true,
+    };
+  }
   if (!review) {
     return {
       id: 'review',

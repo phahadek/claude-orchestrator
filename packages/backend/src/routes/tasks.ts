@@ -350,6 +350,15 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     };
   }
 
+  let depthReview: TaskView['depthReview'] = null;
+  if (row.depth_review_session_id) {
+    depthReview = {
+      sessionId: row.depth_review_session_id,
+      status: row.depth_review_session_status ?? '',
+      verdict: row.depth_review_verdict ?? null,
+    };
+  }
+
   const pauseStruct = parsePauseReason(
     row.pr_pause_reason ?? row.session_pr_creation_failed_pause_reason ?? null,
   );
@@ -393,6 +402,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     planningSession,
     pr,
     review,
+    depthReview,
     totalTokens,
     assignedRepo: getTaskRepoAssignment(row.task_id)?.repo ?? null,
     hasAwaitingDispositionIntent: hasAwaitingDispositionIntentForTask(

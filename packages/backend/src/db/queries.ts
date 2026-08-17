@@ -3988,6 +3988,11 @@ export interface TaskAggregateRow {
   pr_pre_review_stage: string | null;
   pr_flake_recovery_attempts: number | null;
   session_pr_creation_failed_pause_reason: string | null;
+  // depth-review session, resolved via this task's PR (pr_number + repo) —
+  // see getDepthReviewVerdict; depth_review has no task_id of its own.
+  depth_review_session_id: string | null;
+  depth_review_session_status: string | null;
+  depth_review_verdict: string | null;
 }
 
 export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
@@ -4087,12 +4092,18 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
           AND cs.pause_reason IN ('pr_creation_failed', 'stalled_idle')
         THEN cs.pause_reason
         ELSE NULL
-      END                    AS session_pr_creation_failed_pause_reason
+      END                    AS session_pr_creation_failed_pause_reason,
+      drv.depth_session_id   AS depth_review_session_id,
+      dvs.status              AS depth_review_session_status,
+      drv.verdict             AS depth_review_verdict
     FROM task_cache tc
     LEFT JOIN ranked_code cs ON cs.task_id = tc.task_id AND cs.rn = 1
     LEFT JOIN ranked_planning ps ON ps.task_id = tc.task_id AND ps.rn = 1
     LEFT JOIN ranked_review rs ON rs.task_id = tc.task_id AND rs.rn = 1
     LEFT JOIN ranked_pr pr ON pr.task_id = tc.task_id AND pr.rn = 1
+    LEFT JOIN depth_review_verdicts drv
+      ON drv.pr_number = pr.pr_number AND drv.repo = pr.repo
+    LEFT JOIN sessions dvs ON dvs.session_id = drv.depth_session_id
     WHERE tc.task_id IN (${placeholders})
     ORDER BY tc.fetched_at DESC
   `,

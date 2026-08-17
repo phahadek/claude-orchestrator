@@ -227,6 +227,7 @@ export function TaskDetail({
   setSessionFavorited = () => {},
 }: Props) {
   const [showReviewSection, setShowReviewSection] = useState(true);
+  const [showDepthReviewSection, setShowDepthReviewSection] = useState(true);
   const [showPlanningSection, setShowPlanningSection] = useState(() =>
     defaultShowPlanningSection(task.planningSession),
   );
@@ -290,6 +291,8 @@ export function TaskDetail({
     : null;
   const { session: reviewSession, fetchState: reviewFetchState } =
     useResolvedSession(task.review?.sessionId, sessions);
+  const { session: depthReviewSession, fetchState: depthReviewFetchState } =
+    useResolvedSession(task.depthReview?.sessionId, sessions);
   const { session: planningSession, fetchState: planningFetchState } =
     useResolvedSession(task.planningSession?.sessionId, sessions);
 
@@ -533,6 +536,10 @@ export function TaskDetail({
 
   const handleReviewToggle = useCallback(() => {
     setShowReviewSection((v) => !v);
+  }, []);
+
+  const handleDepthReviewToggle = useCallback(() => {
+    setShowDepthReviewSection((v) => !v);
   }, []);
 
   const stages = computeStages(task);
@@ -820,7 +827,7 @@ export function TaskDetail({
         )}
 
         {/* ── Review stage ── */}
-        {selectedStage === 'review' && !task.review && (
+        {selectedStage === 'review' && !task.review && !task.depthReview && (
           <p className={styles.noTranscript}>No review for this task yet.</p>
         )}
         {selectedStage === 'review' && task.review && (
@@ -884,6 +891,62 @@ export function TaskDetail({
                     {reviewFetchState === 'loading'
                       ? 'Review transcript not available — loading session…'
                       : 'Review transcript not available — session not found.'}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {selectedStage === 'review' && task.depthReview && (
+          <div
+            className={styles.reviewSection}
+            data-expanded={showDepthReviewSection}
+            data-testid="depth-review-session-section"
+          >
+            <div
+              className={styles.reviewSectionHeader}
+              onClick={handleDepthReviewToggle}
+              role="button"
+              aria-expanded={showDepthReviewSection}
+            >
+              <span className={styles.reviewToggleIcon} aria-hidden="true">
+                {showDepthReviewSection ? '▼' : '▶'}
+              </span>
+              <span className={styles.sectionTitle}>Depth Review</span>
+              {task.depthReview.verdict ? (
+                <span
+                  className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[task.depthReview.verdict] ?? 'verdict--error']}`}
+                >
+                  {VERDICT_LABELS[task.depthReview.verdict] ??
+                    task.depthReview.verdict}
+                </span>
+              ) : task.depthReview.status === 'running' ||
+                task.depthReview.status === 'starting' ? (
+                <span
+                  className={`${styles.verdictPill} ${styles['verdict--pending']}`}
+                >
+                  In progress…
+                </span>
+              ) : null}
+            </div>
+
+            {showDepthReviewSection && (
+              <div className={styles.reviewBody}>
+                {depthReviewSession ? (
+                  <SessionPanel
+                    session={depthReviewSession}
+                    send={send}
+                    setSessionArchived={setSessionArchived}
+                    setSessionFavorited={setSessionFavorited}
+                    project={project}
+                    showTaskName={false}
+                  />
+                ) : (
+                  <p className={styles.noTranscript}>
+                    {depthReviewFetchState === 'loading'
+                      ? 'Depth review transcript not available — loading session…'
+                      : 'Depth review transcript not available — session not found.'}
                   </p>
                 )}
               </div>
