@@ -82,6 +82,48 @@ describe('SessionControls — active session', () => {
   });
 });
 
+describe('SessionControls — idle session', () => {
+  it('shows Kill but not End Session for idle sessions', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'idle' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('Kill')).toBeTruthy();
+    expect(screen.queryByText('End Session')).toBeNull();
+  });
+
+  it('hides Archive and Delete buttons for idle sessions', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'idle' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.queryByText('Archive')).toBeNull();
+    expect(screen.queryByText('Delete')).toBeNull();
+  });
+
+  it('sends kill WS message when clicking Kill on an idle session', () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+    const send = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ status: 'idle' })}
+        {...defaultProps}
+        send={send}
+      />,
+    );
+    fireEvent.click(screen.getByText('Kill'));
+    expect(send).toHaveBeenCalledWith<[ClientMessage]>({
+      type: 'kill',
+      sessionId: 'sess-1',
+    });
+    vi.unstubAllGlobals();
+  });
+});
+
 describe('SessionControls — inactive session', () => {
   it('shows Archive and Delete buttons for done sessions', () => {
     render(
@@ -101,6 +143,32 @@ describe('SessionControls — inactive session', () => {
         {...defaultProps}
       />,
     );
+    expect(screen.queryByText('End Session')).toBeNull();
+    expect(screen.queryByText('Kill')).toBeNull();
+  });
+
+  it('shows Archive and Delete only for error sessions', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'error' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('Archive')).toBeTruthy();
+    expect(screen.getByText('Delete')).toBeTruthy();
+    expect(screen.queryByText('End Session')).toBeNull();
+    expect(screen.queryByText('Kill')).toBeNull();
+  });
+
+  it('shows Archive and Delete only for killed sessions', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'killed' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('Archive')).toBeTruthy();
+    expect(screen.getByText('Delete')).toBeTruthy();
     expect(screen.queryByText('End Session')).toBeNull();
     expect(screen.queryByText('Kill')).toBeNull();
   });
