@@ -70,9 +70,9 @@ describe('DockerSessionRunner.pause vs kill', () => {
     await pausePromise;
 
     expect(lastProc!.kill).toHaveBeenCalledWith('SIGTERM');
-    expect(
-      capturedExecSyncCmds.some((c) => c.startsWith('docker rm -f')),
-    ).toBe(false);
+    expect(capturedExecSyncCmds.some((c) => c.startsWith('docker rm -f'))).toBe(
+      false,
+    );
     expect(
       capturedExecSyncCmds.some((c) => c.startsWith('docker network rm')),
     ).toBe(false);
