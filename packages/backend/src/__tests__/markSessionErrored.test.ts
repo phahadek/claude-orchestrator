@@ -1101,7 +1101,12 @@ describe('SessionManager.markSessionErrored() — terminal guard', () => {
     );
     const sm = new SessionManager();
 
-    sm.markSessionErrored('test-session', 'error', 'runner_non_zero', 'process exited with code 143');
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      'runner_non_zero',
+      'process exited with code 143',
+    );
 
     expect(queries.updateSessionStatus).not.toHaveBeenCalled();
     expect(recordEvent).toHaveBeenCalledWith(
