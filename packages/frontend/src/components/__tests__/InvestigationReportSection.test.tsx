@@ -443,12 +443,8 @@ describe('InvestigationReportSection — Ctrl+Enter shortcut', () => {
     });
 
     await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
-    await waitFor(() =>
-      expect(commitSpy).toHaveBeenCalledWith('r-shortcut-2'),
-    );
-    expect(
-      await screen.findByTestId('report-card-r-shortcut-2'),
-    ).toBeTruthy();
+    await waitFor(() => expect(commitSpy).toHaveBeenCalledWith('r-shortcut-2'));
+    expect(await screen.findByTestId('report-card-r-shortcut-2')).toBeTruthy();
   });
 
   it('shows the validation error and creates nothing on Ctrl+Enter when fields are blank', async () => {
