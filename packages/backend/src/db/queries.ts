@@ -7846,6 +7846,37 @@ export function getTaskTestFlipRateFlags(
 }
 
 /**
+ * Clears structured_result on every other non-running row sharing this run's
+ * (project_id, content_hash) key. Call right after a run transitions out of
+ * `running` — that transition makes it the latest completed run for the key
+ * (see getLatestTestRequestRun's ordering), so every other row's
+ * structured_result becomes permanently unreachable by any production
+ * reader. test_run_results already retains the per-test outcome/duration
+ * data those blobs duplicate, so this only drops the now-unreachable raw
+ * JSON — every other column, and test_run_results itself, is untouched.
+ */
+export function clearSupersededStructuredResults(
+  projectId: string,
+  contentHash: string,
+  keepRunId: string,
+): void {
+  db.prepare<{
+    project_id: string;
+    content_hash: string;
+    keep_run_id: string;
+  }>(
+    `UPDATE test_request_runs
+     SET structured_result = NULL
+     WHERE project_id = @project_id AND content_hash = @content_hash
+       AND id != @keep_run_id AND structured_result IS NOT NULL`,
+  ).run({
+    project_id: projectId,
+    content_hash: contentHash,
+    keep_run_id: keepRunId,
+  });
+}
+
+/**
  * Invalidate every recorded run for (project_id, content_hash) — F2's
  * flaky.confirm actuation path. Callers must audit this via recordEvent —
  * deletion alone is silent. The subsequent rerun (via runProjectTestRequest)

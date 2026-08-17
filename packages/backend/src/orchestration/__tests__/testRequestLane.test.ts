@@ -403,6 +403,86 @@ describe('structured_result acquisition', () => {
     expect(row.state).toBe('failed');
     expect(row.structured_result).toBeNull();
   });
+
+  it('clears a superseded run\'s structured_result once a newer run lands for the same (project, content-hash), leaving its other columns and test_run_results extraction untouched', async () => {
+    const structuredFirst = {
+      format: 'junit-xml' as const,
+      suites: [
+        {
+          name: 'pytest',
+          tests: [
+            { id: 't1', name: 'test one', outcome: 'passed', durationMs: 10 },
+          ],
+        },
+      ],
+      totals: { passed: 1, failed: 0, skipped: 0, errors: 0 },
+      durationMsTotal: 10,
+    };
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
+
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'first ok' });
+    mockCollectStructuredTestResult.mockReturnValue(structuredFirst);
+    const first = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-supersede' }),
+    );
+
+    const firstRowBefore = db
+      .prepare(
+        `SELECT structured_result FROM test_request_runs WHERE id = ?`,
+      )
+      .get(first.runId) as { structured_result: string | null };
+    expect(firstRowBefore.structured_result).not.toBeNull();
+
+    ingestTestRunResults(getLatestTestRequestRun('proj-1', 'hash-supersede')!);
+    const firstRunResultsBefore = listTestRunResultsForRun(first.runId);
+    expect(firstRunResultsBefore).toHaveLength(1);
+
+    const structuredSecond = {
+      ...structuredFirst,
+      suites: [
+        {
+          name: 'pytest',
+          tests: [
+            { id: 't1', name: 'test one', outcome: 'passed', durationMs: 12 },
+          ],
+        },
+      ],
+    };
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'second ok' });
+    mockCollectStructuredTestResult.mockReturnValue(structuredSecond);
+    const second = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-supersede' }),
+    );
+    expect(second.runId).not.toBe(first.runId);
+
+    const firstRowAfter = db
+      .prepare(
+        `SELECT state, output, structured_result FROM test_request_runs WHERE id = ?`,
+      )
+      .get(first.runId) as {
+      state: string;
+      output: string;
+      structured_result: string | null;
+    };
+    expect(firstRowAfter.structured_result).toBeNull();
+    expect(firstRowAfter.state).toBe('passed');
+    expect(firstRowAfter.output).toBe('first ok');
+
+    // The now-latest row keeps its own structured_result.
+    const secondRow = db
+      .prepare(
+        `SELECT structured_result FROM test_request_runs WHERE id = ?`,
+      )
+      .get(second.runId) as { structured_result: string | null };
+    expect(secondRow.structured_result).not.toBeNull();
+
+    // test_run_results extraction for the superseded run is untouched.
+    expect(listTestRunResultsForRun(first.runId)).toEqual(
+      firstRunResultsBefore,
+    );
+  });
 });
 
 // ── ingestTestRunResults — per-test extraction from structured_result ──────
