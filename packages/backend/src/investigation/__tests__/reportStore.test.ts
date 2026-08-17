@@ -27,6 +27,7 @@ import {
   reconcileOrphanedDispatches,
   listDispatchedSessions,
   getDispatchedSessionsForReport,
+  getReportsForBatchTaskId,
   isInFlight,
   isResolveEligible,
   isDispatchEligible,
@@ -199,6 +200,61 @@ describe('getDispatchedSessionsForReport', () => {
       createdAt: '2026-08-13T00:00:00Z',
     });
     expect(getDispatchedSessionsForReport(report.id)).toEqual([]);
+  });
+});
+
+describe('getReportsForBatchTaskId', () => {
+  it("returns the single report dispatched to a batch's session", () => {
+    const report = insertReport({
+      projectId: 'proj-1',
+      milestoneId: 'milestone-uuid-1',
+      title: 'A',
+      symptomText: 'a',
+      createdAt: '2026-08-13T00:00:00Z',
+    });
+    insertSession('sess-single', 'running');
+    recordDispatch(report.id, 'sess-single', '2026-08-13T00:00:01Z');
+
+    expect(
+      getReportsForBatchTaskId('report-batch:sess-single').map((r) => r.id),
+    ).toEqual([report.id]);
+  });
+
+  it('returns every report dispatched to a multi-report batch', () => {
+    const r1 = insertReport({
+      projectId: 'proj-1',
+      milestoneId: 'milestone-uuid-1',
+      title: 'A',
+      symptomText: 'a',
+      createdAt: '2026-08-13T00:00:00Z',
+    });
+    const r2 = insertReport({
+      projectId: 'proj-1',
+      milestoneId: 'milestone-uuid-1',
+      title: 'B',
+      symptomText: 'b',
+      createdAt: '2026-08-13T00:00:01Z',
+    });
+    insertSession('sess-multi', 'running');
+    recordDispatch(r1.id, 'sess-multi', '2026-08-13T00:00:02Z');
+    recordDispatch(r2.id, 'sess-multi', '2026-08-13T00:00:02Z');
+
+    expect(
+      getReportsForBatchTaskId('report-batch:sess-multi').map((r) => r.id),
+    ).toEqual([r1.id, r2.id]);
+  });
+
+  it('is empty when no session matches the task_id', () => {
+    expect(getReportsForBatchTaskId('report-batch:no-such-session')).toEqual(
+      [],
+    );
+  });
+
+  it('is empty when the session has no dispatch rows', () => {
+    insertSession('sess-no-dispatch', 'running');
+    expect(
+      getReportsForBatchTaskId('report-batch:sess-no-dispatch'),
+    ).toEqual([]);
   });
 });
 

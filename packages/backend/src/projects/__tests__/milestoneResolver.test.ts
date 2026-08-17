@@ -19,6 +19,12 @@ vi.mock('../ProjectService.js', () => ({
   ProjectService: projectServiceMock,
 }));
 
+const reportStoreMock = vi.hoisted(() => ({
+  getReportsForBatchTaskId: vi.fn(),
+}));
+
+vi.mock('../../investigation/reportStore.js', () => reportStoreMock);
+
 import {
   resolveMilestoneForProject,
   resolveMilestoneAnyProject,
@@ -249,6 +255,63 @@ describe('resolveMilestoneForSessionTask', () => {
     vi.spyOn(queries, 'getGateItem').mockReturnValue(undefined);
     expect(
       resolveMilestoneForSessionTask('p1', 'gate-item:missing'),
+    ).toBeNull();
+  });
+
+  it("returns an investigate batch's milestone for a report-batch:<batchId> task id", () => {
+    projectServiceMock.getById.mockReturnValue(project());
+    reportStoreMock.getReportsForBatchTaskId.mockReturnValue([
+      { milestone_id: 'ms-uuid-11' },
+    ]);
+    expect(
+      resolveMilestoneForSessionTask('p1', 'report-batch:batch-1'),
+    ).toBe('M11');
+    expect(reportStoreMock.getReportsForBatchTaskId).toHaveBeenCalledWith(
+      'report-batch:batch-1',
+    );
+  });
+
+  it('resolves a multi-report batch by the first report — matching launchInvestigateBatch', () => {
+    projectServiceMock.getById.mockReturnValue(project());
+    reportStoreMock.getReportsForBatchTaskId.mockReturnValue([
+      { milestone_id: 'ms-uuid-11' },
+      { milestone_id: 'ms-uuid-12' },
+    ]);
+    expect(
+      resolveMilestoneForSessionTask('p1', 'report-batch:batch-multi'),
+    ).toBe('M11');
+  });
+
+  it('returns null, not a crash, when the batch has no dispatch row', () => {
+    reportStoreMock.getReportsForBatchTaskId.mockReturnValue([]);
+    expect(
+      resolveMilestoneForSessionTask('p1', 'report-batch:no-dispatch'),
+    ).toBeNull();
+  });
+
+  it('returns null when the batch has no report', () => {
+    reportStoreMock.getReportsForBatchTaskId.mockReturnValue([]);
+    expect(
+      resolveMilestoneForSessionTask('p1', 'report-batch:no-report'),
+    ).toBeNull();
+  });
+
+  it('returns null when the report has no milestone_id set', () => {
+    reportStoreMock.getReportsForBatchTaskId.mockReturnValue([
+      { milestone_id: null },
+    ]);
+    expect(
+      resolveMilestoneForSessionTask('p1', 'report-batch:no-milestone'),
+    ).toBeNull();
+  });
+
+  it('returns null (not a throw) when the milestone_id no longer resolves for the project', () => {
+    projectServiceMock.getById.mockReturnValue(project());
+    reportStoreMock.getReportsForBatchTaskId.mockReturnValue([
+      { milestone_id: 'unknown-uuid' },
+    ]);
+    expect(
+      resolveMilestoneForSessionTask('p1', 'report-batch:stale-milestone'),
     ).toBeNull();
   });
 });

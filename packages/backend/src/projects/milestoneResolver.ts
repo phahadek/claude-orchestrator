@@ -3,7 +3,11 @@ import type { ProjectMilestone } from './ProjectService';
 import { getTaskCache, getGateItem } from '../db/queries';
 import { normalizeTaskId } from '../tasks/taskId';
 import type { NotionTask } from '../notion/types';
-import { isGateVerifySession } from '../session/sessionPredicates';
+import {
+  isGateVerifySession,
+  isInvestigateSession,
+} from '../session/sessionPredicates';
+import { getReportsForBatchTaskId } from '../investigation/reportStore';
 
 /**
  * Thrown when a milestone reference doesn't resolve to exactly one known
@@ -172,6 +176,18 @@ export function resolveMilestoneForTaskId(
  * fix already stages with no conversion step); otherwise delegates
  * unchanged to resolveMilestoneForTaskId. Returns null — never throws — when
  * the gate item is missing or itself carries no milestone.
+ *
+ * Mirrors that carve-out for an investigate session's sentinel task id
+ * (`report-batch:<batchId>`, see isInvestigateSession): resolves the
+ * dispatched batch's report(s) via getReportsForBatchTaskId and reads
+ * reports[0].milestone_id, matching launchInvestigateBatch's own
+ * first-report rule for a batch that spans multiple reports. That id is in
+ * the milestones.id UUID key space (investigation_report.milestone_id), so
+ * it is normalized through resolveMilestoneForProject to the canonical
+ * short-form key staged_intent.milestone stores — never the raw UUID.
+ * Returns null — never throws — for a batch with no dispatch row, no
+ * report, a report whose milestone is unset, or a milestone id that no
+ * longer resolves for the project.
  */
 export function resolveMilestoneForSessionTask(
   projectId: string,
@@ -180,6 +196,16 @@ export function resolveMilestoneForSessionTask(
   if (isGateVerifySession(taskId)) {
     const itemId = taskId.slice('gate-item:'.length);
     return getGateItem(itemId)?.milestone ?? null;
+  }
+  if (isInvestigateSession(taskId)) {
+    const milestoneId = getReportsForBatchTaskId(taskId)[0]?.milestone_id;
+    if (!milestoneId) return null;
+    try {
+      return resolveMilestoneForProject(projectId, milestoneId);
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) return null;
+      throw err;
+    }
   }
   return resolveMilestoneForTaskId(projectId, taskId);
 }

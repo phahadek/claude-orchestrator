@@ -348,6 +348,33 @@ export function reconcileOrphanedDispatches(dispatchedAt: string): number {
   return backfilled;
 }
 
+/**
+ * Reverse of listDispatchedSessions: the report(s) dispatched to the session
+ * identified by an investigate batch's synthetic task_id
+ * (`report-batch:<batchId>`) — resolveMilestoneForSessionTask's lookup path
+ * for attributing a milestone to that session. Joins through the session row
+ * (task_id -> session_id) and investigation_report_dispatch (session_id ->
+ * report_id); the batchId itself is never parsed as a key, since dispatch
+ * rows are keyed by session_id, not the synthetic batch id. Returns [] — never
+ * throws — when no session matches the task_id or it has no dispatch rows.
+ */
+export function getReportsForBatchTaskId(
+  taskId: string,
+): InvestigationReportRow[] {
+  const session = db
+    .prepare(`SELECT session_id FROM sessions WHERE task_id = ?`)
+    .get(taskId) as { session_id: string } | undefined;
+  if (!session) return [];
+  return db
+    .prepare(
+      `SELECT r.* FROM investigation_report r
+       JOIN investigation_report_dispatch d ON d.report_id = r.id
+       WHERE d.session_id = ?
+       ORDER BY d.id ASC`,
+    )
+    .all(session.session_id) as InvestigationReportRow[];
+}
+
 /** Every session ever dispatched for a report, oldest first — its entire dispatch history. */
 export function listDispatchedSessions(
   reportId: string,

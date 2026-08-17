@@ -56,7 +56,10 @@ import {
   getStagedIntent,
   updateSessionStatus,
   addGrantedCapability,
+  listStagedIntentsByMilestone,
+  UNATTRIBUTED_MILESTONE_BUCKET,
 } from '../db/queries';
+import { insertReport, recordDispatch } from '../investigation/reportStore';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import { createUnit } from '../architecture/ArchUnitStore';
@@ -498,6 +501,62 @@ describe('buildMcpServer — ctx.milestone attribution', () => {
     const staged = JSON.parse(content.text) as { id: string };
     const row = getStagedIntent(staged.id);
     expect(row?.milestone).toBe('M13');
+
+    await client.close();
+    await server.close();
+  });
+
+  it("an investigate session's staged intent is attributed to its batch's milestone, not left unattributed", async () => {
+    const report = insertReport({
+      projectId: 'proj-1',
+      milestoneId: 'ms-13',
+      title: 'Something is wrong',
+      symptomText: 'Sessions crash on startup',
+      createdAt: new Date(0).toISOString(),
+    });
+    insertSession({
+      session_id: 'mcp-investigate-1',
+      task_id: 'report-batch:batch-mcp-1',
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'ops',
+    });
+    recordDispatch(report.id, 'mcp-investigate-1', new Date(0).toISOString());
+
+    const server = buildMcpServer('mcp-investigate-1', new SessionManager());
+    const [serverTransport, clientTransport] =
+      InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+
+    const result = await client.callTool({
+      name: 'session.requestCapability',
+      arguments: {
+        payload: {
+          capability: 'Bash(ls)',
+          plan: 'list files to confirm the finding is real',
+          evidence: 'the investigation requires inspecting repo contents',
+        },
+      },
+    });
+    const content = (result.content as { type: string; text: string }[])[0];
+    const staged = JSON.parse(content.text) as { id: string };
+    const row = getStagedIntent(staged.id);
+    expect(row?.milestone).toBe('M13');
+
+    const attributed = listStagedIntentsByMilestone('proj-1', 'M13');
+    expect(attributed.map((r) => r.id)).toContain(staged.id);
+    const unattributed = listStagedIntentsByMilestone(
+      'proj-1',
+      UNATTRIBUTED_MILESTONE_BUCKET,
+    );
+    expect(unattributed.map((r) => r.id)).not.toContain(staged.id);
 
     await client.close();
     await server.close();
