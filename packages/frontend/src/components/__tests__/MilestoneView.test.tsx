@@ -112,26 +112,25 @@ vi.mock('../MilestoneDecisionStack', () => ({
 vi.mock('../MilestoneDrilldown', () => ({
   MilestoneDrilldown: ({
     mode,
-    depthDispositions,
+    depthReviewStatusBySessionId,
   }: {
     mode: string;
-    depthDispositions?: Array<{
-      prNumber: number;
-      taskName: string | null;
-      failingDimensions: Array<{ name: string; notes: string }>;
-      escalated: boolean;
-    }>;
+    depthReviewStatusBySessionId?: Record<
+      string,
+      { escalated: boolean; routeCount: number }
+    >;
   }) => (
     <div data-testid="milestone-drilldown">
       mode: {mode}
       <div data-testid="milestone-drilldown-depth">
-        {(depthDispositions ?? []).map((d) => (
-          <div key={d.prNumber} data-testid={`depth-disposition-${d.prNumber}`}>
-            PR #{d.prNumber} — {d.taskName} —{' '}
-            {d.failingDimensions.map((dim) => dim.name).join(', ')} —{' '}
-            {d.escalated ? 'escalated' : 'routed'}
-          </div>
-        ))}
+        {Object.entries(depthReviewStatusBySessionId ?? {}).map(
+          ([sessionId, status]) => (
+            <div key={sessionId} data-testid={`depth-status-${sessionId}`}>
+              {sessionId} — {status.escalated ? 'escalated' : 'routed'} — ×
+              {status.routeCount}
+            </div>
+          ),
+        )}
       </div>
     </div>
   ),
@@ -205,19 +204,15 @@ describe('MilestoneView', () => {
     assignedRepo: null,
   };
 
-  it('renders a failing depth verdict for the milestone in the panel, naming the dimension and PR', async () => {
+  it('builds a depth-review status map keyed by session id, for a failing verdict on the milestone', async () => {
     pushPrsResponseOnce([
       {
         prNumber: 915,
-        prUrl: 'https://github.com/org/repo/pull/915',
-        repo: 'org/repo',
         depthVerdict: {
           verdict: 'fail',
-          dimensions: [
-            { name: 'reliability', passed: false, notes: 'Retries unbounded' },
-          ],
-          summary: 'Found a defect',
           escalated: true,
+          sessionId: 'sess-depth-a',
+          routeCount: 0,
         },
       },
     ]);
@@ -225,25 +220,22 @@ describe('MilestoneView', () => {
     render(<MilestoneView {...baseProps} tasks={[depthTask]} />);
 
     await waitFor(() =>
-      expect(screen.getByTestId('depth-disposition-915')).toBeTruthy(),
+      expect(screen.getByTestId('depth-status-sess-depth-a')).toBeTruthy(),
     );
-    const entry = screen.getByTestId('depth-disposition-915');
-    expect(entry.textContent).toContain('reliability');
-    expect(entry.textContent).toContain('915');
-    expect(entry.textContent).toContain('escalated');
+    expect(
+      screen.getByTestId('depth-status-sess-depth-a').textContent,
+    ).toContain('escalated');
   });
 
   it('distinguishes an escalated finding from a routed finding', async () => {
     pushPrsResponseOnce([
       {
         prNumber: 915,
-        prUrl: 'https://github.com/org/repo/pull/915',
-        repo: 'org/repo',
         depthVerdict: {
           verdict: 'fail',
-          dimensions: [{ name: 'reliability', passed: false, notes: 'bad' }],
-          summary: 'Escalated',
           escalated: true,
+          sessionId: 'sess-depth-a',
+          routeCount: 0,
         },
       },
     ]);
@@ -251,31 +243,27 @@ describe('MilestoneView', () => {
       <MilestoneView {...baseProps} tasks={[depthTask]} />,
     );
     await waitFor(() =>
-      expect(screen.getByTestId('depth-disposition-915').textContent).toContain(
-        'escalated',
-      ),
+      expect(
+        screen.getByTestId('depth-status-sess-depth-a').textContent,
+      ).toContain('escalated'),
     );
 
     pushPrsResponseOnce([
       {
         prNumber: 915,
-        prUrl: 'https://github.com/org/repo/pull/915',
-        repo: 'org/repo',
         depthVerdict: {
           verdict: 'fail',
-          dimensions: [
-            { name: 'size-proportionality', passed: false, notes: 'big' },
-          ],
-          summary: 'Routed',
           escalated: false,
+          sessionId: 'sess-depth-a',
+          routeCount: 1,
         },
       },
     ]);
     rerender(<MilestoneView {...baseProps} tasks={[{ ...depthTask }]} />);
     await waitFor(() =>
-      expect(screen.getByTestId('depth-disposition-915').textContent).toContain(
-        'routed',
-      ),
+      expect(
+        screen.getByTestId('depth-status-sess-depth-a').textContent,
+      ).toContain('routed'),
     );
   });
 
@@ -283,13 +271,11 @@ describe('MilestoneView', () => {
     pushPrsResponseOnce([
       {
         prNumber: 915,
-        prUrl: 'https://github.com/org/repo/pull/915',
-        repo: 'org/repo',
         depthVerdict: {
           verdict: 'pass',
-          dimensions: [{ name: 'reliability', passed: true, notes: 'ok' }],
-          summary: 'All good',
           escalated: false,
+          sessionId: 'sess-depth-a',
+          routeCount: 0,
         },
       },
     ]);
@@ -297,15 +283,13 @@ describe('MilestoneView', () => {
     render(<MilestoneView {...baseProps} tasks={[depthTask]} />);
 
     await waitFor(() => expect(vi.mocked(apiRequest)).toHaveBeenCalled());
-    expect(screen.queryByTestId('depth-disposition-915')).toBeNull();
+    expect(screen.queryByTestId('depth-status-sess-depth-a')).toBeNull();
   });
 
   it('renders unchanged for a milestone with no depth verdicts', async () => {
     pushPrsResponseOnce([
       {
         prNumber: 915,
-        prUrl: 'https://github.com/org/repo/pull/915',
-        repo: 'org/repo',
         depthVerdict: null,
       },
     ]);
@@ -318,17 +302,15 @@ describe('MilestoneView', () => {
     ).toBe(0);
   });
 
-  it('does not thread depth dispositions into the decision stack — the staged-intent query stays untouched', async () => {
+  it('does not thread depth-review status into the decision stack — the staged-intent query stays untouched', async () => {
     pushPrsResponseOnce([
       {
         prNumber: 915,
-        prUrl: 'https://github.com/org/repo/pull/915',
-        repo: 'org/repo',
         depthVerdict: {
           verdict: 'fail',
-          dimensions: [{ name: 'reliability', passed: false, notes: 'bad' }],
-          summary: 'Escalated',
           escalated: true,
+          sessionId: 'sess-depth-a',
+          routeCount: 0,
         },
       },
     ]);
@@ -336,11 +318,11 @@ describe('MilestoneView', () => {
     render(<MilestoneView {...baseProps} tasks={[depthTask]} />);
 
     await waitFor(() =>
-      expect(screen.getByTestId('depth-disposition-915')).toBeTruthy(),
+      expect(screen.getByTestId('depth-status-sess-depth-a')).toBeTruthy(),
     );
     expect(
       screen.getByTestId('milestone-decision-stack').textContent,
-    ).not.toContain('reliability');
+    ).not.toContain('sess-depth-a');
   });
 
   it('fetches PR depth dispositions from the DB-only endpoint, never the project-wide live-GitHub /api/prs list', async () => {

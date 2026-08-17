@@ -219,6 +219,83 @@ describe('SessionPanel — review session', () => {
   });
 });
 
+describe('SessionPanel — depth_review session', () => {
+  function depthReviewEvent(verdict: 'pass' | 'fail') {
+    return {
+      eventType: 'text',
+      timestamp: 1,
+      content: JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                verdict,
+                dimensions: [
+                  {
+                    name: 'reliability',
+                    passed: false,
+                    notes: 'Retries are unbounded',
+                  },
+                ],
+                summary: 'Found a defect beyond spec-conformance',
+              }),
+            },
+          ],
+        },
+      }),
+    };
+  }
+
+  it('renders ReviewDetailView (verdict, failing dimension, summary) for a depth_review session', () => {
+    render(
+      <SessionPanel
+        session={makeSession({
+          sessionType: 'depth_review',
+          status: 'done',
+          events: [depthReviewEvent('fail')],
+        })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('Fail')).toBeTruthy();
+    expect(screen.getByText('reliability')).toBeTruthy();
+    expect(screen.getByText('Retries are unbounded')).toBeTruthy();
+    expect(
+      screen.getByText('Found a defect beyond spec-conformance'),
+    ).toBeTruthy();
+  });
+
+  it('renders the escalated/routed disposition when supplied via depthReviewStatus', () => {
+    render(
+      <SessionPanel
+        session={makeSession({
+          sessionType: 'depth_review',
+          status: 'done',
+          events: [depthReviewEvent('fail')],
+        })}
+        {...defaultProps}
+        depthReviewStatus={{ escalated: true, routeCount: 0 }}
+      />,
+    );
+    expect(screen.getByTestId('depth-review-status').textContent).toContain(
+      'Escalated to operator',
+    );
+  });
+
+  it('does not render Transcript/Diff tabs for a depth_review session', () => {
+    render(
+      <SessionPanel
+        session={makeSession({ sessionType: 'depth_review', status: 'done' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.queryByText('Transcript')).toBeNull();
+    expect(screen.queryByText('Diff')).toBeNull();
+  });
+});
+
 describe('SessionPanel — transcript overlay', () => {
   it('code session transcript has Copy button present in DOM', () => {
     render(

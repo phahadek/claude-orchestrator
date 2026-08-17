@@ -3,7 +3,7 @@ import type { SessionState } from '../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
-import { ReviewDetailView } from './ReviewDetailView';
+import { ReviewDetailView, type DepthReviewStatus } from './ReviewDetailView';
 import { EventTranscript } from './EventTranscript';
 import { DiffViewer } from './DiffViewer';
 import { SessionControls } from './SessionControls';
@@ -24,6 +24,8 @@ interface Props {
   showTaskName?: boolean;
   /** Opt out of the embedded proposals/decision block — for surfaces (e.g. the milestone drill-down) that already render the session's staged intents elsewhere. Defaults to shown. */
   showDecisionPanel?: boolean;
+  /** Escalated/routed disposition for a depth_review session — not part of its own emitted JSON, so the caller supplies it (matched by session id). Ignored for other session types. */
+  depthReviewStatus?: DepthReviewStatus | null;
 }
 
 export function SessionPanel({
@@ -38,6 +40,7 @@ export function SessionPanel({
   onClose,
   showTaskName = true,
   showDecisionPanel = true,
+  depthReviewStatus = null,
 }: Props) {
   const [showReviewTranscript, setShowReviewTranscript] = useState(false);
   const [activeTab, setActiveTab] = useState<'transcript' | 'diff'>(
@@ -77,9 +80,17 @@ export function SessionPanel({
           />
         </div>
 
-        {session.sessionType === 'review' ? (
+        {session.sessionType === 'review' ||
+        session.sessionType === 'depth_review' ? (
           <>
-            <ReviewDetailView session={session} />
+            <ReviewDetailView
+              session={session}
+              depthReviewStatus={
+                session.sessionType === 'depth_review'
+                  ? depthReviewStatus
+                  : null
+              }
+            />
 
             <div className={styles.reviewTranscriptOuter}>
               <div className={styles.transcriptOverlay}>
