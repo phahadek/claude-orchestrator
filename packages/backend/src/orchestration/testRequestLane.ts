@@ -36,6 +36,8 @@ import { typedGetSetting } from '../config/settings';
 import {
   insertTestRequestRun,
   completeTestRequestRun,
+  clearSupersededStructuredResults,
+  clearStructuredResultIfSuperseded,
   listRunningTestRequestRuns,
   listTestRequestRunsNeedingExtraction,
   hasTestRunResults,
@@ -243,6 +245,7 @@ async function executeTestRequestRun(
       oomKilled,
       acquisitionAttempted,
     );
+    clearSupersededStructuredResults(spec.projectId, spec.contentHash, runId);
     broadcastRunStatus({
       runId,
       projectId: spec.projectId,
@@ -275,6 +278,7 @@ async function executeTestRequestRun(
     const message = err instanceof Error ? err.message : String(err);
     const output = `[testRequestLane] execution error: ${message}`;
     completeTestRequestRun(runId, 'failed', output, 'generic', null, false);
+    clearSupersededStructuredResults(spec.projectId, spec.contentHash, runId);
     broadcastRunStatus({
       runId,
       projectId: spec.projectId,
@@ -309,6 +313,7 @@ export function recoverInterruptedTestRequestRuns(): void {
     const output =
       '[testRequestLane] backend restarted mid-run — treated as failed';
     completeTestRequestRun(run.id, 'failed', output);
+    clearSupersededStructuredResults(run.project_id, run.content_hash, run.id);
     broadcastRunStatus({
       runId: run.id,
       projectId: run.project_id,
@@ -533,5 +538,16 @@ export function sweepTestRunResultsExtraction(): void {
       `[testRequestLane] extracting test_run_results for run ${run.id} (project ${run.project_id})`,
     );
     ingestTestRunResults(run);
+    // This run's extraction may have been deferred past a newer run
+    // completing for the same key — clearSupersededStructuredResults skipped
+    // it at that time to avoid racing this very sweep. Now that extraction
+    // is done, retroactively clear it if it's no longer the latest.
+    if (hasTestRunResults(run.id)) {
+      clearStructuredResultIfSuperseded(
+        run.id,
+        run.project_id,
+        run.content_hash,
+      );
+    }
   }
 }

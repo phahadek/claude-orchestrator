@@ -7846,6 +7846,79 @@ export function getTaskTestFlipRateFlags(
 }
 
 /**
+ * Clears structured_result on every other non-running row sharing this run's
+ * (project_id, content_hash) key, but ONLY once that row's test_run_results
+ * extraction has already happened. Call right after a run transitions out of
+ * `running` — that transition makes it the latest completed run for the key
+ * (see getLatestTestRequestRun's ordering), so every other row's
+ * structured_result becomes permanently unreachable by any production
+ * reader. test_run_results already retains the per-test outcome/duration
+ * data those blobs duplicate — but extraction can be deferred to the
+ * boot-time sweep (listTestRequestRunsNeedingExtraction) after a crash
+ * mid-run, so a row whose extraction hasn't run yet still needs its
+ * structured_result as the sweep's only source; clearing it here would race
+ * the sweep and permanently lose that row's per-test data. Every other
+ * column, and test_run_results itself, is always untouched.
+ */
+export function clearSupersededStructuredResults(
+  projectId: string,
+  contentHash: string,
+  keepRunId: string,
+): void {
+  db.prepare<{
+    project_id: string;
+    content_hash: string;
+    keep_run_id: string;
+  }>(
+    `UPDATE test_request_runs
+     SET structured_result = NULL
+     WHERE project_id = @project_id AND content_hash = @content_hash
+       AND id != @keep_run_id AND structured_result IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM test_run_results
+         WHERE test_run_results.test_request_run_id = test_request_runs.id
+       )`,
+  ).run({
+    project_id: projectId,
+    content_hash: contentHash,
+    keep_run_id: keepRunId,
+  });
+}
+
+/**
+ * Companion to clearSupersededStructuredResults for the deferred-extraction
+ * path: a run whose test_run_results extraction was deferred to the
+ * boot-time sweep (listTestRequestRunsNeedingExtraction) is skipped by
+ * clearSupersededStructuredResults at the time a newer run for its key
+ * completes, so its structured_result survives that clear. Once the sweep
+ * finishes extracting it, call this to clear it in retrospect if a newer run
+ * had already superseded it in the meantime — same latest-row definition as
+ * getLatestTestRequestRun. No-op if this run is still the latest for its key.
+ */
+export function clearStructuredResultIfSuperseded(
+  runId: string,
+  projectId: string,
+  contentHash: string,
+): void {
+  const tx = db.transaction(() => {
+    const latest = db
+      .prepare<{ project_id: string; content_hash: string }>(
+        `SELECT id FROM test_request_runs
+         WHERE project_id = @project_id AND content_hash = @content_hash AND state != 'running'
+         ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get({ project_id: projectId, content_hash: contentHash }) as
+      | { id: string }
+      | undefined;
+    if (!latest || latest.id === runId) return;
+    db.prepare(
+      `UPDATE test_request_runs SET structured_result = NULL WHERE id = ?`,
+    ).run(runId);
+  });
+  tx();
+}
+
+/**
  * Invalidate every recorded run for (project_id, content_hash) — F2's
  * flaky.confirm actuation path. Callers must audit this via recordEvent —
  * deletion alone is silent. The subsequent rerun (via runProjectTestRequest)

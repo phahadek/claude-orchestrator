@@ -52,6 +52,7 @@ import {
 import {
   insertTestRequestRun,
   completeTestRequestRun,
+  clearSupersededStructuredResults,
   listRunningTestRequestRuns,
   getLatestTestRequestRun,
   listTestRunResultsForRun,
@@ -403,6 +404,85 @@ describe('structured_result acquisition', () => {
     expect(row.state).toBe('failed');
     expect(row.structured_result).toBeNull();
   });
+
+  it("clears a superseded run's structured_result once a newer run lands for the same (project, content-hash), leaving its other columns and test_run_results extraction untouched", async () => {
+    const structuredFirst = {
+      format: 'junit-xml' as const,
+      suites: [
+        {
+          name: 'pytest',
+          tests: [
+            { id: 't1', name: 'test one', outcome: 'passed', durationMs: 10 },
+          ],
+        },
+      ],
+      totals: { passed: 1, failed: 0, skipped: 0, errors: 0 },
+      durationMsTotal: 10,
+    };
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
+
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'first ok' });
+    mockCollectStructuredTestResult.mockReturnValue(structuredFirst);
+    const first = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-supersede' }),
+    );
+
+    const firstRowBefore = db
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
+      .get(first.runId) as { structured_result: string | null };
+    expect(firstRowBefore.structured_result).not.toBeNull();
+
+    ingestTestRunResults(getLatestTestRequestRun('proj-1', 'hash-supersede')!);
+    const firstRunResultsBefore = listTestRunResultsForRun(first.runId);
+    expect(firstRunResultsBefore).toHaveLength(1);
+
+    const structuredSecond = {
+      ...structuredFirst,
+      suites: [
+        {
+          name: 'pytest',
+          tests: [
+            { id: 't1', name: 'test one', outcome: 'passed', durationMs: 12 },
+          ],
+        },
+      ],
+    };
+    mockRunTestCommands.mockResolvedValue({
+      passed: true,
+      output: 'second ok',
+    });
+    mockCollectStructuredTestResult.mockReturnValue(structuredSecond);
+    const second = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-supersede' }),
+    );
+    expect(second.runId).not.toBe(first.runId);
+
+    const firstRowAfter = db
+      .prepare(
+        `SELECT state, output, structured_result FROM test_request_runs WHERE id = ?`,
+      )
+      .get(first.runId) as {
+      state: string;
+      output: string;
+      structured_result: string | null;
+    };
+    expect(firstRowAfter.structured_result).toBeNull();
+    expect(firstRowAfter.state).toBe('passed');
+    expect(firstRowAfter.output).toBe('first ok');
+
+    // The now-latest row keeps its own structured_result.
+    const secondRow = db
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
+      .get(second.runId) as { structured_result: string | null };
+    expect(secondRow.structured_result).not.toBeNull();
+
+    // test_run_results extraction for the superseded run is untouched.
+    expect(listTestRunResultsForRun(first.runId)).toEqual(
+      firstRunResultsBefore,
+    );
+  });
 });
 
 // ── ingestTestRunResults — per-test extraction from structured_result ──────
@@ -543,6 +623,65 @@ describe('sweepTestRunResultsExtraction', () => {
     sweepTestRunResultsExtraction();
 
     expect(listTestRunResultsForRun('run-sweep-2')).toHaveLength(1);
+  });
+
+  it("does not lose a superseded run's per-test data when its extraction was deferred past the run that superseded it", () => {
+    const structuredOld = JSON.stringify({
+      suites: [
+        {
+          tests: [{ id: 't1', name: 'n', outcome: 'passed', durationMs: 5 }],
+        },
+      ],
+    });
+    // Simulates a run that completed and wrote structured_result but
+    // crashed before its own ingestTestRunResults call — the extraction is
+    // left for the boot sweep, same as recoverInterruptedTestRequestRuns'
+    // scenario.
+    insertTestRequestRun(
+      'run-race-old',
+      'proj-1',
+      'hash-race',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun('run-race-old', 'passed', 'ok', null, structuredOld);
+    expect(listTestRunResultsForRun('run-race-old')).toHaveLength(0);
+
+    // A newer run for the same key completes before the sweep runs, and
+    // clears every superseded row it can — but 'run-race-old' has no
+    // test_run_results yet, so it must be skipped rather than wiped.
+    const structuredNew = JSON.stringify({
+      suites: [
+        {
+          tests: [{ id: 't2', name: 'n2', outcome: 'passed', durationMs: 7 }],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-race-new',
+      'proj-1',
+      'hash-race',
+      null,
+      Date.now() + 1,
+    );
+    completeTestRequestRun('run-race-new', 'passed', 'ok', null, structuredNew);
+    clearSupersededStructuredResults('proj-1', 'hash-race', 'run-race-new');
+
+    const oldRowMidRace = db
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
+      .get('run-race-old') as { structured_result: string | null };
+    expect(oldRowMidRace.structured_result).toBe(structuredOld);
+
+    // The sweep now extracts the deferred row, and only then retroactively
+    // clears its structured_result since a newer run had already superseded
+    // it.
+    sweepTestRunResultsExtraction();
+
+    expect(listTestRunResultsForRun('run-race-old')).toHaveLength(1);
+    const oldRowAfterSweep = db
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
+      .get('run-race-old') as { structured_result: string | null };
+    expect(oldRowAfterSweep.structured_result).toBeNull();
   });
 });
 
