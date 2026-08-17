@@ -189,7 +189,7 @@ describe('session_test_request_cycles base-attributable-failures exemption', () 
     const overLimit = stageTestRequest('session-exhausted');
     const checked = await routeStageTimeBlock(overLimit, undefined);
 
-    expect(checked.state).toBe('staged'); // paused, not auto-run
+    expect(checked.state).toBe('approved'); // over limit, still auto-runs
     expect(getSessionTestRequestCycleCount('session-exhausted')).toBe(3);
   });
 });

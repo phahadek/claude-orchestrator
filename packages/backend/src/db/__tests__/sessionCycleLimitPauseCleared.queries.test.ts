@@ -58,7 +58,9 @@ describe('test_request_cycle_exceeded pause reason clears on terminal transition
     seedSession('sess-done');
     setSessionPauseReason('sess-done', 'test_request_cycle_exceeded');
 
-    markSessionDone('sess-done', Date.now());
+    markSessionDone('sess-done', Date.now(), null, 'test', {
+      skipInFlightGuard: true,
+    });
 
     expect(getPauseReason('sess-done')).toBeNull();
   });

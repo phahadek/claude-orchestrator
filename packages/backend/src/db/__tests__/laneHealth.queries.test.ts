@@ -66,6 +66,7 @@ describe('getLaneHealthRollup', () => {
       executionTimeMs: { p50: null, p90: null, p99: null, sampleCount: 0 },
       regressedTests: [],
       flakyTests: { count: 0, tests: [] },
+      cycleLimitCrossings: 0,
     });
   });
 
