@@ -175,8 +175,7 @@ describe('resumeCapabilityRequester approved-outcome notice', () => {
     await supertest(app)
       .post(`/api/staged-intents/${pushbackIntent.id}/reject`)
       .send({ outcome: 'pushback', reason: 'needs more evidence' });
-    const [, , pushbackMessage] =
-      sessionManager.enqueueFeedback.mock.calls[0];
+    const [, , pushbackMessage] = sessionManager.enqueueFeedback.mock.calls[0];
     expect(pushbackMessage).toBe(
       'Capability request "Bash(psql:*)" was sent back for revision. Feedback: needs more evidence',
     );
@@ -185,8 +184,7 @@ describe('resumeCapabilityRequester approved-outcome notice', () => {
     await supertest(app)
       .post(`/api/staged-intents/${declineIntent.id}/reject`)
       .send({ outcome: 'decline', reason: 'not needed' });
-    const [, , declineMessage] =
-      sessionManager.enqueueFeedback.mock.calls[1];
+    const [, , declineMessage] = sessionManager.enqueueFeedback.mock.calls[1];
     expect(declineMessage).toBe(
       'Capability request "Bash(psql:*)" was declined. Reason: not needed',
     );
