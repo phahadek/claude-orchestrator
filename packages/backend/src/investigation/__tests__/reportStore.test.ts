@@ -369,6 +369,20 @@ describe('isResolveEligible', () => {
     insertStagedIntent('intent-2', 'sess-2', 'committed');
     expect(isResolveEligible(report.id)).toBe(true);
   });
+
+  it('treats a withdrawn staged_intent as terminal, same as committed/rejected/superseded', () => {
+    const report = insertReport({
+      projectId: 'proj-1',
+      milestoneId: 'milestone-uuid-1',
+      title: 'A',
+      symptomText: 'a',
+      createdAt: '2026-08-13T00:00:00Z',
+    });
+    insertSession('sess-1', 'done');
+    recordDispatch(report.id, 'sess-1', '2026-08-13T00:00:01Z');
+    insertStagedIntent('intent-1', 'sess-1', 'withdrawn');
+    expect(isResolveEligible(report.id)).toBe(true);
+  });
 });
 
 describe('blocksMilestoneConvergence', () => {

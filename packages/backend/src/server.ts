@@ -718,9 +718,9 @@ registerGateReconciler(scheduler, gateVerificationOptions);
 configureGateVerification(gateVerificationOptions);
 
 // Investigate reconciler: scans committed investigation reports with no
-// live non-terminal session and auto-dispatches them, gated by the global
-// investigation_reconciler_enabled master switch and, per report, by that
-// report's milestone's (milestone, 'investigate') arm. Mirrors the
+// live non-terminal session and auto-dispatches them, gated per report by
+// that report's milestone's (milestone, 'investigate') arm. Also registers
+// the report-resolve watcher, which runs unconditionally. Mirrors the
 // gate-verification reconciler wired just above.
 registerInvestigationReconciler(scheduler, sessionManager);
 
