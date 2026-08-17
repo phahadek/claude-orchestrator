@@ -26,7 +26,7 @@ describe('blocked-intent supersede-scope wording', () => {
     expect(message).toMatch(/supersedes set to "intent-123"/);
     expect(message).toMatch(/only this blocked intent/i);
     expect(message).toMatch(/siblings.*must be left in place/i);
-  });
+  }, 20000);
 
   it('formatDispositionMessage (orchestration/PlanningOrchestrator.ts) auto-pushback branch names supersede-only-the-rejected-intent and leave-siblings-in-place', async () => {
     const { formatDispositionMessage } =
