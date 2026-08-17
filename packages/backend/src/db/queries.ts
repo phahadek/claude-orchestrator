@@ -816,6 +816,31 @@ export function markSessionIdle(
   return 'idle';
 }
 
+/**
+ * Records the skip audit event for a would-be error/killed write onto an
+ * already-terminal session row — the markSessionErrored counterpart to
+ * markSessionIdle's session_idle_write_skipped_terminal event above.
+ * SessionManager.markSessionErrored is the one deciding to skip (it reads
+ * the persisted status via getSession, never the in-memory hasEnded flag —
+ * that flag is exactly what's stale when sessionLivenessReconciler reaps an
+ * orphaned process's OS-level SIGTERM outside the AgentSession object); this
+ * only emits the audit trail for that decision.
+ */
+export function recordSessionErroredWriteSkipped(
+  sessionId: string,
+  taskId: string | null,
+  statusBefore: string,
+  attemptedStatus: string,
+): void {
+  recordEvent({
+    event_type: 'session_errored_write_skipped_terminal',
+    actor_type: 'system',
+    actor_id: sessionId,
+    task_id: taskId,
+    payload: { status_before: statusBefore, attempted_status: attemptedStatus },
+  });
+}
+
 export interface StuckResultSessionRow {
   session_id: string;
   task_id: string | null;

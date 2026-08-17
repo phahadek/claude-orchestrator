@@ -2252,12 +2252,21 @@ describe('terminal cleanup for idle sessions (not live)', () => {
   });
 
   it('markSessionErrored on non-live session (PR closed) triggers worktree teardown', () => {
-    // Session is now 'error' (DB already updated). No task_id so getTaskBackend is skipped.
-    vi.mocked(getSession).mockReturnValue({
-      ...makeDeadRow(),
-      status: 'error',
-      task_id: null,
-    });
+    // First read is markSessionErrored's pre-write terminal guard — row is
+    // still non-terminal ('idle') at that point. Later reads (teardown's own
+    // getSession calls, including cleanupWorktree's chokepoint guard) see
+    // the row as it stands after the (mocked) write: 'error'. No task_id so
+    // getTaskBackend is skipped.
+    vi.mocked(getSession)
+      .mockReturnValueOnce({
+        ...makeDeadRow(),
+        task_id: null,
+      })
+      .mockReturnValue({
+        ...makeDeadRow(),
+        status: 'error',
+        task_id: null,
+      });
 
     sm.markSessionErrored(SESSION_ID, 'error', 'pr_closed');
 
@@ -2297,7 +2306,6 @@ describe('markSessionErrored — Notion status revert respects the task current 
   it('user_kill on a ✅ Done task performs no updateStatus call', () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
-      status: 'killed',
     });
     vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('✅ Done'));
 
@@ -2310,7 +2318,6 @@ describe('markSessionErrored — Notion status revert respects the task current 
   it('user_kill on a ⏭️ Deferred task performs no updateStatus call', () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
-      status: 'killed',
     });
     vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('⏭️ Deferred'));
 
@@ -2323,7 +2330,6 @@ describe('markSessionErrored — Notion status revert respects the task current 
   it('user_kill on a 🔄 In Progress task still reverts it to 🗂️ Ready (majority case)', () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
-      status: 'killed',
     });
     vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('🔄 In Progress'));
 
@@ -2343,7 +2349,6 @@ describe('markSessionErrored — Notion status revert respects the task current 
   it('a cache miss falls back to the existing revert behaviour rather than silently skipping it', () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
-      status: 'killed',
     });
     vi.mocked(getTaskCache).mockReturnValue(undefined);
 
@@ -2363,7 +2368,6 @@ describe('markSessionErrored — Notion status revert respects the task current 
   it('a counted reason (crash budget path) does not set 🚫 Blocked on an already ✅ Done task', () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
-      status: 'error',
     });
     vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('✅ Done'));
     vi.mocked(incrementTaskCrashCount).mockReturnValue(2);
@@ -2384,7 +2388,6 @@ describe('markSessionErrored — Notion status revert respects the task current 
     (reason) => {
       vi.mocked(getSession).mockReturnValue({
         ...makeDeadRow(),
-        status: 'killed',
         session_type: 'groom',
       });
       vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('🔄 In Progress'));
