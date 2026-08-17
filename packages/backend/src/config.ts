@@ -843,8 +843,6 @@ export interface RuntimeSettings {
   gate_verification_enabled: boolean;
   /** GateReconciler: interval in milliseconds between reconcile ticks. */
   gate_verification_interval_ms: number;
-  /** InvestigationReconciler: off until an operator opts in, mirroring gate_verification_enabled. */
-  investigation_reconciler_enabled: boolean;
   /** InvestigationReconciler: interval in milliseconds between reconcile ticks. */
   investigation_reconciler_interval_ms: number;
   /** Model used by the Tier-3 semantic readiness advisory (paraphrased-deferral) classifier. */
@@ -990,8 +988,6 @@ export const runtimeSettings: RuntimeSettings = {
   gate_verification_interval_ms: Number(
     process.env.GATE_VERIFICATION_INTERVAL_MS ?? 60_000,
   ),
-  investigation_reconciler_enabled:
-    process.env.INVESTIGATION_RECONCILER_ENABLED === 'true',
   investigation_reconciler_interval_ms: Number(
     process.env.INVESTIGATION_RECONCILER_INTERVAL_MS ?? 60_000,
   ),

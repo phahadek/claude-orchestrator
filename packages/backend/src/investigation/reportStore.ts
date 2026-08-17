@@ -19,13 +19,15 @@ type InvestigationReportSource = 'operator' | 'session';
 
 /**
  * staged_intent states that terminate an intent's disposition — the set
- * resolve-eligibility waits on. Locked by the design task; 'withdrawn' is
- * also terminal in staged_intent but is not part of this locked list.
+ * resolve-eligibility waits on. A withdrawal is itself a disposition
+ * (stagedIntents.ts records it with disposition: 'withdrawn'), so it counts
+ * as terminal alongside committed/rejected/superseded.
  */
 const TERMINAL_STAGED_INTENT_STATES = new Set([
   'committed',
   'rejected',
   'superseded',
+  'withdrawn',
 ]);
 
 const TERMINAL_REPORT_STATES = new Set<InvestigationReportState>([

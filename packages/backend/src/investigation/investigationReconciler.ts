@@ -169,8 +169,9 @@ export function runReportResolveWatcherTick(
 
 /**
  * Registers the resolve watcher with the Scheduler, beside the dispatch
- * reconciler below — same master switch/cadence, since both are aspects of
- * the same committed-report lifecycle.
+ * reconciler below — same cadence, since both are aspects of the same
+ * committed-report lifecycle. Runs unconditionally: closure has no master
+ * switch, and no per-report arm to check.
  */
 function registerResolveWatcher(
   scheduler: Scheduler,
@@ -180,7 +181,6 @@ function registerResolveWatcher(
     name: 'investigation_resolve_watcher',
     intervalMs: () => runtimeSettings.investigation_reconciler_interval_ms,
     concurrency: 'skip-if-running',
-    enabled: () => runtimeSettings.investigation_reconciler_enabled,
     run: async () => {
       const { resolved } = runReportResolveWatcherTick(options);
       return { items_processed: resolved.length };
@@ -189,10 +189,10 @@ function registerResolveWatcher(
 }
 
 /**
- * Registers the reconciler with the Scheduler, gated by the
- * investigation_reconciler_enabled master switch and, per milestone, the
- * (milestone, 'investigate') arm checked inside the tick above. Mirrors
- * gate/gateReconciler.ts's own register().
+ * Registers the reconciler with the Scheduler. Dispatch is gated per
+ * milestone by the (milestone, 'investigate') arm checked inside the tick
+ * above — flow_arm and DEFAULT_ARM.investigate remain the sole dispatch
+ * control. Mirrors gate/gateReconciler.ts's own register().
  */
 export function register(
   scheduler: Scheduler,
@@ -203,7 +203,6 @@ export function register(
     name: 'investigation_reconciler',
     intervalMs: () => runtimeSettings.investigation_reconciler_interval_ms,
     concurrency: 'skip-if-running',
-    enabled: () => runtimeSettings.investigation_reconciler_enabled,
     run: async () => {
       const result = await runInvestigationReconcilerTick(
         sessionManager,
