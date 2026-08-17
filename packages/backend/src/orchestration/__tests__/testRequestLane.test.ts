@@ -625,7 +625,7 @@ describe('sweepTestRunResultsExtraction', () => {
     expect(listTestRunResultsForRun('run-sweep-2')).toHaveLength(1);
   });
 
-  it('does not lose a superseded run\'s per-test data when its extraction was deferred past the run that superseded it', () => {
+  it("does not lose a superseded run's per-test data when its extraction was deferred past the run that superseded it", () => {
     const structuredOld = JSON.stringify({
       suites: [
         {
