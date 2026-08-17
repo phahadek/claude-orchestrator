@@ -358,6 +358,20 @@ const GRANT_DENYLIST_PATTERNS = [
 ];
 
 /**
+ * Strips single- and double-quoted literal spans from a capability string
+ * before it's tested against GRANT_DENYLIST_PATTERNS. A `Bash(...)`-shaped
+ * capability's command verb sits outside any quotes; quoted spans are query
+ * text / literal arguments (e.g. a `readonly-db-query.js "SELECT resolved_at
+ * FROM ..."` capability) that can innocently contain "resolve"/"apply"/
+ * "done"/"task-intent" as an ordinary word or column-name substring without
+ * the capability itself resembling the mutating actions the denylist exists
+ * to catch.
+ */
+function stripQuotedLiterals(capability: string): string {
+  return capability.replace(/'[^']*'|"[^"]*"/g, '');
+}
+
+/**
  * Prefix for the grantable single-path filesystem-read capability: widens a
  * dispatched planning/ops session's read envelope (the `--add-dir` list
  * passed to the CLI, or the matching read-only bind mount in Docker mode —
@@ -374,7 +388,8 @@ const PATH_READ_PREFIX = 'read:path:';
 
 export function isGrantable(capability: string): boolean {
   if (capability.startsWith(PATH_READ_PREFIX)) return true;
-  return !GRANT_DENYLIST_PATTERNS.some((re) => re.test(capability));
+  const testable = stripQuotedLiterals(capability);
+  return !GRANT_DENYLIST_PATTERNS.some((re) => re.test(testable));
 }
 
 /**
