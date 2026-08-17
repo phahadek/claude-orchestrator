@@ -75,7 +75,7 @@ describe('GateReadinessPanel — operator reclassify control', () => {
       page: 1,
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
     await screen.findByText('item a');
 
     const select = screen.getByTestId(
@@ -102,7 +102,7 @@ describe('GateReadinessPanel — operator reclassify control', () => {
       classification: 'Prod-Mutating',
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
     await screen.findByText('item a');
 
     fireEvent.change(screen.getByTestId('gate-operator-input'), {
@@ -145,7 +145,7 @@ describe('GateReadinessPanel — operator reclassify control', () => {
       new Error('invalid classification'),
     );
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
     await screen.findByText('item a');
 
     fireEvent.change(screen.getByTestId('gate-item-reclassify-a'), {
@@ -173,7 +173,7 @@ describe('GateReadinessPanel — operator reclassify control', () => {
       classification: 'Prod-Mutating',
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
     await screen.findByText('item a');
 
     fireEvent.click(screen.getByTestId('gate-verify-item-a'));

@@ -92,7 +92,7 @@ describe('GateReadinessPanel — seed item disposition controls', () => {
       state: 'applied',
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
     await screen.findByText('seed s1');
 
     fireEvent.change(screen.getByTestId('gate-operator-input'), {
@@ -134,7 +134,7 @@ describe('GateReadinessPanel — seed item disposition controls', () => {
       state: 'confirmed',
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
     await screen.findByText('seed s1');
 
     fireEvent.click(screen.getByTestId('seed-item-confirmed-s1'));
@@ -157,7 +157,7 @@ describe('GateReadinessPanel — seed item disposition controls', () => {
     });
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue(null);
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
     await screen.findByText('seed s1');
 
     fireEvent.click(screen.getByTestId('seed-item-blocked-s1'));
@@ -181,7 +181,7 @@ describe('GateReadinessPanel — seed item disposition controls', () => {
     });
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('TASK-42');
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
     await screen.findByText('seed s1');
 
     fireEvent.click(screen.getByTestId('seed-item-blocked-s1'));
@@ -208,7 +208,7 @@ describe('GateReadinessPanel — seed item disposition controls', () => {
       new Error('seed_item s1: invalid transition'),
     );
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
     await screen.findByText('seed s1');
 
     fireEvent.click(screen.getByTestId('seed-item-applied-s1'));
@@ -248,7 +248,7 @@ describe('GateReadinessPanel — seed item disposition controls', () => {
       currentDisposition: 'pass',
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
     await screen.findByText('gate item g1');
 
     fireEvent.click(screen.getByTestId('gate-item-pass-g1'));

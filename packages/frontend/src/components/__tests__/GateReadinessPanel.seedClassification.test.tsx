@@ -69,7 +69,7 @@ beforeEach(() => {
 
 describe('GateReadinessPanel — seed items classification filter', () => {
   it('renders each seed item classification in the table', async () => {
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
 
     await screen.findByText('seed a');
 
@@ -80,7 +80,7 @@ describe('GateReadinessPanel — seed items classification filter', () => {
   });
 
   it('re-fetches seed items scoped to the selected classification', async () => {
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
 
     await screen.findByText('seed a');
 

@@ -79,7 +79,7 @@ describe('GateReadinessPanel — gate item event evidence', () => {
       events: [EVENT_WITH_EVIDENCE],
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
 
     const row = await screen.findByText('a gate item with a downgraded event');
     fireEvent.click(row);
@@ -126,7 +126,7 @@ describe('GateReadinessPanel — gate item event evidence', () => {
       ],
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
 
     const row = await screen.findByText('a gate item with a downgraded event');
     fireEvent.click(row);
@@ -159,7 +159,7 @@ describe('GateReadinessPanel — gate item event evidence', () => {
       ],
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
 
     const row = await screen.findByText('a gate item with a downgraded event');
     fireEvent.click(row);
@@ -184,7 +184,7 @@ describe('GateReadinessPanel — gate item event evidence', () => {
       events: [{ disposition: 'pass', at: '2026-01-01T00:00:00Z' }],
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
 
     const row = await screen.findByText('a gate item with a downgraded event');
     fireEvent.click(row);

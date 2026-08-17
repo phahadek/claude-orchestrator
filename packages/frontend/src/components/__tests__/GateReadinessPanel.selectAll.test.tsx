@@ -66,7 +66,7 @@ beforeEach(() => {
 
 describe('GateReadinessPanel — Select All / Clear', () => {
   it('Select All adds every filtered item to the selection and Verify(N) reflects the count', async () => {
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
 
     await screen.findByText('item a');
 
@@ -87,7 +87,7 @@ describe('GateReadinessPanel — Select All / Clear', () => {
   });
 
   it('Select All only selects the items shown under the active filters', async () => {
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
 
     await screen.findByText('item a');
 
@@ -113,7 +113,7 @@ describe('GateReadinessPanel — Select All / Clear', () => {
   });
 
   it('Clear resets the selection to zero', async () => {
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
 
     await screen.findByText('item a');
 
@@ -138,7 +138,7 @@ describe('GateReadinessPanel — Select All / Clear', () => {
       total: 0,
       page: 1,
     });
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
 
     await waitFor(() => {
       expect(
