@@ -392,9 +392,15 @@ describe('runTestCommands — externally signal-killed process (host/container O
     // still exits via SIGKILL (the OS/container OOM-killer, not our own
     // escalate()), so this must be caught purely from the close event's
     // signal arg.
-    _spawnHook = () => makeProc(null as unknown as number, '', '', 0, 'SIGKILL');
+    _spawnHook = () =>
+      makeProc(null as unknown as number, '', '', 0, 'SIGKILL');
 
-    const promise = runTestCommands('/worktree', ['npm run test -w backend'], 300, () => {});
+    const promise = runTestCommands(
+      '/worktree',
+      ['npm run test -w backend'],
+      300,
+      () => {},
+    );
     await vi.runAllTimersAsync();
     const result = await promise;
 
@@ -415,7 +421,8 @@ describe('runTestCommands — externally signal-killed process (host/container O
   });
 
   it('does not mark oomKilled for a non-SIGKILL signal (e.g. SIGTERM)', async () => {
-    _spawnHook = () => makeProc(null as unknown as number, '', '', 0, 'SIGTERM');
+    _spawnHook = () =>
+      makeProc(null as unknown as number, '', '', 0, 'SIGTERM');
 
     const promise = runTestCommands('/worktree', ['npm test'], 300, () => {});
     await vi.runAllTimersAsync();
