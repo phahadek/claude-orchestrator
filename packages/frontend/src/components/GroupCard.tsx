@@ -94,7 +94,9 @@ function sizeEstimateOf(members: GroupCardMember[]): string | null {
       typeof sizeCheck?.files === 'number'
     ) {
       const locMethod =
-        typeof sizeCheck.loc_method === 'string' ? ` ${sizeCheck.loc_method}` : '';
+        typeof sizeCheck.loc_method === 'string'
+          ? ` ${sizeCheck.loc_method}`
+          : '';
       return `${sizeCheck.loc} LoC${locMethod}, ${sizeCheck.files} file${
         sizeCheck.files === 1 ? '' : 's'
       }`;
