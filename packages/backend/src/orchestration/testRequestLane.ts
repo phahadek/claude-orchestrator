@@ -222,6 +222,7 @@ async function executeTestRequestRun(
         structuredResult = collectStructuredTestResult(
           spec.worktreePath,
           testReportGlob,
+          spec.commands.length,
         );
       } catch (err) {
         logger.warn(

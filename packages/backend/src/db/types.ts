@@ -1099,6 +1099,16 @@ export interface StructuredTestResult {
     errors: number;
   };
   durationMsTotal: number;
+  /**
+   * True when fewer report files were found than test commands were run —
+   * e.g. one command's report is present but another's producing command
+   * crashed (OOM-kill, etc.) before writing its report. Distinguishes a
+   * partial multi-command glob merge from a genuinely complete result so a
+   * missing suite is never silently indistinguishable from a full pass. See
+   * collectStructuredTestResult in session/test-runner.ts and
+   * classifyFailedRun in orchestration/baseHealthCheck.ts.
+   */
+  incomplete?: boolean;
 }
 
 /** One row per test, extracted from a completed run's structured_result. */
