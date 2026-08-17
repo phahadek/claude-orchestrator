@@ -1092,6 +1092,11 @@ describe('StagedIntentPanel', () => {
     });
 
     it('reclassifies the item to Read-Only via gateApi.reclassifyItem with the shared evidence text as the reason', async () => {
+      vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+        item: { classification: 'Human-Observation' } as never,
+        sources: [],
+        events: [],
+      });
       const reclassifyItem = vi
         .spyOn(gateApi, 'reclassifyItem')
         .mockResolvedValue({} as never);
@@ -1112,6 +1117,24 @@ describe('StagedIntentPanel', () => {
           classification: 'Read-Only',
           reason: 'this is actually readable',
         }),
+      );
+    });
+
+    it('does not render the Read-Only reclassify control once the item is confirmed already Read-Only', async () => {
+      vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+        item: { classification: 'Read-Only' } as never,
+        sources: [],
+        events: [],
+      });
+
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      await waitFor(() =>
+        expect(
+          screen.queryByTestId(
+            'staged-intent-gate-verify-mirror-reclassify-readonly',
+          ),
+        ).toBeNull(),
       );
     });
   });

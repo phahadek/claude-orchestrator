@@ -1253,6 +1253,9 @@ export function StagedIntentPanel({
   const [consentRejectReason, setConsentRejectReason] = useState('');
   const [gateEvidence, setGateEvidence] = useState('');
   const [reclassifyInFlight, setReclassifyInFlight] = useState(false);
+  const [mirrorClassification, setMirrorClassification] = useState<
+    string | null
+  >(null);
   const rejectReasonRef = useRef<HTMLTextAreaElement>(null);
 
   const blocked = Boolean(
@@ -1299,6 +1302,24 @@ export function StagedIntentPanel({
   const mirrorGateItemId = isGateVerifyMirror
     ? (intent.payload as GateVerifyPayload).gateItemId
     : null;
+
+  useEffect(() => {
+    if (!mirrorGateItemId) return;
+    let cancelled = false;
+    gateApi
+      .getGateItemDetail(mirrorGateItemId)
+      .then((detail) => {
+        if (!cancelled) setMirrorClassification(detail.item.classification);
+      })
+      .catch(() => {
+        // Non-fatal — the reclassify button just falls back to always
+        // showing (matching the pre-fetch default) rather than blocking on
+        // this read.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mirrorGateItemId]);
 
   const handleReclassifyReadOnly = async () => {
     if (!mirrorGateItemId) return;
@@ -1740,18 +1761,20 @@ export function StagedIntentPanel({
                 >
                   {inFlight === 'apply' ? 'Applying…' : 'Park'}
                 </button>
-                <button
-                  type="button"
-                  className={styles.reclassifyButton}
-                  disabled={reclassifyInFlight || disabled}
-                  data-testid="staged-intent-gate-verify-mirror-reclassify-readonly"
-                  title="Reclassifies this item as Read-Only, making it auto-runnable by a verifier."
-                  onClick={() => void handleReclassifyReadOnly()}
-                >
-                  {reclassifyInFlight
-                    ? 'Reclassifying…'
-                    : 'Reclassify: Read-Only'}
-                </button>
+                {mirrorClassification !== 'Read-Only' && (
+                  <button
+                    type="button"
+                    className={styles.reclassifyButton}
+                    disabled={reclassifyInFlight || disabled}
+                    data-testid="staged-intent-gate-verify-mirror-reclassify-readonly"
+                    title="Reclassifies this item as Read-Only, making it auto-runnable by a verifier."
+                    onClick={() => void handleReclassifyReadOnly()}
+                  >
+                    {reclassifyInFlight
+                      ? 'Reclassifying…'
+                      : 'Reclassify: Read-Only'}
+                  </button>
+                )}
               </>
             )}
             {!isGrouped && !blocked && !skipsApply && !isGateVerifyMirror && (
