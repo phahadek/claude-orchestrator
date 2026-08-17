@@ -17,6 +17,10 @@ import {
 } from '../db/queries';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
+import {
+  renderTaskBodyMarkdown,
+  type TaskBodySections,
+} from '../tasks/bodyRender';
 import { catchUpMergeCommits } from './gateMergeConsumer';
 import {
   resolveMilestoneDatabaseId,
@@ -177,8 +181,111 @@ function deriveFollowupTaskType(item: GateItem): string {
   return item.classification === 'Human-Observation' ? '📐 Design' : '💻 Code';
 }
 
+/** Every filed follow-up fix blocks the gate the item belongs to — none of them are ever low-priority busywork. */
+const FOLLOWUP_TASK_PRIORITY = '🔴 High';
+
+/**
+ * The verifier's evidence contract (see gateVerifyEvidenceSchema in
+ * mcp/tools/schemas.ts) is `expected`/`found`/`query` required, `source`
+ * optional — but GateVerificationResult.evidence is typed `unknown` since
+ * non-verifier-authored fail events (dispatch failures, budget exceeded,
+ * ...) carry other shapes (e.g. `{ reason }`). Narrows to the structured
+ * shape when present, so a followup body can quote it verbatim without
+ * assuming it's always there.
+ */
+function extractVerifierEvidence(
+  evidence: unknown,
+):
+  | { expected: string; found: string; query: string; source?: string }
+  | undefined {
+  if (typeof evidence !== 'object' || evidence === null) return undefined;
+  const e = evidence as Record<string, unknown>;
+  if (
+    typeof e.expected === 'string' &&
+    typeof e.found === 'string' &&
+    typeof e.query === 'string'
+  ) {
+    return {
+      expected: e.expected,
+      found: e.found,
+      query: e.query,
+      source: typeof e.source === 'string' ? e.source : undefined,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Builds the follow-up fix task's body from the gate item and the failure
+ * that spawned it — a groom session working this task should never need to
+ * go looking for the gate item or its event history to recover what the
+ * verifier already found. Rendered through renderTaskBodyMarkdown so the
+ * body parses under the same section model the promotion gate uses.
+ */
+function buildFollowupTaskBody(
+  item: GateItem,
+  failure: GateVerificationResult,
+): string {
+  const evidence = extractVerifierEvidence(failure.evidence);
+  const originatingSource = item.sources[0];
+
+  const context: TaskBodySections['context'] = [
+    {
+      type: 'paragraph',
+      text: `Gate item ${item.id} — ${item.classification}, milestone ${item.milestone}.`,
+    },
+    { type: 'heading_3', text: 'Gate item text' },
+    { type: 'paragraph', text: item.text },
+    { type: 'heading_3', text: 'Verifier evidence' },
+  ];
+
+  if (evidence) {
+    context.push(
+      { type: 'bulleted_list_item', text: `Expected: ${evidence.expected}` },
+      { type: 'bulleted_list_item', text: `Found: ${evidence.found}` },
+      { type: 'bulleted_list_item', text: `Query: ${evidence.query}` },
+    );
+    if (evidence.source) {
+      context.push({
+        type: 'bulleted_list_item',
+        text: `Source: ${evidence.source}`,
+      });
+    }
+  } else {
+    context.push({
+      type: 'paragraph',
+      text: 'No structured verifier evidence was recorded for this failure.',
+    });
+  }
+
+  context.push(
+    { type: 'heading_3', text: 'Deploy' },
+    {
+      type: 'paragraph',
+      text: `Deployed SHA at failure: ${item.minDeployedCommit ?? 'unknown'}`,
+    },
+  );
+
+  if (originatingSource) {
+    context.push({
+      type: 'paragraph',
+      text: `Originating source task: ${originatingSource.sourceTaskId} (${originatingSource.sourceTaskTitle})`,
+    });
+  }
+
+  const sections: TaskBodySections = {
+    summary: `Fix gate item ${item.id}: ${item.text}`,
+    dependencies: [],
+    context,
+    automatedCriteria: [`Gate item ${item.id} re-verifies as pass.`],
+    manualCriteria: [],
+    taskType: deriveFollowupTaskType(item),
+  };
+  return renderTaskBodyMarkdown(sections);
+}
+
 export const defaultFollowupFiler: FollowupFixTaskFiler = {
-  async fileFollowupFixTask(item) {
+  async fileFollowupFixTask(item, failure) {
     const databaseId = resolveMilestoneDatabaseId(item.project, item.milestone);
     const backend = getTaskBackend(item.project);
     if (!backend.createTask) {
@@ -191,6 +298,8 @@ export const defaultFollowupFiler: FollowupFixTaskFiler = {
       databaseId,
       title,
       type: deriveFollowupTaskType(item),
+      priority: FOLLOWUP_TASK_PRIORITY,
+      body: buildFollowupTaskBody(item, failure),
     });
     return { taskId, taskTitle: title };
   },
