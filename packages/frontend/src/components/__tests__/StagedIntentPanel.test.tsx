@@ -981,7 +981,7 @@ describe('StagedIntentPanel', () => {
       expect(park.disabled).toBe(true);
 
       fireEvent.change(
-        screen.getByTestId('staged-intent-gate-verify-mirror-park-evidence'),
+        screen.getByTestId('staged-intent-gate-verify-mirror-evidence'),
         {
           target: {
             value: 'not triggerable yet — waiting on the real-world event',
@@ -1018,8 +1018,123 @@ describe('StagedIntentPanel', () => {
           override: false,
           reason: undefined,
           mirrorDisposition: 'deferred',
-          mirrorEvidence: undefined,
+          mirrorEvidence: '',
         }),
+      );
+    });
+
+    it('renders exactly one textarea, with a placeholder that is not park-specific', () => {
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      const textareas = screen.getAllByRole('textbox');
+      expect(textareas.length).toBe(1);
+      expect((textareas[0] as HTMLTextAreaElement).placeholder).not.toMatch(
+        /park/i,
+      );
+    });
+
+    it('does not render the Pushback/Decline radio pair or its revise textarea', () => {
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      expect(screen.queryByRole('radio', { name: /pushback/i })).toBeNull();
+      expect(screen.queryByRole('radio', { name: /decline/i })).toBeNull();
+      expect(
+        screen.queryByPlaceholderText('What should the session revise?'),
+      ).toBeNull();
+    });
+
+    it('sends the shared evidence box contents as mirrorEvidence on Pass, Fail, and Defer', async () => {
+      const apply = vi
+        .spyOn(stagedIntentsApi, 'apply')
+        .mockResolvedValue({ ok: true, result: {} });
+
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+      fireEvent.change(
+        screen.getByTestId('staged-intent-gate-verify-mirror-evidence'),
+        { target: { value: 'confirmed via dashboard' } },
+      );
+
+      fireEvent.click(
+        screen.getByTestId('staged-intent-gate-verify-mirror-pass'),
+      );
+      await waitFor(() =>
+        expect(apply).toHaveBeenLastCalledWith('intent-1', {
+          override: false,
+          reason: undefined,
+          mirrorDisposition: 'pass',
+          mirrorEvidence: 'confirmed via dashboard',
+        }),
+      );
+
+      fireEvent.click(
+        screen.getByTestId('staged-intent-gate-verify-mirror-fail'),
+      );
+      await waitFor(() =>
+        expect(apply).toHaveBeenLastCalledWith('intent-1', {
+          override: false,
+          reason: undefined,
+          mirrorDisposition: 'fail',
+          mirrorEvidence: 'confirmed via dashboard',
+        }),
+      );
+
+      fireEvent.click(
+        screen.getByTestId('staged-intent-gate-verify-mirror-defer'),
+      );
+      await waitFor(() =>
+        expect(apply).toHaveBeenLastCalledWith('intent-1', {
+          override: false,
+          reason: undefined,
+          mirrorDisposition: 'deferred',
+          mirrorEvidence: 'confirmed via dashboard',
+        }),
+      );
+    });
+
+    it('reclassifies the item to Read-Only via gateApi.reclassifyItem with the shared evidence text as the reason', async () => {
+      vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+        item: { classification: 'Human-Observation' } as never,
+        sources: [],
+        events: [],
+      });
+      const reclassifyItem = vi
+        .spyOn(gateApi, 'reclassifyItem')
+        .mockResolvedValue({} as never);
+
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+      fireEvent.change(
+        screen.getByTestId('staged-intent-gate-verify-mirror-evidence'),
+        { target: { value: 'this is actually readable' } },
+      );
+      fireEvent.click(
+        screen.getByTestId(
+          'staged-intent-gate-verify-mirror-reclassify-readonly',
+        ),
+      );
+
+      await waitFor(() =>
+        expect(reclassifyItem).toHaveBeenCalledWith('gate-mirror-1', {
+          classification: 'Read-Only',
+          reason: 'this is actually readable',
+        }),
+      );
+    });
+
+    it('does not render the Read-Only reclassify control once the item is confirmed already Read-Only', async () => {
+      vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+        item: { classification: 'Read-Only' } as never,
+        sources: [],
+        events: [],
+      });
+
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      await waitFor(() =>
+        expect(
+          screen.queryByTestId(
+            'staged-intent-gate-verify-mirror-reclassify-readonly',
+          ),
+        ).toBeNull(),
       );
     });
   });

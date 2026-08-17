@@ -950,6 +950,7 @@ export function reclassifyGateItem(
   gateItemId: string,
   classification: GateItemClassification,
   operator?: string,
+  reason?: string,
 ): GateItem {
   if (!RECLASSIFY_TARGETS.has(classification)) {
     throw new Error(
@@ -966,6 +967,7 @@ export function reclassifyGateItem(
     classification,
     now,
     operator,
+    reason ? { reason } : undefined,
   );
   if (
     item.state === 'pending' &&

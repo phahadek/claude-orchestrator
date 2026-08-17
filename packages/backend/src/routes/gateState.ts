@@ -369,7 +369,11 @@ export function createGateStateRouter(): Router {
     '/gate/items/:id/classification',
     (req: Request, res: Response) => {
       const id = String(req.params.id);
-      const body = req.body as { classification?: unknown; operator?: unknown };
+      const body = req.body as {
+        classification?: unknown;
+        operator?: unknown;
+        reason?: unknown;
+      };
       const classification =
         typeof body.classification === 'string' ? body.classification : null;
       if (!classification) {
@@ -381,6 +385,7 @@ export function createGateStateRouter(): Router {
           id,
           classification as GateItemClassification,
           typeof body.operator === 'string' ? body.operator : undefined,
+          typeof body.reason === 'string' ? body.reason : undefined,
         );
         res.json(updated);
       } catch (err) {

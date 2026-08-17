@@ -1196,6 +1196,23 @@ describe('reclassifyGateItem — pending lifecycle', () => {
     const updated = reclassifyGateItem(item.id, 'Read-Only', 'pedro');
     expect(updated.state).toBe('open');
   });
+
+  it('persists a passed reason on the classification-change event evidence', () => {
+    const item = makeItem({ classification: 'Human-Observation' });
+    reclassifyGateItem(
+      item.id,
+      'Read-Only',
+      'pedro',
+      'It is actually readable.',
+    );
+
+    const events = getGateItemDetail(item.id)!.events;
+    const latest = events[events.length - 1];
+    expect(latest.disposition).toBe('reclassified');
+    expect(latest.evidence).toMatchObject({
+      reason: 'It is actually readable.',
+    });
+  });
 });
 
 describe('reopenGateItem — pending is blocked', () => {

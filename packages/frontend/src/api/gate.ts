@@ -175,6 +175,7 @@ export interface RejectGateItemInput {
 export interface ReclassifyGateItemInput {
   classification: GateItemClassification;
   operator?: string;
+  reason?: string;
 }
 
 export interface GateItemVerifySession {

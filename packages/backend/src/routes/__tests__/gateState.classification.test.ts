@@ -62,9 +62,28 @@ describe('POST /api/gate/items/:id/classification', () => {
       'gi-1',
       'Read-Only',
       'pedro',
+      undefined,
     );
     expect(res.status).toBe(200);
     expect(res.body).toEqual(updated);
+  });
+
+  it('forwards a reason from the request body to reclassifyGateItem', async () => {
+    const updated = { id: 'gi-1', classification: 'Read-Only' };
+    gateServiceMock.reclassifyGateItem.mockReturnValue(updated);
+
+    await request(makeApp()).post('/api/gate/items/gi-1/classification').send({
+      classification: 'Read-Only',
+      operator: 'pedro',
+      reason: 'It is actually readable.',
+    });
+
+    expect(gateServiceMock.reclassifyGateItem).toHaveBeenCalledWith(
+      'gi-1',
+      'Read-Only',
+      'pedro',
+      'It is actually readable.',
+    );
   });
 
   it('rejects a missing classification without calling the service', async () => {
