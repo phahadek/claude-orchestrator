@@ -66,6 +66,7 @@ import {
 import {
   insertSession,
   updateSessionStatus,
+  recordSessionErroredWriteSkipped,
   updateSessionWorktreePath,
   markSessionDone,
   markSessionIdle,
@@ -1265,6 +1266,30 @@ export class SessionManager extends EventEmitter {
   ): void {
     const endedAt = Date.now();
 
+    // Terminal guard: a row already concluded (done/error/killed) must never
+    // be downgraded by a late-arriving exit signal — e.g.
+    // sessionLivenessReconciler's SIGTERM reap of an orphaned process whose
+    // row already completed, which fires this session's exit handler
+    // outside the AgentSession object and thus outside its in-memory
+    // hasEnded flag. Reads the persisted status directly instead, mirroring
+    // markSessionIdle's terminal guard (db/queries.ts).
+    const existingRow = getSession(sessionId);
+    if (existingRow && TERMINAL_SESSION_STATUSES.has(existingRow.status)) {
+      recordSessionErroredWriteSkipped(
+        sessionId,
+        existingRow.task_id ?? null,
+        existingRow.status,
+        status,
+      );
+      // Still flip hasEnded so AgentSession's own fallback direct-write path
+      // (used only when sessionManager is absent) doesn't fire either.
+      const liveSession = this.sessions.get(sessionId);
+      if (liveSession) {
+        liveSession.hasEnded = true;
+      }
+      return;
+    }
+
     // 1. Update DB status and ended_at
     updateSessionStatus(sessionId, status, endedAt);
 
@@ -1326,8 +1351,10 @@ export class SessionManager extends EventEmitter {
       this._teardownIdleSessionWorktree(sessionId);
     }
 
-    // 3. Look up session row for taskId (already written by step 1)
-    const row = getSession(sessionId);
+    // 3. Look up session row for taskId — reuses the pre-write fetch from
+    // the terminal guard above (task_id is immutable across the status
+    // write, so a second lookup would be redundant).
+    const row = existingRow;
     const taskId = row?.task_id ?? undefined;
 
     // 4. Emit session_ended WS broadcast

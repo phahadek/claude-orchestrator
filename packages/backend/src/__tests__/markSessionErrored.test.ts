@@ -1087,6 +1087,125 @@ describe('SessionManager.markSessionErrored() — expiry notification', () => {
   });
 });
 
+// ── Terminal guard: reap of an already-terminal row must never downgrade it ──
+
+describe('SessionManager.markSessionErrored() — terminal guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupFakeBackend();
+  });
+
+  it('skips the DB write and records a skip audit event when the row is already done (SIGTERM/143 reap)', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'done' }) as never,
+    );
+    const sm = new SessionManager();
+
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      'runner_non_zero',
+      'process exited with code 143',
+    );
+
+    expect(queries.updateSessionStatus).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_errored_write_skipped_terminal',
+        actor_id: 'test-session',
+        payload: expect.objectContaining({
+          status_before: 'done',
+          attempted_status: 'error',
+        }),
+      }),
+    );
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'session_errored' }),
+    );
+  });
+
+  it('leaves an already-error or already-killed row alone the same way', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'killed' }) as never,
+    );
+    const sm = new SessionManager();
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+
+    expect(queries.updateSessionStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not emit session_ended, reap staged intents, or touch Notion when skipped', async () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'done' }) as never,
+    );
+    const staged = stageIntent('test-session');
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    const messages: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => messages.push(m));
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(messages.find((m) => m.type === 'session_ended')).toBeUndefined();
+    expect(queries.getStagedIntent(staged)!.state).toBe('staged');
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('sets hasEnded on the live in-memory session even though the DB write is skipped', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'done' }) as never,
+    );
+    const sm = new SessionManager();
+    const liveSession = { hasEnded: false } as never;
+    (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(
+      'test-session',
+      liveSession,
+    );
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+
+    expect((liveSession as { hasEnded: boolean }).hasEnded).toBe(true);
+  });
+
+  it('a genuine non-zero exit on a NOT-terminal row still transitions to error unchanged', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }) as never,
+    );
+    const sm = new SessionManager();
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      'test-session',
+      'error',
+      expect.any(Number),
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_errored',
+        payload: expect.objectContaining({ reason: 'runner_non_zero' }),
+      }),
+    );
+  });
+
+  it('guard is based on the persisted status, not any in-memory hasEnded flag', () => {
+    // No live in-memory session is ever registered for this id — the guard
+    // must still fire purely from the persisted row, exactly the case where
+    // sessionLivenessReconciler reaps an orphaned process whose AgentSession
+    // object never observed a clean end (or no longer exists at all).
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'done' }) as never,
+    );
+    const sm = new SessionManager();
+
+    sm.markSessionErrored('test-session', 'killed', 'runner_killed_unexpected');
+
+    expect(queries.updateSessionStatus).not.toHaveBeenCalled();
+  });
+});
+
 // ── Backstop-sweep expiry notification (this task) ──────────────────────────
 
 function insertRealSession(sessionId: string, status: string): void {
