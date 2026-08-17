@@ -37,7 +37,11 @@ beforeEach(() => {
 
 function seedSession(
   sessionId: string,
-  opts: { sessionType?: string; projectId?: string | null; taskId?: string | null } = {},
+  opts: {
+    sessionType?: string;
+    projectId?: string | null;
+    taskId?: string | null;
+  } = {},
 ): void {
   insertSession({
     session_id: sessionId,
@@ -129,7 +133,7 @@ describe('deriveCapabilityProvenance', () => {
     ]);
   });
 
-  it('classifies a capability present in the session\'s resolved pre-grant list as config, even with zero matching audit-log rows', () => {
+  it("classifies a capability present in the session's resolved pre-grant list as config, even with zero matching audit-log rows", () => {
     seedSession('sess-5', {
       sessionType: 'ops',
       projectId: 'proj-1',
@@ -140,9 +144,7 @@ describe('deriveCapabilityProvenance', () => {
       capability_pre_grants: { ops: ['Bash(git log:*)'] },
     });
 
-    const result = deriveCapabilityProvenance('sess-5', [
-      'Bash(git log:*)',
-    ]);
+    const result = deriveCapabilityProvenance('sess-5', ['Bash(git log:*)']);
 
     expect(result).toEqual([
       { capability: 'Bash(git log:*)', provenance: 'config' },
@@ -170,9 +172,7 @@ describe('deriveCapabilityProvenance', () => {
       },
     });
 
-    const result = deriveCapabilityProvenance('sess-6', [
-      'Bash(git log:*)',
-    ]);
+    const result = deriveCapabilityProvenance('sess-6', ['Bash(git log:*)']);
 
     expect(result).toEqual([
       { capability: 'Bash(git log:*)', provenance: 'config' },
