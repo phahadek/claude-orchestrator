@@ -1561,6 +1561,58 @@ function computeGroupKind(
 let stagedIntentSessionManager: SessionManager | undefined;
 
 /**
+ * Request-scoped memoization for the three per-row lookups rowToApi
+ * recomputes independently for every row (groupKind, sessionComplete, and
+ * computeGroupBlockedSignals' full-group re-read): without it, a `.map(
+ * rowToApi)` over a milestone's staged-intent set re-reads every member of
+ * a shared group once per member of that group (quadratic in group size —
+ * see computeGroupBlockedSignals), and re-resolves the same session's
+ * complete/kind state once per row that references it. Scoped to a single
+ * request/list call — never held across requests, since sessionComplete and
+ * groupKind can change between polls.
+ */
+interface RowToApiCache {
+  sessionComplete: Map<string, boolean>;
+  groupKind: Map<string, 'groom' | 'investigation' | 'other'>;
+  groupBlockedSignals: Map<
+    string,
+    { blocked: boolean; blockedMemberCount: number; sessionIncomplete: boolean }
+  >;
+}
+
+function createRowToApiCache(): RowToApiCache {
+  return {
+    sessionComplete: new Map(),
+    groupKind: new Map(),
+    groupBlockedSignals: new Map(),
+  };
+}
+
+function getSessionCompleteCached(
+  sessionId: string,
+  sessionManager: SessionManager | undefined,
+  cache: RowToApiCache,
+): boolean {
+  const cached = cache.sessionComplete.get(sessionId);
+  if (cached !== undefined) return cached;
+  const result = resolveSessionCompleteForDisplay(sessionId, sessionManager);
+  cache.sessionComplete.set(sessionId, result);
+  return result;
+}
+
+function getGroupKindCached(
+  sessionId: string | null,
+  cache: RowToApiCache,
+): 'groom' | 'investigation' | 'other' {
+  const key = sessionId ?? '';
+  const cached = cache.groupKind.get(key);
+  if (cached !== undefined) return cached;
+  const result = computeGroupKind(sessionId);
+  cache.groupKind.set(key, result);
+  return result;
+}
+
+/**
  * Mirrors commitGroupIntents' non-committability predicate for display: a
  * group is blocked when any member (any state, any visibility) sits in
  * needs_revision/pending_verification, or when any live member's owning
@@ -1574,11 +1626,14 @@ let stagedIntentSessionManager: SessionManager | undefined;
 function computeGroupBlockedSignals(
   groupId: string,
   sessionManager: SessionManager | undefined,
+  cache?: RowToApiCache,
 ): {
   blocked: boolean;
   blockedMemberCount: number;
   sessionIncomplete: boolean;
 } {
+  const cached = cache?.groupBlockedSignals.get(groupId);
+  if (cached) return cached;
   const allMembers = listStagedIntentsByGroup(groupId);
   const blockedMemberCount = allMembers.filter(
     (r) => r.state === 'needs_revision' || r.state === 'pending_verification',
@@ -1588,13 +1643,17 @@ function computeGroupBlockedSignals(
     .some(
       (r) =>
         !!r.session_id &&
-        !resolveSessionCompleteForDisplay(r.session_id, sessionManager),
+        !(cache
+          ? getSessionCompleteCached(r.session_id, sessionManager, cache)
+          : resolveSessionCompleteForDisplay(r.session_id, sessionManager)),
     );
-  return {
+  const result = {
     blocked: blockedMemberCount > 0 || sessionIncomplete,
     blockedMemberCount,
     sessionIncomplete,
   };
+  cache?.groupBlockedSignals.set(groupId, result);
+  return result;
 }
 
 /** Maps a test_request_runs row to the same shape testRequestLane.ts broadcasts over WS. */
@@ -1619,7 +1678,10 @@ function testRequestRunRowToApi(
   };
 }
 
-function rowToApi(row: StagedIntentRow): StagedIntent {
+function rowToApi(
+  row: StagedIntentRow,
+  cache: RowToApiCache = createRowToApiCache(),
+): StagedIntent {
   const payload = JSON.parse(row.payload) as unknown;
   const capability =
     row.kind === 'session.requestCapability'
@@ -1650,12 +1712,13 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
     dispositionReason: row.disposition_reason,
     answer: row.answer ? (JSON.parse(row.answer) as StagedIntentAnswer) : null,
     sessionComplete: row.session_id
-      ? resolveSessionCompleteForDisplay(
+      ? getSessionCompleteCached(
           row.session_id,
           stagedIntentSessionManager,
+          cache,
         )
       : null,
-    groupKind: computeGroupKind(row.session_id),
+    groupKind: getGroupKindCached(row.session_id, cache),
     confersFileMutation:
       typeof capability === 'string'
         ? bashCapabilityConfersFileMutation(capability)
@@ -1665,6 +1728,7 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
           const signals = computeGroupBlockedSignals(
             row.group_id!,
             stagedIntentSessionManager,
+            cache,
           );
           return {
             groupBlocked: signals.blocked,
@@ -7594,7 +7658,8 @@ export function createStagedIntentsRouter(
         }
       }
       const ranked = rankDecisions(rows, convergence);
-      res.json({ intents: ranked.map(rowToApi) });
+      const cache = createRowToApiCache();
+      res.json({ intents: ranked.map((r) => rowToApi(r, cache)) });
       return;
     }
 
@@ -7607,7 +7672,8 @@ export function createStagedIntentsRouter(
           ? listStagedIntentsByProject(projectId)
           : listAllActiveStagedIntents()
     ).filter((r) => isVisibleOnDecisionSurface(r, sessionManager));
-    res.json({ intents: rows.map(rowToApi) });
+    const cache = createRowToApiCache();
+    res.json({ intents: rows.map((r) => rowToApi(r, cache)) });
   });
 
   // ── POST /api/staged-intents ─────────────────────────────────────────────
@@ -8156,7 +8222,12 @@ export function createStagedIntentsRouter(
           (r) =>
             r.state === 'needs_revision' || r.state === 'pending_verification',
         );
-      res.json({ groupId, intents: members.map(rowToApi), wedged });
+      const cache = createRowToApiCache();
+      res.json({
+        groupId,
+        intents: members.map((r) => rowToApi(r, cache)),
+        wedged,
+      });
     },
   );
 
