@@ -442,8 +442,7 @@ export function MilestoneDrilldown({
               project={project}
               showDecisionPanel={false}
               depthReviewStatus={
-                depthReviewStatusBySessionId[resolvedSession.sessionId] ??
-                null
+                depthReviewStatusBySessionId[resolvedSession.sessionId] ?? null
               }
             />
           )}

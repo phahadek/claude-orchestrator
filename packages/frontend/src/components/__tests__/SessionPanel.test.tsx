@@ -233,7 +233,11 @@ describe('SessionPanel — depth_review session', () => {
               text: JSON.stringify({
                 verdict,
                 dimensions: [
-                  { name: 'reliability', passed: false, notes: 'Retries are unbounded' },
+                  {
+                    name: 'reliability',
+                    passed: false,
+                    notes: 'Retries are unbounded',
+                  },
                 ],
                 summary: 'Found a defect beyond spec-conformance',
               }),

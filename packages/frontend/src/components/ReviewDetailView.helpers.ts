@@ -7,7 +7,13 @@ interface ReviewDimension {
 }
 
 export interface ReviewResult {
-  verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error' | 'pass' | 'fail';
+  verdict:
+    | 'approved'
+    | 'needs_changes'
+    | 'incomplete'
+    | 'error'
+    | 'pass'
+    | 'fail';
   dimensions: ReviewDimension[];
   summary: string;
   errorDetail?: string;
