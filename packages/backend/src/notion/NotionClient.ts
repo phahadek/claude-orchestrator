@@ -392,6 +392,89 @@ function locateHeadingSection(
   return { headingId, bodyBlocks };
 }
 
+// ─── Block-scoped patch engine (applyPageEdit) ──────────────────────────────
+// Unlike patchBodySection's insert-then-delete-range, applyPageEdit patches a
+// single matched block in place (PATCH /v1/blocks/{id}) — it never rebuilds
+// or deletes blocks it didn't match, so tables, nested subtrees and
+// unaffected formatting elsewhere on the page survive untouched.
+
+/** The [start, end) offset of a block's own rendered line within the flattened text. */
+interface BlockLineRange {
+  blockIndex: number;
+  start: number;
+  end: number;
+}
+
+/**
+ * Flattens `lines` (one rendered line per block, in block order) into a
+ * single '\n'-joined string, alongside each block's own [start, end) offset
+ * range within that string — the provenance that lets a matched substring be
+ * traced back to the single block it came from.
+ */
+function buildFlattenedProvenance(lines: string[]): {
+  text: string;
+  ranges: BlockLineRange[];
+} {
+  const ranges: BlockLineRange[] = [];
+  let offset = 0;
+  lines.forEach((line, blockIndex) => {
+    const start = offset;
+    const end = start + line.length;
+    ranges.push({ blockIndex, start, end });
+    offset = end + 1; // +1 for the '\n' joiner
+  });
+  return { text: lines.join('\n'), ranges };
+}
+
+/** The rich_text array of a block's own type-keyed field, or undefined when that block type carries none. */
+function blockRichText(block: NotionBlock): NotionRichText[] | undefined {
+  const inner = block[block.type as string] as
+    | { rich_text?: NotionRichText[] }
+    | undefined;
+  return inner?.rich_text;
+}
+
+/** blockToLine's per-type line prefix — used in reverse to recover a block's inner text from its mutated line. */
+const BLOCK_LINE_PREFIXES: Record<string, string> = {
+  heading_1: '# ',
+  heading_2: '## ',
+  heading_3: '### ',
+  heading_4: '#### ',
+  to_do: '- ',
+  bulleted_list_item: '- ',
+  numbered_list_item: '1. ',
+  quote: '> ',
+  callout: '> ',
+};
+
+/**
+ * blockToLine's inverse for a single block: recovers the plain inner text a
+ * mutated rendered line should carry back into that block's own rich_text.
+ * Only ever called on a block already confirmed to carry rich_text.
+ */
+function lineToInnerText(type: string, line: string): string {
+  if (type === 'code') {
+    const match = /^```[^\n]*\n([\s\S]*)\n```$/.exec(line);
+    return match ? match[1] : line;
+  }
+  const prefix = BLOCK_LINE_PREFIXES[type];
+  if (prefix && line.startsWith(prefix)) return line.slice(prefix.length);
+  return line;
+}
+
+/** Notion caps each rich_text text.content at 2000 chars; chunk plain (unannotated) text accordingly. */
+function toPlainRichText(
+  text: string,
+): { type: 'text'; text: { content: string } }[] {
+  const LIMIT = 2000;
+  if (text.length === 0) return [{ type: 'text', text: { content: '' } }];
+  const items: { type: 'text'; text: { content: string } }[] = [];
+  for (let i = 0; i < text.length; i += LIMIT) {
+    items.push({ type: 'text', text: { content: text.slice(i, i + LIMIT) } });
+  }
+  return items;
+}
+
 /**
  * Inserts `blocks` as children of `externalId`, positioned right after
  * `afterId` (or at the page end when omitted), chunked to Notion's
@@ -1008,10 +1091,18 @@ export class NotionClient {
 
   /**
    * Applies a notion.pageEdit staged intent's content_updates (each an
-   * old_str/new_str find/replace pair) to an arbitrary Notion page's full
-   * body. Unlike patchBodySection this is not heading-scoped — the payload
-   * targets a source-of-truth doc page rather than a task, so there is no
-   * fixed section to anchor on.
+   * old_str/new_str find/replace pair) to an arbitrary Notion page's body.
+   * Unlike patchBodySection this is not heading-scoped — the payload targets
+   * a source-of-truth doc page rather than a task, so there is no fixed
+   * section to anchor on.
+   *
+   * Block-scoped: the page's children are flattened to one line per block
+   * with block-id provenance, but a match is only ever applied by patching
+   * the single block it came from (PATCH /v1/blocks/{id}) — nothing else on
+   * the page is touched, so tables, nested subtrees and unrelated formatting
+   * survive untouched. A match that spans more than one block, lands on a
+   * block with children, or lands on a block type carrying no rich_text is
+   * refused with NotionPageEditUnpatchableTargetError rather than guessed at.
    *
    * Stale-base handling: the page may have changed since this edit was
    * staged, so every old_str is re-checked against a fresh fetch of the
@@ -1030,23 +1121,66 @@ export class NotionClient {
     // (idempotent on an already-prefixed one) before parseTaskId ever sees it.
     const externalId = toExternalId(normalizeTaskId(pageId));
     const blocks = await fetchBlockChildren(externalId);
-    const text = blocks.map(blockToLine).join('\n');
+    const lines = blocks.map(blockToLine);
 
-    let mutated = text;
+    // All content_updates are located and validated against the fresh fetch
+    // before any write is issued — a later update's match is resolved
+    // against the in-memory result of earlier updates in this same call
+    // (so a chained old_str/new_str pair on the same block still works),
+    // never against a re-fetch.
+    const dirtyBlockIndices: number[] = [];
     for (const { old_str, new_str } of contentUpdates) {
-      if (!mutated.includes(old_str)) {
+      const { text, ranges } = buildFlattenedProvenance(lines);
+      const matchStart = text.indexOf(old_str);
+      if (matchStart === -1) {
         throw new NotionPageEditStaleBaseError(pageId, old_str);
       }
-      mutated = mutated.replace(old_str, new_str);
+      const matchEnd = matchStart + old_str.length;
+
+      const range = ranges.find(
+        (r) => r.start <= matchStart && matchEnd <= r.end,
+      );
+      if (!range) {
+        throw new NotionPageEditUnpatchableTargetError(
+          pageId,
+          old_str,
+          'old_str spans more than one block',
+        );
+      }
+      const block = blocks[range.blockIndex];
+      if (block.has_children) {
+        throw new NotionPageEditUnpatchableTargetError(
+          pageId,
+          old_str,
+          'old_str matches a block with children',
+        );
+      }
+      if (blockRichText(block) === undefined) {
+        throw new NotionPageEditUnpatchableTargetError(
+          pageId,
+          old_str,
+          `old_str matches a "${block.type as string}" block, which carries no editable rich text`,
+        );
+      }
+
+      const line = lines[range.blockIndex];
+      const localStart = matchStart - range.start;
+      const localEnd = matchEnd - range.start;
+      lines[range.blockIndex] =
+        line.slice(0, localStart) + new_str + line.slice(localEnd);
+      dirtyBlockIndices.push(range.blockIndex);
     }
 
-    const newBlocks = markdownToBlocks(mutated);
-    // Insert-before-delete: the new content lands before the stale blocks
-    // are torn down, so a crash mid-apply never leaves the page empty.
-    await insertChildBlocks(externalId, newBlocks);
-    for (const block of blocks) {
-      await notionRequest('DELETE', `/blocks/${block.id as string}`);
+    for (const blockIndex of new Set(dirtyBlockIndices)) {
+      const block = blocks[blockIndex];
+      const type = block.type as string;
+      const inner = block[type] as Record<string, unknown>;
+      const innerText = lineToInnerText(type, lines[blockIndex]);
+      await notionRequest('PATCH', `/blocks/${block.id as string}`, {
+        [type]: { ...inner, rich_text: toPlainRichText(innerText) },
+      });
     }
+
     deleteTaskCacheRow(taskPageCacheKey(pageId));
   }
 }
@@ -1063,6 +1197,25 @@ export class NotionPageEditStaleBaseError extends Error {
         `the page changed since this edit was staged. Reject and re-stage: ${truncateForError(oldStr)}`,
     );
     this.name = 'NotionPageEditStaleBaseError';
+  }
+}
+
+/**
+ * Thrown by applyPageEdit when a content_update's old_str matches, but not
+ * in a way a single-block patch can safely apply: it spans more than one
+ * block, it lands on a block with children (patching the block alone would
+ * silently leave its subtree unedited and unreviewed), or it lands on a
+ * block type that carries no rich_text to patch (e.g. a table or divider).
+ * Never falls back to a whole-page rewrite — the intent routes back to the
+ * staging surface for re-anchoring against a narrower old_str.
+ */
+export class NotionPageEditUnpatchableTargetError extends Error {
+  constructor(pageId: string, oldStr: string, reason: string) {
+    super(
+      `[NotionClient] applyPageEdit: cannot patch a single block on page ${pageId} — ${reason}. ` +
+        `Reject and re-stage with a narrower old_str: ${truncateForError(oldStr)}`,
+    );
+    this.name = 'NotionPageEditUnpatchableTargetError';
   }
 }
 
