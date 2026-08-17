@@ -439,4 +439,122 @@ describe('recoverSession', () => {
       expect(insertLocalBranch).not.toHaveBeenCalled();
     });
   });
+
+  describe('NoOpInvestigator gate', () => {
+    function fakeSessionManager() {
+      return { start: vi.fn() } as unknown as RecoverSessionOpts['sessionManager'];
+    }
+
+    it('launches the investigator when scope=clean_exit, no PR, no diff, and a sessionManager is wired', async () => {
+      const { NoOpInvestigator } = await import('../github/NoOpInvestigator');
+      await recoverSession(
+        'sess-noop-1',
+        baseOpts({ sessionManager: fakeSessionManager() }),
+      );
+      expect(NoOpInvestigator).toHaveBeenCalledTimes(1);
+    });
+
+    it('launches the investigator on every clean-exit turn of a resumed session, not just the first', async () => {
+      // Regression: a resumed session runs handleCleanExit -> recoverSession
+      // multiple times across turns. The gate must fire every time its
+      // stated conditions hold, not only once per session lifetime.
+      const { NoOpInvestigator } = await import('../github/NoOpInvestigator');
+      const sessionManager = fakeSessionManager();
+      const opts = baseOpts({ sessionManager });
+
+      await recoverSession('sess-resumed', opts); // turn 1
+      await recoverSession('sess-resumed', opts); // turn 2 (resumed)
+      await recoverSession('sess-resumed', opts); // turn 3 (resumed)
+
+      expect(NoOpInvestigator).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not launch the investigator for periodic scope', async () => {
+      const { NoOpInvestigator } = await import('../github/NoOpInvestigator');
+      await recoverSession(
+        'sess-noop-periodic',
+        baseOpts({ scope: 'periodic', sessionManager: fakeSessionManager() }),
+      );
+      expect(NoOpInvestigator).not.toHaveBeenCalled();
+    });
+
+    it('records no_op_investigation_skipped with reason has_diff when hasDiff is true', async () => {
+      vi.mocked(hasNonEmptyDiff).mockResolvedValueOnce(true);
+      const { NoOpInvestigator } = await import('../github/NoOpInvestigator');
+      await recoverSession(
+        'sess-noop-hasdiff',
+        baseOpts({ sessionManager: fakeSessionManager() }),
+      );
+      expect(NoOpInvestigator).not.toHaveBeenCalled();
+      expect(recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'no_op_investigation_skipped',
+          payload: expect.objectContaining({
+            reasons: expect.arrayContaining(['has_diff']),
+          }),
+        }),
+      );
+    });
+
+    it('records no_op_investigation_skipped with reason has_pr_url when a PR exists', async () => {
+      const { NoOpInvestigator } = await import('../github/NoOpInvestigator');
+      await recoverSession(
+        'sess-noop-haspr',
+        baseOpts({
+          prUrl: 'https://github.com/owner/repo/pull/1',
+          sessionManager: fakeSessionManager(),
+        }),
+      );
+      expect(NoOpInvestigator).not.toHaveBeenCalled();
+      expect(recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'no_op_investigation_skipped',
+          payload: expect.objectContaining({
+            reasons: expect.arrayContaining(['has_pr_url']),
+          }),
+        }),
+      );
+    });
+
+    it('records no_op_investigation_skipped with reason missing_session_manager when no sessionManager is wired', async () => {
+      const { NoOpInvestigator } = await import('../github/NoOpInvestigator');
+      await recoverSession(
+        'sess-noop-nomanager',
+        baseOpts({ sessionManager: undefined }),
+      );
+      expect(NoOpInvestigator).not.toHaveBeenCalled();
+      expect(recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'no_op_investigation_skipped',
+          payload: expect.objectContaining({
+            reasons: expect.arrayContaining(['missing_session_manager']),
+          }),
+        }),
+      );
+    });
+
+    it('records no_op_investigation_failed when investigate() rejects', async () => {
+      const { NoOpInvestigator } = await import('../github/NoOpInvestigator');
+      vi.mocked(NoOpInvestigator).mockImplementationOnce(
+        () =>
+          ({
+            investigate: vi.fn(async () => {
+              throw new Error('boom');
+            }),
+          }) as any,
+      );
+      await recoverSession(
+        'sess-noop-throws',
+        baseOpts({ sessionManager: fakeSessionManager() }),
+      );
+      // Wait for the floating investigate().catch() to run
+      await new Promise((r) => setTimeout(r, 10));
+      expect(recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'no_op_investigation_failed',
+          payload: expect.objectContaining({ stage: 'investigate_rejected' }),
+        }),
+      );
+    });
+  });
 });
