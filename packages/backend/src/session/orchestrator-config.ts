@@ -28,7 +28,7 @@ import {
  * the same way isGateVerifySession/isInvestigateSession do; the remaining
  * four map 1:1 onto their SessionType literal.
  */
-export const PRE_GRANT_SESSION_KINDS = [
+const PRE_GRANT_SESSION_KINDS = [
   'gate-verify',
   'investigate',
   'ops',
