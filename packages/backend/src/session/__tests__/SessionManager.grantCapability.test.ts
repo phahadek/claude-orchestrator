@@ -271,6 +271,8 @@ import {
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
 import { getSessionAllowedTools } from '../orchestrator-config';
+import fs from 'fs';
+import { logger } from '../../logger';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -477,7 +479,7 @@ describe('enqueueFeedback — lone capability-request approval on a live-but-idl
   }
 
   const APPROVAL_MESSAGE =
-    'Capability request approved: "read:audit-log:claude-dashboard" has been granted for this session.';
+    'Capability request approved: "read:audit-log:claude-dashboard" has been granted — you can use it now.';
 
   it('falls back to a --resume respawn (a real turn starts) when the direct send to the live session fails', async () => {
     await establishLiveSession();
@@ -592,7 +594,7 @@ describe('grantCapability + enqueueFeedback — tool-shaped grant respawn does n
   }
 
   const GRANT_MESSAGE =
-    'Capability request approved: "Bash(sudo systemctl:*)" has been granted for this session.';
+    'Capability request approved: "Bash(sudo systemctl:*)" has been granted — you can use it now.';
 
   it('delivers the feedback item (not left pending) after a tool-shaped grant respawns the session', async () => {
     await establishLiveSession();
@@ -624,5 +626,64 @@ describe('grantCapability + enqueueFeedback — tool-shaped grant respawn does n
       expect.stringContaining('Bash(sudo systemctl:*)'),
     );
     expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([3]);
+  });
+});
+
+// ── regression: a respawn failure is an operator concern, not a session one ──
+// respawnForCapabilityGrant's worktree-missing exit means the in-place
+// respawn never ran, but the capability is already durably persisted
+// (addGrantedCapability happens before any respawn attempt). The session has
+// no way to act on "a respawn didn't happen," so that outcome must surface
+// to the operator (the existing logger.warn) and must not change what the
+// session itself is told.
+describe('grantCapability — respawn failure (worktree missing) surfaces to the operator, not the session', () => {
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    capturedSessions = [];
+    grantedCapabilitiesStore = new Map();
+    vi.clearAllMocks();
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    sm = new SessionManager();
+    vi.mocked(getSession).mockReturnValue(makeRow());
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  async function establishLiveSession(): Promise<void> {
+    const p = sm.sendOrResume(SESSION_ID, 'boot');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+    vi.mocked(AgentSession).mockClear();
+  }
+
+  it('logs a warning and reports respawnApplied: false, without killing the live session', async () => {
+    await establishLiveSession();
+    const liveSession = capturedSessions[capturedSessions.length - 1];
+
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const result = await sm.grantCapability(
+      SESSION_ID,
+      'Bash(sudo systemctl:*)',
+    );
+
+    expect(result.respawnApplied).toBe(false);
+    expect(result.granted).toContain('Bash(sudo systemctl:*)');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('worktree missing'),
+    );
+    // The persistence still happened (granted set updated); the live
+    // session was left alone rather than killed with nothing to replace it.
+    expect(liveSession.kill).not.toHaveBeenCalled();
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
   });
 });

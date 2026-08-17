@@ -5050,19 +5050,22 @@ async function resumeCapabilityRequester(
 
   if (!sessionManager) return;
 
-  let respawnApplied = false;
   if (outcome === 'approved') {
-    ({ respawnApplied } = await sessionManager.grantCapability(
-      intent.sessionId,
-      payload.capability,
-    ));
+    await sessionManager.grantCapability(intent.sessionId, payload.capability);
   }
 
+  // Whether a respawn actually ran (grantCapability's respawnApplied) is not
+  // the session's problem: by the time this message is composed the grant is
+  // already durably persisted, and a live session that missed an in-place
+  // respawn still picks it up on its very next spawn (getSessionAllowedTools
+  // reads getGrantedCapabilities fresh every time). A respawn that was
+  // attempted and failed (e.g. worktree missing) is an operator concern,
+  // already logged by respawnForCapabilityGrant — not something to tell the
+  // session to sit and wait for, since the session has no way to act on
+  // "wait for a resume" and no way to know one happened.
   const message =
     outcome === 'approved'
-      ? respawnApplied
-        ? `Capability request approved: "${payload.capability}" has been granted for this session.`
-        : `Capability request approved: "${payload.capability}" has been recorded but is not yet active in this session — it will take effect on the next resume, not this turn. Do not attempt to use it now.`
+      ? `Capability request approved: "${payload.capability}" has been granted — you can use it now.`
       : outcome === 'pushback'
         ? `Capability request "${payload.capability}" was sent back for revision. Feedback: ${reason ?? ''}`
         : `Capability request "${payload.capability}" was declined. Reason: ${reason ?? ''}`;

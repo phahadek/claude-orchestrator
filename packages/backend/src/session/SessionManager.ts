@@ -3769,9 +3769,15 @@ export class SessionManager extends EventEmitter {
    * took effect — false whenever it was never attempted (capability not
    * grantable/tool-shaped, or the session isn't live) or attempted and
    * declined by respawnForCapabilityGrant's own exits (worktree missing,
-   * usage-admission deferred). Callers must not assume the grant is usable
-   * this turn just because the capability was persisted — `granted` records
-   * the persistence outcome, `respawnApplied` records whether it is live.
+   * usage-admission deferred). This is an operator/diagnostic signal, not
+   * something to relay to the requesting session: the grant is persisted
+   * either way, non-tool-shaped capabilities (the common case) are checked
+   * directly against the granted set with no respawn ever involved, and a
+   * session has no way to act on "wait for a respawn" — a caller composing
+   * a message back to the session must use the same wording regardless of
+   * `respawnApplied`, and should route a false value to operator-facing
+   * logs/surfaces instead (respawnForCapabilityGrant already logs its own
+   * decline reasons).
    */
   async grantCapability(
     sessionId: string,
