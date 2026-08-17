@@ -207,6 +207,30 @@ describe('stage-proposal MCP tools — delegation', () => {
     await close();
   });
 
+  it('journal.setState forwards standDownReason into the staged intent payload on a transition to blocked', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'journal.setState',
+      arguments: {
+        payload: {
+          taskId: 't-1',
+          state: 'blocked',
+          standDownReason: 'No sanctioned capability request could unblock this task.',
+        },
+      },
+    });
+    const intent = parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(intent.kind).toBe('journal.setState');
+    const stored = getStagedIntent(intent.id as string);
+    expect(stored).toBeTruthy();
+    expect(
+      JSON.parse(stored!.payload as string).standDownReason,
+    ).toBe('No sanctioned capability request could unblock this task.');
+    await close();
+  });
+
   it('task.setDependsOn threads groupId so correlated intents commit atomically', async () => {
     const { client, close } = await connectedClient();
     const createResult = await client.callTool({
