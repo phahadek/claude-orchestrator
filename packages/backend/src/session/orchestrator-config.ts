@@ -574,7 +574,11 @@ export function resolvePreGrantSessionKind(
     if (isInvestigateSession(taskId)) return 'investigate';
     return 'ops';
   }
-  if (sessionType === 'groom' || sessionType === 'design' || sessionType === 'docs') {
+  if (
+    sessionType === 'groom' ||
+    sessionType === 'design' ||
+    sessionType === 'docs'
+  ) {
     return sessionType;
   }
   return null;

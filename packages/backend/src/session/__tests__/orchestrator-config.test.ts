@@ -1182,9 +1182,7 @@ describe('resolvePreGrantSessionKind', () => {
   });
 
   it('resolves groom/design/docs sessions to themselves', () => {
-    expect(resolvePreGrantSessionKind('groom', 'notion:abc123')).toBe(
-      'groom',
-    );
+    expect(resolvePreGrantSessionKind('groom', 'notion:abc123')).toBe('groom');
     expect(resolvePreGrantSessionKind('design', 'notion:abc123')).toBe(
       'design',
     );

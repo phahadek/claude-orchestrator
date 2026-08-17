@@ -167,8 +167,9 @@ vi.mock('../../db/queries', () => ({
   removeGrantedCapability: vi.fn(),
   TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
   getUsageDeferral: vi.fn().mockReturnValue(null),
-  getGrantedCapabilities: vi.fn((sessionId: string) =>
-    grantedCapabilitiesStore.get(sessionId)?.slice() ?? [],
+  getGrantedCapabilities: vi.fn(
+    (sessionId: string) =>
+      grantedCapabilitiesStore.get(sessionId)?.slice() ?? [],
   ),
   seedGrantedCapabilities: vi.fn(
     (sessionId: string, capabilities: string[]) => {
