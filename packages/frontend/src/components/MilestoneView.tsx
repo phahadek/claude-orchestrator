@@ -9,6 +9,7 @@ import { useMilestoneConvergence } from '../hooks/useMilestoneConvergence';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { apiRequest } from '../api/projects';
 import { MilestoneBurndown } from './MilestoneBurndown';
+import { DeploySection } from './DeploySection';
 import { FlowArmToggle } from './FlowArmToggle';
 import {
   MilestoneDecisionStack,
@@ -306,6 +307,7 @@ export function MilestoneView({
         projectId={activeProjectId}
         milestoneId={activeBoardMilestone ? activeBoardId : null}
       />
+      <DeploySection activeProjectId={activeProjectId} />
       <FlowArmToggle
         milestoneId={activeBoardId}
         projectId={activeProjectId}

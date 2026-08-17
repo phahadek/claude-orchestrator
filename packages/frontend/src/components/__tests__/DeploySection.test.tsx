@@ -1,35 +1,16 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const gateApiMock = vi.hoisted(() => ({
-  listMilestoneReadiness: vi.fn().mockResolvedValue([]),
-  getGateReadiness: vi.fn().mockResolvedValue(null),
-  listGateItems: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1 }),
-  getGateItemDetail: vi.fn(),
-}));
-vi.mock('../../api/gate', () => ({ gateApi: gateApiMock }));
-
-const seedApiMock = vi.hoisted(() => ({
-  listSeedMilestoneReadiness: vi.fn().mockResolvedValue([]),
-  getSeedReadiness: vi.fn().mockResolvedValue(null),
-  listSeedItems: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1 }),
-}));
-vi.mock('../../api/seed', () => ({ seedApi: seedApiMock }));
-
 const deployApiMock = vi.hoisted(() => ({
   launch: vi.fn(),
   getStatus: vi.fn(),
 }));
 vi.mock('../../api/deploy', () => ({ deployApi: deployApiMock }));
 
-import { GateReadinessPanel } from '../GateReadinessPanel';
+import { DeploySection } from '../DeploySection';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  gateApiMock.listMilestoneReadiness.mockResolvedValue([]);
-  gateApiMock.listGateItems.mockResolvedValue({ items: [], total: 0, page: 1 });
-  seedApiMock.listSeedMilestoneReadiness.mockResolvedValue([]);
-  seedApiMock.listSeedItems.mockResolvedValue({ items: [], total: 0, page: 1 });
   deployApiMock.getStatus.mockResolvedValue({
     run: null,
     events: [],
@@ -40,7 +21,7 @@ beforeEach(() => {
   });
 });
 
-describe('GateReadinessPanel deploy launch control', () => {
+describe('DeploySection launch control', () => {
   it('requires an explicit review click before the confirm-and-deploy control appears, and launches with just the projectId', async () => {
     deployApiMock.launch.mockResolvedValue({
       run: {
@@ -54,7 +35,7 @@ describe('GateReadinessPanel deploy launch control', () => {
       },
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<DeploySection activeProjectId="proj-1" />);
 
     expect(screen.queryByLabelText('Deploy target SHA')).toBeNull();
 
@@ -102,7 +83,7 @@ describe('GateReadinessPanel deploy launch control', () => {
       plan: [{ id: 'deploy', description: null }],
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<DeploySection activeProjectId="proj-1" />);
 
     const status = await screen.findByTestId('deploy-run-status');
     expect(status.textContent).toContain('succeeded');
@@ -146,7 +127,7 @@ describe('GateReadinessPanel deploy launch control', () => {
       behind: { count: 0, items: [] },
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<DeploySection activeProjectId="proj-1" />);
 
     const status = await screen.findByTestId('deploy-run-status');
     expect(status.textContent).toContain('failed');
@@ -179,7 +160,7 @@ describe('GateReadinessPanel deploy launch control', () => {
   });
 
   it('resets the confirm-armed state on reload rather than resuming pre-armed', async () => {
-    const { unmount } = render(<GateReadinessPanel activeProjectId="proj-1" />);
+    const { unmount } = render(<DeploySection activeProjectId="proj-1" />);
 
     const reviewButton = await screen.findByTestId('deploy-review-button');
     fireEvent.click(reviewButton);
@@ -189,7 +170,7 @@ describe('GateReadinessPanel deploy launch control', () => {
     // exactly like a browser reload would recreate all React state.
     unmount();
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<DeploySection activeProjectId="proj-1" />);
 
     expect(await screen.findByTestId('deploy-review-button')).toBeTruthy();
     expect(screen.queryByTestId('deploy-launch-button')).toBeNull();
@@ -215,7 +196,7 @@ describe('GateReadinessPanel deploy launch control', () => {
       plan: [],
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<DeploySection activeProjectId="proj-1" />);
 
     const reviewButton = await screen.findByTestId('deploy-review-button');
     fireEvent.click(reviewButton);
@@ -250,7 +231,7 @@ describe('GateReadinessPanel deploy launch control', () => {
       plan,
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(<DeploySection activeProjectId="proj-1" />);
 
     const strip = await screen.findByTestId('deploy-step-strip');
     const cells = plan.map((step) =>

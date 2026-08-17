@@ -82,7 +82,12 @@ describe('GateReadinessPanel — gate item verify session', () => {
       },
     ]);
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
 
     const row = await screen.findByText('has a verify session');
     fireEvent.click(row);
@@ -132,6 +137,7 @@ describe('GateReadinessPanel — gate item verify session', () => {
     render(
       <GateReadinessPanel
         activeProjectId="proj-1"
+        activeBoardMilestone="M12"
         sessions={[
           {
             sessionId: 'sess-123',
@@ -177,7 +183,12 @@ describe('GateReadinessPanel — gate item verify session', () => {
     );
     gateApiMock.getVerifySessions.mockResolvedValue([]);
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
 
     const row = await screen.findByText('has no verify session');
     fireEvent.click(row);
@@ -204,7 +215,12 @@ describe('GateReadinessPanel — in-flight verify indicator', () => {
       page: 1,
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
 
     await screen.findByText('has a verify session');
 
@@ -232,7 +248,12 @@ describe('GateReadinessPanel — in-flight verify indicator', () => {
       page: 1,
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
 
     await screen.findByText('has no verify session');
 

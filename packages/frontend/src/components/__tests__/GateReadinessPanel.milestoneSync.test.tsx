@@ -16,12 +16,6 @@ const seedApiMock = vi.hoisted(() => ({
 }));
 vi.mock('../../api/seed', () => ({ seedApi: seedApiMock }));
 
-const deployApiMock = vi.hoisted(() => ({
-  launch: vi.fn(),
-  getStatus: vi.fn().mockResolvedValue({ run: null, events: [] }),
-}));
-vi.mock('../../api/deploy', () => ({ deployApi: deployApiMock }));
-
 import { GateReadinessPanel } from '../GateReadinessPanel';
 
 const MILESTONES = [
@@ -36,11 +30,10 @@ beforeEach(() => {
   gateApiMock.listGateItems.mockResolvedValue({ items: [], total: 0, page: 1 });
   seedApiMock.listSeedMilestoneReadiness.mockResolvedValue([]);
   seedApiMock.listSeedItems.mockResolvedValue({ items: [], total: 0, page: 1 });
-  deployApiMock.getStatus.mockResolvedValue({ run: null, events: [] });
 });
 
 describe('GateReadinessPanel milestone sync with the top bar', () => {
-  it('defaults selectedMilestone to the top-bar-resolved milestone, not the first in the list', async () => {
+  it('renders no milestone selector', async () => {
     render(
       <GateReadinessPanel
         activeProjectId="proj-1"
@@ -48,13 +41,23 @@ describe('GateReadinessPanel milestone sync with the top bar', () => {
       />,
     );
 
-    const select = (await screen.findByLabelText(
-      'Select milestone',
-    )) as HTMLSelectElement;
-    expect(select.value).toBe('M12');
+    await screen.findByTestId('gate-readiness-panel');
+    expect(screen.queryByLabelText('Select milestone')).toBeNull();
   });
 
-  it('updates the panel selection when the top-bar selection changes', async () => {
+  it('derives its milestone purely from activeBoardMilestone', async () => {
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
+
+    await screen.findByTestId('gate-readiness-status');
+    expect(gateApiMock.getGateReadiness).toHaveBeenCalledWith('proj-1', 'M12');
+  });
+
+  it('re-renders with the new milestone when the top-bar selection changes', async () => {
     const { rerender } = render(
       <GateReadinessPanel
         activeProjectId="proj-1"
@@ -62,10 +65,8 @@ describe('GateReadinessPanel milestone sync with the top bar', () => {
       />,
     );
 
-    let select = (await screen.findByLabelText(
-      'Select milestone',
-    )) as HTMLSelectElement;
-    expect(select.value).toBe('M10');
+    await screen.findByTestId('gate-readiness-status');
+    expect(gateApiMock.getGateReadiness).toHaveBeenCalledWith('proj-1', 'M10');
 
     rerender(
       <GateReadinessPanel
@@ -74,13 +75,11 @@ describe('GateReadinessPanel milestone sync with the top bar', () => {
       />,
     );
 
-    select = (await screen.findByLabelText(
-      'Select milestone',
-    )) as HTMLSelectElement;
-    expect(select.value).toBe('M11');
+    await screen.findByTestId('gate-readiness-status');
+    expect(gateApiMock.getGateReadiness).toHaveBeenCalledWith('proj-1', 'M11');
   });
 
-  it('defaults selectedMilestone to the normalized short-token when given a full board name', async () => {
+  it('normalizes a full board name to its short-token milestone', async () => {
     render(
       <GateReadinessPanel
         activeProjectId="proj-1"
@@ -88,13 +87,11 @@ describe('GateReadinessPanel milestone sync with the top bar', () => {
       />,
     );
 
-    const select = (await screen.findByLabelText(
-      'Select milestone',
-    )) as HTMLSelectElement;
-    expect(select.value).toBe('M12');
+    await screen.findByTestId('gate-readiness-status');
+    expect(gateApiMock.getGateReadiness).toHaveBeenCalledWith('proj-1', 'M12');
   });
 
-  it('re-syncs the panel selection via the normalized token when the top-bar board changes', async () => {
+  it('re-syncs via the normalized token when the top-bar board changes', async () => {
     const { rerender } = render(
       <GateReadinessPanel
         activeProjectId="proj-1"
@@ -102,10 +99,8 @@ describe('GateReadinessPanel milestone sync with the top bar', () => {
       />,
     );
 
-    let select = (await screen.findByLabelText(
-      'Select milestone',
-    )) as HTMLSelectElement;
-    expect(select.value).toBe('M10');
+    await screen.findByTestId('gate-readiness-status');
+    expect(gateApiMock.getGateReadiness).toHaveBeenCalledWith('proj-1', 'M10');
 
     rerender(
       <GateReadinessPanel
@@ -114,13 +109,11 @@ describe('GateReadinessPanel milestone sync with the top bar', () => {
       />,
     );
 
-    select = (await screen.findByLabelText(
-      'Select milestone',
-    )) as HTMLSelectElement;
-    expect(select.value).toBe('M11');
+    await screen.findByTestId('gate-readiness-status');
+    expect(gateApiMock.getGateReadiness).toHaveBeenCalledWith('proj-1', 'M11');
   });
 
-  it('falls back to the first milestone when the top-bar selection does not resolve', async () => {
+  it('renders no readiness rollup when the top-bar selection does not resolve', async () => {
     render(
       <GateReadinessPanel
         activeProjectId="proj-1"
@@ -128,9 +121,8 @@ describe('GateReadinessPanel milestone sync with the top bar', () => {
       />,
     );
 
-    const select = (await screen.findByLabelText(
-      'Select milestone',
-    )) as HTMLSelectElement;
-    expect(select.value).toBe('M10');
+    await screen.findByTestId('gate-readiness-panel');
+    expect(screen.queryByTestId('gate-readiness-status')).toBeNull();
+    expect(gateApiMock.getGateReadiness).not.toHaveBeenCalled();
   });
 });

@@ -67,7 +67,13 @@ vi.mock('../MilestoneBurndown', () => ({
 }));
 
 vi.mock('../FlowArmToggle', () => ({
-  FlowArmToggle: () => null,
+  FlowArmToggle: () => <div data-testid="flow-arm-toggle" />,
+}));
+
+vi.mock('../DeploySection', () => ({
+  DeploySection: ({ activeProjectId }: { activeProjectId: string | null }) => (
+    <div data-testid="deploy-launch-section">deploy for {activeProjectId}</div>
+  ),
 }));
 
 vi.mock('../MilestoneDecisionStack', () => ({
@@ -441,6 +447,35 @@ describe('MilestoneView', () => {
     expect(screen.getByTestId('milestone-drilldown').textContent).toBe(
       'mode: task',
     );
+  });
+
+  it('renders Deploy in the left column between MilestoneBurndown and FlowArmToggle for every phaseFilter, not only the gate phase', () => {
+    render(<MilestoneView {...baseProps} />);
+
+    function assertDeployBetweenBurndownAndFlowArm() {
+      const leftColumn = screen.getByTestId('milestone-burndown-mount');
+      const html = leftColumn.innerHTML;
+      const burndownIdx = html.indexOf('data-testid="milestone-burndown"');
+      const deployIdx = html.indexOf('data-testid="deploy-launch-section"');
+      const flowArmIdx = html.indexOf('data-testid="flow-arm-toggle"');
+      expect(burndownIdx).toBeGreaterThan(-1);
+      expect(deployIdx).toBeGreaterThan(burndownIdx);
+      expect(flowArmIdx).toBeGreaterThan(deployIdx);
+    }
+
+    // Default (no phase selected).
+    assertDeployBetweenBurndownAndFlowArm();
+    expect(screen.getByTestId('deploy-launch-section').textContent).toContain(
+      'proj-1',
+    );
+
+    // Non-gate phase.
+    fireEvent.click(screen.getByTestId('phase-segment-code'));
+    assertDeployBetweenBurndownAndFlowArm();
+
+    // Gate phase — Deploy still lives in the left column, not in the gate panel.
+    fireEvent.click(screen.getByTestId('phase-segment-gate'));
+    assertDeployBetweenBurndownAndFlowArm();
   });
 
   it('switches the active mobile region to the drill-down when view-session is requested on a mobile viewport', () => {

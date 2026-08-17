@@ -3,10 +3,10 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 
-describe('GateReadinessPanel deploy PR link styling', () => {
+describe('DeploySection deploy PR link styling', () => {
   it('renders the behind-list PR anchor with a scoped class', () => {
     const src = fs.readFileSync(
-      path.join(__dirname, '../GateReadinessPanel.tsx'),
+      path.join(__dirname, '../DeploySection.tsx'),
       'utf-8',
     );
     expect(src).toMatch(
@@ -16,7 +16,7 @@ describe('GateReadinessPanel deploy PR link styling', () => {
 
   it('declares the PR link color from the accent token, not a hard-coded hex, with a distinct hover state', () => {
     const css = fs.readFileSync(
-      path.join(__dirname, '../GateReadinessPanel.module.css'),
+      path.join(__dirname, '../DeploySection.module.css'),
       'utf-8',
     );
     const rule = css.match(/\.deployPrLink\s*{([^}]*)}/);
@@ -28,7 +28,7 @@ describe('GateReadinessPanel deploy PR link styling', () => {
 
   it('leaves the behind-list font-size and font-family unchanged', () => {
     const css = fs.readFileSync(
-      path.join(__dirname, '../GateReadinessPanel.module.css'),
+      path.join(__dirname, '../DeploySection.module.css'),
       'utf-8',
     );
     const listRule = css.match(/\.deployEventList\s*{([^}]*)}/);
