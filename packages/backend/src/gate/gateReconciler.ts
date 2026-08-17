@@ -161,7 +161,21 @@ export interface FollowupFixTaskFiler {
   ): Promise<FollowupFixTask>;
 }
 
-const FOLLOWUP_TASK_TYPE = '💻 Code';
+/**
+ * The follow-up fix task's Type, derived from the gate item it remediates
+ * rather than hardcoded — a mis-typed follow-up (e.g. a documentation
+ * assertion filed as 💻 Code, which auto-dispatches to a headless session
+ * with no Notion write access) cannot actually satisfy the gate item it
+ * exists to fix. Human-Observation items are, by this module's own auto-run
+ * exclusion above, "unverifiable by any headless session" — the same
+ * headless-session limitation applies to fixing one, so its follow-up goes
+ * to 📐 Design (interactive, human-driven) instead of Code. Every other
+ * classification (Read-Only, Prod-Mutating, needs-triage) keeps the prior
+ * Code default, since those items describe verifiable code/config behavior.
+ */
+function deriveFollowupTaskType(item: GateItem): string {
+  return item.classification === 'Human-Observation' ? '📐 Design' : '💻 Code';
+}
 
 export const defaultFollowupFiler: FollowupFixTaskFiler = {
   async fileFollowupFixTask(item) {
@@ -176,7 +190,7 @@ export const defaultFollowupFiler: FollowupFixTaskFiler = {
     const taskId = await backend.createTask({
       databaseId,
       title,
-      type: FOLLOWUP_TASK_TYPE,
+      type: deriveFollowupTaskType(item),
     });
     return { taskId, taskTitle: title };
   },

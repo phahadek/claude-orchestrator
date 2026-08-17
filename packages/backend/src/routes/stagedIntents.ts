@@ -6207,6 +6207,36 @@ function describeUnappliedCrossGroupBodyPatches(
 }
 
 /**
+ * Resolves the Type a Ready-flip gate should validate against: a
+ * task.setType staged into the same group, if one is present, else the
+ * committed board cache — mirroring how computeProposedBody already resolves
+ * the effective body from the group's pending patches rather than only the
+ * stored one. Without this, a groom session cannot retype a mis-typed task
+ * and promote it to Ready in the same pass, since the gate would validate
+ * the old, about-to-be-superseded type. Falls back to `fallbackType` (the
+ * caller's payload.groomingGate?.type) only when neither a pending setType
+ * nor a cached type is available.
+ */
+function resolveEffectiveType(
+  groupId: string | null | undefined,
+  taskId: string,
+  fallbackType: string | undefined,
+): string | undefined {
+  const setTypeRow = groupId
+    ? listStagedIntentsByGroup(groupId).find(
+        (row) =>
+          row.kind === 'task.setType' &&
+          ACTIVE_STATES.includes(row.state) &&
+          (JSON.parse(row.payload) as SetTypePayload).taskId === taskId,
+      )
+    : undefined;
+  if (setTypeRow) {
+    return (JSON.parse(setTypeRow.payload) as SetTypePayload).type;
+  }
+  return getCachedType(taskId) ?? fallbackType;
+}
+
+/**
  * Stage-time eager validation for a task.setStatus -> Ready intent: runs the
  * same grooming-promotion-gate and readiness-gate checks the commit-time path
  * (applyIntent's task.setStatus case) enforces, but only to annotate the
@@ -6227,8 +6257,11 @@ export async function runStageTimeReadyChecks(
   const payload = intent.payload as SetStatusPayload;
   if (payload.status !== 'Ready') return intent;
 
-  const resolvedType =
-    getCachedType(payload.taskId) ?? payload.groomingGate?.type;
+  const resolvedType = resolveEffectiveType(
+    intent.groupId,
+    payload.taskId,
+    payload.groomingGate?.type,
+  );
 
   // A missing/unresolvable project surfaces as its own dedicated block
   // reason inside checkGroomingPromotionGate (via resolveFilesPathsEntriesServerSide)
@@ -6753,7 +6786,7 @@ async function checkGroupArmingIntentCompleteness(
   const gateResult = await checkGroomingPromotionGate(
     payload.groomingGate ?? {},
     payload.taskId,
-    getCachedType(payload.taskId) ?? payload.groomingGate?.type,
+    resolveEffectiveType(groupId, payload.taskId, payload.groomingGate?.type),
     {
       skipGateContributionCheck: hasGroupAccretionIntent(
         groupId,
@@ -6950,7 +6983,14 @@ async function precheckGroupCommit(
         groupId,
         payload.taskId,
       );
-      const violations = checkReadiness(body, getCachedType(payload.taskId));
+      const violations = checkReadiness(
+        body,
+        resolveEffectiveType(
+          groupId,
+          payload.taskId,
+          payload.groomingGate?.type,
+        ),
+      );
       if (violations.length > 0) {
         setStagedIntentAnnotation(
           row.id,
