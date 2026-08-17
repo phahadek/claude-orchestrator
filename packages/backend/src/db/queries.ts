@@ -241,19 +241,23 @@ export function updateSessionStatus(
     status: string;
     ended_at: number | null;
     terminalized_at: number | null;
+    is_terminal: number;
   }>(`
     UPDATE sessions
     SET status = @status, ended_at = @ended_at,
-        terminalized_at = COALESCE(terminalized_at, @terminalized_at)
+        terminalized_at = COALESCE(terminalized_at, @terminalized_at),
+        pause_reason = CASE
+          WHEN @is_terminal = 1 AND pause_reason = 'test_request_cycle_exceeded'
+          THEN NULL ELSE pause_reason END
     WHERE session_id = @session_id
   `);
+  const isTerminal = TERMINAL_SESSION_STATUSES.has(status);
   _stmtUpdateSessionStatus.run({
     session_id: sessionId,
     status,
     ended_at: endedAt ?? null,
-    terminalized_at: TERMINAL_SESSION_STATUSES.has(status)
-      ? (endedAt ?? Date.now())
-      : null,
+    terminalized_at: isTerminal ? (endedAt ?? Date.now()) : null,
+    is_terminal: isTerminal ? 1 : 0,
   });
   if (current && current.status !== status) {
     recordEvent({
@@ -318,7 +322,9 @@ function getStmtMarkSessionDone(): Database.Statement {
   }>(`
     UPDATE sessions
     SET status = 'done', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url),
-        terminalized_at = COALESCE(terminalized_at, @terminalized_at)
+        terminalized_at = COALESCE(terminalized_at, @terminalized_at),
+        pause_reason = CASE
+          WHEN pause_reason = 'test_request_cycle_exceeded' THEN NULL ELSE pause_reason END
     WHERE session_id = @session_id
   `);
   return _stmtMarkSessionDone;
@@ -9949,6 +9955,14 @@ export interface LaneHealthRollup {
     count: number;
     tests: FlaggedFlakyTest[];
   };
+  /**
+   * Count of `test_request_cycle_limit_crossed` audit events for this
+   * project — sessions whose test.request cycle count reached
+   * test_request_cycle_limit. Past the limit the request still
+   * auto-approves (see maybeAutoApproveTestRequest); this is the
+   * non-blocking record of the thrash, not a count of anything paused.
+   */
+  cycleLimitCrossings: number;
 }
 
 /**
@@ -10071,7 +10085,21 @@ export function getLaneHealthRollup(
     executionTimeMs: percentilesOf(executionTimeSamples),
     regressedTests: getRegressedTestsForProject(projectId),
     flakyTests: { count: flakyTests.length, tests: flakyTests },
+    cycleLimitCrossings: getCycleLimitCrossingsForProject(projectId),
   };
+}
+
+let _stmtCycleLimitCrossings: Database.Statement | null = null;
+
+function getCycleLimitCrossingsForProject(projectId: string): number {
+  _stmtCycleLimitCrossings ??= db.prepare<{ project_id: string }>(
+    `SELECT COUNT(*) AS cnt FROM audit_log
+     WHERE event_type = 'test_request_cycle_limit_crossed' AND project_id = @project_id`,
+  );
+  const row = _stmtCycleLimitCrossings.get({ project_id: projectId }) as
+    | { cnt: number }
+    | undefined;
+  return row?.cnt ?? 0;
 }
 
 /** The auto-grant kinds the disagreement-rate signal covers. */

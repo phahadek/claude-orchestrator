@@ -151,7 +151,8 @@ type EventType =
   | 'deploy_run_status_changed'
   | 'base_health_remediation_task_filed'
   | 'no_op_investigation_skipped'
-  | 'no_op_investigation_failed';
+  | 'no_op_investigation_failed'
+  | 'test_request_cycle_limit_crossed';
 
 type ActorType = 'ai' | 'human' | 'system';
 
