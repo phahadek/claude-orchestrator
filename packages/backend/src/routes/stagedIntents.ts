@@ -7595,30 +7595,32 @@ export function createStagedIntentsRouter(
     res.json({
       cycleCount: getSessionTestRequestCycleCount(sessionId),
       cycleLimit: typedGetSetting('test_request_cycle_limit'),
-      runs: runsWithResults.map(({ run, testResults, totalTestResultCount }) => {
-        const classification = classifyTestRunOutcome(run);
-        return {
-          id: run.id,
-          sessionId: run.session_id,
-          contentHash: run.content_hash,
-          startedAt: run.started_at,
-          finishedAt: run.finished_at,
-          durationMs:
-            run.finished_at != null ? run.finished_at - run.started_at : null,
-          concurrentRunCount: run.concurrent_run_count,
-          outcome: classification.outcome,
-          nextAction: classification.nextAction,
-          testResults: testResults.map((t) => ({
-            testId: t.test_id,
-            name: t.name,
-            outcome: t.outcome,
-            durationMs: t.duration_ms,
-            flipRate: flipRateByTestId.get(t.test_id) ?? null,
-          })),
-          testResultsTruncated: totalTestResultCount > testResults.length,
-          totalTestResultCount,
-        };
-      }),
+      runs: runsWithResults.map(
+        ({ run, testResults, totalTestResultCount }) => {
+          const classification = classifyTestRunOutcome(run);
+          return {
+            id: run.id,
+            sessionId: run.session_id,
+            contentHash: run.content_hash,
+            startedAt: run.started_at,
+            finishedAt: run.finished_at,
+            durationMs:
+              run.finished_at != null ? run.finished_at - run.started_at : null,
+            concurrentRunCount: run.concurrent_run_count,
+            outcome: classification.outcome,
+            nextAction: classification.nextAction,
+            testResults: testResults.map((t) => ({
+              testId: t.test_id,
+              name: t.name,
+              outcome: t.outcome,
+              durationMs: t.duration_ms,
+              flipRate: flipRateByTestId.get(t.test_id) ?? null,
+            })),
+            testResultsTruncated: totalTestResultCount > testResults.length,
+            totalTestResultCount,
+          };
+        },
+      ),
     });
   });
 

@@ -65,8 +65,12 @@ describe('listTestRunResultsForRun row cap', () => {
     );
     insertTestRunResults(runId, tests, 0, false);
 
-    expect(countTestRunResultsForRun(runId)).toBe(TEST_RUN_RESULTS_PER_RUN_CAP + 1);
-    expect(listTestRunResultsForRun(runId).length).toBe(TEST_RUN_RESULTS_PER_RUN_CAP);
+    expect(countTestRunResultsForRun(runId)).toBe(
+      TEST_RUN_RESULTS_PER_RUN_CAP + 1,
+    );
+    expect(listTestRunResultsForRun(runId).length).toBe(
+      TEST_RUN_RESULTS_PER_RUN_CAP,
+    );
   });
 });
 

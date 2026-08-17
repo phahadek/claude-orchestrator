@@ -84,7 +84,14 @@ describe('GET /api/test-request-runs/history — per-run result cap', () => {
     insertTestRequestRun(runId, PROJECT_ID, 'hash-2', SESSION_ID, Date.now());
     insertTestRunResults(
       runId,
-      [{ test_id: 'test-a', name: 'test-a', outcome: 'passed', duration_ms: 5 }],
+      [
+        {
+          test_id: 'test-a',
+          name: 'test-a',
+          outcome: 'passed',
+          duration_ms: 5,
+        },
+      ],
       0,
       false,
     );
