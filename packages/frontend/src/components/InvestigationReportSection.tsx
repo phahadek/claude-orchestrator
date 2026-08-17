@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import type {
   InvestigationReport,
   InvestigationReportState,
@@ -149,6 +150,40 @@ export function InvestigationReportSection({
         ),
       )
       .finally(() => setCreating(false));
+  };
+
+  const saveDraft = () => {
+    if (!draftTitle.trim() || !draftSymptom.trim()) {
+      setCreateError('Title and symptom are both required');
+      return;
+    }
+    setCreating(true);
+    setCreateError(null);
+    reportsApi
+      .create({
+        projectId,
+        milestoneId: milestone,
+        title: draftTitle.trim(),
+        symptomText: draftSymptom.trim(),
+        source: 'operator',
+      })
+      .then((report) => {
+        setReports((prev) => [report, ...prev]);
+        setDrafting(false);
+      })
+      .catch((err) =>
+        setCreateError(
+          err instanceof Error ? err.message : 'failed to save draft',
+        ),
+      )
+      .finally(() => setCreating(false));
+  };
+
+  const handleDraftKeyDown = (e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      submitDraft();
+    }
   };
 
   const commit = (id: string) => {
@@ -331,6 +366,7 @@ export function InvestigationReportSection({
             placeholder="Title"
             value={draftTitle}
             onChange={(e) => setDraftTitle(e.target.value)}
+            onKeyDown={handleDraftKeyDown}
             data-testid="report-draft-title"
           />
           <textarea
@@ -338,6 +374,7 @@ export function InvestigationReportSection({
             placeholder="Symptom"
             value={draftSymptom}
             onChange={(e) => setDraftSymptom(e.target.value)}
+            onKeyDown={handleDraftKeyDown}
             data-testid="report-draft-symptom"
           />
           {createError && (
@@ -351,6 +388,14 @@ export function InvestigationReportSection({
               data-testid="report-draft-submit"
             >
               {creating ? 'Filing…' : 'File report'}
+            </button>
+            <button
+              type="button"
+              onClick={saveDraft}
+              disabled={creating}
+              data-testid="report-draft-save"
+            >
+              {creating ? 'Saving…' : 'Save draft'}
             </button>
             <button
               type="button"
