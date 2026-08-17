@@ -463,7 +463,9 @@ function lineToInnerText(type: string, line: string): string {
 }
 
 /** Notion caps each rich_text text.content at 2000 chars; chunk plain (unannotated) text accordingly. */
-function toPlainRichText(text: string): { type: 'text'; text: { content: string } }[] {
+function toPlainRichText(
+  text: string,
+): { type: 'text'; text: { content: string } }[] {
   const LIMIT = 2000;
   if (text.length === 0) return [{ type: 'text', text: { content: '' } }];
   const items: { type: 'text'; text: { content: string } }[] = [];

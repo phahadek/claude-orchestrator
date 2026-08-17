@@ -772,7 +772,11 @@ describe('NotionClient.applyPageEdit()', () => {
         id: 'table-1',
         type: 'table',
         has_children: true,
-        table: { table_width: 2, has_column_header: true, has_row_header: false },
+        table: {
+          table_width: 2,
+          has_column_header: true,
+          has_row_header: false,
+        },
       },
       {
         id: 'bullet-nested',
