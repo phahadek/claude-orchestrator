@@ -10,8 +10,6 @@
  * This covers the missing carve-out and its applyIntent defence-in-depth.
  */
 
-import { readFileSync } from 'fs';
-import path from 'path';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
@@ -37,6 +35,7 @@ import {
   getStagedIntent,
   setStagedIntentGroup,
   transitionStagedIntent,
+  insertStagedIntent,
 } from '../../db/queries';
 import {
   createStagedIntentsRouter,
@@ -45,6 +44,7 @@ import {
   commitGroupIntents,
 } from '../stagedIntents';
 import type { SessionManager } from '../../session/SessionManager';
+import { TERMINAL_ON_APPROVE_INTENT_KINDS } from '../../db/types';
 
 const SESSION_ID = 'session-ops-pr-intent-apply';
 
@@ -182,56 +182,48 @@ describe('ops.prIntent approve route — existing-behaviour regression guard', (
 });
 
 describe('approve-terminal kinds all have a matching apply-route 409 carve-out', () => {
-  it('guards against the next approve-terminal kind repeating the ops.prIntent omission', () => {
-    const sourcePath = path.join(__dirname, '..', 'stagedIntents.ts');
-    const source = readFileSync(sourcePath, 'utf8');
+  // Drives the apply route directly for every kind in the single shared
+  // TERMINAL_ON_APPROVE_INTENT_KINDS set (see db/types.ts) — the apply
+  // route's rejection derives from that same set now, so a kind added there
+  // without matching runtime behaviour fails this test immediately, instead
+  // of drifting silently the way ops.prIntent's own omission once did.
+  it('guards against a future approve-terminal kind repeating the ops.prIntent omission', async () => {
+    insertOpsSession('task-1');
+    const agent = makeApp();
+    const now = Date.now();
 
-    const approveRouteStart = source.indexOf("'/staged-intents/:id/approve'");
-    expect(approveRouteStart).toBeGreaterThan(-1);
-    const approveRouteEnd = source.indexOf(
-      'router.post(',
-      approveRouteStart + 1,
-    );
-    const approveRouteBody = source.slice(
-      approveRouteStart,
-      approveRouteEnd === -1 ? undefined : approveRouteEnd,
-    );
+    for (const kind of TERMINAL_ON_APPROVE_INTENT_KINDS) {
+      const id = `guard-${kind}`;
+      insertStagedIntent({
+        id,
+        kind,
+        payload: '{}',
+        payload_hash: 'hash',
+        task_id: null,
+        project_id: 'proj-1',
+        session_id: SESSION_ID,
+        group_id: null,
+        milestone: null,
+        state: 'staged',
+        supersedes: null,
+        annotation: null,
+        decision_proposal: null,
+        investigation: null,
+        groom_proposal: null,
+        advisory: null,
+        disposition_reason: null,
+        answer: null,
+        applied_task_id: null,
+        created_at: now,
+        updated_at: now,
+      });
 
-    // Terminal kinds are the ones whose approve-route comment — written
-    // immediately above their `if (intent.kind === '...')` branch — says
-    // they have "no separate apply step either", i.e. applyIntent is the
-    // alternate path they must be kept away from. (session.requestCapability
-    // is deliberately excluded: its terminal comment lacks "either" because it
-    // never applies via applyIntent at all — it grants a capability directly.)
-    const ifBranchPattern = /if \(intent\.kind === '([^']+)'\)/g;
-    const branches: Array<{ kind: string; index: number }> = [];
-    let ifMatch: RegExpExecArray | null;
-    while ((ifMatch = ifBranchPattern.exec(approveRouteBody)) !== null) {
-      branches.push({ kind: ifMatch[1], index: ifMatch.index });
-    }
-    const terminalKinds = new Set<string>();
-    let precedingStart = 0;
-    for (const branch of branches) {
-      const preceding = approveRouteBody.slice(precedingStart, branch.index);
-      if (/has no separate apply step either/.test(preceding)) {
-        terminalKinds.add(branch.kind);
-      }
-      precedingStart = branch.index;
-    }
+      const res = await agent.post(`/api/staged-intents/${id}/apply`);
 
-    expect(terminalKinds.size).toBeGreaterThanOrEqual(4);
-
-    const applyRouteStart = source.indexOf("'/staged-intents/:id/apply'");
-    expect(applyRouteStart).toBeGreaterThan(-1);
-    const applyRouteEnd = source.indexOf('router.post(', applyRouteStart + 1);
-    const applyRouteBody = source.slice(
-      applyRouteStart,
-      applyRouteEnd === -1 ? undefined : applyRouteEnd,
-    );
-
-    for (const kind of terminalKinds) {
-      expect(applyRouteBody).toContain(`row.kind === '${kind}'`);
-      expect(applyRouteBody).toContain('approval is terminal for it');
+      expect(res.status).toBe(409);
+      expect(String(res.body.error)).toContain(kind);
+      expect(String(res.body.error)).toContain('approval is terminal for it');
+      expect(String(res.body.error)).toContain('/staged-intents/:id/approve');
     }
   });
 });

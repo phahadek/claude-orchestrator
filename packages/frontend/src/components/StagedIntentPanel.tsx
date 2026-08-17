@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { renderTaskBodyMarkdown } from '@claude-orchestrator/backend/src/tasks/bodyRender';
+import { TERMINAL_ON_APPROVE_INTENT_KINDS } from '@claude-orchestrator/backend/src/db/types';
 import type {
   StagedIntent,
   StagedIntentRejectOutcome,
@@ -1266,17 +1267,11 @@ export function StagedIntentPanel({
   // The grant-approval kind: never applied — dispositioned only through
   // approve / reject / pushback, the existing consent vocabulary.
   const isCapabilityRequest = intent.kind === 'session.requestCapability';
-  // Approval is terminal for a completeness-disposition run too — approving
-  // it directly advances the underlying completeness_disposition row(s) off
-  // `proposed` and unblocks the design task's gated arch.*/closing-synthesis
-  // writes; there is no separate apply/commit step.
-  const isCompletenessDisposition = intent.kind === 'completeness.disposition';
-  // Same terminal-on-approve shape: the operator override for a test.request
-  // stuck at staged (cycle-limit escalation) approves directly — there is no
-  // separate apply/commit step, and the backend rejects apply for this kind.
-  const isTestRequest = intent.kind === 'test.request';
-  const skipsApply =
-    isCapabilityRequest || isCompletenessDisposition || isTestRequest;
+  // Derived from the shared backend/frontend set rather than restated here —
+  // ops.prIntent and review.dispute are terminal-on-approve too (the backend
+  // rejects apply for every kind in this set); see
+  // TERMINAL_ON_APPROVE_INTENT_KINDS in db/types.ts.
+  const skipsApply = TERMINAL_ON_APPROVE_INTENT_KINDS.has(intent.kind);
   // planning.noOp is purely informational/auditable — no operator
   // disposition (commit/approve/reject) is ever offered for it.
   const isNoOp = intent.kind === 'planning.noOp';

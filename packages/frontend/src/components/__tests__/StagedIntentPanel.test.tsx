@@ -10,6 +10,7 @@ import { StagedIntentPanel } from '../StagedIntentPanel';
 import { stagedIntentsApi } from '../../api/stagedIntents';
 import type { StagedIntent } from '../../api/stagedIntents';
 import { gateApi } from '../../api/gate';
+import { TERMINAL_ON_APPROVE_INTENT_KINDS } from '@claude-orchestrator/backend/src/db/types';
 
 function fireKey(key: string, target?: EventTarget) {
   const event = new KeyboardEvent('keydown', { key, bubbles: true });
@@ -1356,6 +1357,131 @@ describe('StagedIntentPanel', () => {
           expect.objectContaining({ reason: 'not needed right now' }),
         ),
       );
+    });
+  });
+
+  describe('ops.prIntent operator approval', () => {
+    function makeOpsPrIntent(overrides: Partial<StagedIntent> = {}) {
+      return makeIntent({
+        kind: 'ops.prIntent',
+        payload: {
+          taskId: 'notion:abc',
+          title: 'add retry to X poller',
+          scope: 'packages/backend/src/x.ts',
+          reason: 'fix flaky poll loop',
+        },
+        ...overrides,
+      });
+    }
+
+    it('renders a working Approve control and no Commit button for an ungrouped ops.prIntent', () => {
+      render(<StagedIntentPanel intent={makeOpsPrIntent()} />);
+
+      expect(screen.getByRole('button', { name: /^approve$/i })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
+    });
+
+    it('clicking Approve calls the approve route, not apply, and succeeds', async () => {
+      const approve = vi
+        .spyOn(stagedIntentsApi, 'approve')
+        .mockResolvedValue({ ...makeOpsPrIntent(), state: 'committed' });
+      const apply = vi.spyOn(stagedIntentsApi, 'apply');
+
+      render(<StagedIntentPanel intent={makeOpsPrIntent()} />);
+      fireEvent.click(screen.getByRole('button', { name: /^approve$/i }));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('intent-1'));
+      expect(apply).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('review.dispute operator approval', () => {
+    function makeReviewDisputeIntent(overrides: Partial<StagedIntent> = {}) {
+      return makeIntent({
+        kind: 'review.dispute',
+        payload: {
+          taskId: 'notion:abc',
+          prNumber: 42,
+          repo: 'org/repo',
+          rationale: 'the flagged file was never touched by this diff',
+        },
+        ...overrides,
+      });
+    }
+
+    it('renders a working Approve control and no Commit button for an ungrouped review.dispute', () => {
+      render(<StagedIntentPanel intent={makeReviewDisputeIntent()} />);
+
+      expect(screen.getByRole('button', { name: /^approve$/i })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
+    });
+
+    it('clicking Approve calls the approve route, not apply', async () => {
+      const approve = vi
+        .spyOn(stagedIntentsApi, 'approve')
+        .mockResolvedValue({ ...makeReviewDisputeIntent(), state: 'approved' });
+      const apply = vi.spyOn(stagedIntentsApi, 'apply');
+
+      render(<StagedIntentPanel intent={makeReviewDisputeIntent()} />);
+      fireEvent.click(screen.getByRole('button', { name: /^approve$/i }));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('intent-1'));
+      expect(apply).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('terminal-on-approve kind coverage', () => {
+    // A representative payload per known terminal-on-approve kind, since a
+    // few kinds' headline renderers assume payload shape (e.g.
+    // completeness.disposition's `payload.questions.length`). A kind added
+    // to TERMINAL_ON_APPROVE_INTENT_KINDS without an entry here fails loudly
+    // below rather than crashing on an unrelated payload assumption.
+    const PAYLOAD_BY_KIND: Record<string, unknown> = {
+      'session.requestCapability': {
+        capability: 'Bash(npm test)',
+        plan: 'run the suite',
+        evidence: 'see failing CI run',
+      },
+      'completeness.disposition': {
+        taskId: 'notion:design1',
+        rowId: 1,
+        project: 'demo',
+        milestone: 'M13',
+        probed: [],
+        questions: [],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+      'review.dispute': {
+        taskId: 'notion:abc',
+        prNumber: 42,
+        repo: 'org/repo',
+        rationale: 'the flagged file was never touched by this diff',
+      },
+      'test.request': { taskId: 'notion:abc', reason: 'verify the fix' },
+      'ops.prIntent': {
+        taskId: 'notion:abc',
+        title: 'add retry to X poller',
+        scope: 'packages/backend/src/x.ts',
+        reason: 'fix flaky poll loop',
+      },
+    };
+
+    it('renders Approve (not Commit) for every kind in the shared terminal-on-approve set', () => {
+      for (const kind of TERMINAL_ON_APPROVE_INTENT_KINDS) {
+        const payload = PAYLOAD_BY_KIND[kind];
+        expect(payload, `add a PAYLOAD_BY_KIND entry for "${kind}"`).toBeDefined();
+
+        const { unmount } = render(
+          <StagedIntentPanel intent={makeIntent({ kind, payload })} />,
+        );
+
+        expect(
+          screen.getByRole('button', { name: /^approve$|^✓ grant$/i }),
+        ).toBeTruthy();
+        expect(screen.queryByRole('button', { name: /^✓ commit$/i })).toBeNull();
+
+        unmount();
+      }
     });
   });
 
