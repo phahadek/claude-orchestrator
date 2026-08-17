@@ -37,6 +37,7 @@ import {
   insertTestRequestRun,
   completeTestRequestRun,
   clearSupersededStructuredResults,
+  clearStructuredResultIfSuperseded,
   listRunningTestRequestRuns,
   listTestRequestRunsNeedingExtraction,
   hasTestRunResults,
@@ -537,5 +538,16 @@ export function sweepTestRunResultsExtraction(): void {
       `[testRequestLane] extracting test_run_results for run ${run.id} (project ${run.project_id})`,
     );
     ingestTestRunResults(run);
+    // This run's extraction may have been deferred past a newer run
+    // completing for the same key — clearSupersededStructuredResults skipped
+    // it at that time to avoid racing this very sweep. Now that extraction
+    // is done, retroactively clear it if it's no longer the latest.
+    if (hasTestRunResults(run.id)) {
+      clearStructuredResultIfSuperseded(
+        run.id,
+        run.project_id,
+        run.content_hash,
+      );
+    }
   }
 }

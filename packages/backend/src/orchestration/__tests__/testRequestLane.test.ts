@@ -52,6 +52,7 @@ import {
 import {
   insertTestRequestRun,
   completeTestRequestRun,
+  clearSupersededStructuredResults,
   listRunningTestRequestRuns,
   getLatestTestRequestRun,
   listTestRunResultsForRun,
@@ -622,6 +623,65 @@ describe('sweepTestRunResultsExtraction', () => {
     sweepTestRunResultsExtraction();
 
     expect(listTestRunResultsForRun('run-sweep-2')).toHaveLength(1);
+  });
+
+  it('does not lose a superseded run\'s per-test data when its extraction was deferred past the run that superseded it', () => {
+    const structuredOld = JSON.stringify({
+      suites: [
+        {
+          tests: [{ id: 't1', name: 'n', outcome: 'passed', durationMs: 5 }],
+        },
+      ],
+    });
+    // Simulates a run that completed and wrote structured_result but
+    // crashed before its own ingestTestRunResults call — the extraction is
+    // left for the boot sweep, same as recoverInterruptedTestRequestRuns'
+    // scenario.
+    insertTestRequestRun(
+      'run-race-old',
+      'proj-1',
+      'hash-race',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun('run-race-old', 'passed', 'ok', null, structuredOld);
+    expect(listTestRunResultsForRun('run-race-old')).toHaveLength(0);
+
+    // A newer run for the same key completes before the sweep runs, and
+    // clears every superseded row it can — but 'run-race-old' has no
+    // test_run_results yet, so it must be skipped rather than wiped.
+    const structuredNew = JSON.stringify({
+      suites: [
+        {
+          tests: [{ id: 't2', name: 'n2', outcome: 'passed', durationMs: 7 }],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-race-new',
+      'proj-1',
+      'hash-race',
+      null,
+      Date.now() + 1,
+    );
+    completeTestRequestRun('run-race-new', 'passed', 'ok', null, structuredNew);
+    clearSupersededStructuredResults('proj-1', 'hash-race', 'run-race-new');
+
+    const oldRowMidRace = db
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
+      .get('run-race-old') as { structured_result: string | null };
+    expect(oldRowMidRace.structured_result).toBe(structuredOld);
+
+    // The sweep now extracts the deferred row, and only then retroactively
+    // clears its structured_result since a newer run had already superseded
+    // it.
+    sweepTestRunResultsExtraction();
+
+    expect(listTestRunResultsForRun('run-race-old')).toHaveLength(1);
+    const oldRowAfterSweep = db
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
+      .get('run-race-old') as { structured_result: string | null };
+    expect(oldRowAfterSweep.structured_result).toBeNull();
   });
 });
 
