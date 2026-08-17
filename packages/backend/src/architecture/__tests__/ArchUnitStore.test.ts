@@ -7,7 +7,7 @@
  * active set with superseded excluded by default.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -15,6 +15,7 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
+import * as queries from '../../db/queries.js';
 import {
   getUnit,
   getUnitEvents,
@@ -129,6 +130,105 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
     ]);
     const newEvents = getUnitEvents(next.id);
     expect(newEvents.map((e) => e.eventType)).toEqual(['created']);
+  });
+});
+
+describe('atomicity of multi-statement writes', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('rolls back the whole createUnit apply when the event insert throws', () => {
+    vi.spyOn(queries, 'insertArchUnitEvent').mockImplementation(() => {
+      throw new Error('simulated mid-sequence failure');
+    });
+
+    expect(() =>
+      createUnit({
+        project: 'proj-1',
+        title: 'Should not persist',
+        kind: 'subsystem',
+        topic: 'sessions',
+        regions: [],
+        body: 'body',
+        at: '2026-01-01T00:00:00Z',
+      }),
+    ).toThrow('simulated mid-sequence failure');
+
+    const rows = db.prepare('SELECT * FROM arch_unit').all();
+    expect(rows).toHaveLength(0);
+  });
+
+  it('rolls back the whole updateUnit apply when recordEvent throws', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Original title',
+      kind: 'subsystem',
+      topic: 'sessions',
+      regions: [],
+      body: 'original body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    vi.spyOn(queries, 'insertArchUnitEvent').mockImplementation(() => {
+      throw new Error('simulated mid-sequence failure');
+    });
+
+    expect(() =>
+      updateUnit(unit.id, { body: 'revised body' }, '2026-01-02T00:00:00Z'),
+    ).toThrow('simulated mid-sequence failure');
+
+    const persisted = getUnit(unit.id);
+    expect(persisted?.body).toBe('original body');
+    expect(persisted?.version).toBe(1);
+    const events = getUnitEvents(unit.id);
+    expect(events).toHaveLength(1);
+  });
+
+  it('rolls back the whole supersedeUnit apply when the second event insert throws', () => {
+    const original = createUnit({
+      project: 'proj-1',
+      title: 'Old decision',
+      kind: 'decision',
+      topic: 'architecture-store',
+      regions: [],
+      body: 'old decision body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const realInsertArchUnitEvent = queries.insertArchUnitEvent;
+    let calls = 0;
+    vi.spyOn(queries, 'insertArchUnitEvent').mockImplementation((row) => {
+      calls += 1;
+      if (calls === 2) {
+        throw new Error('simulated mid-sequence failure');
+      }
+      return realInsertArchUnitEvent(row);
+    });
+
+    expect(() =>
+      supersedeUnit(
+        original.id,
+        {
+          project: 'proj-1',
+          title: 'New decision',
+          kind: 'decision',
+          topic: 'architecture-store',
+          regions: [],
+          body: 'new decision body',
+          at: '2026-01-03T00:00:00Z',
+        },
+        '2026-01-03T00:00:00Z',
+      ),
+    ).toThrow('simulated mid-sequence failure');
+
+    const rows = db
+      .prepare('SELECT * FROM arch_unit WHERE id != ?')
+      .all(original.id);
+    expect(rows).toHaveLength(0);
+    const persisted = getUnit(original.id);
+    expect(persisted?.status).toBe('active');
+    expect(persisted?.version).toBe(1);
   });
 });
 
