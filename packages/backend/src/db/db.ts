@@ -1,5 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
+import path from 'path';
+import { Worker } from 'worker_threads';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { getDataDir } from '../config/dataDir';
 import { resolveDbPath } from '../config/resolveDbPath';
@@ -129,6 +131,69 @@ export function runWalTruncateCheckpoint(
     log: result.log,
     checkpointed: result.checkpointed,
   };
+}
+
+// Dispatches the TRUNCATE checkpoint to a worker thread that opens its own
+// connection against the same on-disk WAL-mode file, instead of running
+// wal_checkpoint(TRUNCATE) synchronously on the shared main-thread `db`
+// connection. That pragma call has to flush every dirty WAL page into the
+// (multi-GB) main database file and then truncate the WAL — real, slow disk
+// I/O — and better-sqlite3 is fully synchronous with no worker-thread or
+// libuv-pool offload of its own, so issuing it on `db` directly would block
+// every Express route, WebSocket handler, and other scheduled job on the
+// process for the full duration of the checkpoint. See
+// walTruncateCheckpointWorker.ts for the worker entry point.
+//
+// An in-memory database has no file a second connection could open against,
+// so it runs in-process there (test-only path; production always has a
+// real dbPath).
+export function runWalTruncateCheckpointOffMainThread(
+  targetPath: string,
+): Promise<WalTruncateCheckpointResult> {
+  if (targetPath === ':memory:') {
+    return Promise.resolve(runWalTruncateCheckpoint(db, targetPath));
+  }
+  return new Promise((resolve, reject) => {
+    const isTsNode = __filename.endsWith('.ts');
+    const workerPath = path.join(
+      __dirname,
+      isTsNode
+        ? 'walTruncateCheckpointWorker.ts'
+        : 'walTruncateCheckpointWorker.js',
+    );
+    const worker = new Worker(workerPath, {
+      workerData: { dbPath: targetPath },
+      execArgv: isTsNode
+        ? ['-r', 'ts-node/register/transpile-only']
+        : [],
+    });
+    let settled = false;
+    worker.once(
+      'message',
+      (msg: { ok: true; result: WalTruncateCheckpointResult } | { ok: false; error: string }) => {
+        settled = true;
+        if (msg.ok) {
+          resolve(msg.result);
+        } else {
+          reject(new Error(`[wal_truncate_checkpoint] worker failed: ${msg.error}`));
+        }
+        void worker.terminate();
+      },
+    );
+    worker.once('error', (err) => {
+      settled = true;
+      reject(err);
+    });
+    worker.once('exit', (code) => {
+      if (!settled) {
+        reject(
+          new Error(
+            `[wal_truncate_checkpoint] worker exited with code ${code} before reporting a result`,
+          ),
+        );
+      }
+    });
+  });
 }
 
 assertDatabaseSchema(db, dbPath, dbFileExistedBeforeOpen);

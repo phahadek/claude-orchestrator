@@ -5,7 +5,7 @@ import http from 'http';
 import path from 'path';
 import os from 'os';
 import { runMigrations } from './db/schema';
-import { db, dbPath, runWalTruncateCheckpoint } from './db/db';
+import { db, dbPath, runWalTruncateCheckpointOffMainThread } from './db/db';
 import { SessionManager } from './session/SessionManager';
 import { handleMessage, setWsRouterRefreshFn } from './ws/router';
 import { setTaskWriteRefreshFn } from './tasks/TaskWriteCommands';
@@ -433,7 +433,7 @@ scheduler.register({
   runOnBoot: false,
   concurrency: 'skip-if-running',
   run: async () => {
-    const result = runWalTruncateCheckpoint(db, dbPath);
+    const result = await runWalTruncateCheckpointOffMainThread(dbPath);
     const bytesFreed = Math.max(
       0,
       result.walSizeBeforeBytes - result.walSizeAfterBytes,
