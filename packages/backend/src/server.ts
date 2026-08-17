@@ -95,7 +95,7 @@ import {
   getPRBySessionId,
   backfillStagedIntentMilestones,
 } from './db/queries';
-import { resolveMilestoneForTaskId } from './projects/milestoneResolver';
+import { resolveMilestoneForSessionTask } from './projects/milestoneResolver';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
@@ -157,7 +157,7 @@ importProjectsFromEnv(process.env.PROJECTS);
 // blocks boot, and rows that don't resolve just stay in the "unattributed"
 // bucket (see backfillStagedIntentMilestones in db/queries.ts).
 try {
-  backfillStagedIntentMilestones(resolveMilestoneForTaskId);
+  backfillStagedIntentMilestones(resolveMilestoneForSessionTask);
 } catch (err) {
   logger.error(
     `[server] staged_intent milestone backfill failed: ${err instanceof Error ? err.message : String(err)}`,
