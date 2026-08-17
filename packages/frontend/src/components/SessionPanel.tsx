@@ -51,11 +51,18 @@ function useDepthReviewStatus(
         if (cancelled) return;
         const item = items.find((i) => i.prNumber === prNumber);
         const verdict = item?.depthVerdict;
-        if (!verdict || verdict.verdict === 'pass' || verdict.sessionId !== sessionId) {
+        if (
+          !verdict ||
+          verdict.verdict === 'pass' ||
+          verdict.sessionId !== sessionId
+        ) {
           setStatus(null);
           return;
         }
-        setStatus({ escalated: verdict.escalated, routeCount: verdict.routeCount });
+        setStatus({
+          escalated: verdict.escalated,
+          routeCount: verdict.routeCount,
+        });
       })
       .catch(() => {
         if (cancelled) return;
