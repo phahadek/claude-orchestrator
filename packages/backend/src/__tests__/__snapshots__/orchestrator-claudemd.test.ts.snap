@@ -17,7 +17,7 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > github backend > ma
 
 ## Lifecycle
 
-> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR) instead of stopping silently — a silent stop re-dispatches the task forever.**
 
 1. Fetch the GitHub issue via the gh CLI. Retrieve only the pre-assigned task above — do NOT browse the board to pick up additional work.
 2. Verify your branch: \`git branch --show-current\` → \`feature/<task-name>\`.
@@ -234,7 +234,7 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > jira backend > matc
 
 ## Lifecycle
 
-> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR) instead of stopping silently — a silent stop re-dispatches the task forever.**
 
 1. Fetch the Jira issue. Retrieve only the pre-assigned task above — do NOT browse the board to pick up additional work.
 2. Verify your branch: \`git branch --show-current\` → \`feature/<task-name>\`.
@@ -451,7 +451,7 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > local backend > mat
 
 ## Lifecycle
 
-> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR) instead of stopping silently — a silent stop re-dispatches the task forever.**
 
 > ⚠️ **YAML task source**: Task context is in \`tasks.yaml\` in the project root. Skip the remote fetch step.
 
@@ -670,7 +670,7 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > notion backend (def
 
 ## Lifecycle
 
-> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR) instead of stopping silently — a silent stop re-dispatches the task forever.**
 
 1. Fetch the Notion task page and project context page. Retrieve only the pre-assigned task above — do NOT browse the board to pick up additional work.
 2. Verify your branch: \`git branch --show-current\` → \`feature/<task-name>\`.

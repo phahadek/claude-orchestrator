@@ -20,7 +20,7 @@ import {
   updateTaskStatusInBoardCaches,
   getTaskCache,
   hasActivePlanningSessionForTask,
-  isGroomNoOpSuppressed,
+  isNoOpSuppressed,
   isPlanningKillSuppressed,
   insertStagedIntent,
   insertSession,
@@ -443,7 +443,7 @@ function insertNoOp(overrides: Partial<StagedIntentRow> = {}): void {
   insertStagedIntent(row);
 }
 
-describe('isGroomNoOpSuppressed', () => {
+describe('isNoOpSuppressed', () => {
   beforeEach(() => {
     db.prepare('DELETE FROM staged_intent').run();
     db.prepare('DELETE FROM audit_log').run();
@@ -451,30 +451,30 @@ describe('isGroomNoOpSuppressed', () => {
 
   it('suppresses while the most recent planning.noOp for the task is committed', () => {
     insertNoOp();
-    expect(isGroomNoOpSuppressed('task-1')).toBe(true);
+    expect(isNoOpSuppressed('task-1')).toBe(true);
   });
 
   it('does not suppress when the task has no planning.noOp', () => {
-    expect(isGroomNoOpSuppressed('task-1')).toBe(false);
+    expect(isNoOpSuppressed('task-1')).toBe(false);
   });
 
   it.each(['rejected', 'superseded', 'staged'] as StagedIntentState[])(
     'does not suppress when the most recent no-op is %s',
     (state) => {
       insertNoOp({ state });
-      expect(isGroomNoOpSuppressed('task-1')).toBe(false);
+      expect(isNoOpSuppressed('task-1')).toBe(false);
     },
   );
 
   it('reads only the most recent no-op, not an earlier committed one', () => {
     insertNoOp({ state: 'committed', created_at: 1000, updated_at: 1000 });
     insertNoOp({ state: 'rejected', created_at: 2000, updated_at: 2000 });
-    expect(isGroomNoOpSuppressed('task-1')).toBe(false);
+    expect(isNoOpSuppressed('task-1')).toBe(false);
   });
 
   it('retires the suppression once a task_body_updated event lands after the commit', () => {
     insertNoOp({ created_at: 1000, updated_at: 1000 });
-    expect(isGroomNoOpSuppressed('task-1')).toBe(true);
+    expect(isNoOpSuppressed('task-1')).toBe(true);
 
     recordEvent({
       event_type: 'task_body_updated',
@@ -484,7 +484,7 @@ describe('isGroomNoOpSuppressed', () => {
       task_id: 'task-1',
       payload: {},
     });
-    expect(isGroomNoOpSuppressed('task-1')).toBe(false);
+    expect(isNoOpSuppressed('task-1')).toBe(false);
   });
 
   it('retires the suppression once a task_deps_updated event lands after the commit', () => {
@@ -497,7 +497,7 @@ describe('isGroomNoOpSuppressed', () => {
       task_id: 'task-1',
       payload: {},
     });
-    expect(isGroomNoOpSuppressed('task-1')).toBe(false);
+    expect(isNoOpSuppressed('task-1')).toBe(false);
   });
 
   it('does not retire on an edit event for a different task', () => {
@@ -510,7 +510,7 @@ describe('isGroomNoOpSuppressed', () => {
       task_id: 'task-2',
       payload: {},
     });
-    expect(isGroomNoOpSuppressed('task-1')).toBe(true);
+    expect(isNoOpSuppressed('task-1')).toBe(true);
   });
 
   it('still suppresses after the staging session goes terminal — derived from the committed intent, not the session', () => {
@@ -522,7 +522,7 @@ describe('isGroomNoOpSuppressed', () => {
          'done', ?, ?, 'groom', 0)`,
     ).run(Date.now() - 10 * 60 * 1000, Date.now());
     insertNoOp();
-    expect(isGroomNoOpSuppressed('task-1')).toBe(true);
+    expect(isNoOpSuppressed('task-1')).toBe(true);
   });
 });
 

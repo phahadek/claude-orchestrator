@@ -42,6 +42,7 @@ vi.mock('../../db/queries.js', () =>
     clearPausedPrReasonForTask: vi.fn(),
     resetTaskCrashCount: vi.fn(),
     getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
+    isNoOpSuppressed: vi.fn().mockReturnValue(false),
   }),
 );
 
@@ -64,6 +65,7 @@ import {
   clearTaskPauseReason,
   clearPausedPrReasonForTask,
   resetTaskCrashCount,
+  isNoOpSuppressed,
 } from '../../db/queries.js';
 import { recordEvent } from '../../audit/AuditLog.js';
 import { hasMemoryHeadroom } from '../memoryAdmission.js';
@@ -1435,6 +1437,29 @@ describe('AutoLauncher — launch failure tracking', () => {
     expect(sessionManager.start).not.toHaveBeenCalled();
 
     vi.mocked(getTaskPauseReason).mockReturnValue(null);
+  });
+
+  it('skips a task whose most recent planning.noOp still stands', async () => {
+    const task = makeResolvedTask({ id: 'task-no-op-suppressed' });
+    const backend = makeFailingBackend(task);
+    const sessionManager = makeSessionManager(0);
+
+    vi.mocked(isNoOpSuppressed).mockImplementation(
+      (id) => id === 'task-no-op-suppressed',
+    );
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    backend.fetchReadyTasks.mockResolvedValue([task]);
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).not.toHaveBeenCalled();
+
+    vi.mocked(isNoOpSuppressed).mockReturnValue(false);
   });
 
   it('dispatching a launch (start() resolving) does NOT clear the crash budget on its own', async () => {

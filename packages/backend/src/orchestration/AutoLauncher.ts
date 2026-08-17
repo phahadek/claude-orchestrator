@@ -23,6 +23,7 @@ import {
   clearPausedPrReasonForTask,
   resetTaskCrashCount,
   getTaskRepoAssignment,
+  isNoOpSuppressed,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency, yieldToEventLoop } from '../utils/concurrency';
@@ -566,6 +567,11 @@ export class AutoLauncher {
     // status wasn't updated yet. The Notion catch-up update is handled in
     // processProject so we have access to the backend.
     if (getMergedPRForTask(task.id) != null) return false;
+    // Skip if a committed planning.noOp still stands — a session already
+    // declared this task's work satisfied elsewhere and drove it to Done
+    // (see routes/stagedIntents.ts's maybeAutoResolveCodeNoOp). Retires
+    // automatically the moment the task is next edited (isNoOpSuppressed).
+    if (isNoOpSuppressed(task.id)) return false;
     return true;
   }
 

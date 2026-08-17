@@ -399,7 +399,7 @@ export function getLatestEventByType(eventType: string): AuditRow | undefined {
  * True when a task_body_updated or task_deps_updated event has been recorded
  * for `taskId` after `sinceTs` — the orchestrator-authored-write signal a
  * committed planning.noOp's grooming suppression retires on (see
- * isGroomNoOpSuppressed in db/queries.ts). Both event types are written by
+ * isNoOpSuppressed in db/queries.ts). Both event types are written by
  * AuditingTaskBackend for every orchestrator-authored body/deps edit; a raw
  * break-glass Notion edit doesn't itself retire the suppression, only the
  * next orchestrator-authored write does.

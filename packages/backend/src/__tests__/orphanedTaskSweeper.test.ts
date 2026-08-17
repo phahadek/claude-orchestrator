@@ -40,6 +40,7 @@ vi.mock('../db/queries.js', () => ({
   getOpsJournalEntry: vi.fn(() => undefined),
   getSession: vi.fn(() => undefined),
   listStagedIntentsBySession: vi.fn(() => []),
+  isNoOpSuppressed: vi.fn(() => false),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -77,6 +78,7 @@ import {
   getOpsJournalEntry,
   getSession,
   listStagedIntentsBySession,
+  isNoOpSuppressed,
 } from '../db/queries.js';
 import {
   recordEvent,
@@ -194,6 +196,7 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(getSession).mockReset().mockReturnValue(undefined);
     vi.mocked(listStagedIntentsBySession).mockReset().mockReturnValue([]);
     vi.mocked(isUsageAdmitted).mockReset().mockReturnValue({ allowed: true });
+    vi.mocked(isNoOpSuppressed).mockReset().mockReturnValue(false);
     broadcast.mockClear();
   });
 
@@ -223,6 +226,25 @@ describe('OrphanedTaskSweeper', () => {
       notionTaskId: 'notion:abc',
       newStatus: '🗂️ Ready',
     });
+  });
+
+  it('does not revert a task whose most recent planning.noOp still stands', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    vi.mocked(isNoOpSuppressed).mockReturnValueOnce(true);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(isNoOpSuppressed).toHaveBeenCalledWith('notion:abc');
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it('skips tasks whose latest session started < 5 minutes ago (anti-race)', async () => {

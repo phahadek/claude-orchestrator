@@ -20,11 +20,12 @@ describe('buildOrchestratorClaudeMd — size ceilings', () => {
   // Ceilings were bumped to track legitimate growth (Context Efficiency,
   // Responding to Review Comments, Manual Verification Gate sections, the
   // Nudges section, the test.request hard-instruction in the Pre-PR Gate /
-  // Flaky-CI sections, etc.) added since these were first set; they still
-  // guard against unbounded creep, just at the current, larger baseline.
-  it('rendered standard fixture is ≤ 10,000 characters', () => {
+  // Flaky-CI sections, the Lifecycle no-op-declaration instruction, etc.)
+  // added since these were first set; they still guard against unbounded
+  // creep, just at the current, larger baseline.
+  it('rendered standard fixture is ≤ 10,100 characters', () => {
     const output = buildOrchestratorClaudeMd(standardParams);
-    expect(output.length).toBeLessThanOrEqual(10000);
+    expect(output.length).toBeLessThanOrEqual(10100);
   });
 
   it('rendered standard fixture is ≤ 1,700 words', () => {

@@ -152,6 +152,11 @@ describe('orchestrator-claudemd.ts — no board-discovery instruction', () => {
     expect(source).toMatch(/no remaining work.*stop|stop.*wait/i);
   });
 
+  it('instructs the session to stage a planning.noOp declaration instead of stopping silently when the work is already satisfied', () => {
+    expect(source).toMatch(/planning\.noOp/);
+    expect(source).toMatch(/already satisfied/i);
+  });
+
   it('does not instruct sessions to search the board for a task to do', () => {
     // The lifecycle section must not contain open-ended board-search instructions
     expect(source).not.toMatch(/fetch.*board.*task|search.*board.*for.*task/i);
