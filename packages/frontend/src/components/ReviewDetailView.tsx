@@ -12,6 +12,8 @@ const VERDICT_LABELS: Record<ReviewResult['verdict'], string> = {
   needs_changes: 'Needs Changes',
   incomplete: 'Incomplete',
   error: 'Error',
+  pass: 'Pass',
+  fail: 'Fail',
 };
 
 const VERDICT_ICONS: Record<ReviewResult['verdict'], string> = {
@@ -19,6 +21,8 @@ const VERDICT_ICONS: Record<ReviewResult['verdict'], string> = {
   needs_changes: '⚠',
   incomplete: '✕',
   error: '✕',
+  pass: '✓',
+  fail: '✕',
 };
 
 const VERDICT_STYLE_KEYS: Record<ReviewResult['verdict'], string> = {
@@ -26,15 +30,24 @@ const VERDICT_STYLE_KEYS: Record<ReviewResult['verdict'], string> = {
   needs_changes: 'verdict--needs-changes',
   incomplete: 'verdict--incomplete',
   error: 'verdict--error',
+  pass: 'verdict--approved',
+  fail: 'verdict--needs-changes',
 };
 
 // ── Component ─────────────────────────────────────────────────────
 
-interface Props {
-  session: SessionState;
+/** Escalated/routed disposition for a depth_review session, matched back to it by session id — not part of the session's own emitted JSON (see ReviewOrchestrator.dispatchDepthReview). */
+export interface DepthReviewStatus {
+  escalated: boolean;
+  routeCount: number;
 }
 
-export function ReviewDetailView({ session }: Props) {
+interface Props {
+  session: SessionState;
+  depthReviewStatus?: DepthReviewStatus | null;
+}
+
+export function ReviewDetailView({ session, depthReviewStatus = null }: Props) {
   const result = parseReviewResultFromEvents(session.events);
   const isActive =
     session.status === 'running' || session.status === 'needs_permission';
@@ -53,6 +66,21 @@ export function ReviewDetailView({ session }: Props) {
               </span>
               {VERDICT_LABELS[result.verdict]}
             </div>
+
+            {depthReviewStatus && (
+              <div
+                className={
+                  depthReviewStatus.escalated
+                    ? styles.depthStatusBadgeEscalated
+                    : styles.depthStatusBadgeRouted
+                }
+                data-testid="depth-review-status"
+              >
+                {depthReviewStatus.escalated
+                  ? 'Escalated to operator'
+                  : `Routed to session${depthReviewStatus.routeCount > 0 ? ` (×${depthReviewStatus.routeCount})` : ''}`}
+              </div>
+            )}
 
             {result.verdict !== 'error' && result.dimensions.length > 0 && (
               <div className={styles.dimensions}>

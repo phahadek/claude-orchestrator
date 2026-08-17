@@ -14,48 +14,47 @@ import {
   MilestoneDecisionStack,
   type MilestoneStackSelection,
 } from './MilestoneDecisionStack';
-import {
-  MilestoneDrilldown,
-  type DrilldownMode,
-  type DepthReviewDisposition,
-} from './MilestoneDrilldown';
+import { MilestoneDrilldown, type DrilldownMode } from './MilestoneDrilldown';
+import type { DepthReviewStatus } from './ReviewDetailView';
 import { GateReadinessPanel } from './GateReadinessPanel';
 import { LaneHealthPanel } from './LaneHealthPanel';
 import { isGatePhase } from '../utils/phaseBurndown';
 import type { PanelKeyboardDeclaration } from '../types/panelKeyboard';
 import styles from './MilestoneView.module.css';
 
-/** The subset of the GET /api/prs response item shape this view needs to build depth dispositions. */
+/** The subset of the GET /api/prs response item shape this view needs to match a depth-review session back to its disposition. */
 interface PrsApiItem {
   prNumber: number;
-  prUrl: string;
-  repo: string;
   depthVerdict: {
     verdict: string;
-    dimensions: Array<{ name: string; passed: boolean; notes: string }>;
-    summary: string;
     escalated: boolean;
+    sessionId: string | null;
+    routeCount: number;
   } | null;
 }
 
 /**
- * Fetches non-passing depth-review dispositions for the milestone's own PRs,
+ * Fetches non-passing depth-review verdicts for the milestone's own PRs,
  * resolved by PR number against `tasks` (which the caller already scopes to
- * the active milestone). Hits the DB-only /api/prs/depth-dispositions
- * endpoint — scoped to exactly the PR numbers this milestone's tasks
- * reference — rather than the project-wide, live-GitHub-reconciling
- * /api/prs endpoint. Since `tasks` is already milestone-scoped upstream, the
- * derived PR-number set (and thus this effect) only changes on updates
- * relevant to this milestone — a task/staged-intent change belonging to a
- * different milestone never touches `tasks` and so never re-fires it.
+ * the active milestone), and reduces them to a map of depth_review session
+ * id -> escalated/routed status. Hits the DB-only
+ * /api/prs/depth-dispositions endpoint — scoped to exactly the PR numbers
+ * this milestone's tasks reference — rather than the project-wide,
+ * live-GitHub-reconciling /api/prs endpoint. Since `tasks` is already
+ * milestone-scoped upstream, the derived PR-number set (and thus this
+ * effect) only changes on updates relevant to this milestone — a
+ * task/staged-intent change belonging to a different milestone never
+ * touches `tasks` and so never re-fires it. Keyed by session id (rather
+ * than PR) so a depth_review session's own detail view can look up its
+ * disposition.
  */
-function useMilestoneDepthDispositions(
+function useMilestoneDepthReviewStatusBySession(
   projectId: string | null,
   tasks: TaskView[],
-): DepthReviewDisposition[] {
-  const [dispositions, setDispositions] = useState<DepthReviewDisposition[]>(
-    [],
-  );
+): Record<string, DepthReviewStatus> {
+  const [statusBySession, setStatusBySession] = useState<
+    Record<string, DepthReviewStatus>
+  >({});
 
   const prNumbersKey = useMemo(() => {
     const nums = new Set<number>();
@@ -69,7 +68,7 @@ function useMilestoneDepthDispositions(
 
   useEffect(() => {
     if (!projectId || !prNumbersKey) {
-      setDispositions([]);
+      setStatusBySession({});
       return;
     }
     let cancelled = false;
@@ -78,38 +77,33 @@ function useMilestoneDepthDispositions(
     )
       .then((items) => {
         if (cancelled) return;
-        const prToTaskName = new Map<number, string>();
-        for (const t of tasks) {
-          if (t.pr) prToTaskName.set(t.pr.prNumber, t.taskName);
+        const milestonePrs = new Set(
+          tasks.filter((t) => t.pr).map((t) => t.pr!.prNumber),
+        );
+        const next: Record<string, DepthReviewStatus> = {};
+        for (const item of items) {
+          if (!milestonePrs.has(item.prNumber)) continue;
+          if (!item.depthVerdict || item.depthVerdict.verdict === 'pass') {
+            continue;
+          }
+          if (!item.depthVerdict.sessionId) continue;
+          next[item.depthVerdict.sessionId] = {
+            escalated: item.depthVerdict.escalated,
+            routeCount: item.depthVerdict.routeCount,
+          };
         }
-        const next = items
-          .filter(
-            (item) => item.depthVerdict && item.depthVerdict.verdict !== 'pass',
-          )
-          .map((item) => ({
-            prNumber: item.prNumber,
-            prUrl: item.prUrl,
-            repo: item.repo,
-            taskName: prToTaskName.get(item.prNumber) ?? null,
-            verdict: item.depthVerdict!.verdict,
-            summary: item.depthVerdict!.summary,
-            failingDimensions: item
-              .depthVerdict!.dimensions.filter((d) => !d.passed)
-              .map((d) => ({ name: d.name, notes: d.notes })),
-            escalated: item.depthVerdict!.escalated,
-          }));
-        setDispositions(next);
+        setStatusBySession(next);
       })
       .catch(() => {
         if (cancelled) return;
-        setDispositions([]);
+        setStatusBySession({});
       });
     return () => {
       cancelled = true;
     };
   }, [projectId, prNumbersKey, tasks]);
 
-  return dispositions;
+  return statusBySession;
 }
 
 const MIN_MIDDLE_WIDTH_PCT = 30;
@@ -218,7 +212,7 @@ export function MilestoneView({
   // used to scope /api/tasks/active).
   const milestoneKey = convergence?.milestone ?? null;
 
-  const depthDispositions = useMilestoneDepthDispositions(
+  const depthReviewStatusBySessionId = useMilestoneDepthReviewStatusBySession(
     activeProjectId,
     tasks,
   );
@@ -367,7 +361,7 @@ export function MilestoneView({
       project={project}
       mode={drilldownMode}
       onModeChange={setDrilldownMode}
-      depthDispositions={depthDispositions}
+      depthReviewStatusBySessionId={depthReviewStatusBySessionId}
     />
   );
 

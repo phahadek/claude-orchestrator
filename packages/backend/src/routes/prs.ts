@@ -154,6 +154,12 @@ export function createPrsRouter(
                 headSha: depthVerdictRow.head_sha,
                 recordedAt: depthVerdictRow.recorded_at,
                 escalated: pr.pause_reason === 'depth_review_escalation',
+                // Lets the frontend match this verdict back to the
+                // depth_review session it belongs to, to render
+                // escalated/routed status inside that session's own detail
+                // view.
+                sessionId: depthVerdictRow.depth_session_id,
+                routeCount: depthVerdictRow.route_count,
               }
             : null;
           return {
@@ -285,6 +291,11 @@ export function createPrsRouter(
               // same pause_reason check distinguishes the two dispositions
               // without re-deriving findings from it.
               escalated: pr.pause_reason === 'depth_review_escalation',
+              // Lets the frontend match this verdict back to the depth_review
+              // session it belongs to, to render escalated/routed status
+              // inside that session's own detail view.
+              sessionId: depthVerdictRow.depth_session_id,
+              routeCount: depthVerdictRow.route_count,
             }
           : null;
         return {

@@ -158,8 +158,8 @@ describe('MilestoneDrilldown', () => {
     expect(screen.getByTestId('milestone-drilldown-empty')).toBeTruthy();
   });
 
-  describe('depth-review dispositions', () => {
-    it('renders a failing depth verdict, naming the failing dimension(s) and the PR it belongs to', () => {
+  describe('depth-review disposition placement', () => {
+    it('never renders a milestone-wide depth-dispositions section, regardless of selection', () => {
       render(
         <MilestoneDrilldown
           selection={null}
@@ -171,93 +171,89 @@ describe('MilestoneDrilldown', () => {
           setSessionFavorited={noop}
           mode="task"
           onModeChange={noop}
-          depthDispositions={[
-            {
-              prNumber: 915,
-              prUrl: 'https://github.com/org/repo/pull/915',
-              repo: 'org/repo',
-              taskName: 'Fix the thing',
-              verdict: 'fail',
-              summary: 'Found a defect beyond spec-conformance',
-              failingDimensions: [
-                { name: 'reliability', notes: 'Retries are unbounded' },
-              ],
-              escalated: true,
-            },
-          ]}
-        />,
-      );
-
-      const entry = screen.getByTestId('depth-disposition-915');
-      expect(entry.textContent).toContain('915');
-      expect(entry.textContent).toContain('reliability');
-      expect(entry.textContent).toContain('Retries are unbounded');
-    });
-
-    it('renders a routed finding and an escalated finding distinguishably', () => {
-      render(
-        <MilestoneDrilldown
-          selection={null}
-          tasks={[]}
-          projectId="proj-1"
-          sessions={[]}
-          send={noop}
-          setSessionArchived={noop}
-          setSessionFavorited={noop}
-          mode="task"
-          onModeChange={noop}
-          depthDispositions={[
-            {
-              prNumber: 915,
-              prUrl: 'https://github.com/org/repo/pull/915',
-              repo: 'org/repo',
-              taskName: 'Escalated task',
-              verdict: 'fail',
-              summary: 'Escalated',
-              failingDimensions: [{ name: 'reliability', notes: 'bad' }],
-              escalated: true,
-            },
-            {
-              prNumber: 918,
-              prUrl: 'https://github.com/org/repo/pull/918',
-              repo: 'org/repo',
-              taskName: 'Routed task',
-              verdict: 'fail',
-              summary: 'Routed',
-              failingDimensions: [
-                { name: 'size-proportionality', notes: 'too big' },
-              ],
-              escalated: false,
-            },
-          ]}
-        />,
-      );
-
-      const escalatedBadge = screen.getByTestId('depth-disposition-915-badge');
-      const routedBadge = screen.getByTestId('depth-disposition-918-badge');
-      expect(escalatedBadge.textContent).toContain('Escalated to operator');
-      expect(routedBadge.textContent).toContain('Routed to session');
-      expect(escalatedBadge.textContent).not.toBe(routedBadge.textContent);
-      expect(escalatedBadge.className).not.toBe(routedBadge.className);
-    });
-
-    it('renders no depth-disposition section when there are no depth verdicts', () => {
-      render(
-        <MilestoneDrilldown
-          selection={null}
-          tasks={[]}
-          projectId="proj-1"
-          sessions={[]}
-          send={noop}
-          setSessionArchived={noop}
-          setSessionFavorited={noop}
-          mode="task"
-          onModeChange={noop}
+          depthReviewStatusBySessionId={{
+            'sess-depth-1': { escalated: true, routeCount: 0 },
+          }}
         />,
       );
 
       expect(screen.queryByTestId('milestone-depth-dispositions')).toBeNull();
       expect(screen.getByTestId('milestone-drilldown-empty')).toBeTruthy();
+    });
+
+    it("surfaces the escalated/routed disposition inside the depth_review session's own detail view, not milestone-wide", async () => {
+      vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+      const task = makeTask({
+        taskId: 'task-1',
+        codeSession: {
+          sessionId: 'sess-depth-1',
+          status: 'done',
+          startedAt: 1,
+          endedAt: 2,
+          lastMessage: '',
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+      });
+
+      render(
+        <DrilldownHarness
+          initialMode="session"
+          selection={{ type: 'task', task }}
+          tasks={[task]}
+          projectId="proj-1"
+          sessions={[
+            {
+              sessionId: 'sess-depth-1',
+              taskName: 'Fix the thing',
+              notionTaskUrl: '',
+              sessionType: 'depth_review',
+              status: 'done',
+              events: [
+                {
+                  eventType: 'text',
+                  timestamp: 1,
+                  content: JSON.stringify({
+                    type: 'assistant',
+                    message: {
+                      content: [
+                        {
+                          type: 'text',
+                          text: JSON.stringify({
+                            verdict: 'fail',
+                            dimensions: [
+                              {
+                                name: 'reliability',
+                                passed: false,
+                                notes: 'Retries are unbounded',
+                              },
+                            ],
+                            summary: 'Found a defect beyond spec-conformance',
+                          }),
+                        },
+                      ],
+                    },
+                  }),
+                },
+              ],
+            },
+          ]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          depthReviewStatusBySessionId={{
+            'sess-depth-1': { escalated: true, routeCount: 0 },
+          }}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId('depth-review-status')).toBeTruthy(),
+      );
+      expect(screen.getByTestId('depth-review-status').textContent).toContain(
+        'Escalated to operator',
+      );
+      expect(screen.queryByTestId('milestone-depth-dispositions')).toBeNull();
     });
   });
 
