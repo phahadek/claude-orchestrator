@@ -151,6 +151,92 @@ describe('InvestigationReportSection — card selection', () => {
   });
 });
 
+describe('InvestigationReportSection — state filter', () => {
+  it('defaults to Active, showing only draft+committed reports', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [
+        makeReport({ id: 'r-draft', state: 'draft' }),
+        makeReport({ id: 'r-committed', state: 'committed' }),
+        makeReport({ id: 'r-resolved', state: 'resolved' }),
+        makeReport({ id: 'r-abandoned', state: 'abandoned' }),
+      ],
+      total: 4,
+      page: 1,
+    });
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('report-card-r-draft');
+    expect(screen.getByTestId('report-card-r-committed')).toBeTruthy();
+    expect(screen.queryByTestId('report-card-r-resolved')).toBeNull();
+    expect(screen.queryByTestId('report-card-r-abandoned')).toBeNull();
+    expect(
+      screen.getByTestId('report-filter-active').className,
+    ).toContain('stateTabActive');
+  });
+
+  it('shows only in-flight reports, regardless of state, when Dispatched is selected', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [
+        makeReport({ id: 'r-committed-inflight', state: 'committed', inFlight: true }),
+        makeReport({ id: 'r-resolved-inflight', state: 'resolved', inFlight: true }),
+        makeReport({ id: 'r-committed-idle', state: 'committed', inFlight: false }),
+        makeReport({ id: 'r-draft-idle', state: 'draft', inFlight: false }),
+      ],
+      total: 4,
+      page: 1,
+    });
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+
+    await screen.findByTestId('report-filter-dispatched');
+    fireEvent.click(screen.getByTestId('report-filter-dispatched'));
+
+    expect(screen.getByTestId('report-card-r-committed-inflight')).toBeTruthy();
+    expect(screen.getByTestId('report-card-r-resolved-inflight')).toBeTruthy();
+    expect(screen.queryByTestId('report-card-r-committed-idle')).toBeNull();
+    expect(screen.queryByTestId('report-card-r-draft-idle')).toBeNull();
+  });
+
+  it('All and per-state tabs continue to work', async () => {
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [
+        makeReport({ id: 'r-draft', state: 'draft' }),
+        makeReport({ id: 'r-committed', state: 'committed' }),
+        makeReport({ id: 'r-resolved', state: 'resolved' }),
+        makeReport({ id: 'r-abandoned', state: 'abandoned' }),
+      ],
+      total: 4,
+      page: 1,
+    });
+
+    render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
+    await screen.findByTestId('report-card-r-draft');
+
+    fireEvent.click(screen.getByTestId('report-filter-all'));
+    expect(screen.getByTestId('report-card-r-draft')).toBeTruthy();
+    expect(screen.getByTestId('report-card-r-committed')).toBeTruthy();
+    expect(screen.getByTestId('report-card-r-resolved')).toBeTruthy();
+    expect(screen.getByTestId('report-card-r-abandoned')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('report-filter-resolved'));
+    expect(screen.queryByTestId('report-card-r-draft')).toBeNull();
+    expect(screen.getByTestId('report-card-r-resolved')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('report-filter-abandoned'));
+    expect(screen.queryByTestId('report-card-r-resolved')).toBeNull();
+    expect(screen.getByTestId('report-card-r-abandoned')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('report-filter-draft'));
+    expect(screen.getByTestId('report-card-r-draft')).toBeTruthy();
+    expect(screen.queryByTestId('report-card-r-abandoned')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('report-filter-committed'));
+    expect(screen.getByTestId('report-card-r-committed')).toBeTruthy();
+    expect(screen.queryByTestId('report-card-r-draft')).toBeNull();
+  });
+});
+
 describe('InvestigationReportSection — filing a report is a single action', () => {
   it('creates and commits the report in one click, rendering exactly one committed card', async () => {
     vi.spyOn(reportsApi, 'list').mockResolvedValue({
