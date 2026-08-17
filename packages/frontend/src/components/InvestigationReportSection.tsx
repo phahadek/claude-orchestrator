@@ -31,6 +31,11 @@ const STATE_LABELS: Record<InvestigationReportState, string> = {
   abandoned: 'Abandoned',
 };
 
+/** draft + committed — reports still in-play, as opposed to resolved/abandoned terminal states. */
+const ACTIVE_STATES: InvestigationReportState[] = ['draft', 'committed'];
+
+type ReportFilter = InvestigationReportState | 'all' | 'active' | 'dispatched';
+
 /**
  * A committed report blocks milestone convergence until it resolves or is
  * abandoned (reportStore.ts's blocksMilestoneConvergence) — a draft hasn't
@@ -63,9 +68,7 @@ export function InvestigationReportSection({
 }: Props) {
   const [reports, setReports] = useState<InvestigationReport[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [stateFilter, setStateFilter] = useState<
-    InvestigationReportState | 'all'
-  >('all');
+  const [stateFilter, setStateFilter] = useState<ReportFilter>('active');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [drafting, setDrafting] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
@@ -215,7 +218,11 @@ export function InvestigationReportSection({
   const filtered =
     stateFilter === 'all'
       ? reports
-      : reports.filter((r) => r.state === stateFilter);
+      : stateFilter === 'active'
+        ? reports.filter((r) => ACTIVE_STATES.includes(r.state))
+        : stateFilter === 'dispatched'
+          ? reports.filter((r) => r.inFlight)
+          : reports.filter((r) => r.state === stateFilter);
 
   return (
     <div className={styles.section} data-testid="investigation-report-section">
@@ -233,6 +240,27 @@ export function InvestigationReportSection({
       </div>
 
       <div className={styles.stateTabs} role="tablist">
+        <button
+          type="button"
+          className={`${styles.stateTab} ${
+            stateFilter === 'active' ? styles.stateTabActive : ''
+          }`}
+          onClick={() => setStateFilter('active')}
+          data-testid="report-filter-active"
+        >
+          Active (
+          {reports.filter((r) => ACTIVE_STATES.includes(r.state)).length})
+        </button>
+        <button
+          type="button"
+          className={`${styles.stateTab} ${
+            stateFilter === 'dispatched' ? styles.stateTabActive : ''
+          }`}
+          onClick={() => setStateFilter('dispatched')}
+          data-testid="report-filter-dispatched"
+        >
+          Dispatched ({reports.filter((r) => r.inFlight).length})
+        </button>
         <button
           type="button"
           className={`${styles.stateTab} ${
