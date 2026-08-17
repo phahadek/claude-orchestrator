@@ -17,6 +17,7 @@ vi.mock('../reviewUtils', () => ({
   formatCIFailureFeedback: vi.fn(),
 }));
 vi.mock('../../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi.fn().mockReturnValue({
     mcp_servers: undefined,
     allowed_tools: [],

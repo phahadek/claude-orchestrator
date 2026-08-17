@@ -130,6 +130,7 @@ vi.mock('../session/AgentSession', () => ({
 }));
 
 vi.mock('../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi.fn().mockReturnValue({
     allowedTools: [],
     verify: [],

@@ -90,7 +90,9 @@ vi.mock('../session/orchestrator-config', () => ({
     prGate: null,
     bashRules: null,
     allowedTools: [],
+    capability_pre_grants: {},
   }),
+  resolvePreGrantCapabilities: vi.fn(() => []),
 }));
 
 vi.mock('../session/ContextBuilder', () => ({

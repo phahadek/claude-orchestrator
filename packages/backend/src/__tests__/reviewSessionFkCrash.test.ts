@@ -117,6 +117,7 @@ vi.mock('../config', () => ({
 }));
 
 vi.mock('../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi.fn(() => ({
     allowed_tools: [],
     prGate: { typeCheck: '', build: '' },

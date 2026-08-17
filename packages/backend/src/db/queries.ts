@@ -1748,6 +1748,29 @@ export function removeGrantedCapability(
   return next;
 }
 
+/**
+ * Seed the session's durable granted-capabilities set at spawn time — the
+ * write path for the per-project/per-session-kind capability pre-grants (see
+ * orchestrator-config.ts#resolvePreGrantCapabilities). Called once, from
+ * SessionManager.start(), immediately after insertSession and before the
+ * session's first turn. A union merge with whatever's already present
+ * (empty for a brand-new session) rather than an overwrite, so it composes
+ * safely with any other pre-first-turn grant write. A no-op for an empty
+ * list.
+ */
+export function seedGrantedCapabilities(
+  sessionId: string,
+  capabilities: string[],
+): string[] {
+  if (capabilities.length === 0) return getGrantedCapabilities(sessionId);
+  const existing = getGrantedCapabilities(sessionId);
+  const next = [...new Set([...existing, ...capabilities])];
+  db.prepare(
+    'UPDATE sessions SET granted_capabilities = ? WHERE session_id = ?',
+  ).run(JSON.stringify(next), sessionId);
+  return next;
+}
+
 export function setDerivedTitle(sessionId: string, title: string): void {
   setSessionMetadata(sessionId, { derivedTitle: title });
 }

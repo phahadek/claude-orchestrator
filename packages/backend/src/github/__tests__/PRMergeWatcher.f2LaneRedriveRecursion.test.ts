@@ -51,6 +51,7 @@ vi.mock('../../config/settings', () => ({
 }));
 
 vi.mock('../../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi.fn().mockReturnValue({
     ci_check_name: [],
     test: ['npm run test'],
