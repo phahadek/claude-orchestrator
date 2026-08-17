@@ -171,6 +171,7 @@ import {
   getTestRequestRunById,
   listTestRequestRunsForSession,
   listTestRunResultsForRun,
+  countTestRunResultsForRun,
   getTaskTestFlipRateFlags,
 } from '../db/queries';
 import { classifyTestRunOutcome } from '../orchestration/baseHealthCheck';
@@ -7551,6 +7552,12 @@ export function createStagedIntentsRouter(
   // annotated per-test with the flip-rate flag (computeTestFlipRateFlag,
   // scoped to test ids seen in this session's own runs) plus the session's
   // test.request cycle count/limit — all data that already exists server-side.
+  // testResults per run is bounded by TEST_RUN_RESULTS_PER_RUN_CAP and
+  // flip-rate lookups are bounded by FLIP_RATE_FLAG_TEST_ID_CAP, regardless
+  // of how many rows/unique test ids exist across the runs in scope — see
+  // listTestRunResultsForRun and getTaskTestFlipRateFlags in db/queries.ts.
+  // testResultsTruncated/totalTestResultCount on each run tell the caller
+  // when the per-run cap actually clipped results.
   router.get('/test-request-runs/history', (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;
@@ -7574,8 +7581,9 @@ export function createStagedIntentsRouter(
     const seenTestIds = new Set<string>();
     const runsWithResults = runs.map((run) => {
       const testResults = listTestRunResultsForRun(run.id);
+      const totalTestResultCount = countTestRunResultsForRun(run.id);
       testResults.forEach((t) => seenTestIds.add(t.test_id));
-      return { run, testResults };
+      return { run, testResults, totalTestResultCount };
     });
     const flipRateFlags = getTaskTestFlipRateFlags(
       [...seenTestIds],
@@ -7587,28 +7595,32 @@ export function createStagedIntentsRouter(
     res.json({
       cycleCount: getSessionTestRequestCycleCount(sessionId),
       cycleLimit: typedGetSetting('test_request_cycle_limit'),
-      runs: runsWithResults.map(({ run, testResults }) => {
-        const classification = classifyTestRunOutcome(run);
-        return {
-          id: run.id,
-          sessionId: run.session_id,
-          contentHash: run.content_hash,
-          startedAt: run.started_at,
-          finishedAt: run.finished_at,
-          durationMs:
-            run.finished_at != null ? run.finished_at - run.started_at : null,
-          concurrentRunCount: run.concurrent_run_count,
-          outcome: classification.outcome,
-          nextAction: classification.nextAction,
-          testResults: testResults.map((t) => ({
-            testId: t.test_id,
-            name: t.name,
-            outcome: t.outcome,
-            durationMs: t.duration_ms,
-            flipRate: flipRateByTestId.get(t.test_id) ?? null,
-          })),
-        };
-      }),
+      runs: runsWithResults.map(
+        ({ run, testResults, totalTestResultCount }) => {
+          const classification = classifyTestRunOutcome(run);
+          return {
+            id: run.id,
+            sessionId: run.session_id,
+            contentHash: run.content_hash,
+            startedAt: run.started_at,
+            finishedAt: run.finished_at,
+            durationMs:
+              run.finished_at != null ? run.finished_at - run.started_at : null,
+            concurrentRunCount: run.concurrent_run_count,
+            outcome: classification.outcome,
+            nextAction: classification.nextAction,
+            testResults: testResults.map((t) => ({
+              testId: t.test_id,
+              name: t.name,
+              outcome: t.outcome,
+              durationMs: t.duration_ms,
+              flipRate: flipRateByTestId.get(t.test_id) ?? null,
+            })),
+            testResultsTruncated: totalTestResultCount > testResults.length,
+            totalTestResultCount,
+          };
+        },
+      ),
     });
   });
 

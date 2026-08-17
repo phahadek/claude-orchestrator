@@ -36,6 +36,8 @@ interface TestRunHistoryEntry {
   outcome: TestRunOutcome;
   nextAction: string;
   testResults: TestResultEntry[];
+  testResultsTruncated: boolean;
+  totalTestResultCount: number;
 }
 
 interface TestRunHistoryResponse {
@@ -180,6 +182,16 @@ export function TestsTab({ projectId, sessionId }: Props) {
               >
                 No per-test report was acquired for this run — the process
                 likely crashed before any structured result was written.
+              </p>
+            )}
+
+            {run.testResultsTruncated && (
+              <p
+                className={styles.runMeta}
+                data-testid={`test-run-truncated-${run.id}`}
+              >
+                Showing {run.testResults.length} of {run.totalTestResultCount}{' '}
+                test results.
               </p>
             )}
 

@@ -7783,12 +7783,23 @@ export function listTestRequestRunsForSession(
  * window/threshold settings as the lane's own auto-disposition check; no new
  * comparison logic.
  */
+/**
+ * Bounds how many unique test ids getTaskTestFlipRateFlags will run
+ * computeTestFlipRateFlag against for a single call — a task's own runs can
+ * still surface thousands of unique test ids even after
+ * TEST_RUN_RESULTS_PER_RUN_CAP bounds each individual run's row count (up to
+ * 50 runs × the per-run cap), and each lookup is a synchronous prepared-
+ * statement execution. The cap trades completeness of the flip-rate
+ * annotation for a bounded amount of synchronous DB work per request.
+ */
+export const FLIP_RATE_FLAG_TEST_ID_CAP = 200;
+
 export function getTaskTestFlipRateFlags(
   testIds: string[],
   windowN: number,
   thresholdK: number,
 ): TestFlipRateFlag[] {
-  const uniqueIds = [...new Set(testIds)];
+  const uniqueIds = [...new Set(testIds)].slice(0, FLIP_RATE_FLAG_TEST_ID_CAP);
   return uniqueIds.map((testId) =>
     computeTestFlipRateFlag(testId, windowN, thresholdK),
   );
@@ -7953,15 +7964,42 @@ export function insertTestRunResults(
   insertAll(tests);
 }
 
+/**
+ * Per-run cap for listTestRunResultsForRun — a single completed run can
+ * insert on the order of 9,500 rows (this project's own live database, per
+ * commit d30cdce7's measurement), and the Tests tab history endpoint fetches
+ * this for up to 50 runs at once. Without a cap that's several hundred
+ * thousand row objects built and JSON-serialized in one synchronous
+ * event-loop tick. Preserves insertion order (existing callers, e.g.
+ * ingestTestRunResults's own extraction test, depend on that ordering) —
+ * callers needing failures surfaced first over a truncated page should
+ * filter/sort client-side or via countTestRunResultsForRun.
+ */
+export const TEST_RUN_RESULTS_PER_RUN_CAP = 500;
+
 export function listTestRunResultsForRun(
   testRequestRunId: string,
+  limit: number = TEST_RUN_RESULTS_PER_RUN_CAP,
 ): TestRunResultRow[] {
   return db
     .prepare(
       `SELECT id, test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at
-       FROM test_run_results WHERE test_request_run_id = ?`,
+       FROM test_run_results
+       WHERE test_request_run_id = ?
+       ORDER BY id ASC
+       LIMIT ?`,
     )
-    .all(testRequestRunId) as TestRunResultRow[];
+    .all(testRequestRunId, limit) as TestRunResultRow[];
+}
+
+/** Total test_run_results row count for one run — used to detect truncation against TEST_RUN_RESULTS_PER_RUN_CAP without pulling every row. */
+export function countTestRunResultsForRun(testRequestRunId: string): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as count FROM test_run_results WHERE test_request_run_id = ?`,
+    )
+    .get(testRequestRunId) as { count: number };
+  return row.count;
 }
 
 /**
