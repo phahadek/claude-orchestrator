@@ -17,7 +17,10 @@ import {
 } from '../db/queries';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
-import { renderTaskBodyMarkdown, type TaskBodySections } from '../tasks/bodyRender';
+import {
+  renderTaskBodyMarkdown,
+  type TaskBodySections,
+} from '../tasks/bodyRender';
 import { catchUpMergeCommits } from './gateMergeConsumer';
 import {
   resolveMilestoneDatabaseId,
@@ -192,7 +195,9 @@ const FOLLOWUP_TASK_PRIORITY = '🔴 High';
  */
 function extractVerifierEvidence(
   evidence: unknown,
-): { expected: string; found: string; query: string; source?: string } | undefined {
+):
+  | { expected: string; found: string; query: string; source?: string }
+  | undefined {
   if (typeof evidence !== 'object' || evidence === null) return undefined;
   const e = evidence as Record<string, unknown>;
   if (
