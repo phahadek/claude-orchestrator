@@ -167,7 +167,6 @@ import {
   getSessionTestRequestCycleCount,
   incrementSessionTestRequestCycleCount,
   decrementSessionTestRequestCycleCount,
-  setSessionPauseReason,
   listRunningTestRequestRuns,
   getLatestTestRequestRun,
   getLatestTestRequestRunForSession,
@@ -5700,12 +5699,14 @@ async function triggerTestRequestExecution(
  * it recomputes a project-scoped whole-tree content hash directly off the
  * requesting session's live worktree (see computeWholeTreeContentHash) and
  * auto-approves whenever the project has `test:` commands configured and a
- * hash could be computed. Bounded by a per-session cycle counter
+ * hash could be computed. Tracked by a per-session cycle counter
  * (session_test_request_cycles, mirroring flake_recovery_max_retries): once
- * a session's staged test.request count exceeds
- * runtimeSettings.test_request_cycle_limit, the session is paused
- * (test_request_cycle_exceeded) instead of auto-running further requests,
- * so an iterate-on-red loop cannot run unbounded.
+ * a session's staged test.request count reaches
+ * runtimeSettings.test_request_cycle_limit, the crossing is recorded via a
+ * durable `test_request_cycle_limit_crossed` audit event (queryable signal,
+ * not a decision-surface prompt) and the request still auto-approves —
+ * declining never helped here, since it only withheld the pass/fail signal
+ * a session needs to know whether its own change is correct.
  */
 /**
  * Declines a test.request's auto-grant for a structural reason (no
@@ -5768,9 +5769,25 @@ async function maybeAutoApproveTestRequest(
   if (!priorFailureBaseAttributable) {
     incrementSessionTestRequestCycleCount(intent.sessionId);
   }
-  if (priorCount >= typedGetSetting('test_request_cycle_limit')) {
-    setSessionPauseReason(intent.sessionId, 'test_request_cycle_exceeded');
-    return intent;
+  const currentCycleCount = getSessionTestRequestCycleCount(intent.sessionId);
+  const cycleLimit = typedGetSetting('test_request_cycle_limit');
+  if (priorCount >= cycleLimit) {
+    // Past the limit the request still auto-approves — see the module
+    // comment above maybeAutoApproveTestRequest. The crossing is recorded
+    // durably as a signal rather than blocking the session, since the
+    // pause this used to trigger interrupted legitimate iteration far more
+    // often than it caught a runaway loop.
+    recordEvent({
+      event_type: 'test_request_cycle_limit_crossed',
+      actor_type: 'system',
+      actor_id: intent.sessionId,
+      project_id: intent.projectId,
+      payload: {
+        session_id: intent.sessionId,
+        cycle_count: currentCycleCount,
+        cycle_limit: cycleLimit,
+      },
+    });
   }
 
   const inputs = resolveTestRequestExecutionInputs(intent);

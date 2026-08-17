@@ -160,7 +160,7 @@ describe('test.request stage-time auto-grant (routeStageTimeBlock)', () => {
     expect(mockComputeHash).toHaveBeenCalledWith('/tmp/wt');
   });
 
-  it('a session exceeding the cycle limit is paused instead of further auto-running (and is not converted into a rejection)', async () => {
+  it('a session exceeding the cycle limit keeps auto-approving and records the crossing durably instead of pausing', async () => {
     setUpSession('session-3');
 
     for (let i = 0; i < 3; i++) {
@@ -173,12 +173,25 @@ describe('test.request stage-time auto-grant (routeStageTimeBlock)', () => {
     const overLimit = stageTestRequest('session-3');
     const checkedOverLimit = await routeStageTimeBlock(overLimit, undefined);
 
-    expect(checkedOverLimit.state).toBe('staged');
+    expect(checkedOverLimit.state).toBe('approved');
 
     const session = db
       .prepare('SELECT pause_reason FROM sessions WHERE session_id = ?')
       .get('session-3') as { pause_reason: string | null };
-    expect(session.pause_reason).toBe('test_request_cycle_exceeded');
+    expect(session.pause_reason).toBeNull();
+
+    const auditRow = db
+      .prepare(
+        "SELECT payload FROM audit_log WHERE event_type = 'test_request_cycle_limit_crossed' AND actor_id = ?",
+      )
+      .get('session-3') as { payload: string } | undefined;
+    expect(auditRow).toBeDefined();
+    const payload = JSON.parse(auditRow!.payload);
+    expect(payload).toEqual({
+      session_id: 'session-3',
+      cycle_count: 4,
+      cycle_limit: 3,
+    });
   });
 
   it('declines and reports — rather than stranding the intent at staged — when the originating session has no resolvable worktree', async () => {
