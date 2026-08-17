@@ -200,6 +200,7 @@ describe('MilestoneView', () => {
       mergeState: null,
     },
     review: null,
+    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
   };
