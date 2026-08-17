@@ -51,6 +51,7 @@ import type {
   OpsPrIntentPayload,
   ReportFilePayload,
 } from '../db/types';
+import { TERMINAL_ON_APPROVE_INTENT_KINDS } from '../db/types';
 import {
   hashIntentPayload,
   insertStagedIntent,
@@ -7815,27 +7816,10 @@ export function createStagedIntentsRouter(
         });
         return;
       }
-      if (row.kind === 'completeness.disposition') {
+      if (TERMINAL_ON_APPROVE_INTENT_KINDS.has(row.kind)) {
+        const article = /^[aeiou]/i.test(row.kind) ? 'an' : 'a';
         res.status(409).json({
-          error: `staged intent "${row.id}" is a completeness.disposition run — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
-        });
-        return;
-      }
-      if (row.kind === 'review.dispute') {
-        res.status(409).json({
-          error: `staged intent "${row.id}" is a review.dispute — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
-        });
-        return;
-      }
-      if (row.kind === 'test.request') {
-        res.status(409).json({
-          error: `staged intent "${row.id}" is a test.request — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
-        });
-        return;
-      }
-      if (row.kind === 'ops.prIntent') {
-        res.status(409).json({
-          error: `staged intent "${row.id}" is an ops.prIntent — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
+          error: `staged intent "${row.id}" is ${article} ${row.kind} — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
         });
         return;
       }

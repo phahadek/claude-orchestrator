@@ -712,6 +712,22 @@ export type StagedIntentState =
   /** Terminal, non-appliable: the staging session itself withdrew this intent — see stagedIntents.ts's withdrawIntent. */
   | 'withdrawn';
 
+/**
+ * Intent kinds for which approval is terminal — no separate apply step
+ * exists for them, so the apply route rejects them outright and the
+ * decision surface must offer Approve/Reject instead of Commit. Single
+ * source of truth for both: the apply route's rejection branches and the
+ * frontend's skipsApply predicate both derive from this set, so a kind
+ * added here cannot be missed by the other side (see StagedIntentPanel.tsx).
+ */
+export const TERMINAL_ON_APPROVE_INTENT_KINDS = new Set([
+  'session.requestCapability',
+  'completeness.disposition',
+  'review.dispute',
+  'test.request',
+  'ops.prIntent',
+]);
+
 export interface StagedIntentRow {
   id: string;
   /** Free-form intent-kind vocabulary — see stagedIntents.ts's KNOWN_INTENT_KINDS (e.g. "task.setStatus", "notion.pageEdit"). */
