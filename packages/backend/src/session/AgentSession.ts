@@ -223,6 +223,26 @@ export function isPreReviewBlocked(pr: {
   return false;
 }
 
+/**
+ * True when a session past the MCP-connection grace window has still not
+ * established any orchestrator MCP connection since its most recent
+ * spawn/respawn — the CLI-side stall SessionManager.reconcileMcpUnreachableSessions
+ * recovers via a bounded in-place respawn (see that method's doc comment).
+ * Pure predicate, kept alongside AgentSession's other exported
+ * classification helpers for unit testing; `lastSpawnMs` is the session's
+ * original started_at, or its latest respawn attempt's timestamp once one
+ * has happened, so the grace window restarts on each fresh spawn.
+ */
+export function isMcpUnreachable(params: {
+  hasConnectedSinceSpawn: boolean;
+  nowMs: number;
+  lastSpawnMs: number;
+  graceMs: number;
+}): boolean {
+  if (params.hasConnectedSinceSpawn) return false;
+  return params.nowMs - params.lastSpawnMs >= params.graceMs;
+}
+
 export interface GitHubPRShape {
   number?: number;
   html_url?: string;

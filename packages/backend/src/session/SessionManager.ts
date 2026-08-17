@@ -11,7 +11,11 @@ const GIT_CONFIG_LOCK_RE =
 
 import { recordEvent } from '../audit/AuditLog';
 import { scrubSecrets } from '../security/scrubSecrets';
-import { AgentSession, parseNotionPageIdDashed } from './AgentSession';
+import {
+  AgentSession,
+  parseNotionPageIdDashed,
+  isMcpUnreachable,
+} from './AgentSession';
 import { formatTaskId } from '../tasks/taskId';
 import { buildSessionContext } from './ContextBuilder';
 import {
@@ -115,6 +119,11 @@ import {
   setSessionTerminalCompletionReason,
   incrementSessionPokeRetryCount,
   resetSessionPokeRetryCount,
+  hasMcpConnectionEstablishedSince,
+  countMcpUnreachableRespawnAttempts,
+  getLatestMcpUnreachableRespawnTimestamp,
+  hasMcpUnreachableExhaustedEvent,
+  listLiveSessionRows,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import { isSessionProcessAlive } from './processLiveness';
@@ -191,6 +200,25 @@ const MAX_TOTAL_SNIPPET_CHARS = 40_000;
  * process crash, so it earns one additional retry.
  */
 const POKE_RETRY_LIMIT = 3;
+
+/**
+ * MCP-connection grace window for reconcileMcpUnreachableSessions: the
+ * CLI's MCP client connects asynchronously after spawn, so a session
+ * legitimately shows zero mcp_connection_established events for the first
+ * stretch after every spawn/respawn — detection must never fire inside
+ * this window. See that method's doc comment for the full failure mode.
+ */
+const MCP_UNREACHABLE_GRACE_MS = 3 * 60_000;
+
+/**
+ * Cap on MCP-unreachable respawn attempts per session — same bounded-retry
+ * shape as MAX_VERIFIER_RECLASSIFY_ATTEMPTS (gateService.ts),
+ * DEFAULT_MAX_DISPATCH_ATTEMPTS (gateReconciler.ts), and
+ * flake_recovery_max_retries (settings.ts). At the cap the session is
+ * surfaced to the operator (pause_reason='mcp_unreachable_exhausted') and
+ * never respawned again by this path.
+ */
+const MAX_MCP_UNREACHABLE_RESPAWNS = 2;
 
 /**
  * Parse file paths from the task spec's "Files" section, read each file from
@@ -4050,6 +4078,236 @@ export class SessionManager extends EventEmitter {
     }
     this.wireSession(sessionId, session, projectDir, recordedPath);
     return true;
+  }
+
+  /**
+   * In-place respawn for a session detected as MCP-unreachable by
+   * reconcileMcpUnreachableSessions below. Same suppress-reap /
+   * same-session-id / --resume mechanism as respawnForCapabilityGrant just
+   * above — kills the live process (if any) with the reap suppressed so
+   * staged intents survive, then respawns under the same session id with
+   * --resume, giving the CLI a fresh MCP client that re-attempts every
+   * configured server. A resumed CLI process reuses its already-failed MCP
+   * client, so only a genuinely fresh process (this respawn) can recover
+   * the connection — poking or re-prompting the same process cannot.
+   *
+   * Declines cleanly (returns false, no event, no error) when the
+   * session's worktree is missing, mirroring respawnForCapabilityGrant's
+   * own guard — there is nothing to resume onto.
+   */
+  private async respawnForMcpUnreachable(
+    sessionId: string,
+    attemptNumber: number,
+  ): Promise<boolean> {
+    const row = getSession(sessionId);
+    if (!row) return false;
+
+    const project = getProjectById(row.project_id ?? '');
+    if (!project) return false;
+    const projectDir = normalizePath(project.projectDir);
+    const defaultWorktreePath = path.join(
+      projectDir,
+      '.claude',
+      'worktrees',
+      sessionId,
+    );
+    const recordedPath =
+      isPlanningSession(row.session_type) && !usesWorktree(row.session_type)
+        ? (row.worktree_path ?? projectDir)
+        : (row.worktree_path ?? defaultWorktreePath);
+
+    if (
+      !recordedPath ||
+      !fs.existsSync(recordedPath) ||
+      !fs.existsSync(path.join(recordedPath, '.git'))
+    ) {
+      logger.warn(
+        `[SessionManager] respawnForMcpUnreachable: worktree missing for ${sessionId.slice(0, 8)} — declining respawn`,
+      );
+      return false;
+    }
+
+    // This kill is not a real death — see respawnForCapabilityGrant's
+    // identical comment above.
+    const liveSession = this.sessions.get(sessionId);
+    if (liveSession) {
+      await liveSession.kill({ suppressReap: true });
+    }
+    this.evictDeadSessionEntry(sessionId);
+
+    const orchConfig = loadOrchestratorConfig(projectDir);
+    const mode = runtimeSettings.session_mode;
+    const runner =
+      mode === 'api'
+        ? new ApiSessionRunner(sessionId)
+        : getCorporateMode().gates.dockerMandatory
+          ? new DockerSessionRunner(sessionId)
+          : new CliSessionRunner(sessionId);
+    const mcpConfigPath = writeMcpConfig(
+      projectDir,
+      sessionId,
+      orchConfig.mcp_servers,
+      project.taskSource,
+    );
+    const systemPromptFilePath =
+      mode === 'cli' && row.task_url
+        ? await this._buildAndWriteResumeSystemPrompt(
+            row,
+            project,
+            orchConfig,
+            projectDir,
+            recordedPath,
+          )
+        : undefined;
+
+    const session = this.respawnSession(
+      row,
+      recordedPath,
+      orchConfig,
+      runner,
+      mcpConfigPath,
+      systemPromptFilePath,
+    );
+    if (!session) {
+      logger.warn(
+        `[SessionManager] respawnForMcpUnreachable: respawnSession deferred/failed for ${sessionId.slice(0, 8)}`,
+      );
+      try {
+        expireStagedIntentsForSession(sessionId, 'session_killed', Date.now());
+      } catch {
+        // Best-effort — DB may be unavailable or mocked without this function.
+      }
+      return false;
+    }
+    this.wireSession(sessionId, session, projectDir, recordedPath);
+
+    recordEvent({
+      event_type: 'session_mcp_unreachable_respawned',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: row.project_id ?? null,
+      task_id: row.task_id ?? null,
+      payload: { session_id: sessionId, attempt_number: attemptNumber },
+    });
+
+    return true;
+  }
+
+  /**
+   * Detects a live session whose orchestrator MCP server never connected —
+   * the CLI-side stall documented on this task: --strict-mcp-config plus a
+   * valid stage credential still leaves the CLI's own MCP client
+   * unconnected in some observed cases, and a resumed CLI process reuses
+   * its already-failed MCP client, so no amount of poking or re-prompting
+   * recovers it. Only a fresh CLI process re-attempts every configured MCP
+   * server, so this recovers via respawnForMcpUnreachable's bounded
+   * in-place respawn — never by terminating the session, which would
+   * return its task to the dispatch pool and risk the exact thrash loop
+   * observed elsewhere (a session dies, the orphan sweeper reverts its task
+   * to Ready, a fresh session launches, repeat).
+   *
+   * Candidate population: every live (non-terminal) session. Skipped
+   * entirely in api session_mode, mirroring the other liveness
+   * reconcilers' skip — an ApiSessionRunner session has no CLI subprocess
+   * and no MCP client to fail.
+   *
+   * Grace window: no detection fires until MCP_UNREACHABLE_GRACE_MS has
+   * elapsed since the session's most recent spawn — its original
+   * started_at, or its latest respawn attempt's timestamp once this
+   * reconciler has already respawned it once (getLatestMcpUnreachableRespawnTimestamp).
+   * That reference moves forward on every respawn, so the grace window
+   * restarts each time: a session that reconnects cleanly on its new
+   * process is never flagged again (hasMcpConnectionEstablishedSince finds
+   * a fresh event), and one that doesn't gets re-detected once the next
+   * window elapses, up to MAX_MCP_UNREACHABLE_RESPAWNS.
+   */
+  async reconcileMcpUnreachableSessions(): Promise<{
+    detected: string[];
+    respawned: string[];
+    exhausted: string[];
+  }> {
+    const detected: string[] = [];
+    const respawned: string[] = [];
+    const exhausted: string[] = [];
+
+    if (runtimeSettings.session_mode === 'api') {
+      return { detected, respawned, exhausted };
+    }
+
+    const now = Date.now();
+    for (const row of listLiveSessionRows()) {
+      if (hasMcpUnreachableExhaustedEvent(row.session_id)) continue;
+
+      const lastSpawnMs =
+        getLatestMcpUnreachableRespawnTimestamp(row.session_id) ??
+        row.started_at;
+      const hasConnectedSinceSpawn = hasMcpConnectionEstablishedSince(
+        row.session_id,
+        lastSpawnMs,
+      );
+
+      if (
+        !isMcpUnreachable({
+          hasConnectedSinceSpawn,
+          nowMs: now,
+          lastSpawnMs,
+          graceMs: MCP_UNREACHABLE_GRACE_MS,
+        })
+      ) {
+        continue;
+      }
+
+      const attemptsSoFar = countMcpUnreachableRespawnAttempts(row.session_id);
+      const attemptNumber = attemptsSoFar + 1;
+
+      recordEvent({
+        event_type: 'session_mcp_unreachable_detected',
+        actor_type: 'system',
+        actor_id: row.session_id,
+        project_id: row.project_id ?? null,
+        task_id: row.task_id ?? null,
+        payload: {
+          session_id: row.session_id,
+          attempt_number: attemptNumber,
+        },
+      });
+      detected.push(row.session_id);
+
+      if (attemptsSoFar >= MAX_MCP_UNREACHABLE_RESPAWNS) {
+        setSessionPauseReason(row.session_id, 'mcp_unreachable_exhausted');
+        recordEvent({
+          event_type: 'session_mcp_unreachable_respawn_exhausted',
+          actor_type: 'system',
+          actor_id: row.session_id,
+          project_id: row.project_id ?? null,
+          task_id: row.task_id ?? null,
+          payload: {
+            session_id: row.session_id,
+            attempt_number: attemptNumber,
+            max_respawns: MAX_MCP_UNREACHABLE_RESPAWNS,
+          },
+        });
+        exhausted.push(row.session_id);
+        logger.warn(
+          `[SessionManager] reconcileMcpUnreachableSessions: session ${row.session_id.slice(0, 8)} exhausted ${MAX_MCP_UNREACHABLE_RESPAWNS} MCP-unreachable respawn attempts — surfaced to operator`,
+        );
+        continue;
+      }
+
+      try {
+        const ok = await this.respawnForMcpUnreachable(
+          row.session_id,
+          attemptNumber,
+        );
+        if (ok) respawned.push(row.session_id);
+      } catch (err) {
+        logger.error(
+          `[SessionManager] reconcileMcpUnreachableSessions: respawn failed for ${row.session_id.slice(0, 8)}: ${err}`,
+        );
+      }
+    }
+
+    return { detected, respawned, exhausted };
   }
 
   /**

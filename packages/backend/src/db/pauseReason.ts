@@ -58,7 +58,8 @@ export type CanonicalPauseReason =
   | 'manual_verification_pending'
   | 'test_request_cycle_exceeded'
   | 'test_report_acquisition_failed'
-  | 'ci_not_completing';
+  | 'ci_not_completing'
+  | 'mcp_unreachable_exhausted';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -378,6 +379,18 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'needs_attention',
     retry_strategy: 'automatic',
     blocks_merge: false,
+  },
+  // SessionManager.reconcileMcpUnreachableSessions exhausted its bounded
+  // respawn budget (MAX_MCP_UNREACHABLE_RESPAWNS) for a session whose CLI's
+  // MCP client never connected to the orchestrator server across every
+  // attempt. Not auto-recoverable — an operator has to decide whether to
+  // keep retrying by hand or abandon the session — so, like
+  // test_request_cycle_exceeded/awaiting_human_approval, there is no
+  // RECOVERY_ACTION_MAP entry.
+  mcp_unreachable_exhausted: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
   },
 };
 

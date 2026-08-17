@@ -707,6 +707,27 @@ scheduler.register({
     };
   },
 });
+// MCP-unreachable reconciler: detects a live session whose orchestrator MCP
+// server never connected (the CLI-side stall — see
+// SessionManager.reconcileMcpUnreachableSessions's doc comment) and
+// recovers it with a bounded in-place respawn, never a termination. Same
+// cadence pattern as the liveness reconcilers above.
+scheduler.register({
+  name: 'mcp_unreachable_reconciler',
+  intervalMs: 10 * 60_000,
+  runOnBoot: true,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const { detected, respawned, exhausted } =
+      await sessionManager.reconcileMcpUnreachableSessions();
+    return {
+      items_processed: detected.length,
+      detected: detected.length,
+      respawned: respawned.length,
+      exhausted: exhausted.length,
+    };
+  },
+});
 // Gate-verification reconciler: runnability/readiness reconcile on every
 // tick; auto-run verification drives the same wired verifier, gated by the
 // global gate_verification_enabled master switch and, per item, by that

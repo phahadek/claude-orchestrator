@@ -136,6 +136,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Test report declared but not acquired — the report was missing, malformed, or the run was killed before teardown. Fix the test harness/glob; this does not block merge if tests passed.',
   ci_not_completing:
     'CI is taking longer than usual to report a result — the merge sweep keeps retrying automatically and will merge once the PR goes clean. No action needed.',
+  mcp_unreachable_exhausted:
+    "Session's orchestrator MCP server never connected and automatic in-place respawn attempts were exhausted — review and resume manually.",
 };
 
 function verdictLabel(verdict: string): string {
