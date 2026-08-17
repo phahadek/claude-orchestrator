@@ -404,7 +404,7 @@ describe('structured_result acquisition', () => {
     expect(row.structured_result).toBeNull();
   });
 
-  it('clears a superseded run\'s structured_result once a newer run lands for the same (project, content-hash), leaving its other columns and test_run_results extraction untouched', async () => {
+  it("clears a superseded run's structured_result once a newer run lands for the same (project, content-hash), leaving its other columns and test_run_results extraction untouched", async () => {
     const structuredFirst = {
       format: 'junit-xml' as const,
       suites: [
@@ -429,9 +429,7 @@ describe('structured_result acquisition', () => {
     );
 
     const firstRowBefore = db
-      .prepare(
-        `SELECT structured_result FROM test_request_runs WHERE id = ?`,
-      )
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
       .get(first.runId) as { structured_result: string | null };
     expect(firstRowBefore.structured_result).not.toBeNull();
 
@@ -450,7 +448,10 @@ describe('structured_result acquisition', () => {
         },
       ],
     };
-    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'second ok' });
+    mockRunTestCommands.mockResolvedValue({
+      passed: true,
+      output: 'second ok',
+    });
     mockCollectStructuredTestResult.mockReturnValue(structuredSecond);
     const second = await runProjectTestRequest(
       baseSpec({ contentHash: 'hash-supersede' }),
@@ -472,9 +473,7 @@ describe('structured_result acquisition', () => {
 
     // The now-latest row keeps its own structured_result.
     const secondRow = db
-      .prepare(
-        `SELECT structured_result FROM test_request_runs WHERE id = ?`,
-      )
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
       .get(second.runId) as { structured_result: string | null };
     expect(secondRow.structured_result).not.toBeNull();
 
