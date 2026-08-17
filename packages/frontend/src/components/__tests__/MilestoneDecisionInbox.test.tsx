@@ -1240,7 +1240,9 @@ describe('MilestoneDecisionInbox', () => {
       const commitSpy = vi
         .spyOn(reportsApi, 'commit')
         .mockImplementation((id: string) =>
-          Promise.resolve(id === 'report-new' ? createdCommitted : draftCommitted),
+          Promise.resolve(
+            id === 'report-new' ? createdCommitted : draftCommitted,
+          ),
         );
       fireEvent.click(screen.getByTestId('report-start-draft'));
       fireEvent.change(screen.getByTestId('report-draft-title'), {
@@ -1260,13 +1262,11 @@ describe('MilestoneDecisionInbox', () => {
           source: 'operator',
         }),
       );
-      await waitFor(() =>
-        expect(commitSpy).toHaveBeenCalledWith('report-new'),
-      );
+      await waitFor(() => expect(commitSpy).toHaveBeenCalledWith('report-new'));
       expect(await screen.findByTestId('report-card-report-new')).toBeTruthy();
-      expect(
-        screen.getByTestId('report-state-report-new').textContent,
-      ).toBe('Committed');
+      expect(screen.getByTestId('report-state-report-new').textContent).toBe(
+        'Committed',
+      );
 
       // Commit the pre-existing draft report.
       fireEvent.click(screen.getByTestId('report-commit-report-draft'));

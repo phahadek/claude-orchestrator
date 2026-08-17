@@ -158,10 +158,16 @@ describe('InvestigationReportSection — filing a report is a single action', ()
       total: 0,
       page: 1,
     });
-    const draft = makeReport({ id: 'r-new', title: 'New symptom', state: 'draft' });
+    const draft = makeReport({
+      id: 'r-new',
+      title: 'New symptom',
+      state: 'draft',
+    });
     const committed = { ...draft, state: 'committed' as const };
     const createSpy = vi.spyOn(reportsApi, 'create').mockResolvedValue(draft);
-    const commitSpy = vi.spyOn(reportsApi, 'commit').mockResolvedValue(committed);
+    const commitSpy = vi
+      .spyOn(reportsApi, 'commit')
+      .mockResolvedValue(committed);
 
     render(<InvestigationReportSection projectId="proj-1" milestone="M1" />);
 
