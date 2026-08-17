@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { deployApi } from '../api/deploy';
-import type { DeployRun, DeployRunEvent, BehindItem, DeployPlanStep } from '../api/deploy';
+import type {
+  DeployRun,
+  DeployRunEvent,
+  BehindItem,
+  DeployPlanStep,
+} from '../api/deploy';
 import { DeployStepStrip } from './DeployStepStrip';
 import styles from './DeploySection.module.css';
 
@@ -213,10 +218,14 @@ export function DeploySection({ activeProjectId }: Props) {
               onClick={() => setDeployLogExpanded((v) => !v)}
               data-testid="deploy-run-events-toggle"
             >
-              {deployLogExpanded ? 'Hide' : 'Show'} raw log ({deployEvents.length})
+              {deployLogExpanded ? 'Hide' : 'Show'} raw log (
+              {deployEvents.length})
             </button>
             {deployLogExpanded && (
-              <ul className={styles.deployEventList} data-testid="deploy-run-events">
+              <ul
+                className={styles.deployEventList}
+                data-testid="deploy-run-events"
+              >
                 {deployEvents.map((ev) => (
                   <li key={ev.id}>
                     {ev.step}: {ev.event_type}

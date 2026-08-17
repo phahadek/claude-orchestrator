@@ -87,7 +87,12 @@ describe('GateReadinessPanel — verify polling settles on a non-resolving verdi
       events: [],
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
     await screen.findByText('needs a verify pass');
 
     vi.useFakeTimers();

@@ -71,14 +71,8 @@ vi.mock('../FlowArmToggle', () => ({
 }));
 
 vi.mock('../DeploySection', () => ({
-  DeploySection: ({
-    activeProjectId,
-  }: {
-    activeProjectId: string | null;
-  }) => (
-    <div data-testid="deploy-launch-section">
-      deploy for {activeProjectId}
-    </div>
+  DeploySection: ({ activeProjectId }: { activeProjectId: string | null }) => (
+    <div data-testid="deploy-launch-section">deploy for {activeProjectId}</div>
   ),
 }));
 
@@ -471,9 +465,9 @@ describe('MilestoneView', () => {
 
     // Default (no phase selected).
     assertDeployBetweenBurndownAndFlowArm();
-    expect(
-      screen.getByTestId('deploy-launch-section').textContent,
-    ).toContain('proj-1');
+    expect(screen.getByTestId('deploy-launch-section').textContent).toContain(
+      'proj-1',
+    );
 
     // Non-gate phase.
     fireEvent.click(screen.getByTestId('phase-segment-code'));
