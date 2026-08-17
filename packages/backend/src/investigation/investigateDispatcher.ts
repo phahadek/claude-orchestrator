@@ -145,9 +145,12 @@ export function buildInvestigateProcedure(
       `\`${orchestratorMcpToolName('decision.pickOne')}\` intent naming the ` +
       'options rather than acting on your own reading of it. Staging the ' +
       'intent(s) is the terminal action for this turn — end the turn once ' +
-      'every finding in this batch has been staged (as a task, a decision, ' +
-      'or an explicit "no actionable finding" note), not on a chat summary ' +
-      'of what you found.',
+      'every finding in this batch has been staged (as a task or a ' +
+      'decision), not on a chat summary of what you found. If a report ' +
+      'genuinely has no actionable finding, do not stage anything for it — ' +
+      'there is no staged-intent tool for "no finding"; simply end the ' +
+      'turn having called no tool for that report. A clean batch that ' +
+      'stages nothing at all is itself the correct, terminal outcome.',
   ].join('\n');
 }
 
