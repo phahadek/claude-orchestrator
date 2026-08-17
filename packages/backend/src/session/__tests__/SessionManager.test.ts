@@ -1228,6 +1228,69 @@ describe('resumeOrphanSessions — usage admission gate', () => {
   });
 });
 
+// ── resumeOrphanSessions — max concurrent code sessions admission gate ───────
+//
+// Policy: orphans exceeding max_concurrent_code_sessions at boot were already
+// running before the restart — they aren't stuck, just outnumbering the
+// *new-dispatch* cap. They must be left resumable (row untouched, still
+// 'running'), never driven to a terminal 'error' status.
+
+describe('resumeOrphanSessions — max concurrent code sessions admission gate', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([]);
+  });
+
+  it('does not error excess code-session orphans beyond the cap — leaves them running/resumable', async () => {
+    // runtimeSettings.max_concurrent_code_sessions is mocked to 5 — seed 7
+    // running code-session orphans so 2 exceed it.
+    const orphanRows = Array.from({ length: 7 }, (_, i) => ({
+      ...makeDeadRow(`orphan-${i}`),
+      status: 'running',
+    }));
+    vi.mocked(getSessionsByStatus).mockReturnValue(orphanRows);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(5);
+    // The excess must never be marked terminal via markSessionErrored's
+    // updateSessionStatus write.
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^orphan-/),
+      'error',
+      expect.any(Number),
+    );
+  });
+
+  it('resumes review/depth_review orphans regardless of the code-session cap', async () => {
+    const codeOrphans = Array.from({ length: 5 }, (_, i) => ({
+      ...makeDeadRow(`code-${i}`),
+      status: 'running',
+    }));
+    const reviewOrphan = {
+      ...makeDeadRow('review-0'),
+      status: 'running',
+      session_type: 'review',
+    };
+    vi.mocked(getSessionsByStatus).mockReturnValue([
+      ...codeOrphans,
+      reviewOrphan,
+    ]);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(6);
+    expect(vi.mocked(AgentSession).mock.calls.map((c) => c[0])).toContain(
+      'review-0',
+    );
+  });
+});
+
 // ── resumeOrphanSessions — deferred done-transition boot sweep ───────────────
 
 describe('resumeOrphanSessions — deferred done-transition boot sweep', () => {

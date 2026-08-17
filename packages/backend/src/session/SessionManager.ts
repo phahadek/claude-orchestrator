@@ -3378,7 +3378,16 @@ export class SessionManager extends EventEmitter {
         row.session_type !== 'review' && row.session_type !== 'depth_review',
     );
     const toResume = [...reviewOrphans, ...codeOrphans.slice(0, available)];
-    const toError = codeOrphans.slice(available);
+    // These orphans were already running before the backend went down — they
+    // aren't stuck, there are simply more of them than the *new-dispatch*
+    // admission cap (max_concurrent_code_sessions, see start()) allows this
+    // boot pass to resume at once. Unlike a genuine resume failure
+    // (flagResumeFailure), nothing about them is broken, so don't mark them
+    // terminal. Leave their row exactly as-is (still 'running' in the DB) —
+    // same deferral shape resumeSession already uses for usage-admission
+    // exhaustion — so the next resumeOrphanSessions pass (next boot, or an
+    // operator-triggered retry) picks them back up once headroom frees.
+    const toDefer = codeOrphans.slice(available);
 
     for (const row of toResume) {
       try {
@@ -3396,15 +3405,9 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    for (const row of toError) {
+    for (const row of toDefer) {
       logger.warn(
-        `[SessionManager] max concurrent code sessions reached — marking orphan ${row.session_id} as error`,
-      );
-      this.markSessionErrored(
-        row.session_id,
-        'error',
-        'max_concurrent',
-        'max concurrent code sessions reached',
+        `[SessionManager] max concurrent code sessions reached — deferring orphan ${row.session_id}, left resumable for the next resumeOrphanSessions pass`,
       );
     }
   }

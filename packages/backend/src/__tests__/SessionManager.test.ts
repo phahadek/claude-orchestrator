@@ -575,7 +575,7 @@ describe('SessionManager.resumeOrphanSessions()', () => {
     expect(flagBlock).toMatch(/reason:\s*'resume_failed'/);
   });
 
-  it('respects max_concurrent_code_sessions — slices code orphans into toResume and toError', () => {
+  it('respects max_concurrent_code_sessions — slices code orphans into toResume and toDefer', () => {
     expect(source).toMatch(
       /runtimeSettings\.max_concurrent_code_sessions\s*-\s*codeSessionCount/,
     );
@@ -583,9 +583,14 @@ describe('SessionManager.resumeOrphanSessions()', () => {
     expect(source).toMatch(/codeOrphans\.slice\s*\(\s*available\s*\)/);
   });
 
-  it('logs a warning and marks excess code orphans as error when limit is exceeded', () => {
-    expect(source).toMatch(/for\s*\(.*of\s+toError/);
-    expect(source).toMatch(/marking orphan.*as error/);
+  it('logs a warning and leaves excess code orphans resumable (never terminal) when limit is exceeded', () => {
+    // Excess orphans were already running before the restart — they aren't
+    // stuck, only outnumbering this boot pass's admission cap, so they must
+    // never be routed through markSessionErrored.
+    expect(source).toMatch(/for\s*\(.*of\s+toDefer/);
+    expect(source).not.toMatch(
+      /this\.markSessionErrored\s*\(\s*row\.session_id/,
+    );
   });
 
   it('always resumes review orphans regardless of code session count', () => {
