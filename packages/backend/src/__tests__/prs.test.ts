@@ -274,6 +274,56 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+// ── GET /api/prs/depth-dispositions ─────────────────────────────────────────
+
+describe('GET /api/prs/depth-dispositions', () => {
+  it('returns depth verdicts for the requested PR numbers without calling the live GitHub API', async () => {
+    vi.mocked(queries.getPRByNumber).mockImplementation((prNumber: number) =>
+      prNumber === 42 ? mockPRRow : null,
+    );
+    vi.mocked(queries.getDepthReviewVerdict).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+      head_sha: 'abc123',
+      verdict: 'fail',
+      dimensions: JSON.stringify([
+        { name: 'reliability', passed: false, notes: 'bad' },
+      ]),
+      summary: 'Found a defect',
+      depth_session_id: 'depth-session-1',
+      recorded_at: '2024-01-01T00:00:00Z',
+    });
+    const github = makeMockGitHub();
+
+    const res = await supertest(buildApp(github)).get(
+      '/api/prs/depth-dispositions?projectId=proj-1&prNumbers=42',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].prNumber).toBe(42);
+    expect(res.body[0].depthVerdict.verdict).toBe('fail');
+    expect(vi.mocked(github.listOpenPRs)).not.toHaveBeenCalled();
+    expect(vi.mocked(github.getPRState)).not.toHaveBeenCalled();
+  });
+
+  it('omits PR numbers not found in the DB rather than erroring', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(null);
+    const res = await supertest(buildApp()).get(
+      '/api/prs/depth-dispositions?projectId=proj-1&prNumbers=999',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('requires a projectId', async () => {
+    const res = await supertest(buildApp()).get(
+      '/api/prs/depth-dispositions?prNumbers=42',
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
 // ── GET /api/prs ──────────────────────────────────────────────────────────────
 
 describe('GET /api/prs', () => {

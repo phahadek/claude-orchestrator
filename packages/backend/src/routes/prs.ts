@@ -107,6 +107,68 @@ export function createPrsRouter(
     return project ? getTaskBackend(project.id) : undefined;
   }
 
+  // ── GET /api/prs/depth-dispositions?projectId=<id>&prNumbers=1,2,3 ─────────
+  // DB-only lookup of depth-review verdicts for a specific set of PRs — no
+  // live GitHub call, unlike GET /api/prs below. Callers (e.g. the Milestones
+  // panel) that only need persisted depth-verdict data for PRs they already
+  // know about via their task list should use this instead of the
+  // project-wide, GitHub-reconciling /prs endpoint.
+  router.get(
+    '/prs/depth-dispositions',
+    asyncHandler(async (req: Request, res: Response) => {
+      const projectId =
+        typeof req.query.projectId === 'string' ? req.query.projectId : '';
+      const prNumbersRaw =
+        typeof req.query.prNumbers === 'string' ? req.query.prNumbers : '';
+      if (!projectId) {
+        res.status(400).json({ error: 'projectId query param is required' });
+        return;
+      }
+      const project = getProjectById(projectId);
+      if (!project) {
+        res.status(400).json({ error: 'Project not found' });
+        return;
+      }
+      if (!project.githubRepo) {
+        res.json([]);
+        return;
+      }
+      const repo = project.githubRepo;
+      const prNumbers = prNumbersRaw
+        .split(',')
+        .map((s) => parseInt(s, 10))
+        .filter((n) => Number.isFinite(n));
+
+      const items = prNumbers
+        .map((prNumber) => {
+          const pr = getPRByNumber(prNumber, repo);
+          if (!pr) return null;
+          const depthVerdictRow = getDepthReviewVerdict(prNumber, repo);
+          const depthVerdict = depthVerdictRow
+            ? {
+                verdict: depthVerdictRow.verdict,
+                dimensions: JSON.parse(
+                  depthVerdictRow.dimensions,
+                ) as DepthReviewDimension[],
+                summary: depthVerdictRow.summary,
+                headSha: depthVerdictRow.head_sha,
+                recordedAt: depthVerdictRow.recorded_at,
+                escalated: pr.pause_reason === 'depth_review_escalation',
+              }
+            : null;
+          return {
+            prNumber: pr.pr_number,
+            prUrl: pr.pr_url,
+            repo: pr.repo,
+            depthVerdict,
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null);
+
+      res.json(items);
+    }),
+  );
+
   // ── GET /api/prs?projectId=<id> ─────────────────────────────────────────────
   router.get(
     '/prs',
