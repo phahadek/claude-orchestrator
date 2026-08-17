@@ -94,6 +94,7 @@ function makeFakeRunner() {
     sendMessage: vi.fn(),
     endSession,
     kill,
+    pause: kill,
     hasSpawnError: false,
   };
   return { runner, endSession, kill };

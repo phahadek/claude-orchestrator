@@ -3391,14 +3391,17 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
   /**
    * Pause the session for graceful server shutdown.
-   * SIGTERMs the CLI subprocess and awaits exit without touching DB status or
-   * Notion — leaving status='running' so resumeOrphanSessions picks it up on
-   * next boot.
+   * Stops the underlying process and awaits exit without touching DB status
+   * or Notion — leaving status='running' so resumeOrphanSessions picks it up
+   * on next boot. Uses runner.pause() rather than runner.kill() so that
+   * Docker-mode sessions keep their container/network alive to reattach to
+   * (kill() unconditionally destroys them, which is correct only for a real
+   * termination).
    */
   async gracefulPause(): Promise<void> {
     if (this.isPausingForShutdown || this.isKilling) return;
     this.isPausingForShutdown = true;
-    await this.runner.kill();
+    await this.runner.pause();
   }
 
   /** Persist to SQLite first, then emit. Caller (SessionManager) listens and broadcasts. */

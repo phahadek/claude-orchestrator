@@ -272,6 +272,8 @@ import {
   incrementSessionPokeRetryCount,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
+import { getCorporateMode } from '../../config/corporateMode';
+import { reapOrphanContainers } from '../DockerSessionRunner';
 import { AgentSession } from '../AgentSession';
 import { buildSessionContext } from '../ContextBuilder';
 import { deriveBranchSlug } from '../branchModel';
@@ -1168,6 +1170,40 @@ describe('resumeOrphanSessions — boot recovery regression', () => {
       'error',
       expect.any(Number),
     );
+  });
+});
+
+// ── resumeOrphanSessions — Docker orphan-container reap ordering ─────────────
+
+describe('resumeOrphanSessions — Docker orphan-container reap ordering', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([]);
+    vi.mocked(getCorporateMode).mockReturnValue({
+      gates: { dockerMandatory: true },
+    } as ReturnType<typeof getCorporateMode>);
+  });
+
+  afterEach(() => {
+    vi.mocked(getCorporateMode).mockReturnValue({
+      gates: { dockerMandatory: false },
+    } as ReturnType<typeof getCorporateMode>);
+  });
+
+  it('does not reap a status=running orphan session before it has had a chance to resume', async () => {
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+
+    await sm.resumeOrphanSessions();
+
+    expect(reapOrphanContainers).toHaveBeenCalledTimes(1);
+    const liveIds = vi.mocked(reapOrphanContainers).mock.calls[0][0];
+    expect(liveIds.has(SESSION_ID)).toBe(true);
   });
 });
 
