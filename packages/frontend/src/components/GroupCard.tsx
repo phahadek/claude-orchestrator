@@ -79,6 +79,30 @@ function actionSuffixFor(groupKind: StagedIntent['groupKind']): string {
   return '';
 }
 
+/** The `task.setStatus` member's groom-gate size estimate, if any member carries one with both `loc` and `files` set — surfaced in the collapsed head so an operator never has to expand a member to see it. */
+function sizeEstimateOf(members: GroupCardMember[]): string | null {
+  for (const { intent } of members) {
+    const payload = intent.payload as Record<string, unknown> | undefined;
+    const groomingGate = payload?.groomingGate as
+      | Record<string, unknown>
+      | undefined;
+    const sizeCheck = groomingGate?.size_check as
+      | { loc?: unknown; files?: unknown; loc_method?: unknown }
+      | undefined;
+    if (
+      typeof sizeCheck?.loc === 'number' &&
+      typeof sizeCheck?.files === 'number'
+    ) {
+      const locMethod =
+        typeof sizeCheck.loc_method === 'string' ? ` ${sizeCheck.loc_method}` : '';
+      return `${sizeCheck.loc} LoC${locMethod}, ${sizeCheck.files} file${
+        sizeCheck.files === 1 ? '' : 's'
+      }`;
+    }
+  }
+  return null;
+}
+
 interface HeadProposal {
   groomProposal?: StagedIntent['groomProposal'];
   decisionProposal?: string | null;
@@ -160,6 +184,7 @@ export function GroupCard({
   const reasonInputRef = useRef<HTMLTextAreaElement>(null);
 
   const head = headProposalOf(members);
+  const sizeEstimate = sizeEstimateOf(members);
   const actionSuffix = actionSuffixFor(members[0]?.intent.groupKind);
   const memberIntents = members.map(({ intent }) => intent);
   const visibleBlockedCount = memberIntents.filter(
@@ -229,6 +254,15 @@ export function GroupCard({
           </label>
         )}
       </div>
+
+      {sizeEstimate && (
+        <div
+          className={styles.cardTitleDetail}
+          data-testid="group-card-size-estimate"
+        >
+          {sizeEstimate}
+        </div>
+      )}
 
       {batchException && (
         <div className={panelStyles.groupError}>{batchException}</div>

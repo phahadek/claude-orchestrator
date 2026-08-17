@@ -102,6 +102,66 @@ describe('GroupCard keyboard ring bindings', () => {
   });
 });
 
+describe('GroupCard size estimate in collapsed head', () => {
+  it('renders LoC and file count from a member groomingGate.size_check without expanding any member', () => {
+    render(
+      <GroupCard
+        {...baseProps({
+          members: [
+            {
+              intent: makeIntent({
+                payload: {
+                  taskId: 'notion:abc',
+                  status: 'Ready',
+                  groomingGate: {
+                    size_check: { decision: 'pass', loc: 123, files: 4 },
+                  },
+                },
+              }),
+              hideActions: true,
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('group-card-size-estimate').textContent).toBe(
+      '123 LoC, 4 files',
+    );
+  });
+
+  it('renders no size estimate when no member carries a size_check with loc/files, without throwing', () => {
+    render(<GroupCard {...baseProps()} />);
+
+    expect(screen.queryByTestId('group-card-size-estimate')).toBeNull();
+  });
+
+  it('renders no size estimate when the size_check is missing loc/files', () => {
+    render(
+      <GroupCard
+        {...baseProps({
+          members: [
+            {
+              intent: makeIntent({
+                payload: {
+                  taskId: 'notion:abc',
+                  status: 'Ready',
+                  groomingGate: {
+                    size_check: { decision: 'pass' },
+                  },
+                },
+              }),
+              hideActions: true,
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.queryByTestId('group-card-size-estimate')).toBeNull();
+  });
+});
+
 describe('GroupCard reject-outcome default', () => {
   it('defaults to pushback and enables reject once a reason is entered, with no blocked members', () => {
     const onRejectGroup = vi.fn();
