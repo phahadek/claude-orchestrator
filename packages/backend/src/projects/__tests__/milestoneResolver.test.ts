@@ -263,9 +263,9 @@ describe('resolveMilestoneForSessionTask', () => {
     reportStoreMock.getReportsForBatchTaskId.mockReturnValue([
       { milestone_id: 'ms-uuid-11' },
     ]);
-    expect(
-      resolveMilestoneForSessionTask('p1', 'report-batch:batch-1'),
-    ).toBe('M11');
+    expect(resolveMilestoneForSessionTask('p1', 'report-batch:batch-1')).toBe(
+      'M11',
+    );
     expect(reportStoreMock.getReportsForBatchTaskId).toHaveBeenCalledWith(
       'report-batch:batch-1',
     );

@@ -252,9 +252,9 @@ describe('getReportsForBatchTaskId', () => {
 
   it('is empty when the session has no dispatch rows', () => {
     insertSession('sess-no-dispatch', 'running');
-    expect(
-      getReportsForBatchTaskId('report-batch:sess-no-dispatch'),
-    ).toEqual([]);
+    expect(getReportsForBatchTaskId('report-batch:sess-no-dispatch')).toEqual(
+      [],
+    );
   });
 });
 
