@@ -28,6 +28,7 @@ import {
   loadOrchestratorConfig,
   isGrantable,
   isToolShapedCapability,
+  resolvePreGrantCapabilities,
 } from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
 import { CliSessionRunner } from './CliSessionRunner';
@@ -101,6 +102,7 @@ import {
   addGrantedCapability,
   removeGrantedCapability,
   getGrantedCapabilities,
+  seedGrantedCapabilities,
   setSessionDeclaredWrites,
   expireStagedIntentsForSession,
   hasStagedIntentForTask,
@@ -1702,6 +1704,21 @@ export class SessionManager extends EventEmitter {
       session_type: sessionType,
       task_name: taskName ?? null,
     });
+
+    // Seed the session-kind-keyed capability pre-grants (per-project
+    // .claude-orchestrator.yml `capability_pre_grants`) before the session's
+    // first turn — see orchestrator-config.ts#resolvePreGrantCapabilities.
+    // Resolved from sessionType + sessionTaskId the same way
+    // isGateVerifySession/isInvestigateSession derive their 'ops' sub-kinds,
+    // and filtered through isGrantable before being written.
+    const preGrantCapabilities = resolvePreGrantCapabilities(
+      loadOrchestratorConfig(projectDir),
+      sessionType,
+      sessionTaskId,
+    );
+    if (preGrantCapabilities.length > 0) {
+      seedGrantedCapabilities(sessionId, preGrantCapabilities);
+    }
 
     // Captured once, here at spawn — never re-derived from a live task-body
     // fetch during the session's run (see StartOptions.declaredWrites doc

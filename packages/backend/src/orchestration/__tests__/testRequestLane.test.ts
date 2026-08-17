@@ -30,6 +30,7 @@ vi.mock('../../session/test-runner', () => ({
 }));
 
 vi.mock('../../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: mockLoadOrchestratorConfig,
 }));
 

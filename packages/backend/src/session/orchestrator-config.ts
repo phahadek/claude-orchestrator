@@ -14,7 +14,30 @@ import {
   NOTION_READ_MCP_TOOLS,
   runtimeSettings,
 } from '../config';
-import { isPlanningSession, isInvestigateSession } from './sessionPredicates';
+import {
+  isPlanningSession,
+  isInvestigateSession,
+  isGateVerifySession,
+} from './sessionPredicates';
+
+/**
+ * The closed set of session-kind keys a project's `.claude-orchestrator.yml`
+ * can pre-grant capabilities to — the six session kinds
+ * resolvePreGrantSessionKind can resolve a spawn to. 'gate-verify' and
+ * 'investigate' are sub-kinds of sessionType 'ops', resolved from `task_id`
+ * the same way isGateVerifySession/isInvestigateSession do; the remaining
+ * four map 1:1 onto their SessionType literal.
+ */
+const PRE_GRANT_SESSION_KINDS = [
+  'gate-verify',
+  'investigate',
+  'ops',
+  'groom',
+  'design',
+  'docs',
+] as const;
+
+export type PreGrantSessionKind = (typeof PRE_GRANT_SESSION_KINDS)[number];
 
 /**
  * Locates the central config tree (the sibling `config/` checkout holding
@@ -147,6 +170,21 @@ export interface OrchestratorConfig {
    * project's own verification. Empty = no verify command (default).
    */
   dependency_verify_command: string;
+  /**
+   * Session-kind-keyed capability pre-grants, seeded directly into
+   * `sessions.granted_capabilities` at spawn time (SessionManager.start,
+   * via resolvePreGrantCapabilities/seedGrantedCapabilities) — before the
+   * session's first turn, so a gate-verify/investigate/ops/groom/design/docs
+   * session starts already holding the capability-shaped reads a project
+   * always intends it to have, with no `session.requestCapability` round
+   * trip needed. Each key is one of PRE_GRANT_SESSION_KINDS; each value is a
+   * list of raw capability strings (e.g. `read:audit-log:<projectId>`).
+   * Every resolved entry is still filtered through `isGrantable` before it's
+   * written — this field cannot widen past the same ceiling an
+   * operator-approved grant is held to. Missing/omitted = no pre-grants
+   * (default).
+   */
+  capability_pre_grants: Partial<Record<PreGrantSessionKind, string[]>>;
 }
 
 const DEFAULTS: OrchestratorConfig = {
@@ -174,7 +212,26 @@ const DEFAULTS: OrchestratorConfig = {
   dependency_lock_paths: [],
   dependency_cache_dirs: [],
   dependency_verify_command: '',
+  capability_pre_grants: {},
 };
+
+function isPreGrantSessionKind(v: string): v is PreGrantSessionKind {
+  return (PRE_GRANT_SESSION_KINDS as readonly string[]).includes(v);
+}
+
+function parseCapabilityPreGrants(
+  raw: unknown,
+): Partial<Record<PreGrantSessionKind, string[]>> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return DEFAULTS.capability_pre_grants;
+  }
+  const result: Partial<Record<PreGrantSessionKind, string[]>> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isPreGrantSessionKind(key) || !Array.isArray(value)) continue;
+    result[key] = value.filter((v): v is string => typeof v === 'string');
+  }
+  return result;
+}
 
 function isValidAnalyzeEntry(v: unknown): v is AnalyzeCommand {
   if (typeof v === 'string') return true;
@@ -316,6 +373,9 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.dependency_verify_command === 'string'
           ? parsed.dependency_verify_command
           : DEFAULTS.dependency_verify_command,
+      capability_pre_grants: parseCapabilityPreGrants(
+        parsed.capability_pre_grants,
+      ),
       mcp_servers:
         parsed.mcp_servers !== null &&
         typeof parsed.mcp_servers === 'object' &&
@@ -496,6 +556,51 @@ export function parsePathReadCapability(capability: string): string | null {
   return capability.startsWith(PATH_READ_PREFIX)
     ? capability.slice(PATH_READ_PREFIX.length)
     : null;
+}
+
+/**
+ * Resolves a spawn's `sessionType` + `taskId` to the pre-grant session kind
+ * whose `.claude-orchestrator.yml` `capability_pre_grants` entry applies —
+ * mirroring how isGateVerifySession/isInvestigateSession derive their two
+ * sessionType-'ops' sub-kinds from the task_id prefix. Returns null for a
+ * sessionType with no pre-grant key (standard/review/split/depth_review).
+ */
+export function resolvePreGrantSessionKind(
+  sessionType: string,
+  taskId: string | null | undefined,
+): PreGrantSessionKind | null {
+  if (sessionType === 'ops') {
+    if (isGateVerifySession(taskId)) return 'gate-verify';
+    if (isInvestigateSession(taskId)) return 'investigate';
+    return 'ops';
+  }
+  if (
+    sessionType === 'groom' ||
+    sessionType === 'design' ||
+    sessionType === 'docs'
+  ) {
+    return sessionType;
+  }
+  return null;
+}
+
+/**
+ * The resolved, `isGrantable`-filtered capability list a spawn should be
+ * seeded with — see OrchestratorConfig.capability_pre_grants's doc comment
+ * for the write path (SessionManager.start ->
+ * db/queries.ts#seedGrantedCapabilities). Returns `[]` for a sessionType with
+ * no pre-grant key, an unconfigured key, or when every configured entry is
+ * denylisted.
+ */
+export function resolvePreGrantCapabilities(
+  orchConfig: Pick<OrchestratorConfig, 'capability_pre_grants'>,
+  sessionType: string,
+  taskId: string | null | undefined,
+): string[] {
+  const kind = resolvePreGrantSessionKind(sessionType, taskId);
+  if (kind === null) return [];
+  const configured = orchConfig.capability_pre_grants[kind] ?? [];
+  return configured.filter(isGrantable);
 }
 
 /**

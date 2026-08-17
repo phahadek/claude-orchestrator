@@ -155,6 +155,7 @@ vi.mock('../orchestration/memoryAdmission', () => ({
 }));
 
 vi.mock('../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi.fn(() => ({
     autofix: [],
     verify: [],

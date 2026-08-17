@@ -232,6 +232,7 @@ vi.mock('../config/corporateMode', () => ({
 }));
 
 vi.mock('../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi.fn().mockReturnValue({
     mainBranch: 'main',
     bootstrapScript: null,

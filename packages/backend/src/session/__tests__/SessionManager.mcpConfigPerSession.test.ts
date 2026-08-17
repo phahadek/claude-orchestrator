@@ -39,6 +39,7 @@ vi.mock('../branchModel', () => ({
   resolveResumeBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
 }));
 vi.mock('../orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi
     .fn()
     .mockReturnValue({ mcp_servers: undefined, allowed_tools: [] }),

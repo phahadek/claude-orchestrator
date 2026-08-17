@@ -131,6 +131,7 @@ vi.mock('../tasks/TaskBackend', () => ({
 }));
 
 vi.mock('../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi.fn().mockReturnValue({
     mainBranch: 'main',
     bootstrapScript: null,

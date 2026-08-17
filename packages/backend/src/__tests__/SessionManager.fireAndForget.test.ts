@@ -93,7 +93,9 @@ vi.mock('../session/orchestrator-config', () => ({
     allowedTools: [],
     required_env: [],
     required_files: [],
+    capability_pre_grants: {},
   }),
+  resolvePreGrantCapabilities: vi.fn(() => []),
 }));
 
 vi.mock('../session/ContextBuilder', () => ({

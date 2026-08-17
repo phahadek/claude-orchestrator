@@ -109,6 +109,7 @@ const mockLoadOrchestratorConfig = vi.fn().mockReturnValue({
 });
 
 vi.mock('../../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: (...args: unknown[]) =>
     mockLoadOrchestratorConfig(...args),
 }));
