@@ -237,6 +237,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   _activeBootTracker = tracker;
   tracker.startSequence([
     'jsonl_import',
+    'token_backfill',
     'session_events_pruner_at_boot',
     'git_config_integrity_check',
     'test_request_run_recovery',
@@ -256,8 +257,8 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('jsonl_import', () => deps.jsonlReader.importAll(), {
     fatalOnError: true,
   });
-  deps.jsonlReader.backfillTokens();
-  void tracker.runStep('session_events_pruner_at_boot', () =>
+  await tracker.runStep('token_backfill', () => deps.jsonlReader.backfillTokens());
+  await tracker.runStep('session_events_pruner_at_boot', () =>
     deps.sessionEventsPruner.runAtBoot(),
   );
   await tracker.runStep('git_config_integrity_check', () =>
