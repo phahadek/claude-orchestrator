@@ -2370,6 +2370,31 @@ export function runMigrations(target: Database.Database): void {
       is_regressed        INTEGER NOT NULL DEFAULT 0,
       updated_at          INTEGER NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS idx_test_perf_baselines_is_regressed
+      ON test_perf_baselines(is_regressed);
+  `);
+
+  // flagged_flaky_tests_rollup: one row per (project_id, test_id) currently
+  // flagged by computeTestFlipRateFlag — see listFlaggedFlakyTests/
+  // replaceFlaggedFlakyTestsRollup in db/queries.ts. Recomputed wholesale for
+  // a project on the FlakyTestRollupJob scheduler cadence rather than derived
+  // live on the request path: the live aggregate walks every
+  // test_run_results row ever recorded for the project (SEARCH r USING
+  // idx_test_request_runs_project_hash, SEARCH trr USING
+  // idx_test_run_results_run_id, TEMP B-TREE FOR GROUP BY) to collapse them
+  // to distinct test_ids, which cost 7.6s+ at 1.5M rows and grows daily with
+  // the table. This table lets GET /api/milestones/:project/lane-health read
+  // a project_id-indexed handful of rows instead.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS flagged_flaky_tests_rollup (
+      project_id        TEXT    NOT NULL,
+      test_id           TEXT    NOT NULL,
+      name              TEXT    NOT NULL,
+      sample_count      INTEGER NOT NULL,
+      transition_count  INTEGER NOT NULL,
+      computed_at       INTEGER NOT NULL,
+      PRIMARY KEY (project_id, test_id)
+    );
   `);
 
   // completing_signal_ledger: durable, append-only record of each
