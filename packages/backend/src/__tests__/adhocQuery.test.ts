@@ -70,7 +70,10 @@ describe('adhoc-query — read-only enforcement and execution', () => {
     const setup = new Database(file);
     setup.exec('CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)');
     const insert = setup.prepare('INSERT INTO items (name) VALUES (?)');
-    for (let i = 0; i < rowCount; i++) insert.run(`item-${i}`);
+    const insertMany = setup.transaction((n: number) => {
+      for (let i = 0; i < n; i++) insert.run(`item-${i}`);
+    });
+    insertMany(rowCount);
     setup.close();
     return file;
   }
