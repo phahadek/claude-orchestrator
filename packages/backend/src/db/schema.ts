@@ -2456,21 +2456,55 @@ export function runMigrations(target: Database.Database): void {
     );
   `);
 
-  // base_health_remediation_tracking: one row per base-branch content hash
-  // ever confirmed unhealthy (see orchestration/baseHealthCheck.ts) —
-  // reuses flaky_remediation_tracking's atomic-claim/dedup shape
-  // (remediation_task_open flipped 0 -> 1 by a single guarded UPDATE) so two
-  // concurrent confirmations for the same content hash can't both file.
-  // Unlike flaky_remediation_tracking, there is no reopen-on-task-close path
-  // — a fixed base tree gets a new content hash, which is a fresh row, not a
-  // reused one.
+  // base_health_remediation_test_tracking: one row per (project_id, test_id)
+  // ever confirmed failing on the base tree itself (partial_fail outcome —
+  // see orchestration/baseHealthCheck.ts). Mirrors flaky_remediation_tracking's
+  // atomic-claim/dedup shape exactly (remediation_task_open flipped 0 -> 1 by
+  // a single guarded UPDATE, reopened once the linked task reaches a
+  // terminal status) — keyed per test id rather than content hash, so a
+  // recurring break with the SAME failing tests but a DIFFERENT content hash
+  // (e.g. an unrelated file changed on the base branch) dedupes against the
+  // still-open remediation instead of filing again. See
+  // audit/baseHealthRemediationFiling.ts.
   target.exec(`
-    CREATE TABLE IF NOT EXISTS base_health_remediation_tracking (
-      content_hash            TEXT    PRIMARY KEY,
-      remediation_task_id     TEXT,
-      remediation_task_open   INTEGER NOT NULL DEFAULT 0,
-      created_at              TEXT    NOT NULL,
-      updated_at              TEXT    NOT NULL
+    CREATE TABLE IF NOT EXISTS base_health_remediation_test_tracking (
+      project_id               TEXT    NOT NULL,
+      test_id                  TEXT    NOT NULL,
+      remediation_task_id      TEXT,
+      remediation_task_open    INTEGER NOT NULL DEFAULT 0,
+      created_at                TEXT    NOT NULL,
+      updated_at                TEXT    NOT NULL,
+      PRIMARY KEY (project_id, test_id)
+    );
+  `);
+
+  // base_health_remediation_reason_tracking: one row per (project_id,
+  // failure_reason) ever confirmed as a whole-process base-branch crash
+  // (total_fail outcome — no per-test breakdown to key off of, so the crash's
+  // failure_reason is the closest identity available). Same atomic-claim/
+  // reopen-on-close shape as base_health_remediation_test_tracking.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS base_health_remediation_reason_tracking (
+      project_id               TEXT    NOT NULL,
+      failure_reason           TEXT    NOT NULL,
+      remediation_task_id      TEXT,
+      remediation_task_open    INTEGER NOT NULL DEFAULT 0,
+      created_at                TEXT    NOT NULL,
+      updated_at                TEXT    NOT NULL,
+      PRIMARY KEY (project_id, failure_reason)
+    );
+  `);
+
+  // base_health_remediation_reason_counts: dedup key of triggering_task_id —
+  // mirrors flaky_remediation_pr_counts' per-triggering-actor gate. A single
+  // triggering task's own retries (e.g. its base tree moves mid-retry and
+  // failure_reason drifts) get only one attempt at claiming a
+  // base_health_remediation_reason_tracking row; later confirmations from
+  // that same task are a pass-through no-op regardless of failure_reason.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS base_health_remediation_reason_counts (
+      triggering_task_id  TEXT    PRIMARY KEY,
+      counted_at           TEXT    NOT NULL
     );
   `);
 

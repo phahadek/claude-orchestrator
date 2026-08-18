@@ -68,6 +68,7 @@ async function maybeFileRemediation(
   contentHash: string,
   outcome: 'partial_fail' | 'total_fail',
   failingTestIds: string[],
+  failureReason: string | null,
   triggeringTaskId: string | null,
 ): Promise<void> {
   try {
@@ -76,6 +77,7 @@ async function maybeFileRemediation(
       contentHash,
       outcome,
       failingTestIds,
+      failureReason,
       triggeringTaskId,
     });
   } catch (err) {
@@ -111,19 +113,25 @@ export async function filterBaseAttributableFailures(
         health.contentHash,
         'total_fail',
         [],
+        health.run.failure_reason,
         triggeringTaskId,
       );
     } else if (health.outcome === 'partial_fail') {
       const baseFailing = getFailingTestIdsForRun(health.run.id).map(
         (t) => t.test_id,
       );
-      void maybeFileRemediation(
-        project.id,
-        health.contentHash,
-        'partial_fail',
-        baseFailing,
-        triggeringTaskId,
-      );
+      // Zero-evidence partial_fail is never filed — treated like
+      // clean_pass/unknown for filing purposes below.
+      if (baseFailing.length > 0) {
+        void maybeFileRemediation(
+          project.id,
+          health.contentHash,
+          'partial_fail',
+          baseFailing,
+          null,
+          triggeringTaskId,
+        );
+      }
     }
   }
 

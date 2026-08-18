@@ -28,6 +28,7 @@ import {
   recordAndMaybeFileFlakyRemediation,
   closeFlakyRemediationTaskIfLinked,
 } from '../audit/flakyRemediationFiling';
+import { closeBaseHealthRemediationTaskIfLinked } from '../audit/baseHealthRemediationFiling';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow, TestRequestRunRow } from '../db/types';
 import { parsePauseReason } from '../db/pauseReason';
@@ -1932,6 +1933,10 @@ export class PRMergeWatcher extends EventEmitter {
           .updateStatus(pr.task_id, '✅ Done')
           .then(() => {
             closeFlakyRemediationTaskIfLinked(
+              pr.task_id!,
+              new Date().toISOString(),
+            );
+            closeBaseHealthRemediationTaskIfLinked(
               pr.task_id!,
               new Date().toISOString(),
             );
