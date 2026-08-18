@@ -1443,13 +1443,18 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
     expect(result.skippedForBudget).toBe(0);
   });
 
-  it("starts dispatching the second item before the first item's verify() call has resolved, when budget allows both", async () => {
+  it("starts dispatching both items before either item's verify() call has resolved, when budget allows both", async () => {
     // Reproduces the reported symptom: a real gate-verify session's
     // verify() call spans the dispatched session's whole investigation
     // (up to its full budget) rather than resolving as soon as it starts.
     // With dispatchBudget >= 2 and 2 runnable items, the tick must attempt
-    // dispatch of the second item without waiting for the first to settle
-    // — not serialize dispatch behind a single item's full verification.
+    // dispatch of both items without either waiting for the other to
+    // settle first — not serialize dispatch behind a single item's full
+    // verification. Doesn't assume a dispatch order between the two items
+    // (nextRunnableGateItems's ordering is an implementation detail) —
+    // instead each item gets its own independently-releasable gate, and
+    // the proof is that verify() is *invoked* for both before either
+    // *resolves*, which is only possible with concurrent dispatch.
     typedSetSetting('max_concurrent_verify_sessions', 10);
     typedSetSetting('max_concurrent_planning_sessions', 10);
     typedSetSetting('human_reserve', 0);
@@ -1459,21 +1464,21 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
       await makeRunnableItem({ text: 'item b', classification: 'Read-Only' }),
     ];
 
-    let releaseFirst: () => void = () => undefined;
-    const firstItemGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    const callOrder: string[] = [];
+    const releaseById = new Map<string, () => void>();
+    const gateById = new Map<string, Promise<void>>();
+    for (const item of items) {
+      gateById.set(
+        item.id,
+        new Promise<void>((resolve) => releaseById.set(item.id, resolve)),
+      );
+    }
+    const started: string[] = [];
+    const resolved: string[] = [];
 
     const verify = vi.fn(async (item: { id: string }) => {
-      callOrder.push(`start:${item.id}`);
-      if (item.id === items[0].id) {
-        // Held open until the assertion below has already observed that
-        // item b's verify() started — proves dispatch isn't serialized
-        // behind item a's full verification.
-        await firstItemGate;
-      }
-      callOrder.push(`resolve:${item.id}`);
+      started.push(item.id);
+      await gateById.get(item.id);
+      resolved.push(item.id);
       return { disposition: 'pass' as const };
     });
 
@@ -1483,14 +1488,15 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
     });
 
     await vi.waitFor(() => {
-      expect(callOrder).toContain(`start:${items[1].id}`);
+      expect(started).toHaveLength(2);
     });
 
-    // Item b's verify() started while item a's is still held open — proof
-    // the second dispatch was attempted before the first one resolved.
-    expect(callOrder).toEqual([`start:${items[0].id}`, `start:${items[1].id}`]);
+    // Both items' verify() calls started while neither has resolved yet —
+    // proof dispatch of the second item was attempted before the first
+    // one's verification settled.
+    expect(resolved).toHaveLength(0);
 
-    releaseFirst();
+    for (const release of releaseById.values()) release();
     const result = await tickPromise;
 
     expect(verify).toHaveBeenCalledTimes(2);
