@@ -444,6 +444,14 @@ export function renderOpsCapabilities(): string[] {
       "session resumes with the operator's feedback instead. DO NOT probe for a " +
       'write tool by trial and error — request it.',
     '',
+    'DO NOT request `Write`, `Edit`, a push, or any PR-create capability for a fix ' +
+      'whose target path matches the workflow-scope denylist (`.github/workflows/**`). ' +
+      'That request is always refused by the hard capability denylist before it is even ' +
+      'staged — it is a doomed round-trip, not a first attempt worth making. Check the ' +
+      "discovered fix's target file path(s) against the denylist FIRST (see " +
+      '"Workflow-scope credential ceiling" below) and, on a match, skip the capability ' +
+      'request entirely and go straight to staging `ops.prIntent`.',
+    '',
     "To verify by value against this orchestrator's own runtime state (e.g. " +
       "confirming a prior session's turn actually ran, or reading its staged/audit " +
       'trail), request the one grantable own-record read instead of a Bash prefix: ' +
@@ -481,12 +489,12 @@ export function renderOpsCapabilities(): string[] {
       'mean this specific request is pending, refused, or the tooling is not ' +
       "installed — never that this class of claim can't be settled at all.",
     '',
-    'Some things are never grantable this way, no matter what an operator approves: ' +
-      'anything that reaches the resolved / ✅ Done / task-intent-apply transition ' +
-      '(that stays device-auth/operator-only — see "Granted writes are idempotent ' +
-      'and resumable" below), and the Write/Edit tools — authoring or rewriting a ' +
-      'file is always a Code task, not something a capability grant hands to ops ' +
-      '(see "Dispatch-eligibility boundary" below).',
+    'DO NOT request the resolved / ✅ Done / task-intent-apply transition, or the ' +
+      'Write/Edit tools, as a capability — both are never grantable this way, no ' +
+      'matter what an operator approves. The former stays device-auth/operator-only ' +
+      '(see "Granted writes are idempotent and resumable" below); the latter because ' +
+      'authoring or rewriting a file is always a Code task, never something a ' +
+      'capability grant hands to ops (see "Dispatch-eligibility boundary" below).',
     '',
     'Do not create a PR out of the box: this session starts with no worktree or ' +
       'branch (see "Session Lifecycle" above). Most code needs stay a 💻 Code task — ' +
@@ -495,18 +503,19 @@ export function renderOpsCapabilities(): string[] {
       'PR, then continue driving the rest of the change, or park on it if the whole ' +
       'thing is now blocked on that Code task landing.',
     '',
-    'Workflow-scope credential ceiling: before staging that `task.create`, check the ' +
-      "discovered fix's target file path(s) — as this session's own investigation " +
-      'names them, since there is no worktree to git-diff — against the workflow-scope ' +
-      'denylist (`.github/workflows/**`; see `session/workflowScopeDenylist.ts`). A ' +
-      'spun-off Code task hits the identical `workflow` OAuth scope ceiling later, ' +
-      'reactively, at its own push — filing one is a dead end, not an escape hatch. ' +
-      'On a match, do NOT stage `task.create`; instead stage an `ops.prIntent` intent ' +
-      `by calling the \`${orchestratorMcpToolName('ops.prIntent')}\` tool with the ` +
-      'payload carrying the verified change content itself (the fix, described in full ' +
-      '— never a branch reference, since this session cannot push one). On operator ' +
-      'approval this session is granted a real worktree and branch and re-dispatched ' +
-      'to make the change and open the PR itself.',
+    'Workflow-scope credential ceiling — check this BEFORE staging `task.create` or ' +
+      'requesting any write capability: does the discovered fix touch a path under ' +
+      '`.github/workflows/**` (as this session\'s own investigation names it, since ' +
+      'there is no worktree to git-diff — see `session/workflowScopeDenylist.ts`)? ' +
+      'DO NOT stage `task.create` for that fix — a spun-off Code task hits the ' +
+      'identical `workflow` OAuth scope ceiling later, reactively, at its own push, so ' +
+      'filing one is a dead end, not an escape hatch. DO stage an `ops.prIntent` intent ' +
+      'instead, on the first pass, with no prior capability request: call the ' +
+      `\`${orchestratorMcpToolName('ops.prIntent')}\` tool with the payload carrying ` +
+      'the verified change content itself (the fix, described in full — never a branch ' +
+      'reference, since this session cannot push one). On operator approval this ' +
+      'session is granted a real worktree and branch and re-dispatched to make the ' +
+      'change and open the PR itself.',
     '',
     'For a change small and ops-scoped enough to land directly from this session, ' +
       'stage an Ops PR-intent declaration first — never open a PR speculatively. On ' +
