@@ -159,7 +159,13 @@ describe('POST /api/staged-intents/group/:groupId/approve — group signal cachi
     ): Promise<number> {
       const app = makeApp();
       const agent = supertest(app);
-      await stageAndApproveGroup(agent, projectId, taskId, groupId, siblingCount);
+      await stageAndApproveGroup(
+        agent,
+        projectId,
+        taskId,
+        groupId,
+        siblingCount,
+      );
       listStagedIntentsByGroupSpy.mockClear();
 
       const approve = await agent
