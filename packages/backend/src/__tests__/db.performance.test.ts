@@ -23,6 +23,7 @@ import {
   upsertPullRequest,
   insertEvent,
   getActiveSessions,
+  getStuckResultSessionRows,
 } from '../db/queries.js';
 import type Database from 'better-sqlite3';
 
@@ -34,6 +35,7 @@ const EXPECTED_INDEXES = [
   'idx_session_events_timestamp',
   'idx_sessions_archived_started_at',
   'idx_sessions_notion_task_id_session_type',
+  'idx_sessions_status',
   'idx_pull_requests_task_id_pr_number',
 ];
 
@@ -91,7 +93,7 @@ const SESSION_DEFAULTS = {
 // ── Migration idempotency ─────────────────────────────────────────────────────
 
 describe('runMigrations — index idempotency', () => {
-  it('creates all six covering indexes on a fresh DB', () => {
+  it('creates all covering indexes on a fresh DB', () => {
     runMigrations(typedDb);
     const names = indexNames();
     for (const idx of EXPECTED_INDEXES) {
@@ -106,6 +108,77 @@ describe('runMigrations — index idempotency', () => {
     for (const idx of EXPECTED_INDEXES) {
       expect(names).toContain(idx);
     }
+  });
+});
+
+// ── getStuckResultSessionRows — index usage and correctness ──────────────────
+
+describe('getStuckResultSessionRows — sessions(status) index', () => {
+  beforeEach(() => {
+    clearTables();
+    runMigrations(typedDb);
+  });
+
+  it('uses idx_sessions_status instead of a bare scan of sessions', () => {
+    const plan = typedDb
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT s.session_id, s.task_id, s.task_url, s.project_context_url,
+                s.project_id, s.pr_url, s.worktree_path, s.session_type,
+                e.timestamp AS last_ts
+         FROM sessions s
+         JOIN session_events e ON e.session_id = s.session_id
+         WHERE s.status = 'running'
+           AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
+           AND e.event_type = 'system'
+           AND json_extract(e.payload, '$.type') = 'result'`,
+      )
+      .all() as { detail: string }[];
+
+    const scanSessionsBare = plan.some((row) =>
+      /^SCAN\s+(s|sessions)\s*$/.test(row.detail.trim()),
+    );
+    expect(scanSessionsBare).toBe(false);
+    const usesStatusIndex = plan.some((row) =>
+      row.detail.includes('idx_sessions_status'),
+    );
+    expect(usesStatusIndex).toBe(true);
+  });
+
+  it('returns only running sessions whose last event is a system/result event', () => {
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'stuck-running',
+      task_id: 'task-stuck',
+      status: 'running',
+      started_at: 1000,
+    });
+    insertEvent({
+      session_id: 'stuck-running',
+      ...makeEventRow('text').live,
+      timestamp: 1,
+    });
+    insertEvent({
+      session_id: 'stuck-running',
+      ...makeEventRow('result').live,
+      timestamp: 2,
+    });
+
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'not-running',
+      task_id: 'task-not-running',
+      status: 'completed',
+      started_at: 1000,
+    });
+    insertEvent({
+      session_id: 'not-running',
+      ...makeEventRow('result').live,
+      timestamp: 1,
+    });
+
+    const rows = getStuckResultSessionRows();
+    expect(rows.map((r) => r.session_id)).toEqual(['stuck-running']);
   });
 });
 
