@@ -24,8 +24,12 @@ import {
   insertEvent,
   getActiveSessions,
   getStuckResultSessionRows,
+  insertProject,
+  insertStagedIntent,
+  listAllActiveStagedIntents,
 } from '../db/queries.js';
 import type Database from 'better-sqlite3';
+import type { StagedIntentRow } from '../db/types.js';
 
 const typedDb = db as Database.Database;
 
@@ -491,5 +495,127 @@ describe('bench: getActiveSessions (sessions route query)', () => {
       elapsed,
       `getActiveSessions took ${elapsed.toFixed(1)}ms, expected <300ms`,
     ).toBeLessThan(300);
+  });
+});
+
+// ── listAllActiveStagedIntents — idx_staged_intent_state_created_at ─────────
+
+describe('listAllActiveStagedIntents — state-only predicate index usage', () => {
+  function stagedIntentRow(
+    overrides: Partial<StagedIntentRow> & { id: string; project_id: string },
+  ): StagedIntentRow {
+    return {
+      kind: 'task.setStatus',
+      payload: '{}',
+      payload_hash: 'hash',
+      task_id: null,
+      session_id: null,
+      group_id: null,
+      milestone: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      investigation: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      applied_task_id: null,
+      created_at: 1000,
+      updated_at: 1000,
+      ...overrides,
+    };
+  }
+
+  it('creates idx_staged_intent_state_created_at on a fresh database', () => {
+    runMigrations(typedDb);
+    expect(indexNames()).toContain('idx_staged_intent_state_created_at');
+  });
+
+  it('EXPLAIN QUERY PLAN contains no full scan of staged_intent and no temp b-tree sort', () => {
+    // listAllActiveStagedIntents runs this as two single-value equality
+    // searches (see its doc comment) rather than one `state IN (...)`
+    // query — SQLite can't serve a multi-value IN's ORDER BY from the
+    // index without a temp b-tree merge, but a single equality can.
+    runMigrations(typedDb);
+    for (const state of ['staged', 'approved']) {
+      const plan = typedDb
+        .prepare(
+          `EXPLAIN QUERY PLAN SELECT * FROM staged_intent WHERE state = ? ORDER BY created_at ASC`,
+        )
+        .all(state) as { detail: string }[];
+      const details = plan.map((r) => r.detail).join('\n');
+      expect(details).not.toContain('SCAN staged_intent');
+      expect(details).not.toContain('USE TEMP B-TREE FOR ORDER BY');
+    }
+  });
+
+  it('returns the same rows in the same order, excluding non-visible states, across projects', () => {
+    runMigrations(typedDb);
+    typedDb.exec(`DELETE FROM staged_intent; DELETE FROM projects;`);
+    insertProject({
+      id: 'proj-a',
+      name: 'Project A',
+      project_dir: '/a',
+      context_url: null,
+      github_repo: 'o/a',
+      task_source: 'notion',
+    });
+    insertProject({
+      id: 'proj-b',
+      name: 'Project B',
+      project_dir: '/b',
+      context_url: null,
+      github_repo: 'o/b',
+      task_source: 'notion',
+    });
+
+    const rows: StagedIntentRow[] = [
+      stagedIntentRow({
+        id: 'a-staged',
+        project_id: 'proj-a',
+        state: 'staged',
+        created_at: 3000,
+      }),
+      stagedIntentRow({
+        id: 'b-approved',
+        project_id: 'proj-b',
+        state: 'approved',
+        created_at: 1000,
+      }),
+      stagedIntentRow({
+        id: 'a-approved',
+        project_id: 'proj-a',
+        state: 'approved',
+        created_at: 2000,
+      }),
+      stagedIntentRow({
+        id: 'b-committed',
+        project_id: 'proj-b',
+        state: 'committed',
+        created_at: 500,
+      }),
+      stagedIntentRow({
+        id: 'a-rejected',
+        project_id: 'proj-a',
+        state: 'rejected',
+        created_at: 4000,
+      }),
+      stagedIntentRow({
+        id: 'b-withdrawn',
+        project_id: 'proj-b',
+        state: 'withdrawn',
+        created_at: 4500,
+      }),
+    ];
+    for (const row of rows) insertStagedIntent(row);
+
+    const result = listAllActiveStagedIntents();
+    expect(result.map((r) => r.id)).toEqual([
+      'b-approved',
+      'a-approved',
+      'a-staged',
+    ]);
   });
 });
