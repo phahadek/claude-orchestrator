@@ -63,6 +63,7 @@ import {
   createStagedIntentsRouter,
   stageIntent,
   runStageTimeReadyChecks,
+  validateAndNormalizeTaskReferences,
 } from '../stagedIntents';
 
 /** Wired like the real server: the human/device-authed staged-intents apply surface. */
@@ -253,6 +254,102 @@ describe('task.create staged by a planning session', () => {
       .send({});
     expect(applied.status).toBe(500);
     expect(applied.body.error).toMatch(/not a known milestone/);
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it("defaults payload.milestone to the staging session's own bound-task milestone when the payload carries neither databaseId nor milestone", async () => {
+    const createTask = vi.fn().mockResolvedValue('notion:new-task-id');
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask,
+    });
+    mockResolveMilestoneDatabaseId.mockReturnValue(
+      '6614adb5-5bec-4b9a-b9a4-208ae0f00f3c',
+    );
+
+    // Mirrors stage() in mcp/tools/stageProposalTools.ts: the caller passes
+    // the session's own ctx.milestone as the normalization step's fallback,
+    // never something the payload itself supplies.
+    const normalizedPayload = await validateAndNormalizeTaskReferences(
+      'task.create',
+      {
+        title: 'Fix the thing the investigation found',
+        type: '💻 Code',
+      },
+      'proj-1',
+      null,
+      'M12',
+    );
+    const intent = stageIntent(
+      'task.create',
+      normalizedPayload,
+      'proj-1',
+      null,
+      'session-design-1',
+      null,
+    );
+    const staged = await runStageTimeReadyChecks(intent);
+
+    const app = buildApp();
+    const agent = supertest(app);
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(200);
+    expect(applied.body.result).toEqual({ id: 'notion:new-task-id' });
+
+    expect(mockResolveMilestoneDatabaseId).toHaveBeenCalledWith(
+      'proj-1',
+      'M12',
+    );
+    expect(createTask).toHaveBeenCalledWith(
+      {
+        databaseId: '6614adb5-5bec-4b9a-b9a4-208ae0f00f3c',
+        title: 'Fix the thing the investigation found',
+        type: '💻 Code',
+      },
+      { source: 'human' },
+    );
+  });
+
+  it('still throws the "requires either databaseId or milestone" error when no session milestone is known and the payload supplies neither field', async () => {
+    const createTask = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask,
+    });
+
+    // No sessionMilestone argument passed — mirrors a session bound to a
+    // non-milestone task, or a human/loopback caller with no session
+    // context (see the POST /staged-intents route, which never supplies one).
+    const normalizedPayload = await validateAndNormalizeTaskReferences(
+      'task.create',
+      {
+        title: 'Fix the thing the investigation found',
+      },
+      'proj-1',
+      null,
+      null,
+    );
+    const intent = stageIntent(
+      'task.create',
+      normalizedPayload,
+      'proj-1',
+      null,
+      'session-ops-1',
+      null,
+    );
+    const staged = await runStageTimeReadyChecks(intent);
+
+    const app = buildApp();
+    const agent = supertest(app);
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(500);
+    expect(applied.body.error).toMatch(
+      /requires either databaseId or milestone/,
+    );
     expect(createTask).not.toHaveBeenCalled();
   });
 });
