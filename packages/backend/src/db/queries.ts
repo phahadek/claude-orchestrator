@@ -8205,7 +8205,7 @@ export const FLIP_RATE_FLAG_TEST_ID_CAP = 200;
  * callers bound the id set themselves rather than looping over every test in
  * a project.
  */
-export function computeTestFlipRateFlagsForTestIds(
+function computeTestFlipRateFlagsForTestIds(
   testIds: string[],
   windowN: number,
   thresholdK: number,
@@ -8754,7 +8754,7 @@ let _stmtGetFlakyRollupWatermark: Database.Statement | null = null;
 let _stmtSetFlakyRollupWatermark: Database.Statement | null = null;
 
 /** Highest test_run_results.id already folded into `projectId`'s flagged_flaky_tests_rollup rows. 0 (never recomputed) if no row exists. */
-export function getFlakyRollupWatermark(projectId: string): number {
+function getFlakyRollupWatermark(projectId: string): number {
   _stmtGetFlakyRollupWatermark ??= db.prepare<{ project_id: string }>(`
     SELECT last_test_run_result_id FROM flagged_flaky_tests_rollup_watermark
     WHERE project_id = @project_id
