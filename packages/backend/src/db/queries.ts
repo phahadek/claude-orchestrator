@@ -8125,31 +8125,45 @@ export function getTestRequestRunById(
  * precedence as the GET /test-request-runs route applies for the
  * content-hash lens.
  */
+let _stmtLatestRunningTestRequestRunIdForSession: Database.Statement | null =
+  null;
+let _stmtLatestFinishedTestRequestRunIdForSession: Database.Statement | null =
+  null;
+
 export function getLatestTestRequestRunForSession(
   projectId: string,
   sessionId: string,
 ): TestRequestRunRow | undefined {
-  const running = db
-    .prepare<{ project_id: string; session_id: string }>(
-      `SELECT id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result
-       FROM test_request_runs
-       WHERE project_id = @project_id AND session_id = @session_id AND state = 'running'
-       ORDER BY started_at DESC, rowid DESC LIMIT 1`,
-    )
-    .get({ project_id: projectId, session_id: sessionId }) as
-    | TestRequestRunRow
-    | undefined;
-  if (running) return running;
-  return db
-    .prepare<{ project_id: string; session_id: string }>(
-      `SELECT id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result
-       FROM test_request_runs
-       WHERE project_id = @project_id AND session_id = @session_id AND state != 'running'
-       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
-    )
-    .get({ project_id: projectId, session_id: sessionId }) as
-    | TestRequestRunRow
-    | undefined;
+  _stmtLatestRunningTestRequestRunIdForSession ??= db.prepare<{
+    project_id: string;
+    session_id: string;
+  }>(
+    `SELECT id
+     FROM test_request_runs
+     WHERE project_id = @project_id AND session_id = @session_id AND state = 'running'
+     ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+  );
+  const running = _stmtLatestRunningTestRequestRunIdForSession.get({
+    project_id: projectId,
+    session_id: sessionId,
+  }) as { id: string } | undefined;
+  if (running) return getTestRequestRunById(running.id);
+
+  _stmtLatestFinishedTestRequestRunIdForSession ??= db.prepare<{
+    project_id: string;
+    session_id: string;
+  }>(
+    `SELECT id
+     FROM test_request_runs
+     WHERE project_id = @project_id AND session_id = @session_id AND state != 'running'
+     ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+  );
+  const finished = _stmtLatestFinishedTestRequestRunIdForSession.get({
+    project_id: projectId,
+    session_id: sessionId,
+  }) as { id: string } | undefined;
+  if (!finished) return undefined;
+  return getTestRequestRunById(finished.id);
 }
 
 /**
