@@ -2542,6 +2542,12 @@ export function runMigrations(target: Database.Database): void {
     -- session_audits carries no session_id index, so the ON DELETE CASCADE
     -- from sessions scans it end to end on every session delete.
     CREATE INDEX IF NOT EXISTS idx_session_audits_session_id ON session_audits(session_id);
+    -- listAllActiveStagedIntents' unscoped WHERE state IN (...) ORDER BY
+    -- created_at ASC: idx_staged_intent_project_state can't serve it (its
+    -- leading column, project_id, isn't in the predicate), so it fell back
+    -- to a full scan of every staged_intent row plus payload. This index
+    -- covers both the state predicate and the ORDER BY in one pass.
+    CREATE INDEX IF NOT EXISTS idx_staged_intent_state_created_at ON staged_intent(state, created_at);
   `);
 
   // test_report_acquisition_attempted: whether this run's producer actually

@@ -9407,12 +9407,41 @@ export function listStagedIntentsByProject(
   }) as StagedIntentRow[];
 }
 
+let _stmtListStagedIntentsByState: Database.Statement | null = null;
+
+/**
+ * Runs the 'staged' and 'approved' branches as two single-value equality
+ * searches (each merge-sortable) rather than one `state IN (...)` query.
+ * idx_staged_intent_state_created_at(state, created_at) satisfies a
+ * single-value equality's ORDER BY directly from the index, but SQLite
+ * can't do the same for a multi-value IN — it probes each value separately
+ * and falls back to a temp b-tree to merge them into one sorted result. The
+ * two already-sorted branches are merged here instead.
+ */
 export function listAllActiveStagedIntents(): StagedIntentRow[] {
-  return db
-    .prepare(
-      `SELECT * FROM staged_intent WHERE state IN ('staged', 'approved') ORDER BY created_at ASC`,
-    )
-    .all() as StagedIntentRow[];
+  _stmtListStagedIntentsByState ??= db.prepare<{ state: StagedIntentState }>(
+    `SELECT * FROM staged_intent WHERE state = @state ORDER BY created_at ASC`,
+  );
+  const staged = _stmtListStagedIntentsByState.all({
+    state: 'staged',
+  }) as StagedIntentRow[];
+  const approved = _stmtListStagedIntentsByState.all({
+    state: 'approved',
+  }) as StagedIntentRow[];
+
+  const merged: StagedIntentRow[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < staged.length && j < approved.length) {
+    merged.push(
+      staged[i].created_at <= approved[j].created_at
+        ? staged[i++]
+        : approved[j++],
+    );
+  }
+  while (i < staged.length) merged.push(staged[i++]);
+  while (j < approved.length) merged.push(approved[j++]);
+  return merged;
 }
 
 /** The milestone key the ?milestone list lens uses to bucket legacy/unattributable rows — never a real milestone's canonical_short_id. */
