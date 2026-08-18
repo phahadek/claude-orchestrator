@@ -9,7 +9,9 @@ import type { StagedIntent } from '../../api/stagedIntents';
 // — these tests exercise the real live-arrival path a WS `staged_intent_changed`
 // event drives, via useDecisionQueue's subscription.
 
-function makeIntent(overrides: Partial<StagedIntent> & { id: string }): StagedIntent {
+function makeIntent(
+  overrides: Partial<StagedIntent> & { id: string },
+): StagedIntent {
   return {
     kind: 'task.setStatus',
     payload: { taskId: `task-${overrides.id}`, status: 'Ready' },
