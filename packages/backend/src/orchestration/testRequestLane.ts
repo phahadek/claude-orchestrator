@@ -179,9 +179,11 @@ async function executeTestRequestRun(
   const release = await semaphore.acquire();
   const runId = randomUUID();
   const startedAt = Date.now();
-  // Occupancy right after acquiring — includes this run — captured now
-  // rather than inferred later, per the concurrent_run_count validity signal.
-  const concurrentRunCount = semaphore.inUse();
+  // Peer occupancy right after acquiring, excluding this run itself, so 0
+  // genuinely means "ran alone" — matching the concurrent_run_count = 0
+  // validity predicate consumers filter on (listRecentValidTestDurations,
+  // computeTestFlipRateFlag).
+  const concurrentRunCount = semaphore.inUse() - 1;
   try {
     insertTestRequestRun(
       runId,
