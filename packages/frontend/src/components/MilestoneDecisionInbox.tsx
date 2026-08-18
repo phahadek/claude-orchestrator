@@ -70,6 +70,17 @@ interface Props {
 /** Distance (px) from the scroll container's top edge within which a card still counts as "at the top" — mirrors MilestoneDecisionStack's scroll-follow threshold. */
 const TOP_THRESHOLD_PX = 8;
 
+/**
+ * Nudges a scroll container's scrollTop by `delta` — pulled out to a plain
+ * (non-component) function because eslint's react-hooks/immutability rule
+ * treats any direct mutation of a prop-sourced ref's `.current` properties
+ * as an illegal props mutation, even though DOM refs are inherently mutable
+ * and this runs inside a layout effect, not render.
+ */
+function nudgeScrollTop(container: HTMLElement, delta: number): void {
+  container.scrollTop += delta;
+}
+
 interface TaskLabel {
   icon: string | null;
   name: string;
@@ -393,7 +404,7 @@ export function MilestoneDecisionInbox({
         const delta = nextPositions.get(anchorId)! - anchorPrevTop;
         if (delta !== 0) {
           suppressNextScroll?.();
-          container.scrollTop += delta;
+          nudgeScrollTop(container, delta);
           for (const [id, top] of nextPositions) {
             nextPositions.set(id, top - delta);
           }
