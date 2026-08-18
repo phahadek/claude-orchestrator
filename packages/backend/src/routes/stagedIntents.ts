@@ -2927,6 +2927,16 @@ export async function validateAndNormalizeTaskReferences(
   payload: unknown,
   projectId: string,
   groupId?: string | null,
+  /**
+   * The staging session's own bound-task milestone (StageProposalToolContext's
+   * ctx.milestone) — the server-known fallback for a task.create payload
+   * that supplies neither `databaseId` nor `milestone`. Null/undefined for
+   * a session bound to a non-milestone task, or a human/loopback caller
+   * with no session context — in that case the payload passes through
+   * unchanged, and createTask's own "requires either databaseId or
+   * milestone" error fires unchanged at apply time.
+   */
+  sessionMilestone?: string | null,
 ): Promise<unknown> {
   // gate.accrete/seed.stage key off `sourceTask.id` rather than a top-level
   // `taskId` — normalized here on the same rule as SUBJECT_TASK_ID_KINDS
@@ -3014,6 +3024,15 @@ export async function validateAndNormalizeTaskReferences(
     const normalized = normalizeOrRejectTaskId(p.taskId, 'taskId');
     await assertTaskIdResolves(normalized, projectId);
     p.taskId = normalized;
+  }
+
+  if (
+    kind === 'task.create' &&
+    p.databaseId === undefined &&
+    p.milestone === undefined &&
+    sessionMilestone
+  ) {
+    p.milestone = sessionMilestone;
   }
 
   if (kind === 'task.setDependsOn' || kind === 'task.create') {
