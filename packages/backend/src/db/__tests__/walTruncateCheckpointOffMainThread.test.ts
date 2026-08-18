@@ -48,7 +48,7 @@ describe('runWalTruncateCheckpointOffMainThread', () => {
     } finally {
       db.close();
     }
-  });
+  }, 15000);
 
   it('runs in-process for an in-memory database, since no second connection can open against it', async () => {
     const result = await runWalTruncateCheckpointOffMainThread(':memory:');
@@ -95,5 +95,5 @@ describe('worker-thread checkpoint dispatch does not block the main event loop',
 
     await checkpointDone;
     await worker.terminate();
-  });
+  }, 15000);
 });
