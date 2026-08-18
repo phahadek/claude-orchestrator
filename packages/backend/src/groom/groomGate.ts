@@ -54,6 +54,7 @@ import {
 import { ProjectService } from '../projects/ProjectService';
 import type { SeedItemClassification } from '../db/types';
 import { extractPathToken } from './groomLoad';
+import type { TrackedFileSetCache } from './groomLoad';
 import { getCachedStatus, getCachedType } from '../tasks/TaskWriteCommands';
 import { STATUS_DISPLAY } from '../tasks/statusCanonical';
 
@@ -525,6 +526,7 @@ async function resolveFilesPathsEntriesServerSide(
   entries: FilesPathsEntry[] | undefined,
   projectId: string | undefined,
   taskBody: string | undefined,
+  trackedFileSetCache?: TrackedFileSetCache,
 ): Promise<{ entries: FilesPathsEntry[] | undefined; blockedReason?: string }> {
   if (type !== '💻 Code') {
     return { entries };
@@ -585,7 +587,7 @@ async function resolveFilesPathsEntriesServerSide(
   } = await import('./groomLoad');
   let trackedFiles: Set<string>;
   try {
-    trackedFiles = await resolveTrackedFileSet(repoRoot);
+    trackedFiles = await resolveTrackedFileSet(repoRoot, trackedFileSetCache);
   } catch (err) {
     return {
       entries,
@@ -932,6 +934,12 @@ function isInteractiveTriageClean(
  * section into its groomingGate payload). Every caller that already has the
  * task body in hand (or fetches it anyway for `checkReadiness`) should pass
  * it through so the verdict tracks the artifact, not the paraphrase.
+ *
+ * `trackedFileSetCache`, when supplied, memoizes the `git ls-files`-backed
+ * tracked-file set `resolveFilesPathsEntriesServerSide` resolves against, so
+ * a multi-member group commit (commitGroupIntents) can share one resolution
+ * across every 💻 Code Ready-flip in the same commit instead of re-spawning
+ * the subprocess once per member.
  */
 export async function checkGroomingPromotionGate(
   entry: GroomingGateEntry,
@@ -940,6 +948,7 @@ export async function checkGroomingPromotionGate(
   accretionOpts?: AccretionCheckOptions,
   projectId?: string,
   taskBody?: string,
+  trackedFileSetCache?: TrackedFileSetCache,
 ): Promise<GroomingGateResult> {
   const reasons: string[] = [];
   const resolvedType = authoritativeType ?? entry.type;
@@ -979,6 +988,7 @@ export async function checkGroomingPromotionGate(
       entry.filesPathsEntries,
       projectId,
       taskBody,
+      trackedFileSetCache,
     );
   if (blockedReason) {
     reasons.push(blockedReason);

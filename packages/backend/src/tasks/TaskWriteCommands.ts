@@ -544,6 +544,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
         undefined,
         this.projectId,
         body,
+        options?.trackedFileSetCache,
       );
       if (!gateResult.allowed) {
         throw new GroomingGateError(gateResult.reasons);

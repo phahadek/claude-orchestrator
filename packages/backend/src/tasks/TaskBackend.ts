@@ -1,6 +1,7 @@
 import type { ResolvedTask } from './types';
 import type { TaskBodySections } from './bodyRender';
 import type { GroomingGateEntry } from '../groom/groomGate';
+import type { TrackedFileSetCache } from '../groom/groomLoad';
 import { ProjectService } from '../projects/ProjectService';
 import { NotionClient } from '../notion/NotionClient';
 import { NotionTaskBackend } from './NotionTaskBackend';
@@ -77,6 +78,16 @@ export interface UpdateStatusOptions {
    * superseded type.
    */
   authoritativeType?: string;
+  /**
+   * Shared memo for the `git ls-files`-backed tracked-file set that a
+   * Ready-transition's grooming-gate Files/paths check re-derives
+   * (checkGroomingPromotionGate → resolveFilesPathsEntriesServerSide). Only
+   * honored by TaskWriteCommands.setStatus. A multi-member group commit
+   * (commitGroupIntents) passes one shared cache across every member so the
+   * resolution runs at most once per commit instead of once per 💻 Code
+   * Ready-flip.
+   */
+  trackedFileSetCache?: TrackedFileSetCache;
 }
 
 /** Provenance options shared by the write-side port methods (create / deps). */
