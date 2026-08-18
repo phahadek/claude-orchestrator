@@ -16,6 +16,7 @@ import { registerArchitectureReadTools } from './tools/architectureReadTools';
 import { registerTaskReadTools } from './tools/taskReadTools';
 import { registerPullRequestReadTools } from './tools/pullRequestReadTools';
 import { registerGateSeedReadTools } from './tools/gateSeedReadTools';
+import { registerTestHealthReadTools } from './tools/testHealthReadTools';
 import { registerSessionRecordReadTool } from './tools/sessionRecordReadTool';
 import { registerAuditLogReadTools } from './tools/auditLogReadTools';
 import { registerSessionEventsReadTools } from './tools/sessionEventsReadTools';
@@ -258,6 +259,7 @@ export function buildMcpServer(
     });
     registerPullRequestReadTools(server);
     registerGateSeedReadTools(server, { projectId: session.project_id });
+    registerTestHealthReadTools(server, { projectId: session.project_id });
     registerCompletenessTools(server, {
       sessionId,
       workflow,

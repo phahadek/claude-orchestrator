@@ -352,8 +352,17 @@ const TASK_READ_MCP_TOOLS = [
 // server also registers it unconditionally for groom/design — a groom/design
 // session must never be CLI-permitted to call it, only ever see it listed
 // (see orchestrator-config.test.ts's "never a mutating gate/seed tool" guard).
+// testHealth.getFlakyHistory — the read-only flagged_flaky_tests_rollup /
+// base_health_remediation_test_tracking lookup (mcp/tools/testHealthReadTools.ts),
+// also registered unconditionally by buildMcpServer for any session resolving
+// to a project. Unlike gateSeed.getState, this one IS CLI-allowed for
+// groom/design too: a groom session investigating a base-health remediation
+// task needs to actually call it (that's the entire point — consulting the
+// orchestrator's own accumulated flaky-test evidence instead of re-running
+// the test suite), not just see it listed.
 const PROJECT_READ_MCP_TOOLS = [
   orchestratorMcpToolName('pullRequest.getByTaskId'),
+  orchestratorMcpToolName('testHealth.getFlakyHistory'),
 ];
 
 const GROOM_MCP_TOOLS = [

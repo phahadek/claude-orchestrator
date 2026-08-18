@@ -56,6 +56,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'planning.noOp',
   'pullRequest.getByTaskId',
   'gateSeed.getState',
+  'testHealth.getFlakyHistory',
   'deploy.verdict',
   'gate.reclassify',
   'intent.dispositionStranded',

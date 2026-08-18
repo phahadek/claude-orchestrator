@@ -8,6 +8,9 @@ const HEALTH_TOOL = orchestratorMcpToolName('health');
 const PULLREQUEST_GETBYTASKID_TOOL = orchestratorMcpToolName(
   'pullRequest.getByTaskId',
 );
+const TESTHEALTH_GETFLAKYHISTORY_TOOL = orchestratorMcpToolName(
+  'testHealth.getFlakyHistory',
+);
 const ARCHITECTURE_READ_TOOLS = [
   orchestratorMcpToolName('architecture.getUnit'),
   orchestratorMcpToolName('architecture.queryUnits'),
@@ -47,6 +50,7 @@ describe('investigate staged-intent-kind allowlist parity with INVESTIGATE_INTEN
   it('INVESTIGATE_ALLOWED_TOOLS staged-intent MCP entries equal INVESTIGATE_INTENT_KINDS mapped through orchestratorMcpToolName', () => {
     const extraNonStagedTools = [
       PULLREQUEST_GETBYTASKID_TOOL,
+      TESTHEALTH_GETFLAKYHISTORY_TOOL,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
       ...TIER_B_READ_TOOLS,
@@ -73,6 +77,7 @@ describe('investigate staged-intent-kind allowlist parity with INVESTIGATE_INTEN
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
       PULLREQUEST_GETBYTASKID_TOOL,
+      TESTHEALTH_GETFLAKYHISTORY_TOOL,
     ]) {
       expect(INVESTIGATE_ALLOWED_TOOLS).toContain(tool);
     }
