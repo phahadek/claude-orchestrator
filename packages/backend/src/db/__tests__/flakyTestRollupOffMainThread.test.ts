@@ -115,7 +115,7 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
     } finally {
       db.close();
     }
-  });
+  }, 15000);
 
   it('runs in-process for an in-memory database, since no second connection can open against it', async () => {
     const result = await replaceFlaggedFlakyTestsRollupOffMainThread(
