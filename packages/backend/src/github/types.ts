@@ -62,6 +62,18 @@ export interface MergeResult {
   sha: string | null;
 }
 
+/**
+ * A check-run rerequested via GitHub's rerequest API, together with its
+ * pre-rerequest `started_at` marker. waitForCheckRunsCompletion requires a
+ * genuinely later `started_at` (not just status='completed') before treating
+ * the run as done, so a stale first-poll read of the pre-rerequest state
+ * can't be mistaken for the rerun's actual result.
+ */
+export interface RerequestedCheckRun {
+  id: number;
+  priorStartedAt: string | null;
+}
+
 export interface FailingCheck {
   name: string;
   conclusion: string;
