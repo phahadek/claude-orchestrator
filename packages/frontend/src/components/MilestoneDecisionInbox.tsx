@@ -1,4 +1,10 @@
-import { useEffect, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import type { StagedIntent } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { gateApi } from '../api/gate';
@@ -55,6 +61,24 @@ interface Props {
   onCardsRemoved?: (ids: string[]) => void;
   /** The keyboard ring's current highlight (an intent id or groupId) — the matching card enables its local 'a'/'r' bindings. */
   keyboardHighlightedId?: string | null;
+  /** The centre column's scrollable ancestor — when set, a live intent arrival that inserts a card above cards already on screen (see useDecisionQueue's insertAtTopOfTier) nudges scrollTop to keep the operator's view pinned instead of letting the insertion silently shift it. Omit to skip compensation. */
+  scrollContainerRef?: React.RefObject<HTMLElement | null>;
+  /** Called just before the compensation effect nudges scrollTop itself, so a caller with its own scroll-follow listener (MilestoneDecisionStack) can ignore the one scroll event that nudge fires. */
+  suppressNextScroll?: () => void;
+}
+
+/** Distance (px) from the scroll container's top edge within which a card still counts as "at the top" — mirrors MilestoneDecisionStack's scroll-follow threshold. */
+const TOP_THRESHOLD_PX = 8;
+
+/**
+ * Nudges a scroll container's scrollTop by `delta` — pulled out to a plain
+ * (non-component) function because eslint's react-hooks/immutability rule
+ * treats any direct mutation of a prop-sourced ref's `.current` properties
+ * as an illegal props mutation, even though DOM refs are inherently mutable
+ * and this runs inside a layout effect, not render.
+ */
+function nudgeScrollTop(container: HTMLElement, delta: number): void {
+  container.scrollTop += delta;
 }
 
 interface TaskLabel {
@@ -189,8 +213,23 @@ export function MilestoneDecisionInbox({
   registerScrollTarget,
   onCardsRemoved,
   keyboardHighlightedId = null,
+  scrollContainerRef,
+  suppressNextScroll,
 }: Props) {
   const taskById = new Map(tasks.map((t) => [t.taskId, t]));
+
+  // Card DOM nodes in render order, local to this component so the
+  // scroll-compensation effect below can measure them on every one of this
+  // component's own commits — the parent's registerScrollTarget map isn't
+  // usable for that, since populating it doesn't cause the parent to
+  // re-render.
+  const cardElsRef = useRef<Map<string, HTMLElement>>(new Map());
+  const cardPositionsRef = useRef<Map<string, number>>(new Map());
+  const cardOrderRef = useRef<string[]>([]);
+  const registerCardEl = useCallback((id: string, el: HTMLElement | null) => {
+    if (el) cardElsRef.current.set(id, el);
+    else cardElsRef.current.delete(id);
+  }, []);
   const {
     intents,
     loaded,
@@ -310,6 +349,73 @@ export function MilestoneDecisionInbox({
     };
   }, [gateItemIdsKey]);
 
+  // Keeps the operator's view pinned when a live intent arrival (see
+  // useDecisionQueue's insertAtTopOfTier) inserts a new card above cards
+  // already on screen — otherwise the scroll container's fixed scrollTop now
+  // renders different content, which reads as an unrequested auto-scroll.
+  // Lives here (not in the parent MilestoneDecisionStack) because this
+  // component is the one that actually re-renders when useDecisionQueue's
+  // `intents` changes — a parent's own effects don't re-run just because a
+  // child's internal state changed.
+  //
+  // Runs every commit: measures each card's current top offset, and if the
+  // set/order of card ids actually changed since the last commit (an
+  // insertion/removal, not just a re-render triggered by something else —
+  // e.g. scroll-follow's own onSelect — while the operator happened to have
+  // scrolled for real), nudges scrollTop by however far the card that was
+  // previously topmost-visible moved, so the same content stays put. Empty
+  // `cardPositionsRef` (nothing measured yet — first mount, or the inbox
+  // just went from 0 to N intents) yields no anchor, so a fresh render is
+  // left alone, matching the "0 intents before" exception.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef?.current;
+    const prevPositions = cardPositionsRef.current;
+    const prevOrder = cardOrderRef.current;
+    const nextPositions = new Map<string, number>();
+    const nextOrder = Array.from(cardElsRef.current.keys());
+
+    if (!container) {
+      cardPositionsRef.current = nextPositions;
+      cardOrderRef.current = nextOrder;
+      return;
+    }
+
+    const containerTop = container.getBoundingClientRect().top;
+    for (const [id, el] of cardElsRef.current) {
+      nextPositions.set(id, el.getBoundingClientRect().top - containerTop);
+    }
+
+    const orderChanged =
+      prevOrder.length !== nextOrder.length ||
+      prevOrder.some((id, i) => id !== nextOrder[i]);
+
+    if (orderChanged && container.scrollTop > 0) {
+      let anchorId: string | null = null;
+      let anchorPrevTop = Infinity;
+      for (const [id, prevTop] of prevPositions) {
+        if (prevTop < -TOP_THRESHOLD_PX) continue;
+        if (!nextPositions.has(id)) continue;
+        if (prevTop < anchorPrevTop) {
+          anchorPrevTop = prevTop;
+          anchorId = id;
+        }
+      }
+      if (anchorId !== null) {
+        const delta = nextPositions.get(anchorId)! - anchorPrevTop;
+        if (delta !== 0) {
+          suppressNextScroll?.();
+          nudgeScrollTop(container, delta);
+          for (const [id, top] of nextPositions) {
+            nextPositions.set(id, top - delta);
+          }
+        }
+      }
+    }
+
+    cardOrderRef.current = nextOrder;
+    cardPositionsRef.current = nextPositions;
+  });
+
   if (!loaded) return null;
 
   const cardOrder = buildCardOrder(intents).filter((card) => {
@@ -358,14 +464,15 @@ export function MilestoneDecisionInbox({
           return (
             <div
               key={intent.id}
-              ref={(el) =>
+              ref={(el) => {
+                registerCardEl(intent.id, el);
                 registerScrollTarget?.(
                   intent.id,
                   el && onSelectIntent
                     ? { el, select: () => onSelectIntent(intent) }
                     : null,
-                )
-              }
+                );
+              }}
               className={`${panelStyles.group}${
                 selectedCardId === intent.id ? ` ${styles.selectedCard}` : ''
               }`}
@@ -461,14 +568,15 @@ export function MilestoneDecisionInbox({
         return (
           <div
             key={groupId}
-            ref={(el) =>
+            ref={(el) => {
+              registerCardEl(groupId, el);
               registerScrollTarget?.(
                 groupId,
                 el && onSelectIntent && groupIntents[0]
                   ? { el, select: () => onSelectIntent(groupIntents[0]) }
                   : null,
-              )
-            }
+              );
+            }}
           >
             <GroupCard
               groupId={groupId}

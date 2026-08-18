@@ -216,6 +216,14 @@ export function MilestoneDecisionStack({
     return () => container.removeEventListener('scroll', handleScroll);
   }, [scrollContainerRef, selectTopmost]);
 
+  // The inbox's own compensation effect (it, not this component, re-renders
+  // when a live intent arrival changes useDecisionQueue's list) needs to
+  // suppress the one scroll event its own scrollTop nudge triggers, same as
+  // an explicit card click does above.
+  const suppressNextScroll = useCallback(() => {
+    suppressNextScrollRef.current = true;
+  }, []);
+
   // Fires once a disposition (single, group, or batch) has removed the
   // currently-selected card and the removal's DOM update has committed —
   // ref cleanups (registerInboxTarget/registerTaskTarget) run during commit,
@@ -257,6 +265,8 @@ export function MilestoneDecisionStack({
         registerScrollTarget={registerInboxTarget}
         onCardsRemoved={handleCardsRemoved}
         keyboardHighlightedId={keyboardHighlightedId}
+        scrollContainerRef={scrollContainerRef}
+        suppressNextScroll={suppressNextScroll}
       />
 
       <TaskSection
