@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3';
+import path from 'path';
+import { Worker } from 'worker_threads';
 import { createHash, randomUUID } from 'crypto';
 import { db } from './db';
 import { logger } from '../logger';
@@ -8574,10 +8576,15 @@ let _txReplaceFlaggedFlakyTestsRollup: ((...args: unknown[]) => void) | null =
 /**
  * Recomputes `projectId`'s flagged-flaky set from full history via
  * listFlaggedFlakyTests and replaces its rows in flagged_flaky_tests_rollup
- * wholesale, inside one transaction. Called on FlakyTestRollupJob's
- * scheduler cadence, never on the lane-health request path.
+ * wholesale, inside one transaction, on the shared main-thread `db`
+ * connection. Only safe to call directly against an in-memory (test) or
+ * otherwise unknown-path database — see
+ * replaceFlaggedFlakyTestsRollupOffMainThread, which dispatches this same
+ * recompute to a worker thread for a real on-disk database instead. Called
+ * on FlakyTestRollupJob's scheduler cadence, never on the lane-health
+ * request path.
  */
-export function replaceFlaggedFlakyTestsRollup(
+function replaceFlaggedFlakyTestsRollupSync(
   projectId: string,
   windowN: number,
   thresholdK: number,
@@ -8619,6 +8626,117 @@ export function replaceFlaggedFlakyTestsRollup(
   _txReplaceFlaggedFlakyTestsRollup(projectId, flagged, computedAt);
 
   return { itemsProcessed: flagged.length };
+}
+
+/**
+ * Dispatches replaceFlaggedFlakyTestsRollupSync's recompute to a worker
+ * thread that opens its OWN connection against `targetPath`, instead of
+ * running it on the shared main-thread `db` connection. listFlaggedFlakyTests
+ * is one synchronous, unyieldable full test_run_results scan per project —
+ * better-sqlite3 has no async API to yield within it — so running it inline
+ * would block every Express route, WebSocket handler, and other scheduled
+ * job for the scan's full duration (documented at 7.6s+ at 1.5M rows,
+ * growing daily). See flakyTestRollupWorker.ts for the worker entry point,
+ * and runWalTruncateCheckpointOffMainThread in db.ts for the identical
+ * pattern applied to the hourly WAL TRUNCATE checkpoint.
+ *
+ * Falls back to the in-process sync path for `:memory:` (no second
+ * connection can open against an in-memory database) and for any other
+ * falsy path, as a defensive default rather than handing an unusable
+ * value to `new Database()` as a real worker target.
+ */
+export function replaceFlaggedFlakyTestsRollupOffMainThread(
+  targetPath: string | undefined,
+  projectId: string,
+  windowN: number,
+  thresholdK: number,
+  computedAt: number,
+): Promise<{ itemsProcessed: number }> {
+  if (!targetPath || targetPath === ':memory:') {
+    return Promise.resolve(
+      replaceFlaggedFlakyTestsRollupSync(
+        projectId,
+        windowN,
+        thresholdK,
+        computedAt,
+      ),
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const isTsNode = __filename.endsWith('.ts');
+    const workerPath = path.join(
+      __dirname,
+      isTsNode ? 'flakyTestRollupWorker.ts' : 'flakyTestRollupWorker.js',
+    );
+    const worker = new Worker(workerPath, {
+      workerData: {
+        dbPath: targetPath,
+        projectId,
+        windowN,
+        thresholdK,
+        computedAt,
+      },
+      execArgv: isTsNode ? ['-r', 'ts-node/register/transpile-only'] : [],
+    });
+    let settled = false;
+    worker.once(
+      'message',
+      (
+        msg:
+          | { ok: true; result: { itemsProcessed: number } }
+          | { ok: false; error: string },
+      ) => {
+        settled = true;
+        if (msg.ok) {
+          resolve(msg.result);
+        } else {
+          reject(new Error(`[flaky_test_rollup] worker failed: ${msg.error}`));
+        }
+        void worker.terminate();
+      },
+    );
+    worker.once('error', (err) => {
+      settled = true;
+      reject(err);
+    });
+    worker.once('exit', (code) => {
+      if (!settled) {
+        reject(
+          new Error(
+            `[flaky_test_rollup] worker exited with code ${code} before reporting a result`,
+          ),
+        );
+      }
+    });
+  });
+}
+
+/**
+ * Public entry point used by FlakyTestRollupJob: recomputes `projectId`'s
+ * flagged-flaky set off the shared main-thread `db` connection. See
+ * replaceFlaggedFlakyTestsRollupOffMainThread for why.
+ *
+ * Dispatches against `db.name` (better-sqlite3's own record of the path it
+ * was opened with) rather than the `dbPath` sibling export from db.ts — a
+ * test file that mocks db.js to swap in its own in-memory `db` (see e.g.
+ * flakyTestRollup.queries.test.ts) has no reason to also stub `dbPath`, so
+ * reading that binding here would silently see whatever the real db.ts
+ * module resolved it to and dispatch a worker against the wrong file.
+ * `db.name` can never disagree with the connection actually in use.
+ */
+export function replaceFlaggedFlakyTestsRollup(
+  projectId: string,
+  windowN: number,
+  thresholdK: number,
+  computedAt: number,
+): Promise<{ itemsProcessed: number }> {
+  return replaceFlaggedFlakyTestsRollupOffMainThread(
+    db.name,
+    projectId,
+    windowN,
+    thresholdK,
+    computedAt,
+  );
 }
 
 let _stmtGetFlaggedFlakyTestsRollup: Database.Statement | null = null;
