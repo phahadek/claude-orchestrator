@@ -4957,6 +4957,7 @@ function transitionRejectedIntent(
   outcome: StagedIntentRejectOutcome,
   reason: string,
   provenance: 'auto' | 'operator' = 'operator',
+  cache?: RowToApiCache,
 ): { intent: StagedIntent; row: StagedIntentRow } {
   // pushback (including an apply-time failure, which is always pushback) is
   // revisable — it lands in needs_revision, the same state the stage-time
@@ -4986,7 +4987,7 @@ function transitionRejectedIntent(
       ? { annotation: JSON.stringify({ autoRejected: true }) }
       : {}),
   });
-  const rejectedIntent = rowToApi(rejected);
+  const rejectedIntent = rowToApi(rejected, cache);
   broadcastIntentChange(rejectedIntent);
 
   recordEvent({
@@ -7405,8 +7406,15 @@ export async function commitGroupIntents(
   // before any task.setDependsOn naming that sibling — see
   // stageSplitIntents), so the id is always present here.
   const createdTaskIds = new Map<string, string>();
+  // Shared across every member of this commit so rowToApi's
+  // computeGroupBlockedSignals (and its listStagedIntentsByGroup re-read +
+  // per-session completeness resolution) runs once per group per commit
+  // instead of once per member — see 39423079, which fixed the same
+  // quadratic pattern on the GET listing routes but never touched this
+  // write-path loop.
+  const cache = createRowToApiCache();
   for (const row of ordered) {
-    const intent = rowToApi(row);
+    const intent = rowToApi(row, cache);
     try {
       if (intent.kind === 'task.setDependsOn') {
         const payload = intent.payload as SetDependsOnPayload;
@@ -7441,7 +7449,7 @@ export async function commitGroupIntents(
       const committedRow = transitionStagedIntent(intent.id, 'committed', {
         annotation: readinessAdvisoryAnnotation(intent, result),
       });
-      broadcastIntentChange(rowToApi(committedRow));
+      broadcastIntentChange(rowToApi(committedRow, cache));
       mirrorJournalDecisionIfStagedProposal(
         intent,
         (result as { previousState?: OpsState } | undefined)?.previousState,
@@ -8569,9 +8577,14 @@ export function createStagedIntentsRouter(
 
       const rejected: string[] = [];
       const forGroupDisposition: StagedIntentRow[] = [];
+      // Shared across every member of this group reject so rowToApi's
+      // computeGroupBlockedSignals runs once per group instead of once per
+      // member — mirrors the same fix applied to commitGroupIntents' apply
+      // loop above (see 39423079 for the original read-path fix).
+      const cache = createRowToApiCache();
       for (const row of target) {
         const { intent: rejectedIntent, row: rejectedRow } =
-          transitionRejectedIntent(row, outcome, reason);
+          transitionRejectedIntent(row, outcome, reason, 'operator', cache);
         rejected.push(rejectedIntent.id);
 
         if (rejectedIntent.kind === 'session.requestCapability') {
