@@ -3,6 +3,26 @@ import { logger } from '../logger';
 import { insertSchedulerAudit } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 
+export type JobRunStatus = 'ok' | 'failed' | 'skipped' | 'degraded';
+
+/**
+ * Scheduler-wide cap on jobs actually executing at once. Each job already
+ * serializes against itself (see `concurrency`), but with no cross-job bound
+ * every job's independent setTimeout can expire during the same event-loop
+ * block and all become runnable the instant the loop drains — a thundering
+ * herd that then serializes into one contiguous mega-block. This bound
+ * forces the rest to queue (FIFO) and run in sequence instead.
+ */
+export const GLOBAL_MAX_CONCURRENT_JOBS = 4;
+
+/**
+ * A completed ('ok') tick that processed zero items and ran at/above this
+ * duration or event-loop-blocked time is reclassified as 'degraded' — a
+ * multi-minute tick that did no work is indistinguishable from a wedged one,
+ * not a healthy no-op, and must not be reported as ok.
+ */
+export const DEGRADED_TICK_THRESHOLD_MS = 5 * 60 * 1000;
+
 export interface JobOptions {
   name: string;
   intervalMs: number | (() => number);
@@ -22,7 +42,7 @@ export interface JobStatus {
   name: string;
   running: boolean;
   lastRunAt: string | null;
-  lastStatus: 'ok' | 'failed' | 'skipped' | null;
+  lastStatus: JobRunStatus | null;
   nextRunAt: string | null;
 }
 
@@ -33,7 +53,7 @@ interface JobState {
   queued: boolean;
   abortController: AbortController | null;
   lastRunAt: string | null;
-  lastStatus: 'ok' | 'failed' | 'skipped' | null;
+  lastStatus: JobRunStatus | null;
   nextRunAt: string | null;
   stopped: boolean;
 }
@@ -41,6 +61,8 @@ interface JobState {
 export class Scheduler {
   private jobs = new Map<string, JobState>();
   private broadcast: ((msg: ServerMessage) => void) | null = null;
+  private globalRunning = 0;
+  private admissionQueue: Array<() => void> = [];
 
   setBroadcast(fn: (msg: ServerMessage) => void): void {
     this.broadcast = fn;
@@ -105,6 +127,34 @@ export class Scheduler {
     state.timer.unref?.();
   }
 
+  /**
+   * Resolves once the caller is admitted into the global concurrency
+   * window. When the window is saturated the resolver is queued FIFO, so a
+   * job deferred here is always released in arrival order — never starved
+   * behind jobs that keep getting readmitted ahead of it.
+   */
+  private _admitGlobalSlot(): Promise<void> {
+    if (
+      this.globalRunning < GLOBAL_MAX_CONCURRENT_JOBS &&
+      this.admissionQueue.length === 0
+    ) {
+      this.globalRunning++;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.admissionQueue.push(resolve);
+    });
+  }
+
+  private _releaseGlobalSlot(): void {
+    this.globalRunning--;
+    const next = this.admissionQueue.shift();
+    if (next) {
+      this.globalRunning++;
+      next();
+    }
+  }
+
   private async _runJob(state: JobState): Promise<void> {
     const concurrency = state.opts.concurrency ?? 'skip-if-running';
 
@@ -146,6 +196,12 @@ export class Scheduler {
     state.running = true;
     state.queued = false;
     state.nextRunAt = null;
+
+    // Cross-job admission bound: waits here if the global concurrency
+    // window is saturated, so timing/measurement below reflects actual
+    // execution, not queueing.
+    await this._admitGlobalSlot();
+
     const startedAt = Date.now();
     // Sampled immediately before the job's await and diffed at completion —
     // eventLoopUtilization(startElu) yields the loop-active time attributable
@@ -180,9 +236,13 @@ export class Scheduler {
       );
       state.running = false;
       state.abortController = null;
-      const itemsProcessed = (
-        result as { items_processed?: number } | undefined
-      )?.items_processed;
+      this._releaseGlobalSlot();
+      // Jobs must report items_processed explicitly, so a genuine zero is
+      // distinguishable from "unreported" — a job that returns nothing
+      // (or omits the field) is recorded as having processed zero items.
+      const itemsProcessed =
+        (result as { items_processed?: number } | undefined)
+          ?.items_processed ?? 0;
 
       if (state.queued && !state.stopped) {
         state.queued = false;
@@ -191,9 +251,18 @@ export class Scheduler {
         this._scheduleNext(state);
       }
 
+      const durationMs = completedAt - startedAt;
+      const finalStatus: JobRunStatus =
+        runStatus === 'ok' &&
+        itemsProcessed === 0 &&
+        (durationMs >= DEGRADED_TICK_THRESHOLD_MS ||
+          eventLoopBlockedMs >= DEGRADED_TICK_THRESHOLD_MS)
+          ? 'degraded'
+          : runStatus;
+
       await this._emitAudit(
         state,
-        runStatus,
+        finalStatus,
         startedAt,
         completedAt,
         itemsProcessed,
@@ -205,7 +274,7 @@ export class Scheduler {
 
   private async _emitAudit(
     state: JobState,
-    status: 'ok' | 'failed' | 'skipped',
+    status: JobRunStatus,
     startedAtMs: number,
     completedAtMs: number,
     itemsProcessed: number | undefined,

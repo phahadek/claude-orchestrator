@@ -5925,7 +5925,7 @@ export function markSessionEventsPruned(
 
 export interface NewSchedulerAuditRow {
   job: string;
-  status: 'ok' | 'failed' | 'skipped';
+  status: 'ok' | 'failed' | 'skipped' | 'degraded';
   started_at: string;
   completed_at: string;
   duration_ms: number;
