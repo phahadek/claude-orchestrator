@@ -87,6 +87,7 @@ describe('isRunFailureBaseAttributable', () => {
     insertTestRequestRun('run-own', 'proj-1', 'hash-a', null, Date.now());
     insertTestRunResults(
       'run-own',
+      'proj-1',
       [{ test_id: 't1', name: 'test one', outcome: 'failed', duration_ms: 1 }],
       null,
       false,
@@ -94,6 +95,7 @@ describe('isRunFailureBaseAttributable', () => {
     insertTestRequestRun('run-base', 'proj-1', 'hash-base', null, Date.now());
     insertTestRunResults(
       'run-base',
+      'proj-1',
       [
         { test_id: 't1', name: 'test one', outcome: 'failed', duration_ms: 1 },
         { test_id: 't2', name: 'test two', outcome: 'failed', duration_ms: 1 },
@@ -115,6 +117,7 @@ describe('isRunFailureBaseAttributable', () => {
     insertTestRequestRun('run-own-2', 'proj-1', 'hash-a', null, Date.now());
     insertTestRunResults(
       'run-own-2',
+      'proj-1',
       [
         { test_id: 't1', name: 'test one', outcome: 'failed', duration_ms: 1 },
         {
@@ -130,6 +133,7 @@ describe('isRunFailureBaseAttributable', () => {
     insertTestRequestRun('run-base-2', 'proj-1', 'hash-base', null, Date.now());
     insertTestRunResults(
       'run-base-2',
+      'proj-1',
       [{ test_id: 't1', name: 'test one', outcome: 'failed', duration_ms: 1 }],
       null,
       false,

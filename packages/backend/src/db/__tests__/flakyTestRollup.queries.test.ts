@@ -42,10 +42,11 @@ function insertTestResult(opts: {
   });
   db.prepare(
     `INSERT INTO test_run_results
-       (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
-     VALUES (@run_id, @test_id, @name, @outcome, 1, 0, 0, @created_at)`,
+       (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+     VALUES (@run_id, @project_id, @test_id, @name, @outcome, 1, 0, 0, @created_at)`,
   ).run({
     run_id: runId,
+    project_id: opts.projectId,
     test_id: opts.testId,
     name: opts.name,
     outcome: opts.outcome,

@@ -1133,6 +1133,7 @@ export interface StructuredTestResult {
 export interface TestRunResultRow {
   id: number;
   test_request_run_id: string;
+  project_id: string;
   test_id: string;
   name: string;
   outcome: string;

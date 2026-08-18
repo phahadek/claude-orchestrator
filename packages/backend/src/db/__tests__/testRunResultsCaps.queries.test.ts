@@ -44,7 +44,7 @@ describe('listTestRunResultsForRun row cap', () => {
       outcome: 'passed',
       duration_ms: 10,
     }));
-    insertTestRunResults(runId, tests, 0, false);
+    insertTestRunResults(runId, 'proj-1', tests, 0, false);
 
     expect(countTestRunResultsForRun(runId)).toBe(rowCount);
     const results = listTestRunResultsForRun(runId);
@@ -63,7 +63,7 @@ describe('listTestRunResultsForRun row cap', () => {
         duration_ms: 10,
       }),
     );
-    insertTestRunResults(runId, tests, 0, false);
+    insertTestRunResults(runId, 'proj-1', tests, 0, false);
 
     expect(countTestRunResultsForRun(runId)).toBe(
       TEST_RUN_RESULTS_PER_RUN_CAP + 1,

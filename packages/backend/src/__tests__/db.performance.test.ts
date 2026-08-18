@@ -1331,11 +1331,12 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
     typedDb
       .prepare(
         `INSERT INTO test_run_results
-           (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
-         VALUES (@run_id, @test_id, @name, @outcome, 1, 0, 0, @created_at)`,
+           (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+         VALUES (@run_id, @project_id, @test_id, @name, @outcome, 1, 0, 0, @created_at)`,
       )
       .run({
         run_id: runId,
+        project_id: opts.projectId,
         test_id: opts.testId,
         name: opts.name,
         outcome: opts.outcome,
@@ -1351,6 +1352,26 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
       DELETE FROM flagged_flaky_tests_rollup_watermark;
     `);
     seq = 0;
+  });
+
+  it("the guard query's EXPLAIN QUERY PLAN searches test_run_results directly, with no join to test_request_runs", () => {
+    const plan = typedDb
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT COUNT(*) AS row_count, MAX(id) AS max_id
+         FROM test_run_results
+         WHERE project_id = @project_id AND id > @since_id`,
+      )
+      .all({ project_id: 'proj-1', since_id: 0 }) as { detail: string }[];
+
+    const referencesTestRequestRuns = plan.some((row) =>
+      row.detail.includes('test_request_runs'),
+    );
+    expect(referencesTestRequestRuns).toBe(false);
+    const usesProjectIdIndex = plan.some((row) =>
+      row.detail.includes('idx_test_run_results_project_id_id'),
+    );
+    expect(usesProjectIdIndex).toBe(true);
   });
 
   it('a second tick with no new test_run_results rows recomputes zero tests and leaves the rollup unchanged', async () => {
@@ -1526,8 +1547,8 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
         fileDb
           .prepare(
             `INSERT INTO test_run_results
-                 (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
-               VALUES (@run_id, 'test-wm', 'suite > wm', @outcome, 1, 0, 0, @created_at)`,
+                 (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+               VALUES (@run_id, 'proj-wm', 'test-wm', 'suite > wm', @outcome, 1, 0, 0, @created_at)`,
           )
           .run({ run_id: runId, outcome, created_at: createdAt });
       }
