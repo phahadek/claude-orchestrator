@@ -96,7 +96,12 @@ function listFlaggedFlakyTests(
 
   const flagged: FlaggedFlakyTest[] = [];
   for (const row of rows) {
-    const flag = computeTestFlipRateFlag(database, row.test_id, windowN, thresholdK);
+    const flag = computeTestFlipRateFlag(
+      database,
+      row.test_id,
+      windowN,
+      thresholdK,
+    );
     if (flag.flagged) {
       flagged.push({
         testId: row.test_id,
@@ -114,7 +119,12 @@ function run(): FlakyTestRollupWorkerResult {
     workerData as FlakyTestRollupWorkerData;
   const database = new Database(dbPath);
   try {
-    const flagged = listFlaggedFlakyTests(database, projectId, windowN, thresholdK);
+    const flagged = listFlaggedFlakyTests(
+      database,
+      projectId,
+      windowN,
+      thresholdK,
+    );
 
     const replace = database.transaction(() => {
       database

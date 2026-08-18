@@ -8655,7 +8655,12 @@ export function replaceFlaggedFlakyTestsRollupOffMainThread(
 ): Promise<{ itemsProcessed: number }> {
   if (!targetPath || targetPath === ':memory:') {
     return Promise.resolve(
-      replaceFlaggedFlakyTestsRollupSync(projectId, windowN, thresholdK, computedAt),
+      replaceFlaggedFlakyTestsRollupSync(
+        projectId,
+        windowN,
+        thresholdK,
+        computedAt,
+      ),
     );
   }
   return new Promise((resolve, reject) => {
@@ -8665,7 +8670,13 @@ export function replaceFlaggedFlakyTestsRollupOffMainThread(
       isTsNode ? 'flakyTestRollupWorker.ts' : 'flakyTestRollupWorker.js',
     );
     const worker = new Worker(workerPath, {
-      workerData: { dbPath: targetPath, projectId, windowN, thresholdK, computedAt },
+      workerData: {
+        dbPath: targetPath,
+        projectId,
+        windowN,
+        thresholdK,
+        computedAt,
+      },
       execArgv: isTsNode ? ['-r', 'ts-node/register/transpile-only'] : [],
     });
     let settled = false;
@@ -8680,9 +8691,7 @@ export function replaceFlaggedFlakyTestsRollupOffMainThread(
         if (msg.ok) {
           resolve(msg.result);
         } else {
-          reject(
-            new Error(`[flaky_test_rollup] worker failed: ${msg.error}`),
-          );
+          reject(new Error(`[flaky_test_rollup] worker failed: ${msg.error}`));
         }
         void worker.terminate();
       },
