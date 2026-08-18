@@ -529,9 +529,10 @@ Design tasks. Distinct from `/groom` and `/design`, which work an *existing* mil
 backlog.
 
 Procedure lives in the **`/milestone-seed` skill** (`skills/milestone-seed/`). It ends with <!-- path-check:ignore -->
-the board **seeded and inert** — registering and activating the milestone belongs to
-`/milestone-wrap`, which is what makes it safe to seed while the prior milestone is still
-running.
+the board **seeded and registered** (a `milestones` row + grooming-manifest entry, created
+in the skill's own Step 4) but **not activated** — activating the milestone (repointing
+`auto_launch_milestone_id`, arming flows) belongs to `/milestone-wrap`, which is what makes
+it safe to seed while the prior milestone is still running.
 
 > This section was previously the full procedure text, carried here because the skill was
 > local-only and unversioned — this file was its only backup. The skill now has a source
