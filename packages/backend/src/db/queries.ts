@@ -8136,15 +8136,33 @@ export function listTestRequestRunsForSession(
  */
 export const FLIP_RATE_FLAG_TEST_ID_CAP = 200;
 
+/**
+ * computeTestFlipRateFlag over a caller-supplied set of test ids — the
+ * set-based path shared by getTaskTestFlipRateFlags (capped, task-scoped)
+ * and the flaky-rollup incremental recompute (uncapped, restricted upstream
+ * to test ids with new test_run_results rows since the rollup's watermark).
+ * Still one prepared-statement round trip per test id — the flip-rate window
+ * is inherently per-test (an ordered outcome sequence for that id) — but
+ * callers bound the id set themselves rather than looping over every test in
+ * a project.
+ */
+export function computeTestFlipRateFlagsForTestIds(
+  testIds: string[],
+  windowN: number,
+  thresholdK: number,
+): TestFlipRateFlag[] {
+  return testIds.map((testId) =>
+    computeTestFlipRateFlag(testId, windowN, thresholdK),
+  );
+}
+
 export function getTaskTestFlipRateFlags(
   testIds: string[],
   windowN: number,
   thresholdK: number,
 ): TestFlipRateFlag[] {
   const uniqueIds = [...new Set(testIds)].slice(0, FLIP_RATE_FLAG_TEST_ID_CAP);
-  return uniqueIds.map((testId) =>
-    computeTestFlipRateFlag(testId, windowN, thresholdK),
-  );
+  return computeTestFlipRateFlagsForTestIds(uniqueIds, windowN, thresholdK);
 }
 
 /**
@@ -8652,21 +8670,135 @@ export function listFlaggedFlakyTests(
   return flagged;
 }
 
-let _stmtDeleteFlaggedFlakyTestsRollup: Database.Statement | null = null;
+let _stmtGetFlakyRollupWatermark: Database.Statement | null = null;
+let _stmtSetFlakyRollupWatermark: Database.Statement | null = null;
+
+/** Highest test_run_results.id already folded into `projectId`'s flagged_flaky_tests_rollup rows. 0 (never recomputed) if no row exists. */
+export function getFlakyRollupWatermark(projectId: string): number {
+  _stmtGetFlakyRollupWatermark ??= db.prepare<{ project_id: string }>(`
+    SELECT last_test_run_result_id FROM flagged_flaky_tests_rollup_watermark
+    WHERE project_id = @project_id
+  `);
+  const row = _stmtGetFlakyRollupWatermark.get({
+    project_id: projectId,
+  }) as { last_test_run_result_id: number } | undefined;
+  return row?.last_test_run_result_id ?? 0;
+}
+
+function setFlakyRollupWatermark(
+  projectId: string,
+  lastTestRunResultId: number,
+  updatedAt: number,
+): void {
+  _stmtSetFlakyRollupWatermark ??= db.prepare<{
+    project_id: string;
+    last_test_run_result_id: number;
+    updated_at: number;
+  }>(`
+    INSERT INTO flagged_flaky_tests_rollup_watermark
+      (project_id, last_test_run_result_id, updated_at)
+    VALUES (@project_id, @last_test_run_result_id, @updated_at)
+    ON CONFLICT(project_id) DO UPDATE SET
+      last_test_run_result_id = excluded.last_test_run_result_id,
+      updated_at = excluded.updated_at
+  `);
+  _stmtSetFlakyRollupWatermark.run({
+    project_id: projectId,
+    last_test_run_result_id: lastTestRunResultId,
+    updated_at: updatedAt,
+  });
+}
+
+interface FlakyRollupCandidates {
+  testIds: string[];
+  names: Map<string, string>;
+  rowsExamined: number;
+  maxId: number;
+}
+
+let _stmtFlakyRollupNewRowStats: Database.Statement | null = null;
+let _stmtFlakyRollupCandidateTestIds: Database.Statement | null = null;
+
+/**
+ * The test ids with at least one test_run_results row past `sinceId` for
+ * `projectId`, plus each one's latest name and the overall new-row count/max
+ * id — the bounded replacement for listFlaggedFlakyTests' unscoped
+ * project-wide GROUP BY. Both statements filter on `trr.id > @since_id`
+ * first (id is test_run_results' rowid-aliased primary key, so this is a
+ * bounded range scan) before joining test_request_runs, so cost tracks the
+ * number of rows inserted since the last tick, not the table's full size.
+ */
+function getFlakyRollupCandidates(
+  projectId: string,
+  sinceId: number,
+): FlakyRollupCandidates {
+  _stmtFlakyRollupNewRowStats ??= db.prepare<{
+    project_id: string;
+    since_id: number;
+  }>(`
+    SELECT COUNT(*) AS row_count, MAX(trr.id) AS max_id
+    FROM test_run_results trr
+    JOIN test_request_runs r ON r.id = trr.test_request_run_id
+    WHERE r.project_id = @project_id AND trr.id > @since_id
+  `);
+  const stats = _stmtFlakyRollupNewRowStats.get({
+    project_id: projectId,
+    since_id: sinceId,
+  }) as { row_count: number; max_id: number | null };
+
+  if (stats.row_count === 0) {
+    return { testIds: [], names: new Map(), rowsExamined: 0, maxId: sinceId };
+  }
+
+  _stmtFlakyRollupCandidateTestIds ??= db.prepare<{
+    project_id: string;
+    since_id: number;
+  }>(`
+    SELECT trr.test_id AS test_id, trr.name AS name, MAX(trr.created_at) AS created_at
+    FROM test_run_results trr
+    JOIN test_request_runs r ON r.id = trr.test_request_run_id
+    WHERE r.project_id = @project_id AND trr.id > @since_id
+    GROUP BY trr.test_id
+  `);
+  const rows = _stmtFlakyRollupCandidateTestIds.all({
+    project_id: projectId,
+    since_id: sinceId,
+  }) as { test_id: string; name: string }[];
+
+  const names = new Map<string, string>();
+  for (const row of rows) names.set(row.test_id, row.name);
+
+  return {
+    testIds: rows.map((r) => r.test_id),
+    names,
+    rowsExamined: stats.row_count,
+    maxId: stats.max_id ?? sinceId,
+  };
+}
+
+let _stmtDeleteFlaggedFlakyTestForId: Database.Statement | null = null;
 let _stmtInsertFlaggedFlakyTestsRollup: Database.Statement | null = null;
 let _txReplaceFlaggedFlakyTestsRollup: ((...args: unknown[]) => void) | null =
   null;
 
 /**
- * Recomputes `projectId`'s flagged-flaky set from full history via
- * listFlaggedFlakyTests and replaces its rows in flagged_flaky_tests_rollup
- * wholesale, inside one transaction, on the shared main-thread `db`
- * connection. Only safe to call directly against an in-memory (test) or
- * otherwise unknown-path database — see
+ * Recomputes `projectId`'s flagged-flaky set incrementally, on the shared
+ * main-thread `db` connection: only test ids with a test_run_results row
+ * past flagged_flaky_tests_rollup_watermark are re-run through
+ * computeTestFlipRateFlagsForTestIds, and only those test ids' rows in
+ * flagged_flaky_tests_rollup are touched — every other project test's
+ * previously-computed flag is left untouched, since nothing about its own
+ * sample window changed. The watermark then advances to the highest
+ * test_run_results.id folded in by this tick. Only safe to call directly
+ * against an in-memory (test) or otherwise unknown-path database — see
  * replaceFlaggedFlakyTestsRollupOffMainThread, which dispatches this same
  * recompute to a worker thread for a real on-disk database instead. Called
  * on FlakyTestRollupJob's scheduler cadence, never on the lane-health
  * request path.
+ *
+ * `itemsProcessed` reports the number of test ids actually recomputed this
+ * tick (work performed), not the number flagged — a tick that examines new
+ * rows but flags nothing is still real work, not an idle no-op.
  */
 function replaceFlaggedFlakyTestsRollupSync(
   projectId: string,
@@ -8674,10 +8806,25 @@ function replaceFlaggedFlakyTestsRollupSync(
   thresholdK: number,
   computedAt: number,
 ): { itemsProcessed: number } {
-  const flagged = listFlaggedFlakyTests(projectId, windowN, thresholdK);
+  const sinceId = getFlakyRollupWatermark(projectId);
+  const candidates = getFlakyRollupCandidates(projectId, sinceId);
 
-  _stmtDeleteFlaggedFlakyTestsRollup ??= db.prepare<{ project_id: string }>(`
-    DELETE FROM flagged_flaky_tests_rollup WHERE project_id = @project_id
+  if (candidates.testIds.length === 0) {
+    return { itemsProcessed: 0 };
+  }
+
+  const flags = computeTestFlipRateFlagsForTestIds(
+    candidates.testIds,
+    windowN,
+    thresholdK,
+  );
+
+  _stmtDeleteFlaggedFlakyTestForId ??= db.prepare<{
+    project_id: string;
+    test_id: string;
+  }>(`
+    DELETE FROM flagged_flaky_tests_rollup
+    WHERE project_id = @project_id AND test_id = @test_id
   `);
   _stmtInsertFlaggedFlakyTestsRollup ??= db.prepare<{
     project_id: string;
@@ -8693,36 +8840,57 @@ function replaceFlaggedFlakyTestsRollupSync(
       (@project_id, @test_id, @name, @sample_count, @transition_count, @computed_at)
   `);
   _txReplaceFlaggedFlakyTestsRollup ??= db.transaction(
-    (pid: string, tests: FlaggedFlakyTest[], at: number) => {
-      _stmtDeleteFlaggedFlakyTestsRollup!.run({ project_id: pid });
-      for (const t of tests) {
-        _stmtInsertFlaggedFlakyTestsRollup!.run({
+    (
+      pid: string,
+      testFlags: TestFlipRateFlag[],
+      names: Map<string, string>,
+      at: number,
+      maxId: number,
+    ) => {
+      for (const flag of testFlags) {
+        _stmtDeleteFlaggedFlakyTestForId!.run({
           project_id: pid,
-          test_id: t.testId,
-          name: t.name,
-          sample_count: t.sampleCount,
-          transition_count: t.transitionCount,
-          computed_at: at,
+          test_id: flag.testId,
         });
+        if (flag.flagged) {
+          _stmtInsertFlaggedFlakyTestsRollup!.run({
+            project_id: pid,
+            test_id: flag.testId,
+            name: names.get(flag.testId) ?? flag.testId,
+            sample_count: flag.sampleCount,
+            transition_count: flag.transitionCount,
+            computed_at: at,
+          });
+        }
       }
+      setFlakyRollupWatermark(pid, maxId, at);
     },
   ) as unknown as (...args: unknown[]) => void;
-  _txReplaceFlaggedFlakyTestsRollup(projectId, flagged, computedAt);
+  _txReplaceFlaggedFlakyTestsRollup(
+    projectId,
+    flags,
+    candidates.names,
+    computedAt,
+    candidates.maxId,
+  );
 
-  return { itemsProcessed: flagged.length };
+  return { itemsProcessed: candidates.testIds.length };
 }
 
 /**
  * Dispatches replaceFlaggedFlakyTestsRollupSync's recompute to a worker
  * thread that opens its OWN connection against `targetPath`, instead of
- * running it on the shared main-thread `db` connection. listFlaggedFlakyTests
- * is one synchronous, unyieldable full test_run_results scan per project —
- * better-sqlite3 has no async API to yield within it — so running it inline
- * would block every Express route, WebSocket handler, and other scheduled
- * job for the scan's full duration (documented at 7.6s+ at 1.5M rows,
- * growing daily). See flakyTestRollupWorker.ts for the worker entry point,
- * and runWalTruncateCheckpointOffMainThread in db.ts for the identical
- * pattern applied to the hourly WAL TRUNCATE checkpoint.
+ * running it on the shared main-thread `db` connection. The recompute is
+ * incremental (scoped to test ids with rows past the watermark) on every
+ * tick after the first, but the first-ever tick for a project — and any
+ * tick after a watermark reset — still walks that project's full
+ * test_run_results history, and better-sqlite3 has no async API to yield
+ * within it, so running it inline would block every Express route,
+ * WebSocket handler, and other scheduled job for that scan's full duration
+ * (previously documented at 7.6s+ at 1.5M rows, growing daily). See
+ * flakyTestRollupWorker.ts for the worker entry point, and
+ * runWalTruncateCheckpointOffMainThread in db.ts for the identical pattern
+ * applied to the hourly WAL TRUNCATE checkpoint.
  *
  * Falls back to the in-process sync path for `:memory:` (no second
  * connection can open against an in-memory database) and for any other

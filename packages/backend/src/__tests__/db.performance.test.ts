@@ -30,8 +30,14 @@ import {
   listAllActiveStagedIntents,
   archiveSession,
   getLastActivityMsForArchivedSessions,
+  replaceFlaggedFlakyTestsRollupOffMainThread,
+  getFlaggedFlakyTestsRollup,
 } from '../db/queries.js';
 import type Database from 'better-sqlite3';
+import RealDatabase from 'better-sqlite3';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import type { StagedIntentRow } from '../db/types.js';
 
 const typedDb = db as Database.Database;
@@ -822,4 +828,280 @@ describe('getLastActivityMsForArchivedSessions — denormalised read', () => {
     const details = plan.map((r) => r.detail).join('\n');
     expect(details).not.toContain('session_events');
   });
+});
+
+// ── flagged_flaky_tests_rollup — incremental recompute ──────────────────────
+
+describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
+  let seq = 0;
+
+  function insertTestResult(opts: {
+    projectId: string;
+    testId: string;
+    name: string;
+    outcome: 'passed' | 'failed';
+    createdAt: number;
+  }): void {
+    seq += 1;
+    const runId = `flaky-run-${seq}`;
+    typedDb
+      .prepare(
+        `INSERT INTO test_request_runs
+           (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
+         VALUES (@id, @project_id, @content_hash, NULL, 'passed', '', 0, 0, 0)`,
+      )
+      .run({
+        id: runId,
+        project_id: opts.projectId,
+        content_hash: `flaky-hash-${seq}`,
+      });
+    typedDb
+      .prepare(
+        `INSERT INTO test_run_results
+           (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+         VALUES (@run_id, @test_id, @name, @outcome, 1, 0, 0, @created_at)`,
+      )
+      .run({
+        run_id: runId,
+        test_id: opts.testId,
+        name: opts.name,
+        outcome: opts.outcome,
+        created_at: opts.createdAt,
+      });
+  }
+
+  beforeEach(() => {
+    typedDb.exec(`
+      DELETE FROM test_run_results;
+      DELETE FROM test_request_runs;
+      DELETE FROM flagged_flaky_tests_rollup;
+      DELETE FROM flagged_flaky_tests_rollup_watermark;
+    `);
+    seq = 0;
+  });
+
+  it('a second tick with no new test_run_results rows recomputes zero tests and leaves the rollup unchanged', async () => {
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-flaky',
+        name: 'suite > flaky test',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: i,
+      }),
+    );
+
+    const first = await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      1000,
+    );
+    expect(first.itemsProcessed).toBe(1);
+    const afterFirst = getFlaggedFlakyTestsRollup('proj-1');
+
+    const second = await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      2000,
+    );
+    expect(second.itemsProcessed).toBe(0);
+    expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual(afterFirst);
+  });
+
+  it('a tick following N new result rows recomputes only the test ids those rows belong to', async () => {
+    // Two tests get their first, from-scratch tick out of the way so the
+    // watermark is past both of their existing rows.
+    insertTestResult({
+      projectId: 'proj-1',
+      testId: 'test-a',
+      name: 'suite > a',
+      outcome: 'passed',
+      createdAt: 1,
+    });
+    insertTestResult({
+      projectId: 'proj-1',
+      testId: 'test-b',
+      name: 'suite > b',
+      outcome: 'passed',
+      createdAt: 2,
+    });
+    await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      1000,
+    );
+
+    // Only test-a gets a new row this tick.
+    insertTestResult({
+      projectId: 'proj-1',
+      testId: 'test-a',
+      name: 'suite > a',
+      outcome: 'failed',
+      createdAt: 3,
+    });
+
+    const StatementProto = Object.getPrototypeOf(typedDb.prepare('SELECT 1'));
+    const allSpy = vi.spyOn(StatementProto, 'all');
+    const result = await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      2000,
+    );
+    // One `.all()` call resolves the candidate test-id set (the GROUP BY),
+    // and one further `.all()` call per recomputed test id evaluates its
+    // flip-rate window (computeTestFlipRateFlag) — so with a single test id
+    // (test-a) carrying new rows, exactly 2 total `.all()` calls fire, not
+    // one per test in the project.
+    expect(allSpy).toHaveBeenCalledTimes(2);
+    allSpy.mockRestore();
+
+    expect(result.itemsProcessed).toBe(1);
+  });
+
+  it('a test id whose new results cross the flip-rate threshold becomes flagged on the next incremental tick', async () => {
+    // Starts stable — not flagged.
+    ['passed', 'passed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-c',
+        name: 'suite > c',
+        outcome: outcome as 'passed',
+        createdAt: i,
+      }),
+    );
+    const first = await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      1000,
+    );
+    expect(first.itemsProcessed).toBe(1);
+    expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual([]);
+
+    // New results flip pass/fail enough times to cross thresholdK=2.
+    ['failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-c',
+        name: 'suite > c',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: 10 + i,
+      }),
+    );
+    const second = await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      2000,
+    );
+    expect(second.itemsProcessed).toBe(1);
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
+      'test-c',
+    ]);
+  });
+
+  it('reports non-zero itemsProcessed when it examined rows but flagged nothing', async () => {
+    ['passed', 'passed', 'passed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-stable',
+        name: 'suite > stable',
+        outcome: outcome as 'passed',
+        createdAt: i,
+      }),
+    );
+
+    const result = await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      1000,
+    );
+    expect(result.itemsProcessed).toBe(1);
+    expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual([]);
+  });
+
+  it(
+    'the watermark advances across ticks and is durable across a simulated restart',
+    async () => {
+      const dir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'flaky-watermark-test-'),
+      );
+      try {
+        const file = path.join(dir, 'test.db');
+        const fileDb = new RealDatabase(file);
+        runMigrations(fileDb);
+
+        let seqLocal = 0;
+        function insertRow(outcome: 'passed' | 'failed', createdAt: number) {
+          seqLocal += 1;
+          const runId = `wm-run-${seqLocal}`;
+          fileDb
+            .prepare(
+              `INSERT INTO test_request_runs
+                 (id, project_id, content_hash, state, output, started_at, finished_at)
+               VALUES (@id, 'proj-wm', @content_hash, 'passed', '', 0, 0)`,
+            )
+            .run({ id: runId, content_hash: `wm-hash-${seqLocal}` });
+          fileDb
+            .prepare(
+              `INSERT INTO test_run_results
+                 (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+               VALUES (@run_id, 'test-wm', 'suite > wm', @outcome, 1, 0, 0, @created_at)`,
+            )
+            .run({ run_id: runId, outcome, created_at: createdAt });
+        }
+
+        insertRow('passed', 1);
+        insertRow('failed', 2);
+        fileDb.close();
+
+        const first = await replaceFlaggedFlakyTestsRollupOffMainThread(
+          file,
+          'proj-wm',
+          20,
+          2,
+          1000,
+        );
+        expect(first.itemsProcessed).toBe(1);
+
+        // Simulate a restart: open a brand-new connection against the same
+        // file and read the watermark back — never held in process memory.
+        const reopened = new RealDatabase(file);
+        const row = reopened
+          .prepare(
+            `SELECT last_test_run_result_id FROM flagged_flaky_tests_rollup_watermark WHERE project_id = ?`,
+          )
+          .get('proj-wm') as { last_test_run_result_id: number } | undefined;
+        expect(row?.last_test_run_result_id).toBe(2);
+        reopened.close();
+
+        // A second, independent worker dispatch against the same file reads
+        // the watermark it just persisted (not a fresh in-memory 0) and sees
+        // no new rows to recompute.
+        const second = await replaceFlaggedFlakyTestsRollupOffMainThread(
+          file,
+          'proj-wm',
+          20,
+          2,
+          2000,
+        );
+        expect(second.itemsProcessed).toBe(0);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    20000,
+  );
 });
