@@ -95,7 +95,7 @@ export function createLocalAsyncGitAncestrySource(
 }
 
 /** The default non-blocking git-ancestry source, used by reconcileGateRunnability. */
-export const asyncGitAncestrySource: AsyncDeployAncestrySource =
+const asyncGitAncestrySource: AsyncDeployAncestrySource =
   createLocalAsyncGitAncestrySource();
 
 /**
