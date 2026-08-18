@@ -71,6 +71,7 @@ const SETTING_KEYS = [
   'capability_auto_approve_allowlist',
   'milestone_attention_aging_threshold_seconds',
   'milestone_attention_flat_convergence_window_seconds',
+  'decision_pick_one_paragraph_threshold',
 ] as const satisfies readonly SettingKey[];
 
 type RouteSettingKey = (typeof SETTING_KEYS)[number];
@@ -239,6 +240,9 @@ function applyToRuntime(
       runtimeSettings.milestone_attention_flat_convergence_window_seconds =
         value as number;
       break;
+    case 'decision_pick_one_paragraph_threshold':
+      runtimeSettings.decision_pick_one_paragraph_threshold = value as number;
+      break;
   }
 }
 
@@ -336,6 +340,9 @@ function runtimeSettingsAsRecord(): {
     ),
     milestone_attention_flat_convergence_window_seconds: String(
       runtimeSettings.milestone_attention_flat_convergence_window_seconds,
+    ),
+    decision_pick_one_paragraph_threshold: String(
+      runtimeSettings.decision_pick_one_paragraph_threshold,
     ),
   };
 }

@@ -41,6 +41,7 @@ export interface SettingsValues {
   large_task_effort: string;
   tier3_classifier_model: string;
   capability_auto_approve_allowlist: string[];
+  decision_pick_one_paragraph_threshold: string;
 }
 
 export const MIN_POLL_INTERVAL_MS = 5000;
@@ -114,5 +115,7 @@ export function validateField(
     return 'Minimum is 1';
   if (key === 'auto_launch_poll_interval_ms' && num < MIN_POLL_INTERVAL_MS)
     return `Minimum is ${MIN_POLL_INTERVAL_MS} ms`;
+  if (key === 'decision_pick_one_paragraph_threshold' && num < 100)
+    return 'Minimum is 100';
   return null;
 }
