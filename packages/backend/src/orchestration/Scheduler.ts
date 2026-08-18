@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import { logger } from '../logger';
 import { insertSchedulerAudit } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
@@ -146,6 +147,12 @@ export class Scheduler {
     state.queued = false;
     state.nextRunAt = null;
     const startedAt = Date.now();
+    // Sampled immediately before the job's await and diffed at completion —
+    // eventLoopUtilization(startElu) yields the loop-active time attributable
+    // to this window, not the cumulative-since-boot absolute. This must not
+    // itself block: eventLoopUtilization() reads process-internal counters,
+    // it never touches the DB or does I/O.
+    const startElu = performance.eventLoopUtilization();
     const ac = new AbortController();
     state.abortController = ac;
 
@@ -168,6 +175,9 @@ export class Scheduler {
       }
     } finally {
       const completedAt = Date.now();
+      const eventLoopBlockedMs = Math.round(
+        performance.eventLoopUtilization(startElu).active,
+      );
       state.running = false;
       state.abortController = null;
       const itemsProcessed = (
@@ -188,6 +198,7 @@ export class Scheduler {
         completedAt,
         itemsProcessed,
         runError,
+        eventLoopBlockedMs,
       );
     }
   }
@@ -199,6 +210,7 @@ export class Scheduler {
     completedAtMs: number,
     itemsProcessed: number | undefined,
     error: { message: string; stack?: string } | undefined,
+    eventLoopBlockedMs?: number,
   ): Promise<void> {
     const startedAt = new Date(startedAtMs).toISOString();
     const completedAt = new Date(completedAtMs).toISOString();
@@ -214,6 +226,7 @@ export class Scheduler {
         started_at: startedAt,
         completed_at: completedAt,
         duration_ms: durationMs,
+        event_loop_blocked_ms: eventLoopBlockedMs ?? null,
         items_processed: itemsProcessed ?? null,
         error: error ? JSON.stringify(error) : null,
       });

@@ -133,6 +133,51 @@ describe('GET /api/diagnostics/scheduler', () => {
       errorCount24h: 0,
     });
   });
+
+  it('surfaces max/mean event-loop-blocked-ms aggregates from audit stats', async () => {
+    mockGetAuditStats.mockReturnValue([
+      {
+        job: 'test_job',
+        lastDurationMs: 1234,
+        runCount24h: 5,
+        errorCount24h: 1,
+        maxEventLoopBlockedMs24h: 4200,
+        meanEventLoopBlockedMs24h: 900,
+      },
+    ]);
+    const scheduler = new Scheduler();
+    scheduler.register({
+      name: 'test_job',
+      intervalMs: 1000,
+      run: async () => {},
+    });
+    const app = makeApp(scheduler);
+    const res = await request(app).get('/api/diagnostics/scheduler');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      name: 'test_job',
+      maxEventLoopBlockedMs24h: 4200,
+      meanEventLoopBlockedMs24h: 900,
+    });
+  });
+
+  it('returns null for event-loop-blocked-ms aggregates when no audit data for a job', async () => {
+    mockGetAuditStats.mockReturnValue([]);
+    const scheduler = new Scheduler();
+    scheduler.register({
+      name: 'new_job',
+      intervalMs: 1000,
+      run: async () => {},
+    });
+    const app = makeApp(scheduler);
+    const res = await request(app).get('/api/diagnostics/scheduler');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      name: 'new_job',
+      maxEventLoopBlockedMs24h: null,
+      meanEventLoopBlockedMs24h: null,
+    });
+  });
 });
 
 describe('POST /api/diagnostics/scheduler/:name/trigger', () => {
