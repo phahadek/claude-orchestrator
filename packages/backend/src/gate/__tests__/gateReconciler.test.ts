@@ -1236,6 +1236,75 @@ describe('runGateReconcilerTick — event loop yielding', () => {
   });
 });
 
+describe('reconcileGateRunnability — synchronous git-spawn hot-path regression', () => {
+  it('skips the git-ancestry check entirely for an item already in a terminal pass state', async () => {
+    const isAncestor = vi.fn(() => true);
+    const item = makeItem();
+    mergeSource(item.id, 'sha1', new Date(1).toISOString());
+    await reconcileGateRunnability('sha1', { ancestrySource: { isAncestor } });
+    expect(isAncestor).toHaveBeenCalled();
+
+    appendGateItemEvent(item.id, { disposition: 'pass' });
+    isAncestor.mockClear();
+
+    await reconcileGateRunnability('sha2', { ancestrySource: { isAncestor } });
+
+    expect(isAncestor).not.toHaveBeenCalled();
+  });
+
+  it('a regression test for runGateReconcilerTick: a realistic number of already-pass items issue no per-item ancestry check', async () => {
+    const isAncestor = vi.fn(() => true);
+    const passItemCount = 50;
+    for (let i = 0; i < passItemCount; i++) {
+      const item = makeItem({ text: `pass item ${i}` });
+      mergeSource(item.id, 'sha1', new Date(1).toISOString(), 'notion:abc');
+      appendGateItemEvent(item.id, { disposition: 'pass' });
+    }
+    // One still-open item, so the tick still has real reconciliation work to do.
+    const openItem = makeItem({ text: 'still open' });
+    mergeSource(openItem.id, 'sha1', new Date(1).toISOString());
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      ancestrySourceForProject: () => ({ isAncestor }),
+    });
+
+    // Only the one non-pass item's source should have reached the ancestry check.
+    expect(isAncestor).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not use a synchronous child-process call — the event loop stays responsive while a check is in flight', async () => {
+    const { createLocalAsyncGitAncestrySource } = await import(
+      '../gateService.js'
+    );
+    const ancestry = createLocalAsyncGitAncestrySource(process.cwd());
+
+    const order: string[] = [];
+    const timer = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        order.push('timer');
+        resolve();
+      }, 0);
+    });
+    const check = Promise.resolve(
+      ancestry.isAncestor(
+        '0000000000000000000000000000000000000a',
+        '0000000000000000000000000000000000000b',
+      ),
+    ).then(() => {
+      order.push('ancestry');
+    });
+
+    await Promise.all([timer, check]);
+
+    // A synchronous execFileSync call would run the whole ancestry check
+    // (including its subprocess spawn) to completion before this function
+    // even returns control to the microtask queue, so the timer scheduled
+    // above would have no chance to fire first.
+    expect(order[0]).toBe('timer');
+  });
+});
+
 describe('runGateReconcilerTick — verify concurrency budgeting', () => {
   /** Seeds a live (non-terminal) session row directly — bypasses SessionManager, for exercising the DB-backed count the reconciler budgets against. */
   function insertLiveSession(opts: {

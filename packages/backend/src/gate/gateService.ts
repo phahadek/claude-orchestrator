@@ -1,4 +1,5 @@
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
+import { promisify } from 'util';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import type { GateItemClassification } from '../db/types';
@@ -54,6 +55,49 @@ export function createLocalGitAncestrySource(
     },
   };
 }
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * The non-blocking twin of DeployAncestrySource, for hot paths that run this
+ * check across many items in a single tick (reconcileGateRunnability) — a
+ * synchronous execFileSync spawn there blocks the whole Node process (every
+ * concurrent request, not just this one) for the git subprocess's full
+ * lifetime, once per item, per tick. isAncestor is async here so the git
+ * spawn's I/O wait yields to the event loop instead of stalling it.
+ */
+export interface AsyncDeployAncestrySource {
+  isAncestor(
+    ancestorSha: string,
+    descendantSha: string,
+  ): boolean | Promise<boolean>;
+}
+
+/** Scoped to a specific local clone, like createLocalGitAncestrySource. */
+export function createLocalAsyncGitAncestrySource(
+  cwd?: string,
+): AsyncDeployAncestrySource {
+  return {
+    async isAncestor(ancestorSha, descendantSha) {
+      if (ancestorSha === descendantSha) return true;
+      try {
+        await execFileAsync('git', [
+          'merge-base',
+          '--is-ancestor',
+          ancestorSha,
+          descendantSha,
+        ], { cwd });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
+/** The default non-blocking git-ancestry source, used by reconcileGateRunnability. */
+export const asyncGitAncestrySource: AsyncDeployAncestrySource =
+  createLocalAsyncGitAncestrySource();
 
 /**
  * The closed disposition vocabulary an event may carry. Anything outside this
@@ -224,7 +268,7 @@ export interface ReconcileGateRunnabilityResult {
 }
 
 export interface ReconcileOptions {
-  ancestrySource?: DeployAncestrySource;
+  ancestrySource?: AsyncDeployAncestrySource;
   /** Scope reconciliation to one project's items — every deploy SHA is project-specific. */
   project?: string;
 }
@@ -269,25 +313,39 @@ function minDeployedCommitAtLastFail(item: GateItem): string | null {
  * 🎨 Assets, 🔧 Operational — produces no branch/PR, so "live" instead means
  * the source task itself has reached ✅ Done.
  */
-function isSourceCovered(
+async function isSourceCovered(
   source: GateItem['sources'][number],
   deploySha: string,
-  ancestry: DeployAncestrySource,
-): boolean {
+  ancestry: AsyncDeployAncestrySource,
+): Promise<boolean> {
   const type = getCachedType(source.sourceTaskId);
   if (type !== null && type !== '💻 Code') {
     return getCachedStatus(source.sourceTaskId) === 'Done';
   }
   return (
-    !!source.mergeCommit && ancestry.isAncestor(source.mergeCommit, deploySha)
+    !!source.mergeCommit &&
+    (await ancestry.isAncestor(source.mergeCommit, deploySha))
   );
+}
+
+/** True once every source is covered — see isSourceCovered for the per-source, Type-dependent test. */
+async function isItemCovered(
+  item: GateItem,
+  deploySha: string,
+  ancestry: AsyncDeployAncestrySource,
+): Promise<boolean> {
+  if (item.sources.length === 0) return true;
+  for (const source of item.sources) {
+    if (!(await isSourceCovered(source, deploySha, ancestry))) return false;
+  }
+  return true;
 }
 
 export async function reconcileGateRunnability(
   deploySha: string,
   options: ReconcileOptions = {},
 ): Promise<ReconcileGateRunnabilityResult> {
-  const ancestry = options.ancestrySource ?? gitAncestrySource;
+  const ancestry = options.ancestrySource ?? asyncGitAncestrySource;
   const now = new Date().toISOString();
   const markedRunnable: string[] = [];
   const reopened: string[] = [];
@@ -297,26 +355,21 @@ export async function reconcileGateRunnability(
     : gateStore.listAll();
 
   for (const item of items) {
-    // The dominant blocking cost of this loop: isSourceCovered calls
-    // execFileSync('git', ['merge-base', ...]) once per source, still
-    // synchronous, but yielding between items lets pending HTTP/WS request
-    // handling interleave rather than starving for the tick's full duration
-    // (mirroring TaskCacheRefresher's per-milestone yield).
-    await yieldToEventLoop();
-
-    // Covered only once every source is live — see isSourceCovered for the
-    // per-source, Type-dependent test. An item with no sources at all has no
-    // dependency, so it's trivially covered.
-    const covered =
-      item.sources.length === 0 ||
-      item.sources.every((source) =>
-        isSourceCovered(source, deploySha, ancestry),
-      );
-
     if (item.state === 'pass') {
       // A pass is terminal for runnability — a redeploy never re-opens it.
+      // Skipped before the ancestry check below: re-checking coverage for
+      // an item that can never change state is pure wasted git-spawn cost.
       continue;
     }
+
+    // The dominant cost of this loop is the per-source git-ancestry check
+    // (see isSourceCovered) — async so the git subprocess's I/O wait yields
+    // to the event loop instead of blocking the whole Node process for the
+    // tick's full duration. The explicit yield still lets pending HTTP/WS
+    // request handling interleave between items.
+    await yieldToEventLoop();
+
+    const covered = await isItemCovered(item, deploySha, ancestry);
 
     let state = item.state;
     let currentDisposition = item.currentDisposition;
