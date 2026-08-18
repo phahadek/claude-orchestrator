@@ -4141,7 +4141,10 @@ export function getLatestCodeSessionByNotionTaskId(
  * ops_journal entries key on the bare board id (see ops/opsLoad.ts), while
  * sessions.task_id is stored normalizeTaskId'd (source-prefixed) at dispatch
  * time (see OpsSessionLauncher.ts) — an exact match would silently never
- * find the session that closeDeferredOpsTask needs.
+ * find the session that closeDeferredOpsTask needs. SQL only pre-filters on
+ * session_type (backed by idx_sessions_session_type_started_at, see
+ * schema.ts) since the id match itself can't be expressed in SQL — bounded
+ * to ops-typed rows rather than the whole sessions table.
  */
 export function getLatestOpsSessionByTaskId(
   taskId: string,
