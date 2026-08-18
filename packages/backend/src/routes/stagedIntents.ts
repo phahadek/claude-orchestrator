@@ -2260,10 +2260,7 @@ class DecisionPickOneValidationError extends Error {
  * what the procedure asked for. Short fields are exempt — a single
  * paragraph under the threshold is legitimately prose, not a wall.
  */
-function assertParagraphBreaksIfLong(
-  fieldLabel: string,
-  value: string,
-): void {
+function assertParagraphBreaksIfLong(fieldLabel: string, value: string): void {
   const threshold = runtimeSettings.decision_pick_one_paragraph_threshold;
   if (value.length > threshold && !value.includes('\n\n')) {
     throw new DecisionPickOneValidationError(

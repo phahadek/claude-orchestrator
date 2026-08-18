@@ -37,7 +37,10 @@ function buildApp() {
 }
 
 const OPTIONS = [
-  { label: 'Option A', description: 'Rewrite the reader to stream in batches.' },
+  {
+    label: 'Option A',
+    description: 'Rewrite the reader to stream in batches.',
+  },
 ];
 
 const LONG_NO_BREAKS = 'x'.repeat(600);
@@ -64,9 +67,7 @@ describe('decision_pick_one_paragraph_threshold setting', () => {
       .send({ decision_pick_one_paragraph_threshold: 1000 });
 
     expect(res.status).toBe(200);
-    expect(res.body.current.decision_pick_one_paragraph_threshold).toBe(
-      '1000',
-    );
+    expect(res.body.current.decision_pick_one_paragraph_threshold).toBe('1000');
     expect(runtimeSettings.decision_pick_one_paragraph_threshold).toBe(1000);
   });
 
