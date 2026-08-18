@@ -3217,10 +3217,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * in-flight `verify()` dispatch (a distinct concern — settling the
    * dispatch, not the verdict) is unaffected. Fires unconditionally (no PR
    * gating) — a read-only gate-verify session has no PR of its own.
-   * Staging itself is content-idempotent (see stageIntent), so no separate
-   * dedup is needed here — unlike recordReviewDisposition/
-   * recordVerifiedFlakyDisposition above, a repeat call with the same
-   * disposition after a rejection must be allowed to re-stage.
+   * Staging itself dedups on the gate item (see stageIntent/extractTaskId's
+   * `gate-item:<id>` key), so no separate dedup is needed here — unlike
+   * recordReviewDisposition/recordVerifiedFlakyDisposition above, a repeat
+   * call with a changed disposition after a rejection must be allowed to
+   * re-stage (superseding the prior staged/approved row), and an identical
+   * repeat call is a no-op that returns the existing row.
    *
    * gateItemId must exact-match an existing gate_item row — getGateItem does
    * a plain `WHERE id = ?` lookup, so a truncated/short-form id (not
