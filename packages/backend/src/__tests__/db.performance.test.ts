@@ -30,6 +30,7 @@ import {
   listAllActiveStagedIntents,
   archiveSession,
   getLastActivityMsForArchivedSessions,
+  querySessionEventsByProjectAggregate,
   replaceFlaggedFlakyTestsRollupOffMainThread,
   getFlaggedFlakyTestsRollup,
 } from '../db/queries.js';
@@ -827,6 +828,301 @@ describe('getLastActivityMsForArchivedSessions — denormalised read', () => {
       .all() as { detail: string }[];
     const details = plan.map((r) => r.detail).join('\n');
     expect(details).not.toContain('session_events');
+  });
+});
+
+// ── sessions.first_event_at / event_count denormalisation ──────────────────
+
+describe('runMigrations — sessions.first_event_at / event_count', () => {
+  beforeEach(() => {
+    clearTables();
+  });
+
+  it('adds both columns to a fresh database and backfills pre-existing sessions', () => {
+    runMigrations(typedDb);
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'backfill-sess-1',
+      task_id: null,
+      started_at: 1000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'backfill-sess-2',
+      task_id: null,
+      started_at: 1000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'backfill-sess-no-events',
+      task_id: null,
+      started_at: 1000,
+    });
+    typedDb
+      .prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      )
+      .run('backfill-sess-1', 'text', '{}', 500);
+    typedDb
+      .prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      )
+      .run('backfill-sess-1', 'text', '{}', 900);
+    typedDb
+      .prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      )
+      .run('backfill-sess-2', 'text', '{}', 700);
+
+    // Simulate rows that predate the write-path maintenance.
+    typedDb.exec(
+      `UPDATE sessions SET last_event_at = NULL, first_event_at = NULL, event_count = 0`,
+    );
+
+    runMigrations(typedDb);
+
+    const rows = typedDb
+      .prepare(
+        `SELECT session_id, first_event_at, event_count FROM sessions ORDER BY session_id`,
+      )
+      .all() as {
+      session_id: string;
+      first_event_at: number | null;
+      event_count: number;
+    }[];
+    expect(rows).toEqual([
+      {
+        session_id: 'backfill-sess-1',
+        first_event_at: 500,
+        event_count: 2,
+      },
+      {
+        session_id: 'backfill-sess-2',
+        first_event_at: 700,
+        event_count: 1,
+      },
+      {
+        session_id: 'backfill-sess-no-events',
+        first_event_at: null,
+        event_count: 0,
+      },
+    ]);
+  });
+
+  it('running runMigrations twice does not throw and leaves both columns present', () => {
+    runMigrations(typedDb);
+    expect(() => runMigrations(typedDb)).not.toThrow();
+    const columns = typedDb.prepare(`PRAGMA table_info(sessions)`).all() as {
+      name: string;
+    }[];
+    expect(columns.map((c) => c.name)).toContain('first_event_at');
+    expect(columns.map((c) => c.name)).toContain('event_count');
+  });
+});
+
+describe('first_event_at / event_count write-path maintenance', () => {
+  beforeEach(() => {
+    clearTables();
+    runMigrations(typedDb);
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'maint-sess',
+      task_id: null,
+      started_at: 1000,
+    });
+  });
+
+  function readAggregates(sessionId: string): {
+    first_event_at: number | null;
+    last_event_at: number | null;
+    event_count: number;
+  } {
+    return typedDb
+      .prepare(
+        `SELECT first_event_at, last_event_at, event_count FROM sessions WHERE session_id = ?`,
+      )
+      .get(sessionId) as {
+      first_event_at: number | null;
+      last_event_at: number | null;
+      event_count: number;
+    };
+  }
+
+  it('insertEvent increments event_count and sets first_event_at/last_event_at', () => {
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 500,
+    });
+    expect(readAggregates('maint-sess')).toEqual({
+      first_event_at: 500,
+      last_event_at: 500,
+      event_count: 1,
+    });
+
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 700,
+    });
+    expect(readAggregates('maint-sess')).toEqual({
+      first_event_at: 500,
+      last_event_at: 700,
+      event_count: 2,
+    });
+  });
+
+  it('an out-of-order event older than the stored first_event_at moves first_event_at backwards but not last_event_at', () => {
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 500,
+    });
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 900,
+    });
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 200,
+    });
+    expect(readAggregates('maint-sess')).toEqual({
+      first_event_at: 200,
+      last_event_at: 900,
+      event_count: 3,
+    });
+  });
+});
+
+// ── querySessionEventsByProjectAggregate — denormalised unfiltered path ────
+
+describe('querySessionEventsByProjectAggregate', () => {
+  beforeEach(() => {
+    clearTables();
+    runMigrations(typedDb);
+    typedDb.exec(`DELETE FROM projects;`);
+    insertProject({
+      id: 'proj-a',
+      name: 'Project A',
+      project_dir: '/a',
+      context_url: null,
+      github_repo: 'o/a',
+      task_source: 'notion',
+    });
+    insertProject({
+      id: 'proj-b',
+      name: 'Project B',
+      project_dir: '/b',
+      context_url: null,
+      github_repo: 'o/b',
+      task_source: 'notion',
+    });
+
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'a-sess-1',
+      task_id: null,
+      started_at: 1000,
+      project_id: 'proj-a',
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'a-sess-2',
+      task_id: null,
+      started_at: 1000,
+      project_id: 'proj-a',
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'a-sess-no-events',
+      task_id: null,
+      started_at: 1000,
+      project_id: 'proj-a',
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'b-sess-1',
+      task_id: null,
+      started_at: 1000,
+      project_id: 'proj-b',
+    });
+
+    insertEvent({
+      session_id: 'a-sess-1',
+      ...makeEventRow('text').live,
+      timestamp: 100,
+    });
+    insertEvent({
+      session_id: 'a-sess-1',
+      ...makeEventRow('text').live,
+      timestamp: 300,
+    });
+    insertEvent({
+      session_id: 'a-sess-2',
+      ...makeEventRow('text').live,
+      timestamp: 200,
+    });
+    insertEvent({
+      session_id: 'b-sess-1',
+      ...makeEventRow('text').live,
+      timestamp: 400,
+    });
+  });
+
+  function legacyAggregate(projectId: string): {
+    session_id: string;
+    count: number;
+    first_timestamp: number;
+    last_timestamp: number;
+  }[] {
+    return typedDb
+      .prepare(
+        `SELECT session_events.session_id AS session_id,
+                COUNT(*) AS count,
+                MIN(session_events.timestamp) AS first_timestamp,
+                MAX(session_events.timestamp) AS last_timestamp
+         FROM session_events
+         JOIN sessions ON sessions.session_id = session_events.session_id
+         WHERE sessions.project_id = ?
+         GROUP BY session_events.session_id
+         ORDER BY last_timestamp DESC`,
+      )
+      .all(projectId) as {
+      session_id: string;
+      count: number;
+      first_timestamp: number;
+      last_timestamp: number;
+    }[];
+  }
+
+  it('unfiltered call matches the pre-change aggregate, in the same order, excluding event-less sessions', () => {
+    expect(querySessionEventsByProjectAggregate('proj-a')).toEqual(
+      legacyAggregate('proj-a'),
+    );
+    expect(querySessionEventsByProjectAggregate('proj-b')).toEqual(
+      legacyAggregate('proj-b'),
+    );
+  });
+
+  it('excludes a session with zero events', () => {
+    const rows = querySessionEventsByProjectAggregate('proj-a');
+    expect(rows.map((r) => r.session_id)).not.toContain('a-sess-no-events');
+  });
+
+  it('a filtered call still aggregates over session_events and returns the filtered result', () => {
+    const rows = querySessionEventsByProjectAggregate('proj-a', {
+      since: 250,
+    });
+    expect(rows).toEqual([
+      {
+        session_id: 'a-sess-1',
+        count: 1,
+        first_timestamp: 300,
+        last_timestamp: 300,
+      },
+    ]);
   });
 });
 

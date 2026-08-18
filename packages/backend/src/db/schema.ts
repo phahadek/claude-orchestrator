@@ -2631,6 +2631,35 @@ export function runMigrations(target: Database.Database): void {
     WHERE last_event_at IS NULL
   `);
 
+  // first_event_at / event_count: denormalised MIN(timestamp) and COUNT(*)
+  // of session_events for the owning session, maintained alongside
+  // last_event_at at the same event-insert sites (see queries.ts) so
+  // querySessionEventsByProjectAggregate's unfiltered path can read all
+  // three aggregates directly from sessions instead of scanning every
+  // session_events row ever recorded on every call.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN first_event_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN event_count INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    UPDATE sessions
+    SET first_event_at = (
+      SELECT MIN(se.timestamp) FROM session_events se WHERE se.session_id = sessions.session_id
+    ),
+    event_count = (
+      SELECT COUNT(*) FROM session_events se WHERE se.session_id = sessions.session_id
+    )
+    WHERE first_event_at IS NULL AND event_count = 0
+  `);
+
   // scheduler_audit.event_loop_blocked_ms: event-loop-busy time attributable
   // to the job's own synchronous work, sampled as an eventLoopUtilization()
   // delta across the job (see Scheduler._runJob). duration_ms is wall-clock

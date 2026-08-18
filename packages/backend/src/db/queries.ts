@@ -1890,10 +1890,12 @@ function getStmtInsertEvent(): Database.Statement {
 let _stmtBumpSessionLastEventAt: Database.Statement | null = null;
 
 /**
- * Lazily-prepared bump of sessions.last_event_at, run alongside every
- * session_events insert so the archived-sessions route can read it directly
- * instead of aggregating session_events per request. The CASE guards against
- * moving the value backwards for an out-of-order (late-arriving) event.
+ * Lazily-prepared bump of sessions.last_event_at/first_event_at/event_count,
+ * run alongside every session_events insert so the archived-sessions route
+ * and querySessionEventsByProjectAggregate's unfiltered path can read them
+ * directly instead of aggregating session_events per request. The CASEs
+ * guard against moving last_event_at backwards or first_event_at forwards
+ * for an out-of-order (late-arriving) event.
  */
 function getStmtBumpSessionLastEventAt(): Database.Statement {
   _stmtBumpSessionLastEventAt ??= db.prepare<{
@@ -1904,7 +1906,12 @@ function getStmtBumpSessionLastEventAt(): Database.Statement {
     SET last_event_at = CASE
       WHEN last_event_at IS NULL OR last_event_at < @timestamp THEN @timestamp
       ELSE last_event_at
-    END
+    END,
+    first_event_at = CASE
+      WHEN first_event_at IS NULL OR first_event_at > @timestamp THEN @timestamp
+      ELSE first_event_at
+    END,
+    event_count = event_count + 1
     WHERE session_id = @session_id
   `);
   return _stmtBumpSessionLastEventAt;
@@ -2149,12 +2156,35 @@ function buildSessionEventsFilterClauses(
  * happen, across any session in this project" without ever risking the
  * tool-result size limit a naive `SELECT *` over every session's raw
  * assistant-turn JSON would blow.
+ *
+ * Unfiltered calls (the overwhelming majority — the whole point of this
+ * tool's default shape) are served from sessions.event_count/first_event_at/
+ * last_event_at, denormalised at the session_events insert sites, instead of
+ * aggregating across the full session_events table. A filter (pattern/
+ * since/until) restricts the aggregate to a subset of events that the
+ * per-session totals can't answer, so any filtered call falls back to the
+ * original session_events aggregation.
  */
 export function querySessionEventsByProjectAggregate(
   projectId: string,
   filters: SessionEventsProjectQueryFilters = {},
 ): SessionEventsAggregateRow[] {
   const { clauses, params } = buildSessionEventsFilterClauses(filters);
+  if (clauses.length === 0) {
+    return db
+      .prepare<[string], SessionEventsAggregateRow>(
+        `
+        SELECT session_id AS session_id,
+               event_count AS count,
+               first_event_at AS first_timestamp,
+               last_event_at AS last_timestamp
+        FROM sessions
+        WHERE project_id = ? AND event_count > 0
+        ORDER BY last_event_at DESC
+      `,
+      )
+      .all(projectId);
+  }
   const whereExtra = clauses.map((c) => `AND ${c}`).join(' ');
   return db
     .prepare<(string | number)[], SessionEventsAggregateRow>(
