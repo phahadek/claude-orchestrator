@@ -6529,14 +6529,12 @@ export function getFlakyRemediationTrackingByOpenTaskId(
 // failure_reason) for a total_fail crash — see
 // audit/baseHealthRemediationFiling.ts.
 
-let _stmtGetBaseHealthRemediationTestTracking: Database.Statement | null =
-  null;
+let _stmtGetBaseHealthRemediationTestTracking: Database.Statement | null = null;
 let _stmtGetBaseHealthRemediationTestTrackingByOpenTaskId: Database.Statement | null =
   null;
 let _stmtEnsureBaseHealthRemediationTestTrackingRow: Database.Statement | null =
   null;
-let _stmtClaimBaseHealthRemediationTestFiling: Database.Statement | null =
-  null;
+let _stmtClaimBaseHealthRemediationTestFiling: Database.Statement | null = null;
 let _stmtSetBaseHealthRemediationTestLinkedTask: Database.Statement | null =
   null;
 

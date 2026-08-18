@@ -309,11 +309,7 @@ describe('recordAndMaybeFileBaseHealthRemediation — total_fail', () => {
     const first = await totalFailTrigger('hash-j1', 'timeout');
     expect(first.filed).toBe(true);
 
-    const second = await totalFailTrigger(
-      'hash-j2',
-      'timeout',
-      otherTaskId,
-    );
+    const second = await totalFailTrigger('hash-j2', 'timeout', otherTaskId);
     expect(second.filed).toBe(false);
     expect(second.reason).toBe('already-open');
     expect(createTaskMock).toHaveBeenCalledTimes(1);
