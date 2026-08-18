@@ -8,6 +8,7 @@ import {
   markSessionEventsPruned,
   getEventsBySession,
   incrementTokens,
+  isJobOverdue,
 } from '../db/queries';
 
 const BATCH_SIZE = 500;
@@ -25,9 +26,14 @@ export class SessionEventsPruner {
   ) {}
 
   register(scheduler: Scheduler): void {
+    const intervalMs = this.options.intervalMs ?? PRUNE_INTERVAL_MS;
     scheduler.register({
       name: 'session_events_pruner',
-      intervalMs: this.options.intervalMs ?? PRUNE_INTERVAL_MS,
+      intervalMs,
+      // Derived from the durable scheduler_audit record, not the in-process
+      // timer, so a restart before the interval elapses doesn't discard the
+      // pending run — see isJobOverdue.
+      runOnBoot: isJobOverdue('session_events_pruner', intervalMs),
       concurrency: 'skip-if-running',
       run: async () => {
         await this.pruneOnce();
