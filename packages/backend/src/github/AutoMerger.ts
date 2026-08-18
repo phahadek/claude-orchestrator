@@ -5,6 +5,7 @@ import {
 } from '../config';
 import { recordEvent } from '../audit/AuditLog';
 import { closeFlakyRemediationTaskIfLinked } from '../audit/flakyRemediationFiling';
+import { closeBaseHealthRemediationTaskIfLinked } from '../audit/baseHealthRemediationFiling';
 import {
   getPRByNumber,
   setHeadSha,
@@ -461,6 +462,10 @@ export class AutoMerger {
           .updateStatus(session.task_id, '✅ Done')
           .then(() => {
             closeFlakyRemediationTaskIfLinked(
+              session.task_id!,
+              new Date().toISOString(),
+            );
+            closeBaseHealthRemediationTaskIfLinked(
               session.task_id!,
               new Date().toISOString(),
             );

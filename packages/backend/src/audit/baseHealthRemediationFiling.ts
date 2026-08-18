@@ -1,23 +1,40 @@
 /**
- * Files a 💻 Code remediation task the first time a project's base branch is
- * confirmed unhealthy at a given content hash (see
- * orchestration/baseHealthCheck.ts and orchestration/baseAttributableFilter.ts,
- * the sole caller). Dedup'd per content hash — a fresh confirmation only
- * recurs once the base tree itself changes (a new content hash), so there is
- * no reopen-on-task-close path the way flaky remediation has.
+ * Files a 💻 Code remediation task once a project's base branch is confirmed
+ * unhealthy (see orchestration/baseHealthCheck.ts and
+ * orchestration/baseAttributableFilter.ts, the sole caller). Dedup'd per
+ * identity, not per base-tree content hash, mirroring
+ * flaky_remediation_tracking's proven reopen-on-close shape:
+ *  - partial_fail: keyed per failing test id (base_health_remediation_test_tracking).
+ *    A confirmation skips any test id already covered by an open remediation
+ *    and claims+files only the newly-uncovered ids, so the SAME recurring
+ *    failing tests never re-file just because an unrelated file changed the
+ *    content hash.
+ *  - total_fail: keyed per (project_id, failure_reason)
+ *    (base_health_remediation_reason_tracking), gated by a counted-once-per-
+ *    triggering-task guard (base_health_remediation_reason_counts) — a
+ *    single triggering task's own retries get only one shot at a claim, even
+ *    if the base tree moves and failure_reason drifts mid-retry.
+ * Both shapes reopen once their linked task reaches a terminal status — see
+ * closeBaseHealthRemediationTaskIfLinked, called from AutoMerger/
+ * PRMergeWatcher's PR-merge → task-Done transition.
  *
- * Reuses flakyRemediationFiling.ts's atomic-claim/dedup shape (see
- * tryClaimBaseHealthRemediationFiling), but the trigger here is this task's
- * base-health confirmation directly — explicitly NOT that filer's flip-rate
- * flaky-detection gate (computeTestFlipRateFlag), which requires alternating
- * pass/fail outcomes for the same test and discards OOM-killed samples
- * outright, so it structurally cannot fire for a deterministic,
- * always-reproducing base break.
+ * Reuses flakyRemediationFiling.ts's atomic-claim/dedup shape, but the
+ * trigger here is this task's base-health confirmation directly —
+ * explicitly NOT that filer's flip-rate flaky-detection gate
+ * (computeTestFlipRateFlag), which requires alternating pass/fail outcomes
+ * for the same test and discards OOM-killed samples outright, so it
+ * structurally cannot fire for a deterministic, always-reproducing base
+ * break.
  */
 import { logger } from '../logger';
 import {
-  setBaseHealthRemediationLinkedTask,
-  tryClaimBaseHealthRemediationFiling,
+  getBaseHealthRemediationReasonTrackingByOpenTaskId,
+  getBaseHealthRemediationTestTrackingByOpenTaskId,
+  recordBaseHealthTotalFailCount,
+  setBaseHealthRemediationReasonLinkedTask,
+  setBaseHealthRemediationTestLinkedTask,
+  tryClaimBaseHealthRemediationReasonFiling,
+  tryClaimBaseHealthRemediationTestFiling,
 } from '../db/queries';
 import {
   resolveMilestoneDatabaseId,
@@ -37,6 +54,8 @@ export interface BaseHealthRemediationTrigger {
   outcome: 'partial_fail' | 'total_fail';
   /** Failing test ids, when a per-test breakdown exists (partial_fail only). */
   failingTestIds: string[];
+  /** The base run's own failure_reason (total_fail only) — null falls back to 'generic'. */
+  failureReason: string | null;
   /** The triggering session's own task id — the filed task lands on this task's milestone. */
   triggeringTaskId: string | null;
 }
@@ -47,26 +66,21 @@ export interface BaseHealthRemediationFilingResult {
   reason?: string;
 }
 
-function renderRemediationTaskTitle(contentHash: string): string {
+function renderPartialFailTitle(contentHash: string): string {
   return `Base branch is broken (content hash ${contentHash.slice(0, 12)})`;
 }
 
-function renderRemediationTaskBody(
+function renderPartialFailBody(
   trigger: BaseHealthRemediationTrigger,
+  claimedTestIds: string[],
 ): string {
   const lines = [
     '## Evidence',
     '',
     `- Base branch content hash: \`${trigger.contentHash}\``,
-    trigger.outcome === 'total_fail'
-      ? '- On-demand base-branch health check: whole-process crash — the base tree failed its own configured test commands with no per-test breakdown at all.'
-      : `- On-demand base-branch health check: ${trigger.failingTestIds.length} failing test(s) on the base tree itself.`,
+    `- On-demand base-branch health check: ${claimedTestIds.length} failing test(s) on the base tree itself.`,
+    `- Failing tests: ${claimedTestIds.slice(0, 20).join(', ')}`,
   ];
-  if (trigger.failingTestIds.length > 0) {
-    lines.push(
-      `- Failing tests: ${trigger.failingTestIds.slice(0, 20).join(', ')}`,
-    );
-  }
   lines.push(
     '',
     '## Open question',
@@ -79,13 +93,40 @@ function renderRemediationTaskBody(
   return lines.join('\n');
 }
 
+function renderTotalFailTitle(failureReason: string): string {
+  return `Base branch is broken (failure reason ${failureReason})`;
+}
+
+function renderTotalFailBody(
+  trigger: BaseHealthRemediationTrigger,
+  failureReason: string,
+): string {
+  const lines = [
+    '## Evidence',
+    '',
+    `- Base branch content hash: \`${trigger.contentHash}\``,
+    `- Failure reason: \`${failureReason}\``,
+    '- On-demand base-branch health check: whole-process crash — the base tree failed its own configured test commands with no per-test breakdown at all.',
+    '',
+    '## Open question',
+    '',
+    'The base branch fails its own configured test commands at this content hash. ' +
+      'Dispatched task sessions are having this failure filtered out of (or their whole ' +
+      'run marked inconclusive in) their own test-request results so they are not blamed ' +
+      'for a break that predates their diff. Investigate and fix the base branch directly.',
+  ];
+  return lines.join('\n');
+}
+
 /**
- * If `trigger.contentHash` hasn't already been claimed for filing, files a
- * fresh 💻 Code remediation task against the triggering task's milestone.
- * Never throws: every failure past the claim (including backend.createTask
- * itself) is caught, logged, and releases the claim so a later confirmation
- * of the same content hash can retry — filing is best-effort and must never
- * block or delay the test-request result delivery it's attached to.
+ * If `trigger.outcome`'s dedup key hasn't already been claimed for filing
+ * (per-test-id for partial_fail, per-(project, failure_reason) for
+ * total_fail — see the module comment), files a fresh 💻 Code remediation
+ * task against the triggering task's milestone. Never throws: every failure
+ * past the claim (including backend.createTask itself) is caught, logged,
+ * and releases the claim so a later confirmation can retry — filing is
+ * best-effort and must never block or delay the test-request result
+ * delivery it's attached to.
  */
 export async function recordAndMaybeFileBaseHealthRemediation(
   trigger: BaseHealthRemediationTrigger,
@@ -96,34 +137,77 @@ export async function recordAndMaybeFileBaseHealthRemediation(
 ): Promise<BaseHealthRemediationFilingResult> {
   const resolveBackend = options.resolveBackend ?? getTaskBackend;
   const now = options.now ?? (() => new Date().toISOString());
-  const nowIso = now();
 
-  if (!tryClaimBaseHealthRemediationFiling(trigger.contentHash, nowIso)) {
-    return { filed: false, reason: 'already-open' };
+  if (trigger.outcome === 'partial_fail') {
+    return recordAndMaybeFilePartialFail(trigger, resolveBackend, now);
   }
-
-  try {
-    return await fileClaimedRemediationTask(trigger, resolveBackend, now);
-  } catch (err) {
-    logger.warn(
-      `[baseHealthRemediationFiling] failed to file remediation task for base content hash ${trigger.contentHash}: ${(err as Error).message}`,
-    );
-    setBaseHealthRemediationLinkedTask(trigger.contentHash, null, false, now());
-    return { filed: false, reason: 'create-task-failed' };
-  }
+  return recordAndMaybeFileTotalFail(trigger, resolveBackend, now);
 }
 
-async function fileClaimedRemediationTask(
+async function recordAndMaybeFilePartialFail(
   trigger: BaseHealthRemediationTrigger,
   resolveBackend: (projectId: string) => TaskBackend,
   now: () => string,
 ): Promise<BaseHealthRemediationFilingResult> {
+  if (trigger.failingTestIds.length === 0) {
+    // Zero-evidence partial_fail — treated like `unknown` for filing
+    // purposes; nothing to key a claim off of.
+    return { filed: false, reason: 'no-evidence' };
+  }
+
+  const nowIso = now();
+  const claimedTestIds = tryClaimBaseHealthRemediationTestFiling(
+    trigger.projectId,
+    trigger.failingTestIds,
+    nowIso,
+  );
+  if (claimedTestIds.length === 0) {
+    return { filed: false, reason: 'already-open' };
+  }
+
+  try {
+    return await fileClaimedPartialFailTask(
+      trigger,
+      claimedTestIds,
+      resolveBackend,
+      now,
+    );
+  } catch (err) {
+    logger.warn(
+      `[baseHealthRemediationFiling] failed to file remediation task for base content hash ${trigger.contentHash}: ${(err as Error).message}`,
+    );
+    setBaseHealthRemediationTestLinkedTask(
+      trigger.projectId,
+      claimedTestIds,
+      null,
+      false,
+      now(),
+    );
+    return { filed: false, reason: 'create-task-failed' };
+  }
+}
+
+async function fileClaimedPartialFailTask(
+  trigger: BaseHealthRemediationTrigger,
+  claimedTestIds: string[],
+  resolveBackend: (projectId: string) => TaskBackend,
+  now: () => string,
+): Promise<BaseHealthRemediationFilingResult> {
+  const release = () =>
+    setBaseHealthRemediationTestLinkedTask(
+      trigger.projectId,
+      claimedTestIds,
+      null,
+      false,
+      now(),
+    );
+
   if (!trigger.triggeringTaskId) {
     logger.warn(
       `[baseHealthRemediationFiling] base content hash ${trigger.contentHash} confirmed unhealthy ` +
         `but has no triggering task id — skipping filing`,
     );
-    setBaseHealthRemediationLinkedTask(trigger.contentHash, null, false, now());
+    release();
     return { filed: false, reason: 'no-triggering-task' };
   }
 
@@ -136,7 +220,7 @@ async function fileClaimedRemediationTask(
       `[baseHealthRemediationFiling] could not resolve milestone for triggering task ` +
         `${trigger.triggeringTaskId} (project ${trigger.projectId}) — skipping filing for content hash ${trigger.contentHash}`,
     );
-    setBaseHealthRemediationLinkedTask(trigger.contentHash, null, false, now());
+    release();
     return { filed: false, reason: 'no-resolvable-milestone' };
   }
 
@@ -148,12 +232,7 @@ async function fileClaimedRemediationTask(
       logger.warn(
         `[baseHealthRemediationFiling] ${err.message} — skipping filing for content hash ${trigger.contentHash}`,
       );
-      setBaseHealthRemediationLinkedTask(
-        trigger.contentHash,
-        null,
-        false,
-        now(),
-      );
+      release();
       return { filed: false, reason: 'unknown-milestone' };
     }
     throw err;
@@ -164,18 +243,24 @@ async function fileClaimedRemediationTask(
     logger.warn(
       `[baseHealthRemediationFiling] task backend for project ${trigger.projectId} does not support createTask`,
     );
-    setBaseHealthRemediationLinkedTask(trigger.contentHash, null, false, now());
+    release();
     return { filed: false, reason: 'backend-unsupported' };
   }
 
   const taskId = await backend.createTask({
     databaseId,
-    title: renderRemediationTaskTitle(trigger.contentHash),
+    title: renderPartialFailTitle(trigger.contentHash),
     type: REMEDIATION_TASK_TYPE,
-    body: renderRemediationTaskBody(trigger),
+    body: renderPartialFailBody(trigger, claimedTestIds),
   });
 
-  setBaseHealthRemediationLinkedTask(trigger.contentHash, taskId, true, now());
+  setBaseHealthRemediationTestLinkedTask(
+    trigger.projectId,
+    claimedTestIds,
+    taskId,
+    true,
+    now(),
+  );
 
   recordEvent({
     event_type: 'base_health_remediation_task_filed',
@@ -185,6 +270,152 @@ async function fileClaimedRemediationTask(
     payload: {
       content_hash: trigger.contentHash,
       outcome: trigger.outcome,
+      claimed_test_ids: claimedTestIds,
+      triggering_task_id: trigger.triggeringTaskId,
+      milestone,
+    },
+  });
+
+  logger.info(
+    `[baseHealthRemediationFiling] filed remediation task ${taskId} for ${claimedTestIds.length} ` +
+      `newly-uncovered base-failing test(s) (content hash ${trigger.contentHash})`,
+  );
+
+  return { filed: true, taskId };
+}
+
+async function recordAndMaybeFileTotalFail(
+  trigger: BaseHealthRemediationTrigger,
+  resolveBackend: (projectId: string) => TaskBackend,
+  now: () => string,
+): Promise<BaseHealthRemediationFilingResult> {
+  if (!trigger.triggeringTaskId) {
+    logger.warn(
+      `[baseHealthRemediationFiling] base content hash ${trigger.contentHash} confirmed unhealthy ` +
+        `but has no triggering task id — skipping filing`,
+    );
+    return { filed: false, reason: 'no-triggering-task' };
+  }
+
+  const nowIso = now();
+  const { countedThisTask } = recordBaseHealthTotalFailCount(
+    trigger.triggeringTaskId,
+    nowIso,
+  );
+  if (!countedThisTask) {
+    // This triggering task already had its one shot at a total_fail claim —
+    // a pass-through no-op regardless of whether failure_reason drifted.
+    return { filed: false, reason: 'already-counted-for-task' };
+  }
+
+  const failureReason = trigger.failureReason ?? 'generic';
+  if (
+    !tryClaimBaseHealthRemediationReasonFiling(
+      trigger.projectId,
+      failureReason,
+      nowIso,
+    )
+  ) {
+    return { filed: false, reason: 'already-open' };
+  }
+
+  try {
+    return await fileClaimedTotalFailTask(
+      trigger,
+      failureReason,
+      resolveBackend,
+      now,
+    );
+  } catch (err) {
+    logger.warn(
+      `[baseHealthRemediationFiling] failed to file remediation task for base content hash ${trigger.contentHash}: ${(err as Error).message}`,
+    );
+    setBaseHealthRemediationReasonLinkedTask(
+      trigger.projectId,
+      failureReason,
+      null,
+      false,
+      now(),
+    );
+    return { filed: false, reason: 'create-task-failed' };
+  }
+}
+
+async function fileClaimedTotalFailTask(
+  trigger: BaseHealthRemediationTrigger,
+  failureReason: string,
+  resolveBackend: (projectId: string) => TaskBackend,
+  now: () => string,
+): Promise<BaseHealthRemediationFilingResult> {
+  const release = () =>
+    setBaseHealthRemediationReasonLinkedTask(
+      trigger.projectId,
+      failureReason,
+      null,
+      false,
+      now(),
+    );
+
+  const milestone = resolveMilestoneForTaskId(
+    trigger.projectId,
+    trigger.triggeringTaskId!,
+  );
+  if (!milestone) {
+    logger.warn(
+      `[baseHealthRemediationFiling] could not resolve milestone for triggering task ` +
+        `${trigger.triggeringTaskId} (project ${trigger.projectId}) — skipping filing for content hash ${trigger.contentHash}`,
+    );
+    release();
+    return { filed: false, reason: 'no-resolvable-milestone' };
+  }
+
+  let databaseId: string;
+  try {
+    databaseId = resolveMilestoneDatabaseId(trigger.projectId, milestone);
+  } catch (err) {
+    if (err instanceof UnknownMilestoneError) {
+      logger.warn(
+        `[baseHealthRemediationFiling] ${err.message} — skipping filing for content hash ${trigger.contentHash}`,
+      );
+      release();
+      return { filed: false, reason: 'unknown-milestone' };
+    }
+    throw err;
+  }
+
+  const backend = resolveBackend(trigger.projectId);
+  if (!backend.createTask) {
+    logger.warn(
+      `[baseHealthRemediationFiling] task backend for project ${trigger.projectId} does not support createTask`,
+    );
+    release();
+    return { filed: false, reason: 'backend-unsupported' };
+  }
+
+  const taskId = await backend.createTask({
+    databaseId,
+    title: renderTotalFailTitle(failureReason),
+    type: REMEDIATION_TASK_TYPE,
+    body: renderTotalFailBody(trigger, failureReason),
+  });
+
+  setBaseHealthRemediationReasonLinkedTask(
+    trigger.projectId,
+    failureReason,
+    taskId,
+    true,
+    now(),
+  );
+
+  recordEvent({
+    event_type: 'base_health_remediation_task_filed',
+    actor_type: 'system',
+    project_id: trigger.projectId,
+    task_id: taskId,
+    payload: {
+      content_hash: trigger.contentHash,
+      outcome: trigger.outcome,
+      failure_reason: failureReason,
       triggering_task_id: trigger.triggeringTaskId,
       milestone,
     },
@@ -192,8 +423,42 @@ async function fileClaimedRemediationTask(
 
   logger.info(
     `[baseHealthRemediationFiling] filed remediation task ${taskId} for confirmed-unhealthy base ` +
-      `content hash ${trigger.contentHash} (${trigger.outcome})`,
+      `failure reason ${failureReason} (content hash ${trigger.contentHash})`,
   );
 
   return { filed: true, taskId };
+}
+
+/**
+ * Marks the remediation task linked to `taskId`'s tracking rows (if any) as
+ * closed — the sole signal that clears the way for a fresh filing on those
+ * test ids / that failure reason once a new confirmation occurs. Called from
+ * wherever a task reaches a terminal ('✅ Done') status; a no-op if `taskId`
+ * isn't currently linked as an open remediation task under either key shape.
+ */
+export function closeBaseHealthRemediationTaskIfLinked(
+  taskId: string,
+  nowIso: string,
+): void {
+  const testRows = getBaseHealthRemediationTestTrackingByOpenTaskId(taskId);
+  if (testRows.length > 0) {
+    setBaseHealthRemediationTestLinkedTask(
+      testRows[0].project_id,
+      testRows.map((r) => r.test_id),
+      taskId,
+      false,
+      nowIso,
+    );
+  }
+
+  const reasonRow = getBaseHealthRemediationReasonTrackingByOpenTaskId(taskId);
+  if (reasonRow) {
+    setBaseHealthRemediationReasonLinkedTask(
+      reasonRow.project_id,
+      reasonRow.failure_reason,
+      taskId,
+      false,
+      nowIso,
+    );
+  }
 }

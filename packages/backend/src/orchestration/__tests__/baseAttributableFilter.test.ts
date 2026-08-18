@@ -177,6 +177,32 @@ describe('filterBaseAttributableFailures', () => {
     );
   });
 
+  it('skips remediation filing for a partial_fail base outcome whose failing-test evidence is empty', async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({
+      outcome: 'partial_fail',
+      projectId: 'proj-1',
+      contentHash: 'base-hash',
+      cacheHit: true,
+      run: BASE_RUN,
+    });
+    mockGetFailingTestIdsForRun.mockImplementation((runId: string) =>
+      runId === 'run-session-1'
+        ? [{ test_id: 'suite.testA', name: 'testA' }]
+        : [],
+    );
+
+    const result = await filterBaseAttributableFailures(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    // Filtering itself is unaffected — only remediation filing is skipped
+    // for the zero-evidence base outcome.
+    expect(result.outcome).toBe('filtered_partial');
+    expect(mockRecordAndMaybeFileBaseHealthRemediation).not.toHaveBeenCalled();
+  });
+
   it('leaves the run unfiltered when the base is clean', async () => {
     mockCheckBaseBranchHealth.mockResolvedValue({
       outcome: 'clean_pass',

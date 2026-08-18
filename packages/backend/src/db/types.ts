@@ -1307,11 +1307,27 @@ export interface FlakyRemediationTrackingRow {
 }
 
 /**
- * One row per base-branch content hash ever confirmed unhealthy — see
- * queries.ts's tryClaimBaseHealthRemediationFiling / audit/baseHealthRemediationFiling.ts.
+ * One row per (project_id, test_id) ever confirmed failing on the base tree
+ * itself (partial_fail outcome) — see queries.ts's
+ * tryClaimBaseHealthRemediationTestFiling / audit/baseHealthRemediationFiling.ts.
  */
-export interface BaseHealthRemediationTrackingRow {
-  content_hash: string;
+export interface BaseHealthRemediationTestTrackingRow {
+  project_id: string;
+  test_id: string;
+  remediation_task_id: string | null;
+  remediation_task_open: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One row per (project_id, failure_reason) ever confirmed as a whole-process
+ * base-branch crash (total_fail outcome) — see queries.ts's
+ * tryClaimBaseHealthRemediationReasonFiling / audit/baseHealthRemediationFiling.ts.
+ */
+export interface BaseHealthRemediationReasonTrackingRow {
+  project_id: string;
+  failure_reason: string;
   remediation_task_id: string | null;
   remediation_task_open: number;
   created_at: string;
