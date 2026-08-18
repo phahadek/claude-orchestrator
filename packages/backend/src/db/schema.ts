@@ -2309,9 +2309,12 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
-  // concurrent_run_count: the per-project Semaphore's occupancy at admission
-  // (captured immediately before the run is inserted, see testRequestLane.ts),
-  // not inferred later — nullable for pre-existing rows.
+  // concurrent_run_count: the number of *other* runs the per-project
+  // Semaphore had in flight at admission (this run's own slot excluded),
+  // captured immediately before the run is inserted, see
+  // testRequestLane.ts — not inferred later. 0 means "ran alone", which is
+  // what the concurrent_run_count = 0 validity predicate downstream
+  // consumers filter on. Nullable for pre-existing rows.
   try {
     target.exec(
       `ALTER TABLE test_request_runs ADD COLUMN concurrent_run_count INTEGER`,
@@ -2366,6 +2369,43 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_test_run_results_test_id_created_at
       ON test_run_results(test_id, created_at DESC);
   `);
+
+  // ── concurrent_run_count producer/consumer backfill (one-time, guarded via
+  // settings) ──────────────────────────────────────────────────────────────
+  // Every row written before this migration stored semaphore occupancy
+  // *including* the run itself (testRequestLane.ts's old behavior), so a
+  // solo run's row held 1, never 0 — the concurrent_run_count = 0 validity
+  // predicate downstream consumers filter on (listRecentValidTestDurations,
+  // computeTestFlipRateFlag) matched nothing. The producer now records peer
+  // occupancy excluding self; existing non-null values need the same
+  // correction (old_value - 1) applied once. A WHERE-column-IS-NULL guard
+  // doesn't work here (the column is already populated), so a settings flag
+  // marks completion instead — decrementing an already-corrected value a
+  // second time would drive it negative.
+  {
+    const marker = target
+      .prepare(`SELECT value FROM settings WHERE key = ?`)
+      .get('concurrent_run_count_backfill_v1') as
+      | { value: string }
+      | undefined;
+    if (!marker) {
+      target.exec(`
+        UPDATE test_request_runs
+        SET concurrent_run_count = concurrent_run_count - 1
+        WHERE concurrent_run_count IS NOT NULL;
+
+        UPDATE test_run_results
+        SET concurrent_run_count = concurrent_run_count - 1
+        WHERE concurrent_run_count IS NOT NULL;
+      `);
+      target
+        .prepare(
+          `INSERT INTO settings (key, value) VALUES (?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        )
+        .run('concurrent_run_count_backfill_v1', 'done');
+    }
+  }
 
   // test_perf_baselines: one row per test_id holding the current rolling
   // median/MAD baseline — see computeTestPerfBaseline in testRequestLane.ts.

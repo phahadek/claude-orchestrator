@@ -58,6 +58,8 @@ import {
   listTestRunResultsForRun,
   insertTestRunResults,
   getTestPerfBaseline,
+  listRecentValidTestDurations,
+  computeTestFlipRateFlag,
 } from '../../db/queries';
 
 beforeEach(() => {
@@ -75,11 +77,19 @@ beforeEach(() => {
 
 let sampleSeq = 0;
 
-/** Inserts one test_run_results row (with a backing test_request_runs row for the FK) for a given test_id/duration/validity. */
+/**
+ * Inserts one test_run_results row (with a backing test_request_runs row for
+ * the FK) for a given test_id/duration/validity. concurrentRunCount is
+ * required, not defaulted — the whole point of these baseline/flip-rate
+ * tests is exercising query logic given an arbitrary already-recorded
+ * value, not re-deriving what the production admission path writes; see the
+ * "concurrent_run_count" describe block below for tests that drive the real
+ * admission path instead.
+ */
 function insertSample(
   testId: string,
   durationMs: number,
-  opts: { concurrentRunCount?: number; oomKilled?: boolean } = {},
+  opts: { concurrentRunCount: number; oomKilled?: boolean },
 ): void {
   const runId = `perf-run-${testId}-${sampleSeq++}`;
   insertTestRequestRun(runId, 'proj-1', `perf-hash-${runId}`, null, Date.now());
@@ -93,7 +103,7 @@ function insertSample(
         duration_ms: durationMs,
       },
     ],
-    opts.concurrentRunCount ?? 0,
+    opts.concurrentRunCount,
     opts.oomKilled ?? false,
   );
 }
@@ -255,7 +265,20 @@ describe('recoverInterruptedTestRequestRuns', () => {
 // ── concurrent_run_count / oom_killed — validity signals captured at run time ──
 
 describe('concurrent_run_count', () => {
-  it("reflects the per-project Semaphore's actual occupancy under concurrent test.request calls", async () => {
+  it('stores 0 — satisfying the concurrent_run_count = 0 validity predicate — for a run admitted with no concurrent peer', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-solo' }));
+
+    const row = db
+      .prepare(
+        `SELECT concurrent_run_count FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .get('hash-solo') as { concurrent_run_count: number };
+    expect(row.concurrent_run_count).toBe(0);
+  });
+
+  it('stores a nonzero peer count — failing the concurrent_run_count = 0 validity predicate — for a run admitted alongside one concurrent peer', async () => {
     const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
       [];
     mockRunTestCommands.mockImplementation(
@@ -281,14 +304,95 @@ describe('concurrent_run_count', () => {
       .all() as { concurrent_run_count: number }[];
     const counts = rows.map((r) => r.concurrent_run_count);
     // Both runs are admitted concurrently (default per-project limit is 2),
-    // so each recorded occupancy must fall within [1, 2] — and since both
-    // were in flight together, the true concurrent occupancy of 2 must have
-    // been observed by at least one of them.
+    // so each recorded peer count (occupancy excluding self) must fall
+    // within [0, 1] — and since both were in flight together, at least one
+    // of them must have observed the other, i.e. a peer count of 1, which
+    // fails the = 0 validity predicate.
     for (const count of counts) {
-      expect(count).toBeGreaterThanOrEqual(1);
-      expect(count).toBeLessThanOrEqual(2);
+      expect(count).toBeGreaterThanOrEqual(0);
+      expect(count).toBeLessThanOrEqual(1);
     }
-    expect(Math.max(...counts)).toBe(2);
+    expect(Math.max(...counts)).toBe(1);
+  });
+});
+
+describe('concurrent_run_count validity signal — end-to-end through the production admission path', () => {
+  function structuredResultFor(
+    testId: string,
+    outcome: 'passed' | 'failed',
+    durationMs: number,
+  ) {
+    return {
+      format: 'junit-xml' as const,
+      suites: [
+        {
+          name: 'suite',
+          tests: [{ id: testId, name: testId, outcome, durationMs }],
+        },
+      ],
+      totals: {
+        passed: outcome === 'passed' ? 1 : 0,
+        failed: outcome === 'failed' ? 1 : 0,
+        skipped: 0,
+        errors: 0,
+      },
+      durationMsTotal: durationMs,
+    };
+  }
+
+  it('listRecentValidTestDurations returns a non-empty sample set and computeTestPerfBaseline writes a baseline row for a test ingested through the lane with no concurrent peer', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
+    const testId = 'e2e-perf-test';
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    mockCollectStructuredTestResult.mockReturnValue(
+      structuredResultFor(testId, 'passed', 123),
+    );
+
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-e2e-perf' }));
+    const run = getLatestTestRequestRun('proj-1', 'hash-e2e-perf')!;
+    expect(run.concurrent_run_count).toBe(0);
+    ingestTestRunResults(run);
+
+    expect(listRecentValidTestDurations(testId, 10)).toEqual([123]);
+
+    const baseline = getTestPerfBaseline(testId);
+    expect(baseline).toBeDefined();
+    expect(baseline!.sample_count).toBe(1);
+  });
+
+  it('computeTestFlipRateFlag accumulates samples and flags a test whose outcomes alternate past the configured threshold, using samples ingested through the lane', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
+    const testId = 'e2e-flip-test';
+    const outcomes: Array<'passed' | 'failed'> = [
+      'passed',
+      'failed',
+      'passed',
+      'failed',
+    ];
+
+    for (const [i, outcome] of outcomes.entries()) {
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: outcome === 'passed',
+        output: 'ok',
+      });
+      mockCollectStructuredTestResult.mockReturnValueOnce(
+        structuredResultFor(testId, outcome, 10),
+      );
+      const contentHash = `hash-e2e-flip-${i}`;
+      await runProjectTestRequest(baseSpec({ contentHash }));
+      const run = getLatestTestRequestRun('proj-1', contentHash)!;
+      expect(run.concurrent_run_count).toBe(0);
+      ingestTestRunResults(run);
+    }
+
+    const flag = computeTestFlipRateFlag(testId, 10, 2);
+    expect(flag.sampleCount).toBe(4);
+    expect(flag.transitionCount).toBe(3);
+    expect(flag.flagged).toBe(true);
   });
 });
 
@@ -690,11 +794,12 @@ describe('sweepTestRunResultsExtraction', () => {
 describe('computeTestPerfBaseline', () => {
   it('excludes concurrent/OOM-marked samples from the baseline', () => {
     const testId = 'baseline-excludes-invalid';
-    for (let i = 0; i < 10; i++) insertSample(testId, 100);
+    for (let i = 0; i < 10; i++)
+      insertSample(testId, 100, { concurrentRunCount: 0 });
     // Invalid samples with wildly different durations must not move the
     // median/MAD at all.
     insertSample(testId, 9999, { concurrentRunCount: 2 });
-    insertSample(testId, 1, { oomKilled: true });
+    insertSample(testId, 1, { concurrentRunCount: 0, oomKilled: true });
 
     computeTestPerfBaseline(testId);
 
@@ -706,10 +811,11 @@ describe('computeTestPerfBaseline', () => {
 
   it('does not flag a regression from a single noisy sample', () => {
     const testId = 'single-noisy-sample';
-    for (let i = 0; i < 12; i++) insertSample(testId, 100);
-    insertSample(testId, 100);
-    insertSample(testId, 100);
-    insertSample(testId, 1000); // one noisy outlier as the most recent sample
+    for (let i = 0; i < 12; i++)
+      insertSample(testId, 100, { concurrentRunCount: 0 });
+    insertSample(testId, 100, { concurrentRunCount: 0 });
+    insertSample(testId, 100, { concurrentRunCount: 0 });
+    insertSample(testId, 1000, { concurrentRunCount: 0 }); // one noisy outlier as the most recent sample
 
     computeTestPerfBaseline(testId);
 
@@ -720,10 +826,11 @@ describe('computeTestPerfBaseline', () => {
 
   it('flags a regression from a sustained duration shift across the minimum consecutive run', () => {
     const testId = 'sustained-shift';
-    for (let i = 0; i < 15; i++) insertSample(testId, 100);
-    insertSample(testId, 500);
-    insertSample(testId, 500);
-    insertSample(testId, 500);
+    for (let i = 0; i < 15; i++)
+      insertSample(testId, 100, { concurrentRunCount: 0 });
+    insertSample(testId, 500, { concurrentRunCount: 0 });
+    insertSample(testId, 500, { concurrentRunCount: 0 });
+    insertSample(testId, 500, { concurrentRunCount: 0 });
 
     computeTestPerfBaseline(testId);
 
@@ -734,13 +841,14 @@ describe('computeTestPerfBaseline', () => {
 
   it('persists the per-test aggregate, overwriting the previous baseline rather than appending', () => {
     const testId = 'persists-aggregate';
-    for (let i = 0; i < 10; i++) insertSample(testId, 50);
+    for (let i = 0; i < 10; i++)
+      insertSample(testId, 50, { concurrentRunCount: 0 });
 
     computeTestPerfBaseline(testId);
     const first = getTestPerfBaseline(testId)!;
     expect(first.sample_count).toBeGreaterThan(0);
 
-    insertSample(testId, 60);
+    insertSample(testId, 60, { concurrentRunCount: 0 });
     computeTestPerfBaseline(testId);
 
     const rows = db
