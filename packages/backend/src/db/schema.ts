@@ -502,6 +502,12 @@ export function runMigrations(target: Database.Database): void {
     -- layer can only pre-filter on session_type — this index keeps that scan
     -- to just the ops-typed rows instead of the whole sessions table.
     CREATE INDEX IF NOT EXISTS idx_sessions_session_type_started_at ON sessions(session_type, started_at DESC);
+    -- Backs getStuckResultSessionRows's WHERE s.status = 'running' filter,
+    -- which otherwise full-scans sessions and runs a correlated
+    -- session_events subquery per row. Plain (not partial on
+    -- status='running') because getSessionsByStatus takes an arbitrary
+    -- status list and benefits from the general form.
+    CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
     CREATE INDEX IF NOT EXISTS idx_pull_requests_task_id_pr_number ON pull_requests(task_id, pr_number DESC);
     CREATE INDEX IF NOT EXISTS idx_pull_requests_repo_state ON pull_requests(repo, state);
     -- Covers getPRBySessionId's WHERE session_id = ? lookup, which otherwise
