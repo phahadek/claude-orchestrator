@@ -118,18 +118,20 @@ describe('pruneTestRunResults', () => {
 
     const originalPrepare = db.prepare.bind(db);
     const batchSizes: number[] = [];
-    const prepareSpy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
-      const stmt = originalPrepare(sql);
-      if (sql.includes('DELETE FROM test_run_results WHERE id IN')) {
-        const originalRun = stmt.run.bind(stmt);
-        stmt.run = (...args: unknown[]) => {
-          const result = originalRun(...args);
-          batchSizes.push(result.changes);
-          return result;
-        };
-      }
-      return stmt;
-    });
+    const prepareSpy = vi
+      .spyOn(db, 'prepare')
+      .mockImplementation((sql: string) => {
+        const stmt = originalPrepare(sql);
+        if (sql.includes('DELETE FROM test_run_results WHERE id IN')) {
+          const originalRun = stmt.run.bind(stmt);
+          stmt.run = (...args: unknown[]) => {
+            const result = originalRun(...args);
+            batchSizes.push(result.changes);
+            return result;
+          };
+        }
+        return stmt;
+      });
 
     const deleted = pruneTestRunResults(retentionMs, 5);
     prepareSpy.mockRestore();

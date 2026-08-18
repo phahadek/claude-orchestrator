@@ -5913,7 +5913,9 @@ export function insertSchedulerAudit(row: NewSchedulerAuditRow): void {
 /** Rows retained per job by pruneSchedulerAudit's daily sweep — see server.ts's scheduler_audit_pruner registration. */
 export const SCHEDULER_AUDIT_KEEP_PER_JOB = 1000;
 
-export function pruneSchedulerAudit(keepPerJob = SCHEDULER_AUDIT_KEEP_PER_JOB): void {
+export function pruneSchedulerAudit(
+  keepPerJob = SCHEDULER_AUDIT_KEEP_PER_JOB,
+): void {
   const jobs = db.prepare(`SELECT DISTINCT job FROM scheduler_audit`).all() as {
     job: string;
   }[];
