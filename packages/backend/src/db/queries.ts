@@ -4081,7 +4081,8 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
             ORDER BY started_at DESC
           ) AS rn
         FROM sessions
-        WHERE session_type = 'standard' OR session_type IS NULL
+        WHERE (session_type = 'standard' OR session_type IS NULL)
+          AND task_id IN (${placeholders})
       ),
       ranked_planning AS (
         SELECT *,
@@ -4091,6 +4092,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
           ) AS rn
         FROM sessions
         WHERE session_type IN (${PLANNING_SESSION_TYPE_SQL_LIST})
+          AND task_id IN (${placeholders})
       ),
       ranked_review AS (
         SELECT *,
@@ -4100,6 +4102,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
           ) AS rn
         FROM sessions
         WHERE session_type = 'review'
+          AND task_id IN (${placeholders})
       ),
       ranked_pr AS (
         SELECT *,
@@ -4108,6 +4111,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
             ORDER BY pr_number DESC
           ) AS rn
         FROM pull_requests
+        WHERE task_id IN (${placeholders})
       )
     SELECT
       tc.task_id,
@@ -4174,7 +4178,13 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
     ORDER BY tc.fetched_at DESC
   `,
     )
-    .all(...taskIds) as TaskAggregateRow[];
+    .all(
+      ...taskIds,
+      ...taskIds,
+      ...taskIds,
+      ...taskIds,
+      ...taskIds,
+    ) as TaskAggregateRow[];
 }
 
 /** Returns the most recent standard (non-review) session for a given task ID. */
