@@ -257,7 +257,7 @@ describe('task.create staged by a planning session', () => {
     expect(createTask).not.toHaveBeenCalled();
   });
 
-  it('defaults payload.milestone to the staging session\'s own bound-task milestone when the payload carries neither databaseId nor milestone', async () => {
+  it("defaults payload.milestone to the staging session's own bound-task milestone when the payload carries neither databaseId nor milestone", async () => {
     const createTask = vi.fn().mockResolvedValue('notion:new-task-id');
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
