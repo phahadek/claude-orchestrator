@@ -32,13 +32,14 @@ import {
   getLastActivityMsForArchivedSessions,
   replaceFlaggedFlakyTestsRollupOffMainThread,
   getFlaggedFlakyTestsRollup,
+  getLatestTestRequestRunForSession,
 } from '../db/queries.js';
 import type Database from 'better-sqlite3';
 import RealDatabase from 'better-sqlite3';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { StagedIntentRow } from '../db/types.js';
+import type { StagedIntentRow, TestRequestRunRow } from '../db/types.js';
 
 const typedDb = db as Database.Database;
 
@@ -50,6 +51,8 @@ const EXPECTED_INDEXES = [
   'idx_sessions_notion_task_id_session_type',
   'idx_sessions_status',
   'idx_pull_requests_task_id_pr_number',
+  'idx_test_request_runs_session_state_started',
+  'idx_test_request_runs_session_finished',
 ];
 
 function indexNames(): string[] {
@@ -1098,4 +1101,145 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }, 20000);
+});
+
+// ── getLatestTestRequestRunForSession — no temp b-tree over structured_result ──
+
+describe('getLatestTestRequestRunForSession — index usage and blob-free sort path', () => {
+  function insertRun(row: {
+    id: string;
+    session_id: string;
+    state: string;
+    started_at: number;
+    finished_at: number | null;
+    structured_result?: string | null;
+  }): void {
+    typedDb
+      .prepare(
+        `INSERT INTO test_request_runs
+           (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result)
+         VALUES (@id, 'proj-1', 'hash', @session_id, @state, '', @started_at, @started_at, @finished_at, NULL, @structured_result)`,
+      )
+      .run({
+        id: row.id,
+        session_id: row.session_id,
+        state: row.state,
+        started_at: row.started_at,
+        finished_at: row.finished_at,
+        structured_result: row.structured_result ?? null,
+      });
+  }
+
+  beforeEach(() => {
+    typedDb.exec(`DELETE FROM test_request_runs;`);
+    runMigrations(typedDb);
+  });
+
+  it('the sort-path statements it prepares select no structured_result column', () => {
+    const prepareSpy = vi.spyOn(typedDb, 'prepare');
+    getLatestTestRequestRunForSession('proj-1', 'sess-spy');
+    const sortPathSql = prepareSpy.mock.calls
+      .map((args) => String(args[0]))
+      .filter(
+        (sql) => sql.includes('test_request_runs') && sql.includes('ORDER BY'),
+      );
+    prepareSpy.mockRestore();
+
+    expect(sortPathSql.length).toBeGreaterThan(0);
+    for (const sql of sortPathSql) {
+      expect(sql).not.toContain('structured_result');
+    }
+  });
+
+  it('plan for the running-state lookup has no temp b-tree sort', () => {
+    const plan = typedDb
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT id FROM test_request_runs
+         WHERE project_id = ? AND session_id = ? AND state = 'running'
+         ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+      )
+      .all('proj-1', 'sess-1') as { detail: string }[];
+    const details = plan.map((r) => r.detail).join('\n');
+    expect(details).not.toContain('USE TEMP B-TREE FOR ORDER BY');
+  });
+
+  it('plan for the non-running fallback lookup has no temp b-tree sort', () => {
+    const plan = typedDb
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT id FROM test_request_runs
+         WHERE project_id = ? AND session_id = ? AND state != 'running'
+         ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+      )
+      .all('proj-1', 'sess-1') as { detail: string }[];
+    const details = plan.map((r) => r.detail).join('\n');
+    expect(details).not.toContain('USE TEMP B-TREE FOR ORDER BY');
+  });
+
+  it('prefers the running row over a more recent non-running row (fallback precedence preserved)', () => {
+    insertRun({
+      id: 'run-old-running',
+      session_id: 'sess-1',
+      state: 'running',
+      started_at: 1000,
+      finished_at: null,
+    });
+    insertRun({
+      id: 'run-new-passed',
+      session_id: 'sess-1',
+      state: 'passed',
+      started_at: 2000,
+      finished_at: 3000,
+      structured_result: 'x'.repeat(1000),
+    });
+
+    const row = getLatestTestRequestRunForSession('proj-1', 'sess-1');
+    expect(row?.id).toBe('run-old-running');
+  });
+
+  it('returns the same row as the pre-change statement across multiple runs in both states', () => {
+    insertRun({
+      id: 'run-a',
+      session_id: 'sess-3',
+      state: 'passed',
+      started_at: 1000,
+      finished_at: 1500,
+      structured_result: '{"a":1}',
+    });
+    insertRun({
+      id: 'run-b',
+      session_id: 'sess-3',
+      state: 'failed',
+      started_at: 2000,
+      finished_at: 2500,
+      structured_result: '{"b":2}',
+    });
+    insertRun({
+      id: 'run-c',
+      session_id: 'sess-3',
+      state: 'passed',
+      started_at: 500,
+      finished_at: 3500,
+      structured_result: '{"c":3}',
+    });
+
+    const legacy = typedDb
+      .prepare(
+        `SELECT id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result
+         FROM test_request_runs
+         WHERE project_id = ? AND session_id = ? AND state != 'running'
+         ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get('proj-1', 'sess-3') as TestRequestRunRow | undefined;
+
+    const row = getLatestTestRequestRunForSession('proj-1', 'sess-3');
+    expect(row?.id).toBe(legacy?.id);
+    expect(row).toMatchObject({
+      id: legacy?.id,
+      state: legacy?.state,
+      structured_result: legacy?.structured_result,
+      finished_at: legacy?.finished_at,
+    });
+  });
 });

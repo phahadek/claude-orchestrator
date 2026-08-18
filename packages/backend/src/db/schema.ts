@@ -2660,4 +2660,22 @@ export function runMigrations(target: Database.Database): void {
       updated_at                INTEGER NOT NULL
     );
   `);
+
+  // getLatestTestRequestRunForSession (queries.ts) filters on
+  // (project_id, session_id, state) and sorts by started_at/finished_at, but
+  // the only existing test_request_runs index covers (project_id,
+  // content_hash) — nothing serves this lookup, so SQLite pulled every
+  // candidate row (including ~1 MB structured_result/output blobs) into a
+  // temp b-tree to sort before applying LIMIT 1. These cover both the
+  // running-row query (ordered by started_at) and the non-running fallback
+  // (ordered by finished_at) so neither needs a sort step. rowid is not
+  // listed explicitly — SQLite already appends it as an implicit tiebreak on
+  // every index over a rowid table, and referencing it by name in CREATE
+  // INDEX throws "no such column: rowid".
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_session_state_started
+      ON test_request_runs(project_id, session_id, state, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_session_finished
+      ON test_request_runs(project_id, session_id, finished_at DESC);
+  `);
 }
