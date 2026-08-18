@@ -42,9 +42,7 @@ describe('GitHubClient.waitForCheckRunsCompletion', () => {
     // 'completed' but started_at unchanged (the rerequest hasn't taken
     // effect server-side yet). This must NOT be treated as done.
     const stalePoll = {
-      check_runs: [
-        { id: 42, status: 'completed', started_at: priorStartedAt },
-      ],
+      check_runs: [{ id: 42, status: 'completed', started_at: priorStartedAt }],
     };
     // Second poll: the run has genuinely re-executed — later started_at and
     // now terminal again.
@@ -78,9 +76,7 @@ describe('GitHubClient.waitForCheckRunsCompletion', () => {
   it('times out if the run never advances past its pre-rerequest started_at', async () => {
     const priorStartedAt = '2026-08-13T07:36:00Z';
     const stalePoll = {
-      check_runs: [
-        { id: 42, status: 'completed', started_at: priorStartedAt },
-      ],
+      check_runs: [{ id: 42, status: 'completed', started_at: priorStartedAt }],
     };
     const mockFetch = makeFetch([stalePoll, stalePoll, stalePoll]);
     globalThis.fetch = mockFetch as never;
