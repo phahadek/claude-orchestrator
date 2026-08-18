@@ -28,10 +28,13 @@ auto-updaters pick up within ~24h).
   change through the project's sanctioned surface (the `/api/projects` route, the
   device-authed clients, `gh`), **never a raw DB write** and **never a mutation of the
   prod checkout's branches**.
-- **Confirm before the irreversible/outward-facing.** Marking done + flipping the active
-  milestone is reversible (do it, report it). Advancing `main` is reversible-ish. The
-  **release tag + GitHub release is the point of no return** — pause for explicit
-  go-ahead before it.
+- **Confirm before the irreversible/outward-facing.** Marking done + updating Notion/
+  `context.md` bookkeeping is reversible (do it, report it). Advancing `main` is
+  reversible-ish. Two actions have live, hard-to-casually-undo consequences and **pause
+  for explicit go-ahead**: repointing `projects.auto_launch_milestone_id` (on an
+  auto-launch project, this is what turns on auto-dispatch of the next milestone's
+  `🗂️ Ready` + `💻 Code` tasks) and the **release tag + GitHub release, the point of no
+  return**.
 - **Don't hand the work back.** Find the "several places" yourself (they're enumerated
   below); don't ask the operator where they are.
 
@@ -137,32 +140,50 @@ postponed seeds. Nothing to carry on the seed side.)*
    `deferred` / `pending` under the closing milestone.
 
 > This is the step whose absence stranded 18 deferred M11 items when M11 closed
-> (re-homed to M12 by hand on 2026-07-20). Do it **before** Step 4's active-milestone
-> flip so the next milestone is fully populated when it goes live.
+> (re-homed to M12 by hand on 2026-07-20). Do it **before** Step 4/5's active-milestone
+> work so the next milestone is fully populated when it goes live.
 
-## Step 4 + 5 — Mark this milestone done, the next one active
+## Step 4 + 5 — Mark this milestone done, the next one active (bookkeeping)
 
-These share **several places** — update **all** of them (they drift independently):
+These share **several places** — update **all** of them (they drift independently).
+**Not included here:** `projects.auto_launch_milestone_id` — that's a separate, live
+action with its own gate; see Step 5.5 below. Everything in this table is reversible
+bookkeeping, unconditional, do it and report it:
 
 | Place | Change | Sanctioned mechanism |
 | --- | --- | --- |
-| **DB `projects.auto_launch_milestone_id`** — the *functional* active-milestone pointer that drives auto-dispatch | old milestone id → next milestone id | `PATCH /api/projects/<projectId>` `{"autoLaunchMilestoneId":"<next-uuid>"}` with `Authorization: Bearer $ORCHESTRATOR_DEVICE_TOKEN`. **Never raw-UPDATE the DB.** Verify by reading the row back. |
 | **DB `milestones.wrapped_at`** — the audited Done marker that scopes convergence/the milestone list to `wrapped_at IS NULL` (active + in-planning) | null → wrap timestamp | `POST /api/milestones/<closingM-uuid>/wrapped` with `Authorization: Bearer $ORCHESTRATOR_DEVICE_TOKEN` (idempotent — a second call 409s, which is fine to ignore). **Never raw-UPDATE the DB.** Verify by reading the closing milestone back and confirming `wrappedAt` is non-null. |
 | **Notion master page — Project Milestones table** | old → `✅ Done (<date>)`; next → `🔄 Active` | `notion-update-page` `update_content` |
 | **Notion master page — "Active Task Board" callout** | phase line + board link → next milestone | `notion-update-page` `update_content` |
 | **Notion master page — Project Summary** *(if stale)* | refresh Status/Next lines | `notion-update-page` `update_content` |
 | **`config/projects/<dir>/context.md`** | "Active Task Board" line + milestone-history list (old → done, add next as active) | `Edit` |
 
-> ⚠️ **The active-milestone flip is LIVE.** On an auto-launch project, pointing it at the
-> next milestone means that milestone's `🗂️ Ready` **Code** tasks begin auto-dispatching.
-> **Check the next board for `Ready`+`💻 Code` tasks first** — 0 is safe; if there are
-> some, confirm the operator wants them to launch now.
->
 > ⚠️ **Notion table cells:** match on the **cell's unique text** (e.g. `🔄 Active`), not a
 > full pipe row — markdown table rows don't match Notion's serialization. Add a table
 > *row* only via a reliable anchor; skip the Key-Decisions-Log row (that log is for
 > architectural decisions, not routine completions — the Milestones table records the
 > completion).
+
+## Step 5.5 — Repoint auto-launch to the next milestone (gated — explicit go-ahead required)
+
+`projects.auto_launch_milestone_id` is not passive bookkeeping — it's the *functional*
+pointer `AutoLauncher` polls (falling back to the first milestone only when unset), so
+repointing it is the exact action that turns on auto-dispatch of the next milestone's
+`🗂️ Ready` + `💻 Code` tasks. Never do this PATCH as a default part of the wrap sweep.
+
+1. **Read `GET /api/projects/<projectId>`** and check `autoLaunchEnabled`. If it's
+   `false`, the pointer has no live dispatch consequence on this project — update it
+   (same mechanism below) and move on. If it's `true` (the common case), the repoint is
+   live: continue to step 2.
+2. **Check the next board for `🗂️ Ready` + `💻 Code` tasks** — this tells the operator
+   what will start dispatching, but it is not itself the gate. Report the count either
+   way (0 is not an exemption from asking).
+3. **Get explicit operator go-ahead before issuing the PATCH**, regardless of whether
+   Ready+Code tasks currently exist — the operator may add some right after the flip.
+   Do not proceed on silence or on an assumption that "it's the routine wrap sweep."
+4. Once confirmed: `PATCH /api/projects/<projectId>` `{"autoLaunchMilestoneId":"<next-uuid>"}`
+   with `Authorization: Bearer $ORCHESTRATOR_DEVICE_TOKEN`. **Never raw-UPDATE the DB.**
+   Verify by reading the row back.
 
 ## Step 6 + 7 — Advance main, cut the release
 
