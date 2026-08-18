@@ -643,9 +643,7 @@ describe('loadGroomContext', () => {
         projectId: PROJECT_ID,
       });
       // (a) the migratedToStore entry is excluded once archStoreAdopted=true...
-      expect(adopted.contextPages.map((p) => p.id)).not.toContain(
-        'ctx-page-1',
-      );
+      expect(adopted.contextPages.map((p) => p.id)).not.toContain('ctx-page-1');
       // ...(c) but a non-migratedToStore entry is still fetched in full.
       expect(adopted.contextPages).toEqual([
         {
