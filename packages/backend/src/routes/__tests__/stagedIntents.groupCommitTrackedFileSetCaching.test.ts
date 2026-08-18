@@ -64,7 +64,11 @@ const FAKE_REPO_ROOT = 'FAKE_REPO_ROOT';
 
 vi.mock('../../projects/ProjectService', () => ({
   ProjectService: {
-    getById: (id: string) => ({ id, projectDir: FAKE_REPO_ROOT, milestones: [] }),
+    getById: (id: string) => ({
+      id,
+      projectDir: FAKE_REPO_ROOT,
+      milestones: [],
+    }),
   },
 }));
 
@@ -163,7 +167,8 @@ const CODE_TASK_BODY =
 
 function countLsFilesCalls(): number {
   return execFileSpy.mock.calls.filter(
-    (call) => call[0] === 'git' && Array.isArray(call[1]) && call[1][0] === 'ls-files',
+    (call) =>
+      call[0] === 'git' && Array.isArray(call[1]) && call[1][0] === 'ls-files',
   ).length;
 }
 
