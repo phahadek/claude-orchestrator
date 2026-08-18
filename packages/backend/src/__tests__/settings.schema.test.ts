@@ -226,4 +226,14 @@ describe('typedSetSetting — non-conforming values throw ZodError', () => {
     expect(() => typedSetSetting('session_mode', 'bad' as never)).toThrow();
     expect(mockSetSetting).not.toHaveBeenCalled();
   });
+
+  it('rejects a flip_rate_window_n value exceeding the digest\'s retained outcome-sequence capacity (200)', () => {
+    expect(() => typedSetSetting('flip_rate_window_n', 201)).toThrow();
+    expect(mockSetSetting).not.toHaveBeenCalled();
+  });
+
+  it('accepts flip_rate_window_n at exactly the digest capacity (200)', () => {
+    typedSetSetting('flip_rate_window_n', 200);
+    expect(mockSetSetting).toHaveBeenCalledWith('flip_rate_window_n', '200');
+  });
 });

@@ -54,6 +54,8 @@ import type {
   DependencyCacheEntryStatus,
   TestRunResultRow,
   NewTestRunResultRow,
+  TestRunSummaryRow,
+  TestOutcomeCounts,
   TestPerfBaselineRow,
   NewTestPerfBaselineRow,
   OpsJournalRow,
@@ -8080,8 +8082,8 @@ export function listTestRequestRunsNeedingExtraction(): TestRequestRunRow[] {
        FROM test_request_runs
        WHERE structured_result IS NOT NULL
          AND NOT EXISTS (
-           SELECT 1 FROM test_run_results
-           WHERE test_run_results.test_request_run_id = test_request_runs.id
+           SELECT 1 FROM test_run_summaries
+           WHERE test_run_summaries.test_request_run_id = test_request_runs.id
          )`,
     )
     .all() as TestRequestRunRow[];
@@ -8278,8 +8280,8 @@ export function clearSupersededStructuredResults(
      WHERE project_id = @project_id AND content_hash = @content_hash
        AND id != @keep_run_id AND structured_result IS NOT NULL
        AND EXISTS (
-         SELECT 1 FROM test_run_results
-         WHERE test_run_results.test_request_run_id = test_request_runs.id
+         SELECT 1 FROM test_run_summaries
+         WHERE test_run_summaries.test_request_run_id = test_request_runs.id
        )`,
   ).run({
     project_id: projectId,
@@ -8422,7 +8424,11 @@ export function claimDependencyCacheEntryForEviction(
 
 // ─── test_run_results ───────────────────────────────────────────────────────
 
-/** True if any row has already been extracted for this run — the idempotency check. */
+/**
+ * True if this run has at least one non-passing test_run_results row. Since
+ * an all-passing run writes none, this is NOT the extraction idempotency
+ * check any more — see hasTestRunSummary for that.
+ */
 export function hasTestRunResults(testRequestRunId: string): boolean {
   const row = db
     .prepare(
@@ -8483,16 +8489,271 @@ export function insertTestRunResults(
   insertAll(tests);
 }
 
+// ─── test_run_summaries ─────────────────────────────────────────────────────
+
+/** True once this run's ingestion (summary + failure rows + digest) has been written — the extraction idempotency check. */
+export function hasTestRunSummary(testRequestRunId: string): boolean {
+  const row = db
+    .prepare(`SELECT 1 FROM test_run_summaries WHERE test_request_run_id = ?`)
+    .get(testRequestRunId);
+  return row !== undefined;
+}
+
+export function getTestRunSummary(
+  testRequestRunId: string,
+): TestRunSummaryRow | undefined {
+  return db
+    .prepare(`SELECT * FROM test_run_summaries WHERE test_request_run_id = ?`)
+    .get(testRequestRunId) as TestRunSummaryRow | undefined;
+}
+
+let _stmtInsertTestRunSummary: Database.Statement | null = null;
+
+function insertTestRunSummary(
+  testRequestRunId: string,
+  projectId: string,
+  counts: TestOutcomeCounts,
+  totalCount: number,
+  totalDurationMs: number,
+  concurrentRunCount: number | null,
+  oomKilled: boolean,
+): void {
+  _stmtInsertTestRunSummary ??= db.prepare<{
+    test_request_run_id: string;
+    project_id: string;
+    passed_count: number;
+    failed_count: number;
+    skipped_count: number;
+    error_count: number;
+    other_count: number;
+    total_count: number;
+    total_duration_ms: number;
+    concurrent_run_count: number | null;
+    oom_killed: number;
+    created_at: number;
+  }>(`
+    INSERT INTO test_run_summaries
+      (test_request_run_id, project_id, passed_count, failed_count, skipped_count, error_count, other_count, total_count, total_duration_ms, concurrent_run_count, oom_killed, created_at)
+    VALUES
+      (@test_request_run_id, @project_id, @passed_count, @failed_count, @skipped_count, @error_count, @other_count, @total_count, @total_duration_ms, @concurrent_run_count, @oom_killed, @created_at)
+  `);
+  _stmtInsertTestRunSummary.run({
+    test_request_run_id: testRequestRunId,
+    project_id: projectId,
+    passed_count: counts.passed,
+    failed_count: counts.failed,
+    skipped_count: counts.skipped,
+    error_count: counts.error,
+    other_count: counts.other,
+    total_count: totalCount,
+    total_duration_ms: totalDurationMs,
+    concurrent_run_count: concurrentRunCount,
+    oom_killed: oomKilled ? 1 : 0,
+    created_at: Date.now(),
+  });
+}
+
+// ─── test_perf_baselines digest ─────────────────────────────────────────────
+// The durable, fixed-width replacement for the per-test-id windowed reads
+// that used to run against raw test_run_results rows
+// (listRecentValidTestDurations, computeTestFlipRateFlag), now that passing
+// results never get a row there. Every ingested (valid, per the existing
+// concurrent_run_count = 0 AND oom_killed = 0 predicate) sample appends to
+// two JSON arrays on the test's test_perf_baselines row: a duration ring
+// (every valid outcome) and an outcome sequence (only 'passed'/'failed',
+// matching computeTestFlipRateFlag's existing outcome filter). Both are
+// newest-last and trimmed to a fixed capacity on every write, so neither
+// grows with ingestion volume.
+
+/** >= the largest window any caller of listRecentValidTestDurations passes (computeTestPerfBaseline's BASELINE_WINDOW_SAMPLES + MIN_CONSECUTIVE_REGRESSED_SAMPLES = 23). */
+export const TEST_DURATION_DIGEST_CAPACITY = 32;
+
+/** >= flip_rate_window_n's max bound (config/settings.ts) — every production caller of computeTestFlipRateFlag passes that setting as windowN. */
+export const TEST_OUTCOME_DIGEST_CAPACITY = 200;
+
+interface DigestOutcomeSample {
+  o: 'P' | 'F';
+  t: number;
+}
+
+function parseDigestOutcomes(json: string): DigestOutcomeSample[] {
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? (parsed as DigestOutcomeSample[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseDigestDurations(json: string): number[] {
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? (parsed as number[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+let _stmtGetTestPerfDigest: Database.Statement | null = null;
+let _stmtUpsertTestPerfDigest: Database.Statement | null = null;
+
 /**
- * Per-run cap for listTestRunResultsForRun — a single completed run can
- * insert on the order of 9,500 rows (this project's own live database, per
- * commit d30cdce7's measurement), and the Tests tab history endpoint fetches
- * this for up to 50 runs at once. Without a cap that's several hundred
- * thousand row objects built and JSON-serialized in one synchronous
- * event-loop tick. Preserves insertion order (existing callers, e.g.
- * ingestTestRunResults's own extraction test, depend on that ordering) —
- * callers needing failures surfaced first over a truncated page should
- * filter/sort client-side or via countTestRunResultsForRun.
+ * Appends one sample to test_id's digest row, creating it if this is the
+ * first sample ever seen for it. `sequencedAt` is a caller-assigned
+ * strictly-increasing value (see ingestTestRunResultsTx) rather than a fresh
+ * Date.now() call here — the flip-rate rollup candidate scan pages on this
+ * column (project_id, updated_at, test_id), so it must never regress once
+ * written, which a second independent Date.now() writer (e.g.
+ * upsertTestPerfBaseline) could easily do by racing ahead or behind within
+ * the same millisecond across thousands of tests in one run.
+ *
+ * No-op (digest untouched) when the sample fails the existing validity
+ * predicate — a row with concurrent_run_count != 0 or oom_killed never
+ * occupied a window slot before, and must not start now.
+ */
+export function recordTestPerfDigestSample(
+  testId: string,
+  projectId: string,
+  name: string,
+  outcome: string,
+  durationMs: number,
+  concurrentRunCount: number | null,
+  oomKilled: boolean,
+  sequencedAt: number,
+): void {
+  if (concurrentRunCount !== 0 || oomKilled) return;
+
+  _stmtGetTestPerfDigest ??= db.prepare<{ test_id: string }>(
+    `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
+  );
+  const existing = _stmtGetTestPerfDigest.get({ test_id: testId }) as
+    | { recent_outcomes: string; recent_durations: string }
+    | undefined;
+
+  const outcomes = existing ? parseDigestOutcomes(existing.recent_outcomes) : [];
+  if (outcome === 'passed' || outcome === 'failed') {
+    outcomes.push({ o: outcome === 'passed' ? 'P' : 'F', t: sequencedAt });
+    if (outcomes.length > TEST_OUTCOME_DIGEST_CAPACITY) {
+      outcomes.splice(0, outcomes.length - TEST_OUTCOME_DIGEST_CAPACITY);
+    }
+  }
+
+  const durations = existing
+    ? parseDigestDurations(existing.recent_durations)
+    : [];
+  durations.push(durationMs);
+  if (durations.length > TEST_DURATION_DIGEST_CAPACITY) {
+    durations.splice(0, durations.length - TEST_DURATION_DIGEST_CAPACITY);
+  }
+
+  _stmtUpsertTestPerfDigest ??= db.prepare<{
+    test_id: string;
+    project_id: string;
+    name: string;
+    last_duration_ms: number;
+    recent_outcomes: string;
+    recent_durations: string;
+    updated_at: number;
+  }>(`
+    INSERT INTO test_perf_baselines
+      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, updated_at)
+    VALUES
+      (@test_id, @project_id, @name, 0, 0, 0, @last_duration_ms, 0, @recent_outcomes, @recent_durations, @updated_at)
+    ON CONFLICT(test_id) DO UPDATE SET
+      project_id = excluded.project_id,
+      name = excluded.name,
+      recent_outcomes = excluded.recent_outcomes,
+      recent_durations = excluded.recent_durations,
+      updated_at = excluded.updated_at
+  `);
+  _stmtUpsertTestPerfDigest.run({
+    test_id: testId,
+    project_id: projectId,
+    name,
+    last_duration_ms: durationMs,
+    recent_outcomes: JSON.stringify(outcomes),
+    recent_durations: JSON.stringify(durations),
+    updated_at: sequencedAt,
+  });
+}
+
+/**
+ * Ingests one completed run's extracted test results: writes a
+ * test_run_summaries row (outcome counts + total duration), writes a
+ * test_run_results row only for non-passing outcomes, and folds every
+ * outcome (passing included) into the test_perf_baselines digest — all in
+ * one transaction, so a crash mid-ingestion never leaves the summary marker
+ * without its digest updates or vice versa. Returns the computed counts so
+ * the caller (ingestTestRunResults in testRequestLane.ts) can log/inspect
+ * them without a second read.
+ */
+export function ingestTestRunResultsTx(
+  testRequestRunId: string,
+  projectId: string,
+  tests: NewTestRunResultRow[],
+  concurrentRunCount: number | null,
+  oomKilled: boolean,
+): TestOutcomeCounts {
+  const counts: TestOutcomeCounts = {
+    passed: 0,
+    failed: 0,
+    skipped: 0,
+    error: 0,
+    other: 0,
+  };
+  let totalDurationMs = 0;
+  for (const t of tests) {
+    totalDurationMs += t.duration_ms;
+    if (t.outcome === 'passed') counts.passed++;
+    else if (t.outcome === 'failed') counts.failed++;
+    else if (t.outcome === 'skipped') counts.skipped++;
+    else if (t.outcome === 'error') counts.error++;
+    else counts.other++;
+  }
+  const failing = tests.filter((t) => t.outcome !== 'passed');
+  const baseSequence = Date.now() * 1000;
+
+  const tx = db.transaction(() => {
+    insertTestRunResults(
+      testRequestRunId,
+      projectId,
+      failing,
+      concurrentRunCount,
+      oomKilled,
+    );
+    insertTestRunSummary(
+      testRequestRunId,
+      projectId,
+      counts,
+      tests.length,
+      totalDurationMs,
+      concurrentRunCount,
+      oomKilled,
+    );
+    tests.forEach((t, index) => {
+      recordTestPerfDigestSample(
+        t.test_id,
+        projectId,
+        t.name,
+        t.outcome,
+        t.duration_ms,
+        concurrentRunCount,
+        oomKilled,
+        baseSequence + index,
+      );
+    });
+  });
+  tx();
+  return counts;
+}
+
+/**
+ * Per-run cap for listTestRunResultsForRun. Since ingestTestRunResultsTx
+ * only writes a test_run_results row for non-passing outcomes, this now
+ * returns only a run's failing tests, not every test in it — callers that
+ * need the full per-outcome counts (including how many passed) should read
+ * the run's test_run_summaries row (getTestRunSummary) instead; that's the
+ * "per-run reads that enumerate every test" digest replacement.
  */
 export const TEST_RUN_RESULTS_PER_RUN_CAP = 500;
 
@@ -8566,31 +8827,42 @@ export function pruneTestRunResults(
 
 // ─── test_perf_baselines ────────────────────────────────────────────────────
 
+let _stmtGetTestPerfDigestDurations: Database.Statement | null = null;
+
 /**
  * Most recent `limit` *valid* (concurrent_run_count = 0 AND oom_killed = 0)
  * durations for a test_id, newest first — the sample pool
  * computeTestPerfBaseline draws its baseline window and recent-run guard
- * from. Excluded samples are never deleted from test_run_results, just
- * skipped here.
+ * from. Reads the fixed-width digest ring on test_perf_baselines
+ * (recordTestPerfDigestSample) rather than raw test_run_results rows —
+ * `limit` must not exceed TEST_DURATION_DIGEST_CAPACITY or the result is
+ * silently truncated to whatever the ring retained.
  */
 export function listRecentValidTestDurations(
   testId: string,
   limit: number,
 ): number[] {
-  const rows = db
-    .prepare(
-      `SELECT duration_ms FROM test_run_results
-       WHERE test_id = ? AND concurrent_run_count = 0 AND oom_killed = 0
-       ORDER BY created_at DESC, id DESC
-       LIMIT ?`,
-    )
-    .all(testId, limit) as { duration_ms: number }[];
-  return rows.map((r) => r.duration_ms);
+  _stmtGetTestPerfDigestDurations ??= db.prepare<{ test_id: string }>(
+    `SELECT recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
+  );
+  const row = _stmtGetTestPerfDigestDurations.get({ test_id: testId }) as
+    | { recent_durations: string }
+    | undefined;
+  if (!row) return [];
+  const durations = parseDigestDurations(row.recent_durations);
+  return durations.slice(-limit).reverse();
 }
 
 let _stmtUpsertTestPerfBaseline: Database.Statement | null = null;
 
-/** Recomputes (not appends) the single current baseline row for a test_id. */
+/**
+ * Recomputes (not appends) the median/MAD summary columns for a test_id's
+ * already-existing digest row. Never touches recent_outcomes/
+ * recent_durations/project_id/name/updated_at — those are owned exclusively
+ * by recordTestPerfDigestSample, whose caller-assigned `updated_at` value
+ * the flip-rate rollup candidate scan depends on staying monotonic; a second
+ * Date.now() writer here could regress it.
+ */
 export function upsertTestPerfBaseline(row: NewTestPerfBaselineRow): void {
   _stmtUpsertTestPerfBaseline ??= db.prepare<{
     test_id: string;
@@ -8610,8 +8882,7 @@ export function upsertTestPerfBaseline(row: NewTestPerfBaselineRow): void {
       mad_duration_ms = excluded.mad_duration_ms,
       sample_count = excluded.sample_count,
       last_duration_ms = excluded.last_duration_ms,
-      is_regressed = excluded.is_regressed,
-      updated_at = excluded.updated_at
+      is_regressed = excluded.is_regressed
   `);
   _stmtUpsertTestPerfBaseline.run({
     test_id: row.test_id,
@@ -8639,7 +8910,7 @@ export interface TestFlipRateFlag {
   flagged: boolean;
 }
 
-let _stmtTestFlipRateSamples: Database.Statement | null = null;
+let _stmtTestFlipRateDigest: Database.Statement | null = null;
 
 /**
  * Live pass<->fail flip-rate flag for one test id, recomputed from its last
@@ -8649,6 +8920,11 @@ let _stmtTestFlipRateSamples: Database.Statement | null = null;
  * Nothing is persisted here — every call reflects the current window, so the
  * flag clears on its own the moment a fresh ingestion's recomputation drops
  * the transition count back below K; there is no sticky marker to reset.
+ *
+ * Reads the fixed-width outcome-sequence digest on test_perf_baselines
+ * (recordTestPerfDigestSample) rather than raw test_run_results rows.
+ * `windowN` must not exceed TEST_OUTCOME_DIGEST_CAPACITY — see
+ * flip_rate_window_n's .max() bound in config/settings.ts.
  */
 export function computeTestFlipRateFlag(
   testId: string,
@@ -8660,38 +8936,26 @@ export function computeTestFlipRateFlag(
   // for every other caller (listFlaggedFlakyTests, the lane-health rollup).
   beforeMs: number = Number.MAX_SAFE_INTEGER,
 ): TestFlipRateFlag {
-  _stmtTestFlipRateSamples ??= db.prepare<{
-    test_id: string;
-    limit: number;
-    before: number;
-  }>(`
-    SELECT outcome FROM (
-      SELECT outcome, created_at, id
-      FROM test_run_results
-      WHERE test_id = @test_id
-        AND concurrent_run_count = 0
-        AND oom_killed = 0
-        AND outcome IN ('passed', 'failed')
-        AND created_at < @before
-      ORDER BY created_at DESC, id DESC
-      LIMIT @limit
-    )
-    ORDER BY created_at ASC, id ASC
-  `);
-  const rows = _stmtTestFlipRateSamples.all({
-    test_id: testId,
-    limit: windowN,
-    before: beforeMs,
-  }) as { outcome: string }[];
+  _stmtTestFlipRateDigest ??= db.prepare<{ test_id: string }>(
+    `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = @test_id`,
+  );
+  const row = _stmtTestFlipRateDigest.get({ test_id: testId }) as
+    | { recent_outcomes: string }
+    | undefined;
+  const all = row ? parseDigestOutcomes(row.recent_outcomes) : [];
+  const filtered = beforeMs === Number.MAX_SAFE_INTEGER
+    ? all
+    : all.filter((s) => s.t < beforeMs);
+  const windowed = filtered.slice(-windowN);
 
   let transitionCount = 0;
-  for (let i = 1; i < rows.length; i++) {
-    if (rows[i].outcome !== rows[i - 1].outcome) transitionCount++;
+  for (let i = 1; i < windowed.length; i++) {
+    if (windowed[i].o !== windowed[i - 1].o) transitionCount++;
   }
 
   return {
     testId,
-    sampleCount: rows.length,
+    sampleCount: windowed.length,
     transitionCount,
     flagged: transitionCount >= thresholdK,
   };
@@ -8777,41 +9041,64 @@ export function listFlaggedFlakyTests(
   return flagged;
 }
 
+interface FlakyRollupWatermark {
+  updatedAt: number;
+  testId: string;
+}
+
 let _stmtGetFlakyRollupWatermark: Database.Statement | null = null;
 let _stmtSetFlakyRollupWatermark: Database.Statement | null = null;
 
-/** Highest test_run_results.id already folded into `projectId`'s flagged_flaky_tests_rollup rows. 0 (never recomputed) if no row exists. */
-function getFlakyRollupWatermark(projectId: string): number {
+/**
+ * `projectId`'s position in test_perf_baselines' (project_id, updated_at,
+ * test_id) digest ordering, already folded into flagged_flaky_tests_rollup —
+ * the keyset-pagination watermark the candidate scan resumes from.
+ * (0, '') (never recomputed) if no row exists. Moved off
+ * test_run_results.id — see the test_perf_baselines digest comment in
+ * schema.ts — since a passing-only test never gets a test_run_results row
+ * to advance a row-id watermark, which would leave it permanently
+ * unre-examinable (e.g. stuck flagged after it stops flapping).
+ */
+function getFlakyRollupWatermark(projectId: string): FlakyRollupWatermark {
   _stmtGetFlakyRollupWatermark ??= db.prepare<{ project_id: string }>(`
-    SELECT last_test_run_result_id FROM flagged_flaky_tests_rollup_watermark
+    SELECT last_digest_updated_at, last_digest_test_id
+    FROM flagged_flaky_tests_rollup_watermark
     WHERE project_id = @project_id
   `);
   const row = _stmtGetFlakyRollupWatermark.get({
     project_id: projectId,
-  }) as { last_test_run_result_id: number } | undefined;
-  return row?.last_test_run_result_id ?? 0;
+  }) as
+    | { last_digest_updated_at: number; last_digest_test_id: string }
+    | undefined;
+  return {
+    updatedAt: row?.last_digest_updated_at ?? 0,
+    testId: row?.last_digest_test_id ?? '',
+  };
 }
 
 function setFlakyRollupWatermark(
   projectId: string,
-  lastTestRunResultId: number,
+  watermark: FlakyRollupWatermark,
   updatedAt: number,
 ): void {
   _stmtSetFlakyRollupWatermark ??= db.prepare<{
     project_id: string;
-    last_test_run_result_id: number;
+    last_digest_updated_at: number;
+    last_digest_test_id: string;
     updated_at: number;
   }>(`
     INSERT INTO flagged_flaky_tests_rollup_watermark
-      (project_id, last_test_run_result_id, updated_at)
-    VALUES (@project_id, @last_test_run_result_id, @updated_at)
+      (project_id, last_digest_updated_at, last_digest_test_id, updated_at)
+    VALUES (@project_id, @last_digest_updated_at, @last_digest_test_id, @updated_at)
     ON CONFLICT(project_id) DO UPDATE SET
-      last_test_run_result_id = excluded.last_test_run_result_id,
+      last_digest_updated_at = excluded.last_digest_updated_at,
+      last_digest_test_id = excluded.last_digest_test_id,
       updated_at = excluded.updated_at
   `);
   _stmtSetFlakyRollupWatermark.run({
     project_id: projectId,
-    last_test_run_result_id: lastTestRunResultId,
+    last_digest_updated_at: watermark.updatedAt,
+    last_digest_test_id: watermark.testId,
     updated_at: updatedAt,
   });
 }
@@ -8820,66 +9107,55 @@ interface FlakyRollupCandidates {
   testIds: string[];
   names: Map<string, string>;
   rowsExamined: number;
-  maxId: number;
+  watermark: FlakyRollupWatermark;
 }
 
-let _stmtFlakyRollupNewRowStats: Database.Statement | null = null;
 let _stmtFlakyRollupCandidateTestIds: Database.Statement | null = null;
 
 /**
- * The test ids with at least one test_run_results row past `sinceId` for
- * `projectId`, plus each one's latest name and the overall new-row count/max
- * id — the bounded replacement for listFlaggedFlakyTests' unscoped
- * project-wide GROUP BY. project_id is denormalized directly onto
- * test_run_results (see schema.ts's idx_test_run_results_project_id_id), so
- * both statements filter `project_id = @project_id AND id > @since_id`
- * against that composite index with no join to test_request_runs — cost
- * tracks the number of rows inserted since the last tick, not the project's
- * full history.
+ * The test ids in `projectId`'s digest (test_perf_baselines) touched past
+ * `since` in (updated_at, test_id) keyset order, plus each one's latest name
+ * — the bounded replacement for listFlaggedFlakyTests' unscoped project-wide
+ * GROUP BY. Every ingested test touches its digest row regardless of
+ * outcome (recordTestPerfDigestSample), so — unlike the old test_run_results
+ * row-id watermark — a test that stops flapping and only passes still
+ * advances past this watermark and gets re-evaluated (and un-flagged).
  */
 function getFlakyRollupCandidates(
   projectId: string,
-  sinceId: number,
+  since: FlakyRollupWatermark,
 ): FlakyRollupCandidates {
-  _stmtFlakyRollupNewRowStats ??= db.prepare<{
-    project_id: string;
-    since_id: number;
-  }>(`
-    SELECT COUNT(*) AS row_count, MAX(id) AS max_id
-    FROM test_run_results
-    WHERE project_id = @project_id AND id > @since_id
-  `);
-  const stats = _stmtFlakyRollupNewRowStats.get({
-    project_id: projectId,
-    since_id: sinceId,
-  }) as { row_count: number; max_id: number | null };
-
-  if (stats.row_count === 0) {
-    return { testIds: [], names: new Map(), rowsExamined: 0, maxId: sinceId };
-  }
-
   _stmtFlakyRollupCandidateTestIds ??= db.prepare<{
     project_id: string;
-    since_id: number;
+    since_updated_at: number;
+    since_test_id: string;
   }>(`
-    SELECT test_id AS test_id, name AS name, MAX(created_at) AS created_at
-    FROM test_run_results
-    WHERE project_id = @project_id AND id > @since_id
-    GROUP BY test_id
+    SELECT test_id AS test_id, name AS name, updated_at AS updated_at
+    FROM test_perf_baselines
+    WHERE project_id = @project_id
+      AND (updated_at > @since_updated_at
+           OR (updated_at = @since_updated_at AND test_id > @since_test_id))
+    ORDER BY updated_at ASC, test_id ASC
   `);
   const rows = _stmtFlakyRollupCandidateTestIds.all({
     project_id: projectId,
-    since_id: sinceId,
-  }) as { test_id: string; name: string }[];
+    since_updated_at: since.updatedAt,
+    since_test_id: since.testId,
+  }) as { test_id: string; name: string; updated_at: number }[];
+
+  if (rows.length === 0) {
+    return { testIds: [], names: new Map(), rowsExamined: 0, watermark: since };
+  }
 
   const names = new Map<string, string>();
   for (const row of rows) names.set(row.test_id, row.name);
+  const last = rows[rows.length - 1];
 
   return {
     testIds: rows.map((r) => r.test_id),
     names,
-    rowsExamined: stats.row_count,
-    maxId: stats.max_id ?? sinceId,
+    rowsExamined: rows.length,
+    watermark: { updatedAt: last.updated_at, testId: last.test_id },
   };
 }
 
@@ -8890,13 +9166,13 @@ let _txReplaceFlaggedFlakyTestsRollup: ((...args: unknown[]) => void) | null =
 
 /**
  * Recomputes `projectId`'s flagged-flaky set incrementally, on the shared
- * main-thread `db` connection: only test ids with a test_run_results row
- * past flagged_flaky_tests_rollup_watermark are re-run through
+ * main-thread `db` connection: only test ids touched (any outcome) past
+ * flagged_flaky_tests_rollup_watermark are re-run through
  * computeTestFlipRateFlagsForTestIds, and only those test ids' rows in
  * flagged_flaky_tests_rollup are touched — every other project test's
  * previously-computed flag is left untouched, since nothing about its own
  * sample window changed. The watermark then advances to the highest
- * test_run_results.id folded in by this tick. Only safe to call directly
+ * (updated_at, test_id) folded in by this tick. Only safe to call directly
  * against an in-memory (test) or otherwise unknown-path database — see
  * replaceFlaggedFlakyTestsRollupOffMainThread, which dispatches this same
  * recompute to a worker thread for a real on-disk database instead. Called
@@ -8913,8 +9189,8 @@ function replaceFlaggedFlakyTestsRollupSync(
   thresholdK: number,
   computedAt: number,
 ): { itemsProcessed: number } {
-  const sinceId = getFlakyRollupWatermark(projectId);
-  const candidates = getFlakyRollupCandidates(projectId, sinceId);
+  const since = getFlakyRollupWatermark(projectId);
+  const candidates = getFlakyRollupCandidates(projectId, since);
 
   if (candidates.testIds.length === 0) {
     return { itemsProcessed: 0 };
@@ -8952,7 +9228,7 @@ function replaceFlaggedFlakyTestsRollupSync(
       testFlags: TestFlipRateFlag[],
       names: Map<string, string>,
       at: number,
-      maxId: number,
+      newWatermark: FlakyRollupWatermark,
     ) => {
       for (const flag of testFlags) {
         _stmtDeleteFlaggedFlakyTestForId!.run({
@@ -8970,7 +9246,7 @@ function replaceFlaggedFlakyTestsRollupSync(
           });
         }
       }
-      setFlakyRollupWatermark(pid, maxId, at);
+      setFlakyRollupWatermark(pid, newWatermark, at);
     },
   ) as unknown as (...args: unknown[]) => void;
   _txReplaceFlaggedFlakyTestsRollup(
@@ -8978,7 +9254,7 @@ function replaceFlaggedFlakyTestsRollupSync(
     flags,
     candidates.names,
     computedAt,
-    candidates.maxId,
+    candidates.watermark,
   );
 
   return { itemsProcessed: candidates.testIds.length };
@@ -10841,21 +11117,21 @@ export interface LaneHealthRollup {
 }
 
 /**
- * Tests currently flagged `is_regressed` whose most recent test_run_results
- * row belongs to this project — test_perf_baselines carries no project_id of
- * its own (keyed by test_id, shared across the lane), so this joins through
- * test_run_results/test_request_runs to scope it. SQLite resolves the bare
- * `name`/`last_duration_ms`-adjacent columns to the max(created_at) row per
- * the GROUP BY per its documented bare-column-with-MAX() behavior.
+ * Tests currently flagged `is_regressed` for this project — test_perf_baselines
+ * carries its own project_id/name (see the digest extension in schema.ts),
+ * populated by recordTestPerfDigestSample on every ingested sample, so this
+ * no longer needs to join through test_run_results/test_request_runs (which
+ * a passing-only regressed test — regression is duration-based, independent
+ * of pass/fail — would no longer have a row in).
  */
 let _stmtHasRegressedTests: Database.Statement | null = null;
 
 function getRegressedTestsForProject(
   projectId: string,
 ): RegressedTestSummary[] {
-  // Guard the three-way join: test_perf_baselines is 0 rows until the
-  // baseline job populates it, and the join costs nothing to skip when
-  // there's nothing regressed anywhere in the table, project or not.
+  // Guard the query: test_perf_baselines is 0 rows until the baseline job
+  // populates it, and the lookup costs nothing to skip when there's nothing
+  // regressed anywhere in the table, project or not.
   _stmtHasRegressedTests ??= db.prepare(
     `SELECT 1 FROM test_perf_baselines WHERE is_regressed = 1 LIMIT 1`,
   );
@@ -10863,15 +11139,11 @@ function getRegressedTestsForProject(
 
   const rows = db
     .prepare<{ project_id: string }>(
-      `SELECT tpb.test_id AS test_id, trr.name AS name,
-              tpb.median_duration_ms AS median_duration_ms,
-              tpb.last_duration_ms AS last_duration_ms,
-              MAX(trr.created_at) AS created_at
-       FROM test_perf_baselines tpb
-       JOIN test_run_results trr ON trr.test_id = tpb.test_id
-       JOIN test_request_runs r ON r.id = trr.test_request_run_id
-       WHERE tpb.is_regressed = 1 AND r.project_id = @project_id
-       GROUP BY tpb.test_id
+      `SELECT test_id AS test_id, name AS name,
+              median_duration_ms AS median_duration_ms,
+              last_duration_ms AS last_duration_ms
+       FROM test_perf_baselines
+       WHERE is_regressed = 1 AND project_id = @project_id
        ORDER BY name ASC`,
     )
     .all({ project_id: projectId }) as Array<{

@@ -68,6 +68,36 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
       outcome: opts.outcome,
       created_at: opts.createdAt,
     });
+
+    // The worker's computeTestFlipRateFlag reads the test_perf_baselines
+    // digest, not raw test_run_results rows — this test opens its own file-
+    // backed connection (not the app's shared `db` singleton), so it can't
+    // call queries.ts's recordTestPerfDigestSample; replicate its upsert
+    // directly against this test's own connection instead.
+    const existing = db
+      .prepare(`SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`)
+      .get(opts.testId) as { recent_outcomes: string } | undefined;
+    const outcomes = existing ? JSON.parse(existing.recent_outcomes) : [];
+    outcomes.push({
+      o: opts.outcome === 'passed' ? 'P' : 'F',
+      t: opts.createdAt,
+    });
+    db.prepare(
+      `INSERT INTO test_perf_baselines
+         (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, updated_at)
+       VALUES (@test_id, @project_id, @name, 0, 0, 0, 100, 0, @recent_outcomes, '[]', @updated_at)
+       ON CONFLICT(test_id) DO UPDATE SET
+         project_id = excluded.project_id,
+         name = excluded.name,
+         recent_outcomes = excluded.recent_outcomes,
+         updated_at = excluded.updated_at`,
+    ).run({
+      test_id: opts.testId,
+      project_id: opts.projectId,
+      name: opts.name,
+      recent_outcomes: JSON.stringify(outcomes),
+      updated_at: opts.createdAt,
+    });
   }
 
   it('recomputes the rollup via a worker thread that opens its own connection', async () => {

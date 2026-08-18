@@ -15,7 +15,7 @@ vi.mock('../db.js', async () => {
 });
 
 import { db } from '../db.js';
-import { computeTestFlipRateFlag } from '../queries.js';
+import { computeTestFlipRateFlag, recordTestPerfDigestSample } from '../queries.js';
 
 let seq = 0;
 
@@ -30,6 +30,13 @@ function insertRun(): string {
   return id;
 }
 
+/**
+ * computeTestFlipRateFlag now reads the test_perf_baselines digest rather
+ * than raw test_run_results rows — recordTestPerfDigestSample is the same
+ * write ingestTestRunResultsTx makes per test at ingestion time.
+ * createdAt doubles as the digest's caller-assigned sequenced-at value, so
+ * ordering in these fixtures stays exactly what the test author wrote.
+ */
 function insertSample(opts: {
   testId: string;
   outcome: 'passed' | 'failed';
@@ -37,24 +44,23 @@ function insertSample(opts: {
   oomKilled?: boolean;
   createdAt: number;
 }): void {
-  const runId = insertRun();
-  db.prepare(
-    `INSERT INTO test_run_results
-       (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
-     VALUES (@run_id, @test_id, @test_id, @outcome, 1, @concurrent_run_count, @oom_killed, @created_at)`,
-  ).run({
-    run_id: runId,
-    test_id: opts.testId,
-    outcome: opts.outcome,
-    concurrent_run_count: opts.concurrentRunCount ?? 0,
-    oom_killed: opts.oomKilled ? 1 : 0,
-    created_at: opts.createdAt,
-  });
+  insertRun();
+  recordTestPerfDigestSample(
+    opts.testId,
+    'proj-1',
+    opts.testId,
+    opts.outcome,
+    1,
+    opts.concurrentRunCount ?? 0,
+    opts.oomKilled ?? false,
+    opts.createdAt,
+  );
 }
 
 beforeEach(() => {
   db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
+  db.prepare('DELETE FROM test_perf_baselines').run();
   seq = 0;
 });
 

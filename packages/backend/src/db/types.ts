@@ -1150,6 +1150,37 @@ export interface NewTestRunResultRow {
   duration_ms: number;
 }
 
+// ─── test_run_summaries ─────────────────────────────────────────────────────
+
+/**
+ * One row per test_request_run: outcome counts and total duration for the
+ * whole run — see ingestTestRunResultsTx in db/queries.ts. Doubles as the
+ * extraction idempotency/existence marker (hasTestRunSummary) now that an
+ * all-passing run writes zero test_run_results rows.
+ */
+export interface TestRunSummaryRow {
+  test_request_run_id: string;
+  project_id: string;
+  passed_count: number;
+  failed_count: number;
+  skipped_count: number;
+  error_count: number;
+  other_count: number;
+  total_count: number;
+  total_duration_ms: number;
+  concurrent_run_count: number | null;
+  oom_killed: number;
+  created_at: number;
+}
+
+export interface TestOutcomeCounts {
+  passed: number;
+  failed: number;
+  skipped: number;
+  error: number;
+  other: number;
+}
+
 // ─── test_perf_baselines ────────────────────────────────────────────────────
 
 /**
@@ -1157,14 +1188,25 @@ export interface NewTestRunResultRow {
  * samples), persisted so it outlives raw test_run_results row pruning — see
  * computeTestPerfBaseline in orchestration/testRequestLane.ts. Recomputed
  * inline at ingestion completion for every test_id touched by that run.
+ *
+ * project_id/name/recent_outcomes/recent_durations are the digest extension
+ * (dig-test-results-at-ingest task): recent_outcomes/recent_durations are
+ * JSON-encoded, fixed-width, newest-last arrays fed by
+ * recordTestPerfDigestSample on every ingested (valid) sample — the durable
+ * replacement for the per-test-id windowed reads that used to hit raw
+ * test_run_results rows (listRecentValidTestDurations, computeTestFlipRateFlag).
  */
 export interface TestPerfBaselineRow {
   test_id: string;
+  project_id: string;
+  name: string;
   median_duration_ms: number;
   mad_duration_ms: number;
   sample_count: number;
   last_duration_ms: number;
   is_regressed: number;
+  recent_outcomes: string;
+  recent_durations: string;
   updated_at: number;
 }
 
