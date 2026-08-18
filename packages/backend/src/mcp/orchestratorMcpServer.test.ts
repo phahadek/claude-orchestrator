@@ -205,6 +205,7 @@ describe('buildMcpServer — tool surface per session type', () => {
         'task.queryTasks',
         'pullRequest.getByTaskId',
         'gateSeed.getState',
+        'testHealth.getFlakyHistory',
         'session.getRecord',
         'auditLog.query',
         'sessionEvents.query',
@@ -236,6 +237,7 @@ describe('buildMcpServer — tool surface per session type', () => {
         'task.queryTasks',
         'pullRequest.getByTaskId',
         'gateSeed.getState',
+        'testHealth.getFlakyHistory',
         'session.getRecord',
         'auditLog.query',
         'sessionEvents.query',
@@ -269,6 +271,7 @@ describe('buildMcpServer — tool surface per session type', () => {
         'task.queryTasks',
         'pullRequest.getByTaskId',
         'gateSeed.getState',
+        'testHealth.getFlakyHistory',
         'deploy.verdict',
         'gate.reclassify',
         'intent.dispositionStranded',
@@ -308,6 +311,7 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).not.toContain('intent.dispositionStranded');
     expect(names).toContain('pullRequest.getByTaskId');
     expect(names).toContain('gateSeed.getState');
+    expect(names).toContain('testHealth.getFlakyHistory');
   });
 });
 
