@@ -2371,7 +2371,7 @@ export function runMigrations(target: Database.Database): void {
   `);
 
   // ── concurrent_run_count producer/consumer backfill (one-time, guarded via
-  // settings) ──────────────────────────────────────────────────────────────
+  // schema_backfills) ─────────────────────────────────────────────────────
   // Every row written before this migration stored semaphore occupancy
   // *including* the run itself (testRequestLane.ts's old behavior), so a
   // solo run's row held 1, never 0 — the concurrent_run_count = 0 validity
@@ -2379,13 +2379,21 @@ export function runMigrations(target: Database.Database): void {
   // computeTestFlipRateFlag) matched nothing. The producer now records peer
   // occupancy excluding self; existing non-null values need the same
   // correction (old_value - 1) applied once. A WHERE-column-IS-NULL guard
-  // doesn't work here (the column is already populated), so a settings flag
-  // marks completion instead — decrementing an already-corrected value a
-  // second time would drive it negative.
+  // doesn't work here (the column is already populated), so a marker row in
+  // this schema-owned table (not the app-level `settings` store, whose
+  // emptiness on a fresh DB other tests — e.g. setupTestDb.test.ts — depend
+  // on) records completion instead — decrementing an already-corrected value
+  // a second time would drive it negative.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS schema_backfills (
+      name        TEXT    PRIMARY KEY,
+      applied_at  INTEGER NOT NULL
+    );
+  `);
   {
     const marker = target
-      .prepare(`SELECT value FROM settings WHERE key = ?`)
-      .get('concurrent_run_count_backfill_v1') as { value: string } | undefined;
+      .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+      .get('concurrent_run_count_v1');
     if (!marker) {
       target.exec(`
         UPDATE test_request_runs
@@ -2398,10 +2406,9 @@ export function runMigrations(target: Database.Database): void {
       `);
       target
         .prepare(
-          `INSERT INTO settings (key, value) VALUES (?, ?)
-           ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+          `INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`,
         )
-        .run('concurrent_run_count_backfill_v1', 'done');
+        .run('concurrent_run_count_v1', Date.now());
     }
   }
 
