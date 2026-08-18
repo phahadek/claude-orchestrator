@@ -5,6 +5,7 @@ import type {
   FailingCheck,
   VerifiedFlakyDispositionPayload,
   FlakeRecoveryOutcome,
+  RerequestedCheckRun,
 } from './types';
 import { GitHubRateLimitError } from './types';
 import type { SessionManager } from '../session/SessionManager';
@@ -1131,9 +1132,9 @@ export class PRMergeWatcher extends EventEmitter {
       if (!result) return;
       outcome = result.outcome;
     } else {
-      let rerequestedIds: number[];
+      let rerequestedRuns: RerequestedCheckRun[];
       try {
-        rerequestedIds = await this.github.rerunFailedJobs(
+        rerequestedRuns = await this.github.rerunFailedJobs(
           pr.head_sha,
           pr.repo,
         );
@@ -1150,7 +1151,7 @@ export class PRMergeWatcher extends EventEmitter {
       await this.github.waitForCheckRunsCompletion(
         pr.head_sha,
         pr.repo,
-        rerequestedIds,
+        rerequestedRuns,
       );
 
       // Re-verify head_sha immediately before recording the outcome — a push

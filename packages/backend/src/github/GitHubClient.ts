@@ -12,6 +12,7 @@ import {
   IssueComment,
   Milestone,
   PRFileEntry,
+  RerequestedCheckRun,
 } from './types';
 import { getPRByNumber } from '../db/queries';
 
@@ -528,9 +529,14 @@ export class GitHubClient {
    * Re-run the failed check-runs for a commit SHA via GitHub's rerequest API —
    * actuates a session's verified-flaky disposition without pushing a new commit.
    * Best-effort per check run: a single rerequest failure is logged and skipped
-   * so the rest still fire. Returns the ids of check runs successfully rerequested.
+   * so the rest still fire. Returns each rerequested run's id together with its
+   * pre-rerequest `started_at`, so waitForCheckRunsCompletion can confirm the
+   * run has actually re-executed rather than trusting a stale 'completed' read.
    */
-  async rerunFailedJobs(sha: string, repo?: string): Promise<number[]> {
+  async rerunFailedJobs(
+    sha: string,
+    repo?: string,
+  ): Promise<RerequestedCheckRun[]> {
     const r = repo ?? GITHUB_REPO;
     const data = await this.request<{
       check_runs: Array<{
@@ -538,6 +544,7 @@ export class GitHubClient {
         name: string;
         status: string;
         conclusion: string | null;
+        started_at: string | null;
       }>;
     }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
     const failing = data.check_runs.filter(
@@ -546,13 +553,13 @@ export class GitHubClient {
         c.conclusion !== null &&
         FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
     );
-    const rerequested: number[] = [];
+    const rerequested: RerequestedCheckRun[] = [];
     for (const c of failing) {
       try {
         await this.request(`/repos/${r}/check-runs/${c.id}/rerequest`, {
           method: 'POST',
         });
-        rerequested.push(c.id);
+        rerequested.push({ id: c.id, priorStartedAt: c.started_at });
       } catch (err) {
         logger.warn(
           `[GitHubClient] rerunFailedJobs: rerequest failed for check run ${c.id} (${c.name}) on ${sha}:`,
@@ -564,38 +571,55 @@ export class GitHubClient {
   }
 
   /**
-   * Poll a commit's check-runs until every id in checkRunIds reaches
-   * status 'completed', or timeoutMs elapses. A freshly rerequested check
-   * run starts out queued/in_progress — reading pass/fail immediately after
-   * rerequest would observe that transient state rather than the rerun's
-   * actual result. Returns true once all runs are terminal, false on
-   * timeout (callers should then treat the outcome as unverified).
+   * Poll a commit's check-runs until every rerequested run in checkRuns reaches
+   * status 'completed' with a `started_at` that has genuinely advanced past its
+   * pre-rerequest value, or timeoutMs elapses. GitHub's rerequest reuses the same
+   * check-run id and updates it in place, but the status reset lags the 201
+   * response — so the very first poll after rerequest can still read back the
+   * STALE pre-rerequest 'completed' state. Requiring status==='completed' AND a
+   * later started_at closes that race; status alone would exit on the stale read
+   * with zero waiting. Returns true once all runs are confirmed re-executed and
+   * terminal, false on timeout (callers should then treat the outcome as
+   * unverified).
    */
   async waitForCheckRunsCompletion(
     sha: string,
     repo: string,
-    checkRunIds: number[],
+    checkRuns: RerequestedCheckRun[],
     opts: {
       timeoutMs?: number;
       pollIntervalMs?: number;
       sleep?: (ms: number) => Promise<void>;
     } = {},
   ): Promise<boolean> {
-    if (checkRunIds.length === 0) return true;
+    if (checkRuns.length === 0) return true;
     const r = repo ?? GITHUB_REPO;
     const timeoutMs = opts.timeoutMs ?? CHECK_RUN_WAIT_TIMEOUT_MS;
     const pollIntervalMs = opts.pollIntervalMs ?? CHECK_RUN_POLL_INTERVAL_MS;
     const sleep =
       opts.sleep ??
       ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-    const pending = new Set(checkRunIds);
+    const pending = new Map(
+      checkRuns.map((c) => [c.id, c.priorStartedAt] as const),
+    );
     const deadline = Date.now() + timeoutMs;
     while (pending.size > 0) {
       const data = await this.request<{
-        check_runs: Array<{ id: number; status: string }>;
+        check_runs: Array<{
+          id: number;
+          status: string;
+          started_at: string | null;
+        }>;
       }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
       for (const run of data.check_runs) {
-        if (pending.has(run.id) && run.status === 'completed') {
+        if (!pending.has(run.id) || run.status !== 'completed') continue;
+        const priorStartedAt = pending.get(run.id) ?? null;
+        const reexecuted =
+          run.started_at != null &&
+          (priorStartedAt == null ||
+            new Date(run.started_at).getTime() >
+              new Date(priorStartedAt).getTime());
+        if (reexecuted) {
           pending.delete(run.id);
         }
       }
@@ -604,7 +628,7 @@ export class GitHubClient {
     }
     if (pending.size > 0) {
       logger.warn(
-        `[GitHubClient] waitForCheckRunsCompletion: timed out waiting for check runs [${[...pending].join(', ')}] on ${sha} in ${r}`,
+        `[GitHubClient] waitForCheckRunsCompletion: timed out waiting for check runs [${[...pending.keys()].join(', ')}] on ${sha} in ${r}`,
       );
     }
     return pending.size === 0;
