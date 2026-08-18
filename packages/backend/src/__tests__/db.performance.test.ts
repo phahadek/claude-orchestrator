@@ -235,7 +235,7 @@ describe('getActiveTaskAggregates — CTE task-id predicate pushdown', () => {
       .spyOn(typedDb, 'prepare')
       .mockImplementation((sql: string, ...rest: unknown[]) => {
         capturedSql = sql;
-         
+
         return (originalPrepare as any)(sql, ...rest);
       });
     fn();
