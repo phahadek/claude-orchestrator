@@ -4136,19 +4136,30 @@ export function getLatestCodeSessionByNotionTaskId(
  * applied-pending-confirm -> resolved transition typically happens well
  * after that session has gone terminal.
  */
+/**
+ * Matched via normalizeBoardId rather than an exact task_id column match:
+ * ops_journal entries key on the bare board id (see ops/opsLoad.ts), while
+ * sessions.task_id is stored normalizeTaskId'd (source-prefixed) at dispatch
+ * time (see OpsSessionLauncher.ts) — an exact match would silently never
+ * find the session that closeDeferredOpsTask needs. SQL only pre-filters on
+ * session_type (backed by idx_sessions_session_type_started_at, see
+ * schema.ts) since the id match itself can't be expressed in SQL — bounded
+ * to ops-typed rows rather than the whole sessions table.
+ */
 export function getLatestOpsSessionByTaskId(
   taskId: string,
 ): Session | undefined {
-  return db
-    .prepare<{ task_id: string }>(
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare(
       `
     SELECT * FROM sessions
-    WHERE task_id = @task_id AND session_type = 'ops'
+    WHERE session_type = 'ops'
     ORDER BY started_at DESC
-    LIMIT 1
   `,
     )
-    .get({ task_id: taskId }) as Session | undefined;
+    .all() as Session[];
+  return rows.find((row) => normalizeBoardId(row.task_id ?? '') === norm);
 }
 
 /** Returns the most recent docs session for a given task ID — the docs-flow counterpart to getLatestOpsSessionByTaskId. */

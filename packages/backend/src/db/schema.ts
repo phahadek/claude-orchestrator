@@ -496,6 +496,12 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_timestamp ON session_events(session_id, timestamp);
     CREATE INDEX IF NOT EXISTS idx_sessions_archived_started_at ON sessions(archived, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_sessions_notion_task_id_session_type ON sessions(task_id, session_type, started_at DESC);
+    -- Backs getLatestOpsSessionByTaskId's session_type-scoped scan: task_id
+    -- there is matched via normalizeBoardId in JS (ops_journal keys on the
+    -- bare board id while sessions.task_id is source-prefixed), so the SQL
+    -- layer can only pre-filter on session_type — this index keeps that scan
+    -- to just the ops-typed rows instead of the whole sessions table.
+    CREATE INDEX IF NOT EXISTS idx_sessions_session_type_started_at ON sessions(session_type, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pull_requests_task_id_pr_number ON pull_requests(task_id, pr_number DESC);
     CREATE INDEX IF NOT EXISTS idx_pull_requests_repo_state ON pull_requests(repo, state);
     -- Covers getPRBySessionId's WHERE session_id = ? lookup, which otherwise
