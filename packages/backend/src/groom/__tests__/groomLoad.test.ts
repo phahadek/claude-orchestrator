@@ -79,6 +79,20 @@ const MANIFEST: GroomManifest = {
   },
 };
 
+/** Same milestone, but ctx-page-1 is flagged as migrated into the arch_unit
+ * store, alongside a second, never-migrated context page (ctx-page-2). */
+const MANIFEST_MIGRATED: GroomManifest = {
+  ...MANIFEST,
+  context_pages: [
+    {
+      id: 'ctx-page-1',
+      title: 'Technical Architecture',
+      migratedToStore: true,
+    },
+    { id: 'ctx-page-2', title: 'Project Context' },
+  ],
+};
+
 const CODE_ROW: NotionTaskLike = {
   id: 'code-task-1',
   title: 'Fix the notion client',
@@ -132,6 +146,11 @@ const TASK_PAGES: Record<
     name: 'Technical Architecture',
     filesSection: '',
     rawMarkdown: '# Technical Architecture\n\nSome context.',
+  },
+  'ctx-page-2': {
+    name: 'Project Context',
+    filesSection: '',
+    rawMarkdown: '# Project Context\n\nNever migrated.',
   },
 };
 
@@ -576,19 +595,21 @@ describe('loadGroomContext', () => {
 
       const result = await loadGroomContext('M-test', {
         repoRoot: repoDir,
-        manifest: MANIFEST,
+        manifest: MANIFEST_MIGRATED,
         notionClient: fakeNotion(),
         projectId: PROJECT_ID,
       });
 
       expect(result.archSource).toBe('store');
-      // contextPages is independent of archStoreAdopted — the manifest's
-      // non-architecture context pages are still fetched from Notion.
+      // The migratedToStore entry (Technical Architecture) is excluded now
+      // that the project has adopted the store — its content is delivered
+      // instead via archUnits below. The never-migrated entry (Project
+      // Context) is still fetched from Notion in full, unaffected by the flag.
       expect(result.contextPages).toEqual([
         {
-          id: 'ctx-page-1',
-          title: 'Technical Architecture',
-          markdown: '# Technical Architecture\n\nSome context.',
+          id: 'ctx-page-2',
+          title: 'Project Context',
+          markdown: '# Project Context\n\nNever migrated.',
         },
       ]);
 
@@ -611,6 +632,51 @@ describe('loadGroomContext', () => {
       ]);
     });
 
+    it('applies the migratedToStore guard per context_pages entry: excluded only when both flagged and adopted', async () => {
+      ({ repoDir } = setupRepo());
+
+      setupProject(true);
+      const adopted = await loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST_MIGRATED,
+        notionClient: fakeNotion(),
+        projectId: PROJECT_ID,
+      });
+      // (a) the migratedToStore entry is excluded once archStoreAdopted=true...
+      expect(adopted.contextPages.map((p) => p.id)).not.toContain('ctx-page-1');
+      // ...(c) but a non-migratedToStore entry is still fetched in full.
+      expect(adopted.contextPages).toEqual([
+        {
+          id: 'ctx-page-2',
+          title: 'Project Context',
+          markdown: '# Project Context\n\nNever migrated.',
+        },
+      ]);
+
+      db.prepare('DELETE FROM projects').run();
+      setupProject(false);
+      const notAdopted = await loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST_MIGRATED,
+        notionClient: fakeNotion(),
+        projectId: PROJECT_ID,
+      });
+      // (b) the same migratedToStore entry is fetched in full when the
+      // project has not adopted the store.
+      expect(notAdopted.contextPages).toEqual([
+        {
+          id: 'ctx-page-1',
+          title: 'Technical Architecture',
+          markdown: '# Technical Architecture\n\nSome context.',
+        },
+        {
+          id: 'ctx-page-2',
+          title: 'Project Context',
+          markdown: '# Project Context\n\nNever migrated.',
+        },
+      ]);
+    });
+
     it("keeps grooming's pre-migration Notion behaviour unchanged when archStoreAdopted is not set", async () => {
       ({ repoDir } = setupRepo());
       setupProject(false);
@@ -626,17 +692,25 @@ describe('loadGroomContext', () => {
 
       const result = await loadGroomContext('M-test', {
         repoRoot: repoDir,
-        manifest: MANIFEST,
+        manifest: MANIFEST_MIGRATED,
         notionClient: fakeNotion(),
         projectId: PROJECT_ID,
       });
 
       expect(result.archSource).toBe('notion');
+      // The migratedToStore flag only takes effect once archStoreAdopted is
+      // set — with the project not yet adopted, every context page (migrated
+      // flag or not) is still fetched from Notion in full.
       expect(result.contextPages).toEqual([
         {
           id: 'ctx-page-1',
           title: 'Technical Architecture',
           markdown: '# Technical Architecture\n\nSome context.',
+        },
+        {
+          id: 'ctx-page-2',
+          title: 'Project Context',
+          markdown: '# Project Context\n\nNever migrated.',
         },
       ]);
 
@@ -644,6 +718,7 @@ describe('loadGroomContext', () => {
       expect(codeTask?.archSource).toBe('notion');
       expect(codeTask?.archUnits).toEqual([
         { id: 'ctx-page-1', title: 'Technical Architecture' },
+        { id: 'ctx-page-2', title: 'Project Context' },
       ]);
     });
 
