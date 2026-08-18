@@ -1071,9 +1071,7 @@ describe('querySessionEventsByProjectAggregate', () => {
     });
   });
 
-  function legacyAggregate(
-    projectId: string,
-  ): {
+  function legacyAggregate(projectId: string): {
     session_id: string;
     count: number;
     first_timestamp: number;
