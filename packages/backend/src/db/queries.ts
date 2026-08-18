@@ -8584,7 +8584,7 @@ let _txReplaceFlaggedFlakyTestsRollup: ((...args: unknown[]) => void) | null =
  * on FlakyTestRollupJob's scheduler cadence, never on the lane-health
  * request path.
  */
-export function replaceFlaggedFlakyTestsRollupSync(
+function replaceFlaggedFlakyTestsRollupSync(
   projectId: string,
   windowN: number,
   thresholdK: number,
