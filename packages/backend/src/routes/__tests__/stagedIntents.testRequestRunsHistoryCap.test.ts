@@ -63,7 +63,7 @@ describe('GET /api/test-request-runs/history — per-run result cap', () => {
       outcome: 'passed',
       duration_ms: 5,
     }));
-    insertTestRunResults(runId, tests, 0, false);
+    insertTestRunResults(runId, PROJECT_ID, tests, 0, false);
     completeTestRequestRun(runId, 'passed', 'ok');
 
     const app = buildApp();
@@ -84,6 +84,7 @@ describe('GET /api/test-request-runs/history — per-run result cap', () => {
     insertTestRequestRun(runId, PROJECT_ID, 'hash-2', SESSION_ID, Date.now());
     insertTestRunResults(
       runId,
+      PROJECT_ID,
       [
         {
           test_id: 'test-a',

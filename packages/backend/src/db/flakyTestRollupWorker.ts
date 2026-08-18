@@ -123,10 +123,9 @@ function getCandidates(
 ): Candidates {
   const stats = database
     .prepare(
-      `SELECT COUNT(*) AS row_count, MAX(trr.id) AS max_id
-       FROM test_run_results trr
-       JOIN test_request_runs r ON r.id = trr.test_request_run_id
-       WHERE r.project_id = @project_id AND trr.id > @since_id`,
+      `SELECT COUNT(*) AS row_count, MAX(id) AS max_id
+       FROM test_run_results
+       WHERE project_id = @project_id AND id > @since_id`,
     )
     .get({ project_id: projectId, since_id: sinceId }) as {
     row_count: number;
@@ -139,11 +138,10 @@ function getCandidates(
 
   const rows = database
     .prepare(
-      `SELECT trr.test_id AS test_id, trr.name AS name, MAX(trr.created_at) AS created_at
-       FROM test_run_results trr
-       JOIN test_request_runs r ON r.id = trr.test_request_run_id
-       WHERE r.project_id = @project_id AND trr.id > @since_id
-       GROUP BY trr.test_id`,
+      `SELECT test_id AS test_id, name AS name, MAX(created_at) AS created_at
+       FROM test_run_results
+       WHERE project_id = @project_id AND id > @since_id
+       GROUP BY test_id`,
     )
     .all({ project_id: projectId, since_id: sinceId }) as {
     test_id: string;

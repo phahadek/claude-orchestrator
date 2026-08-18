@@ -34,6 +34,7 @@ function insertRow(testId: string, createdAt: number): string {
   insertTestRequestRun(runId, 'proj-1', `prune-hash-${seq}`, null, Date.now());
   insertTestRunResults(
     runId,
+    'proj-1',
     [{ test_id: testId, name: testId, outcome: 'passed', duration_ms: 100 }],
     0,
     false,

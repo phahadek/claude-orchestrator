@@ -72,6 +72,7 @@ function seedRunFailures(
 ): void {
   insertTestRunResults(
     runId,
+    'proj-1',
     tests.map((t) => ({
       test_id: t.testId,
       name: t.name,

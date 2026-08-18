@@ -8441,6 +8441,7 @@ let _stmtInsertTestRunResult: Database.Statement | null = null;
  */
 export function insertTestRunResults(
   testRequestRunId: string,
+  projectId: string,
   tests: NewTestRunResultRow[],
   concurrentRunCount: number | null,
   oomKilled: boolean,
@@ -8448,6 +8449,7 @@ export function insertTestRunResults(
   if (tests.length === 0) return;
   _stmtInsertTestRunResult ??= db.prepare<{
     test_request_run_id: string;
+    project_id: string;
     test_id: string;
     name: string;
     outcome: string;
@@ -8457,9 +8459,9 @@ export function insertTestRunResults(
     created_at: number;
   }>(`
     INSERT INTO test_run_results
-      (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+      (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
     VALUES
-      (@test_request_run_id, @test_id, @name, @outcome, @duration_ms, @concurrent_run_count, @oom_killed, @created_at)
+      (@test_request_run_id, @project_id, @test_id, @name, @outcome, @duration_ms, @concurrent_run_count, @oom_killed, @created_at)
   `);
   const stmt = _stmtInsertTestRunResult;
   const insertAll = db.transaction((items: NewTestRunResultRow[]) => {
@@ -8467,6 +8469,7 @@ export function insertTestRunResults(
     for (const item of items) {
       stmt.run({
         test_request_run_id: testRequestRunId,
+        project_id: projectId,
         test_id: item.test_id,
         name: item.name,
         outcome: item.outcome,
@@ -8499,7 +8502,7 @@ export function listTestRunResultsForRun(
 ): TestRunResultRow[] {
   return db
     .prepare(
-      `SELECT id, test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at
+      `SELECT id, test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at
        FROM test_run_results
        WHERE test_request_run_id = ?
        ORDER BY id ASC
@@ -8827,10 +8830,12 @@ let _stmtFlakyRollupCandidateTestIds: Database.Statement | null = null;
  * The test ids with at least one test_run_results row past `sinceId` for
  * `projectId`, plus each one's latest name and the overall new-row count/max
  * id — the bounded replacement for listFlaggedFlakyTests' unscoped
- * project-wide GROUP BY. Both statements filter on `trr.id > @since_id`
- * first (id is test_run_results' rowid-aliased primary key, so this is a
- * bounded range scan) before joining test_request_runs, so cost tracks the
- * number of rows inserted since the last tick, not the table's full size.
+ * project-wide GROUP BY. project_id is denormalized directly onto
+ * test_run_results (see schema.ts's idx_test_run_results_project_id_id), so
+ * both statements filter `project_id = @project_id AND id > @since_id`
+ * against that composite index with no join to test_request_runs — cost
+ * tracks the number of rows inserted since the last tick, not the project's
+ * full history.
  */
 function getFlakyRollupCandidates(
   projectId: string,
@@ -8840,10 +8845,9 @@ function getFlakyRollupCandidates(
     project_id: string;
     since_id: number;
   }>(`
-    SELECT COUNT(*) AS row_count, MAX(trr.id) AS max_id
-    FROM test_run_results trr
-    JOIN test_request_runs r ON r.id = trr.test_request_run_id
-    WHERE r.project_id = @project_id AND trr.id > @since_id
+    SELECT COUNT(*) AS row_count, MAX(id) AS max_id
+    FROM test_run_results
+    WHERE project_id = @project_id AND id > @since_id
   `);
   const stats = _stmtFlakyRollupNewRowStats.get({
     project_id: projectId,
@@ -8858,11 +8862,10 @@ function getFlakyRollupCandidates(
     project_id: string;
     since_id: number;
   }>(`
-    SELECT trr.test_id AS test_id, trr.name AS name, MAX(trr.created_at) AS created_at
-    FROM test_run_results trr
-    JOIN test_request_runs r ON r.id = trr.test_request_run_id
-    WHERE r.project_id = @project_id AND trr.id > @since_id
-    GROUP BY trr.test_id
+    SELECT test_id AS test_id, name AS name, MAX(created_at) AS created_at
+    FROM test_run_results
+    WHERE project_id = @project_id AND id > @since_id
+    GROUP BY test_id
   `);
   const rows = _stmtFlakyRollupCandidateTestIds.all({
     project_id: projectId,

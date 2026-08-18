@@ -2334,16 +2334,18 @@ export function runMigrations(target: Database.Database): void {
 
   // test_run_results: one row per test, extracted from a completed run's
   // structured_result (suites[].tests[]) — see testRequestLane.ts's
-  // ingestTestRunResults. concurrent_run_count/oom_killed are denormalized
-  // from the parent test_request_runs row onto every extracted test row so
-  // per-test validity queries never need a join. Extraction is idempotent:
-  // a run with any existing test_run_results rows is treated as already
-  // ingested (see hasTestRunResults), and all rows for a run are inserted in
-  // a single transaction so a crash mid-ingestion never leaves a partial set.
+  // ingestTestRunResults. concurrent_run_count/oom_killed/project_id are
+  // denormalized from the parent test_request_runs row onto every extracted
+  // test row so per-test validity queries and project-scoped scans never
+  // need a join. Extraction is idempotent: a run with any existing
+  // test_run_results rows is treated as already ingested (see
+  // hasTestRunResults), and all rows for a run are inserted in a single
+  // transaction so a crash mid-ingestion never leaves a partial set.
   target.exec(`
     CREATE TABLE IF NOT EXISTS test_run_results (
       id                   INTEGER PRIMARY KEY AUTOINCREMENT,
       test_request_run_id  TEXT    NOT NULL,
+      project_id           TEXT    NOT NULL DEFAULT '',
       test_id              TEXT    NOT NULL,
       name                 TEXT    NOT NULL,
       outcome              TEXT    NOT NULL,
@@ -2368,6 +2370,25 @@ export function runMigrations(target: Database.Database): void {
     -- ORDER BY created_at DESC without a temp B-tree.
     CREATE INDEX IF NOT EXISTS idx_test_run_results_test_id_created_at
       ON test_run_results(test_id, created_at DESC);
+  `);
+
+  // Idempotent: project_id column for pre-existing test_run_results tables
+  // created before this migration (fresh installs already get it from the
+  // CREATE TABLE above). Population of rows written before this migration
+  // happens in the guarded backfill below, once schema_backfills exists.
+  try {
+    target.exec(
+      `ALTER TABLE test_run_results ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`,
+    );
+  } catch {
+    /* already exists */
+  }
+  // Replaces the getFlakyRollupCandidates/getCandidates join through
+  // test_request_runs with a direct project-scoped range scan — see the
+  // comment above those functions in queries.ts/flakyTestRollupWorker.ts.
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_test_run_results_project_id_id
+      ON test_run_results(project_id, id);
   `);
 
   // ── concurrent_run_count producer/consumer backfill (one-time, guarded via
@@ -2409,6 +2430,35 @@ export function runMigrations(target: Database.Database): void {
           `INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`,
         )
         .run('concurrent_run_count_v1', Date.now());
+    }
+  }
+
+  // ── test_run_results.project_id backfill (one-time, guarded via
+  // schema_backfills) ─────────────────────────────────────────────────────
+  // Rows written before this migration have project_id = '' (the column's
+  // DEFAULT, not the app-level "unknown project" marker), so a plain
+  // WHERE-column-IS-NULL guard doesn't distinguish "not backfilled yet" from
+  // a legitimately-backfilled-but-empty value — same rationale as
+  // concurrent_run_count_v1 above. Joins through test_request_runs exactly
+  // once, here, rather than on every guard-query tick going forward.
+  {
+    const marker = target
+      .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+      .get('test_run_results_project_id_v1');
+    if (!marker) {
+      target.exec(`
+        UPDATE test_run_results
+        SET project_id = (
+          SELECT r.project_id FROM test_request_runs r
+          WHERE r.id = test_run_results.test_request_run_id
+        )
+        WHERE project_id = '';
+      `);
+      target
+        .prepare(
+          `INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`,
+        )
+        .run('test_run_results_project_id_v1', Date.now());
     }
   }
 

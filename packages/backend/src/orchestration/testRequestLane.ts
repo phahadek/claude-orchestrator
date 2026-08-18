@@ -366,6 +366,7 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
 
   insertTestRunResults(
     run.id,
+    run.project_id,
     tests,
     run.concurrent_run_count ?? null,
     !!run.oom_killed,

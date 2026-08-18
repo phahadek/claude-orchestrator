@@ -95,6 +95,7 @@ function insertSample(
   insertTestRequestRun(runId, 'proj-1', `perf-hash-${runId}`, null, Date.now());
   insertTestRunResults(
     runId,
+    'proj-1',
     [
       {
         test_id: testId,
