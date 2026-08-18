@@ -2025,10 +2025,12 @@ function getTxnInsertEventOrIgnoreAndBumpLastEventAt(): InsertEventTxn {
         VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
       `);
       const result = _stmtInsertEventOrIgnore.run(params);
-      getStmtBumpSessionLastEventAt().run({
-        session_id: params.session_id,
-        timestamp: params.timestamp,
-      });
+      if (result.changes > 0) {
+        getStmtBumpSessionLastEventAt().run({
+          session_id: params.session_id,
+          timestamp: params.timestamp,
+        });
+      }
       return result;
     },
   );

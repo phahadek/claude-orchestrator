@@ -994,6 +994,31 @@ describe('first_event_at / event_count write-path maintenance', () => {
       event_count: 3,
     });
   });
+
+  it('insertEventOrIgnore does not bump event_count/first_event_at/last_event_at when the insert is ignored', () => {
+    typedDb.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS test_uniq_session_message ON session_events(session_id, message_id)`,
+    );
+    insertEventOrIgnore({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 500,
+      message_id: 'dup-msg',
+    });
+    // Same (session_id, message_id) — the unique index makes SQLite ignore
+    // this insert, so the bump must not run for it either.
+    insertEventOrIgnore({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 999,
+      message_id: 'dup-msg',
+    });
+    expect(readAggregates('maint-sess')).toEqual({
+      first_event_at: 500,
+      last_event_at: 500,
+      event_count: 1,
+    });
+  });
 });
 
 // ── querySessionEventsByProjectAggregate — denormalised unfiltered path ────
