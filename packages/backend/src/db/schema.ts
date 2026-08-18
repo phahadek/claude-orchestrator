@@ -2565,4 +2565,23 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // last_event_at: denormalised MAX(session_events.timestamp) for the owning
+  // session, maintained at the event-insert sites (see queries.ts) so the
+  // archived-sessions route can read it directly instead of aggregating over
+  // the entire session_events table (99.8% of which belongs to archived
+  // sessions) on every request. Backfilled unconditionally for rows that
+  // haven't been touched by the write-path maintenance yet.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN last_event_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    UPDATE sessions
+    SET last_event_at = (
+      SELECT MAX(se.timestamp) FROM session_events se WHERE se.session_id = sessions.session_id
+    )
+    WHERE last_event_at IS NULL
+  `);
 }

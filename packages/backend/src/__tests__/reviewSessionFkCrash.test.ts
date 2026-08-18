@@ -376,9 +376,13 @@ describe('upsertSessionEvent — defensive guard (source-level)', () => {
       'utf-8',
     );
     const upsertIdx = source.indexOf('export function upsertSessionEvent');
-    const insertIdx = source.indexOf('getStmtInsertEvent().run', upsertIdx);
+    const insertIdx = source.indexOf(
+      'getTxnInsertEventAndBumpLastEventAt()',
+      upsertIdx,
+    );
     const guardIdx = source.indexOf('getStmtGetSession().get', upsertIdx);
     expect(guardIdx).toBeGreaterThan(upsertIdx);
+    expect(insertIdx).toBeGreaterThan(-1);
     expect(guardIdx).toBeLessThan(insertIdx);
   });
 
