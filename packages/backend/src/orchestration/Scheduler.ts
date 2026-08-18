@@ -241,8 +241,8 @@ export class Scheduler {
       // distinguishable from "unreported" — a job that returns nothing
       // (or omits the field) is recorded as having processed zero items.
       const itemsProcessed =
-        (result as { items_processed?: number } | undefined)
-          ?.items_processed ?? 0;
+        (result as { items_processed?: number } | undefined)?.items_processed ??
+        0;
 
       if (state.queued && !state.stopped) {
         state.queued = false;
