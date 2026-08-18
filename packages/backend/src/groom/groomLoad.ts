@@ -459,6 +459,17 @@ async function listTrackedFiles(repoRoot: string): Promise<string[]> {
 }
 
 /**
+ * Caller-scoped memo for `resolveTrackedFileSet`, keyed by repoRoot — lets a
+ * multi-member group commit (commitGroupIntents) share one `git ls-files`
+ * shell-out across every 💻 Code Ready-flip in the same commit instead of
+ * re-spawning it per member, since the tracked-file set is identical for
+ * every member within one commit. Caching the in-flight promise (not just
+ * the resolved value) also collapses concurrent same-repo lookups into one
+ * subprocess. Callers that don't pass one get the prior uncached behaviour.
+ */
+export type TrackedFileSetCache = Map<string, Promise<Set<string>>>;
+
+/**
  * The tracked-file set for a project's repo, for server-side re-derivation
  * of a Files/paths entry's `existsInRepo` at promotion time (groomGate.ts) —
  * reuses the same git-backed source of truth this loader's own
@@ -469,8 +480,25 @@ async function listTrackedFiles(repoRoot: string): Promise<string[]> {
  */
 export async function resolveTrackedFileSet(
   repoRoot: string,
+  cache?: TrackedFileSetCache,
 ): Promise<Set<string>> {
-  return new Set(await gitLsFilesOrThrow(repoRoot));
+  if (!cache) {
+    return new Set(await gitLsFilesOrThrow(repoRoot));
+  }
+  let pending = cache.get(repoRoot);
+  if (!pending) {
+    pending = gitLsFilesOrThrow(repoRoot).then((files) => new Set(files));
+    cache.set(repoRoot, pending);
+  }
+  try {
+    return await pending;
+  } catch (err) {
+    // A failed resolution must not poison the cache for the rest of the
+    // commit — a subsequent member gets a fresh retry rather than the same
+    // rejected promise forever.
+    if (cache.get(repoRoot) === pending) cache.delete(repoRoot);
+    throw err;
+  }
 }
 
 /** Freshness of a repo-relative package path vs. the cached prior SHA. */

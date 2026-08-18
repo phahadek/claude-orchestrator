@@ -36,6 +36,7 @@ import {
   findAutoApproveIneligibleTaskCreate,
   type GroomingGateEntry,
 } from '../groom/groomGate';
+import type { TrackedFileSetCache } from '../groom/groomLoad';
 import { isInteractiveTaskType } from '../planning/triage';
 import { isInvestigateSession } from '../session/sessionPredicates';
 import type {
@@ -4646,6 +4647,7 @@ async function applyIntent(
   triageMilestoneLabel?: string,
   sessionManager?: SessionManager,
   mirrorDisposition?: GateVerifyMirrorDisposition,
+  trackedFileSetCache?: TrackedFileSetCache,
 ): Promise<unknown> {
   if (HUMAN_APPLY_ONLY_KINDS.has(intent.kind) && actorType !== 'human') {
     throw new HumanApplyOnlyError(intent.kind);
@@ -4720,6 +4722,7 @@ async function applyIntent(
           payload.taskId,
           payload.groomingGate?.type,
         ),
+        trackedFileSetCache,
       });
       return { ok: true };
     }
@@ -6951,6 +6954,7 @@ async function checkGroupArmingIntentCompleteness(
   groupId: string,
   row: StagedIntentRow,
   payload: SetStatusPayload,
+  trackedFileSetCache?: TrackedFileSetCache,
 ): Promise<GroupArmingCompletenessResult> {
   const matchedAccretionRowIds: string[] = [];
   const fail = (
@@ -7067,6 +7071,7 @@ async function checkGroupArmingIntentCompleteness(
     },
     row.project_id,
     groomingGateBody,
+    trackedFileSetCache,
   );
   if (!gateResult.allowed) {
     return fail({
@@ -7182,6 +7187,7 @@ async function precheckGroupCommit(
   ordered: StagedIntentRow[],
   opts: GroupCommitOptions,
   sessionManager?: SessionManager,
+  trackedFileSetCache?: TrackedFileSetCache,
 ): Promise<GroupCommitResult | null> {
   const opsTerminalFailure = checkOpsTerminalGroupCompleteness(groupId);
   if (opsTerminalFailure) {
@@ -7196,7 +7202,12 @@ async function precheckGroupCommit(
     const payload = JSON.parse(row.payload) as SetStatusPayload;
 
     const { failure, matchedAccretionRowIds } =
-      await checkGroupArmingIntentCompleteness(groupId, row, payload);
+      await checkGroupArmingIntentCompleteness(
+        groupId,
+        row,
+        payload,
+        trackedFileSetCache,
+      );
     if (failure) {
       if (
         failure.kind === 'dependsOn' ||
@@ -7427,11 +7438,22 @@ export async function commitGroupIntents(
     ...live.filter((r) => isArmingReadyIntent(r)),
   ];
 
+  // Shared across precheckGroupCommit's per-arming-row completeness check
+  // and every member's task.setStatus->Ready apply below so the grooming-
+  // gate's `git ls-files`-backed tracked-file-set resolution
+  // (checkGroomingPromotionGate -> resolveFilesPathsEntriesServerSide ->
+  // resolveTrackedFileSet) runs at most once for this whole commit instead
+  // of once per 💻 Code member per call site — precheckGroupCommit already
+  // runs checkGroomingPromotionGate once per arming row ahead of the apply
+  // loop below, which runs it again per member as each applies.
+  const trackedFileSetCache: TrackedFileSetCache = new Map();
+
   const precheckFailure = await precheckGroupCommit(
     groupId,
     ordered,
     opts,
     sessionManager,
+    trackedFileSetCache,
   );
   if (precheckFailure) {
     return {
@@ -7494,6 +7516,8 @@ export async function commitGroupIntents(
         opts.actorType,
         opts.triageMilestoneLabel,
         sessionManager,
+        undefined,
+        trackedFileSetCache,
       );
       if (intent.kind === 'task.create') {
         createdTaskIds.set(intent.id, (result as { id: string }).id);
