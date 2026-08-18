@@ -1780,16 +1780,13 @@ function extractTaskId(kind: string, payload: unknown): string | null {
     return `${p.taskId}::${p.section.trim()}`;
   }
   if (kind === 'gate.verify') {
-    const gateItemId = (payload as { gateItemId?: unknown } | null)
-      ?.gateItemId;
+    const gateItemId = (payload as { gateItemId?: unknown } | null)?.gateItemId;
     // Reuses the `gate-item:<id>` shape already established elsewhere for a
     // gate-verify session's own task_id sentinel (gateItemVerifier.ts,
     // sessionPredicates.ts, milestoneResolver.ts) — same identity, applied
     // here as the staged-intent dedup key so a second gate.verify for the
     // same item supersedes the first instead of accumulating alongside it.
-    return typeof gateItemId === 'string'
-      ? `gate-item:${gateItemId}`
-      : null;
+    return typeof gateItemId === 'string' ? `gate-item:${gateItemId}` : null;
   }
   if (kind === 'planning.noOp') {
     const p = payload as Partial<NoOpPayload> | null;

@@ -38,7 +38,10 @@ function stageGateVerify(
   gateItemId: string,
   disposition: 'pass' | 'fail' | 'needs-setup' | 'not-yet-triggerable',
   sessionId = SESSION_ID,
-  evidence: unknown = { basis: 'operational', explanation: 'observed the trace' },
+  evidence: unknown = {
+    basis: 'operational',
+    explanation: 'observed the trace',
+  },
 ) {
   return stageIntent(
     'gate.verify',
@@ -104,7 +107,10 @@ describe('gate.verify staged-intent dedup', () => {
 
   it('is a no-op that returns the existing row when the same disposition/evidence is staged twice', () => {
     const item = makeGateItem();
-    const evidence = { basis: 'operational', explanation: 'observed the trace' };
+    const evidence = {
+      basis: 'operational',
+      explanation: 'observed the trace',
+    };
     const first = stageGateVerify(item.id, 'pass', SESSION_ID, evidence);
 
     const second = stageGateVerify(item.id, 'pass', SESSION_ID, evidence);
