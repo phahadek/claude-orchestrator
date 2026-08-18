@@ -233,6 +233,180 @@ describe('getActiveTaskAggregates — single statement execution', () => {
   });
 });
 
+// ── CTE task-id predicate pushdown ────────────────────────────────────────────
+
+describe('getActiveTaskAggregates — CTE task-id predicate pushdown', () => {
+  beforeEach(() => clearTables());
+
+  function captureSql(fn: () => void): string {
+    let capturedSql = '';
+    const originalPrepare = typedDb.prepare.bind(typedDb);
+    const prepareSpy = vi
+      .spyOn(typedDb, 'prepare')
+      .mockImplementation((sql: string, ...rest: unknown[]) => {
+        capturedSql = sql;
+
+        return (originalPrepare as any)(sql, ...rest);
+      });
+    fn();
+    prepareSpy.mockRestore();
+    return capturedSql;
+  }
+
+  it('produces no unrestricted SCAN sessions step for a single-task-id call', () => {
+    upsertTaskCache(
+      'plan-task',
+      JSON.stringify({ id: 'plan-task', title: 'P', status: '🗂️ Ready' }),
+    );
+
+    const sql = captureSql(() => {
+      getActiveTaskAggregates(['plan-task']);
+    });
+
+    const plan = typedDb
+      .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+      .all('plan-task', 'plan-task', 'plan-task', 'plan-task', 'plan-task') as {
+      detail: string;
+    }[];
+    const details = plan.map((r) => r.detail).join('\n');
+    const scansUnrestrictedSessions = plan.some(
+      (row) =>
+        /SCAN sessions\b/.test(row.detail) &&
+        !row.detail.includes('USING INDEX'),
+    );
+    expect(scansUnrestrictedSessions, details).toBe(false);
+  });
+
+  it('preserves the latest-per-task selection when three code sessions exist', () => {
+    const tid = 'latest-task';
+    upsertTaskCache(
+      tid,
+      JSON.stringify({ id: tid, title: 'L', status: '🗂️ Ready' }),
+    );
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'latest-sess-1',
+      task_id: tid,
+      started_at: 1000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'latest-sess-2',
+      task_id: tid,
+      started_at: 3000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'latest-sess-3',
+      task_id: tid,
+      started_at: 2000,
+    });
+
+    const rows = getActiveTaskAggregates([tid]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].code_session_id).toBe('latest-sess-2');
+  });
+
+  it('returns the same row for a single-id call and a multi-id call containing that id', () => {
+    const tid = 'shared-task';
+    upsertTaskCache(
+      tid,
+      JSON.stringify({ id: tid, title: 'S', status: '🗂️ Ready' }),
+    );
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'shared-sess',
+      task_id: tid,
+      started_at: 1000,
+    });
+    upsertPullRequest({
+      ...PR_DEFAULTS,
+      pr_number: 500,
+      pr_url: `https://github.com/o/r/pull/500`,
+      task_id: tid,
+      session_id: 'shared-sess',
+    });
+
+    const otherIds = ['other-task-1', 'other-task-2'];
+    for (const oid of otherIds) {
+      upsertTaskCache(
+        oid,
+        JSON.stringify({ id: oid, title: 'O', status: '🗂️ Ready' }),
+      );
+      insertSession({
+        ...SESSION_DEFAULTS,
+        session_id: `sess-${oid}`,
+        task_id: oid,
+        started_at: 1000,
+      });
+    }
+
+    const soloRows = getActiveTaskAggregates([tid]);
+    const multiRows = getActiveTaskAggregates([tid, ...otherIds]);
+    const multiRow = multiRows.find((r) => r.task_id === tid);
+
+    expect(soloRows).toHaveLength(1);
+    expect(multiRow).toEqual(soloRows[0]);
+  });
+
+  it('short-circuits an empty taskIds array without preparing a statement', () => {
+    const prepareSpy = vi.spyOn(typedDb, 'prepare');
+    const rows = getActiveTaskAggregates([]);
+    expect(rows).toEqual([]);
+    expect(prepareSpy).not.toHaveBeenCalled();
+    prepareSpy.mockRestore();
+  });
+
+  it('binds parameters correctly for a multi-id call spanning code, planning, review and PR rows', () => {
+    const ids = ['multi-a', 'multi-b', 'multi-c'];
+    for (const [i, tid] of ids.entries()) {
+      upsertTaskCache(
+        tid,
+        JSON.stringify({ id: tid, title: `M${i}`, status: '🗂️ Ready' }),
+      );
+      insertSession({
+        ...SESSION_DEFAULTS,
+        session_id: `${tid}-code`,
+        task_id: tid,
+        session_type: 'standard',
+        started_at: 1000 + i,
+      });
+      insertSession({
+        ...SESSION_DEFAULTS,
+        session_id: `${tid}-planning`,
+        task_id: tid,
+        session_type: 'groom',
+        started_at: 1000 + i,
+      });
+      insertSession({
+        ...SESSION_DEFAULTS,
+        session_id: `${tid}-review`,
+        task_id: tid,
+        session_type: 'review',
+        started_at: 1000 + i,
+      });
+      upsertPullRequest({
+        ...PR_DEFAULTS,
+        pr_number: 900 + i,
+        pr_url: `https://github.com/o/r/pull/${900 + i}`,
+        task_id: tid,
+        session_id: `${tid}-code`,
+      });
+    }
+
+    expect(() => getActiveTaskAggregates(ids)).not.toThrow();
+    const rows = getActiveTaskAggregates(ids);
+    expect(rows).toHaveLength(3);
+    for (const [i, tid] of ids.entries()) {
+      const row = rows.find((r) => r.task_id === tid);
+      expect(row?.code_session_id).toBe(`${tid}-code`);
+      expect(row?.planning_session_id).toBe(`${tid}-planning`);
+      expect(row?.review_session_id).toBe(`${tid}-review`);
+      expect(row?.pr_number).toBe(900 + i);
+    }
+  });
+});
+
 // ── Output shape regression guard ─────────────────────────────────────────────
 
 describe('getActiveTaskAggregates — output shape regression guard', () => {
