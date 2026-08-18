@@ -166,6 +166,60 @@ describe('TaskCacheRefresher', () => {
       expect(backends[2].fetchReadyTasks).toHaveBeenCalledWith('m1');
     });
 
+    it('fetches milestones within a single project with bounded concurrency', async () => {
+      const project = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([project]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+        makeMilestone('m2', 'src-2'),
+        makeMilestone('m3', 'src-3'),
+      ]);
+
+      // Deferred promises let us observe that multiple fetchReadyTasks calls
+      // are in flight simultaneously before any of them resolve.
+      const deferreds = new Map<string, { resolve: (v: unknown[]) => void }>();
+      const inFlight = new Set<string>();
+      let maxConcurrent = 0;
+
+      const backend = makeBackend({
+        fetchReadyTasks: vi.fn().mockImplementation((fetchId: string) => {
+          inFlight.add(fetchId);
+          maxConcurrent = Math.max(maxConcurrent, inFlight.size);
+          return new Promise((resolve) => {
+            deferreds.set(fetchId, {
+              resolve: (v: unknown[]) => {
+                inFlight.delete(fetchId);
+                resolve(v);
+              },
+            });
+          });
+        }),
+      });
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      const refreshPromise = refresher.refreshOnce();
+
+      // Each milestone iteration awaits a setImmediate yield before fetching
+      // (yieldToEventLoop) — drain a few real event-loop ticks so every
+      // milestone that's going to start concurrently has had the chance to.
+      for (let i = 0; i < 10; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+
+      expect(maxConcurrent).toBeGreaterThan(1);
+
+      for (const fetchId of ['m1', 'm2', 'm3']) {
+        deferreds.get(fetchId)?.resolve([]);
+      }
+
+      await refreshPromise;
+    });
+
     it('broadcasts task_cache_updated after successful refresh', async () => {
       const project = makeProject({ id: 'p1' });
       vi.mocked(getAllProjects).mockReturnValue([project]);
@@ -402,7 +456,7 @@ describe('TaskCacheRefresher', () => {
   });
 
   describe('event loop yielding', () => {
-    it('yields to the event loop between milestone iterations', async () => {
+    it('yields to the event loop during milestone processing', async () => {
       const project = makeProject({ id: 'p1' });
       vi.mocked(getAllProjects).mockReturnValue([project]);
       vi.mocked(ProjectService.listMilestones).mockReturnValue([
@@ -410,20 +464,8 @@ describe('TaskCacheRefresher', () => {
         makeMilestone('m2', 'src-2'),
       ]);
 
-      let sentinelRan = false;
       const backend = makeBackend({
-        fetchReadyTasks: vi.fn().mockImplementation((fetchId: string) => {
-          if (fetchId === 'm1') {
-            // Scheduled during milestone m1's processing — should fire
-            // before m2 is processed if the refresher yields in between.
-            setImmediate(() => {
-              sentinelRan = true;
-            });
-          } else if (fetchId === 'm2') {
-            expect(sentinelRan).toBe(true);
-          }
-          return Promise.resolve([]);
-        }),
+        fetchReadyTasks: vi.fn().mockResolvedValue([]),
       });
       vi.mocked(getTaskBackend).mockReturnValue(backend);
 
@@ -431,10 +473,23 @@ describe('TaskCacheRefresher', () => {
         listProjects: getAllProjects,
         resolveBackend: getTaskBackend,
       });
-      await refresher.refreshOnce();
 
+      const events: string[] = [];
+      setImmediate(() => {
+        events.push('sentinel');
+      });
+
+      const tick = refresher.refreshOnce().then(() => {
+        events.push('tick-complete');
+      });
+      await tick;
+
+      // A macrotask scheduled at tick start only gets a chance to run
+      // before the tick's own promise resolves if the tick itself yields
+      // to the event loop at least once along the way (all-microtask work
+      // would resolve the tick's promise first, starving the sentinel).
+      expect(events).toEqual(['sentinel', 'tick-complete']);
       expect(backend.fetchReadyTasks).toHaveBeenCalledTimes(2);
-      expect(sentinelRan).toBe(true);
     });
 
     it('does not hold the loop for a full multi-milestone pass', async () => {

@@ -14,6 +14,13 @@ import type { Scheduler } from './Scheduler';
 const MIN_REFRESH_INTERVAL_MS = 10_000;
 const JIRA_MIN_REFRESH_INTERVAL_MS = 120_000;
 const PROJECT_CONCURRENCY = 5;
+/**
+ * Bounded concurrency for milestone fetches within a single project. Jira
+ * stays fully serial (concurrency 1) so a 429 mid-project still aborts every
+ * milestone that hasn't started yet, matching the pre-existing backoff
+ * semantics instead of racing extra requests into the rate-limit window.
+ */
+const MILESTONE_CONCURRENCY = 5;
 const CACHEABLE_TASK_SOURCES = new Set<string>([
   'notion',
   'github',
@@ -135,7 +142,12 @@ export class TaskCacheRefresher {
       (m) => m.sourceId,
     );
 
-    for (const milestone of milestones) {
+    let jiraAborted = false;
+    const milestoneConcurrency =
+      project.taskSource === 'jira' ? 1 : MILESTONE_CONCURRENCY;
+
+    await runWithConcurrency(milestones, milestoneConcurrency, async (milestone) => {
+      if (jiraAborted) return;
       await yieldToEventLoop();
 
       // yaml projects: fetch by source_id (yaml milestone id) so LocalTaskBackend matches correctly
@@ -152,7 +164,7 @@ export class TaskCacheRefresher {
         if (!fileChanged) {
           // Still unresolvable and the source file hasn't changed since we
           // gave up on it — skip silently rather than re-warning every cycle.
-          continue;
+          return;
         }
         // The project's task file changed since condemnation — the
         // registration may resolve now, so give it another chance.
@@ -186,6 +198,7 @@ export class TaskCacheRefresher {
           logger.warn(
             `[TaskCacheRefresher] Jira 429 project=${project.id} milestone=${fetchId}, backing off ${backoffMs}ms`,
           );
+          jiraAborted = true;
           return;
         }
         if (err instanceof MilestoneNotFoundError) {
@@ -206,13 +219,15 @@ export class TaskCacheRefresher {
               `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${fetchId}: ${String(err)} (attempt ${failureCount}/${UNRESOLVABLE_AFTER_CONSECUTIVE_FAILURES})`,
             );
           }
-          continue;
+          return;
         }
         logger.warn(
           `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${fetchId}: ${String(err)}`,
         );
       }
-    }
+    });
+
+    if (jiraAborted) return;
 
     if (project.taskSource === 'jira') {
       this.jiraNextAllowed.set(
