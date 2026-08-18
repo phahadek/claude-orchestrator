@@ -218,8 +218,18 @@ describe('testHealth.getFlakyHistory', () => {
     await close();
 
     expect(result.rollup).toEqual([
-      { testId: 'test-1', name: 'test-one.ts', sampleCount: 10, transitionCount: 4 },
-      { testId: 'test-2', name: 'test-two.ts', sampleCount: 8, transitionCount: 3 },
+      {
+        testId: 'test-1',
+        name: 'test-one.ts',
+        sampleCount: 10,
+        transitionCount: 4,
+      },
+      {
+        testId: 'test-2',
+        name: 'test-two.ts',
+        sampleCount: 8,
+        transitionCount: 3,
+      },
     ]);
     expect(result.tracking).toEqual([
       {
