@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import path from 'path';
 import { Worker } from 'worker_threads';
 import { createHash, randomUUID } from 'crypto';
-import { db, dbPath } from './db';
+import { db } from './db';
 import { logger } from '../logger';
 import { recordEvent, hasTaskEditSinceTimestamp } from '../audit/AuditLog';
 import {
@@ -8642,9 +8642,8 @@ function replaceFlaggedFlakyTestsRollupSync(
  *
  * Falls back to the in-process sync path for `:memory:` (no second
  * connection can open against an in-memory database) and for any other
- * falsy path (a mocked `db` module in tests that doesn't also stub
- * `dbPath` resolves this to `undefined`, which must never be handed to
- * `new Database()` as a real worker target).
+ * falsy path, as a defensive default rather than handing an unusable
+ * value to `new Database()` as a real worker target.
  */
 export function replaceFlaggedFlakyTestsRollupOffMainThread(
   targetPath: string | undefined,
@@ -8716,6 +8715,14 @@ export function replaceFlaggedFlakyTestsRollupOffMainThread(
  * Public entry point used by FlakyTestRollupJob: recomputes `projectId`'s
  * flagged-flaky set off the shared main-thread `db` connection. See
  * replaceFlaggedFlakyTestsRollupOffMainThread for why.
+ *
+ * Dispatches against `db.name` (better-sqlite3's own record of the path it
+ * was opened with) rather than the `dbPath` sibling export from db.ts — a
+ * test file that mocks db.js to swap in its own in-memory `db` (see e.g.
+ * flakyTestRollup.queries.test.ts) has no reason to also stub `dbPath`, so
+ * reading that binding here would silently see whatever the real db.ts
+ * module resolved it to and dispatch a worker against the wrong file.
+ * `db.name` can never disagree with the connection actually in use.
  */
 export function replaceFlaggedFlakyTestsRollup(
   projectId: string,
@@ -8724,7 +8731,7 @@ export function replaceFlaggedFlakyTestsRollup(
   computedAt: number,
 ): Promise<{ itemsProcessed: number }> {
   return replaceFlaggedFlakyTestsRollupOffMainThread(
-    dbPath,
+    db.name,
     projectId,
     windowN,
     thresholdK,
