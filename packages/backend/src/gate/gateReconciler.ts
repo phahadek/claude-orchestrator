@@ -33,12 +33,12 @@ import {
   nextRunnableGateItems,
   nextPendingGateItems,
   appendGateItemEvent,
-  createLocalGitAncestrySource,
+  createLocalAsyncGitAncestrySource,
   isFollowupTaskDone,
   proposeGateItemReclassification,
   type GateReadiness,
   type ReconcileGateRunnabilityResult,
-  type DeployAncestrySource,
+  type AsyncDeployAncestrySource,
 } from './gateService';
 import type { GateItemClassification } from '../db/types';
 
@@ -359,7 +359,7 @@ export interface GateReconcilerOptions {
   followupFiler?: FollowupFixTaskFiler;
   tierLimit?: number;
   /** Per-project git-ancestry source; defaults to a local clone at that project's projectDir. */
-  ancestrySourceForProject?: (project: string) => DeployAncestrySource;
+  ancestrySourceForProject?: (project: string) => AsyncDeployAncestrySource;
   concurrency?: GateVerificationConcurrencyConfig;
 }
 
@@ -397,14 +397,14 @@ export interface GateReconcileTickResult {
 
 function defaultAncestrySourceForProject(
   project: string,
-): DeployAncestrySource {
+): AsyncDeployAncestrySource {
   let projectDir: string | undefined;
   try {
     projectDir = getProjectById(project)?.projectDir;
   } catch {
     projectDir = undefined;
   }
-  return createLocalGitAncestrySource(projectDir);
+  return createLocalAsyncGitAncestrySource(projectDir);
 }
 
 /** Most recent `fail` event carrying a filedFollowon, or undefined if the item has never failed-with-followup. */
