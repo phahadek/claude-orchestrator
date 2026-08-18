@@ -1274,9 +1274,8 @@ describe('reconcileGateRunnability — synchronous git-spawn hot-path regression
   });
 
   it('does not use a synchronous child-process call — the event loop stays responsive while a check is in flight', async () => {
-    const { createLocalAsyncGitAncestrySource } = await import(
-      '../gateService.js'
-    );
+    const { createLocalAsyncGitAncestrySource } =
+      await import('../gateService.js');
     const ancestry = createLocalAsyncGitAncestrySource(process.cwd());
 
     const order: string[] = [];

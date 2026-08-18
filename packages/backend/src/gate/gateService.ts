@@ -81,12 +81,11 @@ export function createLocalAsyncGitAncestrySource(
     async isAncestor(ancestorSha, descendantSha) {
       if (ancestorSha === descendantSha) return true;
       try {
-        await execFileAsync('git', [
-          'merge-base',
-          '--is-ancestor',
-          ancestorSha,
-          descendantSha,
-        ], { cwd });
+        await execFileAsync(
+          'git',
+          ['merge-base', '--is-ancestor', ancestorSha, descendantSha],
+          { cwd },
+        );
         return true;
       } catch {
         return false;
