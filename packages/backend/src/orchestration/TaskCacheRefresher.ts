@@ -14,6 +14,13 @@ import type { Scheduler } from './Scheduler';
 const MIN_REFRESH_INTERVAL_MS = 10_000;
 const JIRA_MIN_REFRESH_INTERVAL_MS = 120_000;
 const PROJECT_CONCURRENCY = 5;
+/**
+ * Bounded concurrency for milestone fetches within a single project. Jira
+ * stays fully serial (concurrency 1) so a 429 mid-project still aborts every
+ * milestone that hasn't started yet, matching the pre-existing backoff
+ * semantics instead of racing extra requests into the rate-limit window.
+ */
+const MILESTONE_CONCURRENCY = 5;
 const CACHEABLE_TASK_SOURCES = new Set<string>([
   'notion',
   'github',
@@ -135,84 +142,96 @@ export class TaskCacheRefresher {
       (m) => m.sourceId,
     );
 
-    for (const milestone of milestones) {
-      await yieldToEventLoop();
+    let jiraAborted = false;
+    const milestoneConcurrency =
+      project.taskSource === 'jira' ? 1 : MILESTONE_CONCURRENCY;
 
-      // yaml projects: fetch by source_id (yaml milestone id) so LocalTaskBackend matches correctly
-      const fetchId = isLocalSource
-        ? (milestone.sourceId as string)
-        : milestone.id;
-      const condemnedKey = `${project.id}::${fetchId}`;
+    await runWithConcurrency(
+      milestones,
+      milestoneConcurrency,
+      async (milestone) => {
+        if (jiraAborted) return;
+        await yieldToEventLoop();
 
-      const condemned = this.condemnedMilestones.get(condemnedKey);
-      if (condemned) {
-        const currentMtimeMs = this.statMtimeMs(condemned.filePath);
-        const fileChanged =
-          currentMtimeMs !== null && currentMtimeMs !== condemned.fileMtimeMs;
-        if (!fileChanged) {
-          // Still unresolvable and the source file hasn't changed since we
-          // gave up on it — skip silently rather than re-warning every cycle.
-          continue;
-        }
-        // The project's task file changed since condemnation — the
-        // registration may resolve now, so give it another chance.
-        this.condemnedMilestones.delete(condemnedKey);
-        this.milestoneFailureCounts.delete(condemnedKey);
-      }
+        // yaml projects: fetch by source_id (yaml milestone id) so LocalTaskBackend matches correctly
+        const fetchId = isLocalSource
+          ? (milestone.sourceId as string)
+          : milestone.id;
+        const condemnedKey = `${project.id}::${fetchId}`;
 
-      try {
-        const tasks = skipCache
-          ? await backend.fetchReadyTasks(fetchId, true)
-          : await backend.fetchReadyTasks(fetchId);
-        // The board cache is always keyed on the DB milestone UUID (milestone.id),
-        // regardless of what identifier the backend needed to fetch the data —
-        // this must match the read side (ws/router) and the write side (each
-        // backend's own upsertTaskCache call).
-        this.broadcast?.({
-          type: 'task_cache_updated',
-          projectId: project.id,
-          boardId: milestone.id,
-          taskCount: tasks.length,
-          refreshedAt: Date.now(),
-        });
-        this.milestoneFailureCounts.delete(condemnedKey);
-      } catch (err) {
-        if (err instanceof JiraApiError && err.statusCode === 429) {
-          const backoffMs = Math.max(
-            JIRA_MIN_REFRESH_INTERVAL_MS,
-            err.retryAfterMs ?? 0,
-          );
-          this.jiraNextAllowed.set(project.id, Date.now() + backoffMs);
-          logger.warn(
-            `[TaskCacheRefresher] Jira 429 project=${project.id} milestone=${fetchId}, backing off ${backoffMs}ms`,
-          );
-          return;
-        }
-        if (err instanceof MilestoneNotFoundError) {
-          const failureCount =
-            (this.milestoneFailureCounts.get(condemnedKey) ?? 0) + 1;
-          this.milestoneFailureCounts.set(condemnedKey, failureCount);
-          if (failureCount >= UNRESOLVABLE_AFTER_CONSECUTIVE_FAILURES) {
-            logger.error(
-              `[TaskCacheRefresher] milestone registration unresolvable — project=${project.id} (${project.name}) milestone=${fetchId} is missing from ${err.filePath}; giving up until the file changes`,
-            );
-            this.condemnedMilestones.set(condemnedKey, {
-              filePath: err.filePath,
-              fileMtimeMs: this.statMtimeMs(err.filePath),
-            });
-            this.milestoneFailureCounts.delete(condemnedKey);
-          } else {
-            logger.warn(
-              `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${fetchId}: ${String(err)} (attempt ${failureCount}/${UNRESOLVABLE_AFTER_CONSECUTIVE_FAILURES})`,
-            );
+        const condemned = this.condemnedMilestones.get(condemnedKey);
+        if (condemned) {
+          const currentMtimeMs = this.statMtimeMs(condemned.filePath);
+          const fileChanged =
+            currentMtimeMs !== null && currentMtimeMs !== condemned.fileMtimeMs;
+          if (!fileChanged) {
+            // Still unresolvable and the source file hasn't changed since we
+            // gave up on it — skip silently rather than re-warning every cycle.
+            return;
           }
-          continue;
+          // The project's task file changed since condemnation — the
+          // registration may resolve now, so give it another chance.
+          this.condemnedMilestones.delete(condemnedKey);
+          this.milestoneFailureCounts.delete(condemnedKey);
         }
-        logger.warn(
-          `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${fetchId}: ${String(err)}`,
-        );
-      }
-    }
+
+        try {
+          const tasks = skipCache
+            ? await backend.fetchReadyTasks(fetchId, true)
+            : await backend.fetchReadyTasks(fetchId);
+          // The board cache is always keyed on the DB milestone UUID (milestone.id),
+          // regardless of what identifier the backend needed to fetch the data —
+          // this must match the read side (ws/router) and the write side (each
+          // backend's own upsertTaskCache call).
+          this.broadcast?.({
+            type: 'task_cache_updated',
+            projectId: project.id,
+            boardId: milestone.id,
+            taskCount: tasks.length,
+            refreshedAt: Date.now(),
+          });
+          this.milestoneFailureCounts.delete(condemnedKey);
+        } catch (err) {
+          if (err instanceof JiraApiError && err.statusCode === 429) {
+            const backoffMs = Math.max(
+              JIRA_MIN_REFRESH_INTERVAL_MS,
+              err.retryAfterMs ?? 0,
+            );
+            this.jiraNextAllowed.set(project.id, Date.now() + backoffMs);
+            logger.warn(
+              `[TaskCacheRefresher] Jira 429 project=${project.id} milestone=${fetchId}, backing off ${backoffMs}ms`,
+            );
+            jiraAborted = true;
+            return;
+          }
+          if (err instanceof MilestoneNotFoundError) {
+            const failureCount =
+              (this.milestoneFailureCounts.get(condemnedKey) ?? 0) + 1;
+            this.milestoneFailureCounts.set(condemnedKey, failureCount);
+            if (failureCount >= UNRESOLVABLE_AFTER_CONSECUTIVE_FAILURES) {
+              logger.error(
+                `[TaskCacheRefresher] milestone registration unresolvable — project=${project.id} (${project.name}) milestone=${fetchId} is missing from ${err.filePath}; giving up until the file changes`,
+              );
+              this.condemnedMilestones.set(condemnedKey, {
+                filePath: err.filePath,
+                fileMtimeMs: this.statMtimeMs(err.filePath),
+              });
+              this.milestoneFailureCounts.delete(condemnedKey);
+            } else {
+              logger.warn(
+                `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${fetchId}: ${String(err)} (attempt ${failureCount}/${UNRESOLVABLE_AFTER_CONSECUTIVE_FAILURES})`,
+              );
+            }
+            return;
+          }
+          logger.warn(
+            `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${fetchId}: ${String(err)}`,
+          );
+        }
+      },
+    );
+
+    if (jiraAborted) return;
 
     if (project.taskSource === 'jira') {
       this.jiraNextAllowed.set(
