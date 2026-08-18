@@ -1887,6 +1887,52 @@ function getStmtInsertEvent(): Database.Statement {
   return _stmtInsertEvent;
 }
 
+let _stmtBumpSessionLastEventAt: Database.Statement | null = null;
+
+/**
+ * Lazily-prepared bump of sessions.last_event_at, run alongside every
+ * session_events insert so the archived-sessions route can read it directly
+ * instead of aggregating session_events per request. The CASE guards against
+ * moving the value backwards for an out-of-order (late-arriving) event.
+ */
+function getStmtBumpSessionLastEventAt(): Database.Statement {
+  _stmtBumpSessionLastEventAt ??= db.prepare<{
+    session_id: string;
+    timestamp: number;
+  }>(`
+    UPDATE sessions
+    SET last_event_at = CASE
+      WHEN last_event_at IS NULL OR last_event_at < @timestamp THEN @timestamp
+      ELSE last_event_at
+    END
+    WHERE session_id = @session_id
+  `);
+  return _stmtBumpSessionLastEventAt;
+}
+
+type InsertEventTxn = Database.Transaction<
+  (
+    params: NewSessionEvent & { message_id: string | null },
+  ) => Database.RunResult
+>;
+
+let _txnInsertEventAndBumpLastEventAt: InsertEventTxn | null = null;
+
+/** Shared transaction for insertEvent/upsertSessionEvent's insert path — inserts the event row and bumps the owning session's last_event_at atomically. */
+function getTxnInsertEventAndBumpLastEventAt(): InsertEventTxn {
+  _txnInsertEventAndBumpLastEventAt ??= db.transaction(
+    (params: NewSessionEvent & { message_id: string | null }) => {
+      const result = getStmtInsertEvent().run(params);
+      getStmtBumpSessionLastEventAt().run({
+        session_id: params.session_id,
+        timestamp: params.timestamp,
+      });
+      return result;
+    },
+  );
+  return _txnInsertEventAndBumpLastEventAt;
+}
+
 /**
  * Epoch ms of the most recent session_events row for the session, or null
  * when it has none (pruned or never emitted — callers must treat null as
@@ -1906,25 +1952,25 @@ let _stmtGetLastActivityMsForArchivedSessions: Database.Statement | null = null;
 
 /**
  * Bulk counterpart to getSessionLastActivityMs for the archived-sessions
- * route: one aggregate query for every archived session's last activity
- * instead of one query per row, so the route's cost no longer scales with
- * the number of archived sessions.
+ * route: reads the denormalised sessions.last_event_at column directly
+ * (maintained at the event-insert sites) instead of aggregating
+ * session_events per request — that aggregate used to touch essentially the
+ * entire event history (archived sessions' events are retained, never
+ * pruned) and scaled worse the longer the deployment ran.
  */
 export function getLastActivityMsForArchivedSessions(): Map<string, number> {
   _stmtGetLastActivityMsForArchivedSessions ??= db.prepare(`
-    SELECT se.session_id AS session_id, MAX(se.timestamp) AS ts
-    FROM session_events se
-    JOIN sessions s ON s.session_id = se.session_id
-    WHERE s.archived = 1
-    GROUP BY se.session_id
+    SELECT session_id, last_event_at AS ts FROM sessions WHERE archived = 1
   `);
   const rows = _stmtGetLastActivityMsForArchivedSessions.all() as {
     session_id: string;
-    ts: number;
+    ts: number | null;
   }[];
   const result = new Map<string, number>();
   for (const row of rows) {
-    result.set(row.session_id, row.ts);
+    if (row.ts !== null) {
+      result.set(row.session_id, row.ts);
+    }
   }
   return result;
 }
@@ -1952,21 +1998,38 @@ export function getPendingToolUseCount(sessionId: string): number {
 }
 
 export function insertEvent(e: NewSessionEvent): void {
-  getStmtInsertEvent().run({
+  getTxnInsertEventAndBumpLastEventAt()({
     message_id: null,
     ...e,
     payload: capEventPayload(e.payload),
   });
 }
 
+let _txnInsertEventOrIgnoreAndBumpLastEventAt: InsertEventTxn | null = null;
+
+/** Transaction for insertEventOrIgnore's dedicated statement (distinct from getStmtInsertEvent) — inserts the event row and bumps the owning session's last_event_at atomically. */
+function getTxnInsertEventOrIgnoreAndBumpLastEventAt(): InsertEventTxn {
+  _txnInsertEventOrIgnoreAndBumpLastEventAt ??= db.transaction(
+    (params: NewSessionEvent & { message_id: string | null }) => {
+      _stmtInsertEventOrIgnore ??= db.prepare<
+        NewSessionEvent & { message_id: string | null }
+      >(`
+        INSERT OR IGNORE INTO session_events (session_id, event_type, payload, timestamp, message_id)
+        VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
+      `);
+      const result = _stmtInsertEventOrIgnore.run(params);
+      getStmtBumpSessionLastEventAt().run({
+        session_id: params.session_id,
+        timestamp: params.timestamp,
+      });
+      return result;
+    },
+  );
+  return _txnInsertEventOrIgnoreAndBumpLastEventAt;
+}
+
 export function insertEventOrIgnore(e: NewSessionEvent): void {
-  _stmtInsertEventOrIgnore ??= db.prepare<
-    NewSessionEvent & { message_id: string | null }
-  >(`
-    INSERT OR IGNORE INTO session_events (session_id, event_type, payload, timestamp, message_id)
-    VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
-  `);
-  _stmtInsertEventOrIgnore.run({
+  getTxnInsertEventOrIgnoreAndBumpLastEventAt()({
     message_id: null,
     ...e,
     payload: capEventPayload(e.payload),
@@ -2009,7 +2072,7 @@ export function upsertSessionEvent(
     );
     return -1;
   }
-  const result = getStmtInsertEvent().run({
+  const result = getTxnInsertEventAndBumpLastEventAt()({
     message_id: null,
     ...e,
     payload: cappedPayload,

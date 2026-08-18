@@ -62,6 +62,7 @@ export interface Session {
   pending_done_pr_url: string | null;
   pending_done_call_site: string | null;
   terminal_completion_reason: string | null; // reason string markTerminal passed to markSessionDone, persisted for lookup after the session has ended
+  last_event_at: number | null; // denormalised MAX(session_events.timestamp) for this session, maintained at event-insert time
 }
 
 export type NewSession = Omit<
@@ -93,6 +94,7 @@ export type NewSession = Omit<
   | 'pending_done_pr_url'
   | 'pending_done_call_site'
   | 'terminal_completion_reason'
+  | 'last_event_at'
 > & {
   ended_at?: number | null;
   terminalized_at?: number | null;

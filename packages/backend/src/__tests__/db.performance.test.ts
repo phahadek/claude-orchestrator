@@ -22,11 +22,14 @@ import {
   insertSession,
   upsertPullRequest,
   insertEvent,
+  insertEventOrIgnore,
   getActiveSessions,
   getStuckResultSessionRows,
   insertProject,
   insertStagedIntent,
   listAllActiveStagedIntents,
+  archiveSession,
+  getLastActivityMsForArchivedSessions,
 } from '../db/queries.js';
 import type Database from 'better-sqlite3';
 import type { StagedIntentRow } from '../db/types.js';
@@ -617,5 +620,206 @@ describe('listAllActiveStagedIntents — state-only predicate index usage', () =
       'a-approved',
       'a-staged',
     ]);
+  });
+});
+
+// ── sessions.last_event_at denormalisation ────────────────────────────────────
+
+describe('runMigrations — sessions.last_event_at', () => {
+  beforeEach(() => {
+    clearTables();
+  });
+
+  it('adds the column to a fresh database and backfills pre-existing sessions', () => {
+    runMigrations(typedDb);
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'backfill-sess-1',
+      task_id: null,
+      started_at: 1000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'backfill-sess-2',
+      task_id: null,
+      started_at: 1000,
+    });
+    typedDb
+      .prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      )
+      .run('backfill-sess-1', 'text', '{}', 500);
+    typedDb
+      .prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      )
+      .run('backfill-sess-1', 'text', '{}', 900);
+    typedDb
+      .prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      )
+      .run('backfill-sess-2', 'text', '{}', 700);
+
+    // Simulate rows that predate the write-path maintenance (e.g. imported
+    // by a prior deploy before this column was populated at insert time).
+    typedDb.exec(`UPDATE sessions SET last_event_at = NULL`);
+
+    runMigrations(typedDb);
+
+    const rows = typedDb
+      .prepare(
+        `SELECT session_id, last_event_at FROM sessions ORDER BY session_id`,
+      )
+      .all() as { session_id: string; last_event_at: number | null }[];
+    expect(rows).toEqual([
+      { session_id: 'backfill-sess-1', last_event_at: 900 },
+      { session_id: 'backfill-sess-2', last_event_at: 700 },
+    ]);
+  });
+
+  it('running runMigrations twice does not throw and leaves the column present', () => {
+    runMigrations(typedDb);
+    expect(() => runMigrations(typedDb)).not.toThrow();
+    const columns = typedDb.prepare(`PRAGMA table_info(sessions)`).all() as {
+      name: string;
+    }[];
+    expect(columns.map((c) => c.name)).toContain('last_event_at');
+  });
+});
+
+describe('last_event_at write-path maintenance', () => {
+  beforeEach(() => {
+    clearTables();
+    runMigrations(typedDb);
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'maint-sess',
+      task_id: null,
+      started_at: 1000,
+    });
+  });
+
+  function lastEventAt(sessionId: string): number | null {
+    const row = typedDb
+      .prepare(`SELECT last_event_at FROM sessions WHERE session_id = ?`)
+      .get(sessionId) as { last_event_at: number | null } | undefined;
+    return row?.last_event_at ?? null;
+  }
+
+  it('insertEvent bumps the owning session last_event_at', () => {
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 500,
+    });
+    expect(lastEventAt('maint-sess')).toBe(500);
+  });
+
+  it('insertEvent does not move last_event_at backwards for an out-of-order event', () => {
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 900,
+    });
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 300,
+    });
+    expect(lastEventAt('maint-sess')).toBe(900);
+  });
+
+  it('insertEventOrIgnore bumps the owning session last_event_at for a new event', () => {
+    insertEventOrIgnore({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 600,
+    });
+    expect(lastEventAt('maint-sess')).toBe(600);
+  });
+
+  it('insertEventOrIgnore does not move last_event_at backwards for an out-of-order event', () => {
+    insertEventOrIgnore({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 800,
+    });
+    insertEventOrIgnore({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 100,
+    });
+    expect(lastEventAt('maint-sess')).toBe(800);
+  });
+});
+
+describe('getLastActivityMsForArchivedSessions — denormalised read', () => {
+  beforeEach(() => {
+    clearTables();
+    runMigrations(typedDb);
+  });
+
+  it('matches the pre-change aggregate for archived sessions with and without events', () => {
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'arch-with-events',
+      task_id: null,
+      started_at: 1000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'arch-no-events',
+      task_id: null,
+      started_at: 1000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'live-sess',
+      task_id: null,
+      started_at: 1000,
+    });
+    insertEvent({
+      session_id: 'arch-with-events',
+      ...makeEventRow('text').live,
+      timestamp: 111,
+    });
+    insertEvent({
+      session_id: 'arch-with-events',
+      ...makeEventRow('text').live,
+      timestamp: 222,
+    });
+    insertEvent({
+      session_id: 'live-sess',
+      ...makeEventRow('text').live,
+      timestamp: 999,
+    });
+    archiveSession('arch-with-events');
+    archiveSession('arch-no-events');
+
+    // Pre-change aggregate, reproduced directly against session_events, for
+    // comparison against the denormalised read.
+    const legacyRows = typedDb
+      .prepare(
+        `SELECT se.session_id AS session_id, MAX(se.timestamp) AS ts
+         FROM session_events se
+         JOIN sessions s ON s.session_id = se.session_id
+         WHERE s.archived = 1
+         GROUP BY se.session_id`,
+      )
+      .all() as { session_id: string; ts: number }[];
+    const legacyMap = new Map(legacyRows.map((r) => [r.session_id, r.ts]));
+
+    const result = getLastActivityMsForArchivedSessions();
+    expect(result).toEqual(legacyMap);
+  });
+
+  it('plan contains no reference to session_events', () => {
+    const plan = typedDb
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT session_id, last_event_at AS ts FROM sessions WHERE archived = 1`,
+      )
+      .all() as { detail: string }[];
+    const details = plan.map((r) => r.detail).join('\n');
+    expect(details).not.toContain('session_events');
   });
 });
