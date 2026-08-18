@@ -505,7 +505,7 @@ export function renderOpsCapabilities(): string[] {
     '',
     'Workflow-scope credential ceiling — check this BEFORE staging `task.create` or ' +
       'requesting any write capability: does the discovered fix touch a path under ' +
-      '`.github/workflows/**` (as this session\'s own investigation names it, since ' +
+      "`.github/workflows/**` (as this session's own investigation names it, since " +
       'there is no worktree to git-diff — see `session/workflowScopeDenylist.ts`)? ' +
       'DO NOT stage `task.create` for that fix — a spun-off Code task hits the ' +
       'identical `workflow` OAuth scope ceiling later, reactively, at its own push, so ' +
