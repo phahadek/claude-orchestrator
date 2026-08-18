@@ -163,19 +163,23 @@ export function runWalTruncateCheckpointOffMainThread(
     );
     const worker = new Worker(workerPath, {
       workerData: { dbPath: targetPath },
-      execArgv: isTsNode
-        ? ['-r', 'ts-node/register/transpile-only']
-        : [],
+      execArgv: isTsNode ? ['-r', 'ts-node/register/transpile-only'] : [],
     });
     let settled = false;
     worker.once(
       'message',
-      (msg: { ok: true; result: WalTruncateCheckpointResult } | { ok: false; error: string }) => {
+      (
+        msg:
+          | { ok: true; result: WalTruncateCheckpointResult }
+          | { ok: false; error: string },
+      ) => {
         settled = true;
         if (msg.ok) {
           resolve(msg.result);
         } else {
-          reject(new Error(`[wal_truncate_checkpoint] worker failed: ${msg.error}`));
+          reject(
+            new Error(`[wal_truncate_checkpoint] worker failed: ${msg.error}`),
+          );
         }
         void worker.terminate();
       },
