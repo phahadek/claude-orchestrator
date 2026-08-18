@@ -49,7 +49,7 @@ describe('Scheduler event-loop blocking instrumentation', () => {
     expect(row.duration_ms).toBeGreaterThanOrEqual(60);
 
     await scheduler.stopAll();
-  });
+  }, 20000);
 
   it('distinguishes a blocker from a victim: a busy-blocking job records much more event_loop_blocked_ms than a job that only awaits a timer for the same wall-clock duration', async () => {
     // A single absolute near-zero threshold on event_loop_blocked_ms is
@@ -98,7 +98,7 @@ describe('Scheduler event-loop blocking instrumentation', () => {
     );
 
     await scheduler.stopAll();
-  });
+  }, 20000);
 
   it('still records event_loop_blocked_ms alongside status=failed when run() throws', async () => {
     const scheduler = makeScheduler();

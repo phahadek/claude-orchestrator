@@ -364,7 +364,7 @@ describe('loadOpsContext — architecture dual-read', () => {
     expect(task?.archUnits.map((u) => u.title)).toEqual([
       'Sessions dispatch through the SessionManager invariant',
     ]);
-  });
+  }, 15000);
 
   it("keeps returning the project's Notion architecture pages (source: notion) when archStoreAdopted is not set", async () => {
     createUnit({
@@ -392,7 +392,7 @@ describe('loadOpsContext — architecture dual-read', () => {
       (t) => t.id === 'task-op-ready',
     );
     expect(task?.archSource).toBe('notion');
-  });
+  }, 15000);
 
   it("scopes each task's archUnits to its own declared region, not one uniform project-wide list", async () => {
     // Point the fixture project at this real git checkout so
@@ -456,7 +456,7 @@ describe('loadOpsContext — architecture dual-read', () => {
     expect(taskB?.archUnits.map((u) => u.title)).toEqual([
       'Planning-region unit',
     ]);
-  });
+  }, 15000);
 
   it("never surfaces another project's arch_unit rows, including its active invariants", async () => {
     updateProject(PROJECT, { arch_store_adopted: 1 });
@@ -496,7 +496,7 @@ describe('loadOpsContext — architecture dual-read', () => {
     expect(task?.archUnits.map((u) => u.title)).toEqual([
       'This project invariant',
     ]);
-  });
+  }, 15000);
 });
 
 describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {

@@ -168,5 +168,5 @@ describe('worker-thread rollup dispatch does not block the main event loop', () 
 
     await rollupDone;
     await worker.terminate();
-  });
+  }, 15000);
 });

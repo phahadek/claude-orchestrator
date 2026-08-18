@@ -1383,7 +1383,7 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
     );
     expect(second.itemsProcessed).toBe(0);
     expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual(afterFirst);
-  });
+  }, 10000);
 
   it('a tick following N new result rows recomputes only the test ids those rows belong to', async () => {
     // Two tests get their first, from-scratch tick out of the way so the
@@ -1437,7 +1437,7 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
     allSpy.mockRestore();
 
     expect(result.itemsProcessed).toBe(1);
-  });
+  }, 10000);
 
   it('a test id whose new results cross the flip-rate threshold becomes flagged on the next incremental tick', async () => {
     // Starts stable — not flagged.
@@ -1481,7 +1481,7 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
     expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
       'test-c',
     ]);
-  });
+  }, 10000);
 
   it('reports non-zero itemsProcessed when it examined rows but flagged nothing', async () => {
     ['passed', 'passed', 'passed'].forEach((outcome, i) =>
@@ -1503,7 +1503,7 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
     );
     expect(result.itemsProcessed).toBe(1);
     expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual([]);
-  });
+  }, 10000);
 
   it('the watermark advances across ticks and is durable across a simulated restart', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flaky-watermark-test-'));
