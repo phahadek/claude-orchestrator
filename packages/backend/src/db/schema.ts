@@ -2385,9 +2385,7 @@ export function runMigrations(target: Database.Database): void {
   {
     const marker = target
       .prepare(`SELECT value FROM settings WHERE key = ?`)
-      .get('concurrent_run_count_backfill_v1') as
-      | { value: string }
-      | undefined;
+      .get('concurrent_run_count_backfill_v1') as { value: string } | undefined;
     if (!marker) {
       target.exec(`
         UPDATE test_request_runs

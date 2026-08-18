@@ -1032,76 +1032,70 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
     expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual([]);
   });
 
-  it(
-    'the watermark advances across ticks and is durable across a simulated restart',
-    async () => {
-      const dir = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'flaky-watermark-test-'),
-      );
-      try {
-        const file = path.join(dir, 'test.db');
-        const fileDb = new RealDatabase(file);
-        runMigrations(fileDb);
+  it('the watermark advances across ticks and is durable across a simulated restart', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flaky-watermark-test-'));
+    try {
+      const file = path.join(dir, 'test.db');
+      const fileDb = new RealDatabase(file);
+      runMigrations(fileDb);
 
-        let seqLocal = 0;
-        function insertRow(outcome: 'passed' | 'failed', createdAt: number) {
-          seqLocal += 1;
-          const runId = `wm-run-${seqLocal}`;
-          fileDb
-            .prepare(
-              `INSERT INTO test_request_runs
+      let seqLocal = 0;
+      function insertRow(outcome: 'passed' | 'failed', createdAt: number) {
+        seqLocal += 1;
+        const runId = `wm-run-${seqLocal}`;
+        fileDb
+          .prepare(
+            `INSERT INTO test_request_runs
                  (id, project_id, content_hash, state, output, started_at, finished_at)
                VALUES (@id, 'proj-wm', @content_hash, 'passed', '', 0, 0)`,
-            )
-            .run({ id: runId, content_hash: `wm-hash-${seqLocal}` });
-          fileDb
-            .prepare(
-              `INSERT INTO test_run_results
+          )
+          .run({ id: runId, content_hash: `wm-hash-${seqLocal}` });
+        fileDb
+          .prepare(
+            `INSERT INTO test_run_results
                  (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
                VALUES (@run_id, 'test-wm', 'suite > wm', @outcome, 1, 0, 0, @created_at)`,
-            )
-            .run({ run_id: runId, outcome, created_at: createdAt });
-        }
-
-        insertRow('passed', 1);
-        insertRow('failed', 2);
-        fileDb.close();
-
-        const first = await replaceFlaggedFlakyTestsRollupOffMainThread(
-          file,
-          'proj-wm',
-          20,
-          2,
-          1000,
-        );
-        expect(first.itemsProcessed).toBe(1);
-
-        // Simulate a restart: open a brand-new connection against the same
-        // file and read the watermark back — never held in process memory.
-        const reopened = new RealDatabase(file);
-        const row = reopened
-          .prepare(
-            `SELECT last_test_run_result_id FROM flagged_flaky_tests_rollup_watermark WHERE project_id = ?`,
           )
-          .get('proj-wm') as { last_test_run_result_id: number } | undefined;
-        expect(row?.last_test_run_result_id).toBe(2);
-        reopened.close();
-
-        // A second, independent worker dispatch against the same file reads
-        // the watermark it just persisted (not a fresh in-memory 0) and sees
-        // no new rows to recompute.
-        const second = await replaceFlaggedFlakyTestsRollupOffMainThread(
-          file,
-          'proj-wm',
-          20,
-          2,
-          2000,
-        );
-        expect(second.itemsProcessed).toBe(0);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
+          .run({ run_id: runId, outcome, created_at: createdAt });
       }
-    },
-    20000,
-  );
+
+      insertRow('passed', 1);
+      insertRow('failed', 2);
+      fileDb.close();
+
+      const first = await replaceFlaggedFlakyTestsRollupOffMainThread(
+        file,
+        'proj-wm',
+        20,
+        2,
+        1000,
+      );
+      expect(first.itemsProcessed).toBe(1);
+
+      // Simulate a restart: open a brand-new connection against the same
+      // file and read the watermark back — never held in process memory.
+      const reopened = new RealDatabase(file);
+      const row = reopened
+        .prepare(
+          `SELECT last_test_run_result_id FROM flagged_flaky_tests_rollup_watermark WHERE project_id = ?`,
+        )
+        .get('proj-wm') as { last_test_run_result_id: number } | undefined;
+      expect(row?.last_test_run_result_id).toBe(2);
+      reopened.close();
+
+      // A second, independent worker dispatch against the same file reads
+      // the watermark it just persisted (not a fresh in-memory 0) and sees
+      // no new rows to recompute.
+      const second = await replaceFlaggedFlakyTestsRollupOffMainThread(
+        file,
+        'proj-wm',
+        20,
+        2,
+        2000,
+      );
+      expect(second.itemsProcessed).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20000);
 });
