@@ -46,6 +46,9 @@ import {
   pruneSchedulerAudit,
   pruneTestRunResults,
   listProjectRows,
+  isJobOverdue,
+  TEST_RUN_RESULTS_RETENTION_MS,
+  SCHEDULER_AUDIT_KEEP_PER_JOB,
 } from './db/queries';
 import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
@@ -399,23 +402,34 @@ scheduler.setBroadcast(broadcast);
 setScheduler(scheduler);
 setDeployScheduler(scheduler);
 // Bound retention: prune scheduler_audit to last 1000 rows per job, daily.
+// runOnBoot is derived from the durable scheduler_audit record rather than
+// hardcoded, so a job overdue by the durable record fires immediately even
+// after a restart discards its in-process timer — see isJobOverdue.
+const SCHEDULER_AUDIT_PRUNER_INTERVAL_MS = 24 * 60 * 60_000;
 scheduler.register({
   name: 'scheduler_audit_pruner',
-  intervalMs: 24 * 60 * 60_000,
-  runOnBoot: false,
+  intervalMs: SCHEDULER_AUDIT_PRUNER_INTERVAL_MS,
+  runOnBoot: isJobOverdue(
+    'scheduler_audit_pruner',
+    SCHEDULER_AUDIT_PRUNER_INTERVAL_MS,
+  ),
   run: async () => {
-    pruneSchedulerAudit(1000);
+    pruneSchedulerAudit(SCHEDULER_AUDIT_KEEP_PER_JOB);
   },
 });
 // Bound retention: prune raw test_run_results rows past a 30-day window,
 // daily. Comfortably exceeds the BASELINE_WINDOW_SAMPLES sample window
 // testRequestLane.ts's regression baseline draws from; the per-test
 // aggregate in test_perf_baselines survives pruning indefinitely.
-const TEST_RUN_RESULTS_RETENTION_MS = 30 * 24 * 60 * 60_000;
+// runOnBoot is derived from the durable scheduler_audit record (see above).
+const TEST_RUN_RESULTS_PRUNER_INTERVAL_MS = 24 * 60 * 60_000;
 scheduler.register({
   name: 'test_run_results_pruner',
-  intervalMs: 24 * 60 * 60_000,
-  runOnBoot: false,
+  intervalMs: TEST_RUN_RESULTS_PRUNER_INTERVAL_MS,
+  runOnBoot: isJobOverdue(
+    'test_run_results_pruner',
+    TEST_RUN_RESULTS_PRUNER_INTERVAL_MS,
+  ),
   run: async () => {
     pruneTestRunResults(TEST_RUN_RESULTS_RETENTION_MS);
   },

@@ -5910,7 +5910,10 @@ export function insertSchedulerAudit(row: NewSchedulerAuditRow): void {
   });
 }
 
-export function pruneSchedulerAudit(keepPerJob = 1000): void {
+/** Rows retained per job by pruneSchedulerAudit's daily sweep — see server.ts's scheduler_audit_pruner registration. */
+export const SCHEDULER_AUDIT_KEEP_PER_JOB = 1000;
+
+export function pruneSchedulerAudit(keepPerJob = SCHEDULER_AUDIT_KEEP_PER_JOB): void {
   const jobs = db.prepare(`SELECT DISTINCT job FROM scheduler_audit`).all() as {
     job: string;
   }[];
@@ -5922,6 +5925,30 @@ export function pruneSchedulerAudit(keepPerJob = 1000): void {
        )`,
     ).run({ job, keep: keepPerJob });
   }
+}
+
+/**
+ * Whether `job`'s last successful (status = 'ok') scheduler_audit run is
+ * older than `intervalMs`, or it has never run — used at registration time
+ * so a daily sweep's firing is derived from the durable audit record rather
+ * than from in-process timer state that a restart discards (a box that
+ * restarts more often than the interval would otherwise never reach a
+ * runOnBoot: false job's first fire).
+ */
+export function isJobOverdue(
+  job: string,
+  intervalMs: number,
+  now: number = Date.now(),
+): boolean {
+  const row = db
+    .prepare<{ job: string }>(
+      `SELECT started_at FROM scheduler_audit
+       WHERE job = @job AND status = 'ok'
+       ORDER BY started_at DESC LIMIT 1`,
+    )
+    .get({ job }) as { started_at: string } | undefined;
+  if (!row) return true;
+  return now - Date.parse(row.started_at) >= intervalMs;
 }
 
 // ─── audit_finding_dedup ────────────────────────────────────────────────────
@@ -8431,12 +8458,33 @@ export function countTestRunResultsForRun(testRequestRunId: string): number {
  * cutoff itself only ever touches rows well outside any read's window: reads
  * pull the newest few dozen samples, and the window here is 30 days.
  */
-export function pruneTestRunResults(retentionMs: number): number {
+/** Retention window for pruneTestRunResults's daily sweep — see server.ts's test_run_results_pruner registration. */
+export const TEST_RUN_RESULTS_RETENTION_MS = 30 * 24 * 60 * 60_000;
+
+/**
+ * Per-statement delete cap so a pruner that hasn't run in a long time (e.g.
+ * after an extended outage) can't hold the single-threaded event loop with
+ * one unbounded DELETE — it instead runs as a bounded loop of small deletes.
+ */
+const PRUNE_TEST_RUN_RESULTS_BATCH_SIZE = 5000;
+
+export function pruneTestRunResults(
+  retentionMs: number,
+  batchSize = PRUNE_TEST_RUN_RESULTS_BATCH_SIZE,
+): number {
   const cutoff = Date.now() - retentionMs;
-  const result = db
-    .prepare(`DELETE FROM test_run_results WHERE created_at < ?`)
-    .run(cutoff);
-  return result.changes;
+  const stmt = db.prepare(
+    `DELETE FROM test_run_results WHERE id IN (
+       SELECT id FROM test_run_results WHERE created_at < ? LIMIT ?
+     )`,
+  );
+  let totalDeleted = 0;
+  while (true) {
+    const result = stmt.run(cutoff, batchSize);
+    totalDeleted += result.changes;
+    if (result.changes < batchSize) break;
+  }
+  return totalDeleted;
 }
 
 // ─── test_perf_baselines ────────────────────────────────────────────────────
