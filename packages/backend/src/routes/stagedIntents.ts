@@ -1753,8 +1753,9 @@ function rowToApi(
 /**
  * Kinds carry their target task at `payload.taskId`, except task.create — a
  * new task has no pre-existing id, so it dedups on title instead (see
- * extractTitleKey) — and gate.accrete/seed.stage, whose source task lives at
- * `payload.sourceTask.id`.
+ * extractTitleKey) — gate.accrete/seed.stage, whose source task lives at
+ * `payload.sourceTask.id`, and gate.verify, which dedups on its gate item
+ * (`payload.gateItemId`, no `taskId` field at all) via a `gate-item:<id>` key.
  */
 function extractTaskId(kind: string, payload: unknown): string | null {
   if (kind === 'task.create' || kind === 'arch.createUnit') return null;
@@ -1777,6 +1778,18 @@ function extractTaskId(kind: string, payload: unknown): string | null {
     // one superseding the other, while same-section patches still supersede
     // via the existing tombstone mechanism above.
     return `${p.taskId}::${p.section.trim()}`;
+  }
+  if (kind === 'gate.verify') {
+    const gateItemId = (payload as { gateItemId?: unknown } | null)
+      ?.gateItemId;
+    // Reuses the `gate-item:<id>` shape already established elsewhere for a
+    // gate-verify session's own task_id sentinel (gateItemVerifier.ts,
+    // sessionPredicates.ts, milestoneResolver.ts) — same identity, applied
+    // here as the staged-intent dedup key so a second gate.verify for the
+    // same item supersedes the first instead of accumulating alongside it.
+    return typeof gateItemId === 'string'
+      ? `gate-item:${gateItemId}`
+      : null;
   }
   if (kind === 'planning.noOp') {
     const p = payload as Partial<NoOpPayload> | null;
