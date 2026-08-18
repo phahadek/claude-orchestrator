@@ -2252,10 +2252,30 @@ class DecisionPickOneValidationError extends Error {
   }
 }
 
+/**
+ * Mechanical backstop for the prose-only "Decision output shape" design-
+ * procedure rule (procedureCore.ts's "one thesis per paragraph"): a field
+ * over the operator-configured threshold with zero `\n\n` breaks is an
+ * unbroken wall of text a Design session failed to structure, regardless of
+ * what the procedure asked for. Short fields are exempt — a single
+ * paragraph under the threshold is legitimately prose, not a wall.
+ */
+function assertParagraphBreaksIfLong(fieldLabel: string, value: string): void {
+  const threshold = runtimeSettings.decision_pick_one_paragraph_threshold;
+  if (value.length > threshold && !value.includes('\n\n')) {
+    throw new DecisionPickOneValidationError(
+      `${fieldLabel} is ${value.length} characters with no paragraph breaks — ` +
+        `text over ${threshold} characters must be split into multiple ` +
+        'paragraphs separated by a blank line (\\n\\n)',
+    );
+  }
+}
+
 function validateDecisionPickOnePayload(
   payload: unknown,
   groupId: string | null | undefined,
   decisionProposal: string | null | undefined,
+  investigation: string | null | undefined,
 ): asserts payload is DecisionPickOnePayload {
   if (groupId) {
     throw new DecisionPickOneValidationError(
@@ -2266,6 +2286,10 @@ function validateDecisionPickOnePayload(
     throw new DecisionPickOneValidationError(
       'a substantive decisionProposal (why this fork needs an operator decision) is required',
     );
+  }
+  assertParagraphBreaksIfLong('decisionProposal', decisionProposal);
+  if (investigation?.trim()) {
+    assertParagraphBreaksIfLong('investigation', investigation);
   }
   const p = payload as Partial<DecisionPickOnePayload> | null;
   if (!p || typeof p.prompt !== 'string' || !p.prompt.trim()) {
@@ -2287,6 +2311,10 @@ function validateDecisionPickOnePayload(
         `option "${opt.label}" requires a substantive description`,
       );
     }
+    assertParagraphBreaksIfLong(
+      `option "${opt.label}" description`,
+      opt.description,
+    );
   }
   if (typeof p.allowFreeForm !== 'boolean') {
     throw new DecisionPickOneValidationError(
@@ -3877,7 +3905,12 @@ export function stageIntent(
     milestone != null ? resolveMilestoneForProject(projectId, milestone) : null;
 
   if (kind === 'decision.pickOne') {
-    validateDecisionPickOnePayload(payload, groupId, decisionProposal);
+    validateDecisionPickOnePayload(
+      payload,
+      groupId,
+      decisionProposal,
+      investigation,
+    );
   }
   if (kind === 'session.requestCapability') {
     validateCapabilityRequestPayload(payload, projectId, sessionId);

@@ -64,6 +64,7 @@ const SettingsSchema = z.object({
   flip_rate_window_n: z.coerce.number().int().min(1),
   flip_rate_threshold_k: z.coerce.number().int().min(1),
   flaky_remediation_file_threshold: z.coerce.number().int().min(1),
+  decision_pick_one_paragraph_threshold: z.coerce.number().int().min(100),
 
   // Boolean settings (stored as 'true'/'false' strings; also accepts native booleans)
   auto_review: zodBoolCoerce,
@@ -167,6 +168,7 @@ export const SETTING_DEFAULTS: Settings = {
   flip_rate_window_n: 20,
   flip_rate_threshold_k: 2,
   flaky_remediation_file_threshold: 2,
+  decision_pick_one_paragraph_threshold: 560,
   auto_review: true,
   auto_archive_enabled: true,
   session_cgroup_deny_swap: true,

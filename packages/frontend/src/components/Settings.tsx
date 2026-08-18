@@ -336,6 +336,14 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                   1,
                   10,
                 )}
+                {numInput(
+                  'decision_pick_one_paragraph_threshold',
+                  'Decision paragraph-break threshold (chars)',
+                  100,
+                  5000,
+                  10,
+                  'decision.pickOne fields over this length must contain a paragraph break',
+                )}
 
                 <h3 className={styles.sectionTitle}>Auto-review</h3>
                 {numInput(

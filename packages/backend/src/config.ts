@@ -892,6 +892,8 @@ export interface RuntimeSettings {
   hourly_usage_pause_threshold_percent: string;
   /** Soft-pause auto-launch when the polled weekly usage percent reaches this threshold; '' = disabled. */
   weekly_usage_pause_threshold_percent: string;
+  /** decision.pickOne fields (decisionProposal/investigation/option description) over this many characters must contain a \n\n paragraph break. */
+  decision_pick_one_paragraph_threshold: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -936,6 +938,7 @@ export const runtimeSettings: RuntimeSettings = {
   ),
   hourly_usage_pause_threshold_percent: '',
   weekly_usage_pause_threshold_percent: '',
+  decision_pick_one_paragraph_threshold: 560,
   min_host_free_memory_mb: Number(process.env.MIN_HOST_FREE_MEMORY_MB ?? 4096),
   per_session_reserve_mb: Number(process.env.PER_SESSION_RESERVE_MB ?? 3072),
   session_cgroup_prod_reserve_mb: Number(
