@@ -5889,15 +5889,21 @@ export interface NewSchedulerAuditRow {
   started_at: string;
   completed_at: string;
   duration_ms: number;
+  // event-loop-busy time attributable to the job's own synchronous work,
+  // sampled as an eventLoopUtilization() delta across the job — distinct
+  // from duration_ms, which is wall-clock across the job's await. Null for
+  // skipped runs, which never actually execute the job.
+  event_loop_blocked_ms?: number | null;
   items_processed?: number | null;
   error?: string | null;
 }
 
 export function insertSchedulerAudit(row: NewSchedulerAuditRow): void {
   db.prepare<NewSchedulerAuditRow>(
-    `INSERT INTO scheduler_audit (job, status, started_at, completed_at, duration_ms, items_processed, error)
-     VALUES (@job, @status, @started_at, @completed_at, @duration_ms, @items_processed, @error)`,
+    `INSERT INTO scheduler_audit (job, status, started_at, completed_at, duration_ms, event_loop_blocked_ms, items_processed, error)
+     VALUES (@job, @status, @started_at, @completed_at, @duration_ms, @event_loop_blocked_ms, @items_processed, @error)`,
   ).run({
+    event_loop_blocked_ms: null,
     items_processed: null,
     error: null,
     ...row,
@@ -6086,6 +6092,11 @@ export interface SchedulerAuditStats {
   lastDurationMs: number | null;
   runCount24h: number;
   errorCount24h: number;
+  // Worst/mean event-loop-blocked time over the same 24h window, over runs
+  // that recorded a value (skipped runs and pre-migration rows are NULL and
+  // excluded). Null when no run in the window recorded one.
+  maxEventLoopBlockedMs24h: number | null;
+  meanEventLoopBlockedMs24h: number | null;
 }
 
 let _stmtSchedulerAuditStats: Database.Statement | null = null;
@@ -6097,6 +6108,7 @@ export function getSchedulerAuditStats(): SchedulerAuditStats[] {
         job,
         status,
         duration_ms,
+        event_loop_blocked_ms,
         started_at,
         ROW_NUMBER() OVER (PARTITION BY job ORDER BY started_at DESC) AS rn
       FROM scheduler_audit
@@ -6105,7 +6117,9 @@ export function getSchedulerAuditStats(): SchedulerAuditStats[] {
       job,
       MAX(CASE WHEN rn = 1 THEN duration_ms END) AS last_duration_ms,
       SUM(CASE WHEN status IN ('ok', 'failed') AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS run_count_24h,
-      SUM(CASE WHEN status = 'failed' AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS error_count_24h
+      SUM(CASE WHEN status = 'failed' AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS error_count_24h,
+      MAX(CASE WHEN started_at > datetime('now', '-24 hours') THEN event_loop_blocked_ms END) AS max_event_loop_blocked_ms_24h,
+      AVG(CASE WHEN started_at > datetime('now', '-24 hours') THEN event_loop_blocked_ms END) AS mean_event_loop_blocked_ms_24h
     FROM ranked
     GROUP BY job
   `);
@@ -6114,12 +6128,19 @@ export function getSchedulerAuditStats(): SchedulerAuditStats[] {
     last_duration_ms: number | null;
     run_count_24h: number;
     error_count_24h: number;
+    max_event_loop_blocked_ms_24h: number | null;
+    mean_event_loop_blocked_ms_24h: number | null;
   }>;
   return rows.map((r) => ({
     job: r.job,
     lastDurationMs: r.last_duration_ms,
     runCount24h: r.run_count_24h,
     errorCount24h: r.error_count_24h,
+    maxEventLoopBlockedMs24h: r.max_event_loop_blocked_ms_24h,
+    meanEventLoopBlockedMs24h:
+      r.mean_event_loop_blocked_ms_24h !== null
+        ? Math.round(r.mean_event_loop_blocked_ms_24h)
+        : null,
   }));
 }
 

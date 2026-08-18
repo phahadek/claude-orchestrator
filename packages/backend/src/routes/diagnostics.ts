@@ -34,6 +34,8 @@ export function createDiagnosticsRouter(): Router {
         lastDurationMs: s?.lastDurationMs ?? null,
         runCount24h: s?.runCount24h ?? 0,
         errorCount24h: s?.errorCount24h ?? 0,
+        maxEventLoopBlockedMs24h: s?.maxEventLoopBlockedMs24h ?? null,
+        meanEventLoopBlockedMs24h: s?.meanEventLoopBlockedMs24h ?? null,
       };
     });
     res.json(augmented);

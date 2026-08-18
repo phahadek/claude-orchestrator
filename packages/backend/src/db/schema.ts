@@ -2584,4 +2584,17 @@ export function runMigrations(target: Database.Database): void {
     )
     WHERE last_event_at IS NULL
   `);
+
+  // scheduler_audit.event_loop_blocked_ms: event-loop-busy time attributable
+  // to the job's own synchronous work, sampled as an eventLoopUtilization()
+  // delta across the job (see Scheduler._runJob). duration_ms is wall-clock
+  // across the job's await and stays unchanged — the two together separate
+  // the job that blocked the loop from jobs that merely waited behind it.
+  try {
+    target.exec(
+      `ALTER TABLE scheduler_audit ADD COLUMN event_loop_blocked_ms INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
 }
