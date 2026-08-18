@@ -223,6 +223,7 @@ export function MilestoneView({
   );
   const middleWidthRef = useRef(middleWidthPct);
   const containerRef = useRef<HTMLDivElement>(null);
+  const leftColumnRef = useRef<HTMLDivElement>(null);
   // The centre column's actual scrollable element — only mounted on desktop
   // (mobile shows one region at a time via tabs, so scroll-follow never
   // observes an ancestor there and stays a no-op).
@@ -260,7 +261,10 @@ export function MilestoneView({
 
     const onMove = (ev: MouseEvent) => {
       const rect = container.getBoundingClientRect();
-      const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+      const leftColumnWidth =
+        leftColumnRef.current?.getBoundingClientRect().width ?? 0;
+      const pct =
+        ((ev.clientX - rect.left - leftColumnWidth) / rect.width) * 100;
       const clamped = Math.min(
         MAX_MIDDLE_WIDTH_PCT,
         Math.max(MIN_MIDDLE_WIDTH_PCT, pct),
@@ -425,7 +429,11 @@ export function MilestoneView({
       ref={containerRef}
       data-testid="milestone-view-shell"
     >
-      <div className={styles.leftColumn} data-testid="milestone-burndown-mount">
+      <div
+        ref={leftColumnRef}
+        className={styles.leftColumn}
+        data-testid="milestone-burndown-mount"
+      >
         {burndownContent}
       </div>
 
@@ -441,6 +449,7 @@ export function MilestoneView({
       <div
         className={styles.resizeHandle}
         onMouseDown={handleResizeMouseDown}
+        data-testid="milestone-resize-handle"
       />
 
       <div

@@ -478,6 +478,61 @@ describe('MilestoneView', () => {
     assertDeployBetweenBurndownAndFlowArm();
   });
 
+  describe('resize handle', () => {
+    // Mirrors the real desktop layout: container 1000px wide starting at
+    // x=0, with .leftColumn's fixed 300px rendered before .middlePanel — so
+    // the handle's true on-screen x is leftColumnWidth + middlePanel's
+    // current pixel width, not the container's own x=0 origin.
+    const CONTAINER_WIDTH = 1000;
+    const LEFT_COLUMN_WIDTH = 300;
+
+    function mockLayout() {
+      const shell = screen.getByTestId('milestone-view-shell');
+      const leftColumn = screen.getByTestId('milestone-burndown-mount');
+      vi.spyOn(shell, 'getBoundingClientRect').mockReturnValue({
+        left: 0,
+        width: CONTAINER_WIDTH,
+      } as DOMRect);
+      vi.spyOn(leftColumn, 'getBoundingClientRect').mockReturnValue({
+        left: 0,
+        width: LEFT_COLUMN_WIDTH,
+      } as DOMRect);
+    }
+
+    function middleWidthPct(): number {
+      const middlePanel = screen.getByTestId('milestone-decision-stack-mount');
+      return parseFloat(middlePanel.style.width);
+    }
+
+    it('does not jump toward the max width on the first drag pixel from the handle actual on-screen position', () => {
+      render(<MilestoneView {...baseProps} />);
+      mockLayout();
+
+      const preDragPct = middleWidthPct(); // DEFAULT_MIDDLE_WIDTH_PCT (55)
+      const handleX = LEFT_COLUMN_WIDTH + (preDragPct / 100) * CONTAINER_WIDTH;
+
+      fireEvent.mouseDown(screen.getByTestId('milestone-resize-handle'));
+      fireEvent.mouseMove(window, { clientX: handleX });
+
+      expect(middleWidthPct()).toBeCloseTo(preDragPct, 0);
+    });
+
+    it('tracks the cursor 1:1 — a known clientX delta moves middleWidthPct by the proportional amount', () => {
+      render(<MilestoneView {...baseProps} />);
+      mockLayout();
+
+      const preDragPct = middleWidthPct();
+      const handleX = LEFT_COLUMN_WIDTH + (preDragPct / 100) * CONTAINER_WIDTH;
+      const deltaPx = 50;
+      const expectedDeltaPct = (deltaPx / CONTAINER_WIDTH) * 100;
+
+      fireEvent.mouseDown(screen.getByTestId('milestone-resize-handle'));
+      fireEvent.mouseMove(window, { clientX: handleX + deltaPx });
+
+      expect(middleWidthPct() - preDragPct).toBeCloseTo(expectedDeltaPct, 5);
+    });
+  });
+
   it('switches the active mobile region to the drill-down when view-session is requested on a mobile viewport', () => {
     mockMatchMedia(true);
     render(<MilestoneView {...baseProps} />);
