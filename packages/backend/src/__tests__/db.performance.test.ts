@@ -30,10 +30,8 @@ import {
   listAllActiveStagedIntents,
   archiveSession,
   getLastActivityMsForArchivedSessions,
-  listFlaggedFlakyTests,
   replaceFlaggedFlakyTestsRollupOffMainThread,
   getFlaggedFlakyTestsRollup,
-  getFlakyRollupWatermark,
 } from '../db/queries.js';
 import type Database from 'better-sqlite3';
 import RealDatabase from 'better-sqlite3';
