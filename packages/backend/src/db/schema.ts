@@ -2388,11 +2388,12 @@ export function runMigrations(target: Database.Database): void {
 
   // flagged_flaky_tests_rollup: one row per (project_id, test_id) currently
   // flagged by computeTestFlipRateFlag — see listFlaggedFlakyTests/
-  // replaceFlaggedFlakyTestsRollup in db/queries.ts. Recomputed wholesale for
-  // a project on the FlakyTestRollupJob scheduler cadence rather than derived
-  // live on the request path: the live aggregate walks every
-  // test_run_results row ever recorded for the project (SEARCH r USING
-  // idx_test_request_runs_project_hash, SEARCH trr USING
+  // replaceFlaggedFlakyTestsRollup in db/queries.ts. Recomputed incrementally
+  // for a project on the FlakyTestRollupJob scheduler cadence (only test ids
+  // with new test_run_results rows since flagged_flaky_tests_rollup_watermark,
+  // see below) rather than derived live on the request path: a from-scratch
+  // recompute walks every test_run_results row ever recorded for the project
+  // (SEARCH r USING idx_test_request_runs_project_hash, SEARCH trr USING
   // idx_test_run_results_run_id, TEMP B-TREE FOR GROUP BY) to collapse them
   // to distinct test_ids, which cost 7.6s+ at 1.5M rows and grows daily with
   // the table. This table lets GET /api/milestones/:project/lane-health read
@@ -2597,4 +2598,21 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // flagged_flaky_tests_rollup_watermark: one row per project holding the
+  // highest test_run_results.id already folded into flagged_flaky_tests_rollup
+  // by the last FlakyTestRollupJob tick. Lets replaceFlaggedFlakyTestsRollup
+  // recompute flip-rate flags only for test ids with rows past this watermark
+  // instead of re-walking every row ever recorded for the project on every
+  // tick — see the docstring on replaceFlaggedFlakyTestsRollupSync in
+  // db/queries.ts. Durable (read fresh from this table on each tick, not held
+  // in process memory) so a restart resumes from the last folded row rather
+  // than re-scanning from scratch.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS flagged_flaky_tests_rollup_watermark (
+      project_id                TEXT    PRIMARY KEY,
+      last_test_run_result_id   INTEGER NOT NULL DEFAULT 0,
+      updated_at                INTEGER NOT NULL
+    );
+  `);
 }
