@@ -1443,7 +1443,7 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
     expect(result.skippedForBudget).toBe(0);
   });
 
-  it('starts dispatching the second item before the first item\'s verify() call has resolved, when budget allows both', async () => {
+  it("starts dispatching the second item before the first item's verify() call has resolved, when budget allows both", async () => {
     // Reproduces the reported symptom: a real gate-verify session's
     // verify() call spans the dispatched session's whole investigation
     // (up to its full budget) rather than resolving as soon as it starts.
