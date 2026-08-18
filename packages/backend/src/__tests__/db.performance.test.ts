@@ -680,9 +680,9 @@ describe('runMigrations — sessions.last_event_at', () => {
   it('running runMigrations twice does not throw and leaves the column present', () => {
     runMigrations(typedDb);
     expect(() => runMigrations(typedDb)).not.toThrow();
-    const columns = typedDb
-      .prepare(`PRAGMA table_info(sessions)`)
-      .all() as { name: string }[];
+    const columns = typedDb.prepare(`PRAGMA table_info(sessions)`).all() as {
+      name: string;
+    }[];
     expect(columns.map((c) => c.name)).toContain('last_event_at');
   });
 });
