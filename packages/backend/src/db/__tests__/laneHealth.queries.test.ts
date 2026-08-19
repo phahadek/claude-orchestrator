@@ -415,9 +415,9 @@ describe('getLaneHealthRollup', () => {
 
   describe('driving query plan', () => {
     it('is created by the schema', () => {
-      const idx = db
-        .prepare(`PRAGMA index_list(test_request_runs)`)
-        .all() as { name: string }[];
+      const idx = db.prepare(`PRAGMA index_list(test_request_runs)`).all() as {
+        name: string;
+      }[];
       expect(idx.map((i) => i.name)).toContain(
         'idx_test_request_runs_project_finished',
       );
