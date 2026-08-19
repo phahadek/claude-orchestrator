@@ -63,15 +63,23 @@ export interface MergeResult {
 }
 
 /**
- * A check-run rerequested via GitHub's rerequest API, together with its
+ * A check-run to wait on after a flake-recovery rerun, together with its
  * pre-rerequest `started_at` marker. waitForCheckRunsCompletion requires a
  * genuinely later `started_at` (not just status='completed') before treating
  * the run as done, so a stale first-poll read of the pre-rerequest state
  * can't be mistaken for the rerun's actual result.
+ *
+ * `rerequested` is false for a run that was already non-terminal (queued/
+ * in_progress) at rerunFailedJobs time — e.g. reset by a prior attempt or
+ * GitHub's own lag — and so was included to wait on without issuing a fresh
+ * rerequest call. For those, waitForCheckRunsCompletion only requires
+ * status='completed', since there is no meaningful pre-rerequest baseline to
+ * compare `started_at` against.
  */
 export interface RerequestedCheckRun {
   id: number;
   priorStartedAt: string | null;
+  rerequested: boolean;
 }
 
 export interface FailingCheck {
