@@ -620,7 +620,12 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
       duration_ms: test.durationMs,
     })),
   );
-  if (tests.length === 0) return;
+  // An incomplete merge (missing an expected report file) must still write
+  // a test_run_summaries row even with zero extracted tests — otherwise the
+  // incomplete signal is lost the moment structured_result is nulled, with
+  // nothing durable left to distinguish it from a genuine per-test
+  // breakdown. See baseHealthCheck.ts's classifyFailedRun.
+  if (tests.length === 0 && !parsed.incomplete) return;
 
   ingestTestRunResultsTx(
     run.id,
@@ -628,6 +633,7 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
     tests,
     run.concurrent_run_count ?? null,
     !!run.oom_killed,
+    !!parsed.incomplete,
   );
 
   const touchedTestIds = tests.map((t) => t.test_id);

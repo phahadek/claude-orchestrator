@@ -73,6 +73,8 @@ import {
   insertTestRequestRun,
   completeTestRequestRun,
   insertTestRunResults,
+  ingestTestRunResultsTx,
+  clearExtractedStructuredResultsBatch,
 } from '../../db/queries';
 import type { ProjectConfig } from '../../config';
 import type { TestRequestRunRow } from '../../db/types';
@@ -132,6 +134,7 @@ beforeEach(() => {
     filed: false,
   });
   db.prepare('DELETE FROM test_run_results').run();
+  db.prepare('DELETE FROM test_run_summaries').run();
   db.prepare('DELETE FROM test_request_runs').run();
 });
 
@@ -311,6 +314,159 @@ describe('checkBaseBranchHealth', () => {
         joined: false,
         passed: false,
         output: 'killed',
+      };
+    });
+
+    const result = await checkBaseBranchHealth(project);
+    expect(result.outcome).toBe('total_fail');
+  });
+
+  it('classifies a failed run with structured_result nulled but extraction output (test_run_summaries) present as partial_fail, not total_fail', async () => {
+    // Reproduces the deployed-SHA-1868df59cf scenario: structured_result is
+    // a transient staging column, cleared once test_run_summaries/
+    // test_run_results have been extracted from it. A null
+    // structured_result here must not be read as "no report acquired" —
+    // the durable per-test breakdown lives in test_run_summaries now.
+    const project = makeProject();
+    mockComputeWholeTreeContentHash.mockResolvedValue('hash-post-sweep');
+    mockRunProjectTestRequest.mockImplementation(async (spec) => {
+      insertTestRequestRun(
+        'run-post-sweep',
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+      );
+      completeTestRequestRun(
+        'run-post-sweep',
+        'failed',
+        'some tests failed',
+        'generic',
+        structuredResultWith(18, 2),
+        false,
+        true,
+      );
+      // Mirrors testRequestLane.ts's own ingestTestRunResults: write the
+      // extraction output, then null structured_result the way the
+      // production sweep (clearExtractedStructuredResultsBatch) does —
+      // rather than hand-constructing both sides consistently in-test.
+      ingestTestRunResultsTx(
+        'run-post-sweep',
+        spec.projectId,
+        [
+          {
+            test_id: 'suite.a',
+            name: 'a',
+            outcome: 'failed',
+            duration_ms: 10,
+          },
+          {
+            test_id: 'suite.b',
+            name: 'b',
+            outcome: 'failed',
+            duration_ms: 10,
+          },
+        ],
+        null,
+        false,
+        false,
+      );
+      clearExtractedStructuredResultsBatch();
+      return {
+        runId: 'run-post-sweep',
+        joined: false,
+        passed: false,
+        output: 'some tests failed',
+      };
+    });
+
+    const result = await checkBaseBranchHealth(project);
+    expect(result.run?.structured_result).toBeNull();
+    expect(result.outcome).toBe('partial_fail');
+  });
+
+  it('classifies a failed run with no structured_result and no extraction output as total_fail when acquisition was attempted (genuine crash/OOM case)', async () => {
+    const project = makeProject();
+    mockComputeWholeTreeContentHash.mockResolvedValue('hash-crash');
+    mockRunProjectTestRequest.mockImplementation(async (spec) => {
+      insertTestRequestRun(
+        'run-crash',
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+      );
+      completeTestRequestRun(
+        'run-crash',
+        'failed',
+        'killed',
+        'oom_killed',
+        null,
+        true,
+        true,
+      );
+      return {
+        runId: 'run-crash',
+        joined: false,
+        passed: false,
+        output: 'killed',
+      };
+    });
+
+    const result = await checkBaseBranchHealth(project);
+    expect(result.outcome).toBe('total_fail');
+  });
+
+  it('classifies a failed run whose extraction output records an incomplete/missing-suite merge as total_fail', async () => {
+    const project = makeProject();
+    mockComputeWholeTreeContentHash.mockResolvedValue('hash-incomplete');
+    mockRunProjectTestRequest.mockImplementation(async (spec) => {
+      insertTestRequestRun(
+        'run-incomplete',
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+      );
+      completeTestRequestRun(
+        'run-incomplete',
+        'failed',
+        'partial merge, one report missing',
+        'generic',
+        JSON.stringify({
+          format: 'junit-xml',
+          suites: [],
+          totals: { passed: 5, failed: 1, skipped: 0, errors: 0 },
+          durationMsTotal: 1000,
+          incomplete: true,
+        }),
+        false,
+        true,
+      );
+      // The extraction output still records the recovered suite's results,
+      // but the summary must carry `incomplete` so a missing report never
+      // looks identical to a complete per-test breakdown.
+      ingestTestRunResultsTx(
+        'run-incomplete',
+        spec.projectId,
+        [
+          {
+            test_id: 'suite.recovered',
+            name: 'recovered',
+            outcome: 'failed',
+            duration_ms: 10,
+          },
+        ],
+        null,
+        false,
+        true,
+      );
+      clearExtractedStructuredResultsBatch();
+      return {
+        runId: 'run-incomplete',
+        joined: false,
+        passed: false,
+        output: 'partial merge, one report missing',
       };
     });
 

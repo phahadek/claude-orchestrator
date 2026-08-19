@@ -2550,6 +2550,21 @@ export function runMigrations(target: Database.Database): void {
       ON test_run_summaries(project_id, created_at);
   `);
 
+  // incomplete: mirrors StructuredTestResult.incomplete at extraction time —
+  // structured_result itself gets nulled once extraction runs (see
+  // clearExtractedStructuredResultsBatch below), so without this column the
+  // "missing an expected report file" signal is lost the moment extraction
+  // completes, and baseHealthCheck.ts's classifyFailedRun (reading this
+  // table post-sweep) could no longer tell an incomplete multi-command merge
+  // apart from a genuine per-test breakdown.
+  try {
+    target.exec(
+      `ALTER TABLE test_run_summaries ADD COLUMN incomplete INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
   // flagged_flaky_tests_rollup: one row per (project_id, test_id) currently
   // flagged by computeTestFlipRateFlag — see listFlaggedFlakyTests/
   // replaceFlaggedFlakyTestsRollup in db/queries.ts. Recomputed incrementally

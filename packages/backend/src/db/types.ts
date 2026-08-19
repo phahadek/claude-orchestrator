@@ -1174,6 +1174,8 @@ export interface TestRunSummaryRow {
   total_duration_ms: number;
   concurrent_run_count: number | null;
   oom_killed: number;
+  /** Mirrors StructuredTestResult.incomplete — a merge missing an expected report file (e.g. an OOM-killed command) survives extraction here since structured_result itself gets nulled. */
+  incomplete: number;
   created_at: number;
 }
 
