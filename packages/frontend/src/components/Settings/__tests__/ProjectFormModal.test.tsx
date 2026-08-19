@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { ProjectFormModal } from '../ProjectFormModal';
+import { projectsApi } from '../../../api/projects';
 import type { Project } from '../../../api/projects';
 
 vi.mock('../../../api/projects', async (importOriginal) => {
@@ -200,7 +201,7 @@ describe('ProjectFormModal', () => {
       expect(screen.getByText(/Save the project first/)).toBeTruthy();
     });
 
-    it('shows milestone dropdown when editing an existing GitHub project', () => {
+    it('shows milestone dropdown when editing an existing GitHub project', async () => {
       render(
         <ProjectFormModal
           initialProject={makeProject({
@@ -213,6 +214,9 @@ describe('ProjectFormModal', () => {
       );
       expect(screen.getByLabelText('Default Milestone')).toBeTruthy();
       expect(screen.getByText(/Leave empty/)).toBeTruthy();
+      await waitFor(() =>
+        expect(projectsApi.listGithubMilestones).toHaveBeenCalled(),
+      );
     });
 
     it('pre-populates owner/repo from taskSourceConfig', () => {
