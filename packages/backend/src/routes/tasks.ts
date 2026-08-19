@@ -28,7 +28,10 @@ import type { NotionTask } from '../notion/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
-import { parsePauseReason, deriveTaskRecoveryDescriptor } from '../db/pauseReason';
+import {
+  parsePauseReason,
+  deriveTaskRecoveryDescriptor,
+} from '../db/pauseReason';
 import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
 import { groomBlockingDepTitles } from '../orchestration/planningCandidates';
 import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
