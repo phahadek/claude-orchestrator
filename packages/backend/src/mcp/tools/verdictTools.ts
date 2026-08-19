@@ -12,7 +12,10 @@ import {
   gateVerifyResultSchema,
   deployAgenticVerdictSchema,
 } from './schemas';
-import { getPRBySessionId, evaluateTestFlakinessCorpus } from '../../db/queries';
+import {
+  getPRBySessionId,
+  evaluateTestFlakinessCorpus,
+} from '../../db/queries';
 import {
   isTestIdTouchedByChangedFiles,
   classnameFromTestId,
@@ -151,7 +154,7 @@ export function registerVerdictTools(
           const beforeMs = pr.created_at ? Date.parse(pr.created_at) : NaN;
           if (!Number.isFinite(beforeMs)) {
             return invalid(
-              "this PR has no recorded creation time to scope the corpus check against",
+              'this PR has no recorded creation time to scope the corpus check against',
             );
           }
           const corpus = evaluateTestFlakinessCorpus(

@@ -16,7 +16,10 @@ import type { AgentSession } from '../../session/AgentSession';
 import { VERIFIER_RECLASSIFY_TARGETS } from '../../session/AgentSession';
 import { gateVerifyReclassifyToSchema } from './schemas';
 import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
-import { getPRBySessionId, evaluateTestFlakinessCorpus } from '../../db/queries';
+import {
+  getPRBySessionId,
+  evaluateTestFlakinessCorpus,
+} from '../../db/queries';
 import { getChangedFiles } from '../../session/autofix-runner';
 
 vi.mock('../../db/queries', () => ({
