@@ -96,6 +96,24 @@ async function runAndDrain(deps: BootDeps): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 50));
 }
 
+/**
+ * Like runAndDrain, but polls for scheduler.start() instead of a fixed
+ * sleep — needed for tests that seed enough real DB work (the extraction
+ * sweep's setImmediate-per-unit yields) that a fixed 50ms window isn't
+ * reliably enough to observe full completion, and to avoid leaking a
+ * still-running background chain into the next test's shared in-memory db.
+ */
+async function runAndDrainFully(
+  deps: BootDeps,
+  schedulerStart: ReturnType<typeof vi.fn>,
+): Promise<void> {
+  await runBootSequence(deps);
+  const deadline = Date.now() + 5000;
+  while (schedulerStart.mock.calls.length === 0 && Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   setReadinessState('migrating');
@@ -347,9 +365,9 @@ describe('boot chain — test_run_results_extraction_sweep is bounded and report
   it('emits a boot_reconciliation_progress record naming the step and the remaining count as it works', async () => {
     seedPendingExtractionRun('run-a', Date.now());
     seedPendingExtractionRun('run-b', Date.now() + 1);
-    const { deps, broadcast } = makeDeps();
+    const { deps, broadcast, scheduler } = makeDeps();
 
-    await runAndDrain(deps);
+    await runAndDrainFully(deps, scheduler.start);
 
     const progressCalls = vi
       .mocked(broadcast)
@@ -373,9 +391,9 @@ describe('boot chain — test_run_results_extraction_sweep is bounded and report
     for (let i = 0; i < total; i++) {
       seedPendingExtractionRun(`run-cap-${i}`, Date.now() + i);
     }
-    const { deps, eventLog } = makeDeps();
+    const { deps, eventLog, scheduler } = makeDeps();
 
-    await runAndDrain(deps);
+    await runAndDrainFully(deps, scheduler.start);
 
     // Boot completed despite a backlog bigger than the cap.
     expect(eventLog).toContain('boot_reconciliation_completed');
@@ -412,9 +430,9 @@ describe('boot ordering', () => {
   });
 
   it('runs the post-listen steps in their declared order', async () => {
-    const { deps, broadcast } = makeDeps();
+    const { deps, broadcast, scheduler } = makeDeps();
 
-    await runAndDrain(deps);
+    await runAndDrainFully(deps, scheduler.start);
 
     const startedCall = vi
       .mocked(broadcast)
