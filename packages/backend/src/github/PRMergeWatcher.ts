@@ -1132,11 +1132,15 @@ export class PRMergeWatcher extends EventEmitter {
       if (!result) return;
       outcome = result.outcome;
     } else {
+      const ciCheckNames = project
+        ? loadOrchestratorConfig(project.projectDir).ci_check_name
+        : [];
       let rerequestedRuns: RerequestedCheckRun[];
       try {
         rerequestedRuns = await this.github.rerunFailedJobs(
           pr.head_sha,
           pr.repo,
+          ciCheckNames,
         );
       } catch (err) {
         logger.warn(
@@ -1145,9 +1149,12 @@ export class PRMergeWatcher extends EventEmitter {
         );
         return;
       }
-      // Wait for the rerequested checks to reach a terminal state — reading
-      // categorizeMergeability right after rerequest would observe the
-      // freshly-queued check run's transient state, not its real outcome.
+      // Wait for the rerequested checks — plus any relevant check-run that
+      // was already back in flight when rerunFailedJobs looked (a prior
+      // attempt's rerequest or GitHub's own lag can reset status before this
+      // runs) — to reach a terminal state. Reading categorizeMergeability
+      // right after rerequest would observe the freshly-queued check run's
+      // transient state, not its real outcome.
       await this.github.waitForCheckRunsCompletion(
         pr.head_sha,
         pr.repo,
@@ -1161,9 +1168,6 @@ export class PRMergeWatcher extends EventEmitter {
       if (current.headSha !== pr.head_sha) {
         outcome = 'inconclusive';
       } else {
-        const ciCheckNames = project
-          ? loadOrchestratorConfig(project.projectDir).ci_check_name
-          : [];
         const category = await this.github.categorizeMergeability(
           pr.pr_number,
           pr.repo,

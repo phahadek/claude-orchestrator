@@ -64,7 +64,7 @@ describe('GitHubClient.waitForCheckRunsCompletion', () => {
     const result = await client.waitForCheckRunsCompletion(
       'sha123',
       'owner/repo',
-      [{ id: 42, priorStartedAt }],
+      [{ id: 42, priorStartedAt, rerequested: true }],
       { sleep, pollIntervalMs: 10, timeoutMs: 60_000 },
     );
 
@@ -92,7 +92,7 @@ describe('GitHubClient.waitForCheckRunsCompletion', () => {
     const result = await client.waitForCheckRunsCompletion(
       'sha123',
       'owner/repo',
-      [{ id: 42, priorStartedAt }],
+      [{ id: 42, priorStartedAt, rerequested: true }],
       { sleep, pollIntervalMs: 10, timeoutMs: 50 },
     );
 
@@ -115,11 +115,42 @@ describe('GitHubClient.waitForCheckRunsCompletion', () => {
     const result = await client.waitForCheckRunsCompletion(
       'sha123',
       'owner/repo',
-      [{ id: 7, priorStartedAt: null }],
+      [{ id: 7, priorStartedAt: null, rerequested: true }],
       { sleep, pollIntervalMs: 10, timeoutMs: 60_000 },
     );
 
     expect(result).toBe(true);
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('waits for a non-terminal run that was not rerequested (already in flight) without requiring started_at to advance', async () => {
+    const priorStartedAt = '2026-08-13T07:36:00Z';
+    // First poll: still in progress.
+    const inProgressPoll = {
+      check_runs: [
+        { id: 99, status: 'in_progress', started_at: priorStartedAt },
+      ],
+    };
+    // Second poll: completed with the SAME started_at — no rerequest was
+    // issued for this run, so there's no later started_at to expect.
+    const completedPoll = {
+      check_runs: [{ id: 99, status: 'completed', started_at: priorStartedAt }],
+    };
+    const mockFetch = makeFetch([inProgressPoll, completedPoll]);
+    globalThis.fetch = mockFetch as never;
+
+    const client = new GitHubClient();
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    const result = await client.waitForCheckRunsCompletion(
+      'sha123',
+      'owner/repo',
+      [{ id: 99, priorStartedAt, rerequested: false }],
+      { sleep, pollIntervalMs: 10, timeoutMs: 60_000 },
+    );
+
+    expect(result).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
   });
 });

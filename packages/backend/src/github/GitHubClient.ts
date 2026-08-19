@@ -532,10 +532,21 @@ export class GitHubClient {
    * so the rest still fire. Returns each rerequested run's id together with its
    * pre-rerequest `started_at`, so waitForCheckRunsCompletion can confirm the
    * run has actually re-executed rather than trusting a stale 'completed' read.
+   *
+   * The failing+completed snapshot taken here can miss a check-run that has
+   * already drifted to a non-terminal state (queued/in_progress) by the time
+   * this runs — e.g. reset by a prior recovery attempt or GitHub's own lag.
+   * Such runs are not re-rerequested (they're already in flight) but are
+   * still included in the returned list — flagged with `rerequested: false`
+   * — so the caller waits for them to actually finish instead of treating
+   * "nothing matched the rerequest filter" as "nothing to wait for". When
+   * ciCheckNames is non-empty, only in-flight runs in that allowlist are
+   * included; when empty, all in-flight runs are included.
    */
   async rerunFailedJobs(
     sha: string,
     repo?: string,
+    ciCheckNames: string[] = [],
   ): Promise<RerequestedCheckRun[]> {
     const r = repo ?? GITHUB_REPO;
     const data = await this.request<{
@@ -553,19 +564,38 @@ export class GitHubClient {
         c.conclusion !== null &&
         FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
     );
+    const failingIds = new Set(failing.map((c) => c.id));
+    const inFlight = data.check_runs.filter(
+      (c) =>
+        c.status !== 'completed' &&
+        !failingIds.has(c.id) &&
+        (ciCheckNames.length === 0 || ciCheckNames.includes(c.name)),
+    );
+
     const rerequested: RerequestedCheckRun[] = [];
     for (const c of failing) {
       try {
         await this.request(`/repos/${r}/check-runs/${c.id}/rerequest`, {
           method: 'POST',
         });
-        rerequested.push({ id: c.id, priorStartedAt: c.started_at });
+        rerequested.push({
+          id: c.id,
+          priorStartedAt: c.started_at,
+          rerequested: true,
+        });
       } catch (err) {
         logger.warn(
           `[GitHubClient] rerunFailedJobs: rerequest failed for check run ${c.id} (${c.name}) on ${sha}:`,
           (err as Error).message,
         );
       }
+    }
+    for (const c of inFlight) {
+      rerequested.push({
+        id: c.id,
+        priorStartedAt: c.started_at,
+        rerequested: false,
+      });
     }
     return rerequested;
   }
@@ -600,7 +630,13 @@ export class GitHubClient {
       opts.sleep ??
       ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     const pending = new Map(
-      checkRuns.map((c) => [c.id, c.priorStartedAt] as const),
+      checkRuns.map(
+        (c) =>
+          [
+            c.id,
+            { priorStartedAt: c.priorStartedAt, rerequested: c.rerequested },
+          ] as const,
+      ),
     );
     const deadline = Date.now() + timeoutMs;
     while (pending.size > 0) {
@@ -612,13 +648,19 @@ export class GitHubClient {
         }>;
       }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
       for (const run of data.check_runs) {
-        if (!pending.has(run.id) || run.status !== 'completed') continue;
-        const priorStartedAt = pending.get(run.id) ?? null;
-        const reexecuted =
-          run.started_at != null &&
-          (priorStartedAt == null ||
-            new Date(run.started_at).getTime() >
-              new Date(priorStartedAt).getTime());
+        const entry = pending.get(run.id);
+        if (!entry || run.status !== 'completed') continue;
+        // A run we didn't rerequest (already in flight when observed) has no
+        // meaningful pre-rerequest baseline — its completion alone is the
+        // genuine wait. A run we did rerequest must show a started_at later
+        // than its pre-rerequest value, so a stale first-poll read of the
+        // pre-rerequest state can't be mistaken for the rerun's result.
+        const reexecuted = !entry.rerequested
+          ? true
+          : run.started_at != null &&
+            (entry.priorStartedAt == null ||
+              new Date(run.started_at).getTime() >
+                new Date(entry.priorStartedAt).getTime());
         if (reexecuted) {
           pending.delete(run.id);
         }

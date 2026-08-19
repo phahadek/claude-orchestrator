@@ -167,8 +167,8 @@ function makePayload(
 function makeMockGitHub(): GitHubClient {
   return {
     rerunFailedJobs: vi.fn().mockResolvedValue([
-      { id: 1, priorStartedAt: '2026-01-01T00:00:00Z' },
-      { id: 2, priorStartedAt: '2026-01-01T00:00:00Z' },
+      { id: 1, priorStartedAt: '2026-01-01T00:00:00Z', rerequested: true },
+      { id: 2, priorStartedAt: '2026-01-01T00:00:00Z', rerequested: true },
     ]),
     waitForCheckRunsCompletion: vi.fn().mockResolvedValue(true),
     getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha: HEAD_SHA }),
@@ -252,13 +252,14 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — same-SHA re-run actu
     expect(vi.mocked(github.rerunFailedJobs)).toHaveBeenCalledWith(
       HEAD_SHA,
       REPO,
+      [],
     );
     expect(vi.mocked(github.waitForCheckRunsCompletion)).toHaveBeenCalledWith(
       HEAD_SHA,
       REPO,
       [
-        { id: 1, priorStartedAt: '2026-01-01T00:00:00Z' },
-        { id: 2, priorStartedAt: '2026-01-01T00:00:00Z' },
+        { id: 1, priorStartedAt: '2026-01-01T00:00:00Z', rerequested: true },
+        { id: 2, priorStartedAt: '2026-01-01T00:00:00Z', rerequested: true },
       ],
     );
     expect(vi.mocked(github.getPRState)).toHaveBeenCalledWith(PR_NUMBER, REPO);
