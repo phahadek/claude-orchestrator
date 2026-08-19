@@ -8783,49 +8783,6 @@ export function countTestRunResultsForRun(testRequestRunId: string): number {
   return row.count;
 }
 
-/**
- * Deletes raw test_run_results rows older than `retentionMs`, keyed off
- * created_at (the extraction timestamp, not the underlying test run time).
- * The per-test aggregate in test_perf_baselines is a separately-maintained
- * table (recomputed, not derived from a join over test_run_results at read
- * time) so it is untouched by this delete regardless of window.
- *
- * Safe against in-flight reads (ingestTestRunResults's insert transaction,
- * listRecentValidTestDurations's baseline read) because better-sqlite3 runs
- * every statement synchronously on a single connection — there is no
- * interleaving of a DELETE with a read or write already in progress. The
- * cutoff itself only ever touches rows well outside any read's window: reads
- * pull the newest few dozen samples, and the window here is 30 days.
- */
-/** Retention window for pruneTestRunResults's daily sweep — see server.ts's test_run_results_pruner registration. */
-export const TEST_RUN_RESULTS_RETENTION_MS = 30 * 24 * 60 * 60_000;
-
-/**
- * Per-statement delete cap so a pruner that hasn't run in a long time (e.g.
- * after an extended outage) can't hold the single-threaded event loop with
- * one unbounded DELETE — it instead runs as a bounded loop of small deletes.
- */
-const PRUNE_TEST_RUN_RESULTS_BATCH_SIZE = 5000;
-
-export function pruneTestRunResults(
-  retentionMs: number,
-  batchSize = PRUNE_TEST_RUN_RESULTS_BATCH_SIZE,
-): number {
-  const cutoff = Date.now() - retentionMs;
-  const stmt = db.prepare(
-    `DELETE FROM test_run_results WHERE id IN (
-       SELECT id FROM test_run_results WHERE created_at < ? LIMIT ?
-     )`,
-  );
-  let totalDeleted = 0;
-  while (true) {
-    const result = stmt.run(cutoff, batchSize);
-    totalDeleted += result.changes;
-    if (result.changes < batchSize) break;
-  }
-  return totalDeleted;
-}
-
 // ─── test_perf_baselines ────────────────────────────────────────────────────
 
 let _stmtGetTestPerfDigestDurations: Database.Statement | null = null;

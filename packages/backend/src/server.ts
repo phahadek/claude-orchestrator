@@ -44,10 +44,8 @@ import {
 import {
   getActiveDeviceCount,
   pruneSchedulerAudit,
-  pruneTestRunResults,
   listProjectRows,
   isJobOverdue,
-  TEST_RUN_RESULTS_RETENTION_MS,
   SCHEDULER_AUDIT_KEEP_PER_JOB,
 } from './db/queries';
 import { importProjectsFromEnv } from './projects/projectImport';
@@ -415,23 +413,6 @@ scheduler.register({
   ),
   run: async () => {
     pruneSchedulerAudit(SCHEDULER_AUDIT_KEEP_PER_JOB);
-  },
-});
-// Bound retention: prune raw test_run_results rows past a 30-day window,
-// daily. Comfortably exceeds the BASELINE_WINDOW_SAMPLES sample window
-// testRequestLane.ts's regression baseline draws from; the per-test
-// aggregate in test_perf_baselines survives pruning indefinitely.
-// runOnBoot is derived from the durable scheduler_audit record (see above).
-const TEST_RUN_RESULTS_PRUNER_INTERVAL_MS = 24 * 60 * 60_000;
-scheduler.register({
-  name: 'test_run_results_pruner',
-  intervalMs: TEST_RUN_RESULTS_PRUNER_INTERVAL_MS,
-  runOnBoot: isJobOverdue(
-    'test_run_results_pruner',
-    TEST_RUN_RESULTS_PRUNER_INTERVAL_MS,
-  ),
-  run: async () => {
-    pruneTestRunResults(TEST_RUN_RESULTS_RETENTION_MS);
   },
 });
 // Scheduled WAL truncate: PASSIVE autocheckpoints already write every
