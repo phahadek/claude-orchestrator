@@ -42,7 +42,10 @@ import {
 } from './ScheduledAuditSweep';
 import { runProjectTestRequest } from './testRequestLane';
 import { Semaphore } from '../tasks/deferralClassifier';
-import { getLatestTestRequestRun, getTestRequestRunById } from '../db/queries';
+import {
+  getLatestBaseHealthTestRequestRun,
+  getTestRequestRunById,
+} from '../db/queries';
 import type { TestRequestRunRow, StructuredTestResult } from '../db/types';
 
 const execFileAsync = promisify(execFile);
@@ -296,7 +299,7 @@ async function checkBaseBranchHealthLocked(
     );
   }
 
-  const cached = getLatestTestRequestRun(project.id, contentHash);
+  const cached = getLatestBaseHealthTestRequestRun(project.id, contentHash);
   if (cached) {
     return {
       outcome: classifyRun(cached),

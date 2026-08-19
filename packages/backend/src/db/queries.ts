@@ -8138,6 +8138,36 @@ export function getLatestTestRequestRun(
 }
 
 /**
+ * baseHealthCheck.ts's own cache read — narrower than getLatestTestRequestRun:
+ * only a run baseHealthCheck.ts itself produced (session_id IS NULL, the
+ * sessionId it always passes to runProjectTestRequest) counts as a cached
+ * base-branch-health confirmation. Without this filter, an ordinary
+ * dispatched task session's own test.request retries against a worktree
+ * that happens to be content-hash-identical to the base branch would land
+ * in the same (project_id, content_hash) bucket and get misread as a
+ * base-health verdict — including a flaky retry's arbitrary failing-test
+ * sample, which re-files a "Base branch is broken" remediation task on
+ * every such retry (see baseHealthRemediationFiling.ts's per-test-id dedup,
+ * which cannot catch this because each retry's failing-test set is novel).
+ */
+export function getLatestBaseHealthTestRequestRun(
+  projectId: string,
+  contentHash: string,
+): TestRequestRunRow | undefined {
+  return db
+    .prepare<{ project_id: string; content_hash: string }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id AND content_hash = @content_hash
+         AND state != 'running' AND session_id IS NULL
+       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get({ project_id: projectId, content_hash: contentHash }) as
+    | TestRequestRunRow
+    | undefined;
+}
+
+/**
  * Single run by id — used to fetch a just-completed run's structured_result
  * for delivery digest rendering (see testResultDigest.ts) once
  * runProjectTestRequest resolves with only the run's id in hand.

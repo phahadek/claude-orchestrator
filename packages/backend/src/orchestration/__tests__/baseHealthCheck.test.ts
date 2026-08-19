@@ -51,14 +51,31 @@ vi.mock('../testRequestLane.js', () => ({
   runProjectTestRequest: mockRunProjectTestRequest,
 }));
 
+const { mockRecordAndMaybeFileBaseHealthRemediation } = vi.hoisted(() => ({
+  mockRecordAndMaybeFileBaseHealthRemediation: vi.fn(async () => ({
+    filed: false,
+  })),
+}));
+
+vi.mock('../../audit/baseHealthRemediationFiling.js', () => ({
+  recordAndMaybeFileBaseHealthRemediation:
+    mockRecordAndMaybeFileBaseHealthRemediation,
+}));
+
 import { db } from '../../db/db';
 import {
   checkBaseBranchHealth,
   getBaseHealthWorktreePath,
 } from '../baseHealthCheck';
+import { filterBaseAttributableFailures } from '../baseAttributableFilter';
 import { getAuditWorktreePath } from '../ScheduledAuditSweep';
-import { insertTestRequestRun, completeTestRequestRun } from '../../db/queries';
+import {
+  insertTestRequestRun,
+  completeTestRequestRun,
+  insertTestRunResults,
+} from '../../db/queries';
 import type { ProjectConfig } from '../../config';
+import type { TestRequestRunRow } from '../../db/types';
 
 function makeProject(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
   return {
@@ -110,7 +127,12 @@ beforeEach(() => {
   mockLoadOrchestratorConfig.mockReset();
   mockLoadOrchestratorConfig.mockReturnValue(DEFAULT_CONFIG);
   mockRunProjectTestRequest.mockReset();
+  mockRecordAndMaybeFileBaseHealthRemediation.mockReset();
+  mockRecordAndMaybeFileBaseHealthRemediation.mockResolvedValue({
+    filed: false,
+  });
   db.prepare('DELETE FROM test_request_runs').run();
+  db.prepare('DELETE FROM test_run_results').run();
 });
 
 describe('checkBaseBranchHealth', () => {
@@ -140,6 +162,52 @@ describe('checkBaseBranchHealth', () => {
     expect(second.run?.id).toBe('run-1');
     // No second execution — the cached row was reused.
     expect(mockRunProjectTestRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat another session\'s own test_request_runs row for the same content hash as a cached base-health confirmation', async () => {
+    const project = makeProject();
+    mockComputeWholeTreeContentHash.mockResolvedValue('hash-foreign-session');
+
+    // A dispatched task session's own ordinary test.request retry — its
+    // worktree happens to be content-hash-identical to the base branch —
+    // lands in the same (project_id, content_hash) bucket. This row must
+    // never be read back as baseHealthCheck.ts's own confirmation.
+    insertTestRequestRun(
+      'run-foreign-session',
+      project.id,
+      'hash-foreign-session',
+      'some-task-session-id',
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-foreign-session',
+      'failed',
+      'unrelated flaky failure',
+      'generic',
+      structuredResultWith(10, 1),
+      false,
+    );
+
+    mockRunProjectTestRequest.mockImplementation(async (spec) => {
+      insertTestRequestRun(
+        'run-own',
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+      );
+      completeTestRequestRun('run-own', 'passed', '');
+      return { runId: 'run-own', joined: false, passed: true, output: '' };
+    });
+
+    const result = await checkBaseBranchHealth(project);
+    // Must run its own dedicated check rather than reusing the foreign
+    // session's row — a cache hit here would misreport that session's
+    // flaky failure as a confirmed base-branch break.
+    expect(mockRunProjectTestRequest).toHaveBeenCalledTimes(1);
+    expect(result.cacheHit).toBe(false);
+    expect(result.outcome).toBe('clean_pass');
+    expect(result.run?.id).toBe('run-own');
   });
 
   it('triggers a fresh run once the base tree content hash changes', async () => {
@@ -357,6 +425,141 @@ describe('checkBaseBranchHealth', () => {
     expect(second.outcome).toBe('clean_pass');
     // The second call, serialized behind the first, resolves as a cache hit.
     expect([first.cacheHit, second.cacheHit].sort()).toEqual([false, true]);
+  });
+
+  it('reproduces the reported repeat-filing scenario: two flaky test_request_runs rows from another session, same content hash, disjoint failing tests, must not each independently trigger remediation filing', async () => {
+    const project = makeProject();
+    mockComputeWholeTreeContentHash.mockResolvedValue('hash-flaky-session');
+
+    // Two of a task session's own ordinary test.request retries against a
+    // worktree that happens to be content-hash-identical to the base
+    // branch — same (project_id, content_hash), different session_id, each
+    // with a disjoint set of failing tests (the reported flaky-retry
+    // scenario). Neither must ever be read back as a base-health verdict.
+    insertTestRequestRun(
+      'run-flaky-1',
+      project.id,
+      'hash-flaky-session',
+      'flaky-task-session-1',
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-flaky-1',
+      'failed',
+      'some tests failed',
+      'generic',
+      JSON.stringify({
+        format: 'junit-xml',
+        suites: [],
+        totals: { passed: 9, failed: 1, skipped: 0, errors: 0 },
+        durationMsTotal: 1000,
+      }),
+      false,
+    );
+    insertTestRunResults(
+      'run-flaky-1',
+      project.id,
+      [
+        {
+          test_id: 'suite.flakyA',
+          name: 'flakyA',
+          outcome: 'failed',
+          duration_ms: 10,
+        },
+      ],
+      null,
+      false,
+    );
+
+    insertTestRequestRun(
+      'run-flaky-2',
+      project.id,
+      'hash-flaky-session',
+      'flaky-task-session-2',
+      Date.now() + 1000,
+    );
+    completeTestRequestRun(
+      'run-flaky-2',
+      'failed',
+      'some tests failed',
+      'generic',
+      JSON.stringify({
+        format: 'junit-xml',
+        suites: [],
+        totals: { passed: 9, failed: 1, skipped: 0, errors: 0 },
+        durationMsTotal: 1000,
+      }),
+      false,
+    );
+    insertTestRunResults(
+      'run-flaky-2',
+      project.id,
+      [
+        {
+          test_id: 'suite.flakyB',
+          name: 'flakyB',
+          outcome: 'failed',
+          duration_ms: 10,
+        },
+      ],
+      null,
+      false,
+    );
+
+    // baseHealthCheck.ts's own dedicated run for this content hash passes
+    // cleanly — the base branch is actually healthy; the two rows above are
+    // just an unrelated session's own flaky retries.
+    mockRunProjectTestRequest.mockImplementation(async (spec) => {
+      insertTestRequestRun(
+        'run-own-dedicated',
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+      );
+      completeTestRequestRun('run-own-dedicated', 'passed', '');
+      return {
+        runId: 'run-own-dedicated',
+        joined: false,
+        passed: true,
+        output: '',
+      };
+    });
+
+    const sessionRun = (id: string): TestRequestRunRow => ({
+      id,
+      project_id: project.id,
+      content_hash: 'hash-flaky-session',
+      session_id: 'unrelated-session',
+      state: 'failed',
+      output: '',
+      requested_at: null,
+      started_at: 0,
+      finished_at: null,
+      structured_result: null,
+      failure_reason: null,
+      concurrent_run_count: null,
+      oom_killed: 0,
+    });
+
+    // Simulate two of that same session's sequential test-request results
+    // being routed through filterBaseAttributableFailures, each of which
+    // internally calls checkBaseBranchHealth.
+    await filterBaseAttributableFailures(
+      project,
+      sessionRun('run-flaky-1'),
+      'triggering-task-1',
+    );
+    await filterBaseAttributableFailures(
+      project,
+      sessionRun('run-flaky-2'),
+      'triggering-task-1',
+    );
+
+    // Since checkBaseBranchHealth's own cache read (session_id IS NULL)
+    // never picks up either flaky-session row, both calls resolve to the
+    // real clean_pass outcome and neither ever triggers remediation filing.
+    expect(mockRecordAndMaybeFileBaseHealthRemediation).not.toHaveBeenCalled();
   });
 });
 
