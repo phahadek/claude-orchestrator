@@ -4049,7 +4049,12 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
       `INSERT INTO test_run_results
          (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
        VALUES (@run_id, @test_id, @name, 'failed', 1, 0, 0, @created_at)`,
-    ).run({ run_id: runId, test_id: testId, name: testId, created_at: createdAt });
+    ).run({
+      run_id: runId,
+      test_id: testId,
+      name: testId,
+      created_at: createdAt,
+    });
   }
 
   function makeMockReviewOrchestratorWithF2(
