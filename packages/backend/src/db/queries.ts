@@ -2129,9 +2129,36 @@ export interface SessionEventsAggregateRow {
 /** Hard cap on rows returned when a caller opts into payload bodies — see querySessionEventsByProjectRows. */
 export const SESSION_EVENTS_ROW_CAP = 200;
 
+/**
+ * Error thrown when `pattern` is supplied without a `since`/`until` bound.
+ * `payload LIKE '%...%'` can never be served from an index (leading
+ * wildcard), so an unbounded pattern filter forces evaluating every
+ * session_events row for the project — exactly the full unindexed scan
+ * this module exists to prevent. Bounding by since/until instead lets the
+ * (session_id, timestamp) composite index restrict the LIKE evaluation to
+ * a caller-controlled window instead of the whole table's history.
+ */
+export class UnboundedPatternQueryError extends Error {
+  constructor() {
+    super(
+      'sessionEvents.query: `pattern` requires a `since` or `until` bound — ' +
+        'an unbounded substring scan over every session_events row for the ' +
+        'project is not supported',
+    );
+    this.name = 'UnboundedPatternQueryError';
+  }
+}
+
 function buildSessionEventsFilterClauses(
   filters: SessionEventsProjectQueryFilters,
 ): { clauses: string[]; params: (string | number)[] } {
+  if (
+    filters.pattern !== undefined &&
+    filters.since === undefined &&
+    filters.until === undefined
+  ) {
+    throw new UnboundedPatternQueryError();
+  }
   const clauses: string[] = [];
   const params: (string | number)[] = [];
   if (filters.pattern !== undefined) {
@@ -2188,6 +2215,13 @@ export function querySessionEventsByProjectAggregate(
       .all(projectId);
   }
   const whereExtra = clauses.map((c) => `AND ${c}`).join(' ');
+  // CROSS JOIN (not JOIN) pins SQLite's join order to the FROM clause's
+  // left-to-right order instead of letting the query planner reorder it:
+  // drive from sessions.project_id (backed by idx_sessions_project_id)
+  // first, then seek into session_events per session via the
+  // (session_id, timestamp) composite index — never a full session_events
+  // table scan. See buildSessionEventsFilterClauses' unbounded-pattern
+  // guard above for why LIKE alone can't be bounded this way.
   return db
     .prepare<(string | number)[], SessionEventsAggregateRow>(
       `
@@ -2195,8 +2229,8 @@ export function querySessionEventsByProjectAggregate(
              COUNT(*) AS count,
              MIN(session_events.timestamp) AS first_timestamp,
              MAX(session_events.timestamp) AS last_timestamp
-      FROM session_events
-      JOIN sessions ON sessions.session_id = session_events.session_id
+      FROM sessions
+      CROSS JOIN session_events ON session_events.session_id = sessions.session_id
       WHERE sessions.project_id = ? ${whereExtra}
       GROUP BY session_events.session_id
       ORDER BY last_timestamp DESC
@@ -2221,12 +2255,14 @@ export function querySessionEventsByProjectRows(
   const cappedLimit = Math.min(limit, SESSION_EVENTS_ROW_CAP);
   const { clauses, params } = buildSessionEventsFilterClauses(filters);
   const whereExtra = clauses.map((c) => `AND ${c}`).join(' ');
+  // See querySessionEventsByProjectAggregate above for why this is a
+  // CROSS JOIN driven from sessions rather than a plain JOIN.
   return db
     .prepare<(string | number)[], SessionEvent>(
       `
       SELECT session_events.*
-      FROM session_events
-      JOIN sessions ON sessions.session_id = session_events.session_id
+      FROM sessions
+      CROSS JOIN session_events ON session_events.session_id = sessions.session_id
       WHERE sessions.project_id = ? ${whereExtra}
       ORDER BY session_events.timestamp DESC
       LIMIT ?

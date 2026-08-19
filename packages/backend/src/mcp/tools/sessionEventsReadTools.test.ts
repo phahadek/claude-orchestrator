@@ -190,6 +190,10 @@ describe('sessionEvents.query', () => {
         arguments: {
           projectId: 'proj-3',
           pattern: 'session_marked_done_while_running',
+          // pattern alone can never be served from an index (leading-
+          // wildcard LIKE) — see UnboundedPatternQueryError — so it must be
+          // paired with a since/until bound.
+          since: 0,
         },
       });
       const text = (result.content as Array<{ type: string; text?: string }>)[0]
@@ -202,6 +206,33 @@ describe('sessionEvents.query', () => {
         session_id: 'worker-c',
         count: 1,
       });
+    } finally {
+      await close();
+    }
+  });
+
+  it('returns a tool-level error for a pattern filter with no since/until bound', async () => {
+    insertSession({
+      session_id: 'requester-3b',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: Date.now(),
+    });
+    insertProjectSession('worker-c2', 'proj-3b');
+    addGrantedCapability(
+      'requester-3b',
+      sessionEventsReadCapability('proj-3b'),
+    );
+
+    const { client, close } = await connectedClient('requester-3b');
+    try {
+      const result = await client.callTool({
+        name: 'sessionEvents.query',
+        arguments: { projectId: 'proj-3b', pattern: 'anything' },
+      });
+      expect(result.isError).toBe(true);
     } finally {
       await close();
     }
