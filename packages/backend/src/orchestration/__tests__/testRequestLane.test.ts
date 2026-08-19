@@ -818,7 +818,7 @@ describe('ingestTestRunResults', () => {
     expect(hasTestRunSummary('run-extract-3')).toBe(false);
   });
 
-  it('never clears the run\'s own structured_result — the lone-key own-row clear must not be inlined into the synchronous completion path, so a race with stagedIntents.ts\'s session-feedback digest read (which happens right after ingestTestRunResults returns) is impossible', () => {
+  it("never clears the run's own structured_result — the lone-key own-row clear must not be inlined into the synchronous completion path, so a race with stagedIntents.ts's session-feedback digest read (which happens right after ingestTestRunResults returns) is impossible", () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -894,14 +894,10 @@ describe('sweepTestRunResultsExtraction', () => {
       null,
       Date.now(),
     );
-    completeTestRequestRun(
-      'run-batch-clear',
-      'passed',
-      'ok',
-      null,
-      structured,
+    completeTestRequestRun('run-batch-clear', 'passed', 'ok', null, structured);
+    ingestTestRunResults(
+      getLatestTestRequestRun('proj-1', 'hash-batch-clear')!,
     );
-    ingestTestRunResults(getLatestTestRequestRun('proj-1', 'hash-batch-clear')!);
 
     const cleared = clearExtractedStructuredResultsBatch();
     expect(cleared).toBe(1);
@@ -1084,13 +1080,7 @@ describe('sweepTestRunResultsExtraction', () => {
       null,
       Date.now(),
     );
-    completeTestRequestRun(
-      'run-unextracted',
-      'passed',
-      'ok',
-      null,
-      structured,
-    );
+    completeTestRequestRun('run-unextracted', 'passed', 'ok', null, structured);
 
     await sweepTestRunResultsExtraction();
 

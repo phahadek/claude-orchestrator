@@ -52,7 +52,11 @@ function insertRun(
   return runId;
 }
 
-function insertSummary(db: Database.Database, runId: string, projectId: string): void {
+function insertSummary(
+  db: Database.Database,
+  runId: string,
+  projectId: string,
+): void {
   db.prepare(
     `INSERT INTO test_run_summaries
        (test_request_run_id, project_id, passed_count, failed_count, skipped_count, error_count, other_count, total_count, total_duration_ms, concurrent_run_count, oom_killed, created_at)
@@ -68,7 +72,11 @@ function getRun(
     .prepare(
       `SELECT structured_result, output, state FROM test_request_runs WHERE id = ?`,
     )
-    .get(runId) as { structured_result: string | null; output: string; state: string };
+    .get(runId) as {
+    structured_result: string | null;
+    output: string;
+    state: string;
+  };
 }
 
 describe('backfillClearExtractedStructuredResults', () => {
@@ -112,11 +120,17 @@ describe('backfillClearExtractedStructuredResults', () => {
     expect(row.output).toBe('ok');
     expect(row.state).toBe('passed');
     expect(
-      db.prepare(`SELECT COUNT(*) AS n FROM test_run_results WHERE test_request_run_id = ?`)
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM test_run_results WHERE test_request_run_id = ?`,
+        )
         .get(runId),
     ).toEqual({ n: 1 });
     expect(
-      db.prepare(`SELECT COUNT(*) AS n FROM test_run_summaries WHERE test_request_run_id = ?`)
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM test_run_summaries WHERE test_request_run_id = ?`,
+        )
         .get(runId),
     ).toEqual({ n: 1 });
   });
