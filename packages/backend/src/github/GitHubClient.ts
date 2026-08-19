@@ -632,7 +632,10 @@ export class GitHubClient {
     const pending = new Map(
       checkRuns.map(
         (c) =>
-          [c.id, { priorStartedAt: c.priorStartedAt, rerequested: c.rerequested }] as const,
+          [
+            c.id,
+            { priorStartedAt: c.priorStartedAt, rerequested: c.rerequested },
+          ] as const,
       ),
     );
     const deadline = Date.now() + timeoutMs;
