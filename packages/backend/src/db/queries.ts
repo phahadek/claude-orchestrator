@@ -8075,7 +8075,9 @@ export function listRunningTestRequestRuns(): TestRequestRunRow[] {
  * mid-ingestion and structured_result having been populated by a process
  * that predates this extraction step.
  */
-export function listTestRequestRunsNeedingExtraction(): TestRequestRunRow[] {
+export function listTestRequestRunsNeedingExtraction(
+  limit: number,
+): TestRequestRunRow[] {
   return db
     .prepare(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
@@ -8084,9 +8086,31 @@ export function listTestRequestRunsNeedingExtraction(): TestRequestRunRow[] {
          AND NOT EXISTS (
            SELECT 1 FROM test_run_summaries
            WHERE test_run_summaries.test_request_run_id = test_request_runs.id
+         )
+       ORDER BY requested_at ASC
+       LIMIT ?`,
+    )
+    .all(limit) as TestRequestRunRow[];
+}
+
+/**
+ * Cheap count companion to listTestRequestRunsNeedingExtraction — used to
+ * report the extraction sweep's residual work list size (progress
+ * reporting, readiness surface) without hydrating every pending row.
+ */
+export function countTestRequestRunsNeedingExtraction(): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n
+       FROM test_request_runs
+       WHERE structured_result IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM test_run_summaries
+           WHERE test_run_summaries.test_request_run_id = test_request_runs.id
          )`,
     )
-    .all() as TestRequestRunRow[];
+    .get() as { n: number };
+  return row.n;
 }
 
 /**

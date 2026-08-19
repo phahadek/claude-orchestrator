@@ -118,7 +118,11 @@ import {
   stageIntent,
   withdrawGateVerifyMirror,
 } from './routes/stagedIntents';
-import { setTestRequestLaneBroadcast } from './orchestration/testRequestLane';
+import {
+  setTestRequestLaneBroadcast,
+  sweepTestRunResultsExtraction,
+  EXTRACTION_SWEEP_DEFAULT_CAP,
+} from './orchestration/testRequestLane';
 import { createOrchestratorMcpRouter } from './mcp/orchestratorMcpServer';
 import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
 import { createOpsJournalRouter } from './routes/opsJournal';
@@ -140,7 +144,11 @@ import {
   OpsSessionLauncher,
   setOpsSessionLauncherRefreshFn,
 } from './orchestration/OpsSessionLauncher';
-import { runBootSequence, getActiveBootTracker } from './bootSequence';
+import {
+  runBootSequence,
+  getActiveBootTracker,
+  getReadinessState,
+} from './bootSequence';
 import { logger } from './logger';
 import {
   handleUncaughtException,
@@ -236,6 +244,15 @@ logConfigProvenanceSummary();
 
 const app = express();
 app.use(express.json());
+// Readiness surface — public, no token required. Distinguishes a slow boot
+// (migrating / boot_steps_running) from a crashed process; only reachable at
+// all once the listener has bound, which only happens after migrations
+// complete, so 'migrating' is reported by direct callers of
+// getReadinessState() rather than ever observed over this route itself.
+app.get('/api/readiness', (_req, res) => {
+  const state = getReadinessState();
+  res.status(state === 'serving' ? 200 : 503).json({ state });
+});
 // Public enrollment routes (bootstrap, request, status) — no token required
 app.use('/api/enrollment', createPublicEnrollmentRouter());
 // Long-lived, loopback-only orchestrator MCP server (streamable-HTTP): the
@@ -657,6 +674,27 @@ registerDependencyCacheReconciler(scheduler);
 // closes the gap the per-PR analyze gate's diff-triggered skip leaves for
 // manifests no PR ever touches.
 registerScheduledAuditSweep(scheduler);
+// Drains whatever the boot-time extraction sweep's cap left behind (see
+// EXTRACTION_SWEEP_BOOT_CAP in bootSequence.ts) — a few runs per tick rather
+// than one unbounded inline pass, so a large backlog never blocks boot or a
+// single scheduler tick.
+scheduler.register({
+  name: 'test_run_results_extraction_drain',
+  intervalMs: 5 * 60_000,
+  runOnBoot: false,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const result = await sweepTestRunResultsExtraction({
+      cap: EXTRACTION_SWEEP_DEFAULT_CAP,
+    });
+    if (result.remaining > 0) {
+      logger.info(
+        `[test_run_results_extraction_drain] processed ${result.processed}, ${result.remaining} still pending`,
+      );
+    }
+    return { items_processed: result.processed };
+  },
+});
 // Session-map reconciler: defense-in-depth sweep dropping stale in-memory
 // this.sessions entries whose DB row is terminal or missing, so a slot leak
 // from any (known or future) code path self-heals without operator
