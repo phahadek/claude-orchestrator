@@ -70,6 +70,13 @@ const SettingsSchema = z.object({
   // no error, so the bound here keeps that impossible.
   flip_rate_window_n: z.coerce.number().int().min(1).max(200),
   flip_rate_threshold_k: z.coerce.number().int().min(1),
+  // Supplements flip_rate_threshold_k with a breadth-of-trees signal: a test
+  // failing across this many distinct content hashes within the lookback
+  // window below cannot be attributable to any single diff, so it clears
+  // the same masking guard a flip-rate flag would — see
+  // evaluateF2LaneFlakyDisposition (orchestration/testRequestLane.ts).
+  flip_rate_breadth_n: z.coerce.number().int().min(1),
+  flip_rate_breadth_window_hours: z.coerce.number().int().min(1),
   flaky_remediation_file_threshold: z.coerce.number().int().min(1),
   decision_pick_one_paragraph_threshold: z.coerce.number().int().min(100),
 
@@ -174,6 +181,8 @@ export const SETTING_DEFAULTS: Settings = {
   milestone_attention_flat_convergence_window_seconds: 48 * 60 * 60,
   flip_rate_window_n: 20,
   flip_rate_threshold_k: 2,
+  flip_rate_breadth_n: 3,
+  flip_rate_breadth_window_hours: 24,
   flaky_remediation_file_threshold: 2,
   decision_pick_one_paragraph_threshold: 560,
   auto_review: true,

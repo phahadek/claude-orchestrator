@@ -8920,6 +8920,61 @@ export function computeTestFlipRateFlag(
   };
 }
 
+export interface TestFailureBreadthFlag {
+  testId: string;
+  distinctContentHashCount: number;
+  flagged: boolean;
+}
+
+let _stmtTestFailureBreadth: Database.Statement | null = null;
+
+/**
+ * The lane-side breadth-of-trees masking signal, supplementing
+ * computeTestFlipRateFlag: counts the distinct test_request_runs.content_hash
+ * values a test failed under within (beforeMs - windowHours, beforeMs) —
+ * i.e. the same "predates this PR's own runs" cutoff flip-rate uses, so a
+ * PR's own re-runs (all sharing that PR's content_hash) can't inflate this
+ * signal. A failure appearing across `breadthN` or more distinct trees
+ * cannot be attributable to any single diff — see evaluateF2LaneFlakyDisposition.
+ *
+ * Joins test_run_results (SEARCH via idx_test_run_results_test_id_created_at
+ * on test_id + the created_at range) to test_request_runs by its primary key
+ * (id) to read content_hash — both index-assisted, no full table scan; see
+ * scripts/check-query-plans.mjs.
+ */
+export function computeTestFailureBreadthFlag(
+  testId: string,
+  windowHours: number,
+  breadthN: number,
+  beforeMs: number,
+): TestFailureBreadthFlag {
+  _stmtTestFailureBreadth ??= db.prepare<{
+    test_id: string;
+    since_ms: number;
+    before_ms: number;
+  }>(`
+    SELECT COUNT(DISTINCT r.content_hash) AS distinct_hashes
+    FROM test_run_results t
+    JOIN test_request_runs r ON r.id = t.test_request_run_id
+    WHERE t.test_id = @test_id
+      AND t.outcome IN ('failed', 'error')
+      AND t.created_at >= @since_ms
+      AND t.created_at < @before_ms
+  `);
+  const sinceMs = beforeMs - windowHours * 60 * 60 * 1000;
+  const row = _stmtTestFailureBreadth.get({
+    test_id: testId,
+    since_ms: sinceMs,
+    before_ms: beforeMs,
+  }) as { distinct_hashes: number };
+  const distinctContentHashCount = row.distinct_hashes;
+  return {
+    testId,
+    distinctContentHashCount,
+    flagged: distinctContentHashCount >= breadthN,
+  };
+}
+
 let _stmtFailingTestIdsForRun: Database.Statement | null = null;
 
 /**
