@@ -57,6 +57,7 @@ import {
   clearExtractedStructuredResultsBatch,
   listRunningTestRequestRuns,
   getLatestTestRequestRun,
+  deleteTestRequestRunsForContentHash,
   listTestRunResultsForRun,
   ingestTestRunResultsTx,
   hasTestRunSummary,
@@ -859,6 +860,145 @@ describe('admitTestRequest — live queue position', () => {
     );
     expect(result.passed).toBe(true);
     expect(result.joined).toBe(false);
+  });
+});
+
+describe('admitTestRequest — settled-run guard', () => {
+  it('a re-request for a content hash whose previous run already settled is answered from that result, without a second test_request_runs row or a second executor call', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'first run output' });
+
+    const first = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-1', contentHash: 'settled-1-hash' }),
+    );
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    const second = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-1', contentHash: 'settled-1-hash' }),
+    );
+
+    // No fresh execution happened for the second call.
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(second.runId).toBe(first.runId);
+    expect(second.passed).toBe(true);
+    expect(second.unchangedReplay).toBe(true);
+    expect(first.unchangedReplay).toBe(false);
+
+    const rowCount = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+      )
+      .get('proj-settled-1', 'settled-1-hash') as { n: number };
+    expect(rowCount.n).toBe(1);
+  });
+
+  it('a request whose recomputed content hash differs from the settled prior run still executes fresh — the guard never suppresses a genuine change', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-2', contentHash: 'settled-2-old' }),
+    );
+    await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-2', contentHash: 'settled-2-new' }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    const rows = db
+      .prepare(`SELECT content_hash FROM test_request_runs WHERE project_id = ?`)
+      .all('proj-settled-2') as { content_hash: string }[];
+    expect(rows.map((r) => r.content_hash).sort()).toEqual([
+      'settled-2-new',
+      'settled-2-old',
+    ]);
+  });
+
+  it('the guard is keyed on the server-recomputed hash argument, not any caller assertion — an identical-looking spec with a different contentHash never gets a replay', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-settled-3',
+        contentHash: 'settled-3-a',
+        sessionId: 'session-hash-honesty',
+      }),
+    );
+    const replayed = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-settled-3',
+        contentHash: 'settled-3-b',
+        sessionId: 'session-hash-honesty',
+      }),
+    );
+
+    // A different (server-recomputed) hash is a genuinely different tree —
+    // no caller field can mark it "unchanged" instead.
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    expect(replayed.unchangedReplay).toBe(false);
+  });
+
+  it('does not advance concurrent content-hash coalescing across two different sessions requesting the same tree while it is still running', async () => {
+    let resolveRun: (v: { passed: boolean; output: string }) => void;
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRun = resolve;
+        }),
+    );
+
+    const fromSessionA = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-settled-4',
+        contentHash: 'settled-4-shared',
+        sessionId: 'session-a',
+      }),
+    );
+    const fromSessionB = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-settled-4',
+        contentHash: 'settled-4-shared',
+        sessionId: 'session-b',
+      }),
+    );
+
+    expect(fromSessionA.unchangedReplay).toBe(false);
+    expect(fromSessionB.unchangedReplay).toBe(false);
+    expect(fromSessionB.runId).toBe(fromSessionA.runId);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    resolveRun!({ passed: true, output: 'ok' });
+    await Promise.all([fromSessionA.result, fromSessionB.result]);
+  });
+
+  it('a session whose prior identical-tree run failed can still reach a fresh execution via the sanctioned flaky path (deleteTestRequestRunsForContentHash), rather than being pinned to the old failing result forever', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output: 'boom',
+    });
+
+    const failedFirst = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-5', contentHash: 'settled-5-hash' }),
+    );
+    expect(failedFirst.passed).toBe(false);
+
+    // Without intervention, a re-request is answered from the failing
+    // settled result rather than re-executing.
+    const stillReplayed = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-5', contentHash: 'settled-5-hash' }),
+    );
+    expect(stillReplayed.unchangedReplay).toBe(true);
+    expect(stillReplayed.passed).toBe(false);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    // F2's flaky.confirm actuation invalidates the cached run for this
+    // (project, content-hash) — the sanctioned path back to a fresh run.
+    deleteTestRequestRunsForContentHash('proj-settled-5', 'settled-5-hash');
+
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    const fresh = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-5', contentHash: 'settled-5-hash' }),
+    );
+    expect(fresh.unchangedReplay).toBe(false);
+    expect(fresh.passed).toBe(true);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
   });
 });
 

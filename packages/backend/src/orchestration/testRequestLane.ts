@@ -57,6 +57,7 @@ import {
   computeTestFailureBreadthFlag,
   getFailingTestIdsForRun,
   getProjectRowById,
+  getLatestTestRequestRun,
 } from '../db/queries';
 import type {
   TestRequestFailureReason,
@@ -105,6 +106,16 @@ export interface TestRequestRunSpec {
 export interface TestRequestRunResult extends TestCommandResult {
   runId: string;
   joined: boolean;
+  /**
+   * True when this result was never freshly executed — it's the most recent
+   * settled run for this exact (project, content-hash), handed back as-is
+   * because the tree hasn't changed since it ran. Set by the settled-run
+   * guard in admitTestRequest; see that function's doc comment. A session
+   * that sees this on a failing result must not simply re-request — it
+   * cannot get a different verdict that way — and should route through the
+   * sanctioned flaky path (F2's flaky disposition / flaky.confirm) instead.
+   */
+  unchangedReplay: boolean;
 }
 
 /** A caller's live standing in the per-project lane: running now, or queued behind others. */
@@ -129,7 +140,15 @@ export interface TestRequestAdmission {
    * see the sessionId-keyed dedupe in admitTestRequest.
    */
   reused: boolean;
-  /** Resolves once the underlying test run (fresh, content-hash-coalesced, or session-reused) finishes. */
+  /**
+   * True when no execution happened at all — the most recent settled run
+   * for this exact (project, content-hash) was handed back as-is because the
+   * tree is unchanged since it last ran. Mutually exclusive with `reused`
+   * (that's a pending-request fold; this is a settled-result replay) — see
+   * the settled-run guard in admitTestRequest.
+   */
+  unchangedReplay: boolean;
+  /** Resolves once the underlying test run (fresh, content-hash-coalesced, session-reused, or settled-replay) finishes. */
   result: Promise<TestRequestRunResult>;
 }
 
@@ -223,7 +242,7 @@ async function waitForMemoryAdmission(
  * instead of a bare "queued" the caller has to take on faith (the observed
  * gap this closes: see the module-level task history).
  *
- * Two coalescing layers, checked in this order:
+ * Three layers, checked in this order:
  *  1. Session-scoped dedupe (sessionId given, matching contentHash): a
  *     session that already has one pending request against the *same* tree
  *     gets that request's identity/position back — `reused: true` — rather
@@ -235,7 +254,15 @@ async function waitForMemoryAdmission(
  *     ReviewOrchestrator, baseHealthCheck — always passes null here).
  *  2. Content-hash coalescing (unchanged from before this function existed):
  *     two callers for the same (project, content-hash) — regardless of
- *     session — share one execution.
+ *     session — share one execution, for the duration that execution is
+ *     in flight.
+ *  3. Settled-run guard: once nothing is pending or in-flight, a prior
+ *     *finished* run for the same (project, content-hash) — found via
+ *     getLatestTestRequestRun, no time bound — is handed back as-is
+ *     (`unchangedReplay: true`, no new test_request_runs row, no fresh
+ *     execution) rather than re-running an unchanged tree. Layers 1 and 2
+ *     only cover concurrent requests; this is what covers a request that
+ *     arrives after its own identical predecessor has already settled.
  *
  * Never throws — a runTestCommands failure surfaces as a `passed: false`
  * result on the returned `result` promise, matching runTestCommands' own
@@ -257,7 +284,12 @@ export function admitTestRequest(
         return {
           runId: pending.runId,
           reused: true,
-          result: pending.promise.then((r) => ({ ...r, joined: true })),
+          unchangedReplay: false,
+          result: pending.promise.then((r) => ({
+            ...r,
+            joined: true,
+            unchangedReplay: false,
+          })),
           ...pending.admission(),
         };
       }
@@ -273,13 +305,51 @@ export function admitTestRequest(
   const key = coalesceKey(spec.projectId, spec.contentHash);
   const existing = inFlightRuns.get(key);
   if (existing) {
-    const result = existing.promise.then((r) => ({ ...r, joined: true }));
+    const result = existing.promise.then((r) => ({
+      ...r,
+      joined: true,
+      unchangedReplay: false,
+    }));
     if (sKey) pendingBySession.set(sKey, existing);
     return {
       runId: existing.runId,
       reused: false,
+      unchangedReplay: false,
       result,
       ...existing.admission(),
+    };
+  }
+
+  // Settled-run guard: nothing is pending or in-flight for this tree, but a
+  // prior run for this exact (project, content-hash) may have already
+  // finished. Re-executing an identical tree can't produce a different
+  // verdict except through flakiness — which has its own path (F2's flaky
+  // disposition / flaky.confirm, which invalidates this cache via
+  // deleteTestRequestRunsForContentHash before re-requesting) — so hand back
+  // that settled result instead of scheduling a fresh run. No time bound: an
+  // unchanged tree's result doesn't become valid again with age. Keyed on
+  // spec.contentHash, which every caller derives server-side from the live
+  // worktree (computeWholeTreeContentHash) — a caller has no way to assert
+  // "unchanged" independent of what the server itself recomputed.
+  const settled = getLatestTestRequestRun(spec.projectId, spec.contentHash);
+  if (settled) {
+    const replayResult: TestRequestRunResult = {
+      passed: settled.state === 'passed',
+      output: settled.output,
+      timedOut: settled.failure_reason === 'timeout',
+      oomKilled: !!settled.oom_killed,
+      runId: settled.id,
+      joined: false,
+      unchangedReplay: true,
+    };
+    return {
+      runId: settled.id,
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: true,
+      result: Promise.resolve(replayResult),
     };
   }
 
@@ -326,7 +396,12 @@ export function admitTestRequest(
   return {
     runId,
     reused: false,
-    result: promise.then((r) => ({ ...r, joined: false })),
+    unchangedReplay: false,
+    result: promise.then((r) => ({
+      ...r,
+      joined: false,
+      unchangedReplay: false,
+    })),
     ...initialAdmission,
   };
 }

@@ -360,6 +360,37 @@ describe('test.request queue position + session-pending dedupe', () => {
     await routeStageTimeBlock(third, undefined);
     expect(getSessionTestRequestCycleCount('session-reuse')).toBe(2);
   });
+
+  it('an unchangedReplay admission (settled-run guard, distinct from a pending-request reuse) does not advance the cycle counter and stages/commits normally rather than withdrawing', async () => {
+    setUpSession('session-replay');
+
+    mockAdmitTestRequest.mockImplementationOnce(() => ({
+      runId: 'run-settled',
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: true,
+      result: Promise.resolve({
+        runId: 'run-settled',
+        passed: true,
+        output: 'ok',
+        joined: false,
+        unchangedReplay: true,
+      }),
+    }));
+    const intent = stageTestRequest('session-replay');
+    const checked = await routeStageTimeBlock(intent, undefined);
+
+    // Unlike a pending-request reuse, an unchangedReplay answer is not
+    // withdrawn — there is no other in-flight execution left to deliver a
+    // result later, so this intent itself must commit and deliver it.
+    expect(checked.state).toBe('approved');
+    expect(checked.annotation).toMatchObject({
+      testRequestQueue: { runId: 'run-settled', unchangedReplay: true },
+    });
+    expect(getSessionTestRequestCycleCount('session-replay')).toBe(0);
+  });
 });
 
 describe('applyIntent defence-in-depth for a stray grouped test.request', () => {
