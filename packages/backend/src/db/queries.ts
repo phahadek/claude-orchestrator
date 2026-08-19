@@ -8596,6 +8596,19 @@ let _stmtUpsertTestPerfDigest: Database.Statement | null = null;
  * No-op (digest untouched) when the sample fails the existing validity
  * predicate — a row with concurrent_run_count != 0 or oom_killed never
  * occupied a window slot before, and must not start now.
+ *
+ * On a brand-new test_id, the INSERT branch below writes
+ * median_duration_ms/mad_duration_ms/sample_count/is_regressed as literal
+ * zeros — real values only land once upsertTestPerfBaseline's own recompute
+ * runs. That's never externally observable: ingestTestRunResultsTx's
+ * transaction (which calls this once per test) and testRequestLane.ts's
+ * immediately-following computeTestPerfBaseline loop both run synchronously,
+ * with no I/O yield point between them, so nothing outside this same call
+ * stack can read the zero-placeholder row. The only way to see it is a hard
+ * process crash inside that window, and even then it self-heals on this
+ * test_id's next ingestion — and every existing reader (e.g.
+ * getRegressedTestsForProject's `is_regressed = 1` filter) already treats a
+ * sample_count = 0 row as "nothing to report", not a real baseline.
  */
 export function recordTestPerfDigestSample(
   testId: string,
