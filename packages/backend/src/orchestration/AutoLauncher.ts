@@ -24,6 +24,8 @@ import {
   resetTaskCrashCount,
   getTaskRepoAssignment,
   isNoOpSuppressed,
+  hasOpenBaseHealthRemediation,
+  getBaseHealthRemediationReasonTrackingByOpenTaskId,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency, yieldToEventLoop } from '../utils/concurrency';
@@ -438,14 +440,25 @@ export class AutoLauncher {
       this.maybeClearStaleReadyTransitionPauses(resolved.task.id);
     }
 
-    // Base-health gate: only evaluated when at least one task is otherwise
-    // ready to dispatch — never proactively on an idle project. Applies (or
-    // clears) the base_branch_broken pause on every otherwise-ready task, so
-    // the existing pause-reason check in isLaunchCandidate does the actual
-    // blocking below.
+    // Base-health gate: only evaluated on-demand — never a proactive poller.
+    // checkBaseBranchHealth is only invoked once some task's own test-request
+    // failure has already triggered an on-demand confirmation (see
+    // baseAttributableFilter.ts), which is what leaves an open total_fail
+    // remediation tracking row for this project, or once a task is already
+    // sitting under a base_branch_broken pause from an earlier tick that
+    // needs to be maintained/cleared. A project no task has ever failed a
+    // test-request against never calls checkBaseHealth at all.
     const readyCodeTasks = allTasks.filter((t) => this.isReadyCodeCandidate(t));
     if (readyCodeTasks.length > 0) {
-      await this.applyBaseHealthGate(project, readyCodeTasks);
+      const hasActiveOrPendingBreak =
+        hasOpenBaseHealthRemediation(project.id) ||
+        readyCodeTasks.some(
+          ({ task }) =>
+            getTaskPauseReason(task.id)?.reason === 'base_branch_broken',
+        );
+      if (hasActiveOrPendingBreak) {
+        await this.applyBaseHealthGate(project, readyCodeTasks);
+      }
     }
 
     const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
@@ -704,6 +717,20 @@ export class AutoLauncher {
 
     if (result.outcome === 'total_fail') {
       for (const { task } of readyCodeTasks) {
+        // Never pause (and always clear) the task that is itself the linked
+        // open remediation task for this exact break — it's the one task
+        // capable of ever landing the fix that clears this gate. Pausing it
+        // would deadlock the project: no commit could ever land on base, so
+        // no subsequent check could ever come back non-total_fail.
+        if (getBaseHealthRemediationReasonTrackingByOpenTaskId(task.id)) {
+          if (getTaskPauseReason(task.id)?.reason === 'base_branch_broken') {
+            clearTaskPauseReason(task.id);
+            logger.info(
+              `[AutoLauncher] project ${project.id}: task ${task.id} is the open base-health remediation task for this break — clearing its dispatch hold`,
+            );
+          }
+          continue;
+        }
         if (getTaskPauseReason(task.id)?.reason === 'base_branch_broken')
           continue;
         setTaskPauseReason(
