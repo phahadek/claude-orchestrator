@@ -1373,7 +1373,12 @@ describe('bench: querySessionEventsByProject{Aggregate,Rows} — filtered reads 
             : `{"text":"haystack ${i}"}`;
         insertStmt.run(sid, 'text', payload, i);
       }
-      insertStmt.run('bench-noise-sess-0', 'text', '{"text":"needle-noise"}', 0);
+      insertStmt.run(
+        'bench-noise-sess-0',
+        'text',
+        '{"text":"needle-noise"}',
+        0,
+      );
     });
     bulkInsert();
 
