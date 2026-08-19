@@ -21,13 +21,13 @@ const {
   mockGetProjectById,
   mockLoadOrchestratorConfig,
   mockComputeHash,
-  mockRunProjectTestRequest,
+  mockAdmitTestRequest,
   mockIsRunFailureBaseAttributable,
 } = vi.hoisted(() => ({
   mockGetProjectById: vi.fn(),
   mockLoadOrchestratorConfig: vi.fn(),
   mockComputeHash: vi.fn(),
-  mockRunProjectTestRequest: vi.fn(),
+  mockAdmitTestRequest: vi.fn(),
   mockIsRunFailureBaseAttributable: vi.fn(),
 }));
 
@@ -49,7 +49,7 @@ vi.mock('../../session/analyzeGating', async (importOriginal) => {
 });
 
 vi.mock('../../orchestration/testRequestLane', () => ({
-  runProjectTestRequest: mockRunProjectTestRequest,
+  admitTestRequest: mockAdmitTestRequest,
 }));
 
 vi.mock('../../orchestration/baseAttribution', () => ({
@@ -93,7 +93,7 @@ beforeEach(() => {
   mockGetProjectById.mockReset();
   mockLoadOrchestratorConfig.mockReset();
   mockComputeHash.mockReset();
-  mockRunProjectTestRequest.mockReset();
+  mockAdmitTestRequest.mockReset();
   mockIsRunFailureBaseAttributable.mockReset();
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
@@ -110,11 +110,19 @@ beforeEach(() => {
     test_fail_fast: true,
   });
   mockComputeHash.mockResolvedValue('hash-1');
-  mockRunProjectTestRequest.mockResolvedValue({
+  mockAdmitTestRequest.mockImplementation(() => ({
     runId: 'run-new',
-    passed: true,
-    output: 'ok',
-  });
+    status: 'running',
+    position: 0,
+    queueDepth: 0,
+    reused: false,
+    result: Promise.resolve({
+      runId: 'run-new',
+      passed: true,
+      output: 'ok',
+      joined: false,
+    }),
+  }));
   typedSetSetting('test_request_cycle_limit', 3);
 });
 

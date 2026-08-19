@@ -21,12 +21,12 @@ const {
   mockGetProjectById,
   mockLoadOrchestratorConfig,
   mockComputeHash,
-  mockRunProjectTestRequest,
+  mockAdmitTestRequest,
 } = vi.hoisted(() => ({
   mockGetProjectById: vi.fn(),
   mockLoadOrchestratorConfig: vi.fn(),
   mockComputeHash: vi.fn(),
-  mockRunProjectTestRequest: vi.fn(),
+  mockAdmitTestRequest: vi.fn(),
 }));
 
 vi.mock('../../config', async (importOriginal) => {
@@ -47,7 +47,7 @@ vi.mock('../../session/analyzeGating', async (importOriginal) => {
 });
 
 vi.mock('../../orchestration/testRequestLane', () => ({
-  runProjectTestRequest: mockRunProjectTestRequest,
+  admitTestRequest: mockAdmitTestRequest,
 }));
 
 import { db } from '../../db/db';
@@ -141,7 +141,7 @@ beforeEach(() => {
   mockGetProjectById.mockReset();
   mockLoadOrchestratorConfig.mockReset();
   mockComputeHash.mockReset();
-  mockRunProjectTestRequest.mockReset();
+  mockAdmitTestRequest.mockReset();
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
   db.prepare('DELETE FROM sessions').run();
@@ -156,9 +156,17 @@ beforeEach(() => {
     test_fail_fast: true,
   });
   mockComputeHash.mockResolvedValue('hash-1');
-  // Never resolves: keeps triggerTestRequestExecution's fire-and-forget tail
-  // from reaching its post-run `committed` transition/broadcast mid-test.
-  mockRunProjectTestRequest.mockImplementation(() => new Promise(() => {}));
+  // `result` never resolves: keeps triggerTestRequestExecution's
+  // fire-and-forget tail from reaching its post-run `committed`
+  // transition/broadcast mid-test.
+  mockAdmitTestRequest.mockImplementation(() => ({
+    runId: 'run-pending',
+    status: 'running',
+    position: 0,
+    queueDepth: 0,
+    reused: false,
+    result: new Promise(() => {}),
+  }));
   typedSetSetting('test_request_cycle_limit', 10);
   setStagedIntentBroadcast(() => {});
 });

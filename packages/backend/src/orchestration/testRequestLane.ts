@@ -15,6 +15,13 @@
  *    (orchestration/memoryAdmission.ts) so a burst of test.request intents
  *    can't starve the host the way an unbounded session launch could.
  *
+ * admitTestRequest (the entry point maybeAutoApproveTestRequest uses) makes
+ * that Semaphore's waiter queue directly observable: a caller learns whether
+ * it's running or queued — and at what position/depth — synchronously at
+ * admission time, before the run itself starts, and a session that already
+ * has one pending request against the same tree gets that request's
+ * position back instead of enqueuing a second one.
+ *
  * Every run is durably recorded in test_request_runs before it starts, so a
  * backend crash mid-run leaves a `running` row recoverInterruptedTestRequestRuns
  * (called once at boot — see bootSequence.ts) sweeps into `failed` rather than
@@ -100,6 +107,32 @@ export interface TestRequestRunResult extends TestCommandResult {
   joined: boolean;
 }
 
+/** A caller's live standing in the per-project lane: running now, or queued behind others. */
+export type TestRequestAdmissionStatus = 'running' | 'queued';
+
+/**
+ * What admitTestRequest reports back the moment a request is admitted —
+ * before the underlying test run has even started, let alone finished — so
+ * a caller waiting on the eventual `result` can still learn its standing
+ * immediately: running, or queued at `position` of `queueDepth` waiters.
+ */
+export interface TestRequestAdmission {
+  runId: string;
+  status: TestRequestAdmissionStatus;
+  /** 1-indexed position among queued waiters; 0 while running. */
+  position: number;
+  /** Count of requests currently waiting for a permit (not yet running). */
+  queueDepth: number;
+  /**
+   * True when this call was folded into an already-pending request from the
+   * same session against the same tree, rather than admitting a new one —
+   * see the sessionId-keyed dedupe in admitTestRequest.
+   */
+  reused: boolean;
+  /** Resolves once the underlying test run (fresh, content-hash-coalesced, or session-reused) finishes. */
+  result: Promise<TestRequestRunResult>;
+}
+
 function failureReasonFor(result: TestCommandResult): TestRequestFailureReason {
   if (result.timedOut) return 'timeout';
   if (result.oomKilled) return 'oom_killed';
@@ -140,13 +173,27 @@ function getProjectSemaphore(projectId: string): Semaphore {
   return sem;
 }
 
-const inFlightRuns = new Map<
-  string,
-  Promise<TestCommandResult & { runId: string }>
->();
+interface InFlightEntry {
+  runId: string;
+  contentHash: string;
+  /** Live admission status, re-derived from the semaphore on every call — never a fixed snapshot. */
+  admission: () => {
+    status: TestRequestAdmissionStatus;
+    position: number;
+    queueDepth: number;
+  };
+  promise: Promise<TestCommandResult & { runId: string }>;
+}
+
+const inFlightRuns = new Map<string, InFlightEntry>();
+const pendingBySession = new Map<string, InFlightEntry>();
 
 function coalesceKey(projectId: string, contentHash: string): string {
   return `${projectId}:${contentHash}`;
+}
+
+function sessionKey(projectId: string, sessionId: string): string {
+  return `${projectId}:${sessionId}`;
 }
 
 const ADMISSION_POLL_MS = 5_000;
@@ -168,41 +215,148 @@ async function waitForMemoryAdmission(
 }
 
 /**
- * Runs (or joins an already-running) test.request execution for
- * (spec.projectId, spec.contentHash). Never throws — a runTestCommands
- * failure surfaces as a `passed: false` result, matching runTestCommands'
- * own contract; only a durable-write failure around it would throw, and even
+ * Admits a test.request into the lane, synchronously — before the run has
+ * even started, let alone finished — reporting whether it's running or
+ * queued (and at what position/depth), rather than making a caller find out
+ * only once the (possibly much later) result promise settles. This is what
+ * lets a session's test_request tool call return a live queue position
+ * instead of a bare "queued" the caller has to take on faith (the observed
+ * gap this closes: see the module-level task history).
+ *
+ * Two coalescing layers, checked in this order:
+ *  1. Session-scoped dedupe (sessionId given, matching contentHash): a
+ *     session that already has one pending request against the *same* tree
+ *     gets that request's identity/position back — `reused: true` — rather
+ *     than admitting a second one. A pending request whose tree has since
+ *     changed (different contentHash) is treated as stale and superseded:
+ *     this call proceeds to admit fresh rather than handing back a position
+ *     that would resolve to a stale result. Never applies when sessionId is
+ *     null (every non-staged-intent caller — PreReviewPipeline,
+ *     ReviewOrchestrator, baseHealthCheck — always passes null here).
+ *  2. Content-hash coalescing (unchanged from before this function existed):
+ *     two callers for the same (project, content-hash) — regardless of
+ *     session — share one execution.
+ *
+ * Never throws — a runTestCommands failure surfaces as a `passed: false`
+ * result on the returned `result` promise, matching runTestCommands' own
+ * contract; only a durable-write failure around it would throw, and even
  * that is caught so a caller awaiting a coalesced run never sees an
  * unhandled rejection.
+ */
+export function admitTestRequest(
+  spec: TestRequestRunSpec,
+): TestRequestAdmission {
+  const sKey = spec.sessionId
+    ? sessionKey(spec.projectId, spec.sessionId)
+    : null;
+
+  if (sKey) {
+    const pending = pendingBySession.get(sKey);
+    if (pending) {
+      if (pending.contentHash === spec.contentHash) {
+        return {
+          runId: pending.runId,
+          reused: true,
+          result: pending.promise.then((r) => ({ ...r, joined: true })),
+          ...pending.admission(),
+        };
+      }
+      // Stale: this session's pending request was staged against a tree
+      // that's since moved on. Per the locked design, a stale pending entry
+      // never gets handed back as if current — drop it and fall through to
+      // admit fresh. The stale run itself keeps executing to completion in
+      // the background; it simply stops being this session's "pending" one.
+      pendingBySession.delete(sKey);
+    }
+  }
+
+  const key = coalesceKey(spec.projectId, spec.contentHash);
+  const existing = inFlightRuns.get(key);
+  if (existing) {
+    const result = existing.promise.then((r) => ({ ...r, joined: true }));
+    if (sKey) pendingBySession.set(sKey, existing);
+    return {
+      runId: existing.runId,
+      reused: false,
+      result,
+      ...existing.admission(),
+    };
+  }
+
+  const requestedAt = Date.now();
+  const runId = randomUUID();
+  const semaphore = getProjectSemaphore(spec.projectId);
+  const permitPromise = semaphore.acquire(runId);
+  const admission = () => {
+    const queuedPosition = semaphore.positionOf(runId);
+    return queuedPosition == null
+      ? {
+          status: 'running' as const,
+          position: 0,
+          queueDepth: semaphore.queueDepth(),
+        }
+      : {
+          status: 'queued' as const,
+          position: queuedPosition,
+          queueDepth: semaphore.queueDepth(),
+        };
+  };
+  const initialAdmission = admission();
+
+  const promise = executeTestRequestRun(
+    spec,
+    runId,
+    requestedAt,
+    permitPromise,
+  ).finally(() => {
+    if (inFlightRuns.get(key)?.runId === runId) inFlightRuns.delete(key);
+    if (sKey && pendingBySession.get(sKey)?.runId === runId)
+      pendingBySession.delete(sKey);
+  });
+
+  const entry: InFlightEntry = {
+    runId,
+    contentHash: spec.contentHash,
+    admission,
+    promise,
+  };
+  inFlightRuns.set(key, entry);
+  if (sKey) pendingBySession.set(sKey, entry);
+
+  return {
+    runId,
+    reused: false,
+    result: promise.then((r) => ({ ...r, joined: false })),
+    ...initialAdmission,
+  };
+}
+
+/**
+ * Runs (or joins an already-running/queued) test.request execution for
+ * (spec.projectId, spec.contentHash) and resolves once it finishes — the
+ * plain awaitable most callers want. A thin wrapper over admitTestRequest
+ * for callers that only care about the eventual result, not the live
+ * admission status (see admitTestRequest's doc comment for that).
  */
 export function runProjectTestRequest(
   spec: TestRequestRunSpec,
 ): Promise<TestRequestRunResult> {
-  const key = coalesceKey(spec.projectId, spec.contentHash);
-  const existing = inFlightRuns.get(key);
-  if (existing) {
-    return existing.then((result) => ({ ...result, joined: true }));
-  }
-
-  const run = executeTestRequestRun(spec).finally(() => {
-    if (inFlightRuns.get(key) === run) inFlightRuns.delete(key);
-  });
-  inFlightRuns.set(key, run);
-  return run.then((result) => ({ ...result, joined: false }));
+  return admitTestRequest(spec).result;
 }
 
 async function executeTestRequestRun(
   spec: TestRequestRunSpec,
+  runId: string,
+  requestedAt: number,
+  permitPromise: Promise<() => void>,
 ): Promise<TestCommandResult & { runId: string }> {
-  const requestedAt = Date.now();
+  const release = await permitPromise;
   await waitForMemoryAdmission(
     spec.projectId,
     getEffectiveProjectLimit(spec.projectId),
   );
 
   const semaphore = getProjectSemaphore(spec.projectId);
-  const release = await semaphore.acquire();
-  const runId = randomUUID();
   const startedAt = Date.now();
   // Peer occupancy right after acquiring, excluding this run itself, so 0
   // genuinely means "ran alone" — matching the concurrent_run_count = 0

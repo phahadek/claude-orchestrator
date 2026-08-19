@@ -282,7 +282,7 @@ async function classifyDeferral(body: string): Promise<Advisory> {
 export class Semaphore {
   private available: number;
   private size: number;
-  private readonly queue: (() => void)[] = [];
+  private readonly queue: { id: string | null; wake: () => void }[] = [];
 
   constructor(size: number) {
     this.available = size;
@@ -299,6 +299,25 @@ export class Semaphore {
     return this.size;
   }
 
+  /** Count of waiters currently parked in the wait queue (not yet holding a permit). */
+  queueDepth(): number {
+    return this.queue.length;
+  }
+
+  /**
+   * 1-indexed position of a tracked waiter (see acquire's `id` param) within
+   * the wait queue, or null when that id isn't currently queued — either it
+   * already holds a permit, or it was never tracked (acquire called without
+   * an id). Lets a caller report a live, decreasing position to whoever is
+   * waiting on a permit (see orchestration/testRequestLane.ts's admission
+   * reporting) without any bookkeeping beyond what the queue array already
+   * carries.
+   */
+  positionOf(id: string): number | null {
+    const idx = this.queue.findIndex((entry) => entry.id === id);
+    return idx === -1 ? null : idx + 1;
+  }
+
   /**
    * Adjusts capacity in place, preserving the in-use count of already-held
    * permits — so a live limit change (see getProjectSemaphore in
@@ -313,19 +332,29 @@ export class Semaphore {
     while (this.available > 0 && this.queue.length > 0) {
       this.available--;
       const next = this.queue.shift()!;
-      next();
+      next.wake();
     }
   }
 
-  async acquire(): Promise<() => void> {
+  /**
+   * Acquires a permit, resolving immediately if one is available or queueing
+   * FIFO otherwise. `id` is an optional caller-supplied identity — when
+   * given, the waiter can look up its own live queue position via
+   * positionOf(id) while parked. Purely additive: omitting it (every call
+   * site outside testRequestLane.ts) behaves exactly as before.
+   */
+  async acquire(id: string | null = null): Promise<() => void> {
     if (this.available > 0) {
       this.available--;
       return () => this.release();
     }
     return new Promise((resolve) => {
-      this.queue.push(() => {
-        this.available--;
-        resolve(() => this.release());
+      this.queue.push({
+        id,
+        wake: () => {
+          this.available--;
+          resolve(() => this.release());
+        },
       });
     });
   }
@@ -333,7 +362,7 @@ export class Semaphore {
   private release(): void {
     this.available++;
     const next = this.queue.shift();
-    if (next) next();
+    if (next) next.wake();
   }
 }
 
