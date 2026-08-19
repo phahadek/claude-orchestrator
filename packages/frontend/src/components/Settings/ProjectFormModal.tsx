@@ -277,10 +277,7 @@ export function ProjectFormModal({
           </div>
 
           <div className={styles.formField}>
-            <label
-              htmlFor="proj-test-concurrency"
-              className={styles.formLabel}
-            >
+            <label htmlFor="proj-test-concurrency" className={styles.formLabel}>
               Test lane concurrency (optional)
             </label>
             <input
@@ -295,9 +292,9 @@ export function ProjectFormModal({
               placeholder="Uses the global default"
             />
             <p className={styles.fieldHelp}>
-              Max concurrent test.request runs for this project. Leave empty
-              to use the global default. Takes effect immediately — no
-              backend restart needed.
+              Max concurrent test.request runs for this project. Leave empty to
+              use the global default. Takes effect immediately — no backend
+              restart needed.
             </p>
             {errors.testRequestMaxConcurrent && (
               <p className={styles.fieldError}>
