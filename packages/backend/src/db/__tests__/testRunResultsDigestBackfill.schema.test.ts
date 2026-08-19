@@ -120,7 +120,9 @@ function referenceMedian(sorted: number[]): number {
 }
 
 function referenceMad(values: number[], center: number): number {
-  const deviations = values.map((v) => Math.abs(v - center)).sort((a, b) => a - b);
+  const deviations = values
+    .map((v) => Math.abs(v - center))
+    .sort((a, b) => a - b);
   return referenceMedian(deviations);
 }
 
@@ -136,7 +138,11 @@ function referenceBaseline(durationsNewestFirst: number[]): {
   if (samples.length <= MIN_CONSECUTIVE_REGRESSED_SAMPLES) {
     const sorted = [...samples].sort((a, b) => a - b);
     const med = referenceMedian(sorted);
-    return { median: med, mad: referenceMad(samples, med), sampleCount: samples.length };
+    return {
+      median: med,
+      mad: referenceMad(samples, med),
+      sampleCount: samples.length,
+    };
   }
   const baselineSamples = samples.slice(MIN_CONSECUTIVE_REGRESSED_SAMPLES);
   const sortedBaseline = [...baselineSamples].sort((a, b) => a - b);
@@ -417,7 +423,9 @@ describe('test_run_results digest backfill', () => {
     const deleted = deleteSubsumedPassingTestRunResults(db, smallBatch);
     expect(deleted).toBeGreaterThanOrEqual(13);
     const remainingPassing = db
-      .prepare(`SELECT COUNT(*) as c FROM test_run_results WHERE outcome = 'passed'`)
+      .prepare(
+        `SELECT COUNT(*) as c FROM test_run_results WHERE outcome = 'passed'`,
+      )
       .get() as { c: number };
     expect(remainingPassing.c).toBe(0);
   });

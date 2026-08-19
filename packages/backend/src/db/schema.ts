@@ -2900,7 +2900,9 @@ function computeDigestBaselineFromDurations(
     TEST_RUN_RESULTS_DIGEST_BASELINE_WINDOW_SAMPLES +
       TEST_RUN_RESULTS_DIGEST_MIN_CONSECUTIVE_REGRESSED_SAMPLES,
   );
-  if (samples.length <= TEST_RUN_RESULTS_DIGEST_MIN_CONSECUTIVE_REGRESSED_SAMPLES) {
+  if (
+    samples.length <= TEST_RUN_RESULTS_DIGEST_MIN_CONSECUTIVE_REGRESSED_SAMPLES
+  ) {
     const sorted = [...samples].sort((a, b) => a - b);
     const med = digestMedian(sorted);
     return {
@@ -3048,9 +3050,7 @@ export function backfillTestRunResultsDigest(
           t: r.created_at,
         }));
 
-      const baseline = computeDigestBaselineFromDurations(
-        newestFirstDurations,
-      );
+      const baseline = computeDigestBaselineFromDurations(newestFirstDurations);
 
       upsertStmt.run({
         test_id: testId,
@@ -3129,9 +3129,7 @@ export function runTestRunResultsDigestBackfillAndPrune(
   if (!backfillMarker) {
     backfillTestRunResultsDigest(target, batchSize);
     target
-      .prepare(
-        `INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`,
-      )
+      .prepare(`INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`)
       .run(TEST_RUN_RESULTS_DIGEST_BACKFILL_MARKER, Date.now());
   }
 
@@ -3141,9 +3139,7 @@ export function runTestRunResultsDigestBackfillAndPrune(
   if (!deleteMarker) {
     deleteSubsumedPassingTestRunResults(target, batchSize);
     target
-      .prepare(
-        `INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`,
-      )
+      .prepare(`INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`)
       .run(TEST_RUN_RESULTS_PASSING_ROWS_DELETE_MARKER, Date.now());
   }
 }
