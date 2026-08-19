@@ -40,8 +40,8 @@ export const SRC_DIR = join(BACKEND_DIR, 'src');
 
 // ── Accepted baseline ────────────────────────────────────────────────────
 //
-// Every table scan detected as of deployed SHA
-// efb9abb9bf5ad82a7d63cf453b8cda89b735cccb, keyed by `<file-relative-to-src>:<line>`
+// Every table scan detected as of SHA
+// 1868df59cf701aa735f2ab1937c8ecf793f13595, keyed by `<file-relative-to-src>:<line>`
 // (the line of the opening backtick of the template literal). Each entry
 // must carry a `reason` — an entry added without one is a table scan being
 // waved through with no stated justification, which fails review on
@@ -72,62 +72,87 @@ const REASON_JSON_EACH =
 
 const ACCEPTED_SCANS = new Map([
   ['db/assertDatabaseSchema.ts:19', { reason: REASON_CATALOG }],
-  ['db/db.ts:200', { reason: REASON_ADMIN }],
-  ['db/queries.ts:420', { reason: REASON_DEBT }],
-  ['db/queries.ts:491', { reason: REASON_DEBT }],
-  ['db/queries.ts:661', { reason: REASON_DEBT }],
-  ['db/queries.ts:844', { reason: REASON_DEBT }],
-  ['db/queries.ts:863', { reason: REASON_DEBT }],
-  ['db/queries.ts:887', { reason: REASON_DEBT }],
-  ['db/queries.ts:963', { reason: REASON_ADMIN }],
-  ['db/queries.ts:1021', { reason: REASON_ADMIN }],
-  ['db/queries.ts:1056', { reason: REASON_DEBT }],
-  ['db/queries.ts:2089', { reason: REASON_ADMIN }],
-  ['db/queries.ts:2128', { reason: REASON_ADMIN }],
-  ['db/queries.ts:2207', { reason: REASON_ADMIN }],
-  ['db/queries.ts:2427', { reason: REASON_ADMIN }],
-  ['db/queries.ts:2463', { reason: REASON_DEBT }],
-  ['db/queries.ts:3168', { reason: REASON_DEBT }],
-  ['db/queries.ts:3230', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:3535', { reason: REASON_DEBT }],
-  ['db/queries.ts:3560', { reason: REASON_DEBT }],
-  ['db/queries.ts:3586', { reason: REASON_DEBT }],
-  ['db/queries.ts:3683', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:3708', { reason: REASON_DEBT }],
-  ['db/queries.ts:3740', { reason: REASON_DEBT }],
-  ['db/queries.ts:3760', { reason: REASON_DEBT }],
-  ['db/queries.ts:3787', { reason: REASON_DEBT }],
-  ['db/queries.ts:3818', { reason: REASON_DEBT }],
-  ['db/queries.ts:4143', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:4272', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:4338', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:4439', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:4476', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:4498', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:4561', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:4816', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:4852', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:5219', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:5463', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:5499', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:5952', { reason: REASON_ADMIN }],
-  ['db/queries.ts:6173', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:6451', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:6844', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:6874', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:7234', { reason: REASON_BOUNDED }],
-  ['db/queries.ts:8062', { reason: REASON_DEBT }],
-  ['db/queries.ts:8553', { reason: REASON_DEBT }],
-  ['db/queries.ts:8735', { reason: REASON_DEBT }],
-  ['db/queries.ts:8847', { reason: REASON_DEBT }],
-  ['db/queries.ts:8901', { reason: REASON_DEBT }],
-  ['db/queries.ts:9140', { reason: REASON_DEBT }],
-  ['db/queries.ts:9174', { reason: REASON_DEBT }],
-  ['db/queries.ts:9301', { reason: REASON_DEBT }],
-  ['db/queries.ts:9326', { reason: REASON_DEBT }],
-  ['db/queries.ts:10152', { reason: REASON_BOUNDED + ' ' + REASON_JSON_EACH }],
+  ['db/db.ts:362', { reason: REASON_ADMIN }],
+  ['db/queries.ts:431', { reason: REASON_DEBT }],
+  ['db/queries.ts:672', { reason: REASON_DEBT }],
+  ['db/queries.ts:923', { reason: REASON_DEBT }],
+  ['db/queries.ts:999', { reason: REASON_ADMIN }],
+  ['db/queries.ts:1057', { reason: REASON_ADMIN }],
+  ['db/queries.ts:2277', { reason: REASON_ADMIN }],
+  ['db/queries.ts:2316', { reason: REASON_ADMIN }],
+  ['db/queries.ts:2395', { reason: REASON_ADMIN }],
+  ['db/queries.ts:2615', { reason: REASON_ADMIN }],
+  ['db/queries.ts:2651', { reason: REASON_DEBT }],
+  ['db/queries.ts:3356', { reason: REASON_DEBT }],
+  ['db/queries.ts:3418', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:3723', { reason: REASON_DEBT }],
+  ['db/queries.ts:3748', { reason: REASON_DEBT }],
+  ['db/queries.ts:3774', { reason: REASON_DEBT }],
+  ['db/queries.ts:3871', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:3896', { reason: REASON_DEBT }],
+  ['db/queries.ts:3928', { reason: REASON_DEBT }],
+  ['db/queries.ts:4006', { reason: REASON_DEBT }],
+  ['db/queries.ts:4363', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:4492', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:4558', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:4659', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:4696', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:4718', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:4781', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:5036', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:5072', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:5439', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:5683', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:5719', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:6212', { reason: REASON_ADMIN }],
+  ['db/queries.ts:6443', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:6721', { reason: REASON_BOUNDED }],
+  [
+    'db/queries.ts:6769',
+    {
+      reason:
+        'Tracking-row cardinality is bounded by the number of currently-tracked ' +
+        'base-health-remediation (project, test) pairs — the same operator/registry ' +
+        'scale as flaky_remediation_tracking above, not per-request volume.',
+    },
+  ],
+  [
+    'db/queries.ts:6920',
+    {
+      reason:
+        'Tracking-row cardinality is bounded by the number of currently-tracked ' +
+        'base-health-remediation (project, failure_reason) pairs — the same ' +
+        'operator/registry scale as flaky_remediation_tracking above, not per-request volume.',
+    },
+  ],
+  ['db/queries.ts:7318', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:7348', { reason: REASON_BOUNDED }],
+  ['db/queries.ts:7708', { reason: REASON_BOUNDED }],
+  [
+    'db/queries.ts:8140',
+    {
+      reason:
+        REASON_ADMIN +
+        ' Companion count for the boot-time structured_result-extraction sweep (see ' +
+        'listTestRequestRunsNeedingExtraction), not a per-request lookup.',
+    },
+  ],
+  [
+    'db/queries.ts:8424',
+    {
+      reason:
+        REASON_ADMIN +
+        ' Only ever called from a boot/scheduler pass (sweepTestRunResultsExtraction or ' +
+        "the one-time schema.ts backfill), per this function's own doc comment — never " +
+        'the synchronous test-request completion path.',
+    },
+  ],
+  ['db/queries.ts:9966', { reason: REASON_DEBT }],
+  ['db/queries.ts:10363', { reason: REASON_DEBT }],
+  ['db/queries.ts:11700', { reason: REASON_BOUNDED + ' ' + REASON_JSON_EACH }],
+  ['db/queries.ts:11708', { reason: REASON_BOUNDED + ' ' + REASON_JSON_EACH }],
   ['investigation/investigationReconciler.ts:31', { reason: REASON_ADMIN }],
-  ['investigation/reportStore.ts:321', { reason: REASON_ADMIN }],
+  ['investigation/reportStore.ts:323', { reason: REASON_ADMIN }],
 ]);
 
 // Whole files excluded from scanning entirely (e.g. one-off migration/backfill
