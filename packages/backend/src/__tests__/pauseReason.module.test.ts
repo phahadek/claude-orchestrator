@@ -5,6 +5,7 @@ import {
   serializePauseReason,
   pauseReasonFromCanonical,
   deriveRecoveryDescriptor,
+  deriveTaskRecoveryDescriptor,
   isMergeBlockingPause,
 } from '../db/pauseReason.js';
 import type { CanonicalPauseReason } from '../db/pauseReason.js';
@@ -311,6 +312,102 @@ describe('deriveRecoveryDescriptor', () => {
     expect(deriveRecoveryDescriptor('stuck_timeout')).toEqual({
       available: false,
     });
+  });
+});
+
+// ── deriveTaskRecoveryDescriptor ────────────────────────────────────────────
+
+describe('deriveTaskRecoveryDescriptor', () => {
+  it('a task-level reason with no PR resolves to its mapped action', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: 'launch_failed',
+      prReason: null,
+      hasPR: false,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({
+      available: true,
+      action: 'redispatch',
+      label: 'Redispatch',
+    });
+  });
+
+  it('terminal session, no PR, no pause row of either kind → redispatch', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: null,
+      hasPR: false,
+      sessionTerminal: true,
+    });
+    expect(d).toEqual({
+      available: true,
+      action: 'redispatch',
+      label: 'Redispatch',
+    });
+  });
+
+  it('non-terminal session, no PR, no pause row → unavailable', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: null,
+      hasPR: false,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({ available: false });
+  });
+
+  it('terminal session but a PR exists, no pause row → unavailable (PR still open)', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: null,
+      hasPR: true,
+      sessionTerminal: true,
+    });
+    expect(d).toEqual({ available: false });
+  });
+
+  it('a PR-side reason with no task-level reason continues to resolve to its mapped action', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: 'ci_failing',
+      hasPR: true,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({ available: true, action: 'resume', label: 'Resume' });
+  });
+
+  it('task-level reason takes precedence over a PR-side reason when both are present', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: 'launch_failed',
+      prReason: 'ci_failing',
+      hasPR: true,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({
+      available: true,
+      action: 'redispatch',
+      label: 'Redispatch',
+    });
+  });
+
+  it('a task-level reason deliberately absent from RECOVERY_ACTION_MAP never defaults to an action', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: 'awaiting_human_approval',
+      prReason: null,
+      hasPR: false,
+      sessionTerminal: true,
+    });
+    expect(d).toEqual({ available: false });
+  });
+
+  it('a PR-side reason deliberately absent from RECOVERY_ACTION_MAP never defaults to an action', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: 'max_reviews',
+      hasPR: true,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({ available: false });
   });
 });
 

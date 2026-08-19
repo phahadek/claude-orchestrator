@@ -446,6 +446,43 @@ export function deriveRecoveryDescriptor(
   return { available: true, action, label: RECOVERY_LABELS[action] };
 }
 
+export interface TaskRecoveryContext {
+  /** task_pause_reasons row for this task, if any. Preferred over prReason — the more specific signal. */
+  taskReason: CanonicalPauseReason | null;
+  /** PR-side (pull_requests.pause_reason) or session pr-creation-failure reason, if any. */
+  prReason: CanonicalPauseReason | null;
+  /** Whether this task currently has a PR. */
+  hasPR: boolean;
+  /** Whether the task's most recent code session ended in a terminal status (done/error/killed). */
+  sessionTerminal: boolean;
+}
+
+/**
+ * Task-level entry point for recovery derivation: routes task_pause_reasons
+ * into deriveRecoveryDescriptor alongside the existing PR-side reason
+ * (task-level wins when both are present), and — only when no reason of
+ * either kind exists — falls back to redispatch for an orphaned task (no PR,
+ * terminal session). That fallback bypasses RECOVERY_ACTION_MAP entirely
+ * since there is no reason to look up; it must never be used to override a
+ * reason that IS present but deliberately unmapped (e.g. awaiting_human_approval).
+ */
+export function deriveTaskRecoveryDescriptor(
+  ctx: TaskRecoveryContext,
+): RecoveryDescriptor {
+  const effectiveReason = ctx.taskReason ?? ctx.prReason ?? null;
+  if (effectiveReason != null) {
+    return deriveRecoveryDescriptor(effectiveReason);
+  }
+  if (!ctx.hasPR && ctx.sessionTerminal) {
+    return {
+      available: true,
+      action: 'redispatch',
+      label: RECOVERY_LABELS.redispatch,
+    };
+  }
+  return { available: false };
+}
+
 const CANONICAL_SET = new Set<string>(Object.keys(PAUSE_REASON_REGISTRY));
 
 const UNKNOWN_FALLBACK: Required<RegistryEntry> = {
