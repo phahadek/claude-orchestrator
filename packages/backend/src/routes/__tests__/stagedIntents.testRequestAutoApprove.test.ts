@@ -20,13 +20,13 @@ const {
   mockGetProjectById,
   mockLoadOrchestratorConfig,
   mockComputeHash,
-  mockRunProjectTestRequest,
+  mockAdmitTestRequest,
   mockGetTaskBackend,
 } = vi.hoisted(() => ({
   mockGetProjectById: vi.fn(),
   mockLoadOrchestratorConfig: vi.fn(),
   mockComputeHash: vi.fn(),
-  mockRunProjectTestRequest: vi.fn(),
+  mockAdmitTestRequest: vi.fn(),
   mockGetTaskBackend: vi.fn(),
 }));
 
@@ -48,7 +48,7 @@ vi.mock('../../session/analyzeGating', async (importOriginal) => {
 });
 
 vi.mock('../../orchestration/testRequestLane', () => ({
-  runProjectTestRequest: mockRunProjectTestRequest,
+  admitTestRequest: mockAdmitTestRequest,
 }));
 
 vi.mock('../../tasks/TaskBackend', async (importOriginal) => {
@@ -68,6 +68,7 @@ import {
   updateSessionWorktreePath,
   setStagedIntentGroup,
   transitionStagedIntent,
+  getSessionTestRequestCycleCount,
 } from '../../db/queries';
 import { typedSetSetting } from '../../config/settings';
 import { logger } from '../../logger';
@@ -103,11 +104,28 @@ function makeSessionManager() {
   };
 }
 
+/** Default admitTestRequest stub: every call admits fresh (never reused), immediately running. */
+function stubFreshAdmission(runId = 'run-preview') {
+  return {
+    runId,
+    status: 'running' as const,
+    position: 0,
+    queueDepth: 0,
+    reused: false,
+    result: Promise.resolve({
+      runId,
+      passed: true,
+      output: 'ok',
+      joined: false,
+    }),
+  };
+}
+
 beforeEach(() => {
   mockGetProjectById.mockReset();
   mockLoadOrchestratorConfig.mockReset();
   mockComputeHash.mockReset();
-  mockRunProjectTestRequest.mockReset();
+  mockAdmitTestRequest.mockReset();
   mockGetTaskBackend.mockReset();
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
@@ -123,7 +141,7 @@ beforeEach(() => {
     test_fail_fast: true,
   });
   mockComputeHash.mockResolvedValue('hash-1');
-  mockRunProjectTestRequest.mockResolvedValue({ passed: true, output: 'ok' });
+  mockAdmitTestRequest.mockImplementation(() => stubFreshAdmission());
   typedSetSetting('test_request_cycle_limit', 3);
 });
 
@@ -203,7 +221,7 @@ describe('test.request stage-time auto-grant (routeStageTimeBlock)', () => {
     const checked = await routeStageTimeBlock(intent, sessionManager);
 
     expect(checked.state).toBe('rejected');
-    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
+    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
     expect(sessionManager.enqueueFeedback).toHaveBeenCalledWith(
       'session-no-worktree',
       'test_request',
@@ -270,6 +288,75 @@ describe('test.request stage-time auto-grant (routeStageTimeBlock)', () => {
       )
       .all();
     expect(active).toEqual([]);
+  });
+});
+
+describe('test.request queue position + session-pending dedupe', () => {
+  it('reports the admission (status/position/queueDepth/runId) via the approved annotation', async () => {
+    mockAdmitTestRequest.mockImplementation(() => ({
+      runId: 'run-queued',
+      status: 'queued',
+      position: 3,
+      queueDepth: 5,
+      reused: false,
+      result: new Promise(() => {}),
+    }));
+    setUpSession('session-position');
+    const intent = stageTestRequest('session-position');
+
+    const checked = await routeStageTimeBlock(intent, undefined);
+
+    expect(checked.state).toBe('approved');
+    expect(checked.annotation).toEqual({
+      testRequestQueue: {
+        runId: 'run-queued',
+        status: 'queued',
+        position: 3,
+        queueDepth: 5,
+        reused: false,
+      },
+    });
+  });
+
+  it('a reused admission (session already has one pending against this tree) does not advance the cycle counter, while a fresh one still does', async () => {
+    setUpSession('session-reuse');
+
+    mockAdmitTestRequest.mockImplementationOnce(() =>
+      stubFreshAdmission('run-first'),
+    );
+    const first = stageTestRequest('session-reuse');
+    await routeStageTimeBlock(first, undefined);
+    expect(getSessionTestRequestCycleCount('session-reuse')).toBe(1);
+
+    mockAdmitTestRequest.mockImplementationOnce(() => ({
+      runId: 'run-first',
+      status: 'queued',
+      position: 1,
+      queueDepth: 1,
+      reused: true,
+      result: Promise.resolve({
+        runId: 'run-first',
+        passed: true,
+        output: 'ok',
+        joined: true,
+      }),
+    }));
+    const second = stageTestRequest('session-reuse');
+    const checkedSecond = await routeStageTimeBlock(second, undefined);
+
+    expect(checkedSecond.state).toBe('approved');
+    expect(getSessionTestRequestCycleCount('session-reuse')).toBe(1);
+    expect(checkedSecond.annotation).toMatchObject({
+      testRequestQueue: { runId: 'run-first', reused: true },
+    });
+
+    // A genuinely fresh (non-reused) third request still advances the budget.
+    mockAdmitTestRequest.mockImplementationOnce(() =>
+      stubFreshAdmission('run-third'),
+    );
+    const third = stageTestRequest('session-reuse');
+    await routeStageTimeBlock(third, undefined);
+    expect(getSessionTestRequestCycleCount('session-reuse')).toBe(2);
   });
 });
 

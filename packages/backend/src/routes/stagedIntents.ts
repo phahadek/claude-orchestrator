@@ -163,7 +163,11 @@ import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import type { TestCommandResult } from '../session/test-runner';
 import { truncateForDelivery } from '../session/test-runner';
-import { runProjectTestRequest } from '../orchestration/testRequestLane';
+import {
+  admitTestRequest,
+  type TestRequestAdmission,
+  type TestRequestAdmissionStatus,
+} from '../orchestration/testRequestLane';
 import { isRunFailureBaseAttributable } from '../orchestration/baseAttribution';
 import {
   getSessionTestRequestCycleCount,
@@ -1432,6 +1436,20 @@ export interface StagedIntent {
     | { advisory: true; violations: ReadinessViolation[] }
     | { autoRejected: true }
     | { autoApproved: true }
+    | {
+        /**
+         * A test.request's live lane standing at the moment it was
+         * auto-approved — set by maybeAutoApproveTestRequest, superseded by
+         * the `{testRequest: {passed}}` annotation once the run commits.
+         */
+        testRequestQueue: {
+          runId: string;
+          status: TestRequestAdmissionStatus;
+          position: number;
+          queueDepth: number;
+          reused: boolean;
+        };
+      }
     | null;
   /**
    * Correlates multiple intents that form one structural-change unit (e.g. a
@@ -5630,16 +5648,25 @@ function resolveTestRequestExecutionInputs(intent: StagedIntent):
 }
 
 /**
- * Runs (or joins, via runProjectTestRequest's coalescing) the test.request
- * lane execution for an already-approved intent, then finalizes it: commits
- * the staged intent (test.request has no separate apply step — mirrors
+ * Runs (or joins, via admitTestRequest's coalescing) the test.request lane
+ * execution for an already-approved intent, then finalizes it: commits the
+ * staged intent (test.request has no separate apply step — mirrors
  * review.dispute/completeness.disposition) and delivers the (truncated)
  * result to the requesting session's feedback inbox so it wakes with the
  * outcome instead of polling for it.
+ *
+ * `precomputedAdmission` lets the auto-grant path (maybeAutoApproveTestRequest)
+ * pass through the exact admission it already made — and already reported to
+ * the session synchronously — so this never admits a second, independent
+ * lane request for the same intent. The operator manual-approve path has no
+ * such precomputed admission (it never calls maybeAutoApproveTestRequest) and
+ * falls back to computing its own, exactly as this function always did before
+ * admission reporting existed.
  */
 async function triggerTestRequestExecution(
   intent: StagedIntent,
   sessionManager: SessionManager | undefined,
+  precomputedAdmission?: TestRequestAdmission,
 ): Promise<void> {
   const inputs = resolveTestRequestExecutionInputs(intent);
   let result: TestCommandResult;
@@ -5651,22 +5678,18 @@ async function triggerTestRequestExecution(
       output: `[test.request] ${inputs.reason}`,
     };
   } else {
-    let contentHash: string | null = null;
-    try {
-      contentHash = await computeWholeTreeContentHash(inputs.worktreePath);
-    } catch (err) {
-      logger.error(
-        `[stagedIntents] worktree hash failed for test.request ${intent.id}: ${err}`,
-      );
-    }
-    if (!contentHash) {
-      result = {
-        passed: false,
-        output: '[test.request] worktree content hash unavailable',
-      };
-    } else {
+    let admission = precomputedAdmission ?? null;
+    if (!admission) {
+      let contentHash: string | null = null;
       try {
-        const runResult = await runProjectTestRequest({
+        contentHash = await computeWholeTreeContentHash(inputs.worktreePath);
+      } catch (err) {
+        logger.error(
+          `[stagedIntents] worktree hash failed for test.request ${intent.id}: ${err}`,
+        );
+      }
+      if (contentHash) {
+        admission = admitTestRequest({
           projectId: intent.projectId,
           contentHash,
           worktreePath: inputs.worktreePath,
@@ -5676,6 +5699,16 @@ async function triggerTestRequestExecution(
           failFast: inputs.failFast,
           sessionId: intent.sessionId ?? null,
         });
+      }
+    }
+    if (!admission) {
+      result = {
+        passed: false,
+        output: '[test.request] worktree content hash unavailable',
+      };
+    } else {
+      try {
+        const runResult = await admission.result;
         result = runResult;
         joined = runResult.joined;
         runId = runResult.runId;
@@ -5833,46 +5866,6 @@ async function maybeAutoApproveTestRequest(
     );
   }
 
-  const priorCount = getSessionTestRequestCycleCount(intent.sessionId);
-  // Skip the charge when the run that prompted this cycle failed for a
-  // confirmed base-attributable reason (see baseAttribution.ts) — the
-  // session's own change isn't what's failing, so an iterate-on-red loop
-  // forced entirely by a broken base branch must not burn this budget.
-  // Unlike stalled_pr_retry_count/flake_recovery_attempts, no reset
-  // primitive exists for this counter — an already-exhausted session always
-  // requires a fresh dispatch, per the locked design.
-  const project = getProjectById(intent.projectId);
-  const priorRun = project
-    ? getLatestTestRequestRunForSession(project.id, intent.sessionId)
-    : undefined;
-  const priorFailureBaseAttributable =
-    project && priorRun?.state === 'failed'
-      ? await isRunFailureBaseAttributable(project, priorRun)
-      : false;
-  if (!priorFailureBaseAttributable) {
-    incrementSessionTestRequestCycleCount(intent.sessionId);
-  }
-  const currentCycleCount = getSessionTestRequestCycleCount(intent.sessionId);
-  const cycleLimit = typedGetSetting('test_request_cycle_limit');
-  if (priorCount >= cycleLimit) {
-    // Past the limit the request still auto-approves — see the module
-    // comment above maybeAutoApproveTestRequest. The crossing is recorded
-    // durably as a signal rather than blocking the session, since the
-    // pause this used to trigger interrupted legitimate iteration far more
-    // often than it caught a runaway loop.
-    recordEvent({
-      event_type: 'test_request_cycle_limit_crossed',
-      actor_type: 'system',
-      actor_id: intent.sessionId,
-      project_id: intent.projectId,
-      payload: {
-        session_id: intent.sessionId,
-        cycle_count: currentCycleCount,
-        cycle_limit: cycleLimit,
-      },
-    });
-  }
-
   const inputs = resolveTestRequestExecutionInputs(intent);
   if (!inputs.ok) {
     return declineTestRequestAutoGrant(intent, inputs.reason, sessionManager);
@@ -5896,18 +5889,97 @@ async function maybeAutoApproveTestRequest(
     );
   }
 
+  // Admitted synchronously, before this intent is even approved — reports
+  // this session's live lane standing (running, or queued at a position/
+  // depth) right in the response, instead of a bare "queued" the caller has
+  // to take on faith. When this session already has one pending request
+  // against this exact tree, `reused` is true and no new lane admission
+  // happened — see admitTestRequest's doc comment.
+  const admission = admitTestRequest({
+    projectId: intent.projectId,
+    contentHash,
+    worktreePath: inputs.worktreePath,
+    commands: inputs.commands,
+    timeoutSec: inputs.timeoutSec,
+    maxRssMb: inputs.maxRssMb,
+    failFast: inputs.failFast,
+    sessionId: intent.sessionId,
+  });
+
+  const priorCount = getSessionTestRequestCycleCount(intent.sessionId);
+  if (!admission.reused) {
+    // Skip the charge when the run that prompted this cycle failed for a
+    // confirmed base-attributable reason (see baseAttribution.ts) — the
+    // session's own change isn't what's failing, so an iterate-on-red loop
+    // forced entirely by a broken base branch must not burn this budget.
+    // Unlike stalled_pr_retry_count/flake_recovery_attempts, no reset
+    // primitive exists for this counter — an already-exhausted session always
+    // requires a fresh dispatch, per the locked design. A reused (already
+    // pending) request never reaches here — it must not advance this budget
+    // a second time for the same underlying cycle.
+    const project = getProjectById(intent.projectId);
+    const priorRun = project
+      ? getLatestTestRequestRunForSession(project.id, intent.sessionId)
+      : undefined;
+    const priorFailureBaseAttributable =
+      project && priorRun?.state === 'failed'
+        ? await isRunFailureBaseAttributable(project, priorRun)
+        : false;
+    if (!priorFailureBaseAttributable) {
+      incrementSessionTestRequestCycleCount(intent.sessionId);
+    }
+    const currentCycleCount = getSessionTestRequestCycleCount(
+      intent.sessionId,
+    );
+    const cycleLimit = typedGetSetting('test_request_cycle_limit');
+    if (priorCount >= cycleLimit) {
+      // Past the limit the request still auto-approves — see the module
+      // comment above maybeAutoApproveTestRequest. The crossing is recorded
+      // durably as a signal rather than blocking the session, since the
+      // pause this used to trigger interrupted legitimate iteration far more
+      // often than it caught a runaway loop.
+      recordEvent({
+        event_type: 'test_request_cycle_limit_crossed',
+        actor_type: 'system',
+        actor_id: intent.sessionId,
+        project_id: intent.projectId,
+        payload: {
+          session_id: intent.sessionId,
+          cycle_count: currentCycleCount,
+          cycle_limit: cycleLimit,
+        },
+      });
+    }
+  }
+
   const row = getStagedIntentRow(intent.id);
   if (!row) return intent;
   autoApproveAccretionRow(row);
 
+  setStagedIntentAnnotation(
+    intent.id,
+    JSON.stringify({
+      testRequestQueue: {
+        runId: admission.runId,
+        status: admission.status,
+        position: admission.position,
+        queueDepth: admission.queueDepth,
+        reused: admission.reused,
+      },
+    }),
+  );
+
   const approved = getStagedIntentRow(intent.id);
   const approvedIntent = approved ? rowToApi(approved) : intent;
 
-  void triggerTestRequestExecution(approvedIntent, sessionManager).catch(
-    (err) =>
-      logger.error(
-        `[stagedIntents] test.request execution failed for ${intent.id}: ${err}`,
-      ),
+  void triggerTestRequestExecution(
+    approvedIntent,
+    sessionManager,
+    admission,
+  ).catch((err) =>
+    logger.error(
+      `[stagedIntents] test.request execution failed for ${intent.id}: ${err}`,
+    ),
   );
 
   return approvedIntent;

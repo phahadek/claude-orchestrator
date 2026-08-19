@@ -44,6 +44,7 @@ vi.mock('../memoryAdmission', () => ({
 import { db } from '../../db/db';
 import {
   runProjectTestRequest,
+  admitTestRequest,
   recoverInterruptedTestRequestRuns,
   ingestTestRunResults,
   sweepTestRunResultsExtraction,
@@ -612,6 +613,252 @@ describe('per-project test-lane concurrency cap', () => {
     resolvers[resolvers.length - 1]({ passed: true, output: 'ok' });
 
     await Promise.all([first, second, third]);
+  });
+});
+
+describe('admitTestRequest — live queue position', () => {
+  /** Queues every runTestCommands call behind a resolver the test controls. */
+  function queueingRunTestCommands() {
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    return resolvers;
+  }
+
+  it('reports status "running", position 0 when admitted immediately', () => {
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(
+      baseSpec({ projectId: 'proj-admit-1', contentHash: 'admit-1-a' }),
+    );
+    expect(admission.status).toBe('running');
+    expect(admission.position).toBe(0);
+    expect(admission.reused).toBe(false);
+  });
+
+  it('reports status "queued" with a position/depth, initially', async () => {
+    insertProject({
+      id: 'proj-admit-2',
+      name: 'Admit 2',
+      project_dir: '/tmp/proj-admit-2',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      test_request_max_concurrent: 1,
+    });
+    const resolvers = queueingRunTestCommands();
+
+    const first = admitTestRequest(
+      baseSpec({ projectId: 'proj-admit-2', contentHash: 'admit-2-a' }),
+    );
+    expect(first.status).toBe('running');
+
+    const second = admitTestRequest(
+      baseSpec({ projectId: 'proj-admit-2', contentHash: 'admit-2-b' }),
+    );
+    expect(second.status).toBe('queued');
+    expect(second.position).toBe(1);
+    expect(second.queueDepth).toBe(1);
+
+    const third = admitTestRequest(
+      baseSpec({ projectId: 'proj-admit-2', contentHash: 'admit-2-c' }),
+    );
+    expect(third.status).toBe('queued');
+    expect(third.position).toBe(2);
+    expect(third.queueDepth).toBe(2);
+
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers[1]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(3),
+    );
+    resolvers[2]({ passed: true, output: 'ok' });
+
+    await Promise.all([first.result, second.result, third.result]);
+  });
+
+  it("a re-request from a session with one already queued gets that same request's live position back — which decreases as earlier runs complete", async () => {
+    insertProject({
+      id: 'proj-admit-2b',
+      name: 'Admit 2b',
+      project_dir: '/tmp/proj-admit-2b',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      test_request_max_concurrent: 1,
+    });
+    const resolvers = queueingRunTestCommands();
+
+    // Two other sessions' requests occupy the running slot and the front of
+    // the queue ahead of the session under test.
+    admitTestRequest(
+      baseSpec({
+        projectId: 'proj-admit-2b',
+        contentHash: 'admit-2b-ahead-1',
+        sessionId: 'session-ahead-1',
+      }),
+    );
+    admitTestRequest(
+      baseSpec({
+        projectId: 'proj-admit-2b',
+        contentHash: 'admit-2b-ahead-2',
+        sessionId: 'session-ahead-2',
+      }),
+    );
+
+    const firstAsk = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-admit-2b',
+        contentHash: 'admit-2b-mine',
+        sessionId: 'session-under-test',
+      }),
+    );
+    expect(firstAsk.status).toBe('queued');
+    expect(firstAsk.position).toBe(2);
+
+    // Completing the running run wakes the first queued waiter (the "ahead-2"
+    // request), moving this session's own request up one spot.
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+
+    const secondAsk = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-admit-2b',
+        contentHash: 'admit-2b-mine',
+        sessionId: 'session-under-test',
+      }),
+    );
+    expect(secondAsk.reused).toBe(true);
+    expect(secondAsk.runId).toBe(firstAsk.runId);
+    expect(secondAsk.status).toBe('queued');
+    expect(secondAsk.position).toBe(1);
+    // Re-asking never enqueues a second waiter for the same session.
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+
+    resolvers[1]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(3),
+    );
+    resolvers[2]({ passed: true, output: 'ok' });
+
+    await Promise.all([firstAsk.result, secondAsk.result]);
+  });
+
+  it('a second call from the same session against the same tree reuses the pending request instead of admitting a new one', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    const first = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-admit-3',
+        contentHash: 'admit-3-tree',
+        sessionId: 'session-dedupe',
+      }),
+    );
+    const second = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-admit-3',
+        contentHash: 'admit-3-tree',
+        sessionId: 'session-dedupe',
+      }),
+    );
+
+    expect(first.reused).toBe(false);
+    expect(second.reused).toBe(true);
+    expect(second.runId).toBe(first.runId);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    const [r1, r2] = await Promise.all([first.result, second.result]);
+    expect(r1.runId).toBe(r2.runId);
+  });
+
+  it('a re-request against a different tree from the same session supersedes the stale pending request and re-enqueues fresh, rather than returning the stale position', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    const stale = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-admit-4',
+        contentHash: 'admit-4-old-tree',
+        sessionId: 'session-supersede',
+      }),
+    );
+    expect(stale.reused).toBe(false);
+
+    const fresh = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-admit-4',
+        contentHash: 'admit-4-new-tree',
+        sessionId: 'session-supersede',
+      }),
+    );
+
+    expect(fresh.reused).toBe(false);
+    expect(fresh.runId).not.toBe(stale.runId);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+
+    const [staleResult, freshResult] = await Promise.all([
+      stale.result,
+      fresh.result,
+    ]);
+    expect(staleResult.runId).toBe(stale.runId);
+    expect(freshResult.runId).toBe(fresh.runId);
+  });
+
+  it('session-scoped dedupe never applies when sessionId is null — content-hash coalescing across two different sessions is unchanged', async () => {
+    let resolveRun: (v: { passed: boolean; output: string }) => void;
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRun = resolve;
+        }),
+    );
+
+    const fromSessionA = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-admit-5',
+        contentHash: 'admit-5-shared-tree',
+        sessionId: 'session-a',
+      }),
+    );
+    const fromSessionB = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-admit-5',
+        contentHash: 'admit-5-shared-tree',
+        sessionId: 'session-b',
+      }),
+    );
+
+    expect(fromSessionA.reused).toBe(false);
+    // Not session-dedupe-"reused" (that's a same-session concept) — this is
+    // the pre-existing content-hash coalescing, still exercised via `joined`
+    // on the eventual result.
+    expect(fromSessionB.runId).toBe(fromSessionA.runId);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    resolveRun!({ passed: true, output: 'ok' });
+    const [rA, rB] = await Promise.all([
+      fromSessionA.result,
+      fromSessionB.result,
+    ]);
+    expect(rA.joined).toBe(false);
+    expect(rB.joined).toBe(true);
+  });
+
+  it('runProjectTestRequest (the plain-awaitable wrapper) resolves to the same result admitTestRequest(...).result would', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const result = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-admit-6', contentHash: 'admit-6-a' }),
+    );
+    expect(result.passed).toBe(true);
+    expect(result.joined).toBe(false);
   });
 });
 

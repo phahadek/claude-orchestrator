@@ -93,6 +93,16 @@ export interface StagedIntent {
     | { advisory: true; violations: StagedIntentViolation[] }
     | { autoRejected: true }
     | { autoApproved: true }
+    | {
+        /** A test.request's live lane standing at the moment it was auto-approved. */
+        testRequestQueue: {
+          runId: string;
+          status: 'running' | 'queued';
+          position: number;
+          queueDepth: number;
+          reused: boolean;
+        };
+      }
     | null;
   /**
    * Tier-3 semantic readiness advisory — a caution signal (confidence +
