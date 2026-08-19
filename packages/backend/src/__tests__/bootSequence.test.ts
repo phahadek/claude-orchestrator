@@ -15,6 +15,23 @@ vi.mock('../config/corporateMode.js', () => ({
     .fn()
     .mockReturnValue({ enabled: false, envLocked: false, gates: {} }),
 }));
+// The bounded-cap/yield/residual behavior of sweepTestRunResultsExtraction
+// itself is covered exhaustively (with a real db) in
+// orchestration/__tests__/testRequestLane.test.ts. Here we only need to
+// verify bootSequence's *wiring* — that the boot step calls it with the
+// boot cap, that its onProgress callback drives boot_reconciliation_progress
+// broadcasts, and that boot completes regardless of how much it reports as
+// still pending — so this mocks it out rather than seeding real rows into
+// the shared test db (which made these tests slow and flaky across files).
+vi.mock('../orchestration/testRequestLane.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../orchestration/testRequestLane.js')
+  >();
+  return {
+    ...actual,
+    sweepTestRunResultsExtraction: vi.fn(actual.sweepTestRunResultsExtraction),
+  };
+});
 
 import {
   runBootSequence,
@@ -24,8 +41,7 @@ import {
 } from '../bootSequence.js';
 import type { BootDeps } from '../bootSequence.js';
 import type { ServerMessage } from '../ws/types.js';
-import { db } from '../db/db.js';
-import { insertTestRequestRun, completeTestRequestRun } from '../db/queries.js';
+import { sweepTestRunResultsExtraction } from '../orchestration/testRequestLane.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -96,40 +112,10 @@ async function runAndDrain(deps: BootDeps): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 50));
 }
 
-/**
- * Like runAndDrain, but polls for scheduler.start() instead of a fixed
- * sleep — needed for tests that seed enough real DB work (the extraction
- * sweep's setImmediate-per-unit yields) that a fixed 50ms window isn't
- * reliably enough to observe full completion, and to avoid leaking a
- * still-running background chain into the next test's shared in-memory db.
- */
-async function runAndDrainFully(
-  deps: BootDeps,
-  schedulerStart: ReturnType<typeof vi.fn>,
-): Promise<void> {
-  await runBootSequence(deps);
-  const deadline = Date.now() + 5000;
-  while (schedulerStart.mock.calls.length === 0 && Date.now() < deadline) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
-  }
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   setReadinessState('migrating');
-  db.prepare('DELETE FROM test_run_summaries').run();
-  db.prepare('DELETE FROM test_request_runs').run();
 });
-
-function seedPendingExtractionRun(id: string, requestedAt: number): void {
-  const structured = JSON.stringify({
-    suites: [
-      { tests: [{ id: 't1', name: 'n', outcome: 'failed', durationMs: 5 }] },
-    ],
-  });
-  insertTestRequestRun(id, 'proj-1', `hash-${id}`, null, requestedAt);
-  completeTestRequestRun(id, 'passed', 'ok', null, structured);
-}
 
 // ── Boot-safety gate ──────────────────────────────────────────────────────────
 
@@ -363,11 +349,16 @@ describe('readiness state', () => {
 
 describe('boot chain — test_run_results_extraction_sweep is bounded and reported', () => {
   it('emits a boot_reconciliation_progress record naming the step and the remaining count as it works', async () => {
-    seedPendingExtractionRun('run-a', Date.now());
-    seedPendingExtractionRun('run-b', Date.now() + 1);
-    const { deps, broadcast, scheduler } = makeDeps();
+    vi.mocked(sweepTestRunResultsExtraction).mockImplementationOnce(
+      async (opts) => {
+        opts?.onProgress?.(1);
+        opts?.onProgress?.(0);
+        return { processed: 2, remaining: 0 };
+      },
+    );
+    const { deps, broadcast } = makeDeps();
 
-    await runAndDrainFully(deps, scheduler.start);
+    await runAndDrain(deps);
 
     const progressCalls = vi
       .mocked(broadcast)
@@ -386,31 +377,23 @@ describe('boot chain — test_run_results_extraction_sweep is bounded and report
     expect(progressCalls.map((msg) => msg.remaining)).toEqual([1, 0]);
   });
 
-  it('processes at most EXTRACTION_SWEEP_BOOT_CAP runs and still completes the boot sequence when more are pending', async () => {
-    const total = EXTRACTION_SWEEP_BOOT_CAP + 5;
-    for (let i = 0; i < total; i++) {
-      seedPendingExtractionRun(`run-cap-${i}`, Date.now() + i);
-    }
-    const { deps, eventLog, scheduler } = makeDeps();
+  it('calls the sweep with the boot cap, and still completes the boot sequence when it reports a large residual', async () => {
+    vi.mocked(sweepTestRunResultsExtraction).mockResolvedValueOnce({
+      processed: EXTRACTION_SWEEP_BOOT_CAP,
+      remaining: 5,
+    });
+    const { deps, eventLog } = makeDeps();
 
-    await runAndDrainFully(deps, scheduler.start);
+    await runAndDrain(deps);
 
-    // Boot completed despite a backlog bigger than the cap.
+    expect(sweepTestRunResultsExtraction).toHaveBeenCalledWith(
+      expect.objectContaining({ cap: EXTRACTION_SWEEP_BOOT_CAP }),
+    );
+    // Boot completed despite the sweep reporting a backlog left behind —
+    // the residual is the drain job's problem (see server.ts's
+    // test_run_results_extraction_drain registration), never boot's.
     expect(eventLog).toContain('boot_reconciliation_completed');
     expect(eventLog).toContain('scheduler_start');
-
-    // The residual work list is non-empty and still discoverable afterwards.
-    const remaining = db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM test_request_runs
-         WHERE structured_result IS NOT NULL
-           AND NOT EXISTS (
-             SELECT 1 FROM test_run_summaries
-             WHERE test_run_summaries.test_request_run_id = test_request_runs.id
-           )`,
-      )
-      .get() as { n: number };
-    expect(remaining.n).toBe(5);
   });
 });
 
@@ -430,9 +413,9 @@ describe('boot ordering', () => {
   });
 
   it('runs the post-listen steps in their declared order', async () => {
-    const { deps, broadcast, scheduler } = makeDeps();
+    const { deps, broadcast } = makeDeps();
 
-    await runAndDrainFully(deps, scheduler.start);
+    await runAndDrain(deps);
 
     const startedCall = vi
       .mocked(broadcast)
