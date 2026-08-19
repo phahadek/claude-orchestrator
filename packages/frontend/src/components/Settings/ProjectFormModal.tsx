@@ -130,12 +130,22 @@ export function ProjectFormModal({
     ) {
       return;
     }
+    let cancelled = false;
     setMilestonesLoading(true);
     projectsApi
       .listGithubMilestones(initialProject.id)
-      .then((ms) => setGithubMilestones(ms))
-      .catch(() => setGithubMilestones([]))
-      .finally(() => setMilestonesLoading(false));
+      .then((ms) => {
+        if (!cancelled) setGithubMilestones(ms);
+      })
+      .catch(() => {
+        if (!cancelled) setGithubMilestones([]);
+      })
+      .finally(() => {
+        if (!cancelled) setMilestonesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [values.taskSource, initialProject]);
 
   function update<K extends keyof ProjectFormValues>(
