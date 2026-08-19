@@ -62,6 +62,7 @@ import {
   getTestPerfBaseline,
   listRecentValidTestDurations,
   computeTestFlipRateFlag,
+  computeTestFailureBreadthFlag,
   TEST_OUTCOME_DIGEST_CAPACITY,
   TEST_DURATION_DIGEST_CAPACITY,
 } from '../../db/queries';
@@ -420,6 +421,37 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
     expect(flag.sampleCount).toBe(4);
     expect(flag.transitionCount).toBe(3);
     expect(flag.flagged).toBe(true);
+  });
+
+  it('computeTestFailureBreadthFlag flags a deterministically-failing test (never alternates, so flip-rate alone could never flag it) once it has failed across enough distinct content hashes ingested through the lane', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
+    const testId = 'e2e-breadth-test';
+    mockRunTestCommands.mockResolvedValue({ passed: false, output: 'fail' });
+    mockCollectStructuredTestResult.mockReturnValue(
+      structuredResultFor(testId, 'failed', 10),
+    );
+
+    for (let i = 0; i < 3; i++) {
+      const contentHash = `hash-e2e-breadth-${i}`;
+      await runProjectTestRequest(baseSpec({ contentHash }));
+      const run = getLatestTestRequestRun('proj-1', contentHash)!;
+      ingestTestRunResults(run);
+    }
+
+    const flipFlag = computeTestFlipRateFlag(testId, 10, 2);
+    expect(flipFlag.transitionCount).toBe(0);
+    expect(flipFlag.flagged).toBe(false);
+
+    const breadthFlag = computeTestFailureBreadthFlag(
+      testId,
+      24,
+      3,
+      Date.now() + 1,
+    );
+    expect(breadthFlag.distinctContentHashCount).toBe(3);
+    expect(breadthFlag.flagged).toBe(true);
   });
 });
 

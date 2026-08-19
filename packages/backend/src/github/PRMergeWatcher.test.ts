@@ -4036,6 +4036,22 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     }
   }
 
+  /** One breadth-signal failure for `testId`, on its own distinct content_hash, at `createdAt`. */
+  function seedBreadthFailure(testId: string, createdAt: number): void {
+    seq += 1;
+    const runId = `breadth-run-${seq}`;
+    db.prepare(
+      `INSERT INTO test_request_runs
+         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
+       VALUES (@id, 'proj-1', @content_hash, NULL, 'failed', '', 0, 0, 0)`,
+    ).run({ id: runId, content_hash: `breadth-hash-${seq}` });
+    db.prepare(
+      `INSERT INTO test_run_results
+         (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+       VALUES (@run_id, @test_id, @name, 'failed', 1, 0, 0, @created_at)`,
+    ).run({ run_id: runId, test_id: testId, name: testId, created_at: createdAt });
+  }
+
   function makeMockReviewOrchestratorWithF2(
     outcome: 'passed' | 'failed' = 'passed',
   ): ReviewOrchestrator {
@@ -4140,6 +4156,73 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
       'owner/repo',
       null,
     );
+  });
+
+  it('auto-recovers a deterministically-failing test (never flip-rate flagged) once it clears the breadth-of-trees guard instead, and still files exactly one remediation record for it', async () => {
+    const testId = 'tests.unit.test_foo.test_deterministic';
+    // Fails on 3 distinct trees before the PR was created — never alternates
+    // (flip-rate stays unflagged), but breadth alone clears guard 1.
+    seedBreadthFailure(testId, PR_CREATED_AT_MS - 300);
+    seedBreadthFailure(testId, PR_CREATED_AT_MS - 200);
+    seedBreadthFailure(testId, PR_CREATED_AT_MS - 100);
+
+    const runId = 'f2-run-breadth';
+    seedRunFailures(runId, [{ testId, name: 'test_deterministic' }]);
+
+    const pr = makePRRow({
+      head_sha: 'sha-breadth',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: null,
+      created_at: PR_CREATED_AT_ISO,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: runId,
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'failed',
+      output: 'FAIL',
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    vi.mocked(getChangedFiles).mockResolvedValue(['src/unrelated.ts']);
+
+    const github = makeMockGitHub();
+    const sessions = makeMockSessions();
+    const reviewOrchestrator = makeMockReviewOrchestratorWithF2('passed');
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.poll();
+
+    expect(vi.mocked(reviewOrchestrator.rerunFlakyTests)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-breadth',
+      '/wt/session',
+      expect.objectContaining({ id: 'proj-1' }),
+    );
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      null,
+    );
+
+    // recordAndMaybeFileFlakyRemediation ran exactly once for this test —
+    // the real (unmocked) function's tracking row shows one counted
+    // auto-disposition, not zero (never ran) or more than one (double-counted).
+    const tracking = db
+      .prepare(
+        `SELECT auto_disposition_count FROM flaky_remediation_tracking WHERE test_id = ?`,
+      )
+      .get(testId) as { auto_disposition_count: number } | undefined;
+    expect(tracking?.auto_disposition_count).toBe(1);
   });
 
   it('still pauses and nudges when only some failing tests are flip-rate-flagged (mixed failures)', async () => {
