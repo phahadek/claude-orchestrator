@@ -4387,6 +4387,7 @@ export interface ProjectPatch {
   data_residency_confirmed?: number;
   base_branch?: string;
   arch_store_adopted?: number;
+  test_request_max_concurrent?: number | null;
 }
 
 export function updateProject(
@@ -4413,6 +4414,7 @@ export function updateProject(
     data_residency_confirmed: number;
     base_branch: string;
     arch_store_adopted: number;
+    test_request_max_concurrent: number | null;
     updated_at: number;
   }>(
     `
@@ -4432,6 +4434,7 @@ export function updateProject(
         data_residency_confirmed = @data_residency_confirmed,
         base_branch = @base_branch,
         arch_store_adopted = @arch_store_adopted,
+        test_request_max_concurrent = @test_request_max_concurrent,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -4482,6 +4485,10 @@ export function updateProject(
       patch.arch_store_adopted !== undefined
         ? patch.arch_store_adopted
         : (existing.arch_store_adopted ?? 0),
+    test_request_max_concurrent:
+      'test_request_max_concurrent' in patch
+        ? (patch.test_request_max_concurrent ?? null)
+        : (existing.test_request_max_concurrent ?? null),
     updated_at: now,
   });
   return getProjectRowById(id);

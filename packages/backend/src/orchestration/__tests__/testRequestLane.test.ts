@@ -67,6 +67,8 @@ import {
   TEST_OUTCOME_DIGEST_CAPACITY,
   TEST_DURATION_DIGEST_CAPACITY,
   countTestRequestRunsNeedingExtraction,
+  insertProject,
+  updateProject,
 } from '../../db/queries';
 
 beforeEach(() => {
@@ -81,6 +83,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_run_summaries').run();
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
+  db.prepare('DELETE FROM projects').run();
 });
 
 let sampleSeq = 0;
@@ -454,6 +457,161 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
     );
     expect(breadthFlag.distinctContentHashCount).toBe(3);
     expect(breadthFlag.flagged).toBe(true);
+  });
+});
+
+// ── per-project concurrency cap (projects.test_request_max_concurrent) ──────
+
+describe('per-project test-lane concurrency cap', () => {
+  /**
+   * Queues every runTestCommands call behind a resolver the test controls,
+   * so admission can be observed via call count rather than timing.
+   */
+  function queueingRunTestCommands() {
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    return resolvers;
+  }
+
+  it('gives a project with an explicit limit a semaphore of that size, independent of another project with a different limit', async () => {
+    insertProject({
+      id: 'proj-cap-1',
+      name: 'Cap 1',
+      project_dir: '/tmp/proj-cap-1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      test_request_max_concurrent: 1,
+    });
+    insertProject({
+      id: 'proj-cap-3',
+      name: 'Cap 3',
+      project_dir: '/tmp/proj-cap-3',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      test_request_max_concurrent: 3,
+    });
+    const resolvers = queueingRunTestCommands();
+
+    // Two requests against the limit-1 project: only the first is admitted.
+    const capOneP1 = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-cap-1', contentHash: 'cap1-a' }),
+    );
+    const capOneP2 = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-cap-1', contentHash: 'cap1-b' }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+
+    // Three requests against the limit-3 project: all three admitted at once.
+    const capThreeP1 = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-cap-3', contentHash: 'cap3-a' }),
+    );
+    const capThreeP2 = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-cap-3', contentHash: 'cap3-b' }),
+    );
+    const capThreeP3 = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-cap-3', contentHash: 'cap3-c' }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(4),
+    );
+
+    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(5),
+    );
+    resolvers[resolvers.length - 1]({ passed: true, output: 'ok' });
+
+    await Promise.all([capOneP1, capOneP2, capThreeP1, capThreeP2, capThreeP3]);
+  });
+
+  it('falls back to the global setting, unchanged from before, when a project has no explicit limit', async () => {
+    insertProject({
+      id: 'proj-no-override',
+      name: 'No Override',
+      project_dir: '/tmp/proj-no-override',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    const resolvers = queueingRunTestCommands();
+
+    // Global default (test_request_max_concurrent_per_project) is 2 — three
+    // requests should admit exactly two before the third queues.
+    const p1 = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-no-override', contentHash: 'nov-a' }),
+    );
+    const p2 = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-no-override', contentHash: 'nov-b' }),
+    );
+    const p3 = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-no-override', contentHash: 'nov-c' }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+
+    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(3),
+    );
+    resolvers[resolvers.length - 1]({ passed: true, output: 'ok' });
+
+    await Promise.all([p1, p2, p3]);
+  });
+
+  it('applies a changed project limit on the very next acquire, without a process restart', async () => {
+    insertProject({
+      id: 'proj-live-resize',
+      name: 'Live Resize',
+      project_dir: '/tmp/proj-live-resize',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      test_request_max_concurrent: 1,
+    });
+    const resolvers = queueingRunTestCommands();
+
+    const first = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-live-resize', contentHash: 'resize-a' }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+
+    // Second request queues behind the limit-1 semaphore — not yet admitted.
+    const second = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-live-resize', contentHash: 'resize-b' }),
+    );
+
+    // Raise the limit without restarting the process — the next acquire
+    // (from a third request) must see the new value and, per Semaphore.resize,
+    // wake the already-queued second request too.
+    updateProject('proj-live-resize', { test_request_max_concurrent: 2 });
+    const third = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-live-resize', contentHash: 'resize-c' }),
+    );
+
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+
+    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(3),
+    );
+    resolvers[resolvers.length - 1]({ passed: true, output: 'ok' });
+
+    await Promise.all([first, second, third]);
   });
 });
 

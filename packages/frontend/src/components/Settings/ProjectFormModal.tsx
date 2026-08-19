@@ -25,6 +25,8 @@ export interface ProjectFormValues {
   githubOwnerRepo: string;
   githubDefaultMilestone: number | null;
   baseBranch: string;
+  /** Raw text input; empty string = no override (fall back to the global default). */
+  testRequestMaxConcurrent: string;
 }
 
 interface Props {
@@ -48,6 +50,7 @@ const EMPTY: ProjectFormValues = {
   githubOwnerRepo: '',
   githubDefaultMilestone: null,
   baseBranch: 'dev',
+  testRequestMaxConcurrent: '',
 };
 
 const OWNER_REPO_RE = /^[^/]+\/[^/]+$/;
@@ -82,6 +85,10 @@ function fromProject(p: Project): ProjectFormValues {
     githubOwnerRepo: githubCfg ? `${githubCfg.owner}/${githubCfg.repo}` : '',
     githubDefaultMilestone: githubCfg?.defaultMilestone ?? null,
     baseBranch: p.baseBranch ?? 'dev',
+    testRequestMaxConcurrent:
+      p.testRequestMaxConcurrent != null
+        ? String(p.testRequestMaxConcurrent)
+        : '',
   };
 }
 
@@ -98,6 +105,7 @@ export function ProjectFormModal({
     projectDir?: string;
     nonMilestoneSourceConfigRaw?: string;
     githubOwnerRepo?: string;
+    testRequestMaxConcurrent?: string;
   }>({});
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
@@ -144,6 +152,7 @@ export function ProjectFormModal({
       projectDir?: string;
       nonMilestoneSourceConfigRaw?: string;
       githubOwnerRepo?: string;
+      testRequestMaxConcurrent?: string;
     } = {};
     if (!values.name.trim()) nextErrors.name = 'Name is required';
     if (!values.projectDir.trim())
@@ -180,6 +189,14 @@ export function ProjectFormModal({
         nextErrors.githubOwnerRepo = 'Repository is required (owner/repo)';
       } else if (!OWNER_REPO_RE.test(ownerRepo)) {
         nextErrors.githubOwnerRepo = 'Must be in owner/repo format';
+      }
+    }
+    const rawConcurrent = values.testRequestMaxConcurrent.trim();
+    if (rawConcurrent) {
+      const n = Number(rawConcurrent);
+      if (!Number.isInteger(n) || n < 1) {
+        nextErrors.testRequestMaxConcurrent =
+          'Must be empty (use global default) or an integer >= 1';
       }
     }
     setErrors(nextErrors);
@@ -257,6 +274,33 @@ export function ProjectFormModal({
               onChange={(e) => update('baseBranch', e.target.value)}
               placeholder="main"
             />
+          </div>
+
+          <div className={styles.formField}>
+            <label htmlFor="proj-test-concurrency" className={styles.formLabel}>
+              Test lane concurrency (optional)
+            </label>
+            <input
+              id="proj-test-concurrency"
+              type="text"
+              inputMode="numeric"
+              className={styles.input}
+              value={values.testRequestMaxConcurrent}
+              onChange={(e) =>
+                update('testRequestMaxConcurrent', e.target.value)
+              }
+              placeholder="Uses the global default"
+            />
+            <p className={styles.fieldHelp}>
+              Max concurrent test.request runs for this project. Leave empty to
+              use the global default. Takes effect immediately — no backend
+              restart needed.
+            </p>
+            {errors.testRequestMaxConcurrent && (
+              <p className={styles.fieldError}>
+                {errors.testRequestMaxConcurrent}
+              </p>
+            )}
           </div>
 
           <div className={styles.formField}>

@@ -831,6 +831,7 @@ describe('TaskList', () => {
       autoMergeEnabled: false,
       dataResidencyConfirmed: false,
       baseBranch: 'dev',
+      testRequestMaxConcurrent: null,
     };
 
     renderList([task], {
@@ -2791,6 +2792,7 @@ describe('TaskList', () => {
       autoMergeEnabled: false,
       dataResidencyConfirmed: true,
       baseBranch: 'dev',
+      testRequestMaxConcurrent: null,
     };
 
     function mockMoveEndpoints() {
