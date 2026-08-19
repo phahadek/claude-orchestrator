@@ -213,7 +213,9 @@ describe('ProjectFormModal', () => {
         />,
       );
       expect(screen.getByLabelText('Default Milestone')).toBeTruthy();
-      expect(screen.getByText(/Leave empty/)).toBeTruthy();
+      expect(
+        screen.getByText(/Leave empty to fetch all Ready issues/),
+      ).toBeTruthy();
       await waitFor(() =>
         expect(projectsApi.listGithubMilestones).toHaveBeenCalled(),
       );
