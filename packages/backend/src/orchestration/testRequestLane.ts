@@ -177,7 +177,11 @@ interface InFlightEntry {
   runId: string;
   contentHash: string;
   /** Live admission status, re-derived from the semaphore on every call — never a fixed snapshot. */
-  admission: () => { status: TestRequestAdmissionStatus; position: number; queueDepth: number };
+  admission: () => {
+    status: TestRequestAdmissionStatus;
+    position: number;
+    queueDepth: number;
+  };
   promise: Promise<TestCommandResult & { runId: string }>;
 }
 
@@ -239,8 +243,12 @@ async function waitForMemoryAdmission(
  * that is caught so a caller awaiting a coalesced run never sees an
  * unhandled rejection.
  */
-export function admitTestRequest(spec: TestRequestRunSpec): TestRequestAdmission {
-  const sKey = spec.sessionId ? sessionKey(spec.projectId, spec.sessionId) : null;
+export function admitTestRequest(
+  spec: TestRequestRunSpec,
+): TestRequestAdmission {
+  const sKey = spec.sessionId
+    ? sessionKey(spec.projectId, spec.sessionId)
+    : null;
 
   if (sKey) {
     const pending = pendingBySession.get(sKey);
@@ -267,7 +275,12 @@ export function admitTestRequest(spec: TestRequestRunSpec): TestRequestAdmission
   if (existing) {
     const result = existing.promise.then((r) => ({ ...r, joined: true }));
     if (sKey) pendingBySession.set(sKey, existing);
-    return { runId: existing.runId, reused: false, result, ...existing.admission() };
+    return {
+      runId: existing.runId,
+      reused: false,
+      result,
+      ...existing.admission(),
+    };
   }
 
   const requestedAt = Date.now();
@@ -277,14 +290,28 @@ export function admitTestRequest(spec: TestRequestRunSpec): TestRequestAdmission
   const admission = () => {
     const queuedPosition = semaphore.positionOf(runId);
     return queuedPosition == null
-      ? { status: 'running' as const, position: 0, queueDepth: semaphore.queueDepth() }
-      : { status: 'queued' as const, position: queuedPosition, queueDepth: semaphore.queueDepth() };
+      ? {
+          status: 'running' as const,
+          position: 0,
+          queueDepth: semaphore.queueDepth(),
+        }
+      : {
+          status: 'queued' as const,
+          position: queuedPosition,
+          queueDepth: semaphore.queueDepth(),
+        };
   };
   const initialAdmission = admission();
 
-  const promise = executeTestRequestRun(spec, runId, requestedAt, permitPromise).finally(() => {
+  const promise = executeTestRequestRun(
+    spec,
+    runId,
+    requestedAt,
+    permitPromise,
+  ).finally(() => {
     if (inFlightRuns.get(key)?.runId === runId) inFlightRuns.delete(key);
-    if (sKey && pendingBySession.get(sKey)?.runId === runId) pendingBySession.delete(sKey);
+    if (sKey && pendingBySession.get(sKey)?.runId === runId)
+      pendingBySession.delete(sKey);
   });
 
   const entry: InFlightEntry = {

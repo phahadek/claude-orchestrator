@@ -5928,9 +5928,7 @@ async function maybeAutoApproveTestRequest(
     if (!priorFailureBaseAttributable) {
       incrementSessionTestRequestCycleCount(intent.sessionId);
     }
-    const currentCycleCount = getSessionTestRequestCycleCount(
-      intent.sessionId,
-    );
+    const currentCycleCount = getSessionTestRequestCycleCount(intent.sessionId);
     const cycleLimit = typedGetSetting('test_request_cycle_limit');
     if (priorCount >= cycleLimit) {
       // Past the limit the request still auto-approves — see the module
