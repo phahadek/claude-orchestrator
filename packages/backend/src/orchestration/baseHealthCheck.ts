@@ -45,6 +45,7 @@ import { Semaphore } from '../tasks/deferralClassifier';
 import {
   getLatestBaseHealthTestRequestRun,
   getTestRequestRunById,
+  getTestRunSummary,
 } from '../db/queries';
 import type { TestRequestRunRow, StructuredTestResult } from '../db/types';
 
@@ -115,20 +116,35 @@ function unknownResult(
 }
 
 /**
- * A failed run is `partial_fail` only when its structured_result carries an
- * actual per-test breakdown (at least one recorded test outcome) AND that
- * breakdown is complete (structured_result.incomplete is not set) —
- * otherwise (structured_result null/unparseable/empty, or a partial
- * multi-command merge missing an expected suite's report entirely, e.g. an
- * OOM-kill before that report was written) it's `total_fail`. This split is
- * agnostic to whether acquisition was attempted — see classifyRun, its
- * dispatch-gating caller, for that distinction; the Tests-tab taxonomy
+ * A failed run is `partial_fail` only when a per-test breakdown exists for
+ * it AND that breakdown is complete — otherwise (no breakdown at all, or a
+ * partial multi-command merge missing an expected suite's report entirely,
+ * e.g. an OOM-kill before that report was written) it's `total_fail`. This
+ * split is agnostic to whether acquisition was attempted — see classifyRun,
+ * its dispatch-gating caller, for that distinction; the Tests-tab taxonomy
  * (classifyTestRunOutcome) intentionally treats "never attempted" and
  * "attempted and empty" alike as "no report acquired".
+ *
+ * The durable source of the breakdown is test_run_summaries/test_run_results
+ * (testRequestLane.ts's extraction output), not
+ * test_request_runs.structured_result — that column is cleared once
+ * extraction has consumed it (clearExtractedStructuredResultsBatch), so a
+ * null structured_result on an already-extracted run means "already
+ * processed", never "crashed". The extraction summary's own `incomplete`
+ * flag (mirroring StructuredTestResult.incomplete, see db/schema.ts) is what
+ * survives that clear and lets an incomplete merge still classify as
+ * total_fail post-sweep. structured_result is only consulted as a fallback
+ * for a run that hasn't been swept (or extracted) yet.
  */
 function classifyFailedRun(
   run: TestRequestRunRow,
 ): 'partial_fail' | 'total_fail' {
+  const summary = getTestRunSummary(run.id);
+  if (summary) {
+    if (summary.incomplete) return 'total_fail';
+    return summary.total_count > 0 ? 'partial_fail' : 'total_fail';
+  }
+
   if (!run.structured_result) return 'total_fail';
   try {
     const parsed = JSON.parse(run.structured_result) as StructuredTestResult;

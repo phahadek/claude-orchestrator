@@ -122,6 +122,7 @@ function insertSample(
     ],
     opts.concurrentRunCount,
     opts.oomKilled ?? false,
+    false,
   );
 }
 
@@ -140,6 +141,7 @@ function insertOutcomeSample(
     [{ test_id: testId, name: testId, outcome, duration_ms: durationMs }],
     opts.concurrentRunCount,
     opts.oomKilled ?? false,
+    false,
   );
 }
 

@@ -8624,6 +8624,7 @@ function insertTestRunSummary(
   totalDurationMs: number,
   concurrentRunCount: number | null,
   oomKilled: boolean,
+  incomplete: boolean,
 ): void {
   _stmtInsertTestRunSummary ??= db.prepare<{
     test_request_run_id: string;
@@ -8637,12 +8638,13 @@ function insertTestRunSummary(
     total_duration_ms: number;
     concurrent_run_count: number | null;
     oom_killed: number;
+    incomplete: number;
     created_at: number;
   }>(`
     INSERT INTO test_run_summaries
-      (test_request_run_id, project_id, passed_count, failed_count, skipped_count, error_count, other_count, total_count, total_duration_ms, concurrent_run_count, oom_killed, created_at)
+      (test_request_run_id, project_id, passed_count, failed_count, skipped_count, error_count, other_count, total_count, total_duration_ms, concurrent_run_count, oom_killed, incomplete, created_at)
     VALUES
-      (@test_request_run_id, @project_id, @passed_count, @failed_count, @skipped_count, @error_count, @other_count, @total_count, @total_duration_ms, @concurrent_run_count, @oom_killed, @created_at)
+      (@test_request_run_id, @project_id, @passed_count, @failed_count, @skipped_count, @error_count, @other_count, @total_count, @total_duration_ms, @concurrent_run_count, @oom_killed, @incomplete, @created_at)
   `);
   _stmtInsertTestRunSummary.run({
     test_request_run_id: testRequestRunId,
@@ -8656,6 +8658,7 @@ function insertTestRunSummary(
     total_duration_ms: totalDurationMs,
     concurrent_run_count: concurrentRunCount,
     oom_killed: oomKilled ? 1 : 0,
+    incomplete: incomplete ? 1 : 0,
     created_at: Date.now(),
   });
 }
@@ -8815,6 +8818,7 @@ export function ingestTestRunResultsTx(
   tests: NewTestRunResultRow[],
   concurrentRunCount: number | null,
   oomKilled: boolean,
+  incomplete: boolean,
 ): TestOutcomeCounts {
   const counts: TestOutcomeCounts = {
     passed: 0,
@@ -8851,6 +8855,7 @@ export function ingestTestRunResultsTx(
       totalDurationMs,
       concurrentRunCount,
       oomKilled,
+      incomplete,
     );
     tests.forEach((t, index) => {
       recordTestPerfDigestSample(
