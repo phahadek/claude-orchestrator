@@ -245,61 +245,57 @@ describe('SessionManager.start() fire-and-forget timing', () => {
     expect(execCallbackFired).toBe(true);
   });
 
-  it(
-    'resolves without waiting for a hung git worktree add (fire-and-forget: caller isolation is unconditional)',
-    async () => {
-      // Simulate a permanently hung git worktree add: the exec callback is
-      // never invoked. If start() awaited completeStart() synchronously, this
-      // test would hang until the test framework's own timeout below — a
-      // deterministic failure that doesn't depend on wall-clock budgets.
-      vi.mocked(execCb).mockImplementation(() => {
-        // Intentionally never calls the callback — simulates a hung git operation.
-        return {} as never;
-      });
-      // The stalled background completeStart() holds SessionManager's per-repo
-      // worktree-add mutex (keyed by projectDir) open forever. Give this test
-      // its own projectDir so that permanently-held lock doesn't block later
-      // tests' completeStart() calls from ever acquiring the lock for '/tmp/test'.
-      // getProjectById is called more than once per launch (start() + completeStart()),
-      // so override the implementation for the whole test rather than just the
-      // next call, then restore the shared default afterward.
+  it('resolves without waiting for a hung git worktree add (fire-and-forget: caller isolation is unconditional)', async () => {
+    // Simulate a permanently hung git worktree add: the exec callback is
+    // never invoked. If start() awaited completeStart() synchronously, this
+    // test would hang until the test framework's own timeout below — a
+    // deterministic failure that doesn't depend on wall-clock budgets.
+    vi.mocked(execCb).mockImplementation(() => {
+      // Intentionally never calls the callback — simulates a hung git operation.
+      return {} as never;
+    });
+    // The stalled background completeStart() holds SessionManager's per-repo
+    // worktree-add mutex (keyed by projectDir) open forever. Give this test
+    // its own projectDir so that permanently-held lock doesn't block later
+    // tests' completeStart() calls from ever acquiring the lock for '/tmp/test'.
+    // getProjectById is called more than once per launch (start() + completeStart()),
+    // so override the implementation for the whole test rather than just the
+    // next call, then restore the shared default afterward.
+    vi.mocked(getProjectById).mockImplementation(
+      () =>
+        ({
+          id: 'test-proj',
+          name: 'Test Project',
+          projectDir: '/tmp/test-hung-worktree-lock',
+          taskSource: 'notion',
+          autoLaunchEnabled: true,
+          boards: [],
+        }) as never,
+    );
+
+    const sm = new SessionManager();
+    try {
+      // If this hangs (synchronous-await regression), the explicit 200ms
+      // test timeout below fails the test fast instead of stalling forever.
+      await sm.start(TASK_URL, CTX_URL, START_OPTS);
+      // Reaching here at all proves start() did not wait on the hung exec
+      // callback, since that callback is never invoked in this test.
+      expect(vi.mocked(execCb)).toHaveBeenCalled();
+      // Test ends here. The stalled background promise is abandoned.
+    } finally {
       vi.mocked(getProjectById).mockImplementation(
         () =>
           ({
             id: 'test-proj',
             name: 'Test Project',
-            projectDir: '/tmp/test-hung-worktree-lock',
+            projectDir: '/tmp/test',
             taskSource: 'notion',
             autoLaunchEnabled: true,
             boards: [],
           }) as never,
       );
-
-      const sm = new SessionManager();
-      try {
-        // If this hangs (synchronous-await regression), the explicit 200ms
-        // test timeout below fails the test fast instead of stalling forever.
-        await sm.start(TASK_URL, CTX_URL, START_OPTS);
-        // Reaching here at all proves start() did not wait on the hung exec
-        // callback, since that callback is never invoked in this test.
-        expect(vi.mocked(execCb)).toHaveBeenCalled();
-        // Test ends here. The stalled background promise is abandoned.
-      } finally {
-        vi.mocked(getProjectById).mockImplementation(
-          () =>
-            ({
-              id: 'test-proj',
-              name: 'Test Project',
-              projectDir: '/tmp/test',
-              taskSource: 'notion',
-              autoLaunchEnabled: true,
-              boards: [],
-            }) as never,
-        );
-      }
-    },
-    200,
-  );
+    }
+  }, 200);
 
   it('emits session_starting synchronously before returning', async () => {
     const sm = new SessionManager();
