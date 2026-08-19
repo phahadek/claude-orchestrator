@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { makeEventRow } from '../../test/helpers/eventFixtures';
 
 // ── In-memory SQLite — schema must be applied inside the factory ───────────────
@@ -31,6 +31,8 @@ import {
   archiveSession,
   getLastActivityMsForArchivedSessions,
   querySessionEventsByProjectAggregate,
+  querySessionEventsByProjectRows,
+  UnboundedPatternQueryError,
   replaceFlaggedFlakyTestsRollupOffMainThread,
   getFlaggedFlakyTestsRollup,
   getLatestTestRequestRunForSession,
@@ -1301,6 +1303,148 @@ describe('querySessionEventsByProjectAggregate', () => {
         last_timestamp: 300,
       },
     ]);
+  });
+});
+
+// ── querySessionEventsByProject{Aggregate,Rows} — filtered path at scale ───
+// Regression coverage for the pattern/since/until-filtered path falling
+// back to a full unindexed session_events scan (payload LIKE '%...%' can
+// never use an index, and since/until-only calls used to fall through to
+// the same unbounded join). See UnboundedPatternQueryError and the
+// CROSS JOIN-driven queries in db/queries.ts.
+
+describe('bench: querySessionEventsByProject{Aggregate,Rows} — filtered reads at scale', () => {
+  const SESSION_COUNT = 200;
+  const EVENTS_PER_SESSION = 2_600; // ~520k rows total, representative of production scale
+  const EVENT_COUNT = SESSION_COUNT * EVENTS_PER_SESSION;
+
+  function seed(): { sessionIds: string[] } {
+    clearTables();
+    runMigrations(typedDb);
+    typedDb.exec(`DELETE FROM projects;`);
+    insertProject({
+      id: 'proj-bench-large',
+      name: 'Bench Large',
+      project_dir: '/bench-large',
+      context_url: null,
+      github_repo: 'o/bench-large',
+      task_source: 'notion',
+    });
+    insertProject({
+      id: 'proj-bench-noise',
+      name: 'Bench Noise',
+      project_dir: '/bench-noise',
+      context_url: null,
+      github_repo: 'o/bench-noise',
+      task_source: 'notion',
+    });
+
+    const sessionIds: string[] = [];
+    for (let i = 0; i < SESSION_COUNT; i++) {
+      const sid = `bench-large-sess-${i}`;
+      sessionIds.push(sid);
+      insertSession({
+        ...SESSION_DEFAULTS,
+        session_id: sid,
+        task_id: null,
+        project_id: 'proj-bench-large',
+        started_at: 1000,
+      });
+    }
+    // Noise from a different project, so the project_id filter has to do
+    // real work rather than the table only ever containing one project.
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'bench-noise-sess-0',
+      task_id: null,
+      project_id: 'proj-bench-noise',
+      started_at: 1000,
+    });
+
+    const insertStmt = typedDb.prepare(
+      `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+    );
+    const bulkInsert = typedDb.transaction(() => {
+      for (let i = 0; i < EVENT_COUNT; i++) {
+        const sid = sessionIds[i % SESSION_COUNT];
+        const payload =
+          i % 10_000 === 0
+            ? `{"text":"needle-${i}"}`
+            : `{"text":"haystack ${i}"}`;
+        insertStmt.run(sid, 'text', payload, i);
+      }
+      insertStmt.run('bench-noise-sess-0', 'text', '{"text":"needle-noise"}', 0);
+    });
+    bulkInsert();
+
+    return { sessionIds };
+  }
+
+  // Seeded once for the whole describe block (not per-test): re-running a
+  // ~520k-row bulk insert (with 4 session_events indexes to maintain) four
+  // times over blows vitest's default per-test timeout. The tests below are
+  // read-only, so sharing one seed across them is safe.
+  beforeAll(() => {
+    seed();
+  }, 60_000);
+
+  it(`seeds ${EVENT_COUNT.toLocaleString()} session_events rows for one project`, () => {
+    const count = (
+      typedDb.prepare(`SELECT COUNT(*) AS n FROM session_events`).get() as {
+        n: number;
+      }
+    ).n;
+    expect(count).toBeGreaterThanOrEqual(500_000);
+  });
+
+  it('a since/until-only aggregate call (no pattern) completes within budget', () => {
+    const start = performance.now();
+    const rows = querySessionEventsByProjectAggregate('proj-bench-large', {
+      since: EVENT_COUNT - 500,
+      until: EVENT_COUNT,
+    });
+    const elapsed = performance.now() - start;
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(
+      rows.every((r) => r.session_id.startsWith('bench-large-sess-')),
+    ).toBe(true);
+    expect(
+      elapsed,
+      `since/until-only querySessionEventsByProjectAggregate took ${elapsed.toFixed(1)}ms, expected <300ms`,
+    ).toBeLessThan(300);
+  });
+
+  it('a pattern call bounded by since/until completes within budget', () => {
+    const start = performance.now();
+    const rows = querySessionEventsByProjectRows('proj-bench-large', {
+      pattern: 'needle',
+      since: 0,
+      until: 20_000,
+    });
+    const elapsed = performance.now() - start;
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.payload.includes('needle'))).toBe(true);
+    expect(
+      elapsed,
+      `bounded pattern querySessionEventsByProjectRows took ${elapsed.toFixed(1)}ms, expected <300ms`,
+    ).toBeLessThan(300);
+  });
+
+  it('a pattern call with no since/until bound is rejected instead of scanning', () => {
+    const start = performance.now();
+    expect(() =>
+      querySessionEventsByProjectAggregate('proj-bench-large', {
+        pattern: 'needle',
+      }),
+    ).toThrow(UnboundedPatternQueryError);
+    const elapsed = performance.now() - start;
+
+    expect(
+      elapsed,
+      `rejected unbounded pattern call took ${elapsed.toFixed(1)}ms, expected <50ms`,
+    ).toBeLessThan(50);
   });
 });
 

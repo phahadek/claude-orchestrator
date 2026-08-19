@@ -514,6 +514,12 @@ export function runMigrations(target: Database.Database): void {
     -- scans the table. Cheap today (2.3k rows) but the same defect class as
     -- the test_run_results index above, on a table that also only grows.
     CREATE INDEX IF NOT EXISTS idx_pull_requests_session_id ON pull_requests(session_id);
+    -- Backs querySessionEventsByProjectAggregate/Rows's filtered (pattern/
+    -- since/until) path: it drives the join from sessions.project_id, and
+    -- without this index that drive step full-scans sessions before the
+    -- indexed (session_id, timestamp) lookup into session_events can even
+    -- start. See queries.ts's session_events filtered-read section.
+    CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id);
   `);
 
   // Idempotent column additions for existing databases

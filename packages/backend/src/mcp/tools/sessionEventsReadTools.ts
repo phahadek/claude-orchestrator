@@ -59,6 +59,11 @@ export function registerSessionEventsReadTools(
         "(auto-approved when `<projectId>` is this session's own dispatched project).",
       inputSchema: {
         projectId: z.string(),
+        // `pattern` alone can never be served from an index (leading-wildcard
+        // LIKE), so it must be paired with a since/until bound — see
+        // UnboundedPatternQueryError in db/queries.ts, which this mirrors at
+        // the tool boundary so the failure is a clean validation error
+        // rather than a thrown-from-inside-the-handler one.
         pattern: z.string().optional(),
         since: z.number().optional(),
         until: z.number().optional(),
