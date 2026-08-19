@@ -1,6 +1,12 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  readFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -13,6 +19,7 @@ import {
   assertValidAcceptedScans,
   baselineKey,
   isExcludedFile,
+  buildSchemaDb,
   SRC_DIR,
 } from '../check-query-plans.mjs';
 
@@ -278,5 +285,41 @@ describe('runCheck', () => {
       'expected getIndexed() statement to be flagged once its index is gone',
     );
     assert.deepEqual(regressed.scans, ['SCAN indexed']);
+  });
+});
+
+// Regression coverage for the F2 breadth-of-trees masking signal
+// (computeTestFailureBreadthFlag, db/queries.ts) added alongside the
+// existing flip-rate guard: it joins test_run_results to test_request_runs
+// to count distinct content_hash values a test failed under. Per the Query-
+// plan constraint that motivated this CI guard, that join must stay
+// index-assisted (idx_test_run_results_test_id_created_at + the
+// test_request_runs primary key) rather than silently degrading into a full
+// table scan as the schema evolves — planned here against the real deployed
+// schema (via buildSchemaDb, the same real migration chain
+// scripts/check-query-plans.mjs's own `main()` plans every statement
+// against), not a hand-rolled fixture.
+describe('computeTestFailureBreadthFlag query plan (regression)', () => {
+  it('the breadth-of-trees join stays index-assisted against the real deployed schema', () => {
+    const content = readFileSync(join(SRC_DIR, 'db', 'queries.ts'), 'utf-8');
+    const { statements } = extractStatements(content);
+    const target = statements.find((s) =>
+      s.sql.includes('COUNT(DISTINCT r.content_hash)'),
+    );
+    assert.ok(
+      target,
+      'expected to find the breadth-of-trees query in db/queries.ts — did it move or get rewritten as dynamic SQL?',
+    );
+
+    const db = buildSchemaDb();
+    const result = planStatement(db, target.sql);
+    db.close();
+
+    assert.deepEqual(
+      result.scans,
+      [],
+      'breadth-of-trees query regressed into a full table scan — either restore ' +
+        'index-assisted access or add a deliberate, reasoned ACCEPTED_SCANS entry',
+    );
   });
 });

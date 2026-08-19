@@ -1365,6 +1365,8 @@ export class PRMergeWatcher extends EventEmitter {
       changedFiles,
       typedGetSetting('flip_rate_window_n'),
       typedGetSetting('flip_rate_threshold_k'),
+      typedGetSetting('flip_rate_breadth_n'),
+      typedGetSetting('flip_rate_breadth_window_hours'),
     );
     if (!eligible) return false;
 

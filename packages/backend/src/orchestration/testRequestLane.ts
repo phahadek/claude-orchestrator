@@ -46,6 +46,7 @@ import {
   listRecentValidTestDurations,
   upsertTestPerfBaseline,
   computeTestFlipRateFlag,
+  computeTestFailureBreadthFlag,
   getFailingTestIdsForRun,
 } from '../db/queries';
 import type {
@@ -389,8 +390,15 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
  * PRMergeWatcher.tryF2LaneAutoDisposition, the sole caller): a failing F2 run
  * is only eligible for auto-recovery when EVERY one of its failing tests
  * (getFailingTestIdsForRun) clears both masking guards —
- *  1. flip-rate flagged, using only samples predating this PR's own runs
- *     (`beforeMs`, keyed off the PR's created_at)
+ *  1. flagged as unrelated-to-this-diff by either signal, using only samples
+ *     predating this PR's own runs (`beforeMs`, keyed off the PR's
+ *     created_at):
+ *       - flip-rate flagged (pass<->fail alternation), or
+ *       - breadth flagged (failed across `breadthN`+ distinct content
+ *         hashes within the lookback window) — a deterministically-failing
+ *         test never alternates, so this is what makes it reachable at all
+ *     Purely additive: either signal alone is sufficient, so nothing that
+ *     already cleared guard 1 via flip-rate stops doing so.
  *  2. the PR's diff (`changedFiles`) does not touch the test's own file,
  *     confidently resolved (isTestIdTouchedByChangedFiles fails closed —
  *     an unmappable test_id blocks auto-disposition, same as a touched file)
@@ -405,18 +413,26 @@ export function evaluateF2LaneFlakyDisposition(
   changedFiles: string[],
   flipRateWindowN: number,
   flipRateThresholdK: number,
+  breadthN: number,
+  breadthWindowHours: number,
 ): boolean {
   const failing = getFailingTestIdsForRun(testRequestRunId);
   if (failing.length === 0) return false;
 
   for (const test of failing) {
-    const flag = computeTestFlipRateFlag(
+    const flipFlag = computeTestFlipRateFlag(
       test.test_id,
       flipRateWindowN,
       flipRateThresholdK,
       beforeMs,
     );
-    if (!flag.flagged) return false;
+    const breadthFlag = computeTestFailureBreadthFlag(
+      test.test_id,
+      breadthWindowHours,
+      breadthN,
+      beforeMs,
+    );
+    if (!flipFlag.flagged && !breadthFlag.flagged) return false;
 
     const { touched, confident } = isTestIdTouchedByChangedFiles(
       test.test_id,
