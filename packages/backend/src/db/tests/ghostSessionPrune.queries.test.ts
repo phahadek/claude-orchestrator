@@ -15,8 +15,8 @@ vi.mock('../db.js', async () => {
 });
 
 import { vi } from 'vitest';
-import { db } from '../db.js';
-import { insertSession, insertEvent, deleteGhostSessions } from '../queries.js';
+import { db } from '../db';
+import { insertSession, insertEvent, deleteGhostSessions } from '../queries';
 
 beforeEach(() => {
   db.prepare('DELETE FROM session_events').run();

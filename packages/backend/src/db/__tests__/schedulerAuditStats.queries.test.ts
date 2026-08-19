@@ -16,8 +16,8 @@ vi.mock('../db.js', async () => {
 });
 
 import { vi } from 'vitest';
-import { db } from '../db.js';
-import { insertSchedulerAudit, getSchedulerAuditStats } from '../queries.js';
+import { db } from '../db';
+import { insertSchedulerAudit, getSchedulerAuditStats } from '../queries';
 
 beforeEach(() => {
   db.prepare('DELETE FROM scheduler_audit').run();
