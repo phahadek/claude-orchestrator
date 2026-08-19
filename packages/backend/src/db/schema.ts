@@ -2844,6 +2844,25 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_test_request_runs_session_finished
       ON test_request_runs(project_id, session_id, finished_at DESC);
   `);
+
+  // getLaneHealthRollup (queries.ts) filters test_request_runs on project_id
+  // and sorts by finished_at DESC, but the only project-scoped index covers
+  // (project_id, content_hash) — useless for this ordering — so SQLite fell
+  // back to a SEARCH on that index followed by materializing every matching
+  // row (including ~1 MB structured_result/output blobs interleaved on
+  // disk) into a temp b-tree to sort before applying LIMIT. id is a TEXT
+  // primary key here (not a rowid alias), so unlike an INTEGER PRIMARY KEY
+  // table, SQLite can't append the true rowid as an index column at all
+  // ("no such column: rowid" from CREATE INDEX) — finished_at DESC is as far
+  // as this index can go. The query's ORDER BY finished_at DESC, rowid DESC
+  // still gets a small "USE TEMP B-TREE FOR LAST TERM OF ORDER BY" step for
+  // rows sharing an exact finished_at, but that only ever sorts the handful
+  // of tied rows, not the whole matching set — the SEARCH itself no longer
+  // walks the table.
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_project_finished
+      ON test_request_runs(project_id, finished_at DESC);
+  `);
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────
