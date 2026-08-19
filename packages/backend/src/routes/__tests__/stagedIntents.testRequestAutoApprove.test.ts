@@ -344,7 +344,9 @@ describe('test.request queue position + session-pending dedupe', () => {
     const second = stageTestRequest('session-reuse');
     const checkedSecond = await routeStageTimeBlock(second, undefined);
 
-    expect(checkedSecond.state).toBe('approved');
+    // Reused: withdrawn immediately rather than staged as a second live
+    // intent — see the locked "stages no new intent" design.
+    expect(checkedSecond.state).toBe('withdrawn');
     expect(getSessionTestRequestCycleCount('session-reuse')).toBe(1);
     expect(checkedSecond.annotation).toMatchObject({
       testRequestQueue: { runId: 'run-first', reused: true },

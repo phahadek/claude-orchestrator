@@ -5952,20 +5952,38 @@ async function maybeAutoApproveTestRequest(
 
   const row = getStagedIntentRow(intent.id);
   if (!row) return intent;
-  autoApproveAccretionRow(row);
 
-  setStagedIntentAnnotation(
-    intent.id,
-    JSON.stringify({
-      testRequestQueue: {
-        runId: admission.runId,
-        status: admission.status,
-        position: admission.position,
-        queueDepth: admission.queueDepth,
-        reused: admission.reused,
-      },
-    }),
-  );
+  const queueAnnotation = JSON.stringify({
+    testRequestQueue: {
+      runId: admission.runId,
+      status: admission.status,
+      position: admission.position,
+      queueDepth: admission.queueDepth,
+      reused: admission.reused,
+    },
+  });
+
+  if (admission.reused) {
+    // This session already has one pending request against this exact
+    // tree — admitTestRequest folded this call into it rather than
+    // admitting a new lane run, and per the locked design this intent must
+    // not stage as a second live one either: withdraw it immediately
+    // (never approved, never executed a second time) with its annotation
+    // pointing at the request it was folded into, so the caller's
+    // synchronous response still carries that request's identity/position.
+    // The original intent's own triggerTestRequestExecution call — already
+    // in flight — is what delivers the eventual result to this session's
+    // feedback inbox; this row has nothing further to do.
+    setStagedIntentAnnotation(intent.id, queueAnnotation);
+    return withdrawIntent(
+      intent.id,
+      `duplicate of pending test.request ${admission.runId}`,
+      intent.sessionId,
+    );
+  }
+
+  autoApproveAccretionRow(row);
+  setStagedIntentAnnotation(intent.id, queueAnnotation);
 
   const approved = getStagedIntentRow(intent.id);
   const approvedIntent = approved ? rowToApi(approved) : intent;
