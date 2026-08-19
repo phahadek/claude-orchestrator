@@ -118,6 +118,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   setReadinessState('migrating');
   db.prepare('DELETE FROM test_run_summaries').run();
+  db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
 });
 
