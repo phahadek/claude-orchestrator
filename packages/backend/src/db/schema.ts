@@ -2863,6 +2863,8 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_test_request_runs_project_finished
       ON test_request_runs(project_id, finished_at DESC);
   `);
+
+  runStructuredResultExtractedClearBackfill(target);
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────
@@ -3167,4 +3169,83 @@ export function runTestRunResultsDigestBackfillAndPrune(
       .prepare(`INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`)
       .run(TEST_RUN_RESULTS_PASSING_ROWS_DELETE_MARKER, Date.now());
   }
+}
+
+// ─── structured_result extraction-scoped clear backfill ────────────────────
+// One-time (per database), forward-only migration nulling structured_result
+// on every already-extracted test_request_runs row that
+// clearSupersededStructuredResults's supersession-scoped predicate (queries.ts)
+// could never reach: that function only ever clears an *other* row sharing a
+// (project_id, content_hash) key, so a key with exactly one run — 659 of 810
+// distinct keys measured live — never has an "other" row to clear, and its
+// blob is retained forever even once test_run_summaries proves extraction
+// already happened. See the "Clear structured_result once extraction has
+// happened" task. Same UPDATE...WHERE id IN (SELECT ... LIMIT) batching
+// precedent as deleteSubsumedPassingTestRunResults above, so no single
+// statement clears more than `batchSize` rows regardless of how many rows a
+// live database has accumulated.
+const STRUCTURED_RESULT_CLEAR_BACKFILL_BATCH_SIZE = 500;
+
+export const STRUCTURED_RESULT_EXTRACTED_CLEAR_BACKFILL_MARKER =
+  'structured_result_extracted_clear_v1';
+
+/**
+ * Nulls structured_result on every row whose extraction has already produced
+ * a test_run_summaries row, in bounded batches. Returns the total number of
+ * rows cleared. Every other column, and test_run_results/test_run_summaries
+ * themselves, are untouched — this is a single-column UPDATE.
+ */
+export function backfillClearExtractedStructuredResults(
+  target: Database.Database,
+  batchSize: number = STRUCTURED_RESULT_CLEAR_BACKFILL_BATCH_SIZE,
+): number {
+  const stmt = target.prepare(
+    `UPDATE test_request_runs
+     SET structured_result = NULL
+     WHERE id IN (
+       SELECT id FROM test_request_runs
+       WHERE structured_result IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM test_run_summaries
+           WHERE test_run_summaries.test_request_run_id = test_request_runs.id
+         )
+       LIMIT ?
+     )`,
+  );
+  let totalCleared = 0;
+  for (;;) {
+    const result = stmt.run(batchSize);
+    totalCleared += result.changes;
+    if (result.changes < batchSize) break;
+  }
+  return totalCleared;
+}
+
+/**
+ * Marker-guarded orchestration, called from runMigrations so it runs at
+ * backend boot like every other migration — a second boot re-derives nothing
+ * and clears nothing further, since the marker short-circuits the whole
+ * backfill and every row it already cleared no longer matches the predicate
+ * anyway.
+ *
+ * auto_vacuum is INCREMENTAL on this database (see schema comment history
+ * above runTestRunResultsDigestBackfillAndPrune), so this UPDATE — a
+ * blob-nulling write, not a row delete, but the same freelist mechanics
+ * apply — returns freed pages to the freelist without shrinking the database
+ * file on its own. Reclaiming that disk space back into the filesystem is
+ * left to incremental vacuum (or a separate operator-run `PRAGMA
+ * incremental_vacuum`), not a side effect of this migration.
+ */
+export function runStructuredResultExtractedClearBackfill(
+  target: Database.Database,
+  batchSize: number = STRUCTURED_RESULT_CLEAR_BACKFILL_BATCH_SIZE,
+): void {
+  const marker = target
+    .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+    .get(STRUCTURED_RESULT_EXTRACTED_CLEAR_BACKFILL_MARKER);
+  if (marker) return;
+  backfillClearExtractedStructuredResults(target, batchSize);
+  target
+    .prepare(`INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`)
+    .run(STRUCTURED_RESULT_EXTRACTED_CLEAR_BACKFILL_MARKER, Date.now());
 }

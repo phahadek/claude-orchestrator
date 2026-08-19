@@ -53,6 +53,7 @@ import {
   insertTestRequestRun,
   completeTestRequestRun,
   clearSupersededStructuredResults,
+  clearExtractedStructuredResultsBatch,
   listRunningTestRequestRuns,
   getLatestTestRequestRun,
   listTestRunResultsForRun,
@@ -816,6 +817,43 @@ describe('ingestTestRunResults', () => {
     expect(listTestRunResultsForRun('run-extract-3')).toHaveLength(0);
     expect(hasTestRunSummary('run-extract-3')).toBe(false);
   });
+
+  it("never clears the run's own structured_result — the lone-key own-row clear must not be inlined into the synchronous completion path, so a race with stagedIntents.ts's session-feedback digest read (which happens right after ingestTestRunResults returns) is impossible", () => {
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [{ id: 't1', name: 'n', outcome: 'failed', durationMs: 5 }],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-extract-lonekey',
+      'proj-1',
+      'hash-extract-lonekey',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-extract-lonekey',
+      'passed',
+      'ok',
+      null,
+      structured,
+    );
+
+    const run = getLatestTestRequestRun('proj-1', 'hash-extract-lonekey')!;
+    ingestTestRunResults(run);
+
+    // Extraction succeeded (this is the only run for its key, so there is no
+    // "other" row for clearSupersededStructuredResults to have cleared
+    // either), yet the row's own blob must still be intact immediately after
+    // ingestTestRunResults returns.
+    expect(hasTestRunSummary('run-extract-lonekey')).toBe(true);
+    const row = db
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
+      .get('run-extract-lonekey') as { structured_result: string | null };
+    expect(row.structured_result).toBe(structured);
+  });
 });
 
 describe('sweepTestRunResultsExtraction', () => {
@@ -841,6 +879,34 @@ describe('sweepTestRunResultsExtraction', () => {
     await sweepTestRunResultsExtraction();
 
     expect(listTestRunResultsForRun('run-sweep-1')).toHaveLength(1);
+  });
+
+  it('clearExtractedStructuredResultsBatch clears an already-summarized row directly, and reports 0 once nothing matches', () => {
+    const structured = JSON.stringify({
+      suites: [
+        { tests: [{ id: 't1', name: 'n', outcome: 'failed', durationMs: 5 }] },
+      ],
+    });
+    insertTestRequestRun(
+      'run-batch-clear',
+      'proj-1',
+      'hash-batch-clear',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun('run-batch-clear', 'passed', 'ok', null, structured);
+    ingestTestRunResults(
+      getLatestTestRequestRun('proj-1', 'hash-batch-clear')!,
+    );
+
+    const cleared = clearExtractedStructuredResultsBatch();
+    expect(cleared).toBe(1);
+    const row = db
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
+      .get('run-batch-clear') as { structured_result: string | null };
+    expect(row.structured_result).toBeNull();
+
+    expect(clearExtractedStructuredResultsBatch()).toBe(0);
   });
 
   it('leaves an already-extracted run untouched', async () => {
@@ -967,6 +1033,62 @@ describe('sweepTestRunResultsExtraction', () => {
       .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
       .get('run-race-old') as { structured_result: string | null };
     expect(oldRowAfterSweep.structured_result).toBeNull();
+  });
+
+  it("clears a lone-key run's own structured_result once the sweep extracts it — the extraction-scoped clear that clearSupersededStructuredResults' supersession-scoped predicate can never reach for a key with only one run", async () => {
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [{ id: 't1', name: 'n', outcome: 'failed', durationMs: 5 }],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-lonekey-sweep',
+      'proj-1',
+      'hash-lonekey-sweep',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-lonekey-sweep',
+      'passed',
+      'ok',
+      null,
+      structured,
+    );
+
+    await sweepTestRunResultsExtraction();
+
+    expect(listTestRunResultsForRun('run-lonekey-sweep')).toHaveLength(1);
+    const row = db
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
+      .get('run-lonekey-sweep') as { structured_result: string | null };
+    expect(row.structured_result).toBeNull();
+  });
+
+  it('a run with no summary row (extraction produced zero tests, so no summary is written) retains its structured_result — the boot sweep must still have it as its only source', async () => {
+    // Zero suites/tests: ingestTestRunResults's `tests.length === 0` early
+    // return means no test_run_summaries row is ever written for this run —
+    // the same "already extracted" guard clearExtractedStructuredResultsBatch
+    // relies on must correctly read this as "not yet extracted", not clear it.
+    const structured = JSON.stringify({ suites: [] });
+    insertTestRequestRun(
+      'run-unextracted',
+      'proj-1',
+      'hash-unextracted',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun('run-unextracted', 'passed', 'ok', null, structured);
+
+    await sweepTestRunResultsExtraction();
+
+    expect(hasTestRunSummary('run-unextracted')).toBe(false);
+    const row = db
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
+      .get('run-unextracted') as { structured_result: string | null };
+    expect(row.structured_result).toBe(structured);
   });
 
   function seedPendingRun(id: string, requestedAt: number): void {
