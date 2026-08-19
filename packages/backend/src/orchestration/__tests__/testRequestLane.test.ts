@@ -865,7 +865,10 @@ describe('admitTestRequest — live queue position', () => {
 
 describe('admitTestRequest — settled-run guard', () => {
   it('a re-request for a content hash whose previous run already settled is answered from that result, without a second test_request_runs row or a second executor call', async () => {
-    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'first run output' });
+    mockRunTestCommands.mockResolvedValue({
+      passed: true,
+      output: 'first run output',
+    });
 
     const first = await runProjectTestRequest(
       baseSpec({ projectId: 'proj-settled-1', contentHash: 'settled-1-hash' }),
@@ -903,7 +906,9 @@ describe('admitTestRequest — settled-run guard', () => {
 
     expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
     const rows = db
-      .prepare(`SELECT content_hash FROM test_request_runs WHERE project_id = ?`)
+      .prepare(
+        `SELECT content_hash FROM test_request_runs WHERE project_id = ?`,
+      )
       .all('proj-settled-2') as { content_hash: string }[];
     expect(rows.map((r) => r.content_hash).sort()).toEqual([
       'settled-2-new',
