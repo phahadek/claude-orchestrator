@@ -19,6 +19,7 @@ import { db } from '../db.js';
 import {
   getLaneHealthRollup,
   replaceFlaggedFlakyTestsRollup,
+  recordTestPerfDigestSample,
 } from '../queries.js';
 
 let seq = 0;
@@ -52,6 +53,8 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM flagged_flaky_tests_rollup').run();
+  db.prepare('DELETE FROM flagged_flaky_tests_rollup_watermark').run();
+  db.prepare('DELETE FROM test_perf_baselines').run();
   seq = 0;
 });
 
@@ -207,18 +210,18 @@ describe('getLaneHealthRollup', () => {
 
     db.prepare(
       `INSERT INTO test_perf_baselines
-         (test_id, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
-       VALUES ('test-a', 100, 10, 5, 900, 1, 1)`,
+         (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
+       VALUES ('test-a', 'proj-1', 'suite > slow test', 100, 10, 5, 900, 1, 1)`,
     ).run();
     db.prepare(
       `INSERT INTO test_perf_baselines
-         (test_id, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
-       VALUES ('test-b', 100, 10, 5, 100, 0, 1)`,
+         (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
+       VALUES ('test-b', 'proj-1', 'suite > steady test', 100, 10, 5, 100, 0, 1)`,
     ).run();
     db.prepare(
       `INSERT INTO test_perf_baselines
-         (test_id, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
-       VALUES ('test-c', 100, 10, 5, 900, 1, 1)`,
+         (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
+       VALUES ('test-c', 'proj-b', 'other project regressed test', 100, 10, 5, 900, 1, 1)`,
     ).run();
 
     const result = getLaneHealthRollup('proj-1');
@@ -263,6 +266,18 @@ describe('getLaneHealthRollup', () => {
         outcome: opts.outcome,
         created_at: opts.createdAt,
       });
+      // computeTestFlipRateFlag (behind replaceFlaggedFlakyTestsRollup) now
+      // reads the test_perf_baselines digest rather than raw rows.
+      recordTestPerfDigestSample(
+        opts.testId,
+        opts.projectId,
+        opts.name,
+        opts.outcome,
+        1,
+        0,
+        false,
+        opts.createdAt,
+      );
     }
 
     // getLaneHealthRollup reads flakyTests off the precomputed

@@ -2481,6 +2481,67 @@ export function runMigrations(target: Database.Database): void {
       ON test_perf_baselines(is_regressed);
   `);
 
+  // test_perf_baselines digest extension (dig-test-results-at-ingest task):
+  // project_id/name let this table serve as the sole per-test read surface
+  // (getRegressedTestsForProject, the flip-rate rollup candidate scan) once
+  // test_run_results stops carrying a row for every passing test — this
+  // table no longer has a reliable join partner for scoping/naming.
+  // recent_outcomes/recent_durations are the bounded digest itself: JSON
+  // arrays, newest-last, capped at TEST_OUTCOME_DIGEST_CAPACITY /
+  // TEST_DURATION_DIGEST_CAPACITY (queries.ts) on every write — see
+  // recordTestPerfDigestSample. updated_at (existing column) doubles as the
+  // digest's own append-order watermark: recordTestPerfDigestSample assigns
+  // it a strictly-increasing value per ingested test (never a plain
+  // Date.now() call from a different writer), so the flip-rate rollup
+  // candidate scan can page on (updated_at, test_id) instead of on
+  // test_run_results.id like it used to.
+  for (const columnDdl of [
+    `ALTER TABLE test_perf_baselines ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE test_perf_baselines ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE test_perf_baselines ADD COLUMN recent_outcomes TEXT NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE test_perf_baselines ADD COLUMN recent_durations TEXT NOT NULL DEFAULT '[]'`,
+  ]) {
+    try {
+      target.exec(columnDdl);
+    } catch {
+      /* already exists */
+    }
+  }
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_test_perf_baselines_project_updated
+      ON test_perf_baselines(project_id, updated_at, test_id);
+  `);
+
+  // test_run_summaries: one row per test_request_run holding outcome counts
+  // and total duration for the run — the replacement for enumerating every
+  // test_run_results row of a run now that only non-passing outcomes get a
+  // row there. Written once per run, in the same transaction as the raw
+  // failure rows and the test_perf_baselines digest updates (see
+  // ingestTestRunResultsTx in queries.ts), so it doubles as the extraction
+  // idempotency/existence marker that hasTestRunResults used to serve —
+  // required because an all-passing run now writes zero test_run_results
+  // rows, so that table can no longer answer "was this run already
+  // extracted".
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS test_run_summaries (
+      test_request_run_id  TEXT    PRIMARY KEY,
+      project_id           TEXT    NOT NULL,
+      passed_count         INTEGER NOT NULL DEFAULT 0,
+      failed_count         INTEGER NOT NULL DEFAULT 0,
+      skipped_count        INTEGER NOT NULL DEFAULT 0,
+      error_count          INTEGER NOT NULL DEFAULT 0,
+      other_count          INTEGER NOT NULL DEFAULT 0,
+      total_count          INTEGER NOT NULL,
+      total_duration_ms    INTEGER NOT NULL,
+      concurrent_run_count INTEGER,
+      oom_killed           INTEGER NOT NULL DEFAULT 0,
+      created_at           INTEGER NOT NULL,
+      FOREIGN KEY (test_request_run_id) REFERENCES test_request_runs(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_test_run_summaries_project_created
+      ON test_run_summaries(project_id, created_at);
+  `);
+
   // flagged_flaky_tests_rollup: one row per (project_id, test_id) currently
   // flagged by computeTestFlipRateFlag — see listFlaggedFlakyTests/
   // replaceFlaggedFlakyTestsRollup in db/queries.ts. Recomputed incrementally
@@ -2739,6 +2800,24 @@ export function runMigrations(target: Database.Database): void {
       updated_at                INTEGER NOT NULL
     );
   `);
+
+  // last_digest_updated_at/last_digest_test_id: the candidate scan's
+  // watermark moved from paging test_run_results.id to paging
+  // test_perf_baselines(project_id, updated_at, test_id) — see the
+  // test_perf_baselines digest comment above. last_test_run_result_id is
+  // left in place (unused going forward) rather than dropped, since SQLite
+  // can't drop a column referenced by nothing else without a full table
+  // rebuild and this migration is forward-only.
+  for (const columnDdl of [
+    `ALTER TABLE flagged_flaky_tests_rollup_watermark ADD COLUMN last_digest_updated_at INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE flagged_flaky_tests_rollup_watermark ADD COLUMN last_digest_test_id TEXT NOT NULL DEFAULT ''`,
+  ]) {
+    try {
+      target.exec(columnDdl);
+    } catch {
+      /* already exists */
+    }
+  }
 
   // getLatestTestRequestRunForSession (queries.ts) filters on
   // (project_id, session_id, state) and sorts by started_at/finished_at, but

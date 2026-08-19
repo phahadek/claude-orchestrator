@@ -18,10 +18,23 @@ import {
   replaceFlaggedFlakyTestsRollup,
   getFlaggedFlakyTestsRollup,
   getLaneHealthRollup,
+  recordTestPerfDigestSample,
 } from '../queries.js';
 
 let seq = 0;
 
+/**
+ * Ingests one synthetic outcome: for a 'failed' outcome, a raw
+ * test_run_results row (listFlaggedFlakyTests' candidate-gathering join
+ * still reads that table — see its own doc comment: any flaggable test must
+ * have failed at least once, so scoping candidates off failure rows alone
+ * stays correct), and — for every outcome, including 'passed' — a sample on
+ * the test_perf_baselines digest, since computeTestFlipRateFlag (and the
+ * flip-rate rollup's candidate scan) now read from there rather than raw
+ * rows. createdAt doubles as the digest's caller-assigned sequenced-at value
+ * (recordTestPerfDigestSample) so ordering in these fixtures stays exactly
+ * what the test author wrote.
+ */
 function insertTestResult(opts: {
   projectId: string;
   testId: string;
@@ -40,24 +53,37 @@ function insertTestResult(opts: {
     project_id: opts.projectId,
     content_hash: `hash-${seq}`,
   });
-  db.prepare(
-    `INSERT INTO test_run_results
-       (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
-     VALUES (@run_id, @project_id, @test_id, @name, @outcome, 1, 0, 0, @created_at)`,
-  ).run({
-    run_id: runId,
-    project_id: opts.projectId,
-    test_id: opts.testId,
-    name: opts.name,
-    outcome: opts.outcome,
-    created_at: opts.createdAt,
-  });
+  if (opts.outcome === 'failed') {
+    db.prepare(
+      `INSERT INTO test_run_results
+         (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+       VALUES (@run_id, @project_id, @test_id, @name, @outcome, 1, 0, 0, @created_at)`,
+    ).run({
+      run_id: runId,
+      project_id: opts.projectId,
+      test_id: opts.testId,
+      name: opts.name,
+      outcome: opts.outcome,
+      created_at: opts.createdAt,
+    });
+  }
+  recordTestPerfDigestSample(
+    opts.testId,
+    opts.projectId,
+    opts.name,
+    opts.outcome,
+    1,
+    0,
+    false,
+    opts.createdAt,
+  );
 }
 
 beforeEach(() => {
   db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM flagged_flaky_tests_rollup').run();
+  db.prepare('DELETE FROM flagged_flaky_tests_rollup_watermark').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
   seq = 0;
 });
@@ -120,10 +146,15 @@ describe('flagged_flaky_tests_rollup equivalence', () => {
         createdAt: i,
       }),
     );
+    // The digest sample calls above (via insertTestResult) already created
+    // test-flaky's test_perf_baselines row — update its median/mad/
+    // is_regressed columns rather than INSERT, which would collide on the
+    // test_id primary key.
     db.prepare(
-      `INSERT INTO test_perf_baselines
-         (test_id, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
-       VALUES ('test-flaky', 100, 10, 5, 900, 1, 1)`,
+      `UPDATE test_perf_baselines
+       SET median_duration_ms = 100, mad_duration_ms = 10, sample_count = 5,
+           last_duration_ms = 900, is_regressed = 1
+       WHERE test_id = 'test-flaky'`,
     ).run();
 
     const preOptimizationFlaky = listFlaggedFlakyTests('proj-1', 20, 2);

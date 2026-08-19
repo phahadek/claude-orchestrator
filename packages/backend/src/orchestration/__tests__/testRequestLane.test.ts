@@ -56,10 +56,14 @@ import {
   listRunningTestRequestRuns,
   getLatestTestRequestRun,
   listTestRunResultsForRun,
-  insertTestRunResults,
+  ingestTestRunResultsTx,
+  hasTestRunSummary,
+  getTestRunSummary,
   getTestPerfBaseline,
   listRecentValidTestDurations,
   computeTestFlipRateFlag,
+  TEST_OUTCOME_DIGEST_CAPACITY,
+  TEST_DURATION_DIGEST_CAPACITY,
 } from '../../db/queries';
 
 beforeEach(() => {
@@ -71,6 +75,7 @@ beforeEach(() => {
   mockLoadOrchestratorConfig.mockReset();
   mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
   db.prepare('DELETE FROM test_run_results').run();
+  db.prepare('DELETE FROM test_run_summaries').run();
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
 });
@@ -78,13 +83,16 @@ beforeEach(() => {
 let sampleSeq = 0;
 
 /**
- * Inserts one test_run_results row (with a backing test_request_runs row for
- * the FK) for a given test_id/duration/validity. concurrentRunCount is
- * required, not defaulted — the whole point of these baseline/flip-rate
- * tests is exercising query logic given an arbitrary already-recorded
- * value, not re-deriving what the production admission path writes; see the
- * "concurrent_run_count" describe block below for tests that drive the real
- * admission path instead.
+ * Ingests one synthetic passing test result (with a backing test_request_runs
+ * row for the FK) for a given test_id/duration/validity, through the same
+ * ingestTestRunResultsTx path production ingestion uses — so the
+ * test_perf_baselines digest (recent_outcomes/recent_durations) the
+ * baseline/flip-rate query functions now read from gets populated exactly
+ * like a real run would. concurrentRunCount is required, not defaulted — the
+ * whole point of these baseline/flip-rate tests is exercising query logic
+ * given an arbitrary already-recorded value, not re-deriving what the
+ * production admission path writes; see the "concurrent_run_count" describe
+ * block below for tests that drive the real admission path instead.
  */
 function insertSample(
   testId: string,
@@ -93,7 +101,7 @@ function insertSample(
 ): void {
   const runId = `perf-run-${testId}-${sampleSeq++}`;
   insertTestRequestRun(runId, 'proj-1', `perf-hash-${runId}`, null, Date.now());
-  insertTestRunResults(
+  ingestTestRunResultsTx(
     runId,
     'proj-1',
     [
@@ -104,6 +112,24 @@ function insertSample(
         duration_ms: durationMs,
       },
     ],
+    opts.concurrentRunCount,
+    opts.oomKilled ?? false,
+  );
+}
+
+/** Like insertSample, but with a caller-chosen outcome — for flip-rate digest tests. */
+function insertOutcomeSample(
+  testId: string,
+  outcome: 'passed' | 'failed',
+  durationMs: number,
+  opts: { concurrentRunCount: number; oomKilled?: boolean },
+): void {
+  const runId = `flip-run-${testId}-${sampleSeq++}`;
+  insertTestRequestRun(runId, 'proj-1', `flip-hash-${runId}`, null, Date.now());
+  ingestTestRunResultsTx(
+    runId,
+    'proj-1',
+    [{ test_id: testId, name: testId, outcome, duration_ms: durationMs }],
     opts.concurrentRunCount,
     opts.oomKilled ?? false,
   );
@@ -517,11 +543,11 @@ describe('structured_result acquisition', () => {
         {
           name: 'pytest',
           tests: [
-            { id: 't1', name: 'test one', outcome: 'passed', durationMs: 10 },
+            { id: 't1', name: 'test one', outcome: 'failed', durationMs: 10 },
           ],
         },
       ],
-      totals: { passed: 1, failed: 0, skipped: 0, errors: 0 },
+      totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
       durationMsTotal: 10,
     };
     mockLoadOrchestratorConfig.mockReturnValue({
@@ -549,7 +575,7 @@ describe('structured_result acquisition', () => {
         {
           name: 'pytest',
           tests: [
-            { id: 't1', name: 'test one', outcome: 'passed', durationMs: 12 },
+            { id: 't1', name: 'test one', outcome: 'failed', durationMs: 12 },
           ],
         },
       ],
@@ -593,7 +619,39 @@ describe('structured_result acquisition', () => {
 // ── ingestTestRunResults — per-test extraction from structured_result ──────
 
 describe('ingestTestRunResults', () => {
-  it('produces one row per test with correct outcome/duration, carrying the run validity signals', () => {
+  it('writes zero test_run_results rows for a run whose results are all passed', () => {
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [
+            { id: 't1', name: 'test one', outcome: 'passed', durationMs: 12 },
+            { id: 't2', name: 'test two', outcome: 'passed', durationMs: 34 },
+          ],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-extract-allpass',
+      'proj-1',
+      'hash-extract-allpass',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-extract-allpass',
+      'passed',
+      'ok',
+      null,
+      structured,
+    );
+
+    const run = getLatestTestRequestRun('proj-1', 'hash-extract-allpass')!;
+    ingestTestRunResults(run);
+
+    expect(listTestRunResultsForRun('run-extract-allpass')).toHaveLength(0);
+  });
+
+  it('writes exactly one row per non-passing result for a mixed run, carrying the run validity signals, and folds the passing result into the digest without a raw row', () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -625,27 +683,70 @@ describe('ingestTestRunResults', () => {
     ingestTestRunResults(run);
 
     const rows = listTestRunResultsForRun('run-extract-1');
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      test_id: 't1',
-      name: 'test one',
-      outcome: 'passed',
-      duration_ms: 12,
-      concurrent_run_count: 2,
-      oom_killed: 1,
-    });
-    expect(rows[1]).toMatchObject({
       test_id: 't2',
       name: 'test two',
       outcome: 'failed',
       duration_ms: 34,
+      concurrent_run_count: 2,
+      oom_killed: 1,
     });
+
+    // t1's passing result never got a raw row, but did reach the digest.
+    expect(listRecentValidTestDurations('t1', 10)).toEqual([]); // invalid — concurrent_run_count=2
   });
 
-  it('is idempotent — calling it twice does not duplicate rows', () => {
+  it('the per-run summary record reports outcome counts equal to the ingested results for a mixed pass/fail/skip run', () => {
     const structured = JSON.stringify({
       suites: [
-        { tests: [{ id: 't1', name: 'n', outcome: 'passed', durationMs: 1 }] },
+        {
+          tests: [
+            { id: 't1', name: 'n1', outcome: 'passed', durationMs: 10 },
+            { id: 't2', name: 'n2', outcome: 'passed', durationMs: 20 },
+            { id: 't3', name: 'n3', outcome: 'failed', durationMs: 30 },
+            { id: 't4', name: 'n4', outcome: 'skipped', durationMs: 0 },
+          ],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-extract-summary',
+      'proj-1',
+      'hash-extract-summary',
+      null,
+      Date.now(),
+      0,
+    );
+    completeTestRequestRun(
+      'run-extract-summary',
+      'passed',
+      'ok',
+      null,
+      structured,
+    );
+
+    const run = getLatestTestRequestRun('proj-1', 'hash-extract-summary')!;
+    ingestTestRunResults(run);
+
+    const summary = getTestRunSummary('run-extract-summary')!;
+    expect(summary.passed_count).toBe(2);
+    expect(summary.failed_count).toBe(1);
+    expect(summary.skipped_count).toBe(1);
+    expect(summary.error_count).toBe(0);
+    expect(summary.total_count).toBe(4);
+    expect(summary.total_duration_ms).toBe(60);
+  });
+
+  it('is idempotent — calling it twice does not duplicate the raw failure row, the summary, or the digest', () => {
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [
+            { id: 't1', name: 'n', outcome: 'passed', durationMs: 1 },
+            { id: 't2', name: 'n2', outcome: 'failed', durationMs: 2 },
+          ],
+        },
       ],
     });
     insertTestRequestRun(
@@ -654,6 +755,7 @@ describe('ingestTestRunResults', () => {
       'hash-extract-2',
       null,
       Date.now(),
+      0,
     );
     completeTestRequestRun('run-extract-2', 'passed', 'ok', null, structured);
 
@@ -662,6 +764,7 @@ describe('ingestTestRunResults', () => {
     ingestTestRunResults(run);
 
     expect(listTestRunResultsForRun('run-extract-2')).toHaveLength(1);
+    expect(listRecentValidTestDurations('t1', 10)).toEqual([1]);
   });
 
   it('is a no-op when structured_result is null', () => {
@@ -678,6 +781,7 @@ describe('ingestTestRunResults', () => {
     ingestTestRunResults(run);
 
     expect(listTestRunResultsForRun('run-extract-3')).toHaveLength(0);
+    expect(hasTestRunSummary('run-extract-3')).toBe(false);
   });
 });
 
@@ -686,7 +790,7 @@ describe('sweepTestRunResultsExtraction', () => {
     const structured = JSON.stringify({
       suites: [
         {
-          tests: [{ id: 't1', name: 'n', outcome: 'passed', durationMs: 5 }],
+          tests: [{ id: 't1', name: 'n', outcome: 'failed', durationMs: 5 }],
         },
       ],
     });
@@ -710,7 +814,7 @@ describe('sweepTestRunResultsExtraction', () => {
     const structured = JSON.stringify({
       suites: [
         {
-          tests: [{ id: 't1', name: 'n', outcome: 'passed', durationMs: 5 }],
+          tests: [{ id: 't1', name: 'n', outcome: 'failed', durationMs: 5 }],
         },
       ],
     });
@@ -730,11 +834,53 @@ describe('sweepTestRunResultsExtraction', () => {
     expect(listTestRunResultsForRun('run-sweep-2')).toHaveLength(1);
   });
 
+  it('is a no-op — writes no duplicate digest samples — when re-run against an already-ingested all-passing run', () => {
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [{ id: 't1', name: 'n', outcome: 'passed', durationMs: 5 }],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-sweep-allpass',
+      'proj-1',
+      'hash-sweep-allpass',
+      null,
+      Date.now(),
+      0,
+    );
+    completeTestRequestRun(
+      'run-sweep-allpass',
+      'passed',
+      'ok',
+      null,
+      structured,
+    );
+
+    // No raw rows and no idempotency-check-detectable state for
+    // hasTestRunResults — the boot-sweep case an all-passing run can no
+    // longer catch via that check alone; hasTestRunSummary is what makes
+    // this idempotent.
+    expect(listTestRunResultsForRun('run-sweep-allpass')).toHaveLength(0);
+    expect(hasTestRunSummary('run-sweep-allpass')).toBe(false);
+
+    sweepTestRunResultsExtraction();
+    expect(hasTestRunSummary('run-sweep-allpass')).toBe(true);
+    const durationsAfterFirstSweep = listRecentValidTestDurations('t1', 10);
+    expect(durationsAfterFirstSweep).toEqual([5]);
+
+    sweepTestRunResultsExtraction();
+
+    expect(listTestRunResultsForRun('run-sweep-allpass')).toHaveLength(0);
+    expect(listRecentValidTestDurations('t1', 10)).toEqual([5]);
+  });
+
   it("does not lose a superseded run's per-test data when its extraction was deferred past the run that superseded it", () => {
     const structuredOld = JSON.stringify({
       suites: [
         {
-          tests: [{ id: 't1', name: 'n', outcome: 'passed', durationMs: 5 }],
+          tests: [{ id: 't1', name: 'n', outcome: 'failed', durationMs: 5 }],
         },
       ],
     });
@@ -753,12 +899,13 @@ describe('sweepTestRunResultsExtraction', () => {
     expect(listTestRunResultsForRun('run-race-old')).toHaveLength(0);
 
     // A newer run for the same key completes before the sweep runs, and
-    // clears every superseded row it can — but 'run-race-old' has no
-    // test_run_results yet, so it must be skipped rather than wiped.
+    // clears every superseded row it can — but 'run-race-old' has not been
+    // extracted (no test_run_summaries row) yet, so it must be skipped
+    // rather than wiped.
     const structuredNew = JSON.stringify({
       suites: [
         {
-          tests: [{ id: 't2', name: 'n2', outcome: 'passed', durationMs: 7 }],
+          tests: [{ id: 't2', name: 'n2', outcome: 'failed', durationMs: 7 }],
         },
       ],
     });
@@ -899,5 +1046,123 @@ describe('ingestTestRunResults — inline baseline recomputation', () => {
     const baseline = getTestPerfBaseline('inline-t1');
     expect(baseline).toBeDefined();
     expect(baseline!.last_duration_ms).toBe(42);
+  });
+});
+
+// ── test_perf_baselines digest — fixed-width outcome/duration rings ────────
+
+describe('test_perf_baselines digest', () => {
+  it('excludes samples with concurrent_run_count != 0 or oom_killed = 1 from both the outcome sequence and the duration ring', () => {
+    const testId = 'digest-excludes-invalid';
+    insertOutcomeSample(testId, 'passed', 100, { concurrentRunCount: 0 });
+    insertOutcomeSample(testId, 'failed', 200, { concurrentRunCount: 1 }); // excluded — concurrent peer
+    insertOutcomeSample(testId, 'failed', 300, {
+      concurrentRunCount: 0,
+      oomKilled: true,
+    }); // excluded — oom-killed
+    insertOutcomeSample(testId, 'passed', 400, { concurrentRunCount: 0 });
+
+    expect(listRecentValidTestDurations(testId, 10)).toEqual([400, 100]);
+    const flag = computeTestFlipRateFlag(testId, 10, 1);
+    expect(flag.sampleCount).toBe(2);
+    expect(flag.transitionCount).toBe(0); // both retained samples are 'passed'
+  });
+
+  it('matches the transition count a raw-row scan over the same synthetic sequence would produce, including a run that alternates pass/fail every run', () => {
+    const testId = 'digest-transition-parity';
+    const outcomes: Array<'passed' | 'failed'> = [
+      'passed',
+      'failed',
+      'passed',
+      'failed',
+      'passed',
+      'failed',
+    ];
+    outcomes.forEach((outcome) =>
+      insertOutcomeSample(testId, outcome, 10, { concurrentRunCount: 0 }),
+    );
+
+    let expectedTransitions = 0;
+    for (let i = 1; i < outcomes.length; i++) {
+      if (outcomes[i] !== outcomes[i - 1]) expectedTransitions++;
+    }
+
+    const flag = computeTestFlipRateFlag(testId, outcomes.length, 2);
+    expect(flag.sampleCount).toBe(outcomes.length);
+    expect(flag.transitionCount).toBe(expectedTransitions);
+    expect(flag.transitionCount).toBe(outcomes.length - 1); // alternates every run
+    expect(flag.flagged).toBe(true);
+  });
+
+  it('the retained outcome sequence is fixed-width — ingesting past TEST_OUTCOME_DIGEST_CAPACITY does not grow the stored value', () => {
+    const testId = 'digest-outcome-fixed-width';
+    const overflow = TEST_OUTCOME_DIGEST_CAPACITY + 25;
+    for (let i = 0; i < overflow; i++) {
+      insertOutcomeSample(testId, i % 2 === 0 ? 'passed' : 'failed', 1, {
+        concurrentRunCount: 0,
+      });
+    }
+
+    const row = db
+      .prepare(
+        `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`,
+      )
+      .get(testId) as { recent_outcomes: string };
+    const outcomes = JSON.parse(row.recent_outcomes) as unknown[];
+    expect(outcomes.length).toBe(TEST_OUTCOME_DIGEST_CAPACITY);
+
+    // The window requested at the digest's own cap must still be fully served.
+    const flag = computeTestFlipRateFlag(
+      testId,
+      TEST_OUTCOME_DIGEST_CAPACITY,
+      1,
+    );
+    expect(flag.sampleCount).toBe(TEST_OUTCOME_DIGEST_CAPACITY);
+  });
+
+  it('the retained duration ring is fixed-width — ingesting past TEST_DURATION_DIGEST_CAPACITY does not grow the stored value', () => {
+    const testId = 'digest-duration-fixed-width';
+    const overflow = TEST_DURATION_DIGEST_CAPACITY + 25;
+    for (let i = 0; i < overflow; i++) {
+      insertSample(testId, i, { concurrentRunCount: 0 });
+    }
+
+    const row = db
+      .prepare(
+        `SELECT recent_durations FROM test_perf_baselines WHERE test_id = ?`,
+      )
+      .get(testId) as { recent_durations: string };
+    const durations = JSON.parse(row.recent_durations) as unknown[];
+    expect(durations.length).toBe(TEST_DURATION_DIGEST_CAPACITY);
+
+    const window = listRecentValidTestDurations(
+      testId,
+      TEST_DURATION_DIGEST_CAPACITY,
+    );
+    expect(window).toHaveLength(TEST_DURATION_DIGEST_CAPACITY);
+    // Newest-first: the very last ingested sample (overflow - 1) leads.
+    expect(window[0]).toBe(overflow - 1);
+  });
+
+  it('listRecentValidTestDurations/upsertTestPerfBaseline compute the same median and MAD from the retained window when more runs were ingested than the window retains', () => {
+    const testId = 'digest-median-mad-window';
+    // 30 old samples at 1000ms (well outside the baseline window), then 23
+    // recent valid samples at 100ms — BASELINE_WINDOW_SAMPLES (20) +
+    // MIN_CONSECUTIVE_REGRESSED_SAMPLES (3).
+    for (let i = 0; i < 30; i++) {
+      insertSample(testId, 1000, { concurrentRunCount: 0 });
+    }
+    for (let i = 0; i < 23; i++) {
+      insertSample(testId, 100, { concurrentRunCount: 0 });
+    }
+
+    computeTestPerfBaseline(testId);
+
+    const baseline = getTestPerfBaseline(testId)!;
+    // The 1000ms samples must have aged fully out of the window — the
+    // median/MAD reflect only the 100ms samples.
+    expect(baseline.median_duration_ms).toBe(100);
+    expect(baseline.mad_duration_ms).toBe(0);
+    expect(baseline.sample_count).toBe(20);
   });
 });

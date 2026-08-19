@@ -83,6 +83,7 @@ import {
   setPendingPush,
   setConflictNudgeSha,
   recordMergeCommitForSession,
+  recordTestPerfDigestSample,
 } from '../db/queries';
 import {
   loadAutofixCommands,
@@ -3982,17 +3983,21 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     outcome: 'passed' | 'failed';
     createdAt: number;
   }): void {
-    const runId = insertHistoryRun();
-    db.prepare(
-      `INSERT INTO test_run_results
-         (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
-       VALUES (@run_id, @test_id, @test_id, @outcome, 1, 0, 0, @created_at)`,
-    ).run({
-      run_id: runId,
-      test_id: opts.testId,
-      outcome: opts.outcome,
-      created_at: opts.createdAt,
-    });
+    insertHistoryRun();
+    // computeTestFlipRateFlag (behind evaluateF2LaneFlakyDisposition) now
+    // reads the test_perf_baselines digest rather than raw test_run_results
+    // rows. createdAt doubles as the digest's caller-assigned sequenced-at
+    // value, preserving the beforeMs cutoff semantics these tests exercise.
+    recordTestPerfDigestSample(
+      opts.testId,
+      'proj-1',
+      opts.testId,
+      opts.outcome,
+      1,
+      0,
+      false,
+      opts.createdAt,
+    );
   }
 
   /** Flags `testId` by seeding 4 alternating pass/fail history samples before `cutoff`. */
@@ -4055,6 +4060,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     seq = 0;
     db.prepare('DELETE FROM test_run_results').run();
     db.prepare('DELETE FROM test_request_runs').run();
+    db.prepare('DELETE FROM test_perf_baselines').run();
     vi.mocked(getProjectByGithubRepo).mockReturnValue({
       id: 'proj-1',
       projectDir: '/proj',

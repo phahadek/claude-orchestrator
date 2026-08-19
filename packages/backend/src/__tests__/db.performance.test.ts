@@ -34,6 +34,7 @@ import {
   replaceFlaggedFlakyTestsRollupOffMainThread,
   getFlaggedFlakyTestsRollup,
   getLatestTestRequestRunForSession,
+  recordTestPerfDigestSample,
 } from '../db/queries.js';
 import type Database from 'better-sqlite3';
 import RealDatabase from 'better-sqlite3';
@@ -1342,6 +1343,20 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
         outcome: opts.outcome,
         created_at: opts.createdAt,
       });
+    // The candidate scan/computeTestFlipRateFlag now read the
+    // test_perf_baselines digest, not raw test_run_results rows — this
+    // dispatches through the ':memory:' sync path onto the same shared `db`
+    // these tests already use, so the queries.ts writer works directly here.
+    recordTestPerfDigestSample(
+      opts.testId,
+      opts.projectId,
+      opts.name,
+      opts.outcome,
+      1,
+      0,
+      false,
+      opts.createdAt,
+    );
   }
 
   beforeEach(() => {
@@ -1350,28 +1365,38 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
       DELETE FROM test_request_runs;
       DELETE FROM flagged_flaky_tests_rollup;
       DELETE FROM flagged_flaky_tests_rollup_watermark;
+      DELETE FROM test_perf_baselines;
     `);
     seq = 0;
   });
 
-  it("the guard query's EXPLAIN QUERY PLAN searches test_run_results directly, with no join to test_request_runs", () => {
+  it("the guard query's EXPLAIN QUERY PLAN searches test_perf_baselines directly by (project_id, updated_at, test_id), with no join to test_request_runs", () => {
     const plan = typedDb
       .prepare(
         `EXPLAIN QUERY PLAN
-         SELECT COUNT(*) AS row_count, MAX(id) AS max_id
-         FROM test_run_results
-         WHERE project_id = @project_id AND id > @since_id`,
+         SELECT test_id, name, updated_at
+         FROM test_perf_baselines
+         WHERE project_id = @project_id
+           AND (updated_at > @since_updated_at
+                OR (updated_at = @since_updated_at AND test_id > @since_test_id))
+         ORDER BY updated_at ASC, test_id ASC`,
       )
-      .all({ project_id: 'proj-1', since_id: 0 }) as { detail: string }[];
+      .all({
+        project_id: 'proj-1',
+        since_updated_at: 0,
+        since_test_id: '',
+      }) as { detail: string }[];
 
-    const referencesTestRequestRuns = plan.some((row) =>
-      row.detail.includes('test_request_runs'),
+    const referencesTestRequestRuns = plan.some(
+      (row) =>
+        row.detail.includes('test_request_runs') ||
+        row.detail.includes('test_run_results'),
     );
     expect(referencesTestRequestRuns).toBe(false);
-    const usesProjectIdIndex = plan.some((row) =>
-      row.detail.includes('idx_test_run_results_project_id_id'),
+    const usesProjectUpdatedIndex = plan.some((row) =>
+      row.detail.includes('idx_test_perf_baselines_project_updated'),
     );
-    expect(usesProjectIdIndex).toBe(true);
+    expect(usesProjectUpdatedIndex).toBe(true);
   });
 
   it('a second tick with no new test_run_results rows recomputes zero tests and leaves the rollup unchanged', async () => {
@@ -1449,12 +1474,13 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
       2,
       2000,
     );
-    // One `.all()` call resolves the candidate test-id set (the GROUP BY),
-    // and one further `.all()` call per recomputed test id evaluates its
-    // flip-rate window (computeTestFlipRateFlag) — so with a single test id
-    // (test-a) carrying new rows, exactly 2 total `.all()` calls fire, not
-    // one per test in the project.
-    expect(allSpy).toHaveBeenCalledTimes(2);
+    // One `.all()` call resolves the candidate test-id set from
+    // test_perf_baselines (project_id, updated_at, test_id) — recomputing
+    // each candidate's flip-rate window (computeTestFlipRateFlag) reads its
+    // single digest row via `.get()`, not `.all()`, so with a single test id
+    // (test-a) carrying new rows, exactly 1 `.all()` call fires, not one per
+    // test in the project.
+    expect(allSpy).toHaveBeenCalledTimes(1);
     allSpy.mockRestore();
 
     expect(result.itemsProcessed).toBe(1);
@@ -1551,6 +1577,31 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
                VALUES (@run_id, 'proj-wm', 'test-wm', 'suite > wm', @outcome, 1, 0, 0, @created_at)`,
           )
           .run({ run_id: runId, outcome, created_at: createdAt });
+
+        // The worker's candidate scan/computeTestFlipRateFlag now read the
+        // test_perf_baselines digest — replicate recordTestPerfDigestSample's
+        // upsert directly against this file-backed connection (this test
+        // opens its own connection, not the app's shared `db` singleton).
+        const existing = fileDb
+          .prepare(
+            `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = 'test-wm'`,
+          )
+          .get() as { recent_outcomes: string } | undefined;
+        const outcomes = existing ? JSON.parse(existing.recent_outcomes) : [];
+        outcomes.push({ o: outcome === 'passed' ? 'P' : 'F', t: createdAt });
+        fileDb
+          .prepare(
+            `INSERT INTO test_perf_baselines
+               (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, updated_at)
+             VALUES ('test-wm', 'proj-wm', 'suite > wm', 0, 0, 0, 1, 0, @recent_outcomes, '[]', @updated_at)
+             ON CONFLICT(test_id) DO UPDATE SET
+               recent_outcomes = excluded.recent_outcomes,
+               updated_at = excluded.updated_at`,
+          )
+          .run({
+            recent_outcomes: JSON.stringify(outcomes),
+            updated_at: createdAt,
+          });
       }
 
       insertRow('passed', 1);
@@ -1571,10 +1622,13 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
       const reopened = new RealDatabase(file);
       const row = reopened
         .prepare(
-          `SELECT last_test_run_result_id FROM flagged_flaky_tests_rollup_watermark WHERE project_id = ?`,
+          `SELECT last_digest_updated_at, last_digest_test_id FROM flagged_flaky_tests_rollup_watermark WHERE project_id = ?`,
         )
-        .get('proj-wm') as { last_test_run_result_id: number } | undefined;
-      expect(row?.last_test_run_result_id).toBe(2);
+        .get('proj-wm') as
+        | { last_digest_updated_at: number; last_digest_test_id: string }
+        | undefined;
+      expect(row?.last_digest_updated_at).toBe(2);
+      expect(row?.last_digest_test_id).toBe('test-wm');
       reopened.close();
 
       // A second, independent worker dispatch against the same file reads

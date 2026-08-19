@@ -61,7 +61,14 @@ const SettingsSchema = z.object({
     .number()
     .int()
     .min(0),
-  flip_rate_window_n: z.coerce.number().int().min(1),
+  // Capped at 200 — the outcome-sequence digest on test_perf_baselines
+  // (TEST_OUTCOME_DIGEST_CAPACITY, db/queries.ts) only retains the most
+  // recent 200 valid outcomes per test. Every production caller passes this
+  // setting straight through to computeTestFlipRateFlag as windowN; a value
+  // above the digest's capacity would silently degrade flip-rate accuracy
+  // (the digest simply couldn't return more samples than it retains) with
+  // no error, so the bound here keeps that impossible.
+  flip_rate_window_n: z.coerce.number().int().min(1).max(200),
   flip_rate_threshold_k: z.coerce.number().int().min(1),
   flaky_remediation_file_threshold: z.coerce.number().int().min(1),
   decision_pick_one_paragraph_threshold: z.coerce.number().int().min(100),

@@ -1,8 +1,8 @@
 // Worker-thread entry point for FlakyTestRollupJob's per-project
 // flagged_flaky_tests_rollup recompute.
 //
-// The recompute is incremental: only test ids with a test_run_results row
-// past flagged_flaky_tests_rollup_watermark are re-run through
+// The recompute is incremental: only test ids touched (any outcome) past
+// flagged_flaky_tests_rollup_watermark are re-run through
 // computeTestFlipRateFlag, so a typical tick touches a small fraction of the
 // project's tests rather than walking the full table (previously documented
 // at 7.6s+ at 1.5M rows, growing daily — see the schema.ts comment on
@@ -20,6 +20,12 @@
 // statements are bound to that singleton connection rather than this one.
 // See walTruncateCheckpointWorker.ts for the identical pattern applied to
 // the hourly WAL TRUNCATE checkpoint.
+//
+// computeTestFlipRateFlag/getCandidates below are intentionally duplicated
+// from db/queries.ts's digest-backed versions (same reason: this file can't
+// import queries.ts) — both now read the fixed-width outcome-sequence digest
+// on test_perf_baselines (recordTestPerfDigestSample) rather than raw
+// test_run_results rows, since a passing test no longer gets a row there.
 import { parentPort, workerData } from 'worker_threads';
 import Database from 'better-sqlite3';
 
@@ -42,70 +48,89 @@ interface FlakyTestRollupWorkerResult {
   itemsProcessed: number;
 }
 
+interface DigestOutcomeSample {
+  o: 'P' | 'F';
+  t: number;
+}
+
+function parseDigestOutcomes(json: string): DigestOutcomeSample[] {
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? (parsed as DigestOutcomeSample[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 function computeTestFlipRateFlag(
   database: Database.Database,
   testId: string,
   windowN: number,
   thresholdK: number,
 ): TestFlipRateFlag {
-  const rows = database
+  const row = database
     .prepare(
-      `
-      SELECT outcome FROM (
-        SELECT outcome, created_at, id
-        FROM test_run_results
-        WHERE test_id = @test_id
-          AND concurrent_run_count = 0
-          AND oom_killed = 0
-          AND outcome IN ('passed', 'failed')
-        ORDER BY created_at DESC, id DESC
-        LIMIT @limit
-      )
-      ORDER BY created_at ASC, id ASC
-    `,
+      `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`,
     )
-    .all({ test_id: testId, limit: windowN }) as { outcome: string }[];
+    .get(testId) as { recent_outcomes: string } | undefined;
+  const all = row ? parseDigestOutcomes(row.recent_outcomes) : [];
+  const windowed = all.slice(-windowN);
 
   let transitionCount = 0;
-  for (let i = 1; i < rows.length; i++) {
-    if (rows[i].outcome !== rows[i - 1].outcome) transitionCount++;
+  for (let i = 1; i < windowed.length; i++) {
+    if (windowed[i].o !== windowed[i - 1].o) transitionCount++;
   }
 
   return {
     testId,
-    sampleCount: rows.length,
+    sampleCount: windowed.length,
     transitionCount,
     flagged: transitionCount >= thresholdK,
   };
 }
 
-function getWatermark(database: Database.Database, projectId: string): number {
+interface Watermark {
+  updatedAt: number;
+  testId: string;
+}
+
+function getWatermark(
+  database: Database.Database,
+  projectId: string,
+): Watermark {
   const row = database
     .prepare(
-      `SELECT last_test_run_result_id FROM flagged_flaky_tests_rollup_watermark WHERE project_id = ?`,
+      `SELECT last_digest_updated_at, last_digest_test_id FROM flagged_flaky_tests_rollup_watermark WHERE project_id = ?`,
     )
-    .get(projectId) as { last_test_run_result_id: number } | undefined;
-  return row?.last_test_run_result_id ?? 0;
+    .get(projectId) as
+    | { last_digest_updated_at: number; last_digest_test_id: string }
+    | undefined;
+  return {
+    updatedAt: row?.last_digest_updated_at ?? 0,
+    testId: row?.last_digest_test_id ?? '',
+  };
 }
 
 function setWatermark(
   database: Database.Database,
   projectId: string,
-  lastTestRunResultId: number,
+  watermark: Watermark,
   updatedAt: number,
 ): void {
   database
     .prepare(
       `INSERT INTO flagged_flaky_tests_rollup_watermark
-         (project_id, last_test_run_result_id, updated_at)
-       VALUES (@project_id, @last_test_run_result_id, @updated_at)
+         (project_id, last_digest_updated_at, last_digest_test_id, updated_at)
+       VALUES (@project_id, @last_digest_updated_at, @last_digest_test_id, @updated_at)
        ON CONFLICT(project_id) DO UPDATE SET
-         last_test_run_result_id = excluded.last_test_run_result_id,
+         last_digest_updated_at = excluded.last_digest_updated_at,
+         last_digest_test_id = excluded.last_digest_test_id,
          updated_at = excluded.updated_at`,
     )
     .run({
       project_id: projectId,
-      last_test_run_result_id: lastTestRunResultId,
+      last_digest_updated_at: watermark.updatedAt,
+      last_digest_test_id: watermark.testId,
       updated_at: updatedAt,
     });
 }
@@ -113,48 +138,41 @@ function setWatermark(
 interface Candidates {
   testIds: string[];
   names: Map<string, string>;
-  maxId: number;
+  watermark: Watermark;
 }
 
 function getCandidates(
   database: Database.Database,
   projectId: string,
-  sinceId: number,
+  since: Watermark,
 ): Candidates {
-  const stats = database
-    .prepare(
-      `SELECT COUNT(*) AS row_count, MAX(id) AS max_id
-       FROM test_run_results
-       WHERE project_id = @project_id AND id > @since_id`,
-    )
-    .get({ project_id: projectId, since_id: sinceId }) as {
-    row_count: number;
-    max_id: number | null;
-  };
-
-  if (stats.row_count === 0) {
-    return { testIds: [], names: new Map(), maxId: sinceId };
-  }
-
   const rows = database
     .prepare(
-      `SELECT test_id AS test_id, name AS name, MAX(created_at) AS created_at
-       FROM test_run_results
-       WHERE project_id = @project_id AND id > @since_id
-       GROUP BY test_id`,
+      `SELECT test_id AS test_id, name AS name, updated_at AS updated_at
+       FROM test_perf_baselines
+       WHERE project_id = @project_id
+         AND (updated_at > @since_updated_at
+              OR (updated_at = @since_updated_at AND test_id > @since_test_id))
+       ORDER BY updated_at ASC, test_id ASC`,
     )
-    .all({ project_id: projectId, since_id: sinceId }) as {
-    test_id: string;
-    name: string;
-  }[];
+    .all({
+      project_id: projectId,
+      since_updated_at: since.updatedAt,
+      since_test_id: since.testId,
+    }) as { test_id: string; name: string; updated_at: number }[];
+
+  if (rows.length === 0) {
+    return { testIds: [], names: new Map(), watermark: since };
+  }
 
   const names = new Map<string, string>();
   for (const row of rows) names.set(row.test_id, row.name);
+  const last = rows[rows.length - 1];
 
   return {
     testIds: rows.map((r) => r.test_id),
     names,
-    maxId: stats.max_id ?? sinceId,
+    watermark: { updatedAt: last.updated_at, testId: last.test_id },
   };
 }
 
@@ -163,8 +181,8 @@ function run(): FlakyTestRollupWorkerResult {
     workerData as FlakyTestRollupWorkerData;
   const database = new Database(dbPath);
   try {
-    const sinceId = getWatermark(database, projectId);
-    const candidates = getCandidates(database, projectId, sinceId);
+    const since = getWatermark(database, projectId);
+    const candidates = getCandidates(database, projectId, since);
 
     if (candidates.testIds.length === 0) {
       return { itemsProcessed: 0 };
@@ -197,7 +215,7 @@ function run(): FlakyTestRollupWorkerResult {
           });
         }
       }
-      setWatermark(database, projectId, candidates.maxId, computedAt);
+      setWatermark(database, projectId, candidates.watermark, computedAt);
     });
     replace();
 

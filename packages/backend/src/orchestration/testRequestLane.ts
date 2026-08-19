@@ -40,8 +40,8 @@ import {
   clearStructuredResultIfSuperseded,
   listRunningTestRequestRuns,
   listTestRequestRunsNeedingExtraction,
-  hasTestRunResults,
-  insertTestRunResults,
+  hasTestRunSummary,
+  ingestTestRunResultsTx,
   listRecentValidTestDurations,
   upsertTestPerfBaseline,
   computeTestFlipRateFlag,
@@ -331,17 +331,21 @@ export function recoverInterruptedTestRequestRuns(): void {
 }
 
 /**
- * Extracts a completed run's structured_result into one test_run_results row
- * per test, denormalizing the run's concurrent_run_count/oom_killed validity
- * signals onto each row. No-op if there's nothing to extract (no
+ * Extracts a completed run's structured_result into a test_run_summaries row
+ * (outcome counts), a test_run_results row per *non-passing* test, and a
+ * test_perf_baselines digest sample per test (passing included) —
+ * denormalizing the run's concurrent_run_count/oom_killed validity signals
+ * onto every write. No-op if there's nothing to extract (no
  * structured_result, no tests, or already extracted) — safe to call
  * unconditionally after every run and again from the boot sweep below, which
  * is what makes extraction re-derivable/idempotent rather than a one-shot
- * step that data loss can slip past.
+ * step that data loss can slip past. hasTestRunSummary (not hasTestRunResults)
+ * is the idempotency check — an all-passing run writes zero test_run_results
+ * rows, so that table alone can no longer answer "already extracted".
  */
 export function ingestTestRunResults(run: TestRequestRunRow): void {
   if (!run.structured_result) return;
-  if (hasTestRunResults(run.id)) return;
+  if (hasTestRunSummary(run.id)) return;
 
   let parsed: StructuredTestResult;
   try {
@@ -364,7 +368,7 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
   );
   if (tests.length === 0) return;
 
-  insertTestRunResults(
+  ingestTestRunResultsTx(
     run.id,
     run.project_id,
     tests,
@@ -545,7 +549,7 @@ export function sweepTestRunResultsExtraction(): void {
     // completing for the same key — clearSupersededStructuredResults skipped
     // it at that time to avoid racing this very sweep. Now that extraction
     // is done, retroactively clear it if it's no longer the latest.
-    if (hasTestRunResults(run.id)) {
+    if (hasTestRunSummary(run.id)) {
       clearStructuredResultIfSuperseded(
         run.id,
         run.project_id,

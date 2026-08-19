@@ -18,7 +18,10 @@ vi.mock('../../db/db', async () => {
 
 import { db } from '../../db/db';
 import { evaluateF2LaneFlakyDisposition } from '../testRequestLane';
-import { insertTestRunResults } from '../../db/queries';
+import {
+  insertTestRunResults,
+  recordTestPerfDigestSample,
+} from '../../db/queries';
 
 let seq = 0;
 
@@ -39,17 +42,21 @@ function insertHistorySample(opts: {
   outcome: 'passed' | 'failed';
   createdAt: number;
 }): void {
-  const runId = insertTestRequestRun();
-  db.prepare(
-    `INSERT INTO test_run_results
-       (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
-     VALUES (@run_id, @test_id, @test_id, @outcome, 1, 0, 0, @created_at)`,
-  ).run({
-    run_id: runId,
-    test_id: opts.testId,
-    outcome: opts.outcome,
-    created_at: opts.createdAt,
-  });
+  insertTestRequestRun();
+  // computeTestFlipRateFlag (behind evaluateF2LaneFlakyDisposition) now
+  // reads the test_perf_baselines digest rather than raw test_run_results
+  // rows. createdAt doubles as the digest's caller-assigned sequenced-at
+  // value, preserving the beforeMs cutoff semantics these tests exercise.
+  recordTestPerfDigestSample(
+    opts.testId,
+    'proj-1',
+    opts.testId,
+    opts.outcome,
+    1,
+    0,
+    false,
+    opts.createdAt,
+  );
 }
 
 /** Flags `testId` by seeding 4 alternating pass/fail history samples before `cutoff`. */
@@ -87,6 +94,7 @@ function seedRunFailures(
 beforeEach(() => {
   db.prepare('DELETE FROM test_run_results').run();
   db.prepare('DELETE FROM test_request_runs').run();
+  db.prepare('DELETE FROM test_perf_baselines').run();
   seq = 0;
 });
 
