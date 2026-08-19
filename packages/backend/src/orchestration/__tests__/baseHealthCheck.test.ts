@@ -164,7 +164,7 @@ describe('checkBaseBranchHealth', () => {
     expect(mockRunProjectTestRequest).toHaveBeenCalledTimes(1);
   });
 
-  it('does not treat another session\'s own test_request_runs row for the same content hash as a cached base-health confirmation', async () => {
+  it("does not treat another session's own test_request_runs row for the same content hash as a cached base-health confirmation", async () => {
     const project = makeProject();
     mockComputeWholeTreeContentHash.mockResolvedValue('hash-foreign-session');
 
