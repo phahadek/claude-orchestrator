@@ -13,7 +13,7 @@ import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
 import { normalizeTaskId } from '../tasks/taskId';
 import { getCachedType, getCachedStatus } from '../tasks/TaskWriteCommands';
-import { yieldToEventLoop } from '../utils/concurrency';
+import { yieldToEventLoop, runWithConcurrency } from '../utils/concurrency';
 
 /**
  * Recomputes whether a deploy contains a given commit. This is the git-ancestry
@@ -316,15 +316,26 @@ async function isSourceCovered(
   source: GateItem['sources'][number],
   deploySha: string,
   ancestry: AsyncDeployAncestrySource,
+  ancestryCache: Map<string, Promise<boolean>>,
 ): Promise<boolean> {
   const type = getCachedType(source.sourceTaskId);
   if (type !== null && type !== '💻 Code') {
     return getCachedStatus(source.sourceTaskId) === 'Done';
   }
-  return (
-    !!source.mergeCommit &&
-    (await ancestry.isAncestor(source.mergeCommit, deploySha))
-  );
+  if (!source.mergeCommit) return false;
+  // Memoized per (mergeCommit, deploySha) pair — multiple items (or
+  // multiple sources within one item) commonly share the same pair within
+  // a single tick, and git ancestry between two fixed shas can't change
+  // mid-tick, so a repeat pair is a spawn worth skipping entirely.
+  const key = `${source.mergeCommit}::${deploySha}`;
+  let pending = ancestryCache.get(key);
+  if (!pending) {
+    pending = Promise.resolve(
+      ancestry.isAncestor(source.mergeCommit, deploySha),
+    );
+    ancestryCache.set(key, pending);
+  }
+  return pending;
 }
 
 /** True once every source is covered — see isSourceCovered for the per-source, Type-dependent test. */
@@ -332,13 +343,23 @@ async function isItemCovered(
   item: GateItem,
   deploySha: string,
   ancestry: AsyncDeployAncestrySource,
+  ancestryCache: Map<string, Promise<boolean>>,
 ): Promise<boolean> {
   if (item.sources.length === 0) return true;
   for (const source of item.sources) {
-    if (!(await isSourceCovered(source, deploySha, ancestry))) return false;
+    if (!(await isSourceCovered(source, deploySha, ancestry, ancestryCache)))
+      return false;
   }
   return true;
 }
+
+/**
+ * Bound on simultaneous in-flight `git merge-base` spawns per tick — high
+ * enough that the ancestry checks (see isSourceCovered) no longer serialize
+ * one-at-a-time behind each other's I/O wait, low enough to not fork-bomb a
+ * tick with hundreds of open gate items.
+ */
+const RECONCILE_ANCESTRY_CONCURRENCY = 8;
 
 export async function reconcileGateRunnability(
   deploySha: string,
@@ -353,53 +374,62 @@ export async function reconcileGateRunnability(
     ? gateStore.listByProject(options.project)
     : gateStore.listAll();
 
-  for (const item of items) {
-    if (item.state === 'pass') {
-      // A pass is terminal for runnability — a redeploy never re-opens it.
-      // Skipped before the ancestry check below: re-checking coverage for
-      // an item that can never change state is pure wasted git-spawn cost.
-      continue;
-    }
+  // A pass is terminal for runnability — a redeploy never re-opens it.
+  // Filtered out before the ancestry check below: re-checking coverage for
+  // an item that can never change state is pure wasted git-spawn cost.
+  const candidates = items.filter((item) => item.state !== 'pass');
 
-    // The dominant cost of this loop is the per-source git-ancestry check
-    // (see isSourceCovered) — async so the git subprocess's I/O wait yields
-    // to the event loop instead of blocking the whole Node process for the
-    // tick's full duration. The explicit yield still lets pending HTTP/WS
-    // request handling interleave between items.
-    await yieldToEventLoop();
+  const ancestryCache = new Map<string, Promise<boolean>>();
 
-    const covered = await isItemCovered(item, deploySha, ancestry);
+  await runWithConcurrency(
+    candidates,
+    RECONCILE_ANCESTRY_CONCURRENCY,
+    async (item) => {
+      // The dominant cost of this loop is the per-source git-ancestry check
+      // (see isSourceCovered) — async so the git subprocess's I/O wait
+      // yields to the event loop instead of blocking the whole Node
+      // process. runWithConcurrency above already keeps several of these
+      // in flight at once rather than serializing them item by item.
+      await yieldToEventLoop();
 
-    let state = item.state;
-    let currentDisposition = item.currentDisposition;
+      const covered = await isItemCovered(
+        item,
+        deploySha,
+        ancestry,
+        ancestryCache,
+      );
 
-    if (state === 'fail') {
-      const failedAtCommit = minDeployedCommitAtLastFail(item);
-      const advanced = (item.minDeployedCommit ?? null) !== failedAtCommit;
-      if (advanced && covered) {
-        gateStore.appendEvent(item.id, {
-          disposition: 'reopened',
-          operator: 'gate-reconciler',
-          evidence: { reason: 'follow-up fix source deployed' },
-          at: now,
-        });
-        gateStore.advanceState(item.id, 'open', 'reopened', now);
-        reopened.push(item.id);
-        state = 'open';
-        currentDisposition = 'reopened';
+      let state = item.state;
+      let currentDisposition = item.currentDisposition;
+
+      if (state === 'fail') {
+        const failedAtCommit = minDeployedCommitAtLastFail(item);
+        const advanced = (item.minDeployedCommit ?? null) !== failedAtCommit;
+        if (advanced && covered) {
+          gateStore.appendEvent(item.id, {
+            disposition: 'reopened',
+            operator: 'gate-reconciler',
+            evidence: { reason: 'follow-up fix source deployed' },
+            at: now,
+          });
+          gateStore.advanceState(item.id, 'open', 'reopened', now);
+          reopened.push(item.id);
+          state = 'open';
+          currentDisposition = 'reopened';
+        }
       }
-    }
 
-    if (state === 'open' && covered) {
-      gateStore.advanceState(item.id, 'runnable', currentDisposition, now);
-      markedRunnable.push(item.id);
-      continue;
-    }
+      if (state === 'open' && covered) {
+        gateStore.advanceState(item.id, 'runnable', currentDisposition, now);
+        markedRunnable.push(item.id);
+        return;
+      }
 
-    if (state === 'runnable' && !covered) {
-      gateStore.advanceState(item.id, 'open', currentDisposition, now);
-    }
-  }
+      if (state === 'runnable' && !covered) {
+        gateStore.advanceState(item.id, 'open', currentDisposition, now);
+      }
+    },
+  );
 
   return { markedRunnable, reopened };
 }

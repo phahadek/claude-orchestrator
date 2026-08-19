@@ -1302,6 +1302,42 @@ describe('reconcileGateRunnability — synchronous git-spawn hot-path regression
     // above would have no chance to fire first.
     expect(order[0]).toBe('timer');
   });
+
+  it('runs ancestry checks with bounded concurrency rather than fully serial, one item at a time', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const isAncestor = vi.fn(async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      inFlight--;
+      return true;
+    });
+
+    for (let i = 0; i < 6; i++) {
+      const item = makeItem({ text: `item ${i}` });
+      mergeSource(item.id, `sha-${i}`, new Date(1).toISOString());
+    }
+
+    await reconcileGateRunnability('sha1', { ancestrySource: { isAncestor } });
+
+    // A fully serial loop can never have more than one ancestry check in
+    // flight at a time — more than one overlapping proves the checks are
+    // actually running concurrently, not just yielding between each other.
+    expect(maxInFlight).toBeGreaterThan(1);
+  });
+
+  it('issues only one isAncestor call for two items sharing the same (mergeCommit, deploySha) pair within a tick', async () => {
+    const isAncestor = vi.fn(() => true);
+    const itemA = makeItem({ text: 'item a' });
+    const itemB = makeItem({ text: 'item b' });
+    mergeSource(itemA.id, 'sha-shared', new Date(1).toISOString());
+    mergeSource(itemB.id, 'sha-shared', new Date(1).toISOString());
+
+    await reconcileGateRunnability('sha1', { ancestrySource: { isAncestor } });
+
+    expect(isAncestor).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('runGateReconcilerTick — verify concurrency budgeting', () => {

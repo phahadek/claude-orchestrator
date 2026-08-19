@@ -21,6 +21,7 @@ vi.mock('../../db/db.js', async () => {
 
 import { db } from '../../db/db.js';
 import { insertSession, insertLocalBranch } from '../../db/queries.js';
+import * as queries from '../../db/queries.js';
 import {
   insertItem,
   getItem,
@@ -288,5 +289,39 @@ describe('catchUpMergeCommits — reconciler durability net', () => {
     });
 
     expect(await catchUpMergeCommits()).toEqual({ filled: 0 });
+  });
+});
+
+describe('catchUpMergeCommits — backoff for a permanently-unresolved source', () => {
+  it('does not re-issue a lookup for a source whose prior attempt returned no merge commit, within the backoff window', async () => {
+    insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Never resolves',
+      classification: 'needs-triage',
+      sources: [
+        {
+          sourceTaskId: 'notion:unresolvable',
+          sourceTaskTitle: 'Ghost task',
+        },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    const spy = vi
+      .spyOn(queries, 'getMergeCommitForTask')
+      .mockResolvedValue(null);
+
+    const first = await catchUpMergeCommits();
+    expect(first.filled).toBe(0);
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // Still unresolved and still within the backoff window — no repeat
+    // lookup, unlike the unbounded-retry behavior this test guards against.
+    const second = await catchUpMergeCommits();
+    expect(second.filled).toBe(0);
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    spy.mockRestore();
   });
 });
