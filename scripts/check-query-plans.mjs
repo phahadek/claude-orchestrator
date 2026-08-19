@@ -143,20 +143,14 @@ const ACCEPTED_SCANS = new Map([
       reason:
         REASON_ADMIN +
         ' Only ever called from a boot/scheduler pass (sweepTestRunResultsExtraction or ' +
-        'the one-time schema.ts backfill), per this function\'s own doc comment — never ' +
+        "the one-time schema.ts backfill), per this function's own doc comment — never " +
         'the synchronous test-request completion path.',
     },
   ],
   ['db/queries.ts:9966', { reason: REASON_DEBT }],
   ['db/queries.ts:10363', { reason: REASON_DEBT }],
-  [
-    'db/queries.ts:11700',
-    { reason: REASON_BOUNDED + ' ' + REASON_JSON_EACH },
-  ],
-  [
-    'db/queries.ts:11708',
-    { reason: REASON_BOUNDED + ' ' + REASON_JSON_EACH },
-  ],
+  ['db/queries.ts:11700', { reason: REASON_BOUNDED + ' ' + REASON_JSON_EACH }],
+  ['db/queries.ts:11708', { reason: REASON_BOUNDED + ' ' + REASON_JSON_EACH }],
   ['investigation/investigationReconciler.ts:31', { reason: REASON_ADMIN }],
   ['investigation/reportStore.ts:323', { reason: REASON_ADMIN }],
 ]);
