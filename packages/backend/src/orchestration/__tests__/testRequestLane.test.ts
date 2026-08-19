@@ -1104,13 +1104,19 @@ describe('test_perf_baselines digest', () => {
     }
 
     const row = db
-      .prepare(`SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`)
+      .prepare(
+        `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`,
+      )
       .get(testId) as { recent_outcomes: string };
     const outcomes = JSON.parse(row.recent_outcomes) as unknown[];
     expect(outcomes.length).toBe(TEST_OUTCOME_DIGEST_CAPACITY);
 
     // The window requested at the digest's own cap must still be fully served.
-    const flag = computeTestFlipRateFlag(testId, TEST_OUTCOME_DIGEST_CAPACITY, 1);
+    const flag = computeTestFlipRateFlag(
+      testId,
+      TEST_OUTCOME_DIGEST_CAPACITY,
+      1,
+    );
     expect(flag.sampleCount).toBe(TEST_OUTCOME_DIGEST_CAPACITY);
   });
 
@@ -1122,7 +1128,9 @@ describe('test_perf_baselines digest', () => {
     }
 
     const row = db
-      .prepare(`SELECT recent_durations FROM test_perf_baselines WHERE test_id = ?`)
+      .prepare(
+        `SELECT recent_durations FROM test_perf_baselines WHERE test_id = ?`,
+      )
       .get(testId) as { recent_durations: string };
     const durations = JSON.parse(row.recent_durations) as unknown[];
     expect(durations.length).toBe(TEST_DURATION_DIGEST_CAPACITY);

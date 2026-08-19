@@ -75,7 +75,9 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
     // call queries.ts's recordTestPerfDigestSample; replicate its upsert
     // directly against this test's own connection instead.
     const existing = db
-      .prepare(`SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`)
+      .prepare(
+        `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`,
+      )
       .get(opts.testId) as { recent_outcomes: string } | undefined;
     const outcomes = existing ? JSON.parse(existing.recent_outcomes) : [];
     outcomes.push({

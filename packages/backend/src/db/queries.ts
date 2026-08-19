@@ -8630,7 +8630,9 @@ export function recordTestPerfDigestSample(
     | { recent_outcomes: string; recent_durations: string }
     | undefined;
 
-  const outcomes = existing ? parseDigestOutcomes(existing.recent_outcomes) : [];
+  const outcomes = existing
+    ? parseDigestOutcomes(existing.recent_outcomes)
+    : [];
   if (outcome === 'passed' || outcome === 'failed') {
     outcomes.push({ o: outcome === 'passed' ? 'P' : 'F', t: sequencedAt });
     if (outcomes.length > TEST_OUTCOME_DIGEST_CAPACITY) {
@@ -8943,9 +8945,10 @@ export function computeTestFlipRateFlag(
     | { recent_outcomes: string }
     | undefined;
   const all = row ? parseDigestOutcomes(row.recent_outcomes) : [];
-  const filtered = beforeMs === Number.MAX_SAFE_INTEGER
-    ? all
-    : all.filter((s) => s.t < beforeMs);
+  const filtered =
+    beforeMs === Number.MAX_SAFE_INTEGER
+      ? all
+      : all.filter((s) => s.t < beforeMs);
   const windowed = filtered.slice(-windowN);
 
   let transitionCount = 0;

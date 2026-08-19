@@ -227,7 +227,7 @@ describe('typedSetSetting — non-conforming values throw ZodError', () => {
     expect(mockSetSetting).not.toHaveBeenCalled();
   });
 
-  it('rejects a flip_rate_window_n value exceeding the digest\'s retained outcome-sequence capacity (200)', () => {
+  it("rejects a flip_rate_window_n value exceeding the digest's retained outcome-sequence capacity (200)", () => {
     expect(() => typedSetSetting('flip_rate_window_n', 201)).toThrow();
     expect(mockSetSetting).not.toHaveBeenCalled();
   });

@@ -18,7 +18,10 @@ vi.mock('../../db/db', async () => {
 
 import { db } from '../../db/db';
 import { evaluateF2LaneFlakyDisposition } from '../testRequestLane';
-import { insertTestRunResults, recordTestPerfDigestSample } from '../../db/queries';
+import {
+  insertTestRunResults,
+  recordTestPerfDigestSample,
+} from '../../db/queries';
 
 let seq = 0;
 

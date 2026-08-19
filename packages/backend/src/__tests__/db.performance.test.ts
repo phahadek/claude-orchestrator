@@ -1387,9 +1387,10 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
         since_test_id: '',
       }) as { detail: string }[];
 
-    const referencesTestRequestRuns = plan.some((row) =>
-      row.detail.includes('test_request_runs') ||
-      row.detail.includes('test_run_results'),
+    const referencesTestRequestRuns = plan.some(
+      (row) =>
+        row.detail.includes('test_request_runs') ||
+        row.detail.includes('test_run_results'),
     );
     expect(referencesTestRequestRuns).toBe(false);
     const usesProjectUpdatedIndex = plan.some((row) =>
@@ -1582,7 +1583,9 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
         // upsert directly against this file-backed connection (this test
         // opens its own connection, not the app's shared `db` singleton).
         const existing = fileDb
-          .prepare(`SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = 'test-wm'`)
+          .prepare(
+            `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = 'test-wm'`,
+          )
           .get() as { recent_outcomes: string } | undefined;
         const outcomes = existing ? JSON.parse(existing.recent_outcomes) : [];
         outcomes.push({ o: outcome === 'passed' ? 'P' : 'F', t: createdAt });
@@ -1595,7 +1598,10 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
                recent_outcomes = excluded.recent_outcomes,
                updated_at = excluded.updated_at`,
           )
-          .run({ recent_outcomes: JSON.stringify(outcomes), updated_at: createdAt });
+          .run({
+            recent_outcomes: JSON.stringify(outcomes),
+            updated_at: createdAt,
+          });
       }
 
       insertRow('passed', 1);

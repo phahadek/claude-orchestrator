@@ -69,7 +69,9 @@ function computeTestFlipRateFlag(
   thresholdK: number,
 ): TestFlipRateFlag {
   const row = database
-    .prepare(`SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`)
+    .prepare(
+      `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = ?`,
+    )
     .get(testId) as { recent_outcomes: string } | undefined;
   const all = row ? parseDigestOutcomes(row.recent_outcomes) : [];
   const windowed = all.slice(-windowN);
@@ -92,7 +94,10 @@ interface Watermark {
   testId: string;
 }
 
-function getWatermark(database: Database.Database, projectId: string): Watermark {
+function getWatermark(
+  database: Database.Database,
+  projectId: string,
+): Watermark {
   const row = database
     .prepare(
       `SELECT last_digest_updated_at, last_digest_test_id FROM flagged_flaky_tests_rollup_watermark WHERE project_id = ?`,

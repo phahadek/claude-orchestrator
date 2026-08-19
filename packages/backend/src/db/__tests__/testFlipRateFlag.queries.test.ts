@@ -15,7 +15,10 @@ vi.mock('../db.js', async () => {
 });
 
 import { db } from '../db.js';
-import { computeTestFlipRateFlag, recordTestPerfDigestSample } from '../queries.js';
+import {
+  computeTestFlipRateFlag,
+  recordTestPerfDigestSample,
+} from '../queries.js';
 
 let seq = 0;
 
