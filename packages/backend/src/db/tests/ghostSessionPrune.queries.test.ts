@@ -58,7 +58,9 @@ describe('deleteGhostSessions', () => {
 
     expect(deleted).toBe(2);
     const remaining = (
-      db.prepare('SELECT session_id FROM sessions ORDER BY session_id').all() as {
+      db
+        .prepare('SELECT session_id FROM sessions ORDER BY session_id')
+        .all() as {
         session_id: string;
       }[]
     ).map((r) => r.session_id);
@@ -77,7 +79,9 @@ describe('deleteGhostSessions', () => {
     const deleted = deleteGhostSessions();
 
     expect(deleted).toBe(0);
-    const remaining = db.prepare('SELECT COUNT(*) AS n FROM sessions').get() as {
+    const remaining = db
+      .prepare('SELECT COUNT(*) AS n FROM sessions')
+      .get() as {
       n: number;
     };
     expect(remaining.n).toBe(1);

@@ -151,6 +151,8 @@ describe('getSchedulerAuditStats', () => {
 
     expect(plan).not.toMatch(/SCAN ranked/);
     expect(plan.toUpperCase()).not.toMatch(/USE TEMP B-TREE FOR WINDOW/i);
-    expect(plan).toMatch(/SEARCH sa USING (COVERING )?INDEX idx_scheduler_audit_job/);
+    expect(plan).toMatch(
+      /SEARCH sa USING (COVERING )?INDEX idx_scheduler_audit_job/,
+    );
   });
 });
