@@ -101,6 +101,7 @@ export interface StagedIntent {
           position: number;
           queueDepth: number;
           reused: boolean;
+          unchangedReplay: boolean;
         };
       }
     | null;

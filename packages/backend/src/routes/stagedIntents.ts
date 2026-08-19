@@ -1448,6 +1448,7 @@ export interface StagedIntent {
           position: number;
           queueDepth: number;
           reused: boolean;
+          unchangedReplay: boolean;
         };
       }
     | null;
@@ -5671,6 +5672,7 @@ async function triggerTestRequestExecution(
   const inputs = resolveTestRequestExecutionInputs(intent);
   let result: TestCommandResult;
   let joined: boolean | null = null;
+  let unchangedReplay = false;
   let runId: string | null = null;
   if (!inputs.ok) {
     result = {
@@ -5711,6 +5713,7 @@ async function triggerTestRequestExecution(
         const runResult = await admission.result;
         result = runResult;
         joined = runResult.joined;
+        unchangedReplay = runResult.unchangedReplay;
         runId = runResult.runId;
       } catch (err) {
         result = {
@@ -5772,6 +5775,7 @@ async function triggerTestRequestExecution(
       disposition: 'test_request_completed',
       passed: result.passed,
       joined,
+      unchangedReplay,
       provenance: 'auto',
       ...(filterResult && filterResult.outcome !== 'unfiltered'
         ? { baseAttributableFilterOutcome: filterResult.outcome }
@@ -5797,6 +5801,7 @@ async function triggerTestRequestExecution(
         intentId: intent.id,
         passed: result.passed,
         output,
+        ...(unchangedReplay ? { unchangedReplay: true } : {}),
         ...(filterResult?.outcome === 'inconclusive'
           ? { inconclusive: true }
           : {}),
@@ -5907,7 +5912,7 @@ async function maybeAutoApproveTestRequest(
   });
 
   const priorCount = getSessionTestRequestCycleCount(intent.sessionId);
-  if (!admission.reused) {
+  if (!admission.reused && !admission.unchangedReplay) {
     // Skip the charge when the run that prompted this cycle failed for a
     // confirmed base-attributable reason (see baseAttribution.ts) — the
     // session's own change isn't what's failing, so an iterate-on-red loop
@@ -5915,8 +5920,9 @@ async function maybeAutoApproveTestRequest(
     // Unlike stalled_pr_retry_count/flake_recovery_attempts, no reset
     // primitive exists for this counter — an already-exhausted session always
     // requires a fresh dispatch, per the locked design. A reused (already
-    // pending) request never reaches here — it must not advance this budget
-    // a second time for the same underlying cycle.
+    // pending) request, or one answered from a settled prior run for an
+    // unchanged tree (unchangedReplay), never reaches here — neither
+    // advances this budget a second time for the same underlying cycle.
     const project = getProjectById(intent.projectId);
     const priorRun = project
       ? getLatestTestRequestRunForSession(project.id, intent.sessionId)
@@ -5960,6 +5966,7 @@ async function maybeAutoApproveTestRequest(
       position: admission.position,
       queueDepth: admission.queueDepth,
       reused: admission.reused,
+      unchangedReplay: admission.unchangedReplay,
     },
   });
 
