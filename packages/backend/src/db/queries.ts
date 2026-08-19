@@ -1056,7 +1056,9 @@ export function deleteGhostSessions(): number {
     .prepare(
       `
     DELETE FROM sessions
-    WHERE session_id NOT IN (SELECT DISTINCT session_id FROM session_events)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM session_events WHERE session_events.session_id = sessions.session_id
+    )
   `,
     )
     .run();
@@ -6215,29 +6217,45 @@ export interface SchedulerAuditStats {
 
 let _stmtSchedulerAuditStats: Database.Statement | null = null;
 
-export function getSchedulerAuditStats(): SchedulerAuditStats[] {
+/**
+ * Per-job stats resolved via correlated lookups against idx_scheduler_audit_job
+ * (job, started_at DESC) — one indexed probe per distinct job for the latest
+ * row, plus an indexed range scan per job for the 24h aggregates — rather than
+ * ranking every row in the table with a window function. started_at is
+ * ISO-8601 TEXT (unlike session_events.timestamp, which is epoch-ms), so the
+ * 24h cutoff is passed in as an ISO string; a numeric/epoch bound would
+ * silently match nothing.
+ */
+export function getSchedulerAuditStats(
+  now: number = Date.now(),
+): SchedulerAuditStats[] {
   _stmtSchedulerAuditStats ??= db.prepare(`
-    WITH ranked AS (
-      SELECT
-        job,
-        status,
-        duration_ms,
-        event_loop_blocked_ms,
-        started_at,
-        ROW_NUMBER() OVER (PARTITION BY job ORDER BY started_at DESC) AS rn
-      FROM scheduler_audit
-    )
     SELECT
-      job,
-      MAX(CASE WHEN rn = 1 THEN duration_ms END) AS last_duration_ms,
-      SUM(CASE WHEN status IN ('ok', 'failed') AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS run_count_24h,
-      SUM(CASE WHEN status = 'failed' AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS error_count_24h,
-      MAX(CASE WHEN started_at > datetime('now', '-24 hours') THEN event_loop_blocked_ms END) AS max_event_loop_blocked_ms_24h,
-      AVG(CASE WHEN started_at > datetime('now', '-24 hours') THEN event_loop_blocked_ms END) AS mean_event_loop_blocked_ms_24h
-    FROM ranked
-    GROUP BY job
+      j.job AS job,
+      (
+        SELECT duration_ms FROM scheduler_audit sa
+        WHERE sa.job = j.job ORDER BY sa.started_at DESC LIMIT 1
+      ) AS last_duration_ms,
+      (
+        SELECT COUNT(*) FROM scheduler_audit sa
+        WHERE sa.job = j.job AND sa.status IN ('ok', 'failed') AND sa.started_at >= @cutoff
+      ) AS run_count_24h,
+      (
+        SELECT COUNT(*) FROM scheduler_audit sa
+        WHERE sa.job = j.job AND sa.status = 'failed' AND sa.started_at >= @cutoff
+      ) AS error_count_24h,
+      (
+        SELECT MAX(event_loop_blocked_ms) FROM scheduler_audit sa
+        WHERE sa.job = j.job AND sa.started_at >= @cutoff
+      ) AS max_event_loop_blocked_ms_24h,
+      (
+        SELECT AVG(event_loop_blocked_ms) FROM scheduler_audit sa
+        WHERE sa.job = j.job AND sa.started_at >= @cutoff
+      ) AS mean_event_loop_blocked_ms_24h
+    FROM (SELECT DISTINCT job FROM scheduler_audit) j
   `);
-  const rows = _stmtSchedulerAuditStats.all() as Array<{
+  const cutoff = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+  const rows = _stmtSchedulerAuditStats.all({ cutoff }) as Array<{
     job: string;
     last_duration_ms: number | null;
     run_count_24h: number;
