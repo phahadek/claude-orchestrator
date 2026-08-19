@@ -2860,7 +2860,7 @@ const TEST_RUN_RESULTS_DIGEST_MIN_CONSECUTIVE_REGRESSED_SAMPLES = 3;
 const TEST_RUN_RESULTS_DIGEST_REGRESSION_K = 3;
 
 /** Per-statement row cap for the backfill/delete batching loops below — see PRUNE_TEST_RUN_RESULTS_BATCH_SIZE's precedent (queries.ts, since removed). */
-export const TEST_RUN_RESULTS_DIGEST_BACKFILL_BATCH_SIZE = 5000;
+const TEST_RUN_RESULTS_DIGEST_BACKFILL_BATCH_SIZE = 5000;
 
 export const TEST_RUN_RESULTS_DIGEST_BACKFILL_MARKER =
   'test_run_results_digest_backfill_v1';
