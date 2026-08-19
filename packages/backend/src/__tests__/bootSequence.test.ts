@@ -355,7 +355,9 @@ describe('boot chain — test_run_results_extraction_sweep is bounded and report
       .mocked(broadcast)
       .mock.calls.map(([msg]) => msg)
       .filter(
-        (msg): msg is Extract<
+        (
+          msg,
+        ): msg is Extract<
           ServerMessage,
           { type: 'boot_reconciliation_progress' }
         > => msg.type === 'boot_reconciliation_progress',
@@ -428,10 +430,13 @@ describe('boot ordering', () => {
       .mocked(broadcast)
       .mock.calls.map(([msg]) => msg)
       .filter(
-        (msg): msg is Extract<
+        (
+          msg,
+        ): msg is Extract<
           ServerMessage,
           { type: 'boot_reconciliation_step' }
-        > => msg.type === 'boot_reconciliation_step' && msg.status === 'started',
+        > =>
+          msg.type === 'boot_reconciliation_step' && msg.status === 'started',
       )
       .map((msg) => msg.step);
 
