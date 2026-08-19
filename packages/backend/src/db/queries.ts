@@ -8354,6 +8354,12 @@ export function getTaskTestFlipRateFlags(
  * structured_result as the sweep's only source; clearing it here would race
  * the sweep and permanently lose that row's per-test data. Every other
  * column, and test_run_results itself, is always untouched.
+ *
+ * Never clears `keepRunId`'s own row — for a (project_id, content_hash) key
+ * with no other run, that leaves its blob untouched forever. See
+ * clearExtractedStructuredResultsBatch below for the extraction-scoped clear
+ * that also covers that own-row case, from a boot/scheduler pass rather than
+ * this synchronous call site.
  */
 export function clearSupersededStructuredResults(
   projectId: string,
@@ -8381,36 +8387,54 @@ export function clearSupersededStructuredResults(
 }
 
 /**
- * Companion to clearSupersededStructuredResults for the deferred-extraction
- * path: a run whose test_run_results extraction was deferred to the
- * boot-time sweep (listTestRequestRunsNeedingExtraction) is skipped by
- * clearSupersededStructuredResults at the time a newer run for its key
- * completes, so its structured_result survives that clear. Once the sweep
- * finishes extracting it, call this to clear it in retrospect if a newer run
- * had already superseded it in the meantime — same latest-row definition as
- * getLatestTestRequestRun. No-op if this run is still the latest for its key.
+ * Bounded per-statement cap for clearExtractedStructuredResultsBatch below —
+ * keeps a single UPDATE from touching an unbounded number of rows.
  */
-export function clearStructuredResultIfSuperseded(
-  runId: string,
-  projectId: string,
-  contentHash: string,
-): void {
-  const tx = db.transaction(() => {
-    const latest = db
-      .prepare<{ project_id: string; content_hash: string }>(
-        `SELECT id FROM test_request_runs
-         WHERE project_id = @project_id AND content_hash = @content_hash AND state != 'running'
-         ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
-      )
-      .get({ project_id: projectId, content_hash: contentHash }) as
-      | { id: string }
-      | undefined;
-    if (!latest || latest.id === runId) return;
-    db.prepare(
-      `UPDATE test_request_runs SET structured_result = NULL WHERE id = ?`,
-    ).run(runId);
-  });
-  tx();
+export const STRUCTURED_RESULT_CLEAR_BATCH_CAP = 500;
+
+/**
+ * The widened, extraction-scoped clearing predicate: nulls structured_result
+ * on up to `limit` rows whose extraction has already produced a
+ * test_run_summaries row, regardless of whether a newer run has superseded
+ * them. clearSupersededStructuredResults above only ever clears an *other*
+ * row sharing a (project_id, content_hash)
+ * key — a key with exactly one run (659 of 810 distinct keys, see the "Clear
+ * structured_result once extraction has happened" task) never has an "other"
+ * row to clear, so its blob was retained forever. This function clears a
+ * run's own row too, once extraction has made the blob redundant — the same
+ * test_run_summaries EXISTS guard as above still protects a row whose
+ * extraction was deferred to the boot sweep after a crash.
+ *
+ * Must only ever be called from a boot/scheduler pass (sweepTestRunResultsExtraction
+ * in testRequestLane.ts, or the one-time backfill in schema.ts), never
+ * inline in the synchronous test-request completion path — clearing a run's
+ * own blob the moment its extraction finishes would race stagedIntents.ts's
+ * session-feedback digest read of that same row, which happens moments after
+ * ingestTestRunResults returns in that path.
+ *
+ * Returns the number of rows cleared, so a caller can loop until a call
+ * returns fewer than `limit` (exhausted) without needing a separate count
+ * query per iteration.
+ */
+export function clearExtractedStructuredResultsBatch(
+  limit: number = STRUCTURED_RESULT_CLEAR_BATCH_CAP,
+): number {
+  const result = db
+    .prepare(
+      `UPDATE test_request_runs
+       SET structured_result = NULL
+       WHERE id IN (
+         SELECT id FROM test_request_runs
+         WHERE structured_result IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM test_run_summaries
+             WHERE test_run_summaries.test_request_run_id = test_request_runs.id
+           )
+         LIMIT ?
+       )`,
+    )
+    .run(limit);
+  return result.changes;
 }
 
 /**

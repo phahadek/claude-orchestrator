@@ -37,7 +37,8 @@ import {
   insertTestRequestRun,
   completeTestRequestRun,
   clearSupersededStructuredResults,
-  clearStructuredResultIfSuperseded,
+  clearExtractedStructuredResultsBatch,
+  STRUCTURED_RESULT_CLEAR_BATCH_CAP,
   listRunningTestRequestRuns,
   listTestRequestRunsNeedingExtraction,
   countTestRequestRunsNeedingExtraction,
@@ -574,6 +575,18 @@ export interface ExtractionSweepResult {
  * each unit of work (`setImmediate`) so a synchronous, potentially
  * long-running sweep never blocks the accept queue the way the prior
  * unbounded inline loop did.
+ *
+ * Also realizes the lone-key own-row structured_result clear: a run whose
+ * (project_id, content_hash) key has no other row is never touched by
+ * clearSupersededStructuredResults (the synchronous completion path's own
+ * clear, which only ever clears an *other* row), so without this pass its
+ * blob would be retained forever once extracted. This must stay a
+ * boot/scheduler-tick concern — clearing it inline right after
+ * ingestTestRunResults in the synchronous completion path would race
+ * stagedIntents.ts's session-feedback digest read of that same row. The
+ * clearing phase below scans for *every* already-extracted-but-uncleared row
+ * (not just the ones this call happened to extract), so it also catches rows
+ * extracted synchronously by the hot completion path itself.
  */
 export async function sweepTestRunResultsExtraction(
   opts: { cap?: number; onProgress?: (remaining: number) => void } = {},
@@ -586,17 +599,6 @@ export async function sweepTestRunResultsExtraction(
       `[testRequestLane] extracting test_run_results for run ${run.id} (project ${run.project_id})`,
     );
     ingestTestRunResults(run);
-    // This run's extraction may have been deferred past a newer run
-    // completing for the same key — clearSupersededStructuredResults skipped
-    // it at that time to avoid racing this very sweep. Now that extraction
-    // is done, retroactively clear it if it's no longer the latest.
-    if (hasTestRunSummary(run.id)) {
-      clearStructuredResultIfSuperseded(
-        run.id,
-        run.project_id,
-        run.content_hash,
-      );
-    }
     processed++;
     opts.onProgress?.(pending.length - processed);
     // Yield between units — this is a boot/scheduler-tick step, not a route
@@ -605,5 +607,16 @@ export async function sweepTestRunResultsExtraction(
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
   const remaining = countTestRequestRunsNeedingExtraction();
+
+  let clearedInBatch: number;
+  do {
+    clearedInBatch = clearExtractedStructuredResultsBatch(
+      STRUCTURED_RESULT_CLEAR_BATCH_CAP,
+    );
+    if (clearedInBatch > 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  } while (clearedInBatch === STRUCTURED_RESULT_CLEAR_BATCH_CAP);
+
   return { processed, remaining };
 }
