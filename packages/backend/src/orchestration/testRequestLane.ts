@@ -49,6 +49,7 @@ import {
   computeTestFlipRateFlag,
   computeTestFailureBreadthFlag,
   getFailingTestIdsForRun,
+  getProjectRowById,
 } from '../db/queries';
 import type {
   TestRequestFailureReason,
@@ -105,15 +106,36 @@ function failureReasonFor(result: TestCommandResult): TestRequestFailureReason {
   return 'generic';
 }
 
+/**
+ * The project's configured concurrency cap: its own
+ * projects.test_request_max_concurrent when set, else the global
+ * test_request_max_concurrent_per_project setting. A project with no
+ * explicit override always resolves to the global — same behaviour as
+ * before this per-project cap existed.
+ */
+function getEffectiveProjectLimit(projectId: string): number {
+  return (
+    getProjectRowById(projectId)?.test_request_max_concurrent ??
+    typedGetSetting('test_request_max_concurrent_per_project')
+  );
+}
+
 const projectSemaphores = new Map<string, Semaphore>();
 
+/**
+ * Returns the per-project semaphore, resizing it in place whenever the
+ * project's configured limit (getEffectiveProjectLimit) has changed since it
+ * was cached — so editing a project's limit (or the global default it falls
+ * back to) takes effect on the very next acquire, no backend restart needed.
+ */
 function getProjectSemaphore(projectId: string): Semaphore {
+  const limit = getEffectiveProjectLimit(projectId);
   let sem = projectSemaphores.get(projectId);
   if (!sem) {
-    sem = new Semaphore(
-      typedGetSetting('test_request_max_concurrent_per_project'),
-    );
+    sem = new Semaphore(limit);
     projectSemaphores.set(projectId, sem);
+  } else if (sem.capacity() !== limit) {
+    sem.resize(limit);
   }
   return sem;
 }
@@ -175,7 +197,7 @@ async function executeTestRequestRun(
   const requestedAt = Date.now();
   await waitForMemoryAdmission(
     spec.projectId,
-    typedGetSetting('test_request_max_concurrent_per_project'),
+    getEffectiveProjectLimit(spec.projectId),
   );
 
   const semaphore = getProjectSemaphore(spec.projectId);

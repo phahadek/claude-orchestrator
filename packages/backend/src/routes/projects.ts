@@ -471,6 +471,23 @@ projectsRouter.patch(
       patch.base_branch = body.baseBranch;
     }
 
+    if ('testRequestMaxConcurrent' in body) {
+      if (body.testRequestMaxConcurrent === null) {
+        patch.test_request_max_concurrent = null;
+      } else if (
+        typeof body.testRequestMaxConcurrent === 'number' &&
+        Number.isInteger(body.testRequestMaxConcurrent) &&
+        body.testRequestMaxConcurrent >= 1
+      ) {
+        patch.test_request_max_concurrent = body.testRequestMaxConcurrent;
+      } else {
+        res.status(400).json({
+          error: 'testRequestMaxConcurrent must be null or an integer >= 1',
+        });
+        return;
+      }
+    }
+
     // dataResidencyConfirmed and archStoreAdopted each trigger audit logging via
     // their own dedicated service methods, applied before the plain patch.
     let auditedUpdate: Project | undefined;

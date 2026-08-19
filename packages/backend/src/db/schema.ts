@@ -2864,6 +2864,18 @@ export function runMigrations(target: Database.Database): void {
       ON test_request_runs(project_id, finished_at DESC);
   `);
 
+  // projects.test_request_max_concurrent: per-project override for the test
+  // lane's concurrency cap. NULL (the default for every existing row) means
+  // "fall back to the global test_request_max_concurrent_per_project
+  // setting" — see getProjectSemaphore in orchestration/testRequestLane.ts.
+  try {
+    target.exec(
+      `ALTER TABLE projects ADD COLUMN test_request_max_concurrent INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+
   runStructuredResultExtractedClearBackfill(target);
 }
 

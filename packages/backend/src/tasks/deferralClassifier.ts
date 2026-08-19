@@ -281,7 +281,7 @@ async function classifyDeferral(body: string): Promise<Advisory> {
  */
 export class Semaphore {
   private available: number;
-  private readonly size: number;
+  private size: number;
   private readonly queue: (() => void)[] = [];
 
   constructor(size: number) {
@@ -292,6 +292,29 @@ export class Semaphore {
   /** Count currently held (not available) — the admission-check peek, never mutates state. */
   inUse(): number {
     return this.size - this.available;
+  }
+
+  /** Current capacity — lets callers detect a configuration change and call resize(). */
+  capacity(): number {
+    return this.size;
+  }
+
+  /**
+   * Adjusts capacity in place, preserving the in-use count of already-held
+   * permits — so a live limit change (see getProjectSemaphore in
+   * orchestration/testRequestLane.ts) takes effect without discarding
+   * accounting for runs currently holding a permit. Growing capacity wakes
+   * queued waiters up to the new headroom; shrinking just lowers the
+   * available count (never revokes an already-held permit).
+   */
+  resize(newSize: number): void {
+    this.available += newSize - this.size;
+    this.size = newSize;
+    while (this.available > 0 && this.queue.length > 0) {
+      this.available--;
+      const next = this.queue.shift()!;
+      next();
+    }
   }
 
   async acquire(): Promise<() => void> {

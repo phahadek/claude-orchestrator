@@ -178,6 +178,8 @@ export interface ProjectRow {
   base_branch: string;
   /** 0 = read the project's Notion architecture pages; 1 = read the arch_unit store. */
   arch_store_adopted: number; // 0 | 1 (SQLite boolean)
+  /** Per-project test-lane concurrency cap. NULL = fall back to the global test_request_max_concurrent_per_project setting. */
+  test_request_max_concurrent: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -196,6 +198,7 @@ export type NewProjectRow = Omit<
   | 'task_source_config'
   | 'base_branch'
   | 'arch_store_adopted'
+  | 'test_request_max_concurrent'
 > & {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
@@ -207,6 +210,7 @@ export type NewProjectRow = Omit<
   task_source_config?: string | null;
   base_branch?: string;
   arch_store_adopted?: number;
+  test_request_max_concurrent?: number | null;
   created_at?: number;
   updated_at?: number;
 };

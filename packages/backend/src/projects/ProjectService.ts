@@ -61,6 +61,8 @@ export interface Project {
   baseBranch: string;
   /** True once this project reads architecture from the arch_unit store instead of Notion. */
   archStoreAdopted: boolean;
+  /** Per-project test-lane concurrency cap. Null = fall back to the global test_request_max_concurrent_per_project setting. */
+  testRequestMaxConcurrent: number | null;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -80,6 +82,7 @@ export interface CreateProjectInput {
   autoMergeEnabled?: boolean;
   dataResidencyConfirmed?: boolean;
   baseBranch?: string;
+  testRequestMaxConcurrent?: number | null;
 }
 
 export interface CreateMilestoneInput {
@@ -133,6 +136,7 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
     dataResidencyConfirmed: (row.data_residency_confirmed ?? 0) === 1,
     baseBranch: row.base_branch ?? 'dev',
     archStoreAdopted: (row.arch_store_adopted ?? 0) === 1,
+    testRequestMaxConcurrent: row.test_request_max_concurrent ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     milestones: milestones.map(rowToMilestone),

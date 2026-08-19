@@ -123,6 +123,52 @@ describe('PATCH /api/projects/:id — archStoreAdopted', () => {
   });
 });
 
+describe('PATCH /api/projects/:id — testRequestMaxConcurrent', () => {
+  it('round-trips a valid value through the update route onto ProjectConfig', async () => {
+    const res = await request(makeApp())
+      .patch(`/api/projects/${PROJECT}`)
+      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
+      .send({ testRequestMaxConcurrent: 5 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.testRequestMaxConcurrent).toBe(5);
+
+    const row = db
+      .prepare('SELECT test_request_max_concurrent FROM projects WHERE id = ?')
+      .get(PROJECT) as { test_request_max_concurrent: number };
+    expect(row.test_request_max_concurrent).toBe(5);
+  });
+
+  it('rejects a value below 1', async () => {
+    const res = await request(makeApp())
+      .patch(`/api/projects/${PROJECT}`)
+      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
+      .send({ testRequestMaxConcurrent: 0 });
+
+    expect(res.status).toBe(400);
+
+    const row = db
+      .prepare('SELECT test_request_max_concurrent FROM projects WHERE id = ?')
+      .get(PROJECT) as { test_request_max_concurrent: number | null };
+    expect(row.test_request_max_concurrent).toBeNull();
+  });
+
+  it('clears the override back to the global fallback with null', async () => {
+    await request(makeApp())
+      .patch(`/api/projects/${PROJECT}`)
+      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
+      .send({ testRequestMaxConcurrent: 5 });
+
+    const res = await request(makeApp())
+      .patch(`/api/projects/${PROJECT}`)
+      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
+      .send({ testRequestMaxConcurrent: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.testRequestMaxConcurrent).toBeNull();
+  });
+});
+
 describe('POST /api/milestones/:id/wrapped', () => {
   it('sets wrapped_at through updateMilestone (no raw SQL) and records a milestone_wrapped audit event', async () => {
     const before = Date.now();
