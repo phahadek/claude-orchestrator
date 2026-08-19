@@ -58,6 +58,9 @@ jobs:
       - name: Format check
         run: npm run format:check
 
+      - name: Check query plans
+        run: npm run check:query-plans
+
       - name: Check markdown paths
         # Validates that repo-relative paths referenced in tracked markdown
         # resolve to tracked files, so a rename/delete cannot silently leave
