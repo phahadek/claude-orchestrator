@@ -2512,6 +2512,8 @@ export function runMigrations(target: Database.Database): void {
       ON test_perf_baselines(project_id, updated_at, test_id);
   `);
 
+  runTestRunResultsDigestBackfillAndPrune(target);
+
   // test_run_summaries: one row per test_request_run holding outcome counts
   // and total duration for the run — the replacement for enumerating every
   // test_run_results row of a run now that only non-passing outcomes get a
@@ -2836,4 +2838,308 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_test_request_runs_session_finished
       ON test_request_runs(project_id, session_id, finished_at DESC);
   `);
+}
+
+// ─── test_run_results → test_perf_baselines digest backfill ────────────────
+// One-time (per database), forward-only migration collapsing every raw
+// test_run_results row accumulated before the digest-at-ingest change into
+// the per-test_id digest, then deleting the now-redundant passing rows. See
+// the "Collapse the existing test_run_results rows into the digest" task.
+// Deliberately duplicates TEST_OUTCOME_DIGEST_CAPACITY/
+// TEST_DURATION_DIGEST_CAPACITY and the median/MAD baseline algorithm from
+// queries.ts/testRequestLane.ts rather than importing them: importing
+// queries.ts here would pull in its module-level `import { db } from
+// './db'`, which opens a real database connection as an import side effect
+// — schema.ts must stay safe to import (as setupTestDb.ts does) without
+// touching the real on-disk database.
+/** Per-test_id raw-row read cap for the backfill below — the declared bound for that statement, independent of TEST_RUN_RESULTS_DIGEST_BACKFILL_BATCH_SIZE. >= both digest ring capacities so one read covers both rings. */
+export const TEST_RUN_RESULTS_DIGEST_OUTCOME_CAPACITY = 200;
+const TEST_RUN_RESULTS_DIGEST_DURATION_CAPACITY = 32;
+const TEST_RUN_RESULTS_DIGEST_BASELINE_WINDOW_SAMPLES = 20;
+const TEST_RUN_RESULTS_DIGEST_MIN_CONSECUTIVE_REGRESSED_SAMPLES = 3;
+const TEST_RUN_RESULTS_DIGEST_REGRESSION_K = 3;
+
+/** Per-statement row cap for the backfill/delete batching loops below — see PRUNE_TEST_RUN_RESULTS_BATCH_SIZE's precedent (queries.ts, since removed). */
+const TEST_RUN_RESULTS_DIGEST_BACKFILL_BATCH_SIZE = 5000;
+
+export const TEST_RUN_RESULTS_DIGEST_BACKFILL_MARKER =
+  'test_run_results_digest_backfill_v1';
+export const TEST_RUN_RESULTS_PASSING_ROWS_DELETE_MARKER =
+  'test_run_results_passing_rows_delete_v1';
+
+function digestMedian(sorted: number[]): number {
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
+function digestMedianAbsoluteDeviation(
+  values: number[],
+  center: number,
+): number {
+  const deviations = values
+    .map((v) => Math.abs(v - center))
+    .sort((a, b) => a - b);
+  return digestMedian(deviations);
+}
+
+interface DigestBaseline {
+  median: number;
+  mad: number;
+  sampleCount: number;
+  isRegressed: boolean;
+}
+
+/** Mirrors computeTestPerfBaseline's (testRequestLane.ts) windowed median/MAD algorithm over an already-fetched newest-first duration array. */
+function computeDigestBaselineFromDurations(
+  durationsNewestFirst: number[],
+): DigestBaseline {
+  const samples = durationsNewestFirst.slice(
+    0,
+    TEST_RUN_RESULTS_DIGEST_BASELINE_WINDOW_SAMPLES +
+      TEST_RUN_RESULTS_DIGEST_MIN_CONSECUTIVE_REGRESSED_SAMPLES,
+  );
+  if (
+    samples.length <= TEST_RUN_RESULTS_DIGEST_MIN_CONSECUTIVE_REGRESSED_SAMPLES
+  ) {
+    const sorted = [...samples].sort((a, b) => a - b);
+    const med = digestMedian(sorted);
+    return {
+      median: med,
+      mad: digestMedianAbsoluteDeviation(samples, med),
+      sampleCount: samples.length,
+      isRegressed: false,
+    };
+  }
+  const recent = samples.slice(
+    0,
+    TEST_RUN_RESULTS_DIGEST_MIN_CONSECUTIVE_REGRESSED_SAMPLES,
+  );
+  const baselineSamples = samples.slice(
+    TEST_RUN_RESULTS_DIGEST_MIN_CONSECUTIVE_REGRESSED_SAMPLES,
+  );
+  const sortedBaseline = [...baselineSamples].sort((a, b) => a - b);
+  const baselineMedian = digestMedian(sortedBaseline);
+  const baselineMad = digestMedianAbsoluteDeviation(
+    baselineSamples,
+    baselineMedian,
+  );
+  const threshold =
+    baselineMedian + TEST_RUN_RESULTS_DIGEST_REGRESSION_K * baselineMad;
+  const isRegressed = recent.every((d) => d > threshold);
+  return {
+    median: baselineMedian,
+    mad: baselineMad,
+    sampleCount: baselineSamples.length,
+    isRegressed,
+  };
+}
+
+interface ValidRawRow {
+  project_id: string;
+  name: string;
+  outcome: string;
+  duration_ms: number;
+  created_at: number;
+}
+
+/**
+ * Derives and writes the test_perf_baselines digest for every distinct
+ * test_id present in test_run_results, from raw rows honouring the same
+ * validity predicate the online readers use (concurrent_run_count = 0 AND
+ * oom_killed = 0). Paginates distinct test_ids by keyset (test_id > cursor)
+ * in `batchSize` chunks, and caps each test_id's raw-row read at
+ * TEST_RUN_RESULTS_DIGEST_OUTCOME_CAPACITY rows (>= both digest caps) so no
+ * single statement scans more than a bounded number of rows regardless of
+ * how much history a test_id has. A test_id already carrying a non-empty
+ * digest (written by live post-cutover ingestion) is left untouched — a
+ * historical backfill must never clobber fresher live digest data. Returns
+ * the number of test_ids that gained/updated a digest row.
+ */
+export function backfillTestRunResultsDigest(
+  target: Database.Database,
+  batchSize: number = TEST_RUN_RESULTS_DIGEST_BACKFILL_BATCH_SIZE,
+): number {
+  const selectIdsStmt = target.prepare<{ after: string; limit: number }>(
+    `SELECT DISTINCT test_id FROM test_run_results
+     WHERE test_id > @after
+     ORDER BY test_id
+     LIMIT @limit`,
+  );
+  const selectValidRowsStmt = target.prepare<{
+    test_id: string;
+    limit: number;
+  }>(
+    `SELECT project_id, name, outcome, duration_ms, created_at
+     FROM test_run_results
+     WHERE test_id = @test_id AND concurrent_run_count = 0 AND oom_killed = 0
+     ORDER BY created_at DESC, id DESC
+     LIMIT @limit`,
+  );
+  const existingDigestStmt = target.prepare<{ test_id: string }>(
+    `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
+  );
+  const upsertStmt = target.prepare<{
+    test_id: string;
+    project_id: string;
+    name: string;
+    median_duration_ms: number;
+    mad_duration_ms: number;
+    sample_count: number;
+    last_duration_ms: number;
+    is_regressed: number;
+    recent_outcomes: string;
+    recent_durations: string;
+    updated_at: number;
+  }>(`
+    INSERT INTO test_perf_baselines
+      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, updated_at)
+    VALUES
+      (@test_id, @project_id, @name, @median_duration_ms, @mad_duration_ms, @sample_count, @last_duration_ms, @is_regressed, @recent_outcomes, @recent_durations, @updated_at)
+    ON CONFLICT(test_id) DO UPDATE SET
+      project_id = excluded.project_id,
+      name = excluded.name,
+      median_duration_ms = excluded.median_duration_ms,
+      mad_duration_ms = excluded.mad_duration_ms,
+      sample_count = excluded.sample_count,
+      last_duration_ms = excluded.last_duration_ms,
+      is_regressed = excluded.is_regressed,
+      recent_outcomes = excluded.recent_outcomes,
+      recent_durations = excluded.recent_durations,
+      updated_at = excluded.updated_at
+  `);
+
+  let processed = 0;
+  let after = '';
+  for (;;) {
+    const idRows = selectIdsStmt.all({ after, limit: batchSize }) as {
+      test_id: string;
+    }[];
+    if (idRows.length === 0) break;
+
+    for (const { test_id: testId } of idRows) {
+      const existing = existingDigestStmt.get({ test_id: testId }) as
+        | { recent_outcomes: string; recent_durations: string }
+        | undefined;
+      if (
+        existing &&
+        (existing.recent_outcomes !== '[]' ||
+          existing.recent_durations !== '[]')
+      ) {
+        continue;
+      }
+
+      const validRows = selectValidRowsStmt.all({
+        test_id: testId,
+        limit: TEST_RUN_RESULTS_DIGEST_OUTCOME_CAPACITY,
+      }) as ValidRawRow[]; // newest-first
+      if (validRows.length === 0) continue;
+
+      const newestFirstDurations = validRows
+        .slice(0, TEST_RUN_RESULTS_DIGEST_DURATION_CAPACITY)
+        .map((r) => r.duration_ms);
+      const durationsOldestFirst = [...newestFirstDurations].reverse();
+
+      const outcomesOldestFirst = validRows
+        .filter((r) => r.outcome === 'passed' || r.outcome === 'failed')
+        .slice(0, TEST_RUN_RESULTS_DIGEST_OUTCOME_CAPACITY)
+        .reverse()
+        .map((r) => ({
+          o: r.outcome === 'passed' ? 'P' : 'F',
+          t: r.created_at,
+        }));
+
+      const baseline = computeDigestBaselineFromDurations(newestFirstDurations);
+
+      upsertStmt.run({
+        test_id: testId,
+        project_id: validRows[0].project_id,
+        name: validRows[0].name,
+        median_duration_ms: baseline.median,
+        mad_duration_ms: baseline.mad,
+        sample_count: baseline.sampleCount,
+        last_duration_ms: validRows[0].duration_ms,
+        is_regressed: baseline.isRegressed ? 1 : 0,
+        recent_outcomes: JSON.stringify(outcomesOldestFirst),
+        recent_durations: JSON.stringify(durationsOldestFirst),
+        updated_at: validRows[0].created_at,
+      });
+      processed++;
+    }
+
+    after = idRows[idRows.length - 1].test_id;
+    if (idRows.length < batchSize) break;
+  }
+  return processed;
+}
+
+/**
+ * Deletes the test_run_results rows the digest backfill now subsumes —
+ * every passing row, since ingestTestRunResultsTx (queries.ts) already
+ * follows the same retention policy for rows written going forward
+ * (failing.filter in that function). Non-passing rows (failed/skipped/
+ * error/other) are never touched. Batched the same way the retired
+ * time-based pruner used to be: a bounded DELETE...WHERE id IN
+ * (SELECT ... LIMIT) loop, so a single statement never touches more than
+ * `batchSize` rows.
+ */
+export function deleteSubsumedPassingTestRunResults(
+  target: Database.Database,
+  batchSize: number = TEST_RUN_RESULTS_DIGEST_BACKFILL_BATCH_SIZE,
+): number {
+  const stmt = target.prepare(
+    `DELETE FROM test_run_results WHERE id IN (
+       SELECT id FROM test_run_results WHERE outcome = 'passed' LIMIT ?
+     )`,
+  );
+  let totalDeleted = 0;
+  for (;;) {
+    const result = stmt.run(batchSize);
+    totalDeleted += result.changes;
+    if (result.changes < batchSize) break;
+  }
+  return totalDeleted;
+}
+
+/**
+ * Marker-guarded orchestration for the two steps above, called from
+ * runMigrations so it runs at backend boot like every other migration. Each
+ * step is guarded by its own schema_backfills marker (not one marker for
+ * both) so a crash between the backfill and the delete can't cause a second
+ * boot to silently skip the delete, and a second boot after both completed
+ * re-derives nothing and deletes nothing — see the acceptance criteria's
+ * idempotency requirement. The ordering (backfill first, delete second) is
+ * load-bearing: deleting first would discard the only source the backfill
+ * reads from.
+ *
+ * auto_vacuum is INCREMENTAL on this database (see schema comment history),
+ * so the delete above returns freed pages to the freelist but does not
+ * shrink the database file on its own — reclaiming that disk space is left
+ * to incremental vacuum (or a separate operator-run `PRAGMA
+ * incremental_vacuum`), not a side effect of this migration.
+ */
+export function runTestRunResultsDigestBackfillAndPrune(
+  target: Database.Database,
+  batchSize: number = TEST_RUN_RESULTS_DIGEST_BACKFILL_BATCH_SIZE,
+): void {
+  const backfillMarker = target
+    .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+    .get(TEST_RUN_RESULTS_DIGEST_BACKFILL_MARKER);
+  if (!backfillMarker) {
+    backfillTestRunResultsDigest(target, batchSize);
+    target
+      .prepare(`INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`)
+      .run(TEST_RUN_RESULTS_DIGEST_BACKFILL_MARKER, Date.now());
+  }
+
+  const deleteMarker = target
+    .prepare(`SELECT 1 FROM schema_backfills WHERE name = ?`)
+    .get(TEST_RUN_RESULTS_PASSING_ROWS_DELETE_MARKER);
+  if (!deleteMarker) {
+    deleteSubsumedPassingTestRunResults(target, batchSize);
+    target
+      .prepare(`INSERT INTO schema_backfills (name, applied_at) VALUES (?, ?)`)
+      .run(TEST_RUN_RESULTS_PASSING_ROWS_DELETE_MARKER, Date.now());
+  }
 }
