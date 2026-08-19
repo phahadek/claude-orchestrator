@@ -84,11 +84,20 @@ function insertBreadthFailure(testId: string, createdAt: number): void {
     `INSERT INTO test_run_results
        (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
      VALUES (@run_id, 'proj-1', @test_id, @name, 'failed', 1, 0, 0, @created_at)`,
-  ).run({ run_id: runId, test_id: testId, name: testId, created_at: createdAt });
+  ).run({
+    run_id: runId,
+    test_id: testId,
+    name: testId,
+    created_at: createdAt,
+  });
 }
 
 /** Seeds `testId` as breadth-flagged: `count` failures on distinct trees before `cutoff`. */
-function flagTestByBreadth(testId: string, cutoff: number, count: number): void {
+function flagTestByBreadth(
+  testId: string,
+  cutoff: number,
+  count: number,
+): void {
   for (let i = 0; i < count; i++) {
     insertBreadthFailure(testId, cutoff - 100 + i);
   }
