@@ -330,7 +330,9 @@ async function isSourceCovered(
   const key = `${source.mergeCommit}::${deploySha}`;
   let pending = ancestryCache.get(key);
   if (!pending) {
-    pending = Promise.resolve(ancestry.isAncestor(source.mergeCommit, deploySha));
+    pending = Promise.resolve(
+      ancestry.isAncestor(source.mergeCommit, deploySha),
+    );
     ancestryCache.set(key, pending);
   }
   return pending;
@@ -390,7 +392,12 @@ export async function reconcileGateRunnability(
       // in flight at once rather than serializing them item by item.
       await yieldToEventLoop();
 
-      const covered = await isItemCovered(item, deploySha, ancestry, ancestryCache);
+      const covered = await isItemCovered(
+        item,
+        deploySha,
+        ancestry,
+        ancestryCache,
+      );
 
       let state = item.state;
       let currentDisposition = item.currentDisposition;

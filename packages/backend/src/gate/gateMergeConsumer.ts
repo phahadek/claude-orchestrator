@@ -104,7 +104,8 @@ export async function catchUpMergeCommits(): Promise<CatchUpMergeCommitsResult> 
     async (sourceTaskId) => {
       const mergeCommit = await getMergeCommitForTask(sourceTaskId);
       if (!mergeCommit) {
-        const attempts = (unresolvedAttempts.get(sourceTaskId)?.attempts ?? 0) + 1;
+        const attempts =
+          (unresolvedAttempts.get(sourceTaskId)?.attempts ?? 0) + 1;
         unresolvedAttempts.set(sourceTaskId, {
           attempts,
           nextAttemptAt: nowMs + unresolvedBackoffMs(attempts),
