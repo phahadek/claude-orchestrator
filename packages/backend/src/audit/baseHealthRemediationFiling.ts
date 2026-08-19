@@ -297,6 +297,25 @@ async function recordAndMaybeFileTotalFail(
     return { filed: false, reason: 'no-triggering-task' };
   }
 
+  // Resolved before the dedupe guard is claimed: a triggeringTaskId that
+  // doesn't match any task on any known board (not a formatting issue —
+  // e.g. it names no task at all) must never be persisted as a
+  // base_health_remediation_reason_counts primary key, or that garbage
+  // value would permanently occupy a guard slot for an identity nothing
+  // can ever legitimately retry under.
+  const milestone = resolveMilestoneForTaskId(
+    trigger.projectId,
+    trigger.triggeringTaskId,
+  );
+  if (!milestone) {
+    logger.warn(
+      `[baseHealthRemediationFiling] triggering task id ${trigger.triggeringTaskId} does not resolve to ` +
+        `any known task (project ${trigger.projectId}) — skipping filing for content hash ${trigger.contentHash} ` +
+        `without recording a dedupe claim`,
+    );
+    return { filed: false, reason: 'unresolvable-triggering-task' };
+  }
+
   const nowIso = now();
   const { countedThisTask } = recordBaseHealthTotalFailCount(
     trigger.triggeringTaskId,
@@ -323,6 +342,7 @@ async function recordAndMaybeFileTotalFail(
     return await fileClaimedTotalFailTask(
       trigger,
       failureReason,
+      milestone,
       resolveBackend,
       now,
     );
@@ -344,6 +364,7 @@ async function recordAndMaybeFileTotalFail(
 async function fileClaimedTotalFailTask(
   trigger: BaseHealthRemediationTrigger,
   failureReason: string,
+  milestone: string,
   resolveBackend: (projectId: string) => TaskBackend,
   now: () => string,
 ): Promise<BaseHealthRemediationFilingResult> {
@@ -355,19 +376,6 @@ async function fileClaimedTotalFailTask(
       false,
       now(),
     );
-
-  const milestone = resolveMilestoneForTaskId(
-    trigger.projectId,
-    trigger.triggeringTaskId!,
-  );
-  if (!milestone) {
-    logger.warn(
-      `[baseHealthRemediationFiling] could not resolve milestone for triggering task ` +
-        `${trigger.triggeringTaskId} (project ${trigger.projectId}) — skipping filing for content hash ${trigger.contentHash}`,
-    );
-    release();
-    return { filed: false, reason: 'no-resolvable-milestone' };
-  }
 
   let databaseId: string;
   try {

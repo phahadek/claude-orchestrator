@@ -42,7 +42,9 @@ import {
   upsertTaskCache,
   getBaseHealthRemediationTestTracking,
   getBaseHealthRemediationReasonTracking,
+  recordBaseHealthTotalFailCount,
 } from '../../db/queries.js';
+import { runMigrations } from '../../db/schema.js';
 import type { NotionTask } from '../../notion/types.js';
 import {
   recordAndMaybeFileBaseHealthRemediation,
@@ -343,5 +345,143 @@ describe('recordAndMaybeFileBaseHealthRemediation — total_fail', () => {
     expect(result.filed).toBe(false);
     expect(result.reason).toBe('no-triggering-task');
     expect(createTaskMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a triggeringTaskId that does not resolve to any known task, without persisting it as a dedupe key', async () => {
+    const bogusTaskId = 'ghost-task-not-on-any-board';
+    const result = await totalFailTrigger('hash-m', 'timeout', bogusTaskId);
+    expect(result.filed).toBe(false);
+    expect(result.reason).toBe('unresolvable-triggering-task');
+    expect(createTaskMock).not.toHaveBeenCalled();
+
+    const rows = db
+      .prepare('SELECT * FROM base_health_remediation_reason_counts')
+      .all();
+    expect(rows).toHaveLength(0);
+  });
+});
+
+describe('recordBaseHealthTotalFailCount — id normalization at the write path', () => {
+  // The reason-count dedupe key's live table has been observed holding the
+  // same task under bare hyphenated, bare hyphenless, and notion:-prefixed
+  // spellings — three distinct primary keys for one task, defeating the
+  // INSERT OR IGNORE guard. These tests exercise the query function
+  // directly, ahead of any milestone/board plumbing.
+  const HYPHENATED = '3c122f91-52f3-81c7-9016-e66a22bdeb75';
+  const HYPHENLESS = '3c122f9152f381c79016e66a22bdeb75';
+  const PREFIXED_HYPHENATED = `notion:${HYPHENATED}`;
+  const BARE_HYPHENATED = HYPHENATED;
+
+  it('collapses notion:<uuid>, bare hyphenated, and bare hyphenless spellings of the same task to one row', () => {
+    const first = recordBaseHealthTotalFailCount(
+      PREFIXED_HYPHENATED,
+      '2026-01-01T00:00:00.000Z',
+    );
+    expect(first.countedThisTask).toBe(true);
+
+    const second = recordBaseHealthTotalFailCount(
+      BARE_HYPHENATED,
+      '2026-01-01T00:01:00.000Z',
+    );
+    expect(second.countedThisTask).toBe(false);
+
+    const third = recordBaseHealthTotalFailCount(
+      HYPHENLESS,
+      '2026-01-01T00:02:00.000Z',
+    );
+    expect(third.countedThisTask).toBe(false);
+
+    const rows = db
+      .prepare('SELECT * FROM base_health_remediation_reason_counts')
+      .all() as { triggering_task_id: string; counted_at: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].triggering_task_id).toBe(PREFIXED_HYPHENATED);
+  });
+
+  it('reports a trigger already counted under one spelling as already-counted when queried under a different spelling', () => {
+    recordBaseHealthTotalFailCount(BARE_HYPHENATED, '2026-01-01T00:00:00.000Z');
+
+    const queriedUnderPrefixedForm = recordBaseHealthTotalFailCount(
+      PREFIXED_HYPHENATED,
+      '2026-01-01T00:05:00.000Z',
+    );
+    expect(queriedUnderPrefixedForm.countedThisTask).toBe(false);
+
+    const queriedUnderHyphenlessForm = recordBaseHealthTotalFailCount(
+      HYPHENLESS,
+      '2026-01-01T00:10:00.000Z',
+    );
+    expect(queriedUnderHyphenlessForm.countedThisTask).toBe(false);
+  });
+
+  it('uses the shared taskId helpers rather than a local hyphen/prefix strip, so a non-UUID external id is left untouched', () => {
+    // A naive "strip every hyphen after the prefix" implementation would
+    // mangle a Jira-shaped id like "jira:PROJ-123" into "jira:PROJ123".
+    // normalizeTaskId's canonicalizeExternalId only reformats 32-hex-char
+    // ids, so this id must round-trip unchanged.
+    recordBaseHealthTotalFailCount('jira:PROJ-123', '2026-01-01T00:00:00.000Z');
+
+    const rows = db
+      .prepare('SELECT triggering_task_id FROM base_health_remediation_reason_counts')
+      .all() as { triggering_task_id: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].triggering_task_id).toBe('jira:PROJ-123');
+  });
+});
+
+describe('base_health_remediation_reason_counts — forward-only id-format collapse migration', () => {
+  it('collapses a fixture seeded with the four observed formats to the canonical set, keeping the earliest counted_at, idempotently across two runs', () => {
+    db.prepare('DELETE FROM base_health_remediation_reason_counts').run();
+
+    const insertRaw = db.prepare(
+      'INSERT INTO base_health_remediation_reason_counts (triggering_task_id, counted_at) VALUES (?, ?)',
+    );
+    // Same task, three spellings — the earliest (bare hyphenated) must win.
+    insertRaw.run(
+      '3c122f91-52f3-81c7-9016-e66a22bdeb75',
+      '2026-01-01T00:00:00.000Z',
+    );
+    insertRaw.run(
+      '3c122f9152f381c79016e66a22bdeb75',
+      '2026-01-02T00:00:00.000Z',
+    );
+    insertRaw.run(
+      'notion:3c122f91-52f3-81c7-9016-e66a22bdeb75',
+      '2026-01-03T00:00:00.000Z',
+    );
+    // A fourth, unrelated id that resolves to no task on any board — the
+    // migration only normalizes format, so it collapses to its own
+    // canonical row rather than being merged with the task above.
+    insertRaw.run(
+      'cfedb6fe-02fb-4619-aebc-6dc6d6a20f98',
+      '2026-01-04T00:00:00.000Z',
+    );
+
+    runMigrations(db);
+
+    const afterFirstRun = db
+      .prepare(
+        'SELECT triggering_task_id, counted_at FROM base_health_remediation_reason_counts ORDER BY triggering_task_id',
+      )
+      .all() as { triggering_task_id: string; counted_at: string }[];
+    expect(afterFirstRun).toHaveLength(2);
+
+    const collapsed = afterFirstRun.find(
+      (r) => r.triggering_task_id === 'notion:3c122f91-52f3-81c7-9016-e66a22bdeb75',
+    );
+    expect(collapsed?.counted_at).toBe('2026-01-01T00:00:00.000Z');
+
+    const unrelated = afterFirstRun.find(
+      (r) => r.triggering_task_id === 'notion:cfedb6fe-02fb-4619-aebc-6dc6d6a20f98',
+    );
+    expect(unrelated?.counted_at).toBe('2026-01-04T00:00:00.000Z');
+
+    runMigrations(db);
+    const afterSecondRun = db
+      .prepare(
+        'SELECT triggering_task_id, counted_at FROM base_health_remediation_reason_counts ORDER BY triggering_task_id',
+      )
+      .all() as { triggering_task_id: string; counted_at: string }[];
+    expect(afterSecondRun).toEqual(afterFirstRun);
   });
 });

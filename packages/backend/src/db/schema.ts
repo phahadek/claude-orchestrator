@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { logger } from '../logger';
+import { normalizeTaskId } from '../tasks/taskId';
 
 export function runMigrations(target: Database.Database): void {
   target.exec(`
@@ -2699,6 +2700,51 @@ export function runMigrations(target: Database.Database): void {
       counted_at           TEXT    NOT NULL
     );
   `);
+
+  // ── base_health_remediation_reason_counts: id-format collapse ───────────
+  // recordBaseHealthTotalFailCount (queries.ts) now normalizes every
+  // triggering_task_id it writes through normalizeTaskId before this
+  // migration existed, callers wrote whatever spelling they had in hand
+  // (bare hyphenated, bare hyphenless, or `notion:`-prefixed), so the SAME
+  // task could hold up to three distinct primary keys here and the
+  // INSERT OR IGNORE dedupe guard never fired for it. Forward-only:
+  // collapses existing rows onto normalizeTaskId's canonical form, keeping
+  // the earliest counted_at per canonical id — a trigger already counted
+  // under any spelling must stay counted, never become eligible to
+  // re-file. Idempotent: guarded on at least one non-canonical row existing,
+  // so a second run (every row already canonical) is a no-op.
+  {
+    const rows = target
+      .prepare(
+        `SELECT triggering_task_id, counted_at FROM base_health_remediation_reason_counts`,
+      )
+      .all() as { triggering_task_id: string; counted_at: string }[];
+    const hasNonCanonicalRow = rows.some(
+      (row) => row.triggering_task_id !== normalizeTaskId(row.triggering_task_id),
+    );
+    if (hasNonCanonicalRow) {
+      const earliestByCanonicalId = new Map<string, string>();
+      for (const row of rows) {
+        const canonicalId = normalizeTaskId(row.triggering_task_id);
+        const earliest = earliestByCanonicalId.get(canonicalId);
+        if (!earliest || row.counted_at < earliest) {
+          earliestByCanonicalId.set(canonicalId, row.counted_at);
+        }
+      }
+      const deleteAll = target.prepare(
+        `DELETE FROM base_health_remediation_reason_counts`,
+      );
+      const insertCanonical = target.prepare(
+        `INSERT INTO base_health_remediation_reason_counts (triggering_task_id, counted_at) VALUES (?, ?)`,
+      );
+      target.transaction(() => {
+        deleteAll.run();
+        for (const [canonicalId, countedAt] of earliestByCanonicalId) {
+          insertCanonical.run(canonicalId, countedAt);
+        }
+      })();
+    }
+  }
 
   // Index audit follow-up: five unindexed lookups plus two FK-cascade scans
   // found by an EXPLAIN QUERY PLAN sweep of every static statement in
