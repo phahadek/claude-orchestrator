@@ -7,7 +7,7 @@
  * session/__tests__/AgentSession.verdictTools.test.ts).
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -16,9 +16,36 @@ import type { AgentSession } from '../../session/AgentSession';
 import { VERIFIER_RECLASSIFY_TARGETS } from '../../session/AgentSession';
 import { gateVerifyReclassifyToSchema } from './schemas';
 import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
+import {
+  getPRBySessionId,
+  evaluateTestFlakinessCorpus,
+} from '../../db/queries';
+import { getChangedFiles } from '../../session/autofix-runner';
+
+vi.mock('../../db/queries', () => ({
+  getPRBySessionId: vi.fn(),
+  evaluateTestFlakinessCorpus: vi.fn(),
+}));
+
+vi.mock('../../session/autofix-runner', () => ({
+  getChangedFiles: vi.fn(),
+}));
+
+vi.mock('../../config/settings', () => ({
+  typedGetSetting: vi.fn(
+    (key: string) =>
+      ({
+        flip_rate_window_n: 20,
+        flip_rate_threshold_k: 2,
+        flip_rate_breadth_n: 3,
+        flip_rate_breadth_window_hours: 24,
+      })[key],
+  ),
+}));
 
 function fakeSession() {
   return {
+    worktreePath: '/fake/worktree',
     recordReviewDisposition: vi.fn(),
     recordVerifiedFlakyDisposition: vi.fn(),
     recordGateVerifyDisposition: vi
@@ -140,22 +167,120 @@ describe('review.disposition', () => {
 });
 
 describe('flaky.confirm', () => {
-  it('delegates to session.recordVerifiedFlakyDisposition', async () => {
+  const TEST_ID = 'tests.test_foo.test_something';
+  const TEST_NAME = 'test_something';
+
+  beforeEach(() => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 7,
+      repo: 'owner/repo',
+      created_at: '2026-08-01T00:00:00.000Z',
+      base_branch: 'dev',
+    } as never);
+    vi.mocked(evaluateTestFlakinessCorpus).mockReturnValue({
+      testId: TEST_ID,
+      eligible: true,
+    });
+    vi.mocked(getChangedFiles).mockResolvedValue([
+      'packages/backend/src/unrelated.ts',
+    ]);
+  });
+
+  it('returns eligible for a test that clears the cross-SHA corpus and is absent from the diff, with no prior re-run recorded for the session', async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session);
     const result = await client.callTool({
       name: 'flaky.confirm',
-      arguments: { gate: 'ci', reason: 'ran in isolation, passed clean' },
+      arguments: {
+        gate: 'f2',
+        reason: 'fails across many trees, unrelated to my diff',
+        testId: TEST_ID,
+        testName: TEST_NAME,
+      },
     });
     expect(resultOf(result as never)).toEqual({ status: 'ok' });
     expect(session.recordVerifiedFlakyDisposition).toHaveBeenCalledWith({
-      gate: 'ci',
-      reason: 'ran in isolation, passed clean',
+      gate: 'f2',
+      reason: 'fails across many trees, unrelated to my diff',
     });
     await close();
   });
 
-  it('rejects a gate outside ci/f2', async () => {
+  it('delegates to session.recordVerifiedFlakyDisposition for the analyze gate without a testId', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: { gate: 'analyze', reason: 'unrelated static-analysis flake' },
+    });
+    expect(resultOf(result as never)).toEqual({ status: 'ok' });
+    expect(session.recordVerifiedFlakyDisposition).toHaveBeenCalledWith({
+      gate: 'analyze',
+      reason: 'unrelated static-analysis flake',
+    });
+    await close();
+  });
+
+  it('refuses ci/f2 gates without a testId/testName', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: { gate: 'f2', reason: 'x' },
+    });
+    expect(result.isError).toBe(true);
+    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('refuses when the test has not cleared the cross-SHA flakiness corpus', async () => {
+    vi.mocked(evaluateTestFlakinessCorpus).mockReturnValue({
+      testId: TEST_ID,
+      eligible: false,
+      reason: 'has not cleared the cross-SHA flakiness bar yet',
+    });
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'f2',
+        reason: 'seems flaky',
+        testId: TEST_ID,
+        testName: TEST_NAME,
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultOf(result as never).error).toContain(
+      'has not cleared the cross-SHA flakiness bar yet',
+    );
+    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it("refuses when the failing test's own file is in the calling session's diff, naming that file", async () => {
+    vi.mocked(getChangedFiles).mockResolvedValue([
+      'tests/test_foo.py',
+      'packages/backend/src/other.ts',
+    ]);
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session);
+    const result = await client.callTool({
+      name: 'flaky.confirm',
+      arguments: {
+        gate: 'f2',
+        reason: 'seems flaky',
+        testId: TEST_ID,
+        testName: TEST_NAME,
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(resultOf(result as never).error).toContain('tests/test_foo.py');
+    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('rejects a gate outside ci/f2/analyze', async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session);
     const result = await client.callTool({

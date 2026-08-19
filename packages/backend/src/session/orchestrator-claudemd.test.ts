@@ -299,6 +299,19 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(prGateSection).not.toContain('npm run format');
   });
 
+  it('Flaky/Transient section no longer instructs a mandatory second or third test_request call to establish flakiness', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const flakySection = result.slice(
+      result.indexOf('## Flaky / Transient CI or F2 Gate Failures'),
+      result.indexOf('## Responding to Review Comments'),
+    );
+    expect(flakySection).not.toMatch(/Call `test_request` again/);
+    expect(flakySection).not.toMatch(/1\. Call `test_request`/);
+    expect(flakySection).toContain('mcp__orchestrator__flaky_confirm');
+    expect(flakySection).toContain('testId');
+    expect(flakySection).toContain('cross-SHA');
+  });
+
   it('includes worktree path in Git Isolation section', () => {
     const result = buildOrchestratorClaudeMd({
       ...defaultParams,
