@@ -18,6 +18,15 @@ import type { ServerMessage } from './ws/types';
 /** Generated once per process; lets audit rows sharing this value be attributed to one process. */
 const processBootId = crypto.randomUUID();
 
+/**
+ * Per-boot cap on the extraction sweep — deliberately small so a boot with a
+ * large backlog (e.g. after this step was added, or after a long outage)
+ * still completes in bounded time. Whatever's left is drained by the
+ * scheduler's test_run_results_extraction_drain job (see server.ts) on
+ * later ticks, not by this step looping until the work list is empty.
+ */
+export const EXTRACTION_SWEEP_BOOT_CAP = 25;
+
 function isLoopback(host: string): boolean {
   return (
     host === '127.0.0.1' ||
@@ -110,7 +119,7 @@ export class BootStatusTracker {
 
   async runStep(
     name: string,
-    fn: () => Promise<void> | void,
+    fn: (report: (remaining: number) => void) => Promise<void> | void,
     opts?: { fatalOnError?: boolean },
   ): Promise<void> {
     const stepStart = Date.now();
@@ -119,8 +128,15 @@ export class BootStatusTracker {
       step: name,
       status: 'started',
     });
+    const report = (remaining: number) => {
+      this.emit({
+        type: 'boot_reconciliation_progress',
+        step: name,
+        remaining,
+      });
+    };
     try {
-      await fn();
+      await fn(report);
       this.emit({
         type: 'boot_reconciliation_step',
         step: name,
@@ -166,6 +182,27 @@ let _activeBootTracker: BootStatusTracker | null = null;
 
 export function getActiveBootTracker(): BootStatusTracker | null {
   return _activeBootTracker;
+}
+
+/**
+ * Coarse readiness state for the /api/readiness surface — the thing that
+ * distinguishes a slow-but-alive boot from a crashed process when no other
+ * surface can. `migrating` is the module-load default (server.ts calls
+ * runMigrations(db) before anything else); `boot_steps_running` covers both
+ * the listener bind and the post-listen runReconciliationChain; `serving`
+ * is set once that chain completes and the scheduler starts.
+ */
+export type ReadinessState = 'migrating' | 'boot_steps_running' | 'serving';
+
+let _readinessState: ReadinessState = 'migrating';
+
+export function getReadinessState(): ReadinessState {
+  return _readinessState;
+}
+
+export function setReadinessState(state: ReadinessState): void {
+  _readinessState = state;
+  logger.info(`[boot] readiness state -> ${state}`);
 }
 
 /**
@@ -215,6 +252,7 @@ export function recordBootEvent(): void {
 
 export async function runBootSequence(deps: BootDeps): Promise<void> {
   const { server, port } = deps;
+  setReadinessState('boot_steps_running');
   const bindHost = resolveBindHost();
   await new Promise<void>((resolve) =>
     server.listen(port, bindHost, () => {
@@ -272,9 +310,15 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('dependency_cache_build_recovery', () =>
     recoverInterruptedDependencyCacheBuilds(),
   );
-  await tracker.runStep('test_run_results_extraction_sweep', () =>
-    sweepTestRunResultsExtraction(),
-  );
+  await tracker.runStep('test_run_results_extraction_sweep', async (report) => {
+    const result = await sweepTestRunResultsExtraction({
+      cap: EXTRACTION_SWEEP_BOOT_CAP,
+      onProgress: report,
+    });
+    logger.info(
+      `[bootSequence] extraction sweep processed ${result.processed} run(s), ${result.remaining} still pending (left for the scheduler drain)`,
+    );
+  });
   await tracker.runStep(
     'resume_orphan_sessions',
     () => deps.sessionManager.resumeOrphanSessions(),
@@ -313,6 +357,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   // Boot-safety gate: scheduler (and its runOnBoot jobs) must not start until
   // boot_reconciliation_completed is emitted. Ordering is explicit, not incidental.
   tracker.completeSequence();
+  setReadinessState('serving');
   recordBootEvent();
   deps.scheduler.start();
 }

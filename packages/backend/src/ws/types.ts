@@ -528,6 +528,12 @@ export type ServerMessage =
       error?: string;
     }
   | {
+      /** Emitted mid-step by a long-running boot step to report it's still working, and how much is left. */
+      type: 'boot_reconciliation_progress';
+      step: string;
+      remaining: number;
+    }
+  | {
       type: 'boot_reconciliation_completed';
       duration_ms: number;
       completed_at: string;

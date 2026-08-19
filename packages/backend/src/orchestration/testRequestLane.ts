@@ -40,6 +40,7 @@ import {
   clearStructuredResultIfSuperseded,
   listRunningTestRequestRuns,
   listTestRequestRunsNeedingExtraction,
+  countTestRequestRunsNeedingExtraction,
   hasTestRunSummary,
   ingestTestRunResultsTx,
   listRecentValidTestDurations,
@@ -532,14 +533,38 @@ function recomputeFlipRateFlags(testIds: string[]): void {
   }
 }
 
+/** Default per-call cap for sweepTestRunResultsExtraction — see its doc comment. */
+export const EXTRACTION_SWEEP_DEFAULT_CAP = 50;
+
+export interface ExtractionSweepResult {
+  /** Number of runs this call actually extracted. */
+  processed: number;
+  /** True total still needing extraction after this call, across the whole table. */
+  remaining: number;
+}
+
 /**
- * Boot-time re-derivation sweep: catches every run with a structured_result
- * but no extracted test_run_results rows — a crash mid-ingestion, or a run
- * completed before this extraction step existed — and ingests it. A delay,
- * never data loss, since extraction is fully re-derivable from the run row.
+ * Re-derivation sweep: catches runs with a structured_result but no
+ * extracted test_run_results rows — a crash mid-ingestion, or a run
+ * completed before this extraction step existed — and ingests them. A
+ * delay, never data loss, since extraction is fully re-derivable from the
+ * run row.
+ *
+ * Bounded per call by `cap` (default EXTRACTION_SWEEP_DEFAULT_CAP) rather
+ * than draining the whole work list inline — the boot chain calls this once
+ * with the boot cap, and a Scheduler job (see server.ts's
+ * test_run_results_extraction_drain registration) drains whatever the boot
+ * pass left behind over subsequent ticks. Yields to the event loop between
+ * each unit of work (`setImmediate`) so a synchronous, potentially
+ * long-running sweep never blocks the accept queue the way the prior
+ * unbounded inline loop did.
  */
-export function sweepTestRunResultsExtraction(): void {
-  const pending = listTestRequestRunsNeedingExtraction();
+export async function sweepTestRunResultsExtraction(
+  opts: { cap?: number; onProgress?: (remaining: number) => void } = {},
+): Promise<ExtractionSweepResult> {
+  const cap = opts.cap ?? EXTRACTION_SWEEP_DEFAULT_CAP;
+  const pending = listTestRequestRunsNeedingExtraction(cap);
+  let processed = 0;
   for (const run of pending) {
     logger.info(
       `[testRequestLane] extracting test_run_results for run ${run.id} (project ${run.project_id})`,
@@ -556,5 +581,13 @@ export function sweepTestRunResultsExtraction(): void {
         run.content_hash,
       );
     }
+    processed++;
+    opts.onProgress?.(pending.length - processed);
+    // Yield between units — this is a boot/scheduler-tick step, not a route
+    // handler, but it still shares the event loop with anything the server
+    // is doing while it runs (accept(), health checks, other jobs).
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
+  const remaining = countTestRequestRunsNeedingExtraction();
+  return { processed, remaining };
 }

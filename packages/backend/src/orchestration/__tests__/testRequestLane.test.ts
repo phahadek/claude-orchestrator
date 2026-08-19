@@ -64,6 +64,7 @@ import {
   computeTestFlipRateFlag,
   TEST_OUTCOME_DIGEST_CAPACITY,
   TEST_DURATION_DIGEST_CAPACITY,
+  countTestRequestRunsNeedingExtraction,
 } from '../../db/queries';
 
 beforeEach(() => {
@@ -786,7 +787,7 @@ describe('ingestTestRunResults', () => {
 });
 
 describe('sweepTestRunResultsExtraction', () => {
-  it('catches a row with structured_result set but no test_run_results rows', () => {
+  it('catches a row with structured_result set but no test_run_results rows', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -805,12 +806,12 @@ describe('sweepTestRunResultsExtraction', () => {
 
     expect(listTestRunResultsForRun('run-sweep-1')).toHaveLength(0);
 
-    sweepTestRunResultsExtraction();
+    await sweepTestRunResultsExtraction();
 
     expect(listTestRunResultsForRun('run-sweep-1')).toHaveLength(1);
   });
 
-  it('leaves an already-extracted run untouched', () => {
+  it('leaves an already-extracted run untouched', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -826,15 +827,15 @@ describe('sweepTestRunResultsExtraction', () => {
       Date.now(),
     );
     completeTestRequestRun('run-sweep-2', 'passed', 'ok', null, structured);
-    sweepTestRunResultsExtraction();
+    await sweepTestRunResultsExtraction();
     expect(listTestRunResultsForRun('run-sweep-2')).toHaveLength(1);
 
-    sweepTestRunResultsExtraction();
+    await sweepTestRunResultsExtraction();
 
     expect(listTestRunResultsForRun('run-sweep-2')).toHaveLength(1);
   });
 
-  it('is a no-op — writes no duplicate digest samples — when re-run against an already-ingested all-passing run', () => {
+  it('is a no-op — writes no duplicate digest samples — when re-run against an already-ingested all-passing run', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -865,18 +866,18 @@ describe('sweepTestRunResultsExtraction', () => {
     expect(listTestRunResultsForRun('run-sweep-allpass')).toHaveLength(0);
     expect(hasTestRunSummary('run-sweep-allpass')).toBe(false);
 
-    sweepTestRunResultsExtraction();
+    await sweepTestRunResultsExtraction();
     expect(hasTestRunSummary('run-sweep-allpass')).toBe(true);
     const durationsAfterFirstSweep = listRecentValidTestDurations('t1', 10);
     expect(durationsAfterFirstSweep).toEqual([5]);
 
-    sweepTestRunResultsExtraction();
+    await sweepTestRunResultsExtraction();
 
     expect(listTestRunResultsForRun('run-sweep-allpass')).toHaveLength(0);
     expect(listRecentValidTestDurations('t1', 10)).toEqual([5]);
   });
 
-  it("does not lose a superseded run's per-test data when its extraction was deferred past the run that superseded it", () => {
+  it("does not lose a superseded run's per-test data when its extraction was deferred past the run that superseded it", async () => {
     const structuredOld = JSON.stringify({
       suites: [
         {
@@ -927,13 +928,93 @@ describe('sweepTestRunResultsExtraction', () => {
     // The sweep now extracts the deferred row, and only then retroactively
     // clears its structured_result since a newer run had already superseded
     // it.
-    sweepTestRunResultsExtraction();
+    await sweepTestRunResultsExtraction();
 
     expect(listTestRunResultsForRun('run-race-old')).toHaveLength(1);
     const oldRowAfterSweep = db
       .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
       .get('run-race-old') as { structured_result: string | null };
     expect(oldRowAfterSweep.structured_result).toBeNull();
+  });
+
+  function seedPendingRun(id: string, requestedAt: number): void {
+    const structured = JSON.stringify({
+      suites: [
+        { tests: [{ id: 't1', name: 'n', outcome: 'failed', durationMs: 5 }] },
+      ],
+    });
+    insertTestRequestRun(id, 'proj-1', `hash-${id}`, null, requestedAt);
+    completeTestRequestRun(id, 'passed', 'ok', null, structured);
+  }
+
+  it('processes at most the configured cap and leaves the remainder pending, rather than draining the whole work list inline', async () => {
+    for (let i = 0; i < 5; i++) {
+      seedPendingRun(`run-cap-${i}`, Date.now() + i);
+    }
+    expect(countTestRequestRunsNeedingExtraction()).toBe(5);
+
+    const result = await sweepTestRunResultsExtraction({ cap: 2 });
+
+    expect(result.processed).toBe(2);
+    expect(result.remaining).toBe(3);
+    expect(countTestRequestRunsNeedingExtraction()).toBe(3);
+  });
+
+  it('a later capped call drains the remainder a bounded run left behind', async () => {
+    for (let i = 0; i < 5; i++) {
+      seedPendingRun(`run-drain-${i}`, Date.now() + i);
+    }
+
+    const first = await sweepTestRunResultsExtraction({ cap: 2 });
+    expect(first.processed).toBe(2);
+    expect(first.remaining).toBe(3);
+
+    const second = await sweepTestRunResultsExtraction({ cap: 2 });
+    expect(second.processed).toBe(2);
+    expect(second.remaining).toBe(1);
+
+    const third = await sweepTestRunResultsExtraction({ cap: 2 });
+    expect(third.processed).toBe(1);
+    expect(third.remaining).toBe(0);
+  });
+
+  it('reports progress with the remaining count in this batch after each unit of work', async () => {
+    for (let i = 0; i < 3; i++) {
+      seedPendingRun(`run-progress-${i}`, Date.now() + i);
+    }
+    const onProgress = vi.fn();
+
+    await sweepTestRunResultsExtraction({ cap: 3, onProgress });
+
+    expect(onProgress).toHaveBeenCalledTimes(3);
+    expect(onProgress.mock.calls.map(([remaining]) => remaining)).toEqual([
+      2, 1, 0,
+    ]);
+  });
+
+  it('yields to the event loop between units of work — a macrotask scheduled mid-sweep runs before the sweep resolves', async () => {
+    for (let i = 0; i < 3; i++) {
+      seedPendingRun(`run-yield-${i}`, Date.now() + i);
+    }
+    const order: string[] = [];
+    const onProgress = () => {
+      order.push('sweep-progress');
+      setImmediate(() => order.push('macrotask'));
+    };
+
+    await sweepTestRunResultsExtraction({ cap: 3, onProgress });
+
+    // Every scheduled macrotask ran before the sweep's own await resolved —
+    // if the sweep never yielded, all 'sweep-progress' entries would appear
+    // before any 'macrotask' entry.
+    expect(order).toEqual([
+      'sweep-progress',
+      'macrotask',
+      'sweep-progress',
+      'macrotask',
+      'sweep-progress',
+      'macrotask',
+    ]);
   });
 });
 
