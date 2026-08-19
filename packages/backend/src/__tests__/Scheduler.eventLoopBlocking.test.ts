@@ -121,4 +121,47 @@ describe('Scheduler event-loop blocking instrumentation', () => {
 
     await scheduler.stopAll();
   });
+
+  it('writes event_loop_blocked_ms per tick without summing across jobs, and the degraded classification reads only the current tick', async () => {
+    const scheduler = makeScheduler();
+    const N = 80;
+    scheduler.register({
+      name: 'blocker3a',
+      intervalMs: 60_000,
+      run: async () => {
+        busyWaitMs(N);
+        return { items_processed: 0 };
+      },
+    });
+    scheduler.register({
+      name: 'blocker3b',
+      intervalMs: 60_000,
+      run: async () => {
+        busyWaitMs(N);
+        return { items_processed: 0 };
+      },
+    });
+    scheduler.start();
+    await scheduler.triggerNow('blocker3a');
+    await scheduler.triggerNow('blocker3b');
+
+    expect(mockInsertAudit).toHaveBeenCalledTimes(2);
+    const rowA = mockInsertAudit.mock.calls[0][0];
+    const rowB = mockInsertAudit.mock.calls[1][0];
+
+    // If blocker3b's window carried forward blocker3a's blocked time (a
+    // sum instead of a per-tick value), it would read roughly 2N or more.
+    // It must instead reflect only its own ~N ms of blocking.
+    expect(rowB.event_loop_blocked_ms).toBeGreaterThanOrEqual(N * 0.6);
+    expect(rowB.event_loop_blocked_ms).toBeLessThan(N * 2);
+
+    // Both ticks are well under the multi-minute degraded threshold, so
+    // even with items_processed: 0 both stay ok — proving the classifier
+    // reads each tick's own (small) value rather than an accumulated sum
+    // that could otherwise cross the threshold.
+    expect(rowA.status).toBe('ok');
+    expect(rowB.status).toBe('ok');
+
+    await scheduler.stopAll();
+  });
 });

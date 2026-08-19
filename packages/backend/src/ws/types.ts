@@ -535,7 +535,7 @@ export type ServerMessage =
   | {
       type: 'scheduler_job_run';
       job: string;
-      status: 'ok' | 'failed' | 'skipped';
+      status: 'ok' | 'failed' | 'skipped' | 'degraded';
       started_at: string;
       completed_at: string;
       duration_ms: number;

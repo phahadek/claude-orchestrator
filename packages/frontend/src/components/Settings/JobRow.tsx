@@ -27,6 +27,7 @@ function resultBadge(status: JobStatus['lastStatus']): string {
   if (status === 'ok') return '✅ ok';
   if (status === 'failed') return '❌ failed';
   if (status === 'skipped') return '⚠️ skip';
+  if (status === 'degraded') return '🟠 degraded';
   return '—';
 }
 
