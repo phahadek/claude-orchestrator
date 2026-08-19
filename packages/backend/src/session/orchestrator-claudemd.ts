@@ -260,13 +260,13 @@ The supervisor's "Pause your work" message isn't a nudge in this sense: stopping
 
 When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
 
-Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite yourself to establish flakiness — the backend already holds a cross-SHA outcome corpus for every test and adjudicates against it. Instead, call the \`mcp__orchestrator__flaky_confirm\` tool once with what you observed, instead of pushing a commit or re-running anything first:
+Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite to establish flakiness — the backend already holds a cross-SHA outcome corpus and adjudicates against it. Call \`mcp__orchestrator__flaky_confirm\` once with what you observed, instead of pushing a commit:
 
-- \`gate\`: \`"ci"\` for a failing GitHub check, \`"f2"\` for the orchestrator-run test gate, or \`"analyze"\` for the orchestrator-run static-analysis gate — whichever gate actually failed.
-- \`reason\`: one line naming what you observed and why you believe it's unrelated to your diff.
-- \`testId\` / \`testName\`: for gate \`"ci"\`/\`"f2"\`, identify the specific failing test as reported by the failing run. Required for those gates — the backend uses them to check the test against its cross-SHA corpus and against your diff.
+- \`gate\`: \`"ci"\`, \`"f2"\`, or \`"analyze"\` — whichever gate failed.
+- \`reason\`: one line naming what you observed and why it's unrelated to your diff.
+- \`testId\` / \`testName\`: required for \`"ci"\`/\`"f2"\` — identifies the failing test so the backend can check it against the corpus and your diff.
 
-The backend checks the test against that corpus (does it fail across enough distinct trees, or flip pass/fail, independent of any single diff) and against your own diff (its file must not be among your changes) before acting — it refuses the call outright if either check fails, naming the reason. On success it re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention rather than looping.
+The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
 
 ---
 
