@@ -8424,20 +8424,6 @@ export function claimDependencyCacheEntryForEviction(
 
 // ─── test_run_results ───────────────────────────────────────────────────────
 
-/**
- * True if this run has at least one non-passing test_run_results row. Since
- * an all-passing run writes none, this is NOT the extraction idempotency
- * check any more — see hasTestRunSummary for that.
- */
-export function hasTestRunResults(testRequestRunId: string): boolean {
-  const row = db
-    .prepare(
-      `SELECT 1 FROM test_run_results WHERE test_request_run_id = ? LIMIT 1`,
-    )
-    .get(testRequestRunId);
-  return row !== undefined;
-}
-
 let _stmtInsertTestRunResult: Database.Statement | null = null;
 
 /**
