@@ -11278,6 +11278,9 @@ export function getLaneHealthRollup(
   projectId: string,
   limit = 500,
 ): LaneHealthRollup {
+  // Served by idx_test_request_runs_project_finished(project_id,
+  // finished_at DESC) — see schema.ts for why the rowid DESC tiebreaker
+  // can't also be covered by that index.
   const rows = db
     .prepare<{ project_id: string; limit: number }>(
       `SELECT state, requested_at, started_at, finished_at, failure_reason

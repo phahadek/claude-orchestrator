@@ -22,6 +22,26 @@ import {
   recordTestPerfDigestSample,
 } from '../queries.js';
 
+/** Plan text for a statement, joined so it can be asserted as a whole. */
+function planFor(sql: string, params: Record<string, unknown>): string {
+  return (
+    db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(params) as {
+      detail: string;
+    }[]
+  )
+    .map((r) => r.detail)
+    .join(' | ');
+}
+
+// The driving statement exactly as getLaneHealthRollup issues it.
+const ROLLUP_SQL = `
+  SELECT state, requested_at, started_at, finished_at, failure_reason
+  FROM test_request_runs
+  WHERE project_id = @project_id AND state != 'running'
+  ORDER BY finished_at DESC, rowid DESC
+  LIMIT @limit
+`;
+
 let seq = 0;
 
 function insertRun(opts: {
@@ -390,6 +410,103 @@ describe('getLaneHealthRollup', () => {
           transitionCount: 3,
         },
       ]);
+    });
+  });
+
+  describe('driving query plan', () => {
+    it('is created by the schema', () => {
+      const idx = db
+        .prepare(`PRAGMA index_list(test_request_runs)`)
+        .all() as { name: string }[];
+      expect(idx.map((i) => i.name)).toContain(
+        'idx_test_request_runs_project_finished',
+      );
+    });
+
+    it('resolves the project-scoped rollup read via the new index, without a full-scan or a full-result sort', () => {
+      const plan = planFor(ROLLUP_SQL, { project_id: 'proj-1', limit: 500 });
+      expect(plan).toContain('idx_test_request_runs_project_finished');
+      // A bare "SCAN test_request_runs" (no USING) is the regression this guards.
+      expect(plan).not.toMatch(/SCAN test_request_runs(?! USING)/);
+      // The old failure mode materialized every matching row into a temp
+      // b-tree to sort the whole result set. The index leaves only a much
+      // cheaper "LAST TERM" tiebreak sort for rows sharing an exact
+      // finished_at, which this must not be confused with.
+      expect(plan).not.toContain('USE TEMP B-TREE FOR ORDER BY');
+    });
+
+    it('returns the same rows, in the same order — including the rowid tiebreaker for a shared finished_at — as the unindexed scan would', () => {
+      insertRun({
+        projectId: 'proj-1',
+        state: 'passed',
+        requestedAt: 0,
+        startedAt: 0,
+        finishedAt: 1000,
+      });
+      // Two runs finishing at the exact same instant: insertion (rowid)
+      // order is the only thing that can make their relative order
+      // deterministic, so the later-inserted row must sort first under
+      // `ORDER BY finished_at DESC, rowid DESC`.
+      insertRun({
+        projectId: 'proj-1',
+        state: 'passed',
+        requestedAt: 500,
+        startedAt: 500,
+        finishedAt: 2000,
+      });
+      insertRun({
+        projectId: 'proj-1',
+        state: 'failed',
+        requestedAt: 600,
+        startedAt: 600,
+        finishedAt: 2000,
+        failureReason: 'generic',
+      });
+      insertRun({
+        projectId: 'proj-1',
+        state: 'passed',
+        requestedAt: 100,
+        startedAt: 100,
+        finishedAt: 500,
+      });
+
+      const rows = db
+        .prepare(ROLLUP_SQL)
+        .all({ project_id: 'proj-1', limit: 500 }) as {
+        finished_at: number;
+        state: string;
+      }[];
+
+      expect(rows.map((r) => [r.finished_at, r.state])).toEqual([
+        [2000, 'failed'], // run-3, inserted after run-2 — rowid DESC breaks the tie
+        [2000, 'passed'], // run-2
+        [1000, 'passed'], // run-1
+        [500, 'passed'], // run-4
+      ]);
+    });
+
+    it('still excludes running runs and honours the LIMIT with the new index in play', () => {
+      db.prepare(
+        `INSERT INTO test_request_runs
+           (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason)
+         VALUES ('running-x', 'proj-1', 'h', NULL, 'running', '', 1000, 1000, NULL, NULL)`,
+      ).run();
+      for (let i = 0; i < 5; i++) {
+        insertRun({
+          projectId: 'proj-1',
+          state: 'passed',
+          requestedAt: i * 1000,
+          startedAt: i * 1000,
+          finishedAt: i * 1000 + 100,
+        });
+      }
+
+      const rows = db
+        .prepare(ROLLUP_SQL)
+        .all({ project_id: 'proj-1', limit: 2 }) as { state: string }[];
+
+      expect(rows).toHaveLength(2);
+      expect(rows.every((r) => r.state !== 'running')).toBe(true);
     });
   });
 });
