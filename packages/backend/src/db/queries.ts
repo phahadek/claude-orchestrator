@@ -6949,6 +6949,27 @@ export function getBaseHealthRemediationReasonTrackingByOpenTaskId(
   }) as BaseHealthRemediationReasonTrackingRow | undefined;
 }
 
+let _stmtHasOpenBaseHealthRemediation: Database.Statement | null = null;
+
+/**
+ * True when `projectId` has at least one total_fail remediation tracking row
+ * currently linked to an open remediation task — the on-demand signal that a
+ * task somewhere in this project already confirmed the base branch broken
+ * (via filterBaseAttributableFailures/recordAndMaybeFileBaseHealthRemediation).
+ * AutoLauncher gates its (cached, cheap) checkBaseBranchHealth call on this so
+ * it only ever runs on-demand, never proactively on a project no task has
+ * failed a test-request against yet.
+ */
+export function hasOpenBaseHealthRemediation(projectId: string): boolean {
+  _stmtHasOpenBaseHealthRemediation ??= db.prepare<{ project_id: string }>(
+    `SELECT 1 FROM base_health_remediation_reason_tracking WHERE project_id = @project_id AND remediation_task_open = 1 LIMIT 1`,
+  );
+  return (
+    _stmtHasOpenBaseHealthRemediation.get({ project_id: projectId }) !==
+    undefined
+  );
+}
+
 /**
  * Atomically claims the right to file a remediation task for `(projectId,
  * failureReason)` — same single-row guarded-UPDATE shape as

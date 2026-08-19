@@ -48,6 +48,10 @@ vi.mock('../../db/queries.js', () => ({
   getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
   getUsageDeferral: vi.fn().mockReturnValue(null),
   isNoOpSuppressed: vi.fn().mockReturnValue(false),
+  hasOpenBaseHealthRemediation: vi.fn().mockReturnValue(false),
+  getBaseHealthRemediationReasonTrackingByOpenTaskId: vi
+    .fn()
+    .mockReturnValue(undefined),
 }));
 
 vi.mock('../../audit/AuditLog.js', () => ({
