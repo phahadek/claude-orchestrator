@@ -2386,9 +2386,9 @@ describe('AutoLauncher — base-health dispatch gate', () => {
     // checkBaseHealth call on. Tests asserting the proactive-poller behavior
     // was removed override this back to false.
     vi.mocked(hasOpenBaseHealthRemediation).mockReturnValue(true);
-    vi.mocked(getBaseHealthRemediationReasonTrackingByOpenTaskId).mockReturnValue(
-      undefined,
-    );
+    vi.mocked(
+      getBaseHealthRemediationReasonTrackingByOpenTaskId,
+    ).mockReturnValue(undefined);
     (
       runtimeSettings as { auto_launch_concurrency: number }
     ).auto_launch_concurrency = 2;
@@ -2561,9 +2561,7 @@ describe('AutoLauncher — base-health dispatch gate', () => {
     const otherTask = makeResolvedTask({ id: 'other-task' });
     const backend = {
       type: 'notion' as const,
-      fetchReadyTasks: vi
-        .fn()
-        .mockResolvedValue([remediationTask, otherTask]),
+      fetchReadyTasks: vi.fn().mockResolvedValue([remediationTask, otherTask]),
     };
     const sessionManager = makeSessionManager(0);
     const checkBaseHealth = vi
@@ -2616,9 +2614,7 @@ describe('AutoLauncher — base-health dispatch gate', () => {
     const otherTask = makeResolvedTask({ id: 'blocked-task' });
     const backend = {
       type: 'notion' as const,
-      fetchReadyTasks: vi
-        .fn()
-        .mockResolvedValue([remediationTask, otherTask]),
+      fetchReadyTasks: vi.fn().mockResolvedValue([remediationTask, otherTask]),
     };
     const sessionManager = makeSessionManager(0);
     const checkBaseHealth = vi
