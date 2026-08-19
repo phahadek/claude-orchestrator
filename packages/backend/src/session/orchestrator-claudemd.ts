@@ -260,18 +260,13 @@ The supervisor's "Pause your work" message isn't a nudge in this sense: stopping
 
 When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
 
-Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Only disposition a failure as flaky after clearing this bar, in order:
+Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite yourself to establish flakiness — the backend already holds a cross-SHA outcome corpus for every test and adjudicates against it. Instead, call the \`mcp__orchestrator__flaky_confirm\` tool once with what you observed, instead of pushing a commit or re-running anything first:
 
-1. Call \`test_request\`; confirm it reproduces there, not just in the CI log.
-2. Call \`test_request\` again after any fix; confirm it passes clean.
-3. Confirm the failure is unrelated to your diff (e.g. infra contention, test-ordering/parallelism interference, a timing race) — not a real regression you introduced.
+- \`gate\`: \`"ci"\` for a failing GitHub check, \`"f2"\` for the orchestrator-run test gate, or \`"analyze"\` for the orchestrator-run static-analysis gate — whichever gate actually failed.
+- \`reason\`: one line naming what you observed and why you believe it's unrelated to your diff.
+- \`testId\` / \`testName\`: for gate \`"ci"\`/\`"f2"\`, identify the specific failing test as reported by the failing run. Required for those gates — the backend uses them to check the test against its cross-SHA corpus and against your diff.
 
-If all three hold, call the \`mcp__orchestrator__flaky_confirm\` tool instead of pushing a commit, with:
-
-- \`gate\`: \`"ci"\` for a failing GitHub check or \`"f2"\` for the orchestrator-run test gate — whichever gate actually failed.
-- \`reason\`: one line naming what you ran and what you concluded.
-
-The orchestrator re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention, so only call this when you've genuinely cleared the verification bar above, not as a way to skip investigating.
+The backend checks the test against that corpus (does it fail across enough distinct trees, or flip pass/fail, independent of any single diff) and against your own diff (its file must not be among your changes) before acting — it refuses the call outright if either check fails, naming the reason. On success it re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention rather than looping.
 
 ---
 
