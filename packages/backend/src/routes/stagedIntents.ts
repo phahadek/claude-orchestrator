@@ -177,6 +177,7 @@ import {
   getLatestTestRequestRun,
   getLatestTestRequestRunForSession,
   getTestRequestRunById,
+  updateTestRequestRunState,
   listTestRequestRunsForSession,
   listTestRunResultsForRun,
   countTestRunResultsForRun,
@@ -5664,7 +5665,7 @@ function resolveTestRequestExecutionInputs(intent: StagedIntent):
  * falls back to computing its own, exactly as this function always did before
  * admission reporting existed.
  */
-async function triggerTestRequestExecution(
+export async function triggerTestRequestExecution(
   intent: StagedIntent,
   sessionManager: SessionManager | undefined,
   precomputedAdmission?: TestRequestAdmission,
@@ -5754,6 +5755,12 @@ async function triggerTestRequestExecution(
   }
   if (filterResult?.outcome === 'inconclusive' && intent.sessionId) {
     decrementSessionTestRequestCycleCount(intent.sessionId);
+  }
+  // A fully-excused failure must also flip the stored run's state — the
+  // test_request_gate PR check reads test_request_runs.state directly, and
+  // it was written 'failed' from the raw result before this filter ran.
+  if (filterResult?.outcome === 'filtered_pass' && runId) {
+    updateTestRequestRunState(runId, 'passed');
   }
 
   const row = getStagedIntentRow(intent.id);
