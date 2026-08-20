@@ -94,7 +94,11 @@ import {
 } from '../db/queries';
 import type { OpsReconciliationAssertion } from '../db/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
-import { parseTaskId, normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
+import {
+  parseTaskId,
+  normalizeTaskId,
+  normalizeBoardId,
+} from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
 import { recordEvent } from '../audit/AuditLog';
 import type {
@@ -657,7 +661,7 @@ class DeferralOrphansDependentsError extends Error {
     super(
       `[stagedIntents] task.setStatus -> Deferred for task "${taskId}" is blocked: ` +
         `it still has non-terminal dependent(s) (${dependentTaskIds.join(', ')}) that ` +
-        'would be permanently wedged, and this project\'s task backend does not support ' +
+        "would be permanently wedged, and this project's task backend does not support " +
         'task.setDependsOn writes, so their Depends On cannot be automatically re-pointed away ' +
         'from this task. Stage a task.setDependsOn for each dependent in the same group before deferring.',
     );

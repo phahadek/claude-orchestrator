@@ -1087,7 +1087,7 @@ describe('task.setStatus -> Deferred automatically re-points a non-terminal depe
     );
   });
 
-  it('preserves the dependent\'s other, unrelated dependencies — only the deferred task\'s id is removed', async () => {
+  it("preserves the dependent's other, unrelated dependencies — only the deferred task's id is removed", async () => {
     seedBoardCache('k1b', [
       { id: 't-defer-1b', status: '🗂️ Ready', dependsOn: [] },
       {
