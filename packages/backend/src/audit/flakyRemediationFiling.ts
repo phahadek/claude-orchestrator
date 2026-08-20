@@ -1,248 +1,238 @@
 /**
  * The remediation-route half of lane-side flaky disposition (see
  * testRequestLane.ts's evaluateF2LaneFlakyDisposition and its
- * PRMergeWatcher.tryF2LaneAutoDisposition caller, the actuation this module
- * counts and reacts to): once a test's distinct-triggering-PR auto-
- * disposition count crosses flaky_remediation_file_threshold, files a
- * 💻 Code task at 🔲 Backlog against the triggering PR's own task's
- * milestone, so a chronically auto-excused test is routed into the normal
- * grooming pipeline instead of being excused indefinitely.
+ * PRMergeWatcher.tryF2LaneAutoDisposition caller, the actuation the lane
+ * side still reacts to on its own): files an operator-selected group of
+ * currently-flagged-flaky tests into a single 🔎 Investigation task at
+ * 🔲 Backlog, so a group of chronically flaky tests is routed into the
+ * normal grooming pipeline instead of being investigated one at a time.
  *
- * Deliberately never blocks or refuses further auto-disposition — the filed
- * task and the normal grooming pipeline are the entire remediation path, per
- * the locked design's "no merge-blocking ceiling" clause.
+ * Deliberately operator-driven, not auto-filed on a threshold — the prior
+ * per-test auto-filing path (and its per-triggering-PR dedup counter) has
+ * been removed; the lane side's f2-only auto-disposition itself is
+ * unaffected and keeps re-running clear tests without ever blocking a merge.
  */
 import { logger } from '../logger';
-import { typedGetSetting } from '../config/settings';
 import {
-  recordFlakyLaneAutoDisposition,
   setFlakyRemediationLinkedTask,
-  getFlakyRemediationTrackingByOpenTaskId,
-  tryClaimFlakyRemediationFiling,
+  getFlakyRemediationTrackingRowsByOpenTaskId,
+  tryClaimFlakyRemediationFilingBatch,
+  getFlaggedFlakyTestsRollup,
+  getFlakyRemediationTracking,
 } from '../db/queries';
-import {
-  resolveMilestoneDatabaseId,
-  resolveMilestoneForTaskId,
-  UnknownMilestoneError,
-} from '../projects/milestoneResolver';
+import { resolveMilestoneDatabaseId } from '../projects/milestoneResolver';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { recordEvent } from './AuditLog';
 
-const REMEDIATION_TASK_TYPE = '💻 Code';
+const INVESTIGATION_TASK_TYPE = '🔎 Investigation';
 
-export interface FlakyRemediationTrigger {
-  projectId: string;
+interface FlakyInvestigationTest {
   testId: string;
-  testName: string;
-  prNumber: number;
-  repo: string;
-  /** The triggering PR's own task id — the filed task lands on this task's milestone. */
-  triggeringTaskId: string | null;
+  name: string;
+  transitionCount: number;
+  sampleCount: number;
 }
 
-export interface FlakyRemediationFilingResult {
-  filed: boolean;
-  taskId?: string;
-  reason?: string;
+export interface FlakyInvestigationRequest {
+  projectId: string;
+  /** Milestone reference (DB id, display name, or canonical short id) to file the Investigation task against. */
+  milestoneId: string;
+  testIds: string[];
 }
 
-function renderRemediationTaskTitle(testId: string): string {
-  return `Chronically auto-excused flaky test: ${testId}`;
+export interface FlakyInvestigationFilingResult {
+  taskId: string;
 }
 
-function renderRemediationTaskBody(
-  testId: string,
-  testName: string,
-  autoDispositionCount: number,
-): string {
+/**
+ * Thrown for every recognized "can't file this request" condition — the
+ * caller (the route) maps `reason` to the appropriate HTTP status.
+ */
+export class FlakyInvestigationFilingError extends Error {
+  constructor(
+    public readonly reason:
+      | 'no-test-ids'
+      | 'not-flagged-flaky'
+      | 'already-open'
+      | 'claim-conflict'
+      | 'unknown-milestone'
+      | 'backend-unsupported',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'FlakyInvestigationFilingError';
+  }
+}
+
+function renderInvestigationTaskTitle(testCount: number): string {
+  return `Chronically flaky test${testCount === 1 ? '' : 's'}: investigate ${testCount} flagged test${testCount === 1 ? '' : 's'}`;
+}
+
+function renderInvestigationTaskBody(tests: FlakyInvestigationTest[]): string {
+  const evidenceLines = tests.map(
+    (t) =>
+      `- \`${t.testId}\` (${t.name}) — ${t.transitionCount} transitions across ${t.sampleCount} samples`,
+  );
   return [
     '## Evidence',
     '',
-    `- Test: \`${testId}\` (${testName})`,
-    `- Auto-disposed by the lane-side f2-only flaky mechanism across ${autoDispositionCount} distinct triggering PRs`,
+    ...evidenceLines,
     '',
     '## Open question',
     '',
-    'This test has repeatedly been auto-excused as flaky rather than blocking merges. ' +
-      'Investigate and fix (or delete/rewrite) the test so it stops needing lane-side ' +
+    `The above ${tests.length} test${tests.length === 1 ? '' : 's'} ${tests.length === 1 ? 'is' : 'are'} currently flagged flaky by the lane-side flip-rate ` +
+      'mechanism. Investigate and fix (or delete/rewrite) each so it stops needing lane-side ' +
       'auto-disposition — the normal grooming pipeline owns triage from here.',
   ].join('\n');
 }
 
 /**
- * Records one lane-side f2-only auto-disposition of `trigger.testId` and, if
- * that push crosses the threshold with no currently-open linked task, files
- * a fresh 💻 Code remediation task. Non-transactional: the tracking-row
- * write and the task.create call are sibling operations, consistent with
- * this codebase's existing convention for this class of state (see
- * capability_disqualification's recordDisqualification/upsertCapabilityDisqualification).
- *
- * The "no open task yet" check and the eventual task.create call are
- * separated by an await (milestone resolution + a network call), so the
- * dedup check alone can't prevent two concurrent threshold-crossing callers
- * for the same test_id from both filing. tryClaimFlakyRemediationFiling
- * closes that race with a single atomic UPDATE ... WHERE remediation_task_open
- * = 0 — only one caller's claim can ever succeed; the loser returns
- * immediately. Never throws: every failure past the claim (including
- * backend.createTask itself) is caught, logged, and releases the claim so a
- * later threshold-crossing can retry — filing is best-effort and must never
- * block or delay the flaky rerun it's attached to.
+ * Validates every requested test_id is currently flagged flaky for the
+ * project and not already tracked open, atomically claims the whole batch,
+ * and files one 🔎 Investigation task covering all of them. On any failure
+ * past a successful claim (including backend.createTask itself throwing),
+ * every claimed test_id is released back to open=0 and the error propagates
+ * — filing here is an explicit operator action, not best-effort background
+ * work, so unlike the retired auto-filing path this does not swallow errors.
  */
-export async function recordAndMaybeFileFlakyRemediation(
-  trigger: FlakyRemediationTrigger,
+export async function fileFlakyInvestigationTask(
+  request: FlakyInvestigationRequest,
   options: {
     resolveBackend?: (projectId: string) => TaskBackend;
     now?: () => string;
   } = {},
-): Promise<FlakyRemediationFilingResult> {
+): Promise<FlakyInvestigationFilingResult> {
   const resolveBackend = options.resolveBackend ?? getTaskBackend;
   const now = options.now ?? (() => new Date().toISOString());
-  const nowIso = now();
 
-  const { countedThisPr, autoDispositionCount } =
-    recordFlakyLaneAutoDisposition(
-      trigger.testId,
-      trigger.prNumber,
-      trigger.repo,
-      nowIso,
+  const testIds = [...new Set(request.testIds)];
+  if (testIds.length === 0) {
+    throw new FlakyInvestigationFilingError(
+      'no-test-ids',
+      'at least one test_id is required',
     );
-  if (!countedThisPr) {
-    return { filed: false, reason: 'already-counted-for-pr' };
   }
 
-  const threshold = typedGetSetting('flaky_remediation_file_threshold');
-  if (autoDispositionCount < threshold) {
-    return { filed: false, reason: 'below-threshold' };
+  const flagged = new Map(
+    getFlaggedFlakyTestsRollup(request.projectId).map((t) => [t.testId, t]),
+  );
+  const notFlagged = testIds.filter((id) => !flagged.has(id));
+  if (notFlagged.length > 0) {
+    throw new FlakyInvestigationFilingError(
+      'not-flagged-flaky',
+      `not currently flagged flaky for project "${request.projectId}": ${notFlagged.join(', ')}`,
+    );
   }
 
-  if (!tryClaimFlakyRemediationFiling(trigger.testId, nowIso)) {
-    return { filed: false, reason: 'already-open' };
+  const alreadyOpen = testIds.filter(
+    (id) => getFlakyRemediationTracking(id)?.remediation_task_open === 1,
+  );
+  if (alreadyOpen.length > 0) {
+    throw new FlakyInvestigationFilingError(
+      'already-open',
+      `already tracked under an open remediation task: ${alreadyOpen.join(', ')}`,
+    );
+  }
+
+  const nowIso = now();
+  if (!tryClaimFlakyRemediationFilingBatch(testIds, nowIso)) {
+    throw new FlakyInvestigationFilingError(
+      'claim-conflict',
+      `could not claim all of: ${testIds.join(', ')} — a concurrent filing won the race`,
+    );
   }
 
   try {
-    return await fileClaimedRemediationTask(
-      trigger,
-      autoDispositionCount,
+    return await fileClaimedInvestigationTask(
+      request,
+      testIds,
+      flagged,
       resolveBackend,
       now,
     );
   } catch (err) {
-    logger.warn(
-      `[flakyRemediationFiling] failed to file remediation task for test ${trigger.testId}: ${(err as Error).message}`,
-    );
-    setFlakyRemediationLinkedTask(trigger.testId, null, false, now());
-    return { filed: false, reason: 'create-task-failed' };
-  }
-}
-
-/**
- * The claimed tail of recordAndMaybeFileFlakyRemediation: resolves the
- * triggering task's milestone and files the task, or releases the claim
- * (returning filed: false) for every recognized "can't file right now"
- * condition — a missing triggering task, an unresolvable milestone, or a
- * backend without createTask support. Any other error (including
- * backend.createTask itself throwing) propagates to the caller's catch,
- * which releases the claim the same way.
- */
-async function fileClaimedRemediationTask(
-  trigger: FlakyRemediationTrigger,
-  autoDispositionCount: number,
-  resolveBackend: (projectId: string) => TaskBackend,
-  now: () => string,
-): Promise<FlakyRemediationFilingResult> {
-  if (!trigger.triggeringTaskId) {
-    logger.warn(
-      `[flakyRemediationFiling] test ${trigger.testId} crossed threshold but the triggering PR ` +
-        `(#${trigger.prNumber} ${trigger.repo}) has no task_id — skipping filing`,
-    );
-    setFlakyRemediationLinkedTask(trigger.testId, null, false, now());
-    return { filed: false, reason: 'no-triggering-task' };
-  }
-
-  const milestone = resolveMilestoneForTaskId(
-    trigger.projectId,
-    trigger.triggeringTaskId,
-  );
-  if (!milestone) {
-    logger.warn(
-      `[flakyRemediationFiling] could not resolve milestone for triggering task ` +
-        `${trigger.triggeringTaskId} (project ${trigger.projectId}) — skipping filing for test ${trigger.testId}`,
-    );
-    setFlakyRemediationLinkedTask(trigger.testId, null, false, now());
-    return { filed: false, reason: 'no-resolvable-milestone' };
-  }
-
-  let databaseId: string;
-  try {
-    databaseId = resolveMilestoneDatabaseId(trigger.projectId, milestone);
-  } catch (err) {
-    if (err instanceof UnknownMilestoneError) {
-      logger.warn(
-        `[flakyRemediationFiling] ${err.message} — skipping filing for test ${trigger.testId}`,
-      );
-      setFlakyRemediationLinkedTask(trigger.testId, null, false, now());
-      return { filed: false, reason: 'unknown-milestone' };
+    for (const testId of testIds) {
+      setFlakyRemediationLinkedTask(testId, null, false, now());
     }
     throw err;
   }
+}
 
-  const backend = resolveBackend(trigger.projectId);
-  if (!backend.createTask) {
-    logger.warn(
-      `[flakyRemediationFiling] task backend for project ${trigger.projectId} does not support createTask`,
+async function fileClaimedInvestigationTask(
+  request: FlakyInvestigationRequest,
+  testIds: string[],
+  flagged: Map<string, FlakyInvestigationTest>,
+  resolveBackend: (projectId: string) => TaskBackend,
+  now: () => string,
+): Promise<FlakyInvestigationFilingResult> {
+  let databaseId: string;
+  try {
+    databaseId = resolveMilestoneDatabaseId(
+      request.projectId,
+      request.milestoneId,
     );
-    setFlakyRemediationLinkedTask(trigger.testId, null, false, now());
-    return { filed: false, reason: 'backend-unsupported' };
+  } catch (err) {
+    throw new FlakyInvestigationFilingError(
+      'unknown-milestone',
+      (err as Error).message,
+    );
   }
+
+  const backend = resolveBackend(request.projectId);
+  if (!backend.createTask) {
+    throw new FlakyInvestigationFilingError(
+      'backend-unsupported',
+      `task backend for project "${request.projectId}" does not support createTask`,
+    );
+  }
+
+  const tests = testIds.map((id) => flagged.get(id)!);
 
   const taskId = await backend.createTask({
     databaseId,
-    title: renderRemediationTaskTitle(trigger.testId),
-    type: REMEDIATION_TASK_TYPE,
-    body: renderRemediationTaskBody(
-      trigger.testId,
-      trigger.testName,
-      autoDispositionCount,
-    ),
+    title: renderInvestigationTaskTitle(tests.length),
+    type: INVESTIGATION_TASK_TYPE,
+    body: renderInvestigationTaskBody(tests),
   });
 
-  setFlakyRemediationLinkedTask(trigger.testId, taskId, true, now());
+  const nowIso = now();
+  for (const testId of testIds) {
+    setFlakyRemediationLinkedTask(testId, taskId, true, nowIso);
+  }
 
   recordEvent({
-    event_type: 'flaky_remediation_task_filed',
-    actor_type: 'system',
-    project_id: trigger.projectId,
+    event_type: 'flaky_investigation_task_filed',
+    actor_type: 'human',
+    project_id: request.projectId,
     task_id: taskId,
     payload: {
-      test_id: trigger.testId,
-      auto_disposition_count: autoDispositionCount,
-      triggering_pr_number: trigger.prNumber,
-      triggering_repo: trigger.repo,
-      milestone,
+      test_ids: testIds,
+      milestone: request.milestoneId,
     },
   });
 
   logger.info(
-    `[flakyRemediationFiling] filed remediation task ${taskId} for chronically auto-excused ` +
-      `test ${trigger.testId} (${autoDispositionCount} distinct triggering PRs)`,
+    `[flakyRemediationFiling] filed investigation task ${taskId} covering ${testIds.length} flagged flaky tests`,
   );
 
-  return { filed: true, taskId };
+  return { taskId };
 }
 
 /**
- * Marks the remediation task linked to `taskId`'s tracking row (if any) as
- * closed — the sole signal that clears the way for a fresh filing on that
- * test_id once a new threshold-crossing occurs. Called from wherever a task
- * reaches a terminal ('✅ Done') status; a no-op if `taskId` isn't currently
- * linked as an open remediation task.
+ * Marks every tracking row linked to `taskId`'s remediation task as closed —
+ * the sole signal that clears the way for a fresh filing on each test_id
+ * once a new operator-driven investigation covers it again. A single task
+ * can cover N tests, so this clears all N rows, not just one. Called from
+ * wherever a task reaches a terminal status; a no-op if `taskId` isn't
+ * currently linked to any open remediation tracking row.
  */
 export function closeFlakyRemediationTaskIfLinked(
   taskId: string,
   nowIso: string,
 ): void {
-  const tracking = getFlakyRemediationTrackingByOpenTaskId(taskId);
-  if (!tracking) return;
-  setFlakyRemediationLinkedTask(tracking.test_id, taskId, false, nowIso);
+  const rows = getFlakyRemediationTrackingRowsByOpenTaskId(taskId);
+  for (const row of rows) {
+    setFlakyRemediationLinkedTask(row.test_id, taskId, false, nowIso);
+  }
 }

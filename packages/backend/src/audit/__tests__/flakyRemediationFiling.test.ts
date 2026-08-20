@@ -1,23 +1,23 @@
 /**
- * Tests for the remediation-route half of lane-side flaky disposition
+ * Tests for the operator-driven grouped Investigation filing route
  * (packages/backend/src/audit/flakyRemediationFiling.ts).
  *
  * AC:
- *  - crossing the threshold (2 distinct triggering PRs) with no currently-
- *    open linked task files exactly one new Code task, against the correct
- *    milestone.
- *  - a third+ distinct triggering PR while the filed task is still open
- *    files no additional task.
- *  - two auto-dispositions from the same PR count as one toward the
- *    threshold, not two.
- *  - once the linked task reaches a terminal status, a subsequent
- *    threshold-crossing files a fresh task.
+ *  - a batch claim atomically claims a whole test_id[] set, all-or-nothing
+ *    (rejects the whole batch on any conflict).
+ *  - on a simulated backend.createTask failure after a successful batch
+ *    claim, every claimed test_id is released back to open=0.
+ *  - fileFlakyInvestigationTask files exactly one Investigation task at
+ *    Backlog covering every valid selected test, rejects any test_id not
+ *    currently flagged flaky or already tracked open, and links every
+ *    covered test_id's tracking row to the created task.
+ *  - closing a task linked to N tracking rows clears all N rows (N > 1).
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
 const { createTaskMock } = vi.hoisted(() => ({
-  createTaskMock: vi.fn(async () => 'notion:remediation-task-1'),
+  createTaskMock: vi.fn(async () => 'notion:investigation-task-1'),
 }));
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({
@@ -34,37 +34,40 @@ vi.mock('../../db/db.js', async () => {
 import { db } from '../../db/db.js';
 import { ProjectService } from '../../projects/ProjectService.js';
 import {
-  upsertTaskCache,
   getFlakyRemediationTracking,
+  tryClaimFlakyRemediationFilingBatch,
+  setFlakyRemediationLinkedTask,
 } from '../../db/queries.js';
-import type { NotionTask } from '../../notion/types.js';
 import {
-  recordAndMaybeFileFlakyRemediation,
+  fileFlakyInvestigationTask,
   closeFlakyRemediationTaskIfLinked,
+  FlakyInvestigationFilingError,
 } from '../flakyRemediationFiling.js';
 
-const PROJECT = 'flaky-remediation-proj';
-const MILESTONE_ROW_ID = 'flaky-remediation-proj:board-m1';
-const MILESTONE_SOURCE_ID = 'aaaaaaaa-bbbb-cccc-dddd-111111111111';
-const TRIGGERING_TASK_ID = 'notion:triggering-task-1';
-const REPO = 'org/repo';
+const PROJECT = 'flaky-investigation-proj';
+const MILESTONE_ROW_ID = 'flaky-investigation-proj:board-m1';
+const MILESTONE_SOURCE_ID = 'aaaaaaaa-bbbb-cccc-dddd-222222222222';
 
-function notionTaskStub(id: string): NotionTask {
-  return {
-    id,
-    title: 'Some task',
-    status: '🔄 In Progress',
-    type: '💻 Code',
-    dependsOn: [],
-    notionUrl: 'https://notion.so/x',
-  };
+function insertRollupRow(testId: string, name = testId): void {
+  db.prepare(
+    `INSERT INTO flagged_flaky_tests_rollup
+       (project_id, test_id, name, sample_count, transition_count, computed_at)
+     VALUES (@project_id, @test_id, @name, @sample_count, @transition_count, @computed_at)`,
+  ).run({
+    project_id: PROJECT,
+    test_id: testId,
+    name,
+    sample_count: 10,
+    transition_count: 4,
+    computed_at: 1700000000000,
+  });
 }
 
 beforeAll(() => {
   ProjectService.create({
     id: PROJECT,
-    name: 'Flaky Remediation Test Project',
-    projectDir: '/tmp/flaky-remediation-proj',
+    name: 'Flaky Investigation Test Project',
+    projectDir: '/tmp/flaky-investigation-proj',
   });
   ProjectService.createMilestone({
     id: MILESTONE_ROW_ID,
@@ -73,156 +76,201 @@ beforeAll(() => {
     canonicalShortId: 'M1',
     sourceId: MILESTONE_SOURCE_ID,
   });
-  upsertTaskCache(
-    `board:${MILESTONE_ROW_ID}`,
-    JSON.stringify([notionTaskStub(TRIGGERING_TASK_ID)]),
-  );
 });
 
 beforeEach(() => {
   db.prepare('DELETE FROM flaky_remediation_tracking').run();
-  db.prepare('DELETE FROM flaky_remediation_pr_counts').run();
+  db.prepare('DELETE FROM flagged_flaky_tests_rollup').run();
   db.prepare('DELETE FROM audit_log').run();
   createTaskMock.mockClear();
-  createTaskMock.mockResolvedValue('notion:remediation-task-1');
+  createTaskMock.mockResolvedValue('notion:investigation-task-1');
 });
 
-function trigger(testId: string, prNumber: number) {
-  return recordAndMaybeFileFlakyRemediation({
-    projectId: PROJECT,
-    testId,
-    testName: 'some test',
-    prNumber,
-    repo: REPO,
-    triggeringTaskId: TRIGGERING_TASK_ID,
+describe('tryClaimFlakyRemediationFilingBatch', () => {
+  it('atomically claims a whole test_id[] set', () => {
+    const ok = tryClaimFlakyRemediationFilingBatch(
+      ['test-a', 'test-b', 'test-c'],
+      new Date(1).toISOString(),
+    );
+    expect(ok).toBe(true);
+    for (const id of ['test-a', 'test-b', 'test-c']) {
+      expect(getFlakyRemediationTracking(id)?.remediation_task_open).toBe(1);
+    }
   });
-}
 
-describe('recordAndMaybeFileFlakyRemediation', () => {
-  it('files exactly one Code task against the correct milestone once 2 distinct PRs cross the threshold', async () => {
-    const first = await trigger('test-a', 101);
-    expect(first.filed).toBe(false);
-    expect(createTaskMock).not.toHaveBeenCalled();
+  it('rejects the whole batch when any test_id is already open — none of the batch is claimed', () => {
+    setFlakyRemediationLinkedTask(
+      'test-b',
+      'notion:already-open-task',
+      true,
+      new Date(1).toISOString(),
+    );
 
-    const second = await trigger('test-a', 102);
-    expect(second.filed).toBe(true);
-    expect(second.taskId).toBe('notion:remediation-task-1');
+    const ok = tryClaimFlakyRemediationFilingBatch(
+      ['test-a', 'test-b', 'test-c'],
+      new Date(2).toISOString(),
+    );
+    expect(ok).toBe(false);
+
+    // Rolled back in full — test-a and test-c must NOT have been claimed
+    // even though they had no conflict of their own.
+    expect(getFlakyRemediationTracking('test-a')).toBeUndefined();
+    expect(getFlakyRemediationTracking('test-c')).toBeUndefined();
+    expect(getFlakyRemediationTracking('test-b')?.remediation_task_id).toBe(
+      'notion:already-open-task',
+    );
+  });
+});
+
+describe('fileFlakyInvestigationTask', () => {
+  it('files exactly one Investigation task at Backlog covering every valid selected test, and links every tracking row', async () => {
+    insertRollupRow('test-a');
+    insertRollupRow('test-b');
+
+    const result = await fileFlakyInvestigationTask({
+      projectId: PROJECT,
+      milestoneId: MILESTONE_ROW_ID,
+      testIds: ['test-a', 'test-b'],
+    });
+
+    expect(result.taskId).toBe('notion:investigation-task-1');
     expect(createTaskMock).toHaveBeenCalledTimes(1);
     expect(createTaskMock).toHaveBeenCalledWith(
       expect.objectContaining({
         databaseId: MILESTONE_SOURCE_ID,
-        type: '💻 Code',
+        type: '🔎 Investigation',
+        body: expect.stringContaining('test-a'),
       }),
     );
+    const body = createTaskMock.mock.calls[0][0].body as string;
+    expect(body).toContain('test-b');
 
-    const tracking = getFlakyRemediationTracking('test-a');
-    expect(tracking?.remediation_task_open).toBe(1);
-    expect(tracking?.remediation_task_id).toBe('notion:remediation-task-1');
-    expect(tracking?.auto_disposition_count).toBe(2);
+    for (const id of ['test-a', 'test-b']) {
+      const tracking = getFlakyRemediationTracking(id);
+      expect(tracking?.remediation_task_open).toBe(1);
+      expect(tracking?.remediation_task_id).toBe('notion:investigation-task-1');
+    }
   });
 
-  it('files no additional task for a third+ distinct triggering PR while the filed task is still open', async () => {
-    await trigger('test-b', 201);
-    await trigger('test-b', 202);
-    expect(createTaskMock).toHaveBeenCalledTimes(1);
+  it('rejects a test_id not currently flagged flaky, before claiming anything', async () => {
+    insertRollupRow('test-a');
+    // 'test-z' is not in flagged_flaky_tests_rollup.
 
-    const third = await trigger('test-b', 203);
-    expect(third.filed).toBe(false);
-    expect(third.reason).toBe('already-open');
-    expect(createTaskMock).toHaveBeenCalledTimes(1);
+    await expect(
+      fileFlakyInvestigationTask({
+        projectId: PROJECT,
+        milestoneId: MILESTONE_ROW_ID,
+        testIds: ['test-a', 'test-z'],
+      }),
+    ).rejects.toMatchObject({ reason: 'not-flagged-flaky' });
 
-    const tracking = getFlakyRemediationTracking('test-b');
-    expect(tracking?.auto_disposition_count).toBe(3);
-  });
-
-  it('counts two auto-dispositions from the same PR as one toward the threshold', async () => {
-    const first = await trigger('test-c', 301);
-    expect(first.filed).toBe(false);
-    expect(first.reason).toBe('below-threshold');
-
-    // Same PR retriggers (force-push retriggering f2) — must not alone cross the threshold.
-    const retry = await trigger('test-c', 301);
-    expect(retry.filed).toBe(false);
-    expect(retry.reason).toBe('already-counted-for-pr');
     expect(createTaskMock).not.toHaveBeenCalled();
-
-    const tracking = getFlakyRemediationTracking('test-c');
-    expect(tracking?.auto_disposition_count).toBe(1);
-
-    const second = await trigger('test-c', 302);
-    expect(second.filed).toBe(true);
-    expect(createTaskMock).toHaveBeenCalledTimes(1);
+    expect(getFlakyRemediationTracking('test-a')).toBeUndefined();
   });
 
-  it('files a fresh task once the previously linked task reaches a terminal status', async () => {
-    await trigger('test-d', 401);
-    const filed = await trigger('test-d', 402);
-    expect(filed.filed).toBe(true);
-    expect(createTaskMock).toHaveBeenCalledTimes(1);
-
-    // A further threshold-crossing while the task is still open files nothing.
-    await trigger('test-d', 403);
-    expect(createTaskMock).toHaveBeenCalledTimes(1);
-
-    closeFlakyRemediationTaskIfLinked(
-      'notion:remediation-task-1',
+  it('rejects a test_id already tracked open', async () => {
+    insertRollupRow('test-a');
+    insertRollupRow('test-b');
+    setFlakyRemediationLinkedTask(
+      'test-b',
+      'notion:other-open-task',
+      true,
       new Date(1).toISOString(),
     );
-    const closed = getFlakyRemediationTracking('test-d');
-    expect(closed?.remediation_task_open).toBe(0);
 
-    createTaskMock.mockResolvedValueOnce('notion:remediation-task-2');
-    const fresh = await trigger('test-d', 404);
-    expect(fresh.filed).toBe(true);
-    expect(fresh.taskId).toBe('notion:remediation-task-2');
-    expect(createTaskMock).toHaveBeenCalledTimes(2);
+    await expect(
+      fileFlakyInvestigationTask({
+        projectId: PROJECT,
+        milestoneId: MILESTONE_ROW_ID,
+        testIds: ['test-a', 'test-b'],
+      }),
+    ).rejects.toMatchObject({ reason: 'already-open' });
+
+    expect(createTaskMock).not.toHaveBeenCalled();
   });
 
-  it('never double-files when two threshold-crossing calls race concurrently for the same test_id', async () => {
-    // Pre-seed the count to 1 so both concurrent calls land on the exact
-    // same threshold-crossing PR-count transition (1 -> 2), maximizing the
-    // TOCTOU window between the dedup check and the eventual createTask call.
-    await trigger('test-e', 501);
-    createTaskMock.mockClear();
-
-    let resolveCreate: (id: string) => void;
-    createTaskMock.mockImplementationOnce(
-      () => new Promise((resolve) => (resolveCreate = resolve)),
-    );
-
-    const raceA = trigger('test-e', 502);
-    const raceB = trigger('test-e', 503);
-
-    // Let both calls reach their claim attempt before the in-flight
-    // createTask resolves — only one should have won the claim.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    resolveCreate!('notion:remediation-task-race');
-
-    const [resultA, resultB] = await Promise.all([raceA, raceB]);
-    const filedResults = [resultA, resultB].filter((r) => r.filed);
-    expect(filedResults).toHaveLength(1);
-    expect(createTaskMock).toHaveBeenCalledTimes(1);
-
-    const tracking = getFlakyRemediationTracking('test-e');
-    expect(tracking?.remediation_task_open).toBe(1);
-    expect(tracking?.remediation_task_id).toBe('notion:remediation-task-race');
-  });
-
-  it('swallows a createTask failure, releases the claim, and lets a later call retry', async () => {
-    await trigger('test-f', 601);
+  it('releases every claimed test_id back to open=0 when backend.createTask fails', async () => {
+    insertRollupRow('test-a');
+    insertRollupRow('test-b');
     createTaskMock.mockRejectedValueOnce(new Error('Notion API timeout'));
 
-    const failed = await trigger('test-f', 602);
-    expect(failed.filed).toBe(false);
-    expect(failed.reason).toBe('create-task-failed');
+    await expect(
+      fileFlakyInvestigationTask({
+        projectId: PROJECT,
+        milestoneId: MILESTONE_ROW_ID,
+        testIds: ['test-a', 'test-b'],
+      }),
+    ).rejects.toThrow('Notion API timeout');
 
-    const tracking = getFlakyRemediationTracking('test-f');
-    expect(tracking?.remediation_task_open).toBe(0);
-    expect(tracking?.remediation_task_id).toBeNull();
+    for (const id of ['test-a', 'test-b']) {
+      const tracking = getFlakyRemediationTracking(id);
+      expect(tracking?.remediation_task_open).toBe(0);
+      expect(tracking?.remediation_task_id).toBeNull();
+    }
 
-    createTaskMock.mockResolvedValueOnce('notion:remediation-task-retry');
-    const retried = await trigger('test-f', 603);
-    expect(retried.filed).toBe(true);
-    expect(retried.taskId).toBe('notion:remediation-task-retry');
+    // A later retry succeeds normally.
+    createTaskMock.mockResolvedValueOnce('notion:investigation-task-retry');
+    const retried = await fileFlakyInvestigationTask({
+      projectId: PROJECT,
+      milestoneId: MILESTONE_ROW_ID,
+      testIds: ['test-a', 'test-b'],
+    });
+    expect(retried.taskId).toBe('notion:investigation-task-retry');
+  });
+
+  it('rejects an unresolvable milestone', async () => {
+    insertRollupRow('test-a');
+
+    await expect(
+      fileFlakyInvestigationTask({
+        projectId: PROJECT,
+        milestoneId: 'not-a-real-milestone',
+        testIds: ['test-a'],
+      }),
+    ).rejects.toMatchObject({ reason: 'unknown-milestone' });
+
+    expect(createTaskMock).not.toHaveBeenCalled();
+    expect(getFlakyRemediationTracking('test-a')?.remediation_task_open).toBe(
+      0,
+    );
+  });
+});
+
+describe('closeFlakyRemediationTaskIfLinked', () => {
+  it('clears all N tracking rows linked to a closing task, N > 1', async () => {
+    insertRollupRow('test-a');
+    insertRollupRow('test-b');
+    insertRollupRow('test-c');
+
+    const filed = await fileFlakyInvestigationTask({
+      projectId: PROJECT,
+      milestoneId: MILESTONE_ROW_ID,
+      testIds: ['test-a', 'test-b', 'test-c'],
+    });
+
+    closeFlakyRemediationTaskIfLinked(filed.taskId, new Date(2).toISOString());
+
+    for (const id of ['test-a', 'test-b', 'test-c']) {
+      const tracking = getFlakyRemediationTracking(id);
+      expect(tracking?.remediation_task_open).toBe(0);
+    }
+  });
+
+  it('is a no-op for a task id with no linked tracking rows', () => {
+    expect(() =>
+      closeFlakyRemediationTaskIfLinked(
+        'notion:no-such-task',
+        new Date(1).toISOString(),
+      ),
+    ).not.toThrow();
+  });
+});
+
+// Sanity check that the error class carries a machine-readable reason for
+// the route to map to an HTTP status.
+describe('FlakyInvestigationFilingError', () => {
+  it('carries the reason code', () => {
+    const err = new FlakyInvestigationFilingError('not-flagged-flaky', 'x');
+    expect(err.reason).toBe('not-flagged-flaky');
   });
 });

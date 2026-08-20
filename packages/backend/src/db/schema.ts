@@ -2635,19 +2635,12 @@ export function runMigrations(target: Database.Database): void {
     );
   `);
 
-  // flaky_remediation_pr_counts: dedup key of (test_id, pr_number, repo) —
-  // a row exists once a given PR has ever contributed a lane-side auto-
-  // disposition for that test, so a single PR's retries/force-pushes only
-  // ever increment flaky_remediation_tracking.auto_disposition_count once.
-  target.exec(`
-    CREATE TABLE IF NOT EXISTS flaky_remediation_pr_counts (
-      test_id     TEXT    NOT NULL,
-      pr_number   INTEGER NOT NULL,
-      repo        TEXT    NOT NULL,
-      counted_at  TEXT    NOT NULL,
-      PRIMARY KEY (test_id, pr_number, repo)
-    );
-  `);
+  // flaky_remediation_pr_counts: formerly the dedup key of (test_id,
+  // pr_number, repo) for the auto-filing threshold-crossing counter. Removed
+  // now that filing is operator-driven (one Investigation task per operator
+  // action, no per-triggering-PR threshold to count toward) — see
+  // audit/flakyRemediationFiling.ts.
+  target.exec(`DROP TABLE IF EXISTS flaky_remediation_pr_counts`);
 
   // base_health_remediation_test_tracking: one row per (project_id, test_id)
   // ever confirmed failing on the base tree itself (partial_fail outcome —

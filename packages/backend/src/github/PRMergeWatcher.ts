@@ -24,11 +24,7 @@ import {
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import { evaluateF2LaneFlakyDisposition } from '../orchestration/testRequestLane';
 import { recordEvent } from '../audit/AuditLog';
-import { getFailingTestIdsForRun } from '../db/queries';
-import {
-  recordAndMaybeFileFlakyRemediation,
-  closeFlakyRemediationTaskIfLinked,
-} from '../audit/flakyRemediationFiling';
+import { closeFlakyRemediationTaskIfLinked } from '../audit/flakyRemediationFiling';
 import { closeBaseHealthRemediationTaskIfLinked } from '../audit/baseHealthRemediationFiling';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow, TestRequestRunRow } from '../db/types';
@@ -1369,22 +1365,6 @@ export class PRMergeWatcher extends EventEmitter {
       typedGetSetting('flip_rate_breadth_window_hours'),
     );
     if (!eligible) return false;
-
-    // Every failing test this run is about to auto-dispose counts toward its
-    // own remediation-filing threshold — see flakyRemediationFiling.ts. Never
-    // blocks or delays the rerun below: filing failures are logged and
-    // swallowed there, per the locked design's "no merge-blocking ceiling".
-    const failingTests = getFailingTestIdsForRun(testResult.id);
-    for (const test of failingTests) {
-      await recordAndMaybeFileFlakyRemediation({
-        projectId: project.id,
-        testId: test.test_id,
-        testName: test.name,
-        prNumber: pr.pr_number,
-        repo: pr.repo,
-        triggeringTaskId: pr.task_id ?? null,
-      });
-    }
 
     recordEvent({
       event_type: 'flake_recovery_attempted',

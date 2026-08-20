@@ -129,7 +129,7 @@ type EventType =
   | 'task_aborted'
   | 'planning_dispatch_launched'
   | 'capability_disposition_investigation_filed'
-  | 'flaky_remediation_task_filed'
+  | 'flaky_investigation_task_filed'
   | 'stuck_session_notify_checked'
   | 'stuck_session_heartbeat_tick'
   | 'session_map_entry_dropped'
