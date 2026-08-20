@@ -18,12 +18,26 @@ import {
 import { GitHubClient } from '../github/GitHubClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 import { recordEvent } from '../audit/AuditLog';
+import { closeFlakyRemediationTaskIfLinked } from '../audit/flakyRemediationFiling';
 import {
   upsertTaskCache,
   updateTaskStatusInBoardCaches,
   getTaskStatusFromCache,
   recordTaskStatusWrite,
 } from '../db/queries';
+
+/**
+ * Statuses a task never leaves once reached — mirrors the DONE_STATUSES
+ * convention used elsewhere (e.g. groomLoad.ts, mergeCandidates.ts). A
+ * transition into one of these is the sole signal that clears the way for a
+ * fresh flaky-remediation filing on any test tracked against this task,
+ * since a PR-less 🔎 Investigation task (the operator-driven filing route's
+ * output) has no PR-merge event to close it via AutoMerger/PRMergeWatcher.
+ */
+const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set([
+  '✅ Done',
+  '⏭️ Deferred',
+]);
 
 /**
  * Per-project configuration that identifies where non-milestone tasks are sourced from.
@@ -344,6 +358,9 @@ export class AuditingTaskBackend implements TaskBackend {
     await this.inner.updateStatus(taskId, status);
     updateTaskStatusInBoardCaches(taskId, status);
     recordTaskStatusWrite(taskId, status);
+    if (TERMINAL_TASK_STATUSES.has(status)) {
+      closeFlakyRemediationTaskIfLinked(taskId, new Date().toISOString());
+    }
     const source = options?.source ?? 'orchestrator';
     const sessionId = options?.sessionId ?? null;
     recordEvent({

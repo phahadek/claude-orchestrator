@@ -56,6 +56,12 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'gate-verify flow arm/disarm control',
   },
+  'POST /api/milestones/:project/flaky-investigation': {
+    audience: 'known-gap',
+    reason: 'operator-driven grouped flaky Investigation filing control',
+    fixTask:
+      'Replace auto-filed per-test flaky remediation with operator-driven grouped Investigation filing (frontend sibling task)',
+  },
 
   // -- planningLaunch.ts -----------------------------------------------------
   'POST /api/planning/launch': {

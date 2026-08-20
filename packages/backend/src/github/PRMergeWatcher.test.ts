@@ -4163,7 +4163,7 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     );
   });
 
-  it('auto-recovers a deterministically-failing test (never flip-rate flagged) once it clears the breadth-of-trees guard instead, and still files exactly one remediation record for it', async () => {
+  it('auto-recovers a deterministically-failing test (never flip-rate flagged) once it clears the breadth-of-trees guard instead', async () => {
     const testId = 'tests.unit.test_foo.test_deterministic';
     // Fails on 3 distinct trees before the PR was created — never alternates
     // (flip-rate stays unflagged), but breadth alone clears guard 1.
@@ -4219,15 +4219,12 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
       null,
     );
 
-    // recordAndMaybeFileFlakyRemediation ran exactly once for this test —
-    // the real (unmocked) function's tracking row shows one counted
-    // auto-disposition, not zero (never ran) or more than one (double-counted).
+    // Auto-filing is retired — clearing the F2 guard must never itself
+    // create a flaky_remediation_tracking row; filing is operator-driven now.
     const tracking = db
-      .prepare(
-        `SELECT auto_disposition_count FROM flaky_remediation_tracking WHERE test_id = ?`,
-      )
-      .get(testId) as { auto_disposition_count: number } | undefined;
-    expect(tracking?.auto_disposition_count).toBe(1);
+      .prepare(`SELECT * FROM flaky_remediation_tracking WHERE test_id = ?`)
+      .get(testId);
+    expect(tracking).toBeUndefined();
   });
 
   it('still pauses and nudges when only some failing tests are flip-rate-flagged (mixed failures)', async () => {

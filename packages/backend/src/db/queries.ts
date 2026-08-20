@@ -6578,16 +6578,14 @@ export function upsertCapabilityDisqualification(
   });
 }
 
-// ─── flaky_remediation_tracking / flaky_remediation_pr_counts ──────────────
+// ─── flaky_remediation_tracking ────────────────────────────────────────────
 // Statements are cached lazily (prepared on first use, not at module load) so
 // importing this module doesn't fail on a not-yet-migrated db handle.
 
 let _stmtGetFlakyRemediationTracking: Database.Statement | null = null;
-let _stmtUpsertFlakyRemediationTrackingCount: Database.Statement | null = null;
 let _stmtSetFlakyRemediationLinkedTask: Database.Statement | null = null;
-let _stmtInsertFlakyRemediationPrCount: Database.Statement | null = null;
 
-/** The current tracking row for one test_id, or undefined if it was never lane-auto-disposed. */
+/** The current tracking row for one test_id, or undefined if it was never tracked. */
 export function getFlakyRemediationTracking(
   testId: string,
 ): FlakyRemediationTrackingRow | undefined {
@@ -6597,72 +6595,6 @@ export function getFlakyRemediationTracking(
   return _stmtGetFlakyRemediationTracking.get({ test_id: testId }) as
     | FlakyRemediationTrackingRow
     | undefined;
-}
-
-/**
- * Records one lane-side f2-only auto-disposition of `testId`, triggered by
- * (prNumber, repo). Per the locked design, the counter is keyed on distinct
- * triggering PRs, not raw actuation calls: a PR that has already contributed
- * to this test's count (a retry/force-push retriggering f2) is a no-op here
- * — flaky_remediation_pr_counts' (test_id, pr_number, repo) primary key is
- * the dedup gate. Returns the up-to-date auto_disposition_count either way,
- * and whether this call is the one that incremented it.
- */
-export function recordFlakyLaneAutoDisposition(
-  testId: string,
-  prNumber: number,
-  repo: string,
-  nowIso: string,
-): { countedThisPr: boolean; autoDispositionCount: number } {
-  _stmtInsertFlakyRemediationPrCount ??= db.prepare<{
-    test_id: string;
-    pr_number: number;
-    repo: string;
-    counted_at: string;
-  }>(`
-    INSERT OR IGNORE INTO flaky_remediation_pr_counts (test_id, pr_number, repo, counted_at)
-    VALUES (@test_id, @pr_number, @repo, @counted_at)
-  `);
-  const info = _stmtInsertFlakyRemediationPrCount.run({
-    test_id: testId,
-    pr_number: prNumber,
-    repo,
-    counted_at: nowIso,
-  });
-  const countedThisPr = info.changes > 0;
-
-  if (!countedThisPr) {
-    const existing = getFlakyRemediationTracking(testId);
-    return {
-      countedThisPr: false,
-      autoDispositionCount: existing?.auto_disposition_count ?? 0,
-    };
-  }
-
-  _stmtUpsertFlakyRemediationTrackingCount ??= db.prepare<{
-    test_id: string;
-    created_at: string;
-    updated_at: string;
-  }>(`
-    INSERT INTO flaky_remediation_tracking
-      (test_id, remediation_task_id, remediation_task_open, auto_disposition_count, created_at, updated_at)
-    VALUES
-      (@test_id, NULL, 0, 1, @created_at, @updated_at)
-    ON CONFLICT(test_id) DO UPDATE SET
-      auto_disposition_count = auto_disposition_count + 1,
-      updated_at = @updated_at
-  `);
-  _stmtUpsertFlakyRemediationTrackingCount.run({
-    test_id: testId,
-    created_at: nowIso,
-    updated_at: nowIso,
-  });
-
-  const row = getFlakyRemediationTracking(testId);
-  return {
-    countedThisPr: true,
-    autoDispositionCount: row?.auto_disposition_count ?? 0,
-  };
 }
 
 /**
@@ -6701,26 +6633,44 @@ export function setFlakyRemediationLinkedTask(
   });
 }
 
-let _stmtClaimFlakyRemediationFiling: Database.Statement | null = null;
+let _stmtEnsureFlakyRemediationTrackingRow: Database.Statement | null = null;
+let _stmtClaimFlakyRemediationFilingRow: Database.Statement | null = null;
+type ClaimFlakyRemediationFilingBatchTxn = Database.Transaction<
+  (ids: string[], updatedAt: string) => void
+>;
+let _txnClaimFlakyRemediationFilingBatch: ClaimFlakyRemediationFilingBatchTxn | null =
+  null;
 
 /**
- * Atomically claims the right to file a remediation task for `testId`:
- * flips remediation_task_open 0 -> 1 in a single UPDATE guarded by
- * `WHERE remediation_task_open = 0`, so two concurrent threshold-crossing
- * callers (plausible since PRMergeWatcher can process more than one PR
- * concurrently) can never both observe "no open task" and both file — only
- * whichever UPDATE's WHERE clause matches first wins (better-sqlite3 is
- * synchronous, so there is no interleaving within this single statement).
- * The caller must release the claim (setFlakyRemediationLinkedTask with
+ * Atomically claims the right to file one grouped Investigation task
+ * covering every test_id in `testIds`: for each, ensures a tracking row
+ * exists (a test_id may never have been tracked before — the operator-driven
+ * route has no prior auto-disposition step that would have created one),
+ * then flips remediation_task_open 0 -> 1 guarded by `WHERE
+ * remediation_task_open = 0`. All-or-nothing — wrapped in a single
+ * better-sqlite3 transaction, so if any test_id in the set is already
+ * claimed (another in-flight filing, or a still-open previously filed task)
+ * the whole batch rolls back and no test_id is claimed. The caller must
+ * release every claimed test_id (setFlakyRemediationLinkedTask with
  * open=false) if it fails to actually finish filing — see
- * recordAndMaybeFileFlakyRemediation. Returns false if another caller (or a
- * still-open previously filed task) already holds the claim.
+ * flakyRemediationFiling.ts. Returns false if the batch could not be claimed
+ * in full.
  */
-export function tryClaimFlakyRemediationFiling(
-  testId: string,
+export function tryClaimFlakyRemediationFilingBatch(
+  testIds: string[],
   nowIso: string,
 ): boolean {
-  _stmtClaimFlakyRemediationFiling ??= db.prepare<{
+  _stmtEnsureFlakyRemediationTrackingRow ??= db.prepare<{
+    test_id: string;
+    now: string;
+  }>(`
+    INSERT INTO flaky_remediation_tracking
+      (test_id, remediation_task_id, remediation_task_open, auto_disposition_count, created_at, updated_at)
+    VALUES
+      (@test_id, NULL, 0, 0, @now, @now)
+    ON CONFLICT(test_id) DO NOTHING
+  `);
+  _stmtClaimFlakyRemediationFilingRow ??= db.prepare<{
     test_id: string;
     updated_at: string;
   }>(`
@@ -6728,26 +6678,42 @@ export function tryClaimFlakyRemediationFiling(
     SET remediation_task_open = 1, remediation_task_id = NULL, updated_at = @updated_at
     WHERE test_id = @test_id AND remediation_task_open = 0
   `);
-  const info = _stmtClaimFlakyRemediationFiling.run({
-    test_id: testId,
-    updated_at: nowIso,
-  });
-  return info.changes > 0;
+  _txnClaimFlakyRemediationFilingBatch ??= db.transaction(
+    (ids: string[], updatedAt: string) => {
+      for (const testId of ids) {
+        _stmtEnsureFlakyRemediationTrackingRow!.run({
+          test_id: testId,
+          now: updatedAt,
+        });
+        const info = _stmtClaimFlakyRemediationFilingRow!.run({
+          test_id: testId,
+          updated_at: updatedAt,
+        });
+        if (info.changes === 0) {
+          throw new Error(`flaky remediation claim conflict on ${testId}`);
+        }
+      }
+    },
+  );
+  try {
+    _txnClaimFlakyRemediationFilingBatch(testIds, nowIso);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-/** The tracking row currently linked to `taskId` as its open remediation task, or undefined. */
-export function getFlakyRemediationTrackingByOpenTaskId(
+/** Every tracking row currently linked to `taskId` as its open remediation task — a task can cover N tests. */
+export function getFlakyRemediationTrackingRowsByOpenTaskId(
   taskId: string,
-): FlakyRemediationTrackingRow | undefined {
+): FlakyRemediationTrackingRow[] {
   return db
     .prepare<{
       remediation_task_id: string;
     }>(
       `SELECT * FROM flaky_remediation_tracking WHERE remediation_task_id = @remediation_task_id AND remediation_task_open = 1`,
     )
-    .get({ remediation_task_id: taskId }) as
-    | FlakyRemediationTrackingRow
-    | undefined;
+    .all({ remediation_task_id: taskId }) as FlakyRemediationTrackingRow[];
 }
 
 // ─── base_health_remediation_test_tracking / _reason_tracking / _reason_counts ──

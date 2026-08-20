@@ -38,7 +38,6 @@ vi.mock('../../db/queries', () => ({
   recordMergeCommitForSession: vi.fn(),
   setConflictNudgeSha: vi.fn(),
   setPreReviewStage: vi.fn(),
-  getFailingTestIdsForRun: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock('../../config', () => ({
@@ -76,7 +75,6 @@ vi.mock('../../orchestration/testRequestLane', () => ({
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 
 vi.mock('../../audit/flakyRemediationFiling', () => ({
-  recordAndMaybeFileFlakyRemediation: vi.fn().mockResolvedValue(undefined),
   closeFlakyRemediationTaskIfLinked: vi.fn(),
 }));
 
