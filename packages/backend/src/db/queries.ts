@@ -7064,6 +7064,14 @@ export function setBaseHealthRemediationReasonLinkedTask(
  * triggering task id rather than (test_id, pr_number, repo): a task gets one
  * shot regardless of which (or how many different) failure_reason values
  * its own retries land on. Returns whether this call is the task's first.
+ *
+ * `triggeringTaskId` is run through normalizeTaskId (packages/backend/src/tasks/taskId.ts)
+ * before it ever reaches the primary key: the caller has been observed
+ * passing bare hyphenated, bare hyphenless, and `notion:`-prefixed spellings
+ * of the same task id, and INSERT OR IGNORE only dedupes on an exact key
+ * match — an unnormalized key let the same triggering task claim this guard
+ * more than once. normalizeTaskId's canonical `source:externalId` form
+ * (hyphenated, lowercased) is the sole form ever stored here.
  */
 export function recordBaseHealthTotalFailCount(
   triggeringTaskId: string,
@@ -7077,7 +7085,7 @@ export function recordBaseHealthTotalFailCount(
     VALUES (@triggering_task_id, @counted_at)
   `);
   const info = _stmtInsertBaseHealthRemediationReasonCount.run({
-    triggering_task_id: triggeringTaskId,
+    triggering_task_id: normalizeTaskId(triggeringTaskId),
     counted_at: nowIso,
   });
   return { countedThisTask: info.changes > 0 };
