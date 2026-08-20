@@ -27,7 +27,7 @@ import { recordEvent } from './AuditLog';
 
 const INVESTIGATION_TASK_TYPE = '🔎 Investigation';
 
-export interface FlakyInvestigationTest {
+interface FlakyInvestigationTest {
   testId: string;
   name: string;
   transitionCount: number;
