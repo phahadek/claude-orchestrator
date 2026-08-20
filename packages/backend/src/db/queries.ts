@@ -8138,6 +8138,25 @@ export function completeTestRequestRun(
   );
 }
 
+/**
+ * Overwrites just `state` on an already-completed run — used when the
+ * base/flaky-attribution filter (baseAttributableFilter.ts) fully excuses a
+ * raw failure (`filtered_pass`) after completeTestRequestRun already stored
+ * the raw 'failed' state. Leaves output/failure_reason/structured_result
+ * alone since those still describe what actually happened; only the state
+ * the test_request_gate PR check reads needs to reflect the filtered
+ * verdict.
+ */
+export function updateTestRequestRunState(
+  id: string,
+  state: TestRequestRunState,
+): void {
+  db.prepare(`UPDATE test_request_runs SET state = ? WHERE id = ?`).run(
+    state,
+    id,
+  );
+}
+
 const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted`;
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
