@@ -1047,17 +1047,19 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
   });
 });
 
-describe('task.setStatus -> Deferred blocked while a non-terminal dependent is not re-pointed', () => {
-  it('refuses when the group carries no companion task.setDependsOn for the dependent, surfacing a structured 409 with the blocking task ids', async () => {
+describe('task.setStatus -> Deferred automatically re-points a non-terminal dependent left unaddressed', () => {
+  it('automatically drops the deferred task id from the dependent Depends On when the group carries no companion task.setDependsOn', async () => {
     seedBoardCache('k1', [
       { id: 't-defer-1', status: '🗂️ Ready', dependsOn: [] },
       { id: 't-dependent-1', status: '🗂️ Ready', dependsOn: ['t-defer-1'] },
     ]);
+    const updateStatus = vi.fn();
+    const setDependsOn = vi.fn();
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
-      updateStatus: vi.fn(),
-      setDependsOn: vi.fn(),
+      updateStatus,
+      setDependsOn,
     });
     const app = makeApp();
     const agent = supertest(app);
@@ -1076,12 +1078,93 @@ describe('task.setStatus -> Deferred blocked while a non-terminal dependent is n
       .post('/api/staged-intents/group/g-defer-1/commit')
       .send({});
 
-    expect(commit.status).toBe(409);
-    expect(commit.body.error).toContain('t-dependent-1');
-    expect(commit.body.dependentTaskIds).toEqual(['t-dependent-1']);
+    expect(commit.status).toBe(200);
+    expect(updateStatus).toHaveBeenCalled();
+    expect(setDependsOn).toHaveBeenCalledWith(
+      'notion:t-dependent-1',
+      [],
+      expect.anything(),
+    );
   });
 
-  it('succeeds when the same group also carries a task.setDependsOn re-pointing the dependent', async () => {
+  it('preserves the dependent\'s other, unrelated dependencies — only the deferred task\'s id is removed', async () => {
+    seedBoardCache('k1b', [
+      { id: 't-defer-1b', status: '🗂️ Ready', dependsOn: [] },
+      {
+        id: 't-dependent-1b',
+        status: '🗂️ Ready',
+        dependsOn: ['t-other-1', 't-defer-1b', 't-other-2'],
+      },
+    ]);
+    const updateStatus = vi.fn();
+    const setDependsOn = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-1b',
+      groupId: 'g-defer-1b',
+      payload: { taskId: 't-defer-1b', status: 'Deferred' },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-defer-1b/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(setDependsOn).toHaveBeenCalledWith(
+      'notion:t-dependent-1b',
+      ['notion:t-other-1', 'notion:t-other-2'],
+      expect.anything(),
+    );
+  });
+
+  it('fails loudly instead of silently wedging when the task backend does not support setDependsOn', async () => {
+    seedBoardCache('k1c', [
+      { id: 't-defer-1c', status: '🗂️ Ready', dependsOn: [] },
+      { id: 't-dependent-1c', status: '🗂️ Ready', dependsOn: ['t-defer-1c'] },
+    ]);
+    const updateStatus = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      // No setDependsOn on this backend — automatic removal is impossible.
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-defer-1c',
+      groupId: 'g-defer-1c',
+      payload: { taskId: 't-defer-1c', status: 'Deferred' },
+    });
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-defer-1c/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).toContain('t-dependent-1c');
+    expect(commit.body.dependentTaskIds).toEqual(['t-dependent-1c']);
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('uses the explicit companion task.setDependsOn as-is instead of the automatic removal when the group already stages one', async () => {
     seedBoardCache('k2', [
       { id: 't-defer-2', status: '🗂️ Ready', dependsOn: [] },
       { id: 't-dependent-2', status: '🗂️ Ready', dependsOn: ['t-defer-2'] },
@@ -1245,16 +1328,17 @@ describe('task.setStatus -> Deferred blocked while a non-terminal dependent is n
     expect(updateStatus).toHaveBeenCalled();
   });
 
-  it('a companion task.setDependsOn naming the deferred task itself rather than its dependent does not satisfy the guard', async () => {
+  it('a companion task.setDependsOn naming the deferred task itself rather than its dependent does not satisfy the guard — the dependent still gets the automatic removal', async () => {
     seedBoardCache('k6', [
       { id: 't-defer-6', status: '🗂️ Ready', dependsOn: [] },
       { id: 't-dependent-6', status: '🗂️ Ready', dependsOn: ['t-defer-6'] },
     ]);
+    const setDependsOn = vi.fn();
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
       updateStatus: vi.fn(),
-      setDependsOn: vi.fn(),
+      setDependsOn,
     });
     const app = makeApp();
     const agent = supertest(app);
@@ -1281,8 +1365,12 @@ describe('task.setStatus -> Deferred blocked while a non-terminal dependent is n
       .post('/api/staged-intents/group/g-defer-6/commit')
       .send({});
 
-    expect(commit.status).toBe(409);
-    expect(commit.body.dependentTaskIds).toEqual(['t-dependent-6']);
+    expect(commit.status).toBe(200);
+    expect(setDependsOn).toHaveBeenCalledWith(
+      'notion:t-dependent-6',
+      [],
+      expect.anything(),
+    );
   });
 
   it('the existing DependsOnCompletenessError Ready-flip guard is unchanged', async () => {
