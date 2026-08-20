@@ -23,11 +23,15 @@ vi.mock('../baseHealthCheck', () => ({
   checkBaseBranchHealth: mockCheckBaseBranchHealth,
 }));
 
-const { mockGetFailingTestIdsForRun } = vi.hoisted(() => ({
-  mockGetFailingTestIdsForRun: vi.fn(),
-}));
+const { mockGetFailingTestIdsForRun, mockGetFlaggedFlakyTestIds } = vi.hoisted(
+  () => ({
+    mockGetFailingTestIdsForRun: vi.fn(),
+    mockGetFlaggedFlakyTestIds: vi.fn(() => new Set<string>()),
+  }),
+);
 vi.mock('../../db/queries', () => ({
   getFailingTestIdsForRun: mockGetFailingTestIdsForRun,
+  getFlaggedFlakyTestIds: mockGetFlaggedFlakyTestIds,
 }));
 
 const { mockRecordAndMaybeFileBaseHealthRemediation } = vi.hoisted(() => ({
@@ -40,7 +44,10 @@ vi.mock('../../audit/baseHealthRemediationFiling', () => ({
     mockRecordAndMaybeFileBaseHealthRemediation,
 }));
 
-import { filterBaseAttributableFailures } from '../baseAttributableFilter';
+import {
+  filterBaseAttributableFailures,
+  renderBaseAttributableFilterDigest,
+} from '../baseAttributableFilter';
 import type { ProjectConfig } from '../../config';
 import type { TestRequestRunRow } from '../../db/types';
 
@@ -72,6 +79,8 @@ const BASE_RUN = makeRun({ id: 'run-base-1', content_hash: 'base-hash' });
 beforeEach(() => {
   mockCheckBaseBranchHealth.mockReset();
   mockGetFailingTestIdsForRun.mockReset();
+  mockGetFlaggedFlakyTestIds.mockReset();
+  mockGetFlaggedFlakyTestIds.mockReturnValue(new Set<string>());
   mockRecordAndMaybeFileBaseHealthRemediation.mockReset();
   mockRecordAndMaybeFileBaseHealthRemediation.mockResolvedValue({
     filed: false,
@@ -105,6 +114,7 @@ describe('filterBaseAttributableFailures', () => {
     expect(result.excludedTests).toEqual([
       { test_id: 'suite.testA', name: 'testA' },
     ]);
+    expect(result.flakyExcludedTests).toEqual([]);
     expect(mockRecordAndMaybeFileBaseHealthRemediation).toHaveBeenCalledWith(
       expect.objectContaining({
         projectId: 'proj-1',
@@ -145,6 +155,133 @@ describe('filterBaseAttributableFailures', () => {
     ]);
     expect(result.excludedTests).toEqual([
       { test_id: 'suite.testA', name: 'testA' },
+    ]);
+    expect(result.flakyExcludedTests).toEqual([]);
+  });
+
+  it('excludes a failure flagged flaky for this project from remainingTests, even when it does not fail on base', async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({
+      outcome: 'partial_fail',
+      projectId: 'proj-1',
+      contentHash: 'base-hash',
+      cacheHit: true,
+      run: BASE_RUN,
+    });
+    mockGetFailingTestIdsForRun.mockImplementation((runId: string) =>
+      runId === 'run-session-1'
+        ? [{ test_id: 'suite.flakyTest', name: 'flakyTest' }]
+        : [],
+    );
+    mockGetFlaggedFlakyTestIds.mockReturnValue(new Set(['suite.flakyTest']));
+
+    const result = await filterBaseAttributableFailures(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    expect(result.outcome).toBe('filtered_pass');
+    expect(result.passed).toBe(true);
+    expect(result.remainingTests).toEqual([]);
+    expect(result.flakyExcludedTests).toEqual([
+      { test_id: 'suite.flakyTest', name: 'flakyTest' },
+    ]);
+  });
+
+  it('still charges a non-flagged failure that does not fail on base', async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({
+      outcome: 'partial_fail',
+      projectId: 'proj-1',
+      contentHash: 'base-hash',
+      cacheHit: true,
+      run: BASE_RUN,
+    });
+    mockGetFailingTestIdsForRun.mockImplementation((runId: string) =>
+      runId === 'run-session-1'
+        ? [{ test_id: 'suite.testC', name: 'testC' }]
+        : [],
+    );
+    mockGetFlaggedFlakyTestIds.mockReturnValue(new Set(['suite.otherTest']));
+
+    const result = await filterBaseAttributableFailures(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    expect(result.outcome).toBe('filtered_partial');
+    expect(result.passed).toBe(false);
+    expect(result.remainingTests).toEqual([
+      { test_id: 'suite.testC', name: 'testC' },
+    ]);
+    expect(result.flakyExcludedTests).toEqual([]);
+  });
+
+  it('scopes flaky exclusion per project — a test flagged for a different project is not excluded here', async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({
+      outcome: 'partial_fail',
+      projectId: 'proj-1',
+      contentHash: 'base-hash',
+      cacheHit: true,
+      run: BASE_RUN,
+    });
+    mockGetFailingTestIdsForRun.mockImplementation((runId: string) =>
+      runId === 'run-session-1'
+        ? [{ test_id: 'suite.flakyTest', name: 'flakyTest' }]
+        : [],
+    );
+    // getFlaggedFlakyTestIds is called with project.id — simulate it being
+    // scoped by only returning the flagged set for a different project.
+    mockGetFlaggedFlakyTestIds.mockImplementation((projectId: string) =>
+      projectId === 'proj-2' ? new Set(['suite.flakyTest']) : new Set(),
+    );
+
+    const result = await filterBaseAttributableFailures(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    expect(mockGetFlaggedFlakyTestIds).toHaveBeenCalledWith('proj-1');
+    expect(result.outcome).toBe('filtered_partial');
+    expect(result.remainingTests).toEqual([
+      { test_id: 'suite.flakyTest', name: 'flakyTest' },
+    ]);
+    expect(result.flakyExcludedTests).toEqual([]);
+  });
+
+  it('reports filtered_pass with passed:true when all remaining failures are flaky-excluded alongside base-attributed ones', async () => {
+    mockCheckBaseBranchHealth.mockResolvedValue({
+      outcome: 'partial_fail',
+      projectId: 'proj-1',
+      contentHash: 'base-hash',
+      cacheHit: true,
+      run: BASE_RUN,
+    });
+    mockGetFailingTestIdsForRun.mockImplementation((runId: string) =>
+      runId === 'run-session-1'
+        ? [
+            { test_id: 'suite.testA', name: 'testA' },
+            { test_id: 'suite.flakyTest', name: 'flakyTest' },
+          ]
+        : [{ test_id: 'suite.testA', name: 'testA' }],
+    );
+    mockGetFlaggedFlakyTestIds.mockReturnValue(new Set(['suite.flakyTest']));
+
+    const result = await filterBaseAttributableFailures(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    expect(result.outcome).toBe('filtered_pass');
+    expect(result.passed).toBe(true);
+    expect(result.remainingTests).toEqual([]);
+    expect(result.excludedTests).toEqual([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+    expect(result.flakyExcludedTests).toEqual([
+      { test_id: 'suite.flakyTest', name: 'flakyTest' },
     ]);
   });
 
@@ -253,5 +390,35 @@ describe('filterBaseAttributableFailures', () => {
     expect(result.outcome).toBe('unfiltered');
     expect(result.passed).toBe(true);
     expect(mockCheckBaseBranchHealth).not.toHaveBeenCalled();
+  });
+});
+
+describe('renderBaseAttributableFilterDigest', () => {
+  it('distinguishes base-attributed exclusions from flaky exclusions in the filtered_pass digest', () => {
+    const digest = renderBaseAttributableFilterDigest({
+      outcome: 'filtered_pass',
+      passed: true,
+      excludedTests: [{ test_id: 'suite.testA', name: 'testA' }],
+      flakyExcludedTests: [{ test_id: 'suite.flakyTest', name: 'flakyTest' }],
+      remainingTests: [],
+    });
+
+    expect(digest).toContain('1 failing test(s) excluded');
+    expect(digest).toContain('1 excluded as known-flaky');
+  });
+
+  it('distinguishes base-attributed exclusions from flaky exclusions in the filtered_partial digest', () => {
+    const digest = renderBaseAttributableFilterDigest({
+      outcome: 'filtered_partial',
+      passed: false,
+      excludedTests: [{ test_id: 'suite.testA', name: 'testA' }],
+      flakyExcludedTests: [{ test_id: 'suite.flakyTest', name: 'flakyTest' }],
+      remainingTests: [{ test_id: 'suite.testC', name: 'testC' }],
+    });
+
+    expect(digest).toContain(
+      '1 additional failure(s) excluded as confirmed base-branch breaks',
+    );
+    expect(digest).toContain('1 excluded as known-flaky');
   });
 });
