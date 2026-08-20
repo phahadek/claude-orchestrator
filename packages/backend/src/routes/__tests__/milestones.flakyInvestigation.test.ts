@@ -27,10 +27,7 @@ import { db } from '../../db/db.js';
 import { createMilestonesRouter } from '../milestones.js';
 import { insertProject, insertMilestone } from '../../db/queries.js';
 import { getTaskBackend, AuditingTaskBackend } from '../../tasks/TaskBackend';
-import type {
-  TaskBackend,
-  NewTaskFields,
-} from '../../tasks/TaskBackend';
+import type { TaskBackend, NewTaskFields } from '../../tasks/TaskBackend';
 
 const PROJECT = 'flaky-investigation-route-proj';
 const MILESTONE_ID = 'flaky-investigation-route-proj:board-m1';
@@ -43,7 +40,9 @@ function makeApp() {
 }
 
 /** Minimal in-memory fake standing in for a real Notion/Jira/GitHub backend. */
-function makeFakeInnerBackend(filedFieldsOut: { current?: NewTaskFields }): TaskBackend {
+function makeFakeInnerBackend(filedFieldsOut: {
+  current?: NewTaskFields;
+}): TaskBackend {
   let nextId = 1;
   return {
     type: 'notion',
