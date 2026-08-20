@@ -2720,7 +2720,8 @@ export function runMigrations(target: Database.Database): void {
       )
       .all() as { triggering_task_id: string; counted_at: string }[];
     const hasNonCanonicalRow = rows.some(
-      (row) => row.triggering_task_id !== normalizeTaskId(row.triggering_task_id),
+      (row) =>
+        row.triggering_task_id !== normalizeTaskId(row.triggering_task_id),
     );
     if (hasNonCanonicalRow) {
       const earliestByCanonicalId = new Map<string, string>();

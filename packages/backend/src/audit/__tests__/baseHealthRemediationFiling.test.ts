@@ -422,7 +422,9 @@ describe('recordBaseHealthTotalFailCount — id normalization at the write path'
     recordBaseHealthTotalFailCount('jira:PROJ-123', '2026-01-01T00:00:00.000Z');
 
     const rows = db
-      .prepare('SELECT triggering_task_id FROM base_health_remediation_reason_counts')
+      .prepare(
+        'SELECT triggering_task_id FROM base_health_remediation_reason_counts',
+      )
       .all() as { triggering_task_id: string }[];
     expect(rows).toHaveLength(1);
     expect(rows[0].triggering_task_id).toBe('jira:PROJ-123');
@@ -467,12 +469,14 @@ describe('base_health_remediation_reason_counts — forward-only id-format colla
     expect(afterFirstRun).toHaveLength(2);
 
     const collapsed = afterFirstRun.find(
-      (r) => r.triggering_task_id === 'notion:3c122f91-52f3-81c7-9016-e66a22bdeb75',
+      (r) =>
+        r.triggering_task_id === 'notion:3c122f91-52f3-81c7-9016-e66a22bdeb75',
     );
     expect(collapsed?.counted_at).toBe('2026-01-01T00:00:00.000Z');
 
     const unrelated = afterFirstRun.find(
-      (r) => r.triggering_task_id === 'notion:cfedb6fe-02fb-4619-aebc-6dc6d6a20f98',
+      (r) =>
+        r.triggering_task_id === 'notion:cfedb6fe-02fb-4619-aebc-6dc6d6a20f98',
     );
     expect(unrelated?.counted_at).toBe('2026-01-04T00:00:00.000Z');
 
