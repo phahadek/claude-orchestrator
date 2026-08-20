@@ -26,7 +26,7 @@
 import { logger } from '../logger';
 import type { ProjectConfig } from '../config';
 import type { TestRequestRunRow } from '../db/types';
-import { getFailingTestIdsForRun } from '../db/queries';
+import { getFailingTestIdsForRun, getFlaggedFlakyTestIds } from '../db/queries';
 import { checkBaseBranchHealth } from './baseHealthCheck';
 import { recordAndMaybeFileBaseHealthRemediation } from '../audit/baseHealthRemediationFiling';
 
@@ -47,6 +47,8 @@ export interface BaseAttributableFilterResult {
   passed: boolean;
   /** Failing tests excluded as confirmed base-attributable. */
   excludedTests: FailingTest[];
+  /** Failing tests excluded because they're flagged in flagged_flaky_tests_rollup for this project. */
+  flakyExcludedTests: FailingTest[];
   /** Failing tests that remain after filtering — what's actually reported as a failure, if any. */
   remainingTests: FailingTest[];
 }
@@ -55,6 +57,7 @@ const UNFILTERED = (passed: boolean): BaseAttributableFilterResult => ({
   outcome: 'unfiltered',
   passed,
   excludedTests: [],
+  flakyExcludedTests: [],
   remainingTests: [],
 });
 
@@ -144,6 +147,7 @@ export async function filterBaseAttributableFailures(
       outcome: 'inconclusive',
       passed: false,
       excludedTests: [],
+      flakyExcludedTests: [],
       remainingTests: [],
     };
   }
@@ -165,8 +169,16 @@ export async function filterBaseAttributableFailures(
   const excludedTests = sessionFailing.filter((t) =>
     baseFailingIds.has(t.test_id),
   );
-  const remainingTests = sessionFailing.filter(
+  const notBaseAttributable = sessionFailing.filter(
     (t) => !baseFailingIds.has(t.test_id),
+  );
+
+  const flakyIds = getFlaggedFlakyTestIds(project.id);
+  const flakyExcludedTests = notBaseAttributable.filter((t) =>
+    flakyIds.has(t.test_id),
+  );
+  const remainingTests = notBaseAttributable.filter(
+    (t) => !flakyIds.has(t.test_id),
   );
 
   if (remainingTests.length === 0) {
@@ -174,6 +186,7 @@ export async function filterBaseAttributableFailures(
       outcome: 'filtered_pass',
       passed: true,
       excludedTests,
+      flakyExcludedTests,
       remainingTests: [],
     };
   }
@@ -182,6 +195,7 @@ export async function filterBaseAttributableFailures(
     outcome: 'filtered_partial',
     passed: false,
     excludedTests,
+    flakyExcludedTests,
     remainingTests,
   };
 }
@@ -206,13 +220,15 @@ export function renderBaseAttributableFilterDigest(
   if (result.outcome === 'filtered_pass') {
     return (
       `**Test results:** passed — ${result.excludedTests.length} failing test(s) excluded ` +
-      'as confirmed base-branch breaks, unrelated to your changes.'
+      'as confirmed base-branch breaks, and ' +
+      `${result.flakyExcludedTests.length} excluded as known-flaky, unrelated to your changes.`
     );
   }
 
   const lines = [
     `**Test results:** ${result.remainingTests.length} failed ` +
-      `(${result.excludedTests.length} additional failure(s) excluded as confirmed base-branch breaks).`,
+      `(${result.excludedTests.length} additional failure(s) excluded as confirmed base-branch breaks, ` +
+      `${result.flakyExcludedTests.length} excluded as known-flaky).`,
     '',
     '**Failing tests:**',
   ];

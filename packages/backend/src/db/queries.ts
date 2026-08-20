@@ -9632,6 +9632,26 @@ export function getFlaggedFlakyTestsRollup(
   }));
 }
 
+let _stmtGetFlaggedFlakyTestIds: Database.Statement | null = null;
+
+/**
+ * Set-membership lookup over flagged_flaky_tests_rollup for `projectId` —
+ * for callers (baseAttributableFilter.ts) that only need to test
+ * "is this test_id currently flagged flaky", not the full UI-rollup shape
+ * returned by getFlaggedFlakyTestsRollup/listFlaggedFlakyTests.
+ */
+export function getFlaggedFlakyTestIds(projectId: string): Set<string> {
+  _stmtGetFlaggedFlakyTestIds ??= db.prepare<{ project_id: string }>(`
+    SELECT test_id
+    FROM flagged_flaky_tests_rollup
+    WHERE project_id = @project_id
+  `);
+  const rows = _stmtGetFlaggedFlakyTestIds.all({
+    project_id: projectId,
+  }) as { test_id: string }[];
+  return new Set(rows.map((r) => r.test_id));
+}
+
 // ─── session_test_request_cycles ───────────────────────────────────────────
 
 export function getSessionTestRequestCycleCount(sessionId: string): number {
