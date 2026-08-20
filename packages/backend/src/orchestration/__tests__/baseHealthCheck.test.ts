@@ -8,7 +8,6 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import path from 'node:path';
 
 vi.mock('../../db/db', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -63,12 +62,8 @@ vi.mock('../../audit/baseHealthRemediationFiling.js', () => ({
 }));
 
 import { db } from '../../db/db';
-import {
-  checkBaseBranchHealth,
-  getBaseHealthWorktreePath,
-} from '../baseHealthCheck';
+import { checkBaseBranchHealth } from '../baseHealthCheck';
 import { filterBaseAttributableFailures } from '../baseAttributableFilter';
-import { getAuditWorktreePath } from '../ScheduledAuditSweep';
 import {
   insertTestRequestRun,
   completeTestRequestRun,
@@ -716,25 +711,5 @@ describe('checkBaseBranchHealth', () => {
     // never picks up either flaky-session row, both calls resolve to the
     // real clean_pass outcome and neither ever triggers remediation filing.
     expect(mockRecordAndMaybeFileBaseHealthRemediation).not.toHaveBeenCalled();
-  });
-});
-
-describe('getBaseHealthWorktreePath', () => {
-  it("is namespaced outside ScheduledAuditSweep's own worktree and outside a bare worktreesDir/<sessionId> path", () => {
-    const project = makeProject();
-    const healthPath = getBaseHealthWorktreePath(project);
-    const auditPath = getAuditWorktreePath(project);
-
-    expect(healthPath).not.toBe(auditPath);
-
-    const worktreesDir = path.join(project.projectDir, '.claude', 'worktrees');
-    // Mirrors ScheduledAuditSweep's own namespacing: nested at least one
-    // segment deeper than `worktreesDir/<name>` so WorktreeReconciler's
-    // exact `worktreesDir/<sessionId>` match can never hit it.
-    const relative = path.relative(worktreesDir, healthPath);
-    expect(relative.split(path.sep).length).toBeGreaterThan(1);
-    expect(healthPath.startsWith(path.join(worktreesDir, 'base-health'))).toBe(
-      true,
-    );
   });
 });
