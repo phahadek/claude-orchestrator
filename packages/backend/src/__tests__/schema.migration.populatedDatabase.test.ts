@@ -106,7 +106,9 @@ describe('populated-database migration fixture', () => {
     expect(() => runMigrations(db)).not.toThrow();
 
     const rows = db
-      .prepare('SELECT session_id, task_id, task_id_norm FROM sessions ORDER BY session_id')
+      .prepare(
+        'SELECT session_id, task_id, task_id_norm FROM sessions ORDER BY session_id',
+      )
       .all() as Array<{
       session_id: string;
       task_id: string | null;
