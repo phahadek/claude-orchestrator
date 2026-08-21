@@ -2751,7 +2751,11 @@ describe('Scheduler degraded-tick reclassification (auto_launcher)', () => {
     (
       runtimeSettings as { auto_launch_concurrency: number }
     ).auto_launch_concurrency = 2;
-    vi.useFakeTimers();
+    // Fake only Date — AutoLauncher yields via setImmediate
+    // (yieldToEventLoop) during its per-task loop, which must keep
+    // resolving on the real event loop, not stall waiting for a manual
+    // timer advance.
+    vi.useFakeTimers({ toFake: ['Date'] });
   });
 
   afterEach(() => {

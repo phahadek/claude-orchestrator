@@ -645,7 +645,10 @@ describe('Scheduler degraded-tick reclassification (task_cache_refresher)', () =
     vi.clearAllMocks();
     vi.mocked(getAllProjects).mockReturnValue([]);
     vi.mocked(ProjectService.listMilestones).mockReturnValue([]);
-    vi.useFakeTimers();
+    // Fake only Date — TaskCacheRefresher yields via setImmediate
+    // (yieldToEventLoop) between milestones, which must keep resolving on
+    // the real event loop, not stall waiting for a manual timer advance.
+    vi.useFakeTimers({ toFake: ['Date'] });
   });
 
   afterEach(() => {
