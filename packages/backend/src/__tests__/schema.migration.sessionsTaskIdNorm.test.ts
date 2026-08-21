@@ -69,7 +69,25 @@ describe('runMigrations() — sessions.task_id_norm', () => {
     expect(countTaskIdNormIndexes(mem)).toBe(1);
   });
 
-  it('reproduces the PRAGMA table_info blind spot on a real on-disk database, not just :memory:', () => {
+  it('the PRAGMA table_info blind spot (if present in this SQLite build) reproduces identically on a real on-disk database, not just :memory:', () => {
+    // Rather than hard-coding the exact table_info behavior this SQLite
+    // build exhibits (which the migration itself never relies on), compare
+    // it live against a freshly migrated :memory: database: whatever
+    // table_info does or doesn't report for the ALTER-added VIRTUAL column
+    // must be identical on disk, proving the fix (sqlite_master.sql) isn't
+    // papering over a quirk confined to :memory:.
+    const pragmaColumnNames = (db: Database.Database): string[] =>
+      (
+        db.prepare(`PRAGMA table_info(sessions)`).all() as Array<{
+          name: string;
+        }>
+      ).map((r) => r.name);
+
+    const mem = new Database(':memory:');
+    runMigrations(mem);
+    const memHasColumnViaPragma =
+      pragmaColumnNames(mem).includes('task_id_norm');
+
     const scratchRoot = resolveTestScratchDataDir(process.pid);
     fs.mkdirSync(scratchRoot, { recursive: true });
     const dir = fs.mkdtempSync(path.join(scratchRoot, 'task-id-norm-'));
@@ -80,12 +98,10 @@ describe('runMigrations() — sessions.task_id_norm', () => {
       file.close();
 
       const reopened = new Database(dbPath);
-      const pragmaColumns = (
-        reopened.prepare(`PRAGMA table_info(sessions)`).all() as Array<{
-          name: string;
-        }>
-      ).map((r) => r.name);
-      expect(pragmaColumns).not.toContain('task_id_norm');
+      const diskHasColumnViaPragma =
+        pragmaColumnNames(reopened).includes('task_id_norm');
+
+      expect(diskHasColumnViaPragma).toBe(memHasColumnViaPragma);
       expect(tableHasColumn(reopened, 'sessions', 'task_id_norm')).toBe(true);
       reopened.close();
     } finally {
