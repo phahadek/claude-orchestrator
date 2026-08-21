@@ -641,18 +641,24 @@ describe('TaskCacheRefresher', () => {
 });
 
 describe('Scheduler degraded-tick reclassification (task_cache_refresher)', () => {
+  let now = 0;
+  let dateNowSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getAllProjects).mockReturnValue([]);
     vi.mocked(ProjectService.listMilestones).mockReturnValue([]);
-    // Fake only Date — TaskCacheRefresher yields via setImmediate
+    // Stub only Date.now — TaskCacheRefresher yields via setImmediate
     // (yieldToEventLoop) between milestones, which must keep resolving on
-    // the real event loop, not stall waiting for a manual timer advance.
-    vi.useFakeTimers({ toFake: ['Date'] });
+    // the real event loop. vi.useFakeTimers() would fake setImmediate too
+    // and stall forever without a manual timer advance, so a plain spy is
+    // used instead of the sinon-backed fake timer machinery.
+    now = 1_000_000;
+    dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    dateNowSpy.mockRestore();
   });
 
   it('distinguishes a long productive tick (ok) from a long zero-item tick (degraded)', async () => {
@@ -665,10 +671,10 @@ describe('Scheduler degraded-tick reclassification (task_cache_refresher)', () =
     let rawJson = JSON.stringify({ v: 1 });
     const backend = makeBackend({
       fetchReadyTasks: vi.fn().mockImplementation(async () => {
-        // Fake timers also fake Date.now(), so advancing them synchronously
-        // during the job simulates a multi-minute tick without the test
-        // actually waiting that long.
-        vi.advanceTimersByTime(DEGRADED_TICK_THRESHOLD_MS);
+        // Advancing the stubbed clock synchronously during the job
+        // simulates a multi-minute tick without the test actually waiting
+        // that long.
+        now += DEGRADED_TICK_THRESHOLD_MS;
         upsertTaskCache('degraded-test-task', rawJson);
         return [{ task: { id: 'degraded-test-task' } }];
       }),
