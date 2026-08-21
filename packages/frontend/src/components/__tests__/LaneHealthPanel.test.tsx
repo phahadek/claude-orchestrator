@@ -243,7 +243,7 @@ describe('LaneHealthPanel', () => {
     const link = screen.getByTestId(
       'flaky-remediation-link-test-open',
     ) as HTMLAnchorElement;
-    expect(link.href).toContain('task-abc');
+    expect(link.href).toContain('taskabc');
 
     // Select-all only picks up the selectable test, not the already-open one.
     fireEvent.click(screen.getByTestId('flaky-select-all'));
