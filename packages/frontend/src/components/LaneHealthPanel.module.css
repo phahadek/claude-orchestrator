@@ -156,6 +156,21 @@
   cursor: pointer;
 }
 
+.flaggedItemOpen {
+  opacity: 0.6;
+}
+
+.flaggedItemOpen .flaggedItemLabel {
+  cursor: default;
+}
+
+.flaggedTaskLink {
+  color: #89b4fa;
+  font-size: 11px;
+  white-space: nowrap;
+  text-decoration: underline;
+}
+
 .flaggedActions {
   display: flex;
   align-items: center;

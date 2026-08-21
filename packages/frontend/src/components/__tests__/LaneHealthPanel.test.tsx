@@ -202,6 +202,60 @@ describe('LaneHealthPanel', () => {
     ).toBe(false);
   });
 
+  it('disables selection and links out for a test already tracked under an open remediation task', async () => {
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...baseRollup,
+      flakyTests: {
+        count: 2,
+        tests: [
+          {
+            testId: 'test-open',
+            name: 'suite > already under investigation',
+            sampleCount: 4,
+            transitionCount: 3,
+            remediationTaskOpen: true,
+            remediationTaskId: 'task-abc',
+          },
+          {
+            testId: 'test-selectable',
+            name: 'suite > selectable flaky test',
+            sampleCount: 5,
+            transitionCount: 4,
+            remediationTaskOpen: false,
+            remediationTaskId: null,
+          },
+        ],
+      },
+    });
+
+    render(
+      <LaneHealthPanel projectId="proj-1" milestoneId="proj-1:board-m1" />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('flaky-tests-section')).toBeTruthy(),
+    );
+
+    expect(
+      (screen.getByTestId('flaky-test-checkbox-test-open') as HTMLInputElement)
+        .disabled,
+    ).toBe(true);
+    const link = screen.getByTestId(
+      'flaky-remediation-link-test-open',
+    ) as HTMLAnchorElement;
+    expect(link.href).toContain('task-abc');
+
+    // Select-all only picks up the selectable test, not the already-open one.
+    fireEvent.click(screen.getByTestId('flaky-select-all'));
+    expect(
+      (
+        screen.getByTestId(
+          'flaky-test-checkbox-test-selectable',
+        ) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+  });
+
   it('disables the fire-investigation control without a milestoneId', async () => {
     vi.mocked(apiRequest).mockResolvedValueOnce({
       ...baseRollup,
