@@ -231,10 +231,45 @@ export class AutoLauncher {
         ),
       concurrency: 'skip-if-running',
       run: async () => {
+        // cycleCounter only advances inside runPollCycle() — i.e. when
+        // pollOnce() actually ran a fresh cycle, not when its own `polling`
+        // guard turned this call into a no-op (e.g. racing the boot-time
+        // direct pollOnce() call). Comparing before/after distinguishes the
+        // two: reading lastTickResult after a no-op would report a stale,
+        // unrelated prior cycle's counts instead of this tick's own (zero).
+        const cycleBefore = this.cycleCounter;
         await this.pollOnce();
+        if (this.cycleCounter === cycleBefore) {
+          return { items_processed: 0 };
+        }
+        const { eligible, launched, skipped, blockReason } =
+          this.lastTickResult;
+        // A negative items_processed mirrors gateReconciler's convention:
+        // "found runnable work but dispatched none of it for want of
+        // budget" — the same admission-block condition that drives
+        // evaluateAdmissionStall (eligible > 0, launched === 0, a block
+        // reason present). Individual per-task launch failures with no
+        // admission block (e.g. worktree setup errors) are a genuine zero,
+        // not a budget block, so they stay 0.
+        const items_processed =
+          launched > 0 ? launched : eligible > 0 && blockReason ? -skipped : 0;
+        return { items_processed };
       },
     });
   }
+
+  /**
+   * Aggregated outcome of the most recently completed poll cycle, consumed
+   * by register()'s run callback to derive items_processed. pollOnce()
+   * itself stays Promise<void> — callers (boot sequence, AutoMerger-style
+   * dispatch, existing tests) only ever awaited completion, never a value.
+   */
+  private lastTickResult: {
+    eligible: number;
+    launched: number;
+    skipped: number;
+    blockReason?: AdmissionBlockReason;
+  } = { eligible: 0, launched: 0, skipped: 0 };
 
   /**
    * Run a single poll cycle. Called directly on boot (after resumeOrphanSessions)
@@ -249,19 +284,25 @@ export class AutoLauncher {
     }
     this.polling = true;
     try {
-      await this.runPollCycle();
+      this.lastTickResult = await this.runPollCycle();
     } finally {
       this.polling = false;
     }
   }
 
-  private async runPollCycle(): Promise<void> {
+  private async runPollCycle(): Promise<{
+    eligible: number;
+    launched: number;
+    skipped: number;
+    blockReason?: AdmissionBlockReason;
+  }> {
     const cycleId = ++this.cycleCounter;
     this.pollLastStartedAt = Date.now();
     logger.info(`[AutoLauncher] poll start cycle=${cycleId}`);
     let eligibleCount = 0;
     let launchedCount = 0;
     let skippedCount = 0;
+    let aggBlockReason: AdmissionBlockReason | undefined;
     try {
       const listProjects = this.options.listProjects ?? getAllProjects;
       const projects = listProjects().filter((p) => p.autoLaunchEnabled);
@@ -297,6 +338,7 @@ export class AutoLauncher {
         }
       }
       this.lastPollReadyTaskIds = newReadyTaskIds;
+      aggBlockReason = blockReason;
       this.evaluateAdmissionStall(
         eligibleCount,
         launchedCount,
@@ -309,6 +351,12 @@ export class AutoLauncher {
         `[AutoLauncher] poll complete cycle=${cycleId} (eligible=${eligibleCount}, launched=${launchedCount}, skipped=${skippedCount}) durationMs=${elapsedMs}`,
       );
     }
+    return {
+      eligible: eligibleCount,
+      launched: launchedCount,
+      skipped: skippedCount,
+      blockReason: aggBlockReason,
+    };
   }
 
   private async processProject(project: ProjectConfig): Promise<{

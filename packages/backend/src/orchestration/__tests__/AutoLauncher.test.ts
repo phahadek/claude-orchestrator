@@ -79,6 +79,8 @@ import {
   AutoLauncher,
   AutoLauncherFetchTimeoutError,
 } from '../AutoLauncher.js';
+import { Scheduler, DEGRADED_TICK_THRESHOLD_MS } from '../Scheduler.js';
+import type { ServerMessage } from '../../ws/types';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -2655,5 +2657,209 @@ describe('AutoLauncher — base-health dispatch gate', () => {
       expect.anything(),
       expect.objectContaining({ taskId: 'remediation-task-2' }),
     );
+  });
+});
+
+describe('AutoLauncher — items_processed reporting via Scheduler', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+  });
+
+  it('reports items_processed matching the number of sessions launched', async () => {
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi
+        .fn()
+        .mockResolvedValue([
+          makeResolvedTask({ id: 'launch-1' }),
+          makeResolvedTask({ id: 'launch-2' }),
+        ]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => notionBackend as never,
+      pollOnStart: false,
+    });
+
+    const scheduler = new Scheduler();
+    const broadcasts: ServerMessage[] = [];
+    scheduler.setBroadcast((msg) => broadcasts.push(msg));
+    launcher.register(scheduler);
+
+    await scheduler.triggerNow('auto_launcher');
+
+    expect(sessionManager.start).toHaveBeenCalledTimes(2);
+    const audit = broadcasts.find((m) => m.type === 'scheduler_job_run') as
+      | (ServerMessage & { items_processed?: number })
+      | undefined;
+    expect(audit?.items_processed).toBe(2);
+  });
+
+  it('reports a negative items_processed (magnitude = tasks wanted but not dispatched) when eligible > 0 and launched === 0 for want of capacity — matching gateReconciler\'s "found runnable work but had no budget" convention', async () => {
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi
+        .fn()
+        .mockResolvedValue([
+          makeResolvedTask({ id: 'blocked-1' }),
+          makeResolvedTask({ id: 'blocked-2' }),
+          makeResolvedTask({ id: 'blocked-3' }),
+        ]),
+    };
+    // cap=1, already 1 live session — zero capacity for any candidate.
+    const sessionManager = makeSessionManager(1);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 1;
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => notionBackend as never,
+      pollOnStart: false,
+    });
+
+    const scheduler = new Scheduler();
+    const broadcasts: ServerMessage[] = [];
+    scheduler.setBroadcast((msg) => broadcasts.push(msg));
+    launcher.register(scheduler);
+
+    await scheduler.triggerNow('auto_launcher');
+
+    expect(sessionManager.start).not.toHaveBeenCalled();
+    const audit = broadcasts.find((m) => m.type === 'scheduler_job_run') as
+      | (ServerMessage & { items_processed?: number })
+      | undefined;
+    expect(audit?.items_processed).toBe(-3);
+  });
+
+  it("reports a genuine 0 — not stale data from an unrelated in-flight poll — when register()'s own pollOnce() call is guarded to a no-op", async () => {
+    let resolveFetch!: (tasks: ResolvedTask[]) => void;
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockImplementation(
+        () =>
+          new Promise<ResolvedTask[]>((resolve) => {
+            resolveFetch = resolve;
+          }),
+      ),
+    };
+    const sessionManager = makeSessionManager(0);
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => notionBackend as never,
+      pollOnStart: false,
+    });
+
+    const scheduler = new Scheduler();
+    const broadcasts: ServerMessage[] = [];
+    scheduler.setBroadcast((msg) => broadcasts.push(msg));
+    launcher.register(scheduler);
+
+    // Simulate an external caller (e.g. bootSequence's direct pollOnce()
+    // call) already mid-cycle — sets the internal `polling` guard true
+    // before the scheduler's own tick fires.
+    const externalPoll = launcher.pollOnce();
+
+    // The scheduler's tick fires while the external call is still in
+    // flight: register()'s run() calls pollOnce() again, which must hit
+    // the guard and no-op rather than block or race.
+    const tickPromise = scheduler.triggerNow('auto_launcher');
+
+    // Resolve the external call's fetch with a launched task — giving
+    // lastTickResult a non-zero value that must NOT leak into the
+    // guarded tick's own report.
+    resolveFetch([makeResolvedTask({ id: 'external-task' })]);
+    await Promise.all([externalPoll, tickPromise]);
+
+    const audit = broadcasts.find((m) => m.type === 'scheduler_job_run') as
+      | (ServerMessage & { items_processed?: number })
+      | undefined;
+    expect(audit?.items_processed).toBe(0);
+  });
+});
+
+describe('Scheduler degraded-tick reclassification (auto_launcher)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+    // Fake only Date — AutoLauncher yields via setImmediate
+    // (yieldToEventLoop) during its per-task loop, which must keep
+    // resolving on the real event loop, not stall waiting for a manual
+    // timer advance.
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('keeps a long productive tick ok, but reclassifies a long zero-item tick as degraded', async () => {
+    const sessionManager = makeSessionManager(0);
+
+    // Productive: one eligible task, launched successfully, long duration.
+    const productiveBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockImplementation(async () => {
+        // Fake timers also fake Date.now(), so advancing them synchronously
+        // during the fetch simulates a multi-minute tick without the test
+        // actually waiting that long.
+        vi.advanceTimersByTime(DEGRADED_TICK_THRESHOLD_MS);
+        return [makeResolvedTask({ id: 'productive-task' })];
+      }),
+    };
+    const productiveLauncher = new AutoLauncher(
+      sessionManager as never,
+      undefined,
+      {
+        listProjects: () => [makeProject()],
+        resolveBackend: () => productiveBackend as never,
+        pollOnStart: false,
+      },
+    );
+    const productiveScheduler = new Scheduler();
+    productiveLauncher.register(productiveScheduler);
+
+    await productiveScheduler.triggerNow('auto_launcher');
+    const afterProductive = productiveScheduler
+      .status()
+      .find((s) => s.name === 'auto_launcher');
+    expect(afterProductive?.lastStatus).toBe('ok');
+
+    // Idle: no eligible tasks at all, same long duration — a genuinely
+    // starved/wedged-looking tick that must be reclassified degraded.
+    const idleBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockImplementation(async () => {
+        vi.advanceTimersByTime(DEGRADED_TICK_THRESHOLD_MS);
+        return [];
+      }),
+    };
+    const idleLauncher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => idleBackend as never,
+      pollOnStart: false,
+    });
+    const idleScheduler = new Scheduler();
+    idleLauncher.register(idleScheduler);
+
+    await idleScheduler.triggerNow('auto_launcher');
+    const afterIdle = idleScheduler
+      .status()
+      .find((s) => s.name === 'auto_launcher');
+    expect(afterIdle?.lastStatus).toBe('degraded');
   });
 });
