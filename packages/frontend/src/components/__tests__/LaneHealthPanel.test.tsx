@@ -143,7 +143,9 @@ describe('LaneHealthPanel', () => {
     fireEvent.click(fireButton);
 
     await waitFor(() =>
-      expect(screen.getByTestId('flaky-fire-investigation-success')).toBeTruthy(),
+      expect(
+        screen.getByTestId('flaky-fire-investigation-success'),
+      ).toBeTruthy(),
     );
     expect(fileFlakyInvestigation).toHaveBeenCalledWith(
       'proj-1',
