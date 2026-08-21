@@ -51,7 +51,7 @@ export function LaneHealthPanel({
   const [filingConflict, setFilingConflict] = useState<string | null>(null);
   const [filedTaskId, setFiledTaskId] = useState<string | null>(null);
 
-  const flakyTests = rollup?.flakyTests.tests ?? [];
+  const flakyTests = rollup?.flakyTests?.tests ?? [];
   // Tests already tracked under an open remediation task can't be re-selected
   // into another batch — the filing service would reject the whole request.
   const selectableTests = flakyTests.filter((t) => !t.remediationTaskOpen);
