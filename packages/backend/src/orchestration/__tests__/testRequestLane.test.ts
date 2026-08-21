@@ -289,9 +289,9 @@ describe('runProjectTestRequest — coalescing', () => {
 
 describe('runProjectTestRequest — the lane never fails fast', () => {
   it('executes every subsequent command when an earlier one fails, using the real runTestCommands rather than the module mock', async () => {
-    const actual = await vi.importActual<typeof import('../../session/test-runner')>(
-      '../../session/test-runner',
-    );
+    const actual = await vi.importActual<
+      typeof import('../../session/test-runner')
+    >('../../session/test-runner');
     mockRunTestCommands.mockImplementation(actual.runTestCommands);
 
     const result = await runProjectTestRequest(

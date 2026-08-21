@@ -297,7 +297,9 @@ describe('runTestCommands — fail-fast', () => {
     _spawnHook = (cmd) => {
       if (cmd !== 'taskkill') callCount++;
       // First command hangs past the timeout; second returns immediately.
-      return callCount === 1 ? makeProc(0, '', '', 9999_000) : makeProc(0, 'cmd2');
+      return callCount === 1
+        ? makeProc(0, '', '', 9999_000)
+        : makeProc(0, 'cmd2');
     };
 
     const promise = runTestCommands(
