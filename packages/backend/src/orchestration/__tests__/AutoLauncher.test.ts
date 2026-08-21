@@ -2740,7 +2740,7 @@ describe('AutoLauncher — items_processed reporting via Scheduler', () => {
     expect(audit?.items_processed).toBe(-3);
   });
 
-  it('reports a genuine 0 — not stale data from an unrelated in-flight poll — when register()\'s own pollOnce() call is guarded to a no-op', async () => {
+  it("reports a genuine 0 — not stale data from an unrelated in-flight poll — when register()'s own pollOnce() call is guarded to a no-op", async () => {
     let resolveFetch!: (tasks: ResolvedTask[]) => void;
     const notionBackend = {
       type: 'notion' as const,
