@@ -25,7 +25,7 @@ vi.mock('../../api/projects', () => ({
         prsResponses.length > 0 ? prsResponses.shift() : [],
       );
     }
-    return Promise.resolve([]);
+    return Promise.resolve(null);
   }),
 }));
 
