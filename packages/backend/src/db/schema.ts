@@ -2968,6 +2968,19 @@ export function runMigrations(target: Database.Database): void {
     }
   }
 
+  // run_origin: explicit identity a caller states about the run it's
+  // originating — 'base_health_probe' (baseHealthCheck.ts) or 'pr_pipeline'
+  // (PreReviewPipeline.ts/ReviewOrchestrator.ts) — rather than session_id
+  // being NULL for all three, which made a PR-branch worktree's run
+  // indistinguishable from a genuine base-branch probe (see
+  // getLatestBaseHealthTestRequestRun in queries.ts). NULL for an ordinary
+  // session-attributed run and for rows predating this column.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN run_origin TEXT`);
+  } catch {
+    /* already exists */
+  }
+
   runStructuredResultExtractedClearBackfill(target);
 }
 

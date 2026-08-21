@@ -5738,6 +5738,7 @@ export async function triggerTestRequestExecution(
           maxRssMb: inputs.maxRssMb,
           failFast: inputs.failFast,
           sessionId: intent.sessionId ?? null,
+          runOrigin: null,
         });
       }
     }
@@ -5957,6 +5958,7 @@ async function maybeAutoApproveTestRequest(
     maxRssMb: inputs.maxRssMb,
     failFast: inputs.failFast,
     sessionId: intent.sessionId,
+    runOrigin: null,
   });
 
   const priorCount = getSessionTestRequestCycleCount(intent.sessionId);

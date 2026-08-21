@@ -578,6 +578,7 @@ export class ReviewOrchestrator {
           maxRssMb,
           failFast,
           sessionId: null,
+          runOrigin: 'pr_pipeline',
         })
       : await runTestCommands(
           worktreePath,

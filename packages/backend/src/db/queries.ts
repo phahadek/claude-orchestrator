@@ -50,6 +50,7 @@ import type {
   TestRequestRunRow,
   TestRequestRunState,
   TestRequestFailureReason,
+  RunOrigin,
   DependencyCacheEntryRow,
   DependencyCacheEntryStatus,
   TestRunResultRow,
@@ -8114,10 +8115,11 @@ export function insertTestRequestRun(
   sessionId: string | null,
   requestedAt: number,
   concurrentRunCount?: number | null,
+  runOrigin?: RunOrigin,
 ): void {
   db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count)
-     VALUES (?, ?, ?, ?, 'running', '', ?, ?, NULL, NULL, ?)`,
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin)
+     VALUES (?, ?, ?, ?, 'running', '', ?, ?, NULL, NULL, ?, ?)`,
   ).run(
     id,
     projectId,
@@ -8126,6 +8128,7 @@ export function insertTestRequestRun(
     requestedAt,
     Date.now(),
     concurrentRunCount ?? null,
+    runOrigin ?? null,
   );
 }
 
@@ -8171,7 +8174,7 @@ export function updateTestRequestRunState(
   );
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin`;
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {
@@ -8254,16 +8257,18 @@ export function getLatestTestRequestRun(
 
 /**
  * baseHealthCheck.ts's own cache read — narrower than getLatestTestRequestRun:
- * only a run baseHealthCheck.ts itself produced (session_id IS NULL, the
- * sessionId it always passes to runProjectTestRequest) counts as a cached
- * base-branch-health confirmation. Without this filter, an ordinary
- * dispatched task session's own test.request retries against a worktree
- * that happens to be content-hash-identical to the base branch would land
- * in the same (project_id, content_hash) bucket and get misread as a
- * base-health verdict — including a flaky retry's arbitrary failing-test
- * sample, which re-files a "Base branch is broken" remediation task on
- * every such retry (see baseHealthRemediationFiling.ts's per-test-id dedup,
- * which cannot catch this because each retry's failing-test set is novel).
+ * only a run baseHealthCheck.ts itself produced (run_origin =
+ * 'base_health_probe', the identity it always passes to
+ * runProjectTestRequest) counts as a cached base-branch-health confirmation.
+ * session_id IS NULL is not sufficient — PreReviewPipeline.ts and
+ * ReviewOrchestrator.ts also pass session_id: null while executing a
+ * PR-branch worktree (they state run_origin: 'pr_pipeline' instead), so
+ * filtering on session_id alone would let a PR-branch run's row get misread
+ * as a base-health verdict — including a flaky retry's arbitrary
+ * failing-test sample, which re-files a "Base branch is broken" remediation
+ * task on every such retry (see baseHealthRemediationFiling.ts's
+ * per-test-id dedup, which cannot catch this because each retry's
+ * failing-test set is novel).
  */
 export function getLatestBaseHealthTestRequestRun(
   projectId: string,
@@ -8274,7 +8279,7 @@ export function getLatestBaseHealthTestRequestRun(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
        WHERE project_id = @project_id AND content_hash = @content_hash
-         AND state != 'running' AND session_id IS NULL
+         AND state != 'running' AND run_origin = 'base_health_probe'
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )
     .get({ project_id: projectId, content_hash: contentHash }) as
