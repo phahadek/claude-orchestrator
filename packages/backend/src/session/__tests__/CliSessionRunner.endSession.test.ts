@@ -43,14 +43,17 @@ vi.mock('../planningScratchDir', () => ({
   getScratchDir: vi.fn(),
 }));
 
-const { placeSessionPidMock, killSessionCgroupMock, spawnIntoSessionCgroupMock } =
-  vi.hoisted(() => ({
-    placeSessionPidMock: vi.fn(),
-    killSessionCgroupMock: vi.fn(),
-    spawnIntoSessionCgroupMock: vi.fn(
-      (_sessionId: string, spawnFn: () => unknown) => spawnFn(),
-    ),
-  }));
+const {
+  placeSessionPidMock,
+  killSessionCgroupMock,
+  spawnIntoSessionCgroupMock,
+} = vi.hoisted(() => ({
+  placeSessionPidMock: vi.fn(),
+  killSessionCgroupMock: vi.fn(),
+  spawnIntoSessionCgroupMock: vi.fn(
+    (_sessionId: string, spawnFn: () => unknown) => spawnFn(),
+  ),
+}));
 vi.mock('../sessionCgroup', () => ({
   placeSessionPid: (...args: unknown[]) => placeSessionPidMock(...args),
   killSessionCgroup: (...args: unknown[]) => killSessionCgroupMock(...args),
