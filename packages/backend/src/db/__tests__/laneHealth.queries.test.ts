@@ -333,6 +333,8 @@ describe('getLaneHealthRollup', () => {
           name: 'suite > flaky test',
           sampleCount: 4,
           transitionCount: 3,
+          remediationTaskId: null,
+          remediationTaskOpen: false,
         },
       ]);
     });
@@ -408,6 +410,8 @@ describe('getLaneHealthRollup', () => {
           name: 'suite > renamed test',
           sampleCount: 4,
           transitionCount: 3,
+          remediationTaskId: null,
+          remediationTaskOpen: false,
         },
       ]);
     });
