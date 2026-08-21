@@ -62,7 +62,10 @@ vi.mock('../../audit/baseHealthRemediationFiling.js', () => ({
 }));
 
 import { db } from '../../db/db';
-import { checkBaseBranchHealth } from '../baseHealthCheck';
+import {
+  checkBaseBranchHealth,
+  classifyTestRunOutcome,
+} from '../baseHealthCheck';
 import { filterBaseAttributableFailures } from '../baseAttributableFilter';
 import {
   insertTestRequestRun,
@@ -467,6 +470,48 @@ describe('checkBaseBranchHealth', () => {
 
     const result = await checkBaseBranchHealth(project);
     expect(result.outcome).toBe('total_fail');
+  });
+
+  it('records the missing/stale-report case (a fresh-cleanup run whose report was excluded as stale/never-written) with the distinct "no report acquired" outcome, not conflated with a genuine OOM/timeout crash', () => {
+    // Shape produced by collectStructuredTestResult's startedAt freshness
+    // guard: acquisition was attempted, but the only matched file predated
+    // this run's start (or cleanup left nothing to match at all), so the
+    // merge is `incomplete` with no real per-test breakdown — the same
+    // shape as testRequestLane's own incomplete-merge path, just reached via
+    // stale-report exclusion rather than a missing command's report.
+    const staleReportRun: TestRequestRunRow = {
+      id: 'run-stale-excluded',
+      project_id: 'proj-1',
+      content_hash: 'hash-stale',
+      session_id: null,
+      state: 'failed',
+      output: 'command failed before writing a fresh report',
+      requested_at: null,
+      started_at: 0,
+      finished_at: null,
+      structured_result: JSON.stringify({
+        format: 'junit-xml',
+        suites: [],
+        totals: { passed: 0, failed: 0, skipped: 0, errors: 0 },
+        durationMsTotal: 0,
+        incomplete: true,
+      }),
+      failure_reason: 'generic',
+      concurrent_run_count: null,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+    };
+
+    const { outcome } = classifyTestRunOutcome(staleReportRun);
+
+    // Must land on the distinct "no report acquired" reading — not
+    // misclassified as an OOM-kill or timeout, which downstream consumers
+    // (e.g. the Tests tab's next-action copy) would otherwise read as
+    // evidence of a genuine base-branch crash rather than an unconfirmed
+    // result this run itself never produced.
+    expect(outcome).toBe('failed-with-no-report-acquired');
+    expect(outcome).not.toBe('crashed-oom');
+    expect(outcome).not.toBe('timed-out');
   });
 
   it('classifies a failed run whose acquisition was never attempted as partial_fail, not total_fail', async () => {
