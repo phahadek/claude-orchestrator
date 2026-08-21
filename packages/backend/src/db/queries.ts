@@ -1419,18 +1419,24 @@ export function getActivePlanningSessionForTask(
 
 export function hasActiveSessionForTask(taskId: string): boolean {
   const norm = taskId.replace(/-/g, '');
+  // Matches sessions.task_id_norm — a STORED generated column mirroring this
+  // same REPLACE(...,'-','') expression (see schema.ts) — instead of
+  // applying REPLACE() to every row inside WHERE. That defeated
+  // idx_sessions_notion_task_id_session_type (indexed on raw task_id) and
+  // forced a full scan of the sessions table on every call; comparing
+  // against the indexed generated column turns it into a single index seek.
   const row = db
-    .prepare<{ task_id: string }>(
+    .prepare<{ task_id_norm: string }>(
       `
     SELECT 1 FROM sessions
-    WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
+    WHERE task_id_norm = @task_id_norm
       AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND (session_type = 'standard' OR session_type IS NULL)
       AND archived = 0
     LIMIT 1
   `,
     )
-    .get({ task_id: norm });
+    .get({ task_id_norm: norm });
   return !!row;
 }
 

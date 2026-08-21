@@ -877,7 +877,17 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
   if (!configuredMirrorSink) return { staged, retired };
   const sink = configuredMirrorSink;
 
-  const allItems = gateStore.listAll();
+  // Shallow to pick candidates: isMirrorCandidate/isConsentCandidate below
+  // only read project/milestone/classification/state, so scanning with
+  // listAll()'s N+1 sources+events hydration on every all-time gate_item row
+  // was pure waste here. sink.stageMirror, however, is an injected callback
+  // (see server.ts) that DOES read a matched item's .events (the consent
+  // origin's evidence is latestDispositionEvidence(item)) — so each matched
+  // candidate is re-hydrated individually via getItem before being handed to
+  // the sink. That keeps the N+1 bounded to only the (normally small) set of
+  // items actually eligible for a mirror this tick, not every item ever
+  // filed.
+  const allItems = gateStore.listAllShallow();
   const candidatesByOrigin: [
     GateItemMirrorOrigin,
     (item: GateItem) => boolean,
@@ -886,8 +896,10 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
     ['consent', isConsentCandidate],
   ];
   for (const [origin, matches] of candidatesByOrigin) {
-    for (const item of allItems.filter(matches)) {
-      if (findActiveGateVerifyMirrorForItem(item.id, origin)) continue;
+    for (const shallowItem of allItems.filter(matches)) {
+      if (findActiveGateVerifyMirrorForItem(shallowItem.id, origin)) continue;
+      const item = gateStore.getItem(shallowItem.id);
+      if (!item) continue;
       sink.stageMirror(item, origin);
       staged.push(item.id);
     }
@@ -946,7 +958,12 @@ export async function runGateReconcilerTick(
   // merge_completed event left unfilled before reconciling runnability.
   await catchUpMergeCommits();
 
-  const allItems = gateStore.listAll();
+  // Shallow: this tick only reads project/milestone/classification/state off
+  // allItems (below, and via reconcileHumanObservationMirrors) — never
+  // .sources/.events — so the full sources+events N+1 hydration listAll()
+  // does per row (2N+1 queries, doubled since this ran twice per tick) was
+  // pure waste that scaled with all-time gate_item history.
+  const allItems = gateStore.listAllShallow();
   const projects = new Set(allItems.map((item) => item.project));
   const deployShaByProject: Record<string, string | null> = {};
   let reconciled: ReconcileGateRunnabilityResult | null = null;
