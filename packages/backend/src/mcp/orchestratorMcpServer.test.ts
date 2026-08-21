@@ -327,9 +327,9 @@ describe('buildMcpServer — tool surface per session type', () => {
       'gate.verify',
       'ops.prIntent',
       'planning.noOp',
-      // Registered directly off workflow === 'ops', not via
-      // PLANNING_INTENT_KINDS.ops — see verdictTools.ts/
-      // gateReclassifyTool.ts/strandedIntentTool.ts.
+      // Registered directly off workflow === 'ops' rather than via
+      // PLANNING_INTENT_KINDS.ops — see verdictTools.ts,
+      // gateReclassifyTool.ts, and strandedIntentTool.ts.
       'deploy.verdict',
       'gate.reclassify',
       'intent.dispositionStranded',
