@@ -64,7 +64,7 @@ const DEFAULT_VERIFY_TIMEOUT_MS = 10 * 60_000;
  * marker keeps a malformed capture from being persisted as if it were a
  * usable identity value.
  */
-export const IDENTITY_CAPTURE_INVALID = '<identity-capture-invalid>';
+const IDENTITY_CAPTURE_INVALID = '<identity-capture-invalid>';
 
 export type AgenticVerdict = 'approved' | 'rejected' | 'inconclusive';
 
