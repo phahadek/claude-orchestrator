@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { Scheduler } from '../orchestration/Scheduler';
@@ -39,6 +41,26 @@ import { logger } from '../logger';
 import { asyncHandler } from './asyncHandler';
 
 const GATE_RECONCILER_JOB = 'gate_verification_reconciler';
+
+/**
+ * The SHA `npm run build` embeds into `dist/build-sha.txt` (see
+ * packages/backend/package.json's `build` script) — read once at process
+ * startup and served verbatim by `GET /deploy/build-sha`. This is verify's
+ * identity check target: it proves which build a restarted process is
+ * actually running, not merely that a restart happened (see
+ * DeployOrchestrator's `resolveIdentityCheck`). Overridable via
+ * `DEPLOY_BUILD_SHA_PATH` for tests, which don't have a real `dist/` build
+ * to read from.
+ */
+const BUILD_SHA_PATH =
+  process.env.DEPLOY_BUILD_SHA_PATH ?? path.join(__dirname, '../build-sha.txt');
+const BUILD_SHA: string = (() => {
+  try {
+    return fs.readFileSync(BUILD_SHA_PATH, 'utf8').trim();
+  } catch {
+    return 'unknown';
+  }
+})();
 
 /** Wall-clock budget per runId:stepId before an agentic step abstains to `inconclusive`. Mirrors gate-verify's default. */
 const DEFAULT_AGENTIC_STEP_BUDGET_MS = 20 * 60_000;
@@ -451,6 +473,15 @@ export function resumeActiveDeployRuns(projects: ProjectRow[]): void {
  */
 export function createDeployRouter(): Router {
   const router = Router();
+
+  // GET /api/deploy/build-sha
+  // Reports the SHA embedded into this running process's own build — the
+  // identity check verify's playbook step curls (`curl -sf .../deploy/build-sha`)
+  // and compares byte-for-byte against the run's own target_sha, so this
+  // responds with the bare SHA as plain text, not a JSON envelope.
+  router.get('/deploy/build-sha', (_req: Request, res: Response) => {
+    res.status(200).type('text/plain').send(BUILD_SHA);
+  });
 
   // POST /api/deploy/report-in  { projectId, sha }
   router.post('/deploy/report-in', (req: Request, res: Response) => {

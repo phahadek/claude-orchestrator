@@ -13,11 +13,15 @@
 # unit name and the verify port are not paths and stay embedded directly, per
 # the migration's scope.
 #
-# `restart`'s identity_capture runs BEFORE its own command_or_prompt: the
-# engine reads the outgoing MainPID and persists it as a deploy_run_event, so
-# `verify`'s poll_until can't green until a differing MainPID plus a healthy
-# response are both observed — otherwise verify would report the outgoing
-# process healthy while the new build is still booting (or crash-looping).
+# `restart`'s identity_capture is re-read by `verify` on every poll attempt:
+# the engine requires that reading to equal this run's own target_sha (not
+# merely differ from some pre-restart baseline) plus a healthy response
+# before `verify` can green — otherwise verify would report a healthy
+# service that's serving the wrong build (an unrelated manual restart, a
+# rollback, systemd's own retry landing on the outgoing build) as this run's
+# success. `verify` is also bounded by a wall-clock timeout (engine-side,
+# default 10 minutes, timed from its own first step_started event) so a
+# crash-looping build can no longer leave a run stuck in `verify` forever.
 #
 # Rollback model: `rollback_ref` is author-declared per step, not a generic
 # "restore prior state" the engine improvises. A step's forward-chain
@@ -63,7 +67,7 @@ steps:
   - id: restart
     kind: shell
     command_or_prompt: 'sudo systemctl restart orchestrator.service'
-    identity_capture: 'systemctl show -p MainPID --value orchestrator.service'
+    identity_capture: 'curl -sf http://localhost:3000/deploy/build-sha'
     is_prod_mutating: true
 
   - id: verify
