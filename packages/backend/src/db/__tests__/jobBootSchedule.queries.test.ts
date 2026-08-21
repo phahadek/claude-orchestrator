@@ -13,7 +13,11 @@ vi.mock('../db.js', async () => {
 });
 
 import { db } from '../db';
-import { insertSchedulerAudit, getJobBootSchedule, isJobOverdue } from '../queries';
+import {
+  insertSchedulerAudit,
+  getJobBootSchedule,
+  isJobOverdue,
+} from '../queries';
 
 beforeEach(() => {
   db.prepare('DELETE FROM scheduler_audit').run();
