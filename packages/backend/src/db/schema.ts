@@ -2931,6 +2931,27 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // task_id_norm: a STORED generated column mirroring
+  // hasActiveSessionForTask's REPLACE(COALESCE(task_id,''),'-','') match
+  // expression exactly (same normalization, no LOWER — task_id casing is
+  // preserved by every writer), so the sessions table can carry a real index
+  // on the normalized form. The prior query applied REPLACE() to every row's
+  // task_id inside WHERE, which SQLite cannot use an index to satisfy —
+  // every call scanned the full (ever-growing) sessions table. Indexing the
+  // generated column instead turns that into a single index seek, generated
+  // and kept in sync by SQLite itself on every insert/update rather than a
+  // separately maintained trigger.
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN task_id_norm TEXT GENERATED ALWAYS AS (REPLACE(COALESCE(task_id,''),'-','')) STORED`,
+    );
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_task_id_norm ON sessions(task_id_norm);
+  `);
+
   runStructuredResultExtractedClearBackfill(target);
 }
 
