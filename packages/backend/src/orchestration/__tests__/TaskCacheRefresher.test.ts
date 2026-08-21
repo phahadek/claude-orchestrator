@@ -27,6 +27,7 @@ import { getTaskBackend } from '../../tasks/TaskBackend.js';
 import { ProjectService } from '../../projects/ProjectService.js';
 import { TaskCacheRefresher } from '../TaskCacheRefresher.js';
 import { JiraApiError } from '../../tasks/JiraClient.js';
+import { upsertTaskCache } from '../../db/queries.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -596,6 +597,44 @@ describe('TaskCacheRefresher', () => {
       await refresher.refreshProjectById('p1');
 
       expect(backend.fetchReadyTasks).toHaveBeenCalledWith('m1');
+    });
+  });
+
+  describe('items_processed reporting', () => {
+    it('returns a non-zero count when a cached task row changed, and 0 when nothing changed', async () => {
+      const project = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([project]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+      ]);
+
+      let rawJson = JSON.stringify({ v: 1 });
+      const backend = makeBackend({
+        fetchReadyTasks: vi.fn().mockImplementation(async () => {
+          upsertTaskCache('changed-row-task', rawJson);
+          return [{ task: { id: 'changed-row-task' } }];
+        }),
+      });
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      // First observation of this task's cache row counts as a change.
+      const first = await refresher.refreshOnce();
+      expect(first).toBe(1);
+
+      // Same content rewritten — the row's fetched_at moves but its content
+      // doesn't, so this must be a true zero, not just "unreported".
+      const second = await refresher.refreshOnce();
+      expect(second).toBe(0);
+
+      // Content actually changes — reported again as non-zero.
+      rawJson = JSON.stringify({ v: 2 });
+      const third = await refresher.refreshOnce();
+      expect(third).toBe(1);
     });
   });
 });
