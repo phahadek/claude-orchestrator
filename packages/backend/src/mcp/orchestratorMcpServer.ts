@@ -133,14 +133,14 @@ function toPlanningWorkflow(
 }
 
 /**
- * Resolves the stage-proposal kinds registered on a connection: an
+ * Resolves the stage-proposal kinds registered on a connection. An
  * investigate-dispatched session (session_type 'ops', task_id
  * `report-batch:<batchId>` — see sessionPredicates.ts#isInvestigateSession)
- * gets the narrower `INVESTIGATE_INTENT_KINDS`, not `PLANNING_INTENT_KINDS.ops`
- * — it has no journal/task-status/gate/PR-intent analog and needs
- * `decision.pickOne`, which `PLANNING_INTENT_KINDS.ops` lacks. A null
- * workflow (code/review sessions) registers CODE_INTENT_KINDS, not every
- * kind — see planningIntentKinds.ts.
+ * gets `INVESTIGATE_INTENT_KINDS`, not `PLANNING_INTENT_KINDS.ops`: it has
+ * no journal/task-status/gate/PR-intent analog, and needs `decision.pickOne`,
+ * which `PLANNING_INTENT_KINDS.ops` lacks. A null workflow (code/review
+ * sessions) registers CODE_INTENT_KINDS, not every kind — see
+ * planningIntentKinds.ts.
  */
 function resolveStageProposalKinds(
   workflow: PlanningWorkflow | null,
