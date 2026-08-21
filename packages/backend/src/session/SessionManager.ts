@@ -36,7 +36,10 @@ import {
 } from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
 import { CliSessionRunner } from './CliSessionRunner';
-import { killSessionCgroup } from './sessionCgroup';
+import {
+  killSessionCgroup,
+  reapOrphanedMainCgroupProcesses,
+} from './sessionCgroup';
 import {
   revokeStageCredential,
   mintStageCredential,
@@ -3279,6 +3282,19 @@ export class SessionManager extends EventEmitter {
    * as unkillable ghosts. Called from server.ts after migrations and imports.
    */
   async resumeOrphanSessions(): Promise<void> {
+    // Reap any process left sitting in the backend's own main/ cgroup with
+    // ppid=1 — a daemonizing grandchild (e.g. a temp postgres cluster's
+    // postmaster) that escaped a prior boot's session placement and is now
+    // structurally unreachable by killSessionCgroup, since that only ever
+    // touches sessions/<sessionId>/. See sessionCgroup.ts's
+    // reapOrphanedMainCgroupProcesses for why ppid=1 is the safe signal.
+    const reapedOrphans = reapOrphanedMainCgroupProcesses();
+    if (reapedOrphans > 0) {
+      logger.info(
+        `[SessionManager] reaped ${reapedOrphans} orphaned process(es) from main/ cgroup at boot`,
+      );
+    }
+
     // Close the loop on deferred done-transitions that were never applied —
     // e.g. the backend restarted between markSessionDone's pending write and
     // applyPendingDoneForSettledSession's own call. Excludes status='running'

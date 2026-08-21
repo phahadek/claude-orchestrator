@@ -11,6 +11,10 @@ const SESSIONS_LEAF = 'sessions';
 /** Absolute path of the delegated sessions/ cgroup once set up; null when unavailable. */
 let sessionsCgroupPath: string | null = null;
 
+/** Absolute path of the delegated main/ cgroup (the backend's own resting
+ * place) once set up; null when unavailable. */
+let mainCgroupPath: string | null = null;
+
 /** Derived cgroup memory limits, in bytes. */
 export interface SessionCgroupLimits {
   maxBytes: number;
@@ -123,6 +127,7 @@ export function setupSessionCgroup(): void {
     // controller for its child cgroups.
     fs.writeFileSync(path.join(ownPath, 'cgroup.subtree_control'), '+memory');
 
+    mainCgroupPath = mainPath;
     sessionsCgroupPath = sessionsPath;
     writeLimits(currentLimits());
     logger.info(
@@ -130,6 +135,7 @@ export function setupSessionCgroup(): void {
     );
   } catch (err) {
     sessionsCgroupPath = null;
+    mainCgroupPath = null;
     warnNoop((err as Error).message);
   }
 }
@@ -190,6 +196,64 @@ export function placeSessionPid(pid: number, sessionId?: string): void {
 }
 
 /**
+ * Runs `spawnFn` (expected to synchronously call child_process.spawn) with
+ * the backend's own process temporarily relocated into the session's
+ * sub-cgroup, so the spawned child is *born* into sessions/<sessionId>/
+ * rather than being migrated there after the fact.
+ *
+ * This closes the fork-time race that a post-spawn placeSessionPid() call
+ * can't: a child inherits its parent's cgroup at fork(), not at whatever
+ * later moment the parent gets around to writing cgroup.procs. If that
+ * child forks a grandchild (e.g. a test command that starts a temp
+ * postgres cluster) before the post-spawn placement write lands, the
+ * grandchild is born into whatever cgroup the parent was still in at that
+ * moment — main/, in the pre-fix code — and stays there for its entire
+ * life, invisible to killSessionCgroup. Relocating the backend itself
+ * *before* calling spawn() means there is no window in which the new
+ * child (or anything it forks synchronously) could ever observe the
+ * backend sitting in main/.
+ *
+ * Node is single-threaded and every step here is a synchronous fs call, so
+ * no other code can spawn a process (and thus observe the backend
+ * mid-relocation) between the move-in and the restore. Falls back to
+ * calling `spawnFn` directly, unrelocated, when the delegated subtree was
+ * never set up.
+ */
+export function spawnIntoSessionCgroup<T>(
+  sessionId: string,
+  spawnFn: () => T,
+): T {
+  if (!sessionsCgroupPath || !mainCgroupPath) return spawnFn();
+  const dir = sessionCgroupDir(sessionId);
+  let relocated = false;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'cgroup.procs'), String(process.pid));
+    relocated = true;
+  } catch (err) {
+    logger.warn(
+      `[sessionCgroup] failed to relocate backend into session ${sessionId.slice(0, 8)} cgroup for spawn: ${(err as Error).message}`,
+    );
+  }
+  try {
+    return spawnFn();
+  } finally {
+    if (relocated) {
+      try {
+        fs.writeFileSync(
+          path.join(mainCgroupPath, 'cgroup.procs'),
+          String(process.pid),
+        );
+      } catch (err) {
+        logger.warn(
+          `[sessionCgroup] failed to restore backend to main cgroup after spawn: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+}
+
+/**
  * Kills every process in a session's sub-cgroup (sessions/<sessionId>/) and
  * removes the directory — the backstop for the escape killProcessTree's
  * process-group kill(-pid) can't reach: a grandchild that called setsid()
@@ -226,11 +290,96 @@ export function killSessionCgroup(sessionId: string): void {
   }
 }
 
+/** Reads a pid's parent pid from /proc/<pid>/stat; null if unreadable (pid gone). */
+function readPpid(pid: number): number | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // comm (2nd field) is parenthesized and may itself contain spaces/parens
+    // — find the *last* ')' to skip past it before splitting the rest.
+    const afterComm = stat.slice(stat.lastIndexOf(')') + 2);
+    const fields = afterComm.split(' ');
+    const ppid = parseInt(fields[1], 10);
+    return Number.isNaN(ppid) ? null : ppid;
+  } catch {
+    return null;
+  }
+}
+
+function listMainCgroupPids(): number[] {
+  if (!mainCgroupPath) return [];
+  try {
+    return fs
+      .readFileSync(path.join(mainCgroupPath, 'cgroup.procs'), 'utf8')
+      .split('\n')
+      .map((l) => parseInt(l.trim(), 10))
+      .filter((n) => !Number.isNaN(n));
+  } catch {
+    return [];
+  }
+}
+
+export interface OrphanReapDeps {
+  listMainCgroupPids: () => number[];
+  readPpid: (pid: number) => number | null;
+  kill: (pid: number) => void;
+  ownPid: number;
+}
+
+/**
+ * Teardown backstop for the memory/disk leak this module exists to close:
+ * anything sitting in main/ (the backend's own resting cgroup) that has
+ * been re-parented to init (ppid === 1) is, by construction, not the
+ * backend itself and not a live child the backend is still tracking — it's
+ * a daemonizing grandchild (e.g. a temp postgres cluster's postmaster,
+ * double-forked by pg_ctl) whose immediate parent already exited. Nothing
+ * in main/ is ever supposed to reach that state: legitimate one-off
+ * spawns from the backend (git, etc.) are non-daemonizing and either exit
+ * normally or stay attached to a live parent. Kills every such pid and
+ * returns how many were reaped.
+ *
+ * A pid that is *not* re-parented (ppid still resolves and isn't 1) is
+ * left alone — it may be a legitimate short-lived helper still running
+ * under the backend's own pid, which briefly shares main/ with the
+ * backend during any window outside spawnIntoSessionCgroup's relocation.
+ */
+export function reapOrphanedMainCgroupProcesses(
+  deps: Partial<OrphanReapDeps> = {},
+): number {
+  if (!mainCgroupPath) return 0;
+  const listPids = deps.listMainCgroupPids ?? listMainCgroupPids;
+  const getPpid = deps.readPpid ?? readPpid;
+  const kill = deps.kill ?? ((pid: number) => process.kill(pid, 'SIGKILL'));
+  const ownPid = deps.ownPid ?? process.pid;
+
+  let reaped = 0;
+  for (const pid of listPids()) {
+    if (pid === ownPid) continue;
+    if (getPpid(pid) !== 1) continue;
+    try {
+      kill(pid);
+      reaped++;
+      logger.warn(
+        `[sessionCgroup] reaped orphaned process ${pid} found sitting in main/ cgroup with ppid=1`,
+      );
+    } catch (err) {
+      logger.warn(
+        `[sessionCgroup] failed to reap orphaned process ${pid}: ${(err as Error).message}`,
+      );
+    }
+  }
+  return reaped;
+}
+
 /** Test-only accessor/reset for the module's cached delegated-path state. */
 export function _resetForTesting(): void {
   sessionsCgroupPath = null;
+  mainCgroupPath = null;
 }
 
 export function _setSessionsPathForTesting(p: string | null): void {
   sessionsCgroupPath = p;
+}
+
+export function _setMainPathForTesting(p: string | null): void {
+  mainCgroupPath = p;
 }

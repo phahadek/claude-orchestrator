@@ -25,8 +25,11 @@ import {
   placeSessionPid,
   killSessionCgroup,
   reapplySessionCgroupLimits,
+  spawnIntoSessionCgroup,
+  reapOrphanedMainCgroupProcesses,
   _resetForTesting,
   _setSessionsPathForTesting,
+  _setMainPathForTesting,
 } from '../sessionCgroup';
 
 describe('computeSessionCgroupLimits', () => {
@@ -256,6 +259,147 @@ describe('placeSessionPid with a sessionId — per-session sub-cgroup', () => {
     expect(
       writtenPath.startsWith('/sys/fs/cgroup/orchestrator.service/sessions/'),
     ).toBe(true);
+  });
+});
+
+describe('spawnIntoSessionCgroup', () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+  });
+
+  it('relocates the backend into the session cgroup before spawnFn runs, so a forked child resolves to the session path, not main', () => {
+    _setMainPathForTesting('/sys/fs/cgroup/orchestrator.service/main');
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined as any);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+
+    let observedCgroupDuringSpawn: string | null = null;
+    const result = spawnIntoSessionCgroup('session-xyz', () => {
+      // Simulate the OS resolving the *would-be* fork-time cgroup of a
+      // child spawned right now: whichever cgroup.procs write the backend
+      // most recently issued for its own pid.
+      const lastOwnPidWrite = writeSpy.mock.calls
+        .map((c) => String(c[0]))
+        .reverse()
+        .find((p) => p.endsWith('cgroup.procs'));
+      observedCgroupDuringSpawn = lastOwnPidWrite ?? null;
+      return 'spawned-child';
+    });
+
+    expect(result).toBe('spawned-child');
+    expect(observedCgroupDuringSpawn).toBe(
+      '/sys/fs/cgroup/orchestrator.service/sessions/session-xyz/cgroup.procs',
+    );
+    expect(observedCgroupDuringSpawn).not.toContain('/main/');
+  });
+
+  it('restores the backend to main/ after spawnFn returns, even when spawnFn throws', () => {
+    _setMainPathForTesting('/sys/fs/cgroup/orchestrator.service/main');
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined as any);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+
+    expect(() =>
+      spawnIntoSessionCgroup('session-xyz', () => {
+        throw new Error('spawn failed');
+      }),
+    ).toThrow('spawn failed');
+
+    const lastWrite = String(
+      writeSpy.mock.calls[writeSpy.mock.calls.length - 1][0],
+    );
+    expect(lastWrite).toBe(
+      '/sys/fs/cgroup/orchestrator.service/main/cgroup.procs',
+    );
+  });
+
+  it('never leaves a window where the backend sits in main/ during spawnFn — the pre- and post-spawn writes bracket it, so no descendant forked during spawnFn can land in main', () => {
+    _setMainPathForTesting('/sys/fs/cgroup/orchestrator.service/main');
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined as any);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+
+    spawnIntoSessionCgroup('session-xyz', () => 'child');
+
+    const ownPidWrites = writeSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((p) => p.endsWith('cgroup.procs'));
+    expect(ownPidWrites).toEqual([
+      '/sys/fs/cgroup/orchestrator.service/sessions/session-xyz/cgroup.procs',
+      '/sys/fs/cgroup/orchestrator.service/main/cgroup.procs',
+    ]);
+  });
+
+  it('falls back to calling spawnFn directly (unrelocated) when the delegated subtree was never set up', () => {
+    const writeSpy = vi.spyOn(fs, 'writeFileSync');
+    const result = spawnIntoSessionCgroup('session-xyz', () => 'child');
+    expect(result).toBe('child');
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('reapOrphanedMainCgroupProcesses', () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+  });
+
+  it('kills a pid sitting in main/ whose parent has already exited (ppid=1), and reports it as reaped', () => {
+    _setMainPathForTesting('/sys/fs/cgroup/orchestrator.service/main');
+    const killed: number[] = [];
+
+    const reaped = reapOrphanedMainCgroupProcesses({
+      ownPid: 100,
+      listMainCgroupPids: () => [100, 42424],
+      readPpid: (pid) => (pid === 42424 ? 1 : 100),
+      kill: (pid) => killed.push(pid),
+    });
+
+    expect(killed).toEqual([42424]);
+    expect(reaped).toBe(1);
+  });
+
+  it('never kills the backend itself, even if somehow its own ppid resolved to 1', () => {
+    _setMainPathForTesting('/sys/fs/cgroup/orchestrator.service/main');
+    const killed: number[] = [];
+
+    reapOrphanedMainCgroupProcesses({
+      ownPid: 100,
+      listMainCgroupPids: () => [100],
+      readPpid: () => 1,
+      kill: (pid) => killed.push(pid),
+    });
+
+    expect(killed).toEqual([]);
+  });
+
+  it('leaves a pid alone whose parent is still alive (not re-parented to init)', () => {
+    _setMainPathForTesting('/sys/fs/cgroup/orchestrator.service/main');
+    const killed: number[] = [];
+
+    const reaped = reapOrphanedMainCgroupProcesses({
+      ownPid: 100,
+      listMainCgroupPids: () => [100, 555],
+      readPpid: (pid) => (pid === 555 ? 100 : 100),
+      kill: (pid) => killed.push(pid),
+    });
+
+    expect(killed).toEqual([]);
+    expect(reaped).toBe(0);
+  });
+
+  it('is a no-op when the delegated subtree was never set up', () => {
+    const kill = vi.fn();
+    const reaped = reapOrphanedMainCgroupProcesses({ kill });
+    expect(reaped).toBe(0);
+    expect(kill).not.toHaveBeenCalled();
   });
 });
 

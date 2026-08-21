@@ -43,11 +43,22 @@ vi.mock('../planningScratchDir', () => ({
   getScratchDir: vi.fn(),
 }));
 
-const placeSessionPidMock = vi.fn();
-const killSessionCgroupMock = vi.fn();
+const {
+  placeSessionPidMock,
+  killSessionCgroupMock,
+  spawnIntoSessionCgroupMock,
+} = vi.hoisted(() => ({
+  placeSessionPidMock: vi.fn(),
+  killSessionCgroupMock: vi.fn(),
+  spawnIntoSessionCgroupMock: vi.fn(
+    (_sessionId: string, spawnFn: () => unknown) => spawnFn(),
+  ),
+}));
 vi.mock('../sessionCgroup', () => ({
   placeSessionPid: (...args: unknown[]) => placeSessionPidMock(...args),
   killSessionCgroup: (...args: unknown[]) => killSessionCgroupMock(...args),
+  spawnIntoSessionCgroup: (...args: [string, () => unknown]) =>
+    spawnIntoSessionCgroupMock(...args),
 }));
 
 import { CliSessionRunner, GRACEFUL_END_TIMEOUT_MS } from '../CliSessionRunner';
@@ -70,6 +81,7 @@ beforeEach(() => {
   killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
   placeSessionPidMock.mockClear();
   killSessionCgroupMock.mockClear();
+  spawnIntoSessionCgroupMock.mockClear();
 });
 
 afterEach(() => {
