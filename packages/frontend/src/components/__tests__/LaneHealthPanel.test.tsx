@@ -243,6 +243,7 @@ describe('LaneHealthPanel', () => {
     const link = screen.getByTestId(
       'flaky-remediation-link-test-open',
     ) as HTMLAnchorElement;
+    // LaneHealthPanel strips dashes from remediationTaskId when building the Notion link.
     expect(link.href).toContain('taskabc');
 
     // Select-all only picks up the selectable test, not the already-open one.
