@@ -150,6 +150,57 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
     }
   }, 30000);
 
+  it('prunes a flagged rollup row via the worker path once its test_perf_baselines row goes stale, without crossing the watermark again', async () => {
+    const { db, file } = openFileBackedDb();
+    try {
+      ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+        insertTestResult(db, {
+          projectId: 'proj-1',
+          testId: 'test-renamed-old',
+          name: 'suite > old name (before rename)',
+          outcome: outcome as 'passed' | 'failed',
+          createdAt: i,
+        }),
+      );
+
+      await replaceFlaggedFlakyTestsRollupOffMainThread(
+        file,
+        'proj-1',
+        20,
+        2,
+        1000,
+      );
+      expect(
+        (
+          db
+            .prepare(
+              'SELECT test_id FROM flagged_flaky_tests_rollup WHERE project_id = ?',
+            )
+            .all('proj-1') as { test_id: string }[]
+        ).map((r) => r.test_id),
+      ).toEqual(['test-renamed-old']);
+
+      const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+      await replaceFlaggedFlakyTestsRollupOffMainThread(
+        file,
+        'proj-1',
+        20,
+        2,
+        1000 + SEVEN_DAYS_MS + 1,
+      );
+
+      expect(
+        db
+          .prepare(
+            'SELECT test_id FROM flagged_flaky_tests_rollup WHERE project_id = ?',
+          )
+          .all('proj-1'),
+      ).toEqual([]);
+    } finally {
+      db.close();
+    }
+  }, 30000);
+
   it('runs in-process for an in-memory database, since no second connection can open against it', async () => {
     const result = await replaceFlaggedFlakyTestsRollupOffMainThread(
       ':memory:',

@@ -48,6 +48,33 @@ interface FlakyTestRollupWorkerResult {
   itemsProcessed: number;
 }
 
+// Mirrors FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS in db/queries.ts — see that
+// constant's doc comment for why a renamed/deleted test's old test_id can
+// never cross the watermark again on its own, and why elapsed time since the
+// last real digest update is the only available signal to prune it.
+const GHOST_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function pruneGhostFlaggedFlakyTests(
+  database: Database.Database,
+  projectId: string,
+  computedAt: number,
+): number {
+  const result = database
+    .prepare(
+      `DELETE FROM flagged_flaky_tests_rollup
+       WHERE project_id = @project_id
+         AND test_id NOT IN (
+           SELECT test_id FROM test_perf_baselines
+           WHERE project_id = @project_id AND updated_at > @stale_before
+         )`,
+    )
+    .run({
+      project_id: projectId,
+      stale_before: computedAt - GHOST_STALE_MS,
+    });
+  return result.changes as number;
+}
+
 interface DigestOutcomeSample {
   o: 'P' | 'F';
   t: number;
@@ -183,9 +210,14 @@ function run(): FlakyTestRollupWorkerResult {
   try {
     const since = getWatermark(database, projectId);
     const candidates = getCandidates(database, projectId, since);
+    const ghostsPruned = pruneGhostFlaggedFlakyTests(
+      database,
+      projectId,
+      computedAt,
+    );
 
     if (candidates.testIds.length === 0) {
-      return { itemsProcessed: 0 };
+      return { itemsProcessed: ghostsPruned };
     }
 
     const flags = candidates.testIds.map((testId) =>
@@ -219,7 +251,7 @@ function run(): FlakyTestRollupWorkerResult {
     });
     replace();
 
-    return { itemsProcessed: candidates.testIds.length };
+    return { itemsProcessed: candidates.testIds.length + ghostsPruned };
   } finally {
     database.close();
   }

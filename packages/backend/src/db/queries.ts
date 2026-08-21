@@ -9436,6 +9436,56 @@ function getFlakyRollupCandidates(
   };
 }
 
+/**
+ * How long a test_perf_baselines row can go untouched before a flagged
+ * rollup row pinned to it is treated as a ghost rather than a genuinely
+ * still-flaky test that simply hasn't run recently. A renamed/deleted test's
+ * old test_id stops receiving digest updates entirely (recordTestPerfDigestSample
+ * only ever writes under the CURRENT literal test_id), so its
+ * test_perf_baselines row freezes at whatever updated_at it last had —
+ * forever behind flagged_flaky_tests_rollup_watermark, and so never
+ * revisited by getFlakyRollupCandidates' keyset scan. There is no way to
+ * distinguish "permanently dead" from "temporarily quiet" from position
+ * alone (both sit behind the watermark); only elapsed time since the last
+ * real update does. A project's suite is expected to exercise a still-live
+ * flaky test at least once in this window.
+ */
+const FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+let _stmtPruneGhostFlaggedFlakyTests: Database.Statement | null = null;
+
+/**
+ * Deletes `projectId`'s flagged_flaky_tests_rollup rows whose test_id has no
+ * test_perf_baselines row updated within FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS
+ * of `computedAt` — either the baseline row was deleted outright, or (the
+ * renamed/retired-test case) it still exists but has stopped receiving new
+ * samples. Runs on every recompute tick, independent of and in addition to
+ * the keyset-candidate pass below, since a ghost's own test_id can never
+ * cross flagged_flaky_tests_rollup_watermark again to get itself reconsidered
+ * by that scan. Returns the number of rows pruned.
+ */
+function pruneGhostFlaggedFlakyTests(
+  projectId: string,
+  computedAt: number,
+): number {
+  _stmtPruneGhostFlaggedFlakyTests ??= db.prepare<{
+    project_id: string;
+    stale_before: number;
+  }>(`
+    DELETE FROM flagged_flaky_tests_rollup
+    WHERE project_id = @project_id
+      AND test_id NOT IN (
+        SELECT test_id FROM test_perf_baselines
+        WHERE project_id = @project_id AND updated_at > @stale_before
+      )
+  `);
+  const result = _stmtPruneGhostFlaggedFlakyTests.run({
+    project_id: projectId,
+    stale_before: computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS,
+  });
+  return result.changes;
+}
+
 let _stmtDeleteFlaggedFlakyTestForId: Database.Statement | null = null;
 let _stmtInsertFlaggedFlakyTestsRollup: Database.Statement | null = null;
 let _txReplaceFlaggedFlakyTestsRollup: ((...args: unknown[]) => void) | null =
@@ -9456,9 +9506,15 @@ let _txReplaceFlaggedFlakyTestsRollup: ((...args: unknown[]) => void) | null =
  * on FlakyTestRollupJob's scheduler cadence, never on the lane-health
  * request path.
  *
+ * Also prunes ghost rows every tick (see pruneGhostFlaggedFlakyTests) —
+ * flagged rows whose test_id's test_perf_baselines row has gone stale,
+ * meaning the underlying test was renamed or deleted and can never cross
+ * the watermark again on its own to get re-examined.
+ *
  * `itemsProcessed` reports the number of test ids actually recomputed this
- * tick (work performed), not the number flagged — a tick that examines new
- * rows but flags nothing is still real work, not an idle no-op.
+ * tick (work performed) plus any ghost rows pruned, not the number flagged —
+ * a tick that examines new rows but flags nothing is still real work, not an
+ * idle no-op.
  */
 function replaceFlaggedFlakyTestsRollupSync(
   projectId: string,
@@ -9468,9 +9524,10 @@ function replaceFlaggedFlakyTestsRollupSync(
 ): { itemsProcessed: number } {
   const since = getFlakyRollupWatermark(projectId);
   const candidates = getFlakyRollupCandidates(projectId, since);
+  const ghostsPruned = pruneGhostFlaggedFlakyTests(projectId, computedAt);
 
   if (candidates.testIds.length === 0) {
-    return { itemsProcessed: 0 };
+    return { itemsProcessed: ghostsPruned };
   }
 
   const flags = computeTestFlipRateFlagsForTestIds(
@@ -9534,7 +9591,7 @@ function replaceFlaggedFlakyTestsRollupSync(
     candidates.watermark,
   );
 
-  return { itemsProcessed: candidates.testIds.length };
+  return { itemsProcessed: candidates.testIds.length + ghostsPruned };
 }
 
 /**
