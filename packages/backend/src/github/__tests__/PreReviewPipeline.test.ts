@@ -1363,8 +1363,8 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
       commands: ['npm test'],
       timeoutSec: 300,
       maxRssMb: 0,
-      failFast: true,
       sessionId: null,
+      runOrigin: 'pr_pipeline',
     });
   });
 

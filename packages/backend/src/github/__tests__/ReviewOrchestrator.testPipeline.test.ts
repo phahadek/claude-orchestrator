@@ -281,8 +281,8 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', ()
       commands: ['npm test'],
       timeoutSec: 300,
       maxRssMb: 0,
-      failFast: true,
       sessionId: null,
+      runOrigin: 'pr_pipeline',
     });
 
     vi.clearAllMocks();
@@ -312,8 +312,8 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new content hash', ()
       commands: ['npm test'],
       timeoutSec: 300,
       maxRssMb: 0,
-      failFast: true,
       sessionId: null,
+      runOrigin: 'pr_pipeline',
     });
   });
 });
@@ -345,8 +345,8 @@ describe('ReviewOrchestrator.runTestPipeline — persistence via the shared lane
       commands: ['npm test'],
       timeoutSec: 60,
       maxRssMb: 0,
-      failFast: true,
       sessionId: null,
+      runOrigin: 'pr_pipeline',
     });
   });
 
