@@ -159,7 +159,6 @@ function baseSpec(
     commands: ['npm test'],
     timeoutSec: 60,
     maxRssMb: 0,
-    failFast: true,
     sessionId: null,
     ...overrides,
   };
@@ -285,6 +284,105 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(reasonFor('hash-timeout')).toBe('timeout');
     expect(reasonFor('hash-oom')).toBe('oom_killed');
     expect(reasonFor('hash-generic')).toBe('generic');
+  });
+});
+
+describe('runProjectTestRequest — the lane never fails fast', () => {
+  it('executes every subsequent command when an earlier one fails, using the real runTestCommands rather than the module mock', async () => {
+    const actual = await vi.importActual<
+      typeof import('../../session/test-runner')
+    >('../../session/test-runner');
+    mockRunTestCommands.mockImplementation(actual.runTestCommands);
+
+    const result = await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-no-failfast-real',
+        commands: ['exit 1', 'echo backend-suite-ran'],
+        timeoutSec: 10,
+      }),
+    );
+
+    expect(result.passed).toBe(false);
+    // Both commands' own '$ <cmd>' markers must be present — proof the
+    // second command actually ran rather than the loop breaking after the
+    // first command's failure.
+    expect(result.output).toContain('$ exit 1');
+    expect(result.output).toContain('$ echo backend-suite-ran');
+    expect(result.output).toContain('backend-suite-ran');
+  });
+
+  it('never passes failFast: true to runTestCommands', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-no-failfast-opt' }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.any(Number),
+      expect.any(Function),
+      expect.objectContaining({ failFast: false }),
+    );
+  });
+
+  it('a base probe (no originating session) whose frontend command fails still records backend failures in its per-test results', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'frontend failed\nbackend failed',
+    });
+    mockCollectStructuredTestResult.mockReturnValue({
+      format: 'junit-xml',
+      suites: [
+        {
+          name: 'frontend',
+          tests: [
+            {
+              id: 'frontend-test',
+              name: 'frontend-test',
+              outcome: 'failed',
+              durationMs: 5,
+            },
+          ],
+        },
+        {
+          name: 'backend',
+          tests: [
+            {
+              id: 'backend-test',
+              name: 'backend-test',
+              outcome: 'failed',
+              durationMs: 7,
+            },
+          ],
+        },
+      ],
+      totals: { passed: 0, failed: 2, skipped: 0, errors: 0 },
+      durationMsTotal: 12,
+    });
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-base-probe',
+        commands: [
+          'npm run test -w packages/frontend',
+          'npm run test -w packages/backend',
+        ],
+        sessionId: null,
+      }),
+    );
+
+    const run = getLatestTestRequestRun('proj-1', 'hash-base-probe')!;
+    expect(run.session_id).toBeNull();
+    ingestTestRunResults(run);
+
+    const testIds = listTestRunResultsForRun(run.id).map((r) => r.test_id);
+    expect(testIds).toContain('frontend-test');
+    expect(testIds).toContain('backend-test');
   });
 });
 
