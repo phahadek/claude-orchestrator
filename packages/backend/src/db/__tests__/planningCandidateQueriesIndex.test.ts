@@ -118,20 +118,7 @@ describe('planning-candidate predicate chain — indexable task_id_norm matches'
       expect(isPlanningKillSuppressed('zz-zz-9999', 'groom')).toBe(false);
     });
 
-    // Skipped: this assertion has been verified correct by direct execution
-    // against the compiled query (the INDEXED BY-forced plan reliably
-    // resolves to "SEARCH sessions USING INDEX
-    // idx_sessions_task_id_norm_flow_started_at ..." with correct
-    // isPlanningKillSuppressed() behavior — see the preceding test, which
-    // is unskipped and exercises the same query end-to-end), but it fails
-    // consistently under this repo's CI/test_request runner alongside a
-    // stable, unrelated batch of failures elsewhere in the suite
-    // (PRMergeWatcher, compactionTracking, groomLoad, baseHealthCheck,
-    // designLoad) that this diff never touches — indicating an
-    // environment/harness issue in that runner, not a defect in this
-    // query. Left in place (skipped, not deleted) so it can be re-enabled
-    // once that runner discrepancy is understood.
-    it.skip('resolves the most-recent-session lookup via an index seek, not a table scan', () => {
+    it('resolves the most-recent-session lookup via an index seek, not a table scan', () => {
       const plan = db
         .prepare(
           `EXPLAIN QUERY PLAN SELECT * FROM sessions INDEXED BY idx_sessions_task_id_norm_flow_started_at
@@ -147,18 +134,35 @@ describe('planning-candidate predicate chain — indexable task_id_norm matches'
       expect(detail).not.toMatch(/SCAN sessions\b(?!.*USING INDEX)/);
     });
 
-    // A timing-based cost-growth assertion for this lookup was removed
-    // here: it failed consistently under this repo's CI/test_request
-    // runner across an absolute-ms bound and a generous relative-growth
-    // comparison alike, most likely due to resource contention on that
-    // runner rather than a real perf regression. It is not the only
-    // correctness signal for this query — the preceding functional test
-    // exercises isPlanningKillSuppressed() end-to-end (which would fail
-    // outright, not just run slow, if the INDEXED BY-forced index it
-    // relies on were missing), and the EXPLAIN QUERY PLAN test above
-    // proves the index is used. getActivePlanningSessionForTask and
-    // hasTaskEditSinceTimestamp retain their own cost-growth tests, which
-    // have run reliably.
+    it('lookup cost does not grow with unrelated session row count', () => {
+      for (let i = 0; i < 2000; i++) {
+        insertSession(`unrelated-task-${i}`, 'groom', 'done', 1000 + i);
+      }
+      const sessionId = insertSession(
+        'needle-task-id',
+        'groom',
+        'killed',
+        999999,
+      );
+      db.prepare('UPDATE sessions SET ended_at = ? WHERE session_id = ?').run(
+        999999,
+        sessionId,
+      );
+      recordEvent({
+        event_type: 'session_errored',
+        actor_type: 'session',
+        actor_id: sessionId,
+        task_id: null,
+        payload: { reason: 'user_kill' },
+      });
+
+      const start = process.hrtime.bigint();
+      for (let i = 0; i < 500; i++) {
+        isPlanningKillSuppressed('needle-task-id', 'groom');
+      }
+      const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+      expect(elapsedMs).toBeLessThan(200);
+    });
   });
 
   describe('hasTaskEditSinceTimestamp', () => {
