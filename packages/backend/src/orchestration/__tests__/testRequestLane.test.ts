@@ -15,11 +15,13 @@ vi.mock('../../db/db', async () => {
 const {
   mockRunTestCommands,
   mockCollectStructuredTestResult,
+  mockClearReportFiles,
   mockHasAdmission,
   mockLoadOrchestratorConfig,
 } = vi.hoisted(() => ({
   mockRunTestCommands: vi.fn(),
   mockCollectStructuredTestResult: vi.fn(() => null),
+  mockClearReportFiles: vi.fn(),
   mockHasAdmission: vi.fn(() => true),
   mockLoadOrchestratorConfig: vi.fn(() => ({ test_report_glob: '' })),
 }));
@@ -27,6 +29,7 @@ const {
 vi.mock('../../session/test-runner', () => ({
   runTestCommands: mockRunTestCommands,
   collectStructuredTestResult: mockCollectStructuredTestResult,
+  clearReportFiles: mockClearReportFiles,
 }));
 
 vi.mock('../../session/orchestrator-config', () => ({
@@ -77,6 +80,7 @@ beforeEach(() => {
   mockRunTestCommands.mockReset();
   mockCollectStructuredTestResult.mockReset();
   mockCollectStructuredTestResult.mockReturnValue(null);
+  mockClearReportFiles.mockReset();
   mockHasAdmission.mockReset();
   mockHasAdmission.mockReturnValue(true);
   mockLoadOrchestratorConfig.mockReset();
@@ -1111,6 +1115,7 @@ describe('structured_result acquisition', () => {
       '/tmp/wt',
       'reports/*.xml',
       1,
+      expect.any(Number),
     );
     const row = db
       .prepare(
@@ -1118,6 +1123,36 @@ describe('structured_result acquisition', () => {
       )
       .get('hash-with-glob') as { structured_result: string | null };
     expect(JSON.parse(row.structured_result!)).toEqual(structured);
+  });
+
+  it('clears prior report files matching testReportGlob before running the test commands, so a crashed command cannot leave a stale report to be re-ingested', async () => {
+    const callOrder: string[] = [];
+    mockClearReportFiles.mockImplementation(() => {
+      callOrder.push('clear');
+    });
+    mockRunTestCommands.mockImplementation(async () => {
+      callOrder.push('run');
+      return { passed: true, output: 'ok' };
+    });
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
+
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-clear-order' }));
+
+    expect(mockClearReportFiles).toHaveBeenCalledWith(
+      '/tmp/wt',
+      'reports/*.xml',
+    );
+    expect(callOrder).toEqual(['clear', 'run']);
+  });
+
+  it('does not attempt cleanup when testReportGlob is unset', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-no-clear' }));
+
+    expect(mockClearReportFiles).not.toHaveBeenCalled();
   });
 
   it('still runs to completion and leaves structured_result null when acquisition finds no matching report', async () => {

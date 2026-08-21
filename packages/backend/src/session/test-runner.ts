@@ -1,5 +1,11 @@
 import { spawn } from 'child_process';
-import { readFileSync, readdirSync, type Dirent } from 'fs';
+import {
+  readFileSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  type Dirent,
+} from 'fs';
 import path from 'path';
 import { platform } from 'process';
 import { minimatch } from 'minimatch';
@@ -559,6 +565,38 @@ function listWorktreeFiles(worktreePath: string): string[] {
   return results;
 }
 
+function matchReportFiles(worktreePath: string, reportGlob: string): string[] {
+  return listWorktreeFiles(worktreePath)
+    .filter((rel) => minimatch(rel, reportGlob, { dot: true }))
+    .sort();
+}
+
+/**
+ * Deletes every file matching `reportGlob` under `worktreePath`, walking the
+ * tree the same way collectStructuredTestResult does (matchReportFiles) so
+ * cleanup and collection can never disagree about what counts as a report
+ * file. Called before a run's test commands execute so that a command which
+ * fails/crashes before its runner's normal teardown leaves no report file
+ * behind to be mistaken for this run's output — collectStructuredTestResult's
+ * glob then finds nothing for that command rather than a stale prior report.
+ * Best-effort: a file that fails to delete (permissions, already removed) is
+ * skipped rather than throwing, since acquisition's freshness check
+ * (collectStructuredTestResult's `startedAt`) is the backstop for exactly
+ * that case.
+ */
+export function clearReportFiles(
+  worktreePath: string,
+  reportGlob: string,
+): void {
+  for (const rel of matchReportFiles(worktreePath, reportGlob)) {
+    try {
+      unlinkSync(path.join(worktreePath, rel));
+    } catch {
+      // best-effort — freshness check in collectStructuredTestResult backstops this
+    }
+  }
+}
+
 /**
  * Glob-matches report files under `worktreePath`, parses each as JUnit XML,
  * and merges every matched file's suites into one normalized
@@ -578,15 +616,34 @@ function listWorktreeFiles(worktreePath: string): string[] {
  * never got written (e.g. it crashed/OOM-killed before its runner's normal
  * teardown) — the returned result is marked `incomplete: true` so this
  * partial merge is never indistinguishable from a genuinely complete one.
+ *
+ * `startedAt`, when given, is a Date.now() timestamp captured before the
+ * run's test commands executed. Any matched file whose mtime predates it is
+ * excluded from the merge (and from the matched-file count feeding
+ * `incomplete`) — it wasn't written by this run, so ingesting its contents
+ * would misattribute a stale/previous run's per-test results to this one.
+ * This is defense-in-depth alongside clearReportFiles' pre-run cleanup, not
+ * a replacement for it — cleanup already makes a fully-missing report caught
+ * by the expectedReportCount check; this guards the case cleanup missed
+ * (permission failure, glob/walk mismatch).
  */
 export function collectStructuredTestResult(
   worktreePath: string,
   reportGlob: string,
   expectedReportCount = 1,
+  startedAt?: number,
 ): StructuredTestResult | null {
-  const matchedFiles = listWorktreeFiles(worktreePath)
-    .filter((rel) => minimatch(rel, reportGlob, { dot: true }))
-    .sort();
+  const allMatched = matchReportFiles(worktreePath, reportGlob);
+  const matchedFiles =
+    startedAt === undefined
+      ? allMatched
+      : allMatched.filter((rel) => {
+          try {
+            return statSync(path.join(worktreePath, rel)).mtimeMs >= startedAt;
+          } catch {
+            return false;
+          }
+        });
   if (matchedFiles.length === 0) return null;
 
   const suites: JUnitSuite[] = [];
