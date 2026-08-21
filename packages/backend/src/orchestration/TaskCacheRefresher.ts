@@ -132,7 +132,7 @@ export class TaskCacheRefresher {
     logger.info(
       `[TaskCacheRefresher] refresh start projects=${projects.length}`,
     );
-    let itemsProcessed = 0;
+    let itemsProcessed: number;
     try {
       const changedCounts = await runWithConcurrency(
         projects,
