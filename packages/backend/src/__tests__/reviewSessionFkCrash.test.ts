@@ -107,6 +107,8 @@ vi.mock('../config', () => ({
   getAllProjects: vi.fn(() => [projectFixture]),
   getSessionAllowedTools: vi.fn(() => []),
   normalizePath: (p: string) => p,
+  PLANNING_DISALLOWED_TOOLS: [],
+  SCHEDULING_DISALLOWED_TOOLS: [],
   runtimeSettings: {
     session_mode: 'cli',
     code_session_model: '',

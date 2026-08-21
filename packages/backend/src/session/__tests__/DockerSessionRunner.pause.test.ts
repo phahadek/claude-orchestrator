@@ -5,6 +5,7 @@ import { Readable, Writable } from 'stream';
 vi.mock('../../config', () => ({
   config: { claudePath: '/fake/claude' },
   PLANNING_DISALLOWED_TOOLS: [],
+  SCHEDULING_DISALLOWED_TOOLS: [],
 }));
 
 let lastProc: ReturnType<typeof makeMockProc> | null = null;

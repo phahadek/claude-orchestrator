@@ -15,6 +15,12 @@ vi.mock('../../config', () => ({
     'CronDelete',
     'CronList',
   ],
+  SCHEDULING_DISALLOWED_TOOLS: [
+    'ScheduleWakeup',
+    'CronCreate',
+    'CronDelete',
+    'CronList',
+  ],
 }));
 
 // Captures args passed to spawn(), keyed by which binary was spawned —
@@ -153,8 +159,8 @@ describe('CliSessionRunner vs DockerSessionRunner — planning session CLI parit
     },
   );
 
-  it.each(['standard', 'review'] as const)(
-    'produce identical (empty) --disallowed-tools / --add-dir for non-planning sessionType=%s',
+  it.each(['standard', 'review', 'depth_review'] as const)(
+    'produce identical scheduling-only --disallowed-tools / (empty) --add-dir for non-planning sessionType=%s',
     async (sessionType) => {
       const cliRunner = new CliSessionRunner(SESSION_ID);
       await cliRunner.run(
@@ -174,9 +180,15 @@ describe('CliSessionRunner vs DockerSessionRunner — planning session CLI parit
       );
       const dockerArgs = lastDockerExecArgs;
 
-      expect(dockerArgs.includes('--disallowed-tools')).toBe(
-        cliArgs.includes('--disallowed-tools'),
+      expect(extractFlagList(dockerArgs, '--disallowed-tools')).toEqual(
+        extractFlagList(cliArgs, '--disallowed-tools'),
       );
+      expect(extractFlagList(cliArgs, '--disallowed-tools')).toEqual([
+        'ScheduleWakeup',
+        'CronCreate',
+        'CronDelete',
+        'CronList',
+      ]);
       expect(dockerArgs.includes('--add-dir')).toBe(
         cliArgs.includes('--add-dir'),
       );
