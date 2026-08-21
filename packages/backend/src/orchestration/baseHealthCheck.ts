@@ -23,10 +23,13 @@
  *  - unknown:      no result could be produced at all (worktree
  *                   provisioning failure, content-hash unavailable, no test
  *                   commands configured, or the run itself errored before
- *                   leaving a durable row). Distinct from total_fail —
- *                   every downstream consumer must default an `unknown`
- *                   outcome to today's pre-this-design behavior (charge
- *                   normally, don't gate dispatch).
+ *                   leaving a durable row). Distinct from total_fail — no
+ *                   per-test breakdown exists, but also no confirmed base
+ *                   verdict at all, so a caller filtering a failed session
+ *                   run against it (baseAttributableFilter.ts) must not
+ *                   treat this as "base is healthy, the failure is yours":
+ *                   it surfaces its own distinct filter outcome instead of
+ *                   collapsing to unfiltered.
  */
 
 import { execFile } from 'node:child_process';

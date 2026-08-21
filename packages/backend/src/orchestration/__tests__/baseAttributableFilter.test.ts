@@ -360,7 +360,7 @@ describe('filterBaseAttributableFailures', () => {
     expect(mockRecordAndMaybeFileBaseHealthRemediation).not.toHaveBeenCalled();
   });
 
-  it('leaves the run unfiltered when the base health check is unknown', async () => {
+  it('reports a distinct unknown outcome — not unfiltered — when no usable base-health probe exists', async () => {
     mockCheckBaseBranchHealth.mockResolvedValue({
       outcome: 'unknown',
       projectId: 'proj-1',
@@ -376,8 +376,46 @@ describe('filterBaseAttributableFailures', () => {
       'task-1',
     );
 
-    expect(result.outcome).toBe('unfiltered');
+    expect(result.outcome).toBe('unknown');
+    expect(result.outcome).not.toBe('unfiltered');
+    expect(result.passed).toBe(false);
+    expect(result.remainingTests).toEqual([]);
     expect(mockRecordAndMaybeFileBaseHealthRemediation).not.toHaveBeenCalled();
+  });
+
+  it("reproduces the observed regression shape: a session-failing set identical to the base tree's, with no usable probe for the current base hash, is not reported as an unattributed self-inflicted failure", async () => {
+    // The base content hash moved (a merge landed seconds after the last
+    // successful probe) and no fresh probe has resolved for it yet.
+    mockCheckBaseBranchHealth.mockResolvedValue({
+      outcome: 'unknown',
+      projectId: 'proj-1',
+      contentHash: null,
+      cacheHit: false,
+      run: null,
+      unknownReason: 'worktree provisioning failed',
+    });
+    // The session's own run failed 8 tests — irrelevant to the outcome,
+    // since no base breakdown exists to compare against at all.
+    mockGetFailingTestIdsForRun.mockReturnValue(
+      Array.from({ length: 8 }, (_, i) => ({
+        test_id: `suite.test${i}`,
+        name: `test${i}`,
+      })),
+    );
+
+    const result = await filterBaseAttributableFailures(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    expect(result.outcome).toBe('unknown');
+    expect(result.outcome).not.toBe('unfiltered');
+    expect(result.passed).toBe(false);
+
+    const digest = renderBaseAttributableFilterDigest(result);
+    expect(digest).toMatch(/base health.*unavailable/i);
+    expect(digest).toMatch(/cannot be attributed to your/i);
   });
 
   it('leaves a passed run untouched without consulting base health', async () => {
@@ -420,5 +458,19 @@ describe('renderBaseAttributableFilterDigest', () => {
       '1 additional failure(s) excluded as confirmed base-branch breaks',
     );
     expect(digest).toContain('1 excluded as known-flaky');
+  });
+
+  it('states base health was unavailable and does not attribute the failure to the session for the unknown outcome', () => {
+    const digest = renderBaseAttributableFilterDigest({
+      outcome: 'unknown',
+      passed: false,
+      excludedTests: [],
+      flakyExcludedTests: [],
+      remainingTests: [],
+    });
+
+    expect(digest).toMatch(/base health.*unavailable/i);
+    expect(digest).toMatch(/cannot be attributed to your/i);
+    expect(digest).toContain('Not counted against your test-request budget');
   });
 });

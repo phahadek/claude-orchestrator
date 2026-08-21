@@ -4,8 +4,7 @@
  * task session isn't blamed — or its retry budget charged — for a break
  * that predates its own diff.
  *
- * Three outcomes past the trivial "base is healthy / unknown, report
- * as-is" case:
+ * Four outcomes past the trivial "base is healthy, report as-is" case:
  *  - filtered_pass:    every one of the session's failing tests also fails
  *                        on the base tree (base outcome partial_fail) —
  *                        report the session's run as passing.
@@ -18,10 +17,23 @@
  *                        as inconclusive rather than a filtered pass, and
  *                        must not be charged against the session's
  *                        test-request retry budget.
+ *  - unknown:            no usable base-health probe exists for the current
+ *                        base content hash (base outcome unknown) —
+ *                        attribution was impossible, not "attributed to
+ *                        you". Reported distinctly from a plain unfiltered
+ *                        failure so it's queryable, and — like
+ *                        inconclusive — must not be charged against the
+ *                        session's test-request retry budget. Distinct from
+ *                        inconclusive: that means the base whole-process
+ *                        crashed; this means no probe result existed to
+ *                        judge against at all.
  *
  * The first time a content hash is confirmed unhealthy (partial_fail or
  * total_fail), also triggers a deduplicated remediation task filing — see
  * audit/baseHealthRemediationFiling.ts.
+ *
+ * See ./baseHealthCheck.ts for the `unknown` base-health outcome this
+ * module's own `unknown` filter outcome mirrors.
  */
 import { logger } from '../logger';
 import type { ProjectConfig } from '../config';
@@ -34,7 +46,8 @@ type BaseAttributableFilterOutcome =
   | 'unfiltered'
   | 'filtered_pass'
   | 'filtered_partial'
-  | 'inconclusive';
+  | 'inconclusive'
+  | 'unknown';
 
 interface FailingTest {
   test_id: string;
@@ -92,11 +105,12 @@ async function maybeFileRemediation(
 
 /**
  * Classifies `run` (an already-completed, failed test.request run) against
- * the project's current base-branch health. Never throws — every internal
- * failure (base-health check errors internally into `unknown`, a missing
- * per-test breakdown, etc.) collapses into `unfiltered`, so callers can
- * treat this as a plain lookup and fall back to the run's own raw
- * pass/fail verdict.
+ * the project's current base-branch health. Never throws — an unresolvable
+ * per-test breakdown on an otherwise-healthy-lookup base still collapses to
+ * `unfiltered`, so callers can treat this as a plain lookup and fall back
+ * to the run's own raw pass/fail verdict. A base-health outcome of
+ * `unknown` (no usable probe for the current base content hash) does NOT
+ * collapse to `unfiltered` — see the `unknown` outcome above.
  */
 export async function filterBaseAttributableFailures(
   project: ProjectConfig,
@@ -138,8 +152,18 @@ export async function filterBaseAttributableFailures(
     }
   }
 
-  if (health.outcome === 'clean_pass' || health.outcome === 'unknown') {
+  if (health.outcome === 'clean_pass') {
     return UNFILTERED(false);
+  }
+
+  if (health.outcome === 'unknown') {
+    return {
+      outcome: 'unknown',
+      passed: false,
+      excludedTests: [],
+      flakyExcludedTests: [],
+      remainingTests: [],
+    };
   }
 
   if (health.outcome === 'total_fail') {
@@ -214,6 +238,14 @@ export function renderBaseAttributableFilterDigest(
       '(whole-process crash, no per-test breakdown), so this run cannot be attributed ' +
       'to your changes. Not counted against your test-request budget. A remediation task ' +
       'has been filed against the base branch.'
+    );
+  }
+
+  if (result.outcome === 'unknown') {
+    return (
+      '**Test results:** base health unavailable — no confirmed result exists yet for the ' +
+      "current base branch content, so this run's failures cannot be attributed to your " +
+      'changes or blamed on you. Not counted against your test-request budget.'
     );
   }
 
