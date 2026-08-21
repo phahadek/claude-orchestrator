@@ -140,20 +140,16 @@ describe('backup-database.mjs plaintext cleanup', () => {
 
   it('removes the plaintext snapshot on the success path (--dry-run)', () => {
     const runWorkDir = join(workDir, 'success-run');
-    const result = spawnSync(
-      process.execPath,
-      [BACKUP_SCRIPT, '--dry-run'],
-      {
-        cwd: REPO_ROOT,
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          DB_PATH: dbPath,
-          BACKUP_WORK_DIR: runWorkDir,
-          BACKUP_GPG_PASSPHRASE: 'test-passphrase',
-        },
+    const result = spawnSync(process.execPath, [BACKUP_SCRIPT, '--dry-run'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        DB_PATH: dbPath,
+        BACKUP_WORK_DIR: runWorkDir,
+        BACKUP_GPG_PASSPHRASE: 'test-passphrase',
       },
-    );
+    });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(
       listPlaintextSnapshots(runWorkDir).length,
@@ -161,32 +157,35 @@ describe('backup-database.mjs plaintext cleanup', () => {
       'plaintext .db snapshot left behind after a successful run',
     );
     const encrypted = readdirSync(runWorkDir).filter((n) => n.endsWith('.gpg'));
-    assert.equal(encrypted.length, 1, 'expected exactly one encrypted artifact');
+    assert.equal(
+      encrypted.length,
+      1,
+      'expected exactly one encrypted artifact',
+    );
   });
 
   it('removes the plaintext snapshot when the run is killed mid-snapshot (SIGTERM)', async () => {
     const runWorkDir = join(workDir, 'killed-run');
-    const child = spawn(
-      process.execPath,
-      [BACKUP_SCRIPT, '--dry-run'],
-      {
-        cwd: REPO_ROOT,
-        env: {
-          ...process.env,
-          DB_PATH: dbPath,
-          BACKUP_WORK_DIR: runWorkDir,
-          BACKUP_GPG_PASSPHRASE: 'test-passphrase',
-        },
-        stdio: 'ignore',
+    const child = spawn(process.execPath, [BACKUP_SCRIPT, '--dry-run'], {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        DB_PATH: dbPath,
+        BACKUP_WORK_DIR: runWorkDir,
+        BACKUP_GPG_PASSPHRASE: 'test-passphrase',
       },
-    );
+      stdio: 'ignore',
+    });
 
     const exited = new Promise((resolve) => child.on('exit', resolve));
 
     // Poll for the plaintext snapshot to appear on disk, then kill mid-write.
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
-      if (existsSync(runWorkDir) && listPlaintextSnapshots(runWorkDir).length > 0) {
+      if (
+        existsSync(runWorkDir) &&
+        listPlaintextSnapshots(runWorkDir).length > 0
+      ) {
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 2));
