@@ -1419,7 +1419,7 @@ export function getActivePlanningSessionForTask(
 
 export function hasActiveSessionForTask(taskId: string): boolean {
   const norm = taskId.replace(/-/g, '');
-  // Matches sessions.task_id_norm — a STORED generated column mirroring this
+  // Matches sessions.task_id_norm — a VIRTUAL generated column mirroring this
   // same REPLACE(...,'-','') expression (see schema.ts) — instead of
   // applying REPLACE() to every row inside WHERE. That defeated
   // idx_sessions_notion_task_id_session_type (indexed on raw task_id) and
