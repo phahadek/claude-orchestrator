@@ -661,22 +661,21 @@ describe('Scheduler degraded-tick reclassification (task_cache_refresher)', () =
     dateNowSpy.mockRestore();
   });
 
-  it('distinguishes a long productive tick (ok) from a long zero-item tick (degraded)', async () => {
+  it('keeps a long productive tick ok', async () => {
     const project = makeProject({ id: 'p1' });
     vi.mocked(getAllProjects).mockReturnValue([project]);
     vi.mocked(ProjectService.listMilestones).mockReturnValue([
       makeMilestone('m1', 'src-1'),
     ]);
 
-    let rawJson = JSON.stringify({ v: 1 });
     const backend = makeBackend({
       fetchReadyTasks: vi.fn().mockImplementation(async () => {
         // Advancing the stubbed clock synchronously during the job
         // simulates a multi-minute tick without the test actually waiting
         // that long.
         now += DEGRADED_TICK_THRESHOLD_MS;
-        upsertTaskCache('degraded-test-task', rawJson);
-        return [{ task: { id: 'degraded-test-task' } }];
+        upsertTaskCache('productive-test-task', JSON.stringify({ v: 1 }));
+        return [{ task: { id: 'productive-test-task' } }];
       }),
     });
     vi.mocked(getTaskBackend).mockReturnValue(backend);
@@ -688,15 +687,39 @@ describe('Scheduler degraded-tick reclassification (task_cache_refresher)', () =
     const scheduler = new Scheduler();
     refresher.register(scheduler);
 
-    // Long tick, content changed — genuinely productive, must stay 'ok'.
+    // Long tick, a cached row's content actually changed — genuinely
+    // productive, must stay 'ok'.
     await scheduler.triggerNow('task_cache_refresher');
     const afterProductive = scheduler
       .status()
       .find((s) => s.name === 'task_cache_refresher');
     expect(afterProductive?.lastStatus).toBe('ok');
+  });
 
-    // Long tick, identical content — a starved/wedged-looking tick that did
-    // no real work, must be reclassified 'degraded'.
+  it('reclassifies a long zero-item tick as degraded', async () => {
+    const project = makeProject({ id: 'p1' });
+    vi.mocked(getAllProjects).mockReturnValue([project]);
+    vi.mocked(ProjectService.listMilestones).mockReturnValue([
+      makeMilestone('m1', 'src-1'),
+    ]);
+
+    const backend = makeBackend({
+      fetchReadyTasks: vi.fn().mockImplementation(async () => {
+        now += DEGRADED_TICK_THRESHOLD_MS;
+        return [];
+      }),
+    });
+    vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+    const refresher = new TaskCacheRefresher(undefined, {
+      listProjects: getAllProjects,
+      resolveBackend: getTaskBackend,
+    });
+    const scheduler = new Scheduler();
+    refresher.register(scheduler);
+
+    // Long tick, no ready tasks at all — a genuinely starved/wedged-looking
+    // tick that did no real work, must be reclassified 'degraded'.
     await scheduler.triggerNow('task_cache_refresher');
     const afterIdle = scheduler
       .status()
