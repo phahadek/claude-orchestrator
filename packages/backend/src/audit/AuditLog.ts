@@ -422,14 +422,13 @@ export function hasTaskEditSinceTimestamp(
 ): boolean {
   const norm = normalizeBoardId(taskId);
   const row = db
-    .prepare<
-      [string, number],
-      { task_id: string | null }
-    >(`SELECT task_id FROM audit_log
+    .prepare<[string, number], { task_id: string | null }>(
+      `SELECT task_id FROM audit_log
        WHERE task_id_norm = ?
          AND event_type IN ('task_body_updated', 'task_deps_updated')
          AND ts > ?
-       LIMIT 1`)
+       LIMIT 1`,
+    )
     .get(norm, sinceTs);
   return row !== undefined;
 }

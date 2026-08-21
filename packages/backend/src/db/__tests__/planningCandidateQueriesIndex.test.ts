@@ -56,13 +56,15 @@ describe('planning-candidate predicate chain — indexable task_id_norm matches'
   describe('getActivePlanningSessionForTask', () => {
     it('matches ignoring hyphen formatting', () => {
       insertSession('ab-cd-1234', 'groom', 'running', 1000);
-      expect(getActivePlanningSessionForTask('abcd1234', 'groom')?.task_id).toBe(
-        'ab-cd-1234',
-      );
+      expect(
+        getActivePlanningSessionForTask('abcd1234', 'groom')?.task_id,
+      ).toBe('ab-cd-1234');
       expect(
         getActivePlanningSessionForTask('ab-cd-1234', 'groom'),
       ).toBeDefined();
-      expect(getActivePlanningSessionForTask('zz-zz-9999', 'groom')).toBeUndefined();
+      expect(
+        getActivePlanningSessionForTask('zz-zz-9999', 'groom'),
+      ).toBeUndefined();
     });
 
     it('resolves via an index seek on task_id_norm, not a table scan', () => {
