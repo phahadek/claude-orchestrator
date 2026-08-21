@@ -665,4 +665,39 @@ describe('Scheduler integration (task_cache_refresher) — minimal baseline', ()
       .find((s) => s.name === 'task_cache_refresher');
     expect(after?.lastStatus).toBe('ok');
   });
+
+  it('stays ok on a long tick when a cached row changed, with Date.now stubbed', async () => {
+    const project = makeProject({ id: 'p1' });
+    vi.mocked(getAllProjects).mockReturnValue([project]);
+    vi.mocked(ProjectService.listMilestones).mockReturnValue([
+      makeMilestone('m1', 'src-1'),
+    ]);
+
+    let now = 1_000_000;
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    const backend = makeBackend({
+      fetchReadyTasks: vi.fn().mockImplementation(async () => {
+        now += DEGRADED_TICK_THRESHOLD_MS;
+        upsertTaskCache('productive-baseline-task', JSON.stringify({ v: 1 }));
+        return [{ task: { id: 'productive-baseline-task' } }];
+      }),
+    });
+    vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+    const refresher = new TaskCacheRefresher(undefined, {
+      listProjects: getAllProjects,
+      resolveBackend: getTaskBackend,
+    });
+    const scheduler = new Scheduler();
+    refresher.register(scheduler);
+
+    await scheduler.triggerNow('task_cache_refresher');
+    const after = scheduler
+      .status()
+      .find((s) => s.name === 'task_cache_refresher');
+    expect(after?.lastStatus).toBe('ok');
+
+    dateNowSpy.mockRestore();
+  });
 });
