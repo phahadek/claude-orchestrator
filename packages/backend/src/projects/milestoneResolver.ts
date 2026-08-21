@@ -53,7 +53,10 @@ function findMilestone<
  * the safe default that keeps it in scope exactly as before this predicate
  * existed, rather than excluding it on a lookup failure.
  */
-export function isMilestoneWrapped(projectId: string, milestone: string): boolean {
+export function isMilestoneWrapped(
+  projectId: string,
+  milestone: string,
+): boolean {
   const project = ProjectService.getById(projectId);
   if (!project) return false;
   const match = findMilestone(project.milestones, milestone);
@@ -71,10 +74,7 @@ export function createWrappedMilestoneChecker(): (
   project: string,
   milestone: string,
 ) => boolean {
-  const cache = new Map<
-    string,
-    ReturnType<typeof ProjectService.getById>
-  >();
+  const cache = new Map<string, ReturnType<typeof ProjectService.getById>>();
   return (project, milestone) => {
     let proj = cache.get(project);
     if (proj === undefined && !cache.has(project)) {
