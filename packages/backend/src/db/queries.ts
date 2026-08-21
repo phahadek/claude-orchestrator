@@ -6035,6 +6035,36 @@ export function isJobOverdue(
   intervalMs: number,
   now: number = Date.now(),
 ): boolean {
+  return getJobBootSchedule(job, intervalMs, now).runOnBoot;
+}
+
+export interface JobBootSchedule {
+  /** Whether the job is already overdue and should fire immediately. */
+  runOnBoot: boolean;
+  /**
+   * Delay, in ms, before the job's first fire — seeded from the durable
+   * last-run time (last_ok_started_at + intervalMs, clamped at zero) rather
+   * than from process-registration time, so a restart landing mid-interval
+   * resumes the original schedule instead of pushing the next fire out by
+   * a fresh intervalMs. Meaningless (and ignored) when runOnBoot is true.
+   */
+  initialDelayMs: number;
+}
+
+/**
+ * Resolves the schedule a job should be registered with at boot, derived
+ * from `job`'s last successful (status = 'ok') scheduler_audit run rather
+ * than from in-process timer state a restart discards. A job that has
+ * never run, or whose last run is already `intervalMs` or older, fires
+ * immediately (runOnBoot: true). Otherwise its first fire is seeded at
+ * last_ok_started_at + intervalMs, so repeated restarts inside one
+ * interval never postpone the fire beyond that point.
+ */
+export function getJobBootSchedule(
+  job: string,
+  intervalMs: number,
+  now: number = Date.now(),
+): JobBootSchedule {
   const row = db
     .prepare<{ job: string }>(
       `SELECT started_at FROM scheduler_audit
@@ -6042,8 +6072,12 @@ export function isJobOverdue(
        ORDER BY started_at DESC LIMIT 1`,
     )
     .get({ job }) as { started_at: string } | undefined;
-  if (!row) return true;
-  return now - Date.parse(row.started_at) >= intervalMs;
+  if (!row) return { runOnBoot: true, initialDelayMs: 0 };
+  const initialDelayMs = Math.max(
+    0,
+    Date.parse(row.started_at) + intervalMs - now,
+  );
+  return { runOnBoot: initialDelayMs === 0, initialDelayMs };
 }
 
 // ─── audit_finding_dedup ────────────────────────────────────────────────────

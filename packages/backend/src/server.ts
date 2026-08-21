@@ -45,7 +45,7 @@ import {
   getActiveDeviceCount,
   pruneSchedulerAudit,
   listProjectRows,
-  isJobOverdue,
+  getJobBootSchedule,
   SCHEDULER_AUDIT_KEEP_PER_JOB,
 } from './db/queries';
 import { importProjectsFromEnv } from './projects/projectImport';
@@ -416,18 +416,24 @@ const scheduler = new Scheduler();
 scheduler.setBroadcast(broadcast);
 setScheduler(scheduler);
 setDeployScheduler(scheduler);
-// Bound retention: prune scheduler_audit to last 1000 rows per job, daily.
-// runOnBoot is derived from the durable scheduler_audit record rather than
-// hardcoded, so a job overdue by the durable record fires immediately even
-// after a restart discards its in-process timer — see isJobOverdue.
+// Bound retention: prune scheduler_audit to last 1000 rows per job, daily
+// (SCHEDULER_AUDIT_KEEP_PER_JOB rows retained per job — see db/queries.ts).
+// The first-fire schedule is derived from the durable scheduler_audit
+// record rather than process-registration time: an overdue job fires
+// immediately, and one that's mid-interval is seeded to fire at
+// last_ok_started_at + intervalMs rather than intervalMs from *this* boot
+// — so a restart landing mid-interval doesn't push the next run out by a
+// fresh interval — see getJobBootSchedule.
 const SCHEDULER_AUDIT_PRUNER_INTERVAL_MS = 24 * 60 * 60_000;
+const schedulerAuditPrunerSchedule = getJobBootSchedule(
+  'scheduler_audit_pruner',
+  SCHEDULER_AUDIT_PRUNER_INTERVAL_MS,
+);
 scheduler.register({
   name: 'scheduler_audit_pruner',
   intervalMs: SCHEDULER_AUDIT_PRUNER_INTERVAL_MS,
-  runOnBoot: isJobOverdue(
-    'scheduler_audit_pruner',
-    SCHEDULER_AUDIT_PRUNER_INTERVAL_MS,
-  ),
+  runOnBoot: schedulerAuditPrunerSchedule.runOnBoot,
+  initialDelayMs: schedulerAuditPrunerSchedule.initialDelayMs,
   run: async () => {
     pruneSchedulerAudit(SCHEDULER_AUDIT_KEEP_PER_JOB);
   },
