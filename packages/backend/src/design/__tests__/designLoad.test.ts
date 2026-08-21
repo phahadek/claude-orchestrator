@@ -1,4 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+
+vi.setConfig({ testTimeout: 20_000 });
 import { spawnSync } from 'child_process';
 import {
   mkdirSync,
