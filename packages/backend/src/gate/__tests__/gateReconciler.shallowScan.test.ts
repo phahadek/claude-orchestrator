@@ -63,9 +63,7 @@ beforeEach(() => {
   });
 });
 
-function seedItem(
-  overrides: Partial<Parameters<typeof insertItem>[0]> = {},
-) {
+function seedItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
   return insertItem({
     project: 'shallow-scan-proj',
     milestone: 'M12',
