@@ -77,6 +77,8 @@ vi.mock('../config', () => ({
   runtimeSettings: {},
   getProjectById: vi.fn(() => undefined),
   config: { claudePath: 'claude' },
+  PLANNING_DISALLOWED_TOOLS: [],
+  SCHEDULING_DISALLOWED_TOOLS: [],
 }));
 
 import { AgentSession } from '../session/AgentSession';

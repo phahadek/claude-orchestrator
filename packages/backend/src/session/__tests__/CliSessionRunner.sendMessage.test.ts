@@ -7,6 +7,7 @@ vi.mock('../../config', () => ({
   BASH_MAX_OUTPUT_LENGTH: 30000,
   BASH_DEFAULT_TIMEOUT_MS: 300000,
   PLANNING_DISALLOWED_TOOLS: [],
+  SCHEDULING_DISALLOWED_TOOLS: [],
 }));
 
 let lastProc: ReturnType<typeof makeMockProc> | null = null;
