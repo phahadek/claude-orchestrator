@@ -383,7 +383,7 @@ describe('filterBaseAttributableFailures', () => {
     expect(mockRecordAndMaybeFileBaseHealthRemediation).not.toHaveBeenCalled();
   });
 
-  it('reproduces the observed regression shape: a session-failing set identical to the base tree\'s, with no usable probe for the current base hash, is not reported as an unattributed self-inflicted failure', async () => {
+  it("reproduces the observed regression shape: a session-failing set identical to the base tree's, with no usable probe for the current base hash, is not reported as an unattributed self-inflicted failure", async () => {
     // The base content hash moved (a merge landed seconds after the last
     // successful probe) and no fresh probe has resolved for it yet.
     mockCheckBaseBranchHealth.mockResolvedValue({

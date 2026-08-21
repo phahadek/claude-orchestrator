@@ -56,15 +56,19 @@ vi.mock('../../orchestration/testRequestLane', () => ({
   admitTestRequest: mockAdmitTestRequest,
 }));
 
-vi.mock('../../orchestration/baseAttributableFilter', async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import('../../orchestration/baseAttributableFilter')
-  >();
-  return {
-    ...actual,
-    filterBaseAttributableFailures: mockFilterBaseAttributableFailures,
-  };
-});
+vi.mock(
+  '../../orchestration/baseAttributableFilter',
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import('../../orchestration/baseAttributableFilter')
+      >();
+    return {
+      ...actual,
+      filterBaseAttributableFailures: mockFilterBaseAttributableFailures,
+    };
+  },
+);
 
 import { db } from '../../db/db';
 import {
@@ -235,9 +239,9 @@ describe('triggerTestRequestExecution — unknown base-health outcome', () => {
     await triggerTestRequestExecution(intent, sessionManager);
 
     expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
-    const [, , payloadJson] = (sessionManager.enqueueFeedback as ReturnType<
-      typeof vi.fn
-    >).mock.calls[0];
+    const [, , payloadJson] = (
+      sessionManager.enqueueFeedback as ReturnType<typeof vi.fn>
+    ).mock.calls[0];
     const payload = JSON.parse(payloadJson as string);
     expect(payload.output).toMatch(/base health.*unavailable/i);
     expect(payload.output).not.toBe('some tests failed');
