@@ -119,6 +119,77 @@ describe('Scheduler.start / run', () => {
     expect(runFn).toHaveBeenCalledOnce();
     await scheduler.stopAll();
   });
+
+  it('initialDelayMs seeds the first fire at last_run + intervalMs instead of intervalMs from registration', async () => {
+    const { scheduler } = makeScheduler();
+    const runFn = vi.fn().mockResolvedValue(undefined);
+    // Job's durable last run was 21h into a 24h interval — 3h (10_800_000ms)
+    // of "credit" remains toward the next fire.
+    scheduler.register({
+      name: 'j_seeded',
+      intervalMs: 24 * 60 * 60 * 1000,
+      runOnBoot: false,
+      initialDelayMs: 3 * 60 * 60 * 1000,
+      run: runFn,
+    });
+    scheduler.start();
+    // Just short of the seeded delay — must not have fired yet.
+    await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000 - 100);
+    expect(runFn).not.toHaveBeenCalled();
+    // Crossing the seeded delay fires it, well short of a fresh 24h wait.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(runFn).toHaveBeenCalledOnce();
+    await scheduler.stopAll();
+  });
+
+  it('repeated restarts inside one interval do not postpone the fire beyond the originally seeded delay', async () => {
+    // Simulates a job restarted several times before its durable last-run
+    // + intervalMs is reached: each restart re-registers with the SAME
+    // initialDelayMs (derived from the unchanged durable record), not a
+    // fresh intervalMs from that restart's own registration time.
+    const seededDelayMs = 3 * 60 * 60 * 1000;
+    const intervalMs = 24 * 60 * 60 * 1000;
+    let elapsedAcrossRestarts = 0;
+    let runFn = vi.fn().mockResolvedValue(undefined);
+
+    for (let restart = 0; restart < 3; restart++) {
+      const { scheduler } = makeScheduler();
+      runFn = vi.fn().mockResolvedValue(undefined);
+      const remaining = Math.max(0, seededDelayMs - elapsedAcrossRestarts);
+      scheduler.register({
+        name: 'j_restart_seeded',
+        intervalMs,
+        runOnBoot: remaining === 0,
+        initialDelayMs: remaining,
+        run: runFn,
+      });
+      scheduler.start();
+      const advanceBy = 60 * 60 * 1000; // simulate 1h of uptime before "restart"
+      await vi.advanceTimersByTimeAsync(advanceBy);
+      elapsedAcrossRestarts += advanceBy;
+      if (elapsedAcrossRestarts < seededDelayMs) {
+        expect(runFn).not.toHaveBeenCalled();
+      }
+      await scheduler.stopAll();
+    }
+
+    // Final restart: remaining delay has elapsed — fires at/before
+    // seededDelayMs total uptime, never at a re-pushed intervalMs.
+    const { scheduler } = makeScheduler();
+    const finalRunFn = vi.fn().mockResolvedValue(undefined);
+    const finalRemaining = Math.max(0, seededDelayMs - elapsedAcrossRestarts);
+    scheduler.register({
+      name: 'j_restart_seeded',
+      intervalMs,
+      runOnBoot: finalRemaining === 0,
+      initialDelayMs: finalRemaining,
+      run: finalRunFn,
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(finalRemaining + 10);
+    expect(finalRunFn).toHaveBeenCalledOnce();
+    await scheduler.stopAll();
+  });
 });
 
 describe('Scheduler audit + WS broadcast', () => {

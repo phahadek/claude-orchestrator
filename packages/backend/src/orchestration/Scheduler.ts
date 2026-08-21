@@ -27,6 +27,16 @@ export interface JobOptions {
   name: string;
   intervalMs: number | (() => number);
   runOnBoot?: boolean;
+  /**
+   * Delay before the FIRST fire, overriding intervalMs for that one
+   * scheduling call only — seeded from a job's durable last-run time
+   * (last_ok_started_at + intervalMs, clamped at zero) so a restart that
+   * lands mid-interval resumes the original schedule instead of restarting
+   * a fresh intervalMs-long wait from registration. Ignored when
+   * runOnBoot is true. Every reschedule after the first fire uses the
+   * normal intervalMs.
+   */
+  initialDelayMs?: number;
   jitterMs?: number;
   enabled?: () => boolean;
   concurrency?: 'skip-if-running' | 'queue-next' | 'serial-no-overlap';
@@ -104,21 +114,28 @@ export class Scheduler {
     state.stopped = false;
     if (state.opts.runOnBoot) {
       void this._runJob(state);
+    } else if (state.opts.initialDelayMs !== undefined) {
+      this._scheduleNext(state, state.opts.initialDelayMs);
     } else {
       this._scheduleNext(state);
     }
   }
 
-  private _scheduleNext(state: JobState): void {
+  private _scheduleNext(state: JobState, delayOverride?: number): void {
     if (state.stopped) return;
-    const base =
-      typeof state.opts.intervalMs === 'function'
-        ? state.opts.intervalMs()
-        : state.opts.intervalMs;
-    const jitter = state.opts.jitterMs
-      ? Math.random() * state.opts.jitterMs
-      : 0;
-    const delay = base + jitter;
+    let delay: number;
+    if (delayOverride !== undefined) {
+      delay = delayOverride;
+    } else {
+      const base =
+        typeof state.opts.intervalMs === 'function'
+          ? state.opts.intervalMs()
+          : state.opts.intervalMs;
+      const jitter = state.opts.jitterMs
+        ? Math.random() * state.opts.jitterMs
+        : 0;
+      delay = base + jitter;
+    }
     state.nextRunAt = new Date(Date.now() + delay).toISOString();
     state.timer = setTimeout(() => {
       state.timer = null;
