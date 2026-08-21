@@ -109,7 +109,7 @@ describe('runMigrations() — sessions.task_id_norm', () => {
     const mem = new Database(':memory:');
     let indexAttempted = false;
     const failing: Database.Database = new Proxy(mem, {
-      get(target, prop, receiver) {
+      get(target, prop) {
         if (prop === 'exec') {
           return (sql: string) => {
             if (
