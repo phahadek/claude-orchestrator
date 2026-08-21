@@ -94,16 +94,16 @@ describe('runMigrations() — sessions.task_id_norm', () => {
     const dbPath = path.join(dir, 'test.db');
     try {
       const file = new Database(dbPath);
-      runMigrations(file);
-      file.close();
+      try {
+        runMigrations(file);
+        const diskHasColumnViaPragma =
+          pragmaColumnNames(file).includes('task_id_norm');
 
-      const reopened = new Database(dbPath);
-      const diskHasColumnViaPragma =
-        pragmaColumnNames(reopened).includes('task_id_norm');
-
-      expect(diskHasColumnViaPragma).toBe(memHasColumnViaPragma);
-      expect(tableHasColumn(reopened, 'sessions', 'task_id_norm')).toBe(true);
-      reopened.close();
+        expect(diskHasColumnViaPragma).toBe(memHasColumnViaPragma);
+        expect(tableHasColumn(file, 'sessions', 'task_id_norm')).toBe(true);
+      } finally {
+        file.close();
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
