@@ -25,6 +25,7 @@ import { catchUpMergeCommits } from './gateMergeConsumer';
 import {
   resolveMilestoneDatabaseId,
   resolveMilestoneRowForProject,
+  createWrappedMilestoneChecker,
   UnknownMilestoneError,
 } from '../projects/milestoneResolver';
 import {
@@ -962,8 +963,18 @@ export async function runGateReconcilerTick(
   // allItems (below, and via reconcileHumanObservationMirrors) — never
   // .sources/.events — so the full sources+events N+1 hydration listAll()
   // does per row (2N+1 queries, doubled since this ran twice per tick) was
-  // pure waste that scaled with all-time gate_item history.
-  const allItems = gateStore.listAllShallow();
+  // pure waste that scaled with all-time gate_item history. Also excludes a
+  // wrapped milestone's items outright — see createWrappedMilestoneChecker
+  // — since two thirds of all-time volume belongs to milestones already
+  // closed out, with nothing left to reconcile.
+  //
+  // Cached once per tick: checking every item's milestone against
+  // ProjectService would otherwise cost one DB round-trip per item rather
+  // than per distinct project. See createWrappedMilestoneChecker.
+  const isWrapped = createWrappedMilestoneChecker();
+  const allItems = gateStore
+    .listAllShallow()
+    .filter((item) => !isWrapped(item.project, item.milestone));
   const projects = new Set(allItems.map((item) => item.project));
   const deployShaByProject: Record<string, string | null> = {};
   let reconciled: ReconcileGateRunnabilityResult | null = null;
@@ -975,6 +986,7 @@ export async function runGateReconcilerTick(
     const result = await reconcileGateRunnability(sha, {
       project,
       ancestrySource: ancestrySourceForProject(project),
+      isMilestoneWrapped: isWrapped,
     });
     reconciled = reconciled
       ? {

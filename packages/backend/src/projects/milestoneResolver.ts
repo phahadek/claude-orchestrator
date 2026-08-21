@@ -42,6 +42,52 @@ function findMilestone<
 }
 
 /**
+ * True once the milestone a gate item belongs to has been wrapped
+ * (milestones.wrapped_at set — see /milestone-wrap). Resolves through the
+ * same id/name/canonical-short-id matching as resolveMilestoneRowForProject,
+ * so a gate_item row that still holds a raw milestone UUID (the shadow
+ * key-space documented in context.md) resolves to the same row — and the
+ * same wrapped/unwrapped answer — as its canonical-short-id counterpart,
+ * rather than silently missing the match. An unresolvable milestone
+ * (unknown project, typo, stale reference) is treated as NOT wrapped —
+ * the safe default that keeps it in scope exactly as before this predicate
+ * existed, rather than excluding it on a lookup failure.
+ */
+export function isMilestoneWrapped(projectId: string, milestone: string): boolean {
+  const project = ProjectService.getById(projectId);
+  if (!project) return false;
+  const match = findMilestone(project.milestones, milestone);
+  return match?.wrappedAt != null;
+}
+
+/**
+ * A cached variant of isMilestoneWrapped for hot loops that check many gate
+ * items against the same small set of projects/milestones within a single
+ * pass (the reconciler tick) — memoizes ProjectService.getById per project
+ * so checking N items costs at most one DB round-trip per distinct project,
+ * not one per item.
+ */
+export function createWrappedMilestoneChecker(): (
+  project: string,
+  milestone: string,
+) => boolean {
+  const cache = new Map<
+    string,
+    ReturnType<typeof ProjectService.getById>
+  >();
+  return (project, milestone) => {
+    let proj = cache.get(project);
+    if (proj === undefined && !cache.has(project)) {
+      proj = ProjectService.getById(project);
+      cache.set(project, proj);
+    }
+    if (!proj) return false;
+    const match = findMilestone(proj.milestones, milestone);
+    return match?.wrappedAt != null;
+  };
+}
+
+/**
  * Resolves a milestone reference — its canonical short-form key (e.g. "M11"),
  * its full display name, or its DB id — to the canonical short-form key that
  * gate_item/seed_item key on, scoped to one project. Throws
