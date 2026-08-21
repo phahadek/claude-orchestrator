@@ -14,6 +14,7 @@ import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
 import { normalizeTaskId } from '../tasks/taskId';
 import { getCachedType, getCachedStatus } from '../tasks/TaskWriteCommands';
 import { yieldToEventLoop, runWithConcurrency } from '../utils/concurrency';
+import { isMilestoneWrapped } from '../projects/milestoneResolver';
 
 /**
  * Recomputes whether a deploy contains a given commit. This is the git-ancestry
@@ -220,6 +221,23 @@ export function getGateReadiness(
   project: string,
   milestone: string,
 ): GateReadiness {
+  // A wrapped milestone's items are no longer reconciled by the scheduled
+  // tick (see reconcileGateRunnability's isMilestoneWrapped option) — if
+  // this rollup still counted them, a wrapped milestone with unresolved
+  // items would report `blocked` forever with nothing left to ever
+  // re-evaluate it. Excluding it here, independent of what the caller
+  // already filtered, keeps this the single source of truth for readiness.
+  if (isMilestoneWrapped(project, milestone)) {
+    return {
+      status: 'green',
+      blocking: [],
+      parked: [],
+      bespokeStates: [],
+      nonResolvingItems: [],
+      counts: {},
+      awaitingSetupCount: 0,
+    };
+  }
   const items = gateStore.listByMilestoneShallow(project, milestone);
   const toBlockingItem = (item: GateItem): GateBlockingItem => ({
     id: item.id,
@@ -270,6 +288,15 @@ export interface ReconcileOptions {
   ancestrySource?: AsyncDeployAncestrySource;
   /** Scope reconciliation to one project's items — every deploy SHA is project-specific. */
   project?: string;
+  /**
+   * Predicate excluding a wrapped milestone's items from this pass — passed
+   * by the scheduled tick (gateReconciler.ts) via
+   * createWrappedMilestoneChecker, so this function never hydrates a
+   * wrapped milestone's rows in the first place. Omitted by the manual
+   * POST /gate/reconcile route, which still reconciles everything
+   * unconditionally on operator request.
+   */
+  isMilestoneWrapped?: (project: string, milestone: string) => boolean;
 }
 
 /**
@@ -370,14 +397,27 @@ export async function reconcileGateRunnability(
   const markedRunnable: string[] = [];
   const reopened: string[] = [];
 
-  const items = options.project
-    ? gateStore.listByProject(options.project)
-    : gateStore.listAll();
+  // Filtered on the cheap shallow (no sources/events) rows first, then only
+  // the surviving ids pay the per-item sources/events hydration cost —
+  // both the terminal-`pass` filter and the wrapped-milestone exclusion
+  // below used to run *after* gateStore.listAll/listByProject had already
+  // hydrated every row, which is exactly the cost the wrapped-milestone
+  // predicate exists to avoid.
+  const shallowItems = options.project
+    ? gateStore.listByProjectShallow(options.project)
+    : gateStore.listAllShallow();
 
   // A pass is terminal for runnability — a redeploy never re-opens it.
   // Filtered out before the ancestry check below: re-checking coverage for
   // an item that can never change state is pure wasted git-spawn cost.
-  const candidates = items.filter((item) => item.state !== 'pass');
+  const candidates = shallowItems
+    .filter(
+      (item) =>
+        item.state !== 'pass' &&
+        !(options.isMilestoneWrapped?.(item.project, item.milestone) ?? false),
+    )
+    .map((item) => gateStore.getItem(item.id))
+    .filter((item): item is GateItem => item !== undefined);
 
   const ancestryCache = new Map<string, Promise<boolean>>();
 
