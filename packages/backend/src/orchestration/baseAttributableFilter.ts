@@ -31,6 +31,9 @@
  * The first time a content hash is confirmed unhealthy (partial_fail or
  * total_fail), also triggers a deduplicated remediation task filing — see
  * audit/baseHealthRemediationFiling.ts.
+ *
+ * See ./baseHealthCheck.ts for the `unknown` base-health outcome this
+ * module's own `unknown` filter outcome mirrors.
  */
 import { logger } from '../logger';
 import type { ProjectConfig } from '../config';
