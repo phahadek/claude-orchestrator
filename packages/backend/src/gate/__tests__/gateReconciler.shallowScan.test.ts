@@ -76,8 +76,7 @@ function seedItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
 }
 
 describe('gateReconciler — shallow bulk scan', () => {
-  it('reconcileHumanObservationMirrors calls listAllShallow (not listAll) for its bulk scan', () => {
-    const listAllSpy = vi.spyOn(gateStore, 'listAll');
+  it('reconcileHumanObservationMirrors calls listAllShallow for its bulk scan', () => {
     const listAllShallowSpy = vi.spyOn(gateStore, 'listAllShallow');
     for (let i = 0; i < 15; i++) {
       seedItem({ text: `not a candidate ${i}` });
@@ -86,8 +85,6 @@ describe('gateReconciler — shallow bulk scan', () => {
     reconcileHumanObservationMirrors();
 
     expect(listAllShallowSpy).toHaveBeenCalled();
-    expect(listAllSpy).not.toHaveBeenCalled();
-    listAllSpy.mockRestore();
     listAllShallowSpy.mockRestore();
   });
 
@@ -146,18 +143,15 @@ describe('gateReconciler — shallow bulk scan', () => {
       seedItem({ text: `history ${i}` });
     }
     upsertArm(m12Id, 'gate-verify', true, 1);
-    const listAllSpy = vi.spyOn(gateStore, 'listAll');
     const listAllShallowSpy = vi.spyOn(gateStore, 'listAllShallow');
 
     await runGateReconcilerTick();
 
-    // listAll() (the N+1-hydrating full scan) must never be used for the
-    // bulk pass; listAllShallow() is called exactly twice per tick (the
+    // listAllShallow() is called exactly twice per tick (the
     // runnability/grouping pass, and the mirror pass) regardless of how
-    // many gate_item rows exist.
-    expect(listAllSpy).not.toHaveBeenCalled();
+    // many gate_item rows exist — the old N+1-hydrating full scan
+    // (formerly gateStore.listAll()) must never be used for the bulk pass.
     expect(listAllShallowSpy).toHaveBeenCalledTimes(2);
-    listAllSpy.mockRestore();
     listAllShallowSpy.mockRestore();
   });
 
