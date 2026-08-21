@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { runMigrations } from '../db/schema.js';
+import { resolveTestScratchDataDir } from '../testScratchDataDir.js';
 
 // Tests the sessions.task_id_norm generated-column migration (schema.ts).
 // SQLite rejects ALTER TABLE ADD COLUMN for STORED generated columns — only
@@ -70,9 +70,9 @@ describe('runMigrations() — sessions.task_id_norm', () => {
   });
 
   it('reproduces the PRAGMA table_info blind spot on a real on-disk database, not just :memory:', () => {
-    const dir = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'schema-migration-task-id-norm-'),
-    );
+    const scratchRoot = resolveTestScratchDataDir(process.pid);
+    fs.mkdirSync(scratchRoot, { recursive: true });
+    const dir = fs.mkdtempSync(path.join(scratchRoot, 'task-id-norm-'));
     const dbPath = path.join(dir, 'test.db');
     try {
       const file = new Database(dbPath);
