@@ -1037,6 +1037,16 @@ export type TestRequestRunState = 'running' | 'passed' | 'failed';
  */
 export type TestRequestFailureReason = 'timeout' | 'oom_killed' | 'generic';
 
+/**
+ * Explicit identity a caller states about the run it's originating —
+ * required on every runProjectTestRequest call site (see
+ * TestRequestRunSpec.runOrigin in testRequestLane.ts) so a base-health
+ * probe's row can never be confused with a PR-branch worktree's row just
+ * because both happen to pass session_id: null. Null means an ordinary
+ * session-attributed run (a test.request staged intent).
+ */
+export type RunOrigin = 'base_health_probe' | 'pr_pipeline' | null;
+
 export interface TestRequestRunRow {
   id: string;
   project_id: string;
@@ -1065,6 +1075,8 @@ export interface TestRequestRunRow {
    * disambiguates for.
    */
   test_report_acquisition_attempted: number | null;
+  /** Explicit run identity stated by the originating caller — see RunOrigin. Null for pre-existing rows and ordinary session-attributed runs. */
+  run_origin: RunOrigin;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────

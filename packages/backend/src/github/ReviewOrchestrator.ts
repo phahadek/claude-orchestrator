@@ -577,6 +577,7 @@ export class ReviewOrchestrator {
           timeoutSec,
           maxRssMb,
           sessionId: null,
+          runOrigin: 'pr_pipeline',
         })
       : await runTestCommands(
           worktreePath,

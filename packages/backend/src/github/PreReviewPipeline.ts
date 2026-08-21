@@ -488,6 +488,7 @@ export class PreReviewPipeline {
               timeoutSec: config.test_timeout_sec,
               maxRssMb: config.test_max_rss_mb,
               sessionId: null,
+              runOrigin: 'pr_pipeline',
             })
           : await runTestCommands(
               ctx.worktreePath,
@@ -553,6 +554,7 @@ export class PreReviewPipeline {
           timeoutSec: config.test_timeout_sec,
           maxRssMb: config.test_max_rss_mb,
           sessionId: null,
+          runOrigin: 'pr_pipeline',
         })
       : await runTestCommands(
           worktreePath,

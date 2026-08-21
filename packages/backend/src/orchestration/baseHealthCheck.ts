@@ -348,6 +348,7 @@ async function checkBaseBranchHealthLocked(
       timeoutSec: config.test_timeout_sec,
       maxRssMb: config.test_max_rss_mb,
       sessionId: null,
+      runOrigin: 'base_health_probe',
     });
     runId = result.runId;
   } catch (err) {

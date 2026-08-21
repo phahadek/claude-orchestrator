@@ -65,6 +65,7 @@ import type {
   TestRequestRunRow,
   StructuredTestResult,
   NewTestRunResultRow,
+  RunOrigin,
 } from '../db/types';
 import { logger } from '../logger';
 import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
@@ -94,6 +95,17 @@ export interface TestRequestRunSpec {
   maxRssMb: number;
   /** Originating session, persisted onto the run row for per-request attribution. */
   sessionId: string | null;
+  /**
+   * Explicit identity the caller states about the run it's originating —
+   * 'base_health_probe' for baseHealthCheck.ts, 'pr_pipeline' for
+   * PreReviewPipeline.ts/ReviewOrchestrator.ts, null for an ordinary
+   * session-attributed test.request. Required so every call site states its
+   * own identity rather than relying on sessionId's absence — sessionId is
+   * null for both a base probe and a PR-branch run, and only run_origin
+   * distinguishes them (see getLatestBaseHealthTestRequestRun in
+   * db/queries.ts).
+   */
+  runOrigin: RunOrigin;
 }
 
 /**
@@ -446,6 +458,7 @@ async function executeTestRequestRun(
       spec.sessionId,
       requestedAt,
       concurrentRunCount,
+      spec.runOrigin,
     );
     broadcastRunStatus({
       runId,
@@ -542,6 +555,7 @@ async function executeTestRequestRun(
       concurrent_run_count: concurrentRunCount,
       oom_killed: oomKilled ? 1 : 0,
       test_report_acquisition_attempted: acquisitionAttempted ? 1 : 0,
+      run_origin: spec.runOrigin,
     });
     return { ...result, runId };
   } catch (err) {
