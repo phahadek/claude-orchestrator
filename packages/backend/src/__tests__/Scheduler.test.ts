@@ -150,11 +150,10 @@ describe('Scheduler.start / run', () => {
     const seededDelayMs = 3 * 60 * 60 * 1000;
     const intervalMs = 24 * 60 * 60 * 1000;
     let elapsedAcrossRestarts = 0;
-    let runFn = vi.fn().mockResolvedValue(undefined);
 
     for (let restart = 0; restart < 3; restart++) {
       const { scheduler } = makeScheduler();
-      runFn = vi.fn().mockResolvedValue(undefined);
+      const runFn = vi.fn().mockResolvedValue(undefined);
       const remaining = Math.max(0, seededDelayMs - elapsedAcrossRestarts);
       scheduler.register({
         name: 'j_restart_seeded',
