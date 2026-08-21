@@ -2981,6 +2981,24 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // idx_sessions_task_id_norm_flow_started_at: composite index for
+  // isPlanningKillSuppressed's "most recent session of this task+flow"
+  // lookup (`WHERE task_id_norm = ? AND session_type = ? ORDER BY
+  // started_at DESC LIMIT 1`). The bare task_id_norm index above is enough
+  // for a plain equality lookup, but with an ORDER BY + LIMIT in play
+  // SQLite's planner prefers idx_sessions_session_type_started_at instead
+  // (it already satisfies the ORDER BY without a sort) and walks that
+  // index — filtering task_id_norm as a post-condition — until it finds a
+  // match, which is unbounded by this task's own (small) session count and
+  // regresses to a scan of the flow's entire session history again. This
+  // composite index satisfies the equality filters AND the ORDER BY
+  // together, so the planner picks it and the lookup is bounded by this
+  // task's own session count.
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_task_id_norm_flow_started_at
+      ON sessions(task_id_norm, session_type, started_at DESC);
+  `);
+
   // audit_log.task_id_norm: the audit_log analog of sessions.task_id_norm
   // above, for hasTaskEditSinceTimestamp (audit/AuditLog.ts) — used by
   // isNoOpSuppressed and isPlanningKillSuppressed (db/queries.ts), both in

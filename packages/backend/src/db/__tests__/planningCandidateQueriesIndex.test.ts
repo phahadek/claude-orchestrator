@@ -128,7 +128,7 @@ describe('planning-candidate predicate chain — indexable task_id_norm matches'
         detail: string;
       }[];
       const detail = plan.map((row) => row.detail).join(' | ');
-      expect(detail).toContain('idx_sessions_task_id_norm');
+      expect(detail).toContain('idx_sessions_task_id_norm_flow_started_at');
       expect(detail).not.toMatch(/SCAN sessions\b(?!.*USING INDEX)/);
     });
 
