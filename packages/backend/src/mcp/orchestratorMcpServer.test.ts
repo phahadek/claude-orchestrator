@@ -327,6 +327,12 @@ describe('buildMcpServer — tool surface per session type', () => {
       'gate.verify',
       'ops.prIntent',
       'planning.noOp',
+      // Registered directly off workflow === 'ops', not via
+      // PLANNING_INTENT_KINDS.ops — see verdictTools.ts/
+      // gateReclassifyTool.ts/strandedIntentTool.ts.
+      'deploy.verdict',
+      'gate.reclassify',
+      'intent.dispositionStranded',
     ];
     for (const kind of opsOnlyKinds) {
       expect(names).not.toContain(kind);

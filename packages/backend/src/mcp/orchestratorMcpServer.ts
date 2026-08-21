@@ -203,7 +203,12 @@ export function buildOrchestratorMcpServerEntry(
  * the device-authed gate-state-client.mjs `reclassify` command) and the
  * 'ops'-scoped stranded-intent disposition verb (intent.dispositionStranded,
  * see mcp/tools/strandedIntentTool.ts), both acting immediately rather than
- * staging an intent for later operator disposition,
+ * staging an intent for later operator disposition — none of gate.verify /
+ * deploy.verdict / gate.reclassify / intent.dispositionStranded are
+ * registered for an investigate-dispatched session (session_type 'ops',
+ * task_id `report-batch:<batchId>`, see
+ * sessionPredicates.ts#isInvestigateSession): it has no gate item or PR to
+ * act on, so these fall back to their workflow=null (unregistered) case,
  * — for a 'design' workflow session — the completeness-safeguard direct-
  * write/read surface (completeness.disposition / completeness.traceCoverage,
  * see mcp/tools/completenessTools.ts), and — for a 'groom' workflow session
@@ -254,6 +259,21 @@ export function buildMcpServer(
   );
 
   const workflow = toPlanningWorkflow(session?.session_type);
+  // gate.verify/deploy.verdict (verdictTools.ts) and gate.reclassify/
+  // intent.dispositionStranded (gateReclassifyTool.ts/strandedIntentTool.ts)
+  // are registered directly off `workflow === 'ops'`, outside the
+  // PLANNING_INTENT_KINDS.ops kind list resolveStageProposalKinds already
+  // narrows above — an investigate-dispatched session (session_type 'ops',
+  // task_id `report-batch:<batchId>`) has no gate item or PR to act on, so
+  // it must not get any of them either. `mutationWorkflow` stays `workflow`
+  // for a real ops session and downgrades to `null` only for the
+  // investigate carve-out, leaving the read-only registrations below
+  // (taskReadTools/architectureReadTools/etc, gated on the unchanged
+  // `workflow`) unaffected.
+  const mutationWorkflow: PlanningWorkflow | null =
+    workflow === 'ops' && isInvestigateSession(session?.task_id)
+      ? null
+      : workflow;
 
   if (session?.project_id) {
     // Best-effort — a task not found in any cached milestone board (e.g. a
@@ -293,11 +313,17 @@ export function buildMcpServer(
   registerVerdictTools(server, {
     sessionId,
     getSession: () => sessionManager.getLiveSession(sessionId),
-    workflow,
+    workflow: mutationWorkflow,
   });
 
-  registerGateReclassifyTool(server, { sessionId, workflow });
-  registerStrandedIntentTool(server, { sessionId, workflow });
+  registerGateReclassifyTool(server, {
+    sessionId,
+    workflow: mutationWorkflow,
+  });
+  registerStrandedIntentTool(server, {
+    sessionId,
+    workflow: mutationWorkflow,
+  });
 
   if (session?.project_id) {
     registerArchitectureReadTools(server, {
