@@ -71,7 +71,7 @@ export interface BootDeps {
   };
   githubClient: GitHubClient;
   autoLauncher: {
-    pollOnce(): Promise<unknown>;
+    pollOnce(): Promise<void>;
   };
   scheduler: {
     start(): void;

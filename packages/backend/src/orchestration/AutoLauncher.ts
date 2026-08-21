@@ -231,8 +231,9 @@ export class AutoLauncher {
         ),
       concurrency: 'skip-if-running',
       run: async () => {
+        await this.pollOnce();
         const { eligible, launched, skipped, blockReason } =
-          await this.pollOnce();
+          this.lastTickResult;
         // A negative items_processed mirrors gateReconciler's convention:
         // "found runnable work but dispatched none of it for want of
         // budget" — the same admission-block condition that drives
@@ -252,24 +253,32 @@ export class AutoLauncher {
   }
 
   /**
+   * Aggregated outcome of the most recently completed poll cycle, consumed
+   * by register()'s run callback to derive items_processed. pollOnce()
+   * itself stays Promise<void> — callers (boot sequence, AutoMerger-style
+   * dispatch, existing tests) only ever awaited completion, never a value.
+   */
+  private lastTickResult: {
+    eligible: number;
+    launched: number;
+    skipped: number;
+    blockReason?: AdmissionBlockReason;
+  } = { eligible: 0, launched: 0, skipped: 0 };
+
+  /**
    * Run a single poll cycle. Called directly on boot (after resumeOrphanSessions)
    * and periodically by the Scheduler thereafter — guarded here too (not just
    * via the Scheduler's skip-if-running) since the boot-time call bypasses the
    * Scheduler's own tracking entirely.
    */
-  async pollOnce(): Promise<{
-    eligible: number;
-    launched: number;
-    skipped: number;
-    blockReason?: AdmissionBlockReason;
-  }> {
+  async pollOnce(): Promise<void> {
     if (this.polling) {
       logger.info('[AutoLauncher] poll already in progress — skipping');
-      return { eligible: 0, launched: 0, skipped: 0 };
+      return;
     }
     this.polling = true;
     try {
-      return await this.runPollCycle();
+      this.lastTickResult = await this.runPollCycle();
     } finally {
       this.polling = false;
     }
