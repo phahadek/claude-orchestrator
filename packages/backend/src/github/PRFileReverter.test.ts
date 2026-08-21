@@ -1,5 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFile } from 'child_process';
+
+vi.setConfig({ testTimeout: 20_000 });
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';

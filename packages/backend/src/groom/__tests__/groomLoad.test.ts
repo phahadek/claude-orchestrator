@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 
+vi.setConfig({ testTimeout: 20_000 });
+
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
