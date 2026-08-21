@@ -12,7 +12,11 @@ import type {
   SessionRunnerOptions,
 } from './SessionRunner';
 import { logger } from '../logger';
-import { placeSessionPid, killSessionCgroup } from './sessionCgroup';
+import {
+  placeSessionPid,
+  killSessionCgroup,
+  spawnIntoSessionCgroup,
+} from './sessionCgroup';
 import { isPlanningSession, isCodeSession } from './sessionPredicates';
 import {
   getSessionAddDirs,
@@ -200,18 +204,29 @@ export class CliSessionRunner implements ISessionRunner {
       ...inheritedEnv
     } = process.env;
 
-    this.proc = spawn(config.claudePath, spawnArgs, {
-      cwd: worktreePath,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...inheritedEnv,
-        BASH_MAX_OUTPUT_LENGTH: String(BASH_MAX_OUTPUT_LENGTH),
-        BASH_DEFAULT_TIMEOUT_MS: String(BASH_DEFAULT_TIMEOUT_MS),
-        ...extraEnv,
-      },
-      ...(process.platform !== 'win32' && { detached: true }),
-    });
+    // Spawned with the backend temporarily relocated into this session's
+    // cgroup (see spawnIntoSessionCgroup) so the child — and anything it
+    // forks before the placeSessionPid backstop below runs — is born
+    // directly into sessions/<sessionId>/ rather than briefly landing in
+    // main/ and staying there for life (a daemonizing grandchild, e.g. a
+    // temp postgres cluster's postmaster, never gets migrated later).
+    this.proc = spawnIntoSessionCgroup(this.sessionId, () =>
+      spawn(config.claudePath, spawnArgs, {
+        cwd: worktreePath,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          ...inheritedEnv,
+          BASH_MAX_OUTPUT_LENGTH: String(BASH_MAX_OUTPUT_LENGTH),
+          BASH_DEFAULT_TIMEOUT_MS: String(BASH_DEFAULT_TIMEOUT_MS),
+          ...extraEnv,
+        },
+        ...(process.platform !== 'win32' && { detached: true }),
+      }),
+    );
 
+    // Belt-and-suspenders: idempotent when spawnIntoSessionCgroup already
+    // placed the pid correctly; a real backstop when it no-opped (e.g. the
+    // relocation write failed but the spawn itself still succeeded).
     if (this.proc.pid) {
       placeSessionPid(this.proc.pid, this.sessionId);
     }
