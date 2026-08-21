@@ -320,6 +320,7 @@ export function MilestoneView({
       <LaneHealthPanel
         projectId={activeProjectId}
         invalidationKey={invalidationKey}
+        milestoneId={activeBoardMilestone ? activeBoardId : null}
       />
     </>
   );

@@ -126,6 +126,8 @@ describe('flagged_flaky_tests_rollup equivalence', () => {
         name: 'suite > flaky test',
         sampleCount: 4,
         transitionCount: 3,
+        remediationTaskOpen: false,
+        remediationTaskId: null,
       },
     ]);
   });
@@ -169,6 +171,89 @@ describe('flagged_flaky_tests_rollup equivalence', () => {
         name: 'suite > flaky test',
         medianDurationMs: 100,
         lastDurationMs: 900,
+      },
+    ]);
+  });
+});
+
+describe('getFlaggedFlakyTestsRollup remediation-tracking join', () => {
+  it('reports remediationTaskOpen/remediationTaskId for a tracked-open test and false/null for an untracked one', () => {
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-open',
+        name: 'suite > open remediation test',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: i,
+      }),
+    );
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-untracked',
+        name: 'suite > untracked flaky test',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: i,
+      }),
+    );
+    replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 1000);
+
+    db.prepare(
+      `INSERT INTO flaky_remediation_tracking
+         (test_id, remediation_task_id, remediation_task_open, auto_disposition_count, created_at, updated_at)
+       VALUES ('test-open', 'task-abc', 1, 1, '2024-01-01', '2024-01-01')`,
+    ).run();
+
+    const rollup = getFlaggedFlakyTestsRollup('proj-1').sort((a, b) =>
+      a.testId.localeCompare(b.testId),
+    );
+
+    expect(rollup).toEqual([
+      {
+        testId: 'test-open',
+        name: 'suite > open remediation test',
+        sampleCount: 4,
+        transitionCount: 3,
+        remediationTaskOpen: true,
+        remediationTaskId: 'task-abc',
+      },
+      {
+        testId: 'test-untracked',
+        name: 'suite > untracked flaky test',
+        sampleCount: 4,
+        transitionCount: 3,
+        remediationTaskOpen: false,
+        remediationTaskId: null,
+      },
+    ]);
+  });
+
+  it('reports remediationTaskOpen false for a test with a closed tracking row', () => {
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-closed',
+        name: 'suite > closed remediation test',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: i,
+      }),
+    );
+    replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 1000);
+
+    db.prepare(
+      `INSERT INTO flaky_remediation_tracking
+         (test_id, remediation_task_id, remediation_task_open, auto_disposition_count, created_at, updated_at)
+       VALUES ('test-closed', 'task-old', 0, 1, '2024-01-01', '2024-01-01')`,
+    ).run();
+
+    expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual([
+      {
+        testId: 'test-closed',
+        name: 'suite > closed remediation test',
+        sampleCount: 4,
+        transitionCount: 3,
+        remediationTaskOpen: false,
+        remediationTaskId: null,
       },
     ]);
   });
