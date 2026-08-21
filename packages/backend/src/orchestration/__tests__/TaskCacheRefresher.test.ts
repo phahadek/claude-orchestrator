@@ -640,15 +640,29 @@ describe('TaskCacheRefresher', () => {
   });
 });
 
-describe('Scheduler integration (task_cache_refresher) — minimal baseline', () => {
-  it('registers with a real Scheduler and triggerNow completes with status ok', async () => {
+describe('Scheduler degraded-tick reclassification (task_cache_refresher)', () => {
+  it('keeps a long productive tick ok', async () => {
     const project = makeProject({ id: 'p1' });
     vi.mocked(getAllProjects).mockReturnValue([project]);
     vi.mocked(ProjectService.listMilestones).mockReturnValue([
       makeMilestone('m1', 'src-1'),
     ]);
+
+    // Local Date.now stub, set up and torn down within this test only — a
+    // shared describe-level beforeEach/afterEach for this same stub was
+    // observed to corrupt unrelated tests elsewhere in the run.
+    let now = 1_000_000;
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
     const backend = makeBackend({
-      fetchReadyTasks: vi.fn().mockResolvedValue([]),
+      fetchReadyTasks: vi.fn().mockImplementation(async () => {
+        // Advancing the stubbed clock synchronously during the job
+        // simulates a multi-minute tick without the test actually waiting
+        // that long.
+        now += DEGRADED_TICK_THRESHOLD_MS;
+        upsertTaskCache('productive-test-task', JSON.stringify({ v: 1 }));
+        return [{ task: { id: 'productive-test-task' } }];
+      }),
     });
     vi.mocked(getTaskBackend).mockReturnValue(backend);
 
@@ -659,14 +673,20 @@ describe('Scheduler integration (task_cache_refresher) — minimal baseline', ()
     const scheduler = new Scheduler();
     refresher.register(scheduler);
 
-    await scheduler.triggerNow('task_cache_refresher');
-    const after = scheduler
-      .status()
-      .find((s) => s.name === 'task_cache_refresher');
-    expect(after?.lastStatus).toBe('ok');
+    try {
+      // Long tick, a cached row's content actually changed — genuinely
+      // productive, must stay 'ok'.
+      await scheduler.triggerNow('task_cache_refresher');
+      const after = scheduler
+        .status()
+        .find((s) => s.name === 'task_cache_refresher');
+      expect(after?.lastStatus).toBe('ok');
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
-  it('stays ok on a long tick when a cached row changed, with Date.now stubbed', async () => {
+  it('reclassifies a long zero-item tick as degraded', async () => {
     const project = makeProject({ id: 'p1' });
     vi.mocked(getAllProjects).mockReturnValue([project]);
     vi.mocked(ProjectService.listMilestones).mockReturnValue([
@@ -679,8 +699,7 @@ describe('Scheduler integration (task_cache_refresher) — minimal baseline', ()
     const backend = makeBackend({
       fetchReadyTasks: vi.fn().mockImplementation(async () => {
         now += DEGRADED_TICK_THRESHOLD_MS;
-        upsertTaskCache('productive-baseline-task', JSON.stringify({ v: 1 }));
-        return [{ task: { id: 'productive-baseline-task' } }];
+        return [];
       }),
     });
     vi.mocked(getTaskBackend).mockReturnValue(backend);
@@ -692,12 +711,16 @@ describe('Scheduler integration (task_cache_refresher) — minimal baseline', ()
     const scheduler = new Scheduler();
     refresher.register(scheduler);
 
-    await scheduler.triggerNow('task_cache_refresher');
-    const after = scheduler
-      .status()
-      .find((s) => s.name === 'task_cache_refresher');
-    expect(after?.lastStatus).toBe('ok');
-
-    dateNowSpy.mockRestore();
+    try {
+      // Long tick, no ready tasks at all — a genuinely starved/wedged-
+      // looking tick that did no real work, must be reclassified 'degraded'.
+      await scheduler.triggerNow('task_cache_refresher');
+      const after = scheduler
+        .status()
+        .find((s) => s.name === 'task_cache_refresher');
+      expect(after?.lastStatus).toBe('degraded');
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 });
