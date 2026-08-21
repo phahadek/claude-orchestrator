@@ -445,6 +445,22 @@ const OPS_MCP_TOOLS = [
 ];
 
 /**
+ * Self-scheduling/re-entry built-ins — any tool that grants a scheduling or
+ * re-entry path the orchestrator doesn't own. Dispatched sessions (planning
+ * one-shot turns, and code/review sessions that should await pushed
+ * feedback rather than respawn to poll for it) must never hold these
+ * (--allowed-tools omission alone doesn't gate CLI built-ins, so this must
+ * be an explicit --disallowed-tools entry). Shared so every disallow list
+ * that needs it composes from one source instead of restating the names.
+ */
+export const SCHEDULING_DISALLOWED_TOOLS = [
+  'ScheduleWakeup',
+  'CronCreate',
+  'CronDelete',
+  'CronList',
+];
+
+/**
  * Dispatched planning sessions (groom/design/ops) are one-shot turns that end
  * and park idle, re-driven only by an operator disposition. Any built-in
  * that grants a scheduling or re-entry path the orchestrator doesn't own —
@@ -456,10 +472,7 @@ export const PLANNING_DISALLOWED_TOOLS = [
   'Skill',
   'Write',
   'Edit',
-  'ScheduleWakeup',
-  'CronCreate',
-  'CronDelete',
-  'CronList',
+  ...SCHEDULING_DISALLOWED_TOOLS,
 ];
 
 /**

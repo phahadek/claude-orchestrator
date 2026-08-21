@@ -1,6 +1,10 @@
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { createInterface } from 'readline';
-import { config, PLANNING_DISALLOWED_TOOLS } from '../config';
+import {
+  config,
+  PLANNING_DISALLOWED_TOOLS,
+  SCHEDULING_DISALLOWED_TOOLS,
+} from '../config';
 import type {
   ISessionRunner,
   RawSessionEvent,
@@ -236,9 +240,10 @@ export class DockerSessionRunner implements ISessionRunner {
         : []),
       '--allowed-tools',
       ...allowedTools,
+      '--disallowed-tools',
       ...(isPlanning
-        ? ['--disallowed-tools', ...PLANNING_DISALLOWED_TOOLS]
-        : []),
+        ? PLANNING_DISALLOWED_TOOLS
+        : SCHEDULING_DISALLOWED_TOOLS),
       ...addDirs.flatMap((dir) => ['--add-dir', dir]),
     ];
 

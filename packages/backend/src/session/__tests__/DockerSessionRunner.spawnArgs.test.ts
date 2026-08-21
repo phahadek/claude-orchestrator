@@ -13,6 +13,12 @@ vi.mock('../../config', () => ({
     'CronDelete',
     'CronList',
   ],
+  SCHEDULING_DISALLOWED_TOOLS: [
+    'ScheduleWakeup',
+    'CronCreate',
+    'CronDelete',
+    'CronList',
+  ],
 }));
 
 // Capture the args passed to spawn('docker', ...) so we can assert on them.
@@ -205,8 +211,8 @@ describe('DockerSessionRunner --disallowed-tools', () => {
     },
   );
 
-  it.each(['standard', 'review'] as const)(
-    'omits --disallowed-tools for a %s (non-planning) session',
+  it.each(['standard', 'review', 'depth_review'] as const)(
+    'includes only --disallowed-tools ScheduleWakeup, CronCreate, CronDelete, CronList (no Write/Edit) for a %s (non-planning) session',
     async (sessionType) => {
       const runner = new DockerSessionRunner(SESSION_ID);
       await runner.run(
@@ -217,7 +223,14 @@ describe('DockerSessionRunner --disallowed-tools', () => {
       );
 
       const claudeArgs = capturedDockerArgs.slice(4);
-      expect(claudeArgs).not.toContain('--disallowed-tools');
+      const idx = claudeArgs.indexOf('--disallowed-tools');
+      expect(idx).not.toBe(-1);
+      expect(claudeArgs[idx + 1]).toBe('ScheduleWakeup');
+      expect(claudeArgs[idx + 2]).toBe('CronCreate');
+      expect(claudeArgs[idx + 3]).toBe('CronDelete');
+      expect(claudeArgs[idx + 4]).toBe('CronList');
+      expect(claudeArgs).not.toContain('Write');
+      expect(claudeArgs).not.toContain('Edit');
     },
   );
 });
