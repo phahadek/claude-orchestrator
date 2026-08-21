@@ -165,9 +165,7 @@ export class CliSessionRunner implements ISessionRunner {
       '--allowed-tools',
       ...allowedTools,
       '--disallowed-tools',
-      ...(isPlanning
-        ? PLANNING_DISALLOWED_TOOLS
-        : SCHEDULING_DISALLOWED_TOOLS),
+      ...(isPlanning ? PLANNING_DISALLOWED_TOOLS : SCHEDULING_DISALLOWED_TOOLS),
       ...addDirs.flatMap((dir) => ['--add-dir', dir]),
     ];
 
