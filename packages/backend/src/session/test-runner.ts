@@ -1,5 +1,11 @@
 import { spawn } from 'child_process';
-import { readFileSync, readdirSync, statSync, unlinkSync, type Dirent } from 'fs';
+import {
+  readFileSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  type Dirent,
+} from 'fs';
 import path from 'path';
 import { platform } from 'process';
 import { minimatch } from 'minimatch';
@@ -578,7 +584,10 @@ function matchReportFiles(worktreePath: string, reportGlob: string): string[] {
  * (collectStructuredTestResult's `startedAt`) is the backstop for exactly
  * that case.
  */
-export function clearReportFiles(worktreePath: string, reportGlob: string): void {
+export function clearReportFiles(
+  worktreePath: string,
+  reportGlob: string,
+): void {
   for (const rel of matchReportFiles(worktreePath, reportGlob)) {
     try {
       unlinkSync(path.join(worktreePath, rel));

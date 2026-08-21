@@ -280,11 +280,21 @@ describe('collectStructuredTestResult', () => {
       const startedAt = Date.now() - 1_000;
       write('reports/junit.xml', PYTEST_REPORT);
 
-      const result = collectStructuredTestResult(worktree, 'reports/*.xml', 1, startedAt);
+      const result = collectStructuredTestResult(
+        worktree,
+        'reports/*.xml',
+        1,
+        startedAt,
+      );
 
       expect(result).not.toBeNull();
       expect(result!.incomplete).toBeUndefined();
-      expect(result!.totals).toEqual({ passed: 1, failed: 1, skipped: 1, errors: 0 });
+      expect(result!.totals).toEqual({
+        passed: 1,
+        failed: 1,
+        skipped: 1,
+        errors: 0,
+      });
     });
   });
 });
@@ -297,8 +307,12 @@ describe('clearReportFiles', () => {
 
     clearReportFiles(worktree, 'reports/*.xml');
 
-    expect(fs.existsSync(path.join(worktree, 'reports/frontend.xml'))).toBe(false);
-    expect(fs.existsSync(path.join(worktree, 'reports/backend.xml'))).toBe(false);
+    expect(fs.existsSync(path.join(worktree, 'reports/frontend.xml'))).toBe(
+      false,
+    );
+    expect(fs.existsSync(path.join(worktree, 'reports/backend.xml'))).toBe(
+      false,
+    );
     expect(fs.existsSync(path.join(worktree, 'reports/notes.txt'))).toBe(true);
   });
 
