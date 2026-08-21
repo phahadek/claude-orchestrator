@@ -23,7 +23,9 @@ vi.mock('../../deploy/deployService.js', () => ({
 }));
 
 vi.mock('../../deploy/DeployOrchestrator.js', () => ({
-  DeployOrchestrator: vi.fn().mockImplementation(() => ({ startDeploy: vi.fn() })),
+  DeployOrchestrator: vi
+    .fn()
+    .mockImplementation(() => ({ startDeploy: vi.fn() })),
   buildDeployAgenticTaskId: vi.fn(),
 }));
 

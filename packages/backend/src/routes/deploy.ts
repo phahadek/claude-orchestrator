@@ -53,8 +53,7 @@ const GATE_RECONCILER_JOB = 'gate_verification_reconciler';
  * to read from.
  */
 const BUILD_SHA_PATH =
-  process.env.DEPLOY_BUILD_SHA_PATH ??
-  path.join(__dirname, '../build-sha.txt');
+  process.env.DEPLOY_BUILD_SHA_PATH ?? path.join(__dirname, '../build-sha.txt');
 const BUILD_SHA: string = (() => {
   try {
     return fs.readFileSync(BUILD_SHA_PATH, 'utf8').trim();

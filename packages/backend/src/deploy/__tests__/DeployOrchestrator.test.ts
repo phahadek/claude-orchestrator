@@ -814,7 +814,11 @@ describe('DeployOrchestrator: verify requires build identity to equal target_sha
         return { ok: true, output: '', exitCode: 0 };
       }),
     });
-    const orchestrator = new DeployOrchestrator('claude-dashboard', '/tmp/proj', deps);
+    const orchestrator = new DeployOrchestrator(
+      'claude-dashboard',
+      '/tmp/proj',
+      deps,
+    );
     // A prior successful deploy already recorded a known-good SHA — it must
     // survive this run's failed verify untouched, not be overwritten and not
     // be wiped to null.
@@ -845,7 +849,11 @@ describe('DeployOrchestrator: verify requires build identity to equal target_sha
         return { ok: true, output: TARGET_SHA, exitCode: 0 };
       }),
     });
-    const orchestrator = new DeployOrchestrator('claude-dashboard', '/tmp/proj', deps);
+    const orchestrator = new DeployOrchestrator(
+      'claude-dashboard',
+      '/tmp/proj',
+      deps,
+    );
     const { reportProjectDeploy } = await import('../deployService');
     reportProjectDeploy('claude-dashboard', 'previously-good-sha');
 
