@@ -64,9 +64,16 @@ function playbookWith(
 }
 
 let tick = 0;
+const TICK_EPOCH_MS = Date.UTC(2026, 6, 20, 0, 0, 0, 0);
 function now(): string {
   tick += 1;
-  return `2026-07-20T00:00:${String(tick).padStart(2, '0')}.000Z`;
+  // Computed via Date arithmetic (not a fixed-width seconds string) so it
+  // stays a valid ISO timestamp past tick=59 — a bare
+  // `00:00:${tick}` string produces an invalid seconds field like
+  // `00:00:75.000Z` once this file accumulates more than a minute's worth
+  // of now() calls, which silently breaks any Date.parse-based comparison
+  // (e.g. the verify step's wall-clock timeout deadline) via NaN.
+  return new Date(TICK_EPOCH_MS + tick * 1000).toISOString();
 }
 
 function makeDeps(
