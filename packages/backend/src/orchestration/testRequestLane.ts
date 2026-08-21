@@ -34,6 +34,7 @@ import { Semaphore } from '../tasks/deferralClassifier';
 import {
   runTestCommands,
   collectStructuredTestResult,
+  clearReportFiles,
   isTestIdTouchedByChangedFiles,
   type TestCommandResult,
 } from '../session/test-runner';
@@ -456,14 +457,6 @@ async function executeTestRequestRun(
       requestedAt,
       startedAt,
     });
-    const result = await runTestCommands(
-      spec.worktreePath,
-      spec.commands,
-      spec.timeoutSec,
-      (msg) => logger.info(`[testRequestLane] ${msg}`),
-      { maxRssMb: spec.maxRssMb, failFast: spec.failFast },
-    );
-    const oomKilled = result.oomKilled ?? false;
     // Acquisition is attempted regardless of pass/fail — a failing test run
     // still writes its report file, and that's exactly the case structured
     // per-test detail matters most for. The glob is resolved here, from the
@@ -474,6 +467,21 @@ async function executeTestRequestRun(
       spec.worktreePath,
     ).test_report_glob;
     const acquisitionAttempted = !!testReportGlob;
+    // Delete any report file left over from a previous run before this run's
+    // commands execute — otherwise a command that fails/crashes before its
+    // runner's teardown leaves a stale report on disk that would otherwise
+    // be indistinguishable from one this run actually wrote.
+    if (testReportGlob) {
+      clearReportFiles(spec.worktreePath, testReportGlob);
+    }
+    const result = await runTestCommands(
+      spec.worktreePath,
+      spec.commands,
+      spec.timeoutSec,
+      (msg) => logger.info(`[testRequestLane] ${msg}`),
+      { maxRssMb: spec.maxRssMb, failFast: spec.failFast },
+    );
+    const oomKilled = result.oomKilled ?? false;
     let structuredResult: StructuredTestResult | null = null;
     if (testReportGlob) {
       try {
@@ -481,6 +489,7 @@ async function executeTestRequestRun(
           spec.worktreePath,
           testReportGlob,
           spec.commands.length,
+          startedAt,
         );
       } catch (err) {
         logger.warn(

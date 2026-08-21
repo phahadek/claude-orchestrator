@@ -10,7 +10,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { minimatch } from 'minimatch';
-import { parseJUnitXml, collectStructuredTestResult } from '../test-runner';
+import {
+  parseJUnitXml,
+  collectStructuredTestResult,
+  clearReportFiles,
+} from '../test-runner';
 import { loadOrchestratorConfig } from '../orchestrator-config';
 
 const REPO_ROOT = path.resolve(__dirname, '../../../../..');
@@ -29,6 +33,13 @@ function write(relPath: string, content: string): void {
   const full = path.join(worktree, relPath);
   fs.mkdirSync(path.dirname(full), { recursive: true });
   fs.writeFileSync(full, content, 'utf8');
+}
+
+/** Backdates a file's mtime, simulating a report left over from a previous run. */
+function backdate(relPath: string, mtimeMs: number): void {
+  const full = path.join(worktree, relPath);
+  const t = mtimeMs / 1000;
+  fs.utimesSync(full, t, t);
 }
 
 const PYTEST_REPORT = `<?xml version="1.0" encoding="utf-8"?>
@@ -205,6 +216,121 @@ describe('collectStructuredTestResult', () => {
 
     expect(result).not.toBeNull();
     expect(result!.incomplete).toBeUndefined();
+  });
+
+  describe('startedAt freshness guard', () => {
+    it('does not ingest a stale report left over from a previous run when this run wrote nothing (single-command / polimarket shape)', () => {
+      // Simulates: a prior run wrote reports/junit.xml; this run's command
+      // crashed before its own teardown, so the file on disk is untouched
+      // since before this run started.
+      write('reports/junit.xml', PYTEST_REPORT);
+      backdate('reports/junit.xml', Date.now() - 60_000);
+      const startedAt = Date.now();
+
+      const result = collectStructuredTestResult(
+        worktree,
+        'reports/*.xml',
+        1,
+        startedAt,
+      );
+
+      // Must fail against the pre-fix implementation, which ingests the
+      // stale file's contents on existence alone.
+      expect(result).toBeNull();
+    });
+
+    it('still ingests full per-test detail when a suite fails but writes a fresh report', () => {
+      const startedAt = Date.now() - 1_000;
+      write('reports/junit.xml', PYTEST_REPORT);
+
+      const result = collectStructuredTestResult(
+        worktree,
+        'reports/*.xml',
+        1,
+        startedAt,
+      );
+
+      expect(result).not.toBeNull();
+      expect(result!.suites).toHaveLength(1);
+      expect(result!.suites[0].tests).toHaveLength(3);
+      expect(result!.incomplete).toBeUndefined();
+    });
+
+    it('marks a multi-command run incomplete, and excludes the stale report, when one report is fresh and the other is stale', () => {
+      const startedAt = Date.now();
+      write('reports/frontend.xml', VITEST_REPORT);
+      // backend.xml is left over from a previous run — its command crashed
+      // before rewriting it this time.
+      write('reports/backend.xml', PYTEST_REPORT);
+      backdate('reports/backend.xml', startedAt - 120_000);
+
+      const result = collectStructuredTestResult(
+        worktree,
+        'reports/*.xml',
+        2,
+        startedAt,
+      );
+
+      expect(result).not.toBeNull();
+      expect(result!.incomplete).toBe(true);
+      expect(result!.suites.map((s) => s.name)).toEqual(['src/foo.test.ts']);
+    });
+
+    it('single-command project still acquires normally with a fresh report and no expectedReportCount override', () => {
+      const startedAt = Date.now() - 1_000;
+      write('reports/junit.xml', PYTEST_REPORT);
+
+      const result = collectStructuredTestResult(worktree, 'reports/*.xml', 1, startedAt);
+
+      expect(result).not.toBeNull();
+      expect(result!.incomplete).toBeUndefined();
+      expect(result!.totals).toEqual({ passed: 1, failed: 1, skipped: 1, errors: 0 });
+    });
+  });
+});
+
+describe('clearReportFiles', () => {
+  it('deletes every file matching the glob, leaving unrelated files untouched', () => {
+    write('reports/frontend.xml', VITEST_REPORT);
+    write('reports/backend.xml', PYTEST_REPORT);
+    write('reports/notes.txt', 'keep me');
+
+    clearReportFiles(worktree, 'reports/*.xml');
+
+    expect(fs.existsSync(path.join(worktree, 'reports/frontend.xml'))).toBe(false);
+    expect(fs.existsSync(path.join(worktree, 'reports/backend.xml'))).toBe(false);
+    expect(fs.existsSync(path.join(worktree, 'reports/notes.txt'))).toBe(true);
+  });
+
+  it('is a no-op when nothing matches the glob', () => {
+    write('other/file.txt', 'not a report');
+
+    expect(() => clearReportFiles(worktree, 'reports/*.xml')).not.toThrow();
+    expect(fs.existsSync(path.join(worktree, 'other/file.txt'))).toBe(true);
+  });
+
+  it('composes with collectStructuredTestResult so a cleared-then-rewritten report is ingested fresh, and a cleared-but-not-rewritten command is caught by the completeness check without stale content leaking in', () => {
+    // Round 1: a normal run writes both reports.
+    write('reports/frontend.xml', VITEST_REPORT);
+    write('reports/backend.xml', PYTEST_REPORT);
+
+    // Round 2 begins: cleanup runs before the new commands.
+    clearReportFiles(worktree, 'reports/*.xml');
+    const startedAt = Date.now();
+    // Only the frontend command rewrites its report this time; backend
+    // crashed before teardown.
+    write('reports/frontend.xml', VITEST_REPORT);
+
+    const result = collectStructuredTestResult(
+      worktree,
+      'reports/*.xml',
+      2,
+      startedAt,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.incomplete).toBe(true);
+    expect(result!.suites.map((s) => s.name)).toEqual(['src/foo.test.ts']);
   });
 });
 
