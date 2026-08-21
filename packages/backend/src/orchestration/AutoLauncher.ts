@@ -231,7 +231,17 @@ export class AutoLauncher {
         ),
       concurrency: 'skip-if-running',
       run: async () => {
+        // cycleCounter only advances inside runPollCycle() — i.e. when
+        // pollOnce() actually ran a fresh cycle, not when its own `polling`
+        // guard turned this call into a no-op (e.g. racing the boot-time
+        // direct pollOnce() call). Comparing before/after distinguishes the
+        // two: reading lastTickResult after a no-op would report a stale,
+        // unrelated prior cycle's counts instead of this tick's own (zero).
+        const cycleBefore = this.cycleCounter;
         await this.pollOnce();
+        if (this.cycleCounter === cycleBefore) {
+          return { items_processed: 0 };
+        }
         const { eligible, launched, skipped, blockReason } =
           this.lastTickResult;
         // A negative items_processed mirrors gateReconciler's convention:
