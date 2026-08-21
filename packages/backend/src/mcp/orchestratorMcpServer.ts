@@ -259,17 +259,14 @@ export function buildMcpServer(
   );
 
   const workflow = toPlanningWorkflow(session?.session_type);
-  // gate.verify/deploy.verdict (verdictTools.ts) and gate.reclassify/
-  // intent.dispositionStranded (gateReclassifyTool.ts/strandedIntentTool.ts)
-  // are registered directly off `workflow === 'ops'`, outside the
-  // PLANNING_INTENT_KINDS.ops kind list resolveStageProposalKinds already
-  // narrows above — an investigate-dispatched session (session_type 'ops',
+  // gate.verify/deploy.verdict/gate.reclassify/intent.dispositionStranded
+  // register directly off `workflow === 'ops'` (verdictTools.ts /
+  // gateReclassifyTool.ts / strandedIntentTool.ts), outside the
+  // PLANNING_INTENT_KINDS.ops kinds resolveStageProposalKinds already
+  // narrows above. An investigate-dispatched session (session_type 'ops',
   // task_id `report-batch:<batchId>`) has no gate item or PR to act on, so
-  // it must not get any of them either. `mutationWorkflow` stays `workflow`
-  // for a real ops session and downgrades to `null` only for the
-  // investigate carve-out, leaving the read-only registrations below
-  // (taskReadTools/architectureReadTools/etc, gated on the unchanged
-  // `workflow`) unaffected.
+  // downgrade to `null` for it here too — the read-only registrations below
+  // stay keyed on the unchanged `workflow`.
   const mutationWorkflow: PlanningWorkflow | null =
     workflow === 'ops' && isInvestigateSession(session?.task_id)
       ? null
