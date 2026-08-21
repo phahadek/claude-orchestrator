@@ -2578,6 +2578,14 @@ export function runMigrations(target: Database.Database): void {
   // to distinct test_ids, which cost 7.6s+ at 1.5M rows and grows daily with
   // the table. This table lets GET /api/milestones/:project/lane-health read
   // a project_id-indexed handful of rows instead.
+  //
+  // A row here is pinned to a test_perf_baselines row by test_id. If the
+  // underlying test is renamed or deleted, that test_id stops receiving new
+  // digest updates entirely and can never cross
+  // flagged_flaky_tests_rollup_watermark again to get itself re-examined by
+  // the keyset scan — so replaceFlaggedFlakyTestsRollupSync also prunes any
+  // row here whose test_perf_baselines row has gone stale (no update in
+  // FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS), independent of the watermark scan.
   target.exec(`
     CREATE TABLE IF NOT EXISTS flagged_flaky_tests_rollup (
       project_id        TEXT    NOT NULL,

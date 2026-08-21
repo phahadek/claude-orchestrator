@@ -176,6 +176,63 @@ describe('flagged_flaky_tests_rollup equivalence', () => {
   });
 });
 
+describe('ghost pruning for renamed/retired tests', () => {
+  it('removes a flagged rollup row once its test_perf_baselines row goes stale, without that test_id crossing the watermark again', () => {
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-renamed-old',
+        name: 'suite > old name (before rename)',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: i,
+      }),
+    );
+    replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 1000);
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual(
+      ['test-renamed-old'],
+    );
+
+    // test-renamed-old never gets another sample again — it was renamed, so
+    // recordTestPerfDigestSample now only ever touches the NEW test_id's
+    // baseline row. Its own test_perf_baselines row is frozen at
+    // updated_at=3, forever behind the watermark this first tick already
+    // advanced past. A much-later tick — with no new candidates of its own —
+    // must still prune it via staleness, not by re-visiting it through the
+    // keyset scan.
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const laterComputedAt = 1000 + SEVEN_DAYS_MS + 1;
+    replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, laterComputedAt);
+
+    expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual([]);
+  });
+
+  it('leaves a flagged rollup row alone when its test_perf_baselines row is still fresh', () => {
+    // createdAt values sit on the same ms timescale as computedAt below
+    // (unlike the tiny 0..3 offsets other fixtures use) so the staleness
+    // window — measured from computedAt back FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS
+    // — is actually exercised rather than trivially satisfied either way.
+    const baseAt = 1_700_000_000_000;
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-still-flaky',
+        name: 'suite > still flaky test',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: baseAt + i,
+      }),
+    );
+    replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, baseAt + 1000);
+
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const soonComputedAt = baseAt + SEVEN_DAYS_MS - 1;
+    replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, soonComputedAt);
+
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual(
+      ['test-still-flaky'],
+    );
+  });
+});
+
 describe('getFlaggedFlakyTestsRollup remediation-tracking join', () => {
   it('reports remediationTaskOpen/remediationTaskId for a tracked-open test and false/null for an untracked one', () => {
     ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
