@@ -6,6 +6,10 @@ OnFailure=orchestrator-db-backup-alert.service
 
 [Service]
 Type=oneshot
+# Observed healthy runs are 4-18 minutes; 3600s gives >3x margin while still
+# failing loudly (triggering OnFailure=) well inside the 24h timer period
+# instead of hanging indefinitely and silently blocking all future runs.
+TimeoutStartSec=3600
 User=orchestrator
 WorkingDirectory=/home/orchestrator/claude-orchestrator
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
