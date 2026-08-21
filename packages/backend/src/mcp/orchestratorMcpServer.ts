@@ -24,10 +24,12 @@ import type { SessionManager } from '../session/SessionManager';
 import {
   PLANNING_INTENT_KINDS,
   CODE_INTENT_KINDS,
+  INVESTIGATE_INTENT_KINDS,
 } from '../planning/planningIntentKinds';
 import type { PlanningWorkflow } from '../planning/planningIntentKinds';
 import { resolveMilestoneForSessionTask } from '../projects/milestoneResolver';
 import { normalizeTaskId, parseTaskId } from '../tasks/taskId';
+import { isInvestigateSession } from '../session/sessionPredicates';
 
 const NOTION_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -128,6 +130,26 @@ function toPlanningWorkflow(
     sessionType === 'split'
     ? sessionType
     : null;
+}
+
+/**
+ * Resolves the stage-proposal kinds registered on a connection: an
+ * investigate-dispatched session (session_type 'ops', task_id
+ * `report-batch:<batchId>` — see sessionPredicates.ts#isInvestigateSession)
+ * gets the narrower `INVESTIGATE_INTENT_KINDS`, not `PLANNING_INTENT_KINDS.ops`
+ * — it has no journal/task-status/gate/PR-intent analog and needs
+ * `decision.pickOne`, which `PLANNING_INTENT_KINDS.ops` lacks. A null
+ * workflow (code/review sessions) registers CODE_INTENT_KINDS, not every
+ * kind — see planningIntentKinds.ts.
+ */
+function resolveStageProposalKinds(
+  workflow: PlanningWorkflow | null,
+  taskId: string | null | undefined,
+): readonly string[] {
+  if (workflow === 'ops' && isInvestigateSession(taskId)) {
+    return INVESTIGATE_INTENT_KINDS;
+  }
+  return workflow ? PLANNING_INTENT_KINDS[workflow] : CODE_INTENT_KINDS;
 }
 
 /**
@@ -243,9 +265,7 @@ export function buildMcpServer(
     registerStageProposalTools(server, {
       sessionId,
       projectId: session.project_id,
-      // A null workflow (code/review sessions) registers CODE_INTENT_KINDS,
-      // not every kind — see planningIntentKinds.ts.
-      kinds: workflow ? PLANNING_INTENT_KINDS[workflow] : CODE_INTENT_KINDS,
+      kinds: resolveStageProposalKinds(workflow, session.task_id),
       sessionManager,
       milestone,
     });
