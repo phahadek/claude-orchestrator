@@ -188,9 +188,9 @@ describe('ghost pruning for renamed/retired tests', () => {
       }),
     );
     replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 1000);
-    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual(
-      ['test-renamed-old'],
-    );
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
+      'test-renamed-old',
+    ]);
 
     // test-renamed-old never gets another sample again — it was renamed, so
     // recordTestPerfDigestSample now only ever touches the NEW test_id's
@@ -227,9 +227,9 @@ describe('ghost pruning for renamed/retired tests', () => {
     const soonComputedAt = baseAt + SEVEN_DAYS_MS - 1;
     replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, soonComputedAt);
 
-    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual(
-      ['test-still-flaky'],
-    );
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
+      'test-still-flaky',
+    ]);
   });
 });
 
