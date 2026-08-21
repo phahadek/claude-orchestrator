@@ -9678,11 +9678,12 @@ export function incrementSessionTestRequestCycleCount(
 }
 
 /**
- * Undoes one prior increment — used when a test.request cycle's only
- * failure(s) turned out to be confirmed base-attributable via a
- * whole-process-crash base break (baseAttributableFilter's `inconclusive`
- * outcome), so that run doesn't count against test_request_cycle_limit.
- * Floors at 0 rather than going negative.
+ * Undoes one prior increment — used when a test.request cycle's failure
+ * couldn't be judged against the session's own diff at all: either the base
+ * tree itself whole-process-crashed (baseAttributableFilter's
+ * `inconclusive` outcome) or no usable base-health probe existed for the
+ * current base content hash (`unknown` outcome). Neither case counts
+ * against test_request_cycle_limit. Floors at 0 rather than going negative.
  */
 export function decrementSessionTestRequestCycleCount(
   sessionId: string,

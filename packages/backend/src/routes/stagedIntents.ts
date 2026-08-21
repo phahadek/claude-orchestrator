@@ -5790,7 +5790,11 @@ export async function triggerTestRequestExecution(
   if (filterResult && filterResult.outcome !== 'unfiltered') {
     result = { ...result, passed: filterResult.passed };
   }
-  if (filterResult?.outcome === 'inconclusive' && intent.sessionId) {
+  if (
+    (filterResult?.outcome === 'inconclusive' ||
+      filterResult?.outcome === 'unknown') &&
+    intent.sessionId
+  ) {
     decrementSessionTestRequestCycleCount(intent.sessionId);
   }
   // A fully-excused failure must also flip the stored run's state — the

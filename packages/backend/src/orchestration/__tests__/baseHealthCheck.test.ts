@@ -503,16 +503,52 @@ describe('checkBaseBranchHealth', () => {
     expect(result.outcome).toBe('partial_fail');
   });
 
-  it('returns unknown, distinct from total_fail, when worktree provisioning fails', async () => {
+  it('returns unknown, distinct from total_fail, when worktree provisioning fails on both the initial attempt and the prune+retry', async () => {
     const project = makeProject();
     mockEnsureAuditWorktree.mockRejectedValue(
       new Error('git worktree add failed'),
     );
+    const gitRunner = vi.fn().mockResolvedValue({ stdout: '', stderr: '' });
 
-    const result = await checkBaseBranchHealth(project);
+    const result = await checkBaseBranchHealth(project, { gitRunner });
     expect(result.outcome).toBe('unknown');
     expect(result.run).toBeNull();
     expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
+    // One prune + one retried ensureAuditWorktree call before giving up.
+    expect(gitRunner).toHaveBeenCalledWith(
+      ['worktree', 'prune'],
+      project.projectDir,
+    );
+    expect(mockEnsureAuditWorktree).toHaveBeenCalledTimes(2);
+  });
+
+  it('self-heals a stale worktree-provisioning failure via prune+retry rather than reporting unknown', async () => {
+    const project = makeProject();
+    mockEnsureAuditWorktree
+      .mockRejectedValueOnce(new Error('git worktree add failed'))
+      .mockResolvedValueOnce(undefined);
+    const gitRunner = vi.fn().mockResolvedValue({ stdout: '', stderr: '' });
+    mockComputeWholeTreeContentHash.mockResolvedValue('hash-self-heal');
+    mockRunProjectTestRequest.mockImplementation(async (spec) => {
+      insertTestRequestRun(
+        'run-self-heal',
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+      );
+      completeTestRequestRun('run-self-heal', 'passed', '');
+      return { runId: 'run-self-heal', joined: false, passed: true, output: '' };
+    });
+
+    const result = await checkBaseBranchHealth(project, { gitRunner });
+
+    expect(result.outcome).toBe('clean_pass');
+    expect(gitRunner).toHaveBeenCalledWith(
+      ['worktree', 'prune'],
+      project.projectDir,
+    );
+    expect(mockEnsureAuditWorktree).toHaveBeenCalledTimes(2);
   });
 
   it('returns unknown when the content hash cannot be computed (empty tree)', async () => {
