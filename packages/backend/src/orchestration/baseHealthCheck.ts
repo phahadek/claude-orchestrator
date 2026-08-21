@@ -293,25 +293,11 @@ async function checkBaseBranchHealthLocked(
   try {
     await ensureAuditWorktree(project, worktreePath, deps.gitRunner);
   } catch (err) {
-    // ensureAuditWorktree only self-heals the "directory exists but reset
-    // fails" case (it rm -rf's and re-adds). When the directory does NOT
-    // exist but git's own worktree administrative metadata still references
-    // it — e.g. left behind by a prior crash, or the directory removed
-    // without `git worktree remove` — `git worktree add` fails against that
-    // stale metadata with nothing on disk to reclaim, and every subsequent
-    // call fails identically with no self-healing path: a persistent, not
-    // transient, `unknown`. One `git worktree prune` clears exactly that
-    // stale-metadata case; retry once before giving up.
-    try {
-      await deps.gitRunner(['worktree', 'prune'], project.projectDir);
-      await ensureAuditWorktree(project, worktreePath, deps.gitRunner);
-    } catch (retryErr) {
-      return unknownResult(
-        project.id,
-        null,
-        `worktree provisioning failed: ${retryErr instanceof Error ? retryErr.message : retryErr}`,
-      );
-    }
+    return unknownResult(
+      project.id,
+      null,
+      `worktree provisioning failed: ${err instanceof Error ? err.message : err}`,
+    );
   }
 
   let contentHash: string | null;

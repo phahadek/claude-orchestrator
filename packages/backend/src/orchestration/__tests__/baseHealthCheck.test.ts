@@ -503,62 +503,16 @@ describe('checkBaseBranchHealth', () => {
     expect(result.outcome).toBe('partial_fail');
   });
 
-  it('returns unknown, distinct from total_fail, when worktree provisioning fails on both the initial attempt and the prune+retry', async () => {
+  it('returns unknown, distinct from total_fail, when worktree provisioning fails', async () => {
     const project = makeProject();
     mockEnsureAuditWorktree.mockRejectedValue(
       new Error('git worktree add failed'),
     );
-    const gitRunnerCalls: unknown[][] = [];
-    const gitRunner = async (...args: unknown[]) => {
-      gitRunnerCalls.push(args);
-      return { stdout: '', stderr: '' };
-    };
 
-    const result = await checkBaseBranchHealth(project, { gitRunner });
-
+    const result = await checkBaseBranchHealth(project);
     expect(result.outcome).toBe('unknown');
     expect(result.run).toBeNull();
     expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
-    expect(mockEnsureAuditWorktree.mock.calls.length).toBeGreaterThanOrEqual(
-      2,
-    );
-    expect(
-      gitRunnerCalls.some(
-        (call) =>
-          Array.isArray(call[0]) &&
-          call[0][0] === 'worktree' &&
-          call[0][1] === 'prune',
-      ),
-    ).toBe(true);
-  });
-
-  it('self-heals a stale worktree-provisioning failure via prune+retry rather than reporting unknown', async () => {
-    const project = makeProject();
-    let ensureAttempt = 0;
-    mockEnsureAuditWorktree.mockImplementation(async () => {
-      ensureAttempt++;
-      if (ensureAttempt === 1) {
-        throw new Error('git worktree add failed');
-      }
-    });
-    const gitRunner = async () => ({ stdout: '', stderr: '' });
-    mockComputeWholeTreeContentHash.mockResolvedValue('hash-self-heal');
-    mockRunProjectTestRequest.mockImplementation(async (spec) => {
-      insertTestRequestRun(
-        'run-self-heal',
-        spec.projectId,
-        spec.contentHash,
-        null,
-        Date.now(),
-      );
-      completeTestRequestRun('run-self-heal', 'passed', '');
-      return { runId: 'run-self-heal', joined: false, passed: true, output: '' };
-    });
-
-    const result = await checkBaseBranchHealth(project, { gitRunner });
-
-    expect(result.outcome).toBe('clean_pass');
-    expect(ensureAttempt).toBeGreaterThanOrEqual(2);
   });
 
   it('returns unknown when the content hash cannot be computed (empty tree)', async () => {
