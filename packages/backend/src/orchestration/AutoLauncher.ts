@@ -242,11 +242,7 @@ export class AutoLauncher {
         // admission block (e.g. worktree setup errors) are a genuine zero,
         // not a budget block, so they stay 0.
         const items_processed =
-          launched > 0
-            ? launched
-            : eligible > 0 && blockReason
-              ? -skipped
-              : 0;
+          launched > 0 ? launched : eligible > 0 && blockReason ? -skipped : 0;
         return { items_processed };
       },
     });

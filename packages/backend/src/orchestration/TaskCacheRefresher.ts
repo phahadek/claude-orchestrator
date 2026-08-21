@@ -63,9 +63,7 @@ export class TaskCacheRefresher {
    * Counts how many of `tasks`' cache rows have different raw_json than the
    * last tick observed, updating the tracked snapshot as it goes.
    */
-  private countChangedTaskRows(
-    tasks: { task?: { id?: string } }[],
-  ): number {
+  private countChangedTaskRows(tasks: { task?: { id?: string } }[]): number {
     let changed = 0;
     for (const item of tasks) {
       const taskId = item?.task?.id;
