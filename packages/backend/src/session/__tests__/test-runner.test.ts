@@ -291,6 +291,30 @@ describe('runTestCommands — fail-fast', () => {
     expect(result.passed).toBe(false);
     expect(result.output).toContain('TIMEOUT');
   });
+
+  it('runs the second command after the first times out, when failFast is false — each command is bounded independently by its own timeout', async () => {
+    let callCount = 0;
+    _spawnHook = (cmd) => {
+      if (cmd !== 'taskkill') callCount++;
+      // First command hangs past the timeout; second returns immediately.
+      return callCount === 1 ? makeProc(0, '', '', 9999_000) : makeProc(0, 'cmd2');
+    };
+
+    const promise = runTestCommands(
+      '/worktree',
+      ['slow-cmd', 'second-cmd'],
+      5,
+      () => {},
+      { failFast: false },
+    );
+    await vi.advanceTimersByTimeAsync(11_000);
+    const result = await promise;
+
+    expect(callCount).toBe(2);
+    expect(result.passed).toBe(false);
+    expect(result.output).toContain('TIMEOUT');
+    expect(result.output).toContain('cmd2');
+  });
 });
 
 describe('runTestCommands — RSS kill', () => {

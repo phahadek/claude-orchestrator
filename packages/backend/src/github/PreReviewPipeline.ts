@@ -487,7 +487,6 @@ export class PreReviewPipeline {
               commands: config.test,
               timeoutSec: config.test_timeout_sec,
               maxRssMb: config.test_max_rss_mb,
-              failFast: config.test_fail_fast,
               sessionId: null,
             })
           : await runTestCommands(
@@ -553,7 +552,6 @@ export class PreReviewPipeline {
           commands: config.test,
           timeoutSec: config.test_timeout_sec,
           maxRssMb: config.test_max_rss_mb,
-          failFast: config.test_fail_fast,
           sessionId: null,
         })
       : await runTestCommands(

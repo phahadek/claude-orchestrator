@@ -5651,7 +5651,6 @@ function resolveTestRequestExecutionInputs(intent: StagedIntent):
       commands: string[];
       timeoutSec: number;
       maxRssMb: number;
-      failFast: boolean;
     }
   | { ok: false; reason: string } {
   if (!intent.sessionId) {
@@ -5682,7 +5681,6 @@ function resolveTestRequestExecutionInputs(intent: StagedIntent):
     commands: config.test,
     timeoutSec: config.test_timeout_sec,
     maxRssMb: config.test_max_rss_mb,
-    failFast: config.test_fail_fast,
   };
 }
 
@@ -5736,7 +5734,6 @@ export async function triggerTestRequestExecution(
           commands: inputs.commands,
           timeoutSec: inputs.timeoutSec,
           maxRssMb: inputs.maxRssMb,
-          failFast: inputs.failFast,
           sessionId: intent.sessionId ?? null,
         });
       }
@@ -5955,7 +5952,6 @@ async function maybeAutoApproveTestRequest(
     commands: inputs.commands,
     timeoutSec: inputs.timeoutSec,
     maxRssMb: inputs.maxRssMb,
-    failFast: inputs.failFast,
     sessionId: intent.sessionId,
   });
 

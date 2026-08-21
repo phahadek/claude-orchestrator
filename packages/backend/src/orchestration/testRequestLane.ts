@@ -92,7 +92,6 @@ export interface TestRequestRunSpec {
   commands: string[];
   timeoutSec: number;
   maxRssMb: number;
-  failFast: boolean;
   /** Originating session, persisted onto the run row for per-request attribution. */
   sessionId: string | null;
 }
@@ -474,12 +473,18 @@ async function executeTestRequestRun(
     if (testReportGlob) {
       clearReportFiles(spec.worktreePath, testReportGlob);
     }
+    // The test.request lane never fails fast: every declared command runs
+    // regardless of an earlier one failing, so a base probe or session run
+    // always yields a complete per-command failing set. Each command is
+    // still bounded independently — timeoutSec applies per loop iteration
+    // inside runCommandWithTimeout — so this cannot push a run past its
+    // configured timeout, only make a run with an early failure run longer.
     const result = await runTestCommands(
       spec.worktreePath,
       spec.commands,
       spec.timeoutSec,
       (msg) => logger.info(`[testRequestLane] ${msg}`),
-      { maxRssMb: spec.maxRssMb, failFast: spec.failFast },
+      { maxRssMb: spec.maxRssMb, failFast: false },
     );
     const oomKilled = result.oomKilled ?? false;
     let structuredResult: StructuredTestResult | null = null;
