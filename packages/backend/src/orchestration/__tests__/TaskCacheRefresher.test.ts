@@ -28,6 +28,7 @@ import { ProjectService } from '../../projects/ProjectService.js';
 import { TaskCacheRefresher } from '../TaskCacheRefresher.js';
 import { JiraApiError } from '../../tasks/JiraClient.js';
 import { upsertTaskCache } from '../../db/queries.js';
+import { Scheduler, DEGRADED_TICK_THRESHOLD_MS } from '../Scheduler.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -636,5 +637,32 @@ describe('TaskCacheRefresher', () => {
       const third = await refresher.refreshOnce();
       expect(third).toBe(1);
     });
+  });
+});
+
+describe('Scheduler integration (task_cache_refresher) — minimal baseline', () => {
+  it('registers with a real Scheduler and triggerNow completes with status ok', async () => {
+    const project = makeProject({ id: 'p1' });
+    vi.mocked(getAllProjects).mockReturnValue([project]);
+    vi.mocked(ProjectService.listMilestones).mockReturnValue([
+      makeMilestone('m1', 'src-1'),
+    ]);
+    const backend = makeBackend({
+      fetchReadyTasks: vi.fn().mockResolvedValue([]),
+    });
+    vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+    const refresher = new TaskCacheRefresher(undefined, {
+      listProjects: getAllProjects,
+      resolveBackend: getTaskBackend,
+    });
+    const scheduler = new Scheduler();
+    refresher.register(scheduler);
+
+    await scheduler.triggerNow('task_cache_refresher');
+    const after = scheduler
+      .status()
+      .find((s) => s.name === 'task_cache_refresher');
+    expect(after?.lastStatus).toBe('ok');
   });
 });
