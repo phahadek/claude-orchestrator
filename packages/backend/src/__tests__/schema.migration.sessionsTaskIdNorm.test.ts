@@ -9,14 +9,14 @@ import { runMigrations } from '../db/schema.js';
 // failed ALTER never created.
 
 function getColumnNames(db: Database.Database, table: string): Set<string> {
-  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+  const rows = db.prepare(`PRAGMA table_xinfo(${table})`).all() as Array<{
     name: string;
   }>;
   return new Set(rows.map((r) => r.name));
 }
 
 function countTaskIdNormColumns(db: Database.Database): number {
-  const rows = db.prepare(`PRAGMA table_info(sessions)`).all() as Array<{
+  const rows = db.prepare(`PRAGMA table_xinfo(sessions)`).all() as Array<{
     name: string;
   }>;
   return rows.filter((r) => r.name === 'task_id_norm').length;
