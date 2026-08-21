@@ -146,21 +146,32 @@ describe('planning-candidate predicate chain — indexable task_id_norm matches'
     });
 
     it('lookup cost does not grow with unrelated per-flow session history', () => {
+      // Relative comparison rather than an absolute wall-clock bound: an
+      // absolute-ms threshold is prone to flaking on a loaded/shared CI
+      // runner. What actually matters is that cost stays flat as unrelated
+      // row count grows — an unindexed scan would instead grow
+      // proportionally with the table, so the ratio between a small-table
+      // and large-table timing is the meaningful signal.
+      function timeLookups(): number {
+        const start = process.hrtime.bigint();
+        for (let i = 0; i < 500; i++) {
+          isPlanningKillSuppressed('needle-task-id', 'groom');
+        }
+        return Number(process.hrtime.bigint() - start) / 1e6;
+      }
+
+      insertSession('needle-task-id', 'groom', 'done', 999999);
+      const smallTableMs = Math.max(timeLookups(), 1);
+
       for (let i = 0; i < 2000; i++) {
         insertSession(`unrelated-task-${i}`, 'groom', 'done', 1000 + i);
       }
-      insertSession('needle-task-id', 'groom', 'done', 999999);
+      const largeTableMs = timeLookups();
 
-      const start = process.hrtime.bigint();
-      for (let i = 0; i < 500; i++) {
-        isPlanningKillSuppressed('needle-task-id', 'groom');
-      }
-      const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
-      // Generous bound (vs. the 200ms used elsewhere in this file) since
-      // this lookup does an extra query beyond the plain session seek —
-      // still orders of magnitude below what an unindexed per-flow scan
-      // over 2000 rows would cost per call under load on a shared runner.
-      expect(elapsedMs).toBeLessThan(1000);
+      // Generous multiplier to absorb CI noise/jitter around tiny
+      // baselines — an unindexed per-flow scan would grow ~400x (2000
+      // unrelated rows vs. ~5), not stay within a small constant factor.
+      expect(largeTableMs).toBeLessThan(smallTableMs * 20 + 200);
     });
   });
 
