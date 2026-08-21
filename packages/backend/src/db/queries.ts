@@ -9248,6 +9248,10 @@ export interface FlaggedFlakyTest {
   name: string;
   sampleCount: number;
   transitionCount: number;
+  /** Whether this test_id is currently tracked under an open remediation task — see flaky_remediation_tracking. Always false from listFlaggedFlakyTests, which only backs the rollup-table write path. */
+  remediationTaskOpen: boolean;
+  /** The linked remediation task id, set only when remediationTaskOpen is true. */
+  remediationTaskId: string | null;
 }
 
 let _stmtDistinctProjectTestIds: Database.Statement | null = null;
@@ -9293,6 +9297,8 @@ export function listFlaggedFlakyTests(
         name: row.name,
         sampleCount: flag.sampleCount,
         transitionCount: flag.transitionCount,
+        remediationTaskOpen: false,
+        remediationTaskId: null,
       });
     }
   }
@@ -9644,10 +9650,17 @@ export function getFlaggedFlakyTestsRollup(
   projectId: string,
 ): FlaggedFlakyTest[] {
   _stmtGetFlaggedFlakyTestsRollup ??= db.prepare<{ project_id: string }>(`
-    SELECT test_id, name, sample_count, transition_count
-    FROM flagged_flaky_tests_rollup
-    WHERE project_id = @project_id
-    ORDER BY test_id ASC
+    SELECT
+      f.test_id AS test_id,
+      f.name AS name,
+      f.sample_count AS sample_count,
+      f.transition_count AS transition_count,
+      t.remediation_task_open AS remediation_task_open,
+      t.remediation_task_id AS remediation_task_id
+    FROM flagged_flaky_tests_rollup f
+    LEFT JOIN flaky_remediation_tracking t ON t.test_id = f.test_id
+    WHERE f.project_id = @project_id
+    ORDER BY f.test_id ASC
   `);
   const rows = _stmtGetFlaggedFlakyTestsRollup.all({
     project_id: projectId,
@@ -9656,12 +9669,17 @@ export function getFlaggedFlakyTestsRollup(
     name: string;
     sample_count: number;
     transition_count: number;
+    remediation_task_open: number | null;
+    remediation_task_id: string | null;
   }[];
   return rows.map((r) => ({
     testId: r.test_id,
     name: r.name,
     sampleCount: r.sample_count,
     transitionCount: r.transition_count,
+    remediationTaskOpen: r.remediation_task_open === 1,
+    remediationTaskId:
+      r.remediation_task_open === 1 ? r.remediation_task_id : null,
   }));
 }
 
