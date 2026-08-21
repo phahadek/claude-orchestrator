@@ -1399,23 +1399,31 @@ export function hasActivePlanningSessionForTask(
  * the abort route (routes/taskAbort.ts) to resolve the specific session id
  * to kill, rather than just a boolean. Same non-terminal (running OR parked
  * idle), flow-scoped, archived=0 filter.
+ *
+ * Matches against sessions.task_id_norm — the same STORED generated column
+ * hasActiveSessionForTask (above) matches against — instead of a JS
+ * `.find()` over an unfiltered-by-task `SELECT *`. That previously forced a
+ * full scan of the sessions table on every groom/ops/design/docs candidate
+ * evaluated by DispatchTriggerEvaluator; the indexed column turns it into a
+ * single index seek.
  */
 export function getActivePlanningSessionForTask(
   taskId: string,
   flow: DedupedPlanningFlow,
 ): Session | undefined {
-  const norm = normalizeBoardId(taskId);
-  const rows = db
-    .prepare<{ flow: string }, Session>(
+  const norm = taskId.replace(/-/g, '');
+  return db
+    .prepare<{ task_id_norm: string; flow: string }, Session>(
       `
     SELECT * FROM sessions
-    WHERE status NOT IN (${TERMINAL_STATUS_SQL_LIST})
+    WHERE task_id_norm = @task_id_norm
+      AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND session_type = @flow
       AND archived = 0
+    LIMIT 1
   `,
     )
-    .all({ flow }) as Session[];
-  return rows.find((row) => normalizeBoardId(row.task_id ?? '') === norm);
+    .get({ task_id_norm: norm, flow }) as Session | undefined;
 }
 
 export function hasActiveSessionForTask(taskId: string): boolean {
@@ -10184,21 +10192,29 @@ export type KillSuppressiblePlanningFlow = 'groom' | 'design' | 'ops';
  * (done/error/launch_failed/etc.) never suppresses candidacy. The
  * session_errored audit event this reads is written unconditionally by
  * markSessionErrored for every terminal session, including kills.
+ *
+ * The most-recent-session lookup matches against sessions.task_id_norm (the
+ * same STORED generated column hasActiveSessionForTask matches against)
+ * instead of a JS `.find()` over every session ever run for `flow`,
+ * account-wide and unbounded by status. That previously fetched and
+ * hydrated the full per-flow session history on every groom/ops/design
+ * candidate that cleared the earlier gates; scoping the query to this
+ * task's task_id_norm turns it into a single indexed lookup for at most
+ * this task's own (small) session history.
  */
 export function isPlanningKillSuppressed(
   taskId: string,
   flow: KillSuppressiblePlanningFlow,
 ): boolean {
-  const norm = normalizeBoardId(taskId);
-  const rows = db
-    .prepare<
-      { flow: string },
-      Session
-    >(`SELECT * FROM sessions WHERE session_type = @flow ORDER BY started_at DESC`)
-    .all({ flow }) as Session[];
-  const session = rows.find(
-    (row) => normalizeBoardId(row.task_id ?? '') === norm,
-  );
+  const norm = taskId.replace(/-/g, '');
+  const session = db
+    .prepare<{ task_id_norm: string; flow: string }, Session>(
+      `SELECT * FROM sessions
+       WHERE task_id_norm = @task_id_norm AND session_type = @flow
+       ORDER BY started_at DESC
+       LIMIT 1`,
+    )
+    .get({ task_id_norm: norm, flow }) as Session | undefined;
   if (!session || session.status !== 'killed') return false;
 
   const event = db

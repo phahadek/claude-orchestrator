@@ -2981,6 +2981,41 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // audit_log.task_id_norm: the audit_log analog of sessions.task_id_norm
+  // above, for hasTaskEditSinceTimestamp (audit/AuditLog.ts) — used by
+  // isNoOpSuppressed and isPlanningKillSuppressed (db/queries.ts), both in
+  // DispatchTriggerEvaluator's planning-candidate predicate chain. That
+  // query previously matched via normalizeBoardId(row.task_id) === norm in
+  // JS over every task_body_updated/task_deps_updated row account-wide
+  // since a timestamp — unindexable, and unbounded by unrelated task
+  // history. audit_log.task_id carries a `source:`-prefixed id (e.g.
+  // "notion:1a2b-...") unlike sessions.task_id, so — unlike task_id_norm
+  // above — this generated column also strips a recognized source prefix
+  // and lowercases, mirroring normalizeBoardId (tasks/taskId.ts) exactly so
+  // the indexed column can replace that JS comparison outright.
+  try {
+    target.exec(
+      `ALTER TABLE audit_log ADD COLUMN task_id_norm TEXT GENERATED ALWAYS AS (
+        LOWER(REPLACE(
+          CASE
+            WHEN INSTR(COALESCE(task_id,''), ':') > 0
+              AND SUBSTR(COALESCE(task_id,''), 1, INSTR(COALESCE(task_id,''), ':') - 1)
+                IN ('notion', 'yaml', 'jira', 'github')
+            THEN SUBSTR(task_id, INSTR(task_id, ':') + 1)
+            ELSE COALESCE(task_id, '')
+          END,
+          '-', ''
+        ))
+      ) STORED`,
+    );
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_audit_log_task_id_norm_event_type
+      ON audit_log(task_id_norm, event_type, ts);
+  `);
+
   runStructuredResultExtractedClearBackfill(target);
 }
 
