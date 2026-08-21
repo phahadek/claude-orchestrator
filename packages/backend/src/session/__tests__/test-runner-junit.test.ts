@@ -257,7 +257,7 @@ describe('collectStructuredTestResult', () => {
     });
 
     it('marks a multi-command run incomplete, and excludes the stale report, when one report is fresh and the other is stale', () => {
-      const startedAt = Date.now();
+      const startedAt = Date.now() - 1_000;
       write('reports/frontend.xml', VITEST_REPORT);
       // backend.xml is left over from a previous run — its command crashed
       // before rewriting it this time.
@@ -330,7 +330,7 @@ describe('clearReportFiles', () => {
 
     // Round 2 begins: cleanup runs before the new commands.
     clearReportFiles(worktree, 'reports/*.xml');
-    const startedAt = Date.now();
+    const startedAt = Date.now() - 1_000;
     // Only the frontend command rewrites its report this time; backend
     // crashed before teardown.
     write('reports/frontend.xml', VITEST_REPORT);
