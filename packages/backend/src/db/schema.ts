@@ -2931,26 +2931,42 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
-  // task_id_norm: a STORED generated column mirroring
+  // task_id_norm: a VIRTUAL generated column mirroring
   // hasActiveSessionForTask's REPLACE(COALESCE(task_id,''),'-','') match
   // expression exactly (same normalization, no LOWER — task_id casing is
   // preserved by every writer), so the sessions table can carry a real index
   // on the normalized form. The prior query applied REPLACE() to every row's
   // task_id inside WHERE, which SQLite cannot use an index to satisfy —
   // every call scanned the full (ever-growing) sessions table. Indexing the
-  // generated column instead turns that into a single index seek, generated
-  // and kept in sync by SQLite itself on every insert/update rather than a
-  // separately maintained trigger.
+  // generated column instead turns that into a single index seek. SQLite
+  // rejects ALTER TABLE ADD COLUMN for STORED generated columns (only
+  // VIRTUAL may be added to an existing table), but a VIRTUAL column can
+  // still be indexed directly — CREATE INDEX computes and stores the value
+  // in the index itself, so the lookup still gets an index seek.
+  //
+  // The CREATE INDEX lives inside this same try: if the ALTER genuinely
+  // fails (not just "already exists"), the index must never be attempted
+  // against a column that was never created. And unlike the plain
+  // ALTER-ADD-COLUMN sites elsewhere in this file, this catch discriminates
+  // — it re-throws anything that isn't SQLite's own duplicate-column
+  // wording, so a real failure crashes loudly at boot instead of being
+  // silently swallowed into a subsequent "no such column" crash loop. Any
+  // future generated-column migration in this file should follow the same
+  // shape: dependent statements inside the same try, non-duplicate errors
+  // re-thrown.
   try {
     target.exec(
-      `ALTER TABLE sessions ADD COLUMN task_id_norm TEXT GENERATED ALWAYS AS (REPLACE(COALESCE(task_id,''),'-','')) STORED`,
+      `ALTER TABLE sessions ADD COLUMN task_id_norm TEXT GENERATED ALWAYS AS (REPLACE(COALESCE(task_id,''),'-','')) VIRTUAL`,
     );
-  } catch {
-    /* already exists */
+    target.exec(`
+      CREATE INDEX IF NOT EXISTS idx_sessions_task_id_norm ON sessions(task_id_norm);
+    `);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('duplicate column name')) {
+      throw err;
+    }
   }
-  target.exec(`
-    CREATE INDEX IF NOT EXISTS idx_sessions_task_id_norm ON sessions(task_id_norm);
-  `);
 
   runStructuredResultExtractedClearBackfill(target);
 }
