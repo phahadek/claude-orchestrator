@@ -119,7 +119,7 @@ describe('planning-candidate predicate chain — indexable task_id_norm matches'
     it('resolves the most-recent-session lookup via an index seek, not a table scan', () => {
       const plan = db
         .prepare(
-          `EXPLAIN QUERY PLAN SELECT * FROM sessions
+          `EXPLAIN QUERY PLAN SELECT * FROM sessions INDEXED BY idx_sessions_task_id_norm_flow_started_at
            WHERE task_id_norm = @task_id_norm AND session_type = @flow
            ORDER BY started_at DESC
            LIMIT 1`,

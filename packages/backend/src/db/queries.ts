@@ -10209,7 +10209,13 @@ export function isPlanningKillSuppressed(
   const norm = taskId.replace(/-/g, '');
   const session = db
     .prepare<{ task_id_norm: string; flow: string }, Session>(
-      `SELECT * FROM sessions
+      // INDEXED BY pins this to the task-scoped composite index. Without
+      // it, SQLite's planner — lacking ANALYZE stats on a fresh/small
+      // table — can instead pick idx_sessions_session_type_started_at
+      // (which also satisfies ORDER BY started_at DESC), walking the
+      // flow's entire session history looking for a task_id_norm match
+      // rather than seeking directly to this task's own (small) history.
+      `SELECT * FROM sessions INDEXED BY idx_sessions_task_id_norm_flow_started_at
        WHERE task_id_norm = @task_id_norm AND session_type = @flow
        ORDER BY started_at DESC
        LIMIT 1`,
