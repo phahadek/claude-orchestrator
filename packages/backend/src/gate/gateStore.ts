@@ -166,7 +166,7 @@ export function listAllShallow(): GateItem[] {
   return listAllGateItems().map(rowToShallowItem);
 }
 
-/** Shallow (no sources/events hydration) equivalent of listByProject — for readiness rollups only. */
+/** Shallow (no sources/events hydration) read of every gate item for a project — used by readiness rollups and reconcileGateRunnability's project-scoped candidate scan. */
 export function listByProjectShallow(project: string): GateItem[] {
   return listGateItemsByProject(project).map(rowToShallowItem);
 }
@@ -198,13 +198,6 @@ export function listByMilestone(
 /** Every gate item across all projects/milestones — the reconciler's working set. */
 export function listAll(): GateItem[] {
   return listAllGateItems()
-    .map((row) => getItem(row.id))
-    .filter((item): item is GateItem => item !== undefined);
-}
-
-/** Every gate item for a single project, regardless of milestone — the readiness rollup's per-project lookup. */
-export function listByProject(project: string): GateItem[] {
-  return listGateItemsByProject(project)
     .map((row) => getItem(row.id))
     .filter((item): item is GateItem => item !== undefined);
 }
