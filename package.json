@@ -31,7 +31,7 @@
     "scan:identifiers": "node scripts/scan-identifiers.mjs",
     "check:markdown-paths": "node scripts/check-markdown-paths.mjs",
     "check:query-plans": "node scripts/check-query-plans.mjs",
-    "test:scripts": "node --test scripts/__tests__/",
+    "test:scripts": "node --test scripts/__tests__/ scripts/tests/",
     "backup:db": "node scripts/backup-database.mjs",
     "audit:licenses": "npx --yes license-checker --failOn 'GPL;AGPL'",
     "start:win": "powershell -ExecutionPolicy Bypass -File start.ps1",

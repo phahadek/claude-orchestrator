@@ -8,11 +8,15 @@
  *
  * Pipeline:
  *   1. Snapshot — open a READ connection to the live DB (better-sqlite3) and
- *      call `.backup(destPath)`. This is WAL-safe and does not require
- *      stopping the backend or an idle DB (unlike `VACUUM INTO`, which
- *      scripts/migrate-host.mjs deliberately avoids for the same reason — see
- *      that script's header). Written to a timestamped temp file under
- *      --work-dir so a crash mid-run never clobbers a prior good snapshot.
+ *      run `VACUUM INTO` (the same in-repo pattern scripts/migrate-host.mjs
+ *      uses). This takes its consistent view once, at the start of a single
+ *      read transaction covering the WAL tail, and streams it out without
+ *      re-checking for intervening writer commits — so unlike SQLite's
+ *      online-backup API (`.backup()`), it cannot be livelocked by a busy
+ *      writer. Under WAL a reader is never blocked by concurrent writers and
+ *      vice versa, so the backend stays fully online. Written to a
+ *      timestamped temp file under --work-dir so a crash mid-run never
+ *      clobbers a prior good snapshot.
  *   2. Encrypt — GPG symmetric encryption (AES256, `--batch --passphrase-fd`)
  *      before the file ever leaves disk. Chosen over an rclone crypt remote
  *      because it keeps the encrypted artifact self-contained and restorable
@@ -77,6 +81,45 @@ import {
   readdirSync,
 } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+
+// Tracks the plaintext snapshot path currently on disk (if any) so a signal
+// handler can remove it even if the process is killed mid-run — the
+// plaintext snapshot must never survive past the encrypt step, including on
+// abnormal termination.
+let currentPlaintextSnapshotPath = null;
+
+function cleanupPlaintextSnapshot() {
+  if (currentPlaintextSnapshotPath) {
+    rmSync(currentPlaintextSnapshotPath, { force: true });
+    currentPlaintextSnapshotPath = null;
+  }
+}
+
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  process.on(signal, () => {
+    cleanupPlaintextSnapshot();
+    process.exit(1);
+  });
+}
+
+/**
+ * Snapshot `dbPath` into a single self-contained file at `destPath` via
+ * `VACUUM INTO`. Online and WAL-safe: takes its consistent view once, at the
+ * start of a single implicit read transaction, and is immune to the
+ * online-backup API's writer-commit restart livelock.
+ */
+export function snapshotDatabase(dbPath, destPath) {
+  rmSync(destPath, { force: true });
+  const src = new Database(dbPath, { readonly: true });
+  try {
+    src.exec(`VACUUM INTO '${destPath.replace(/'/g, "''")}'`);
+  } finally {
+    src.close();
+  }
+}
 
 function parseArgs(argv) {
   const args = { dryRun: false };
@@ -177,16 +220,16 @@ async function main() {
 
   // ── 1. Snapshot ──────────────────────────────────────────────────────────
   console.log(`[snapshot] ${dbPath} -> ${snapshotPath}`);
+  currentPlaintextSnapshotPath = snapshotPath;
   try {
-    const src = new Database(dbPath, { readonly: true });
-    await src.backup(snapshotPath);
-    src.close();
+    snapshotDatabase(dbPath, snapshotPath);
   } catch (err) {
     rmSync(snapshotPath, { force: true });
+    currentPlaintextSnapshotPath = null;
     fail('snapshot', err.message);
   }
   if (!existsSync(snapshotPath))
-    fail('snapshot', 'backup() completed but no file was produced');
+    fail('snapshot', 'VACUUM INTO completed but no file was produced');
 
   // ── 2. Encrypt ───────────────────────────────────────────────────────────
   console.log(`[encrypt] ${snapshotPath} -> ${encryptedPath}`);
@@ -215,6 +258,7 @@ async function main() {
   } finally {
     // Plaintext snapshot never survives past this step, success or failure.
     rmSync(snapshotPath, { force: true });
+    currentPlaintextSnapshotPath = null;
   }
   if (!existsSync(encryptedPath))
     fail('encrypt', 'gpg completed but no output file was produced');
@@ -280,4 +324,6 @@ async function main() {
   console.log(`✓ backup complete: ${encryptedName}`);
 }
 
-main().catch((err) => fail('unhandled', err.stack ?? String(err)));
+if (process.argv[1] === __filename) {
+  main().catch((err) => fail('unhandled', err.stack ?? String(err)));
+}
