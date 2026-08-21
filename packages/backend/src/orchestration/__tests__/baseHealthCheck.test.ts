@@ -135,8 +135,8 @@ beforeEach(() => {
     filed: false,
   });
   db.prepare('DELETE FROM test_run_results').run();
-  db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_run_summaries').run();
+  db.prepare('DELETE FROM test_request_runs').run();
 });
 
 describe('checkBaseBranchHealth', () => {
