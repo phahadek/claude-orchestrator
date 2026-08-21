@@ -235,12 +235,17 @@ export function updateReportFields(
 /**
  * Advances the closed-vocabulary state column. No transition validation is
  * enforced here — callers (the intake surface, resolve-eligibility watcher)
- * own which transitions are legal.
+ * own which transitions are legal. `reason`, when supplied, is a session's
+ * own stated why (e.g. an investigate session's auto-resolved
+ * `planning.noOp`) and is folded into the audit payload; omitted entirely
+ * when absent, preserving today's payload shape for callers (the passive
+ * resolve watcher, the intake surface) that supply none.
  */
 export function updateReportState(
   id: string,
   state: InvestigationReportState,
   updatedAt: string,
+  reason?: string,
 ): InvestigationReportRow {
   const row = getReport(id);
   if (!row) {
@@ -253,7 +258,12 @@ export function updateReportState(
     event_type: 'investigation_report_state_changed',
     actor_type: 'system',
     project_id: row.project_id,
-    payload: { reportId: id, from: row.state, to: state },
+    payload: {
+      reportId: id,
+      from: row.state,
+      to: state,
+      ...(reason ? { reason } : {}),
+    },
   });
   const updated = getReport(id);
   if (!updated) {

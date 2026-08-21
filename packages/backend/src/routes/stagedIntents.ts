@@ -149,7 +149,11 @@ import {
   resolveMilestoneForProject,
   resolveMilestoneRowForProject,
 } from '../projects/milestoneResolver';
-import { insertReport, updateReportState } from '../investigation/reportStore';
+import {
+  insertReport,
+  updateReportState,
+  getReportsForBatchTaskId,
+} from '../investigation/reportStore';
 import { rankDecisions } from '../convergence/decisionRanking';
 import { resolveSessionCompleteForDisplay } from '../convergence/attentionSignals';
 import {
@@ -1169,6 +1173,18 @@ function assertSessionTaskBinding(
 
   const session = getSession(sessionId);
   if (!session?.task_id) return;
+
+  // An investigate session's planning.noOp targets one report from its own
+  // dispatched batch, never the synthetic 'report-batch:<batchId>' task_id
+  // itself — bind against the batch's dispatched report ids instead of the
+  // generic session.task_id equality check below.
+  if (kind === 'planning.noOp' && isInvestigateSession(session.task_id)) {
+    const dispatchedReportIds = new Set(
+      getReportsForBatchTaskId(session.task_id).map((r) => r.id),
+    );
+    if (dispatchedReportIds.has(payloadTaskId)) return;
+    throw new SessionTaskBindingError(kind, session.task_id, payloadTaskId);
+  }
 
   if (normalizeTaskId(payloadTaskId) === normalizeTaskId(session.task_id)) {
     return;
@@ -6793,7 +6809,8 @@ async function maybeAutoResolveCodeNoOp(
   const session = getSession(intent.sessionId);
   if (
     !session ||
-    (session.session_type !== 'standard' && session.session_type !== 'ops')
+    (session.session_type !== 'standard' && session.session_type !== 'ops') ||
+    isInvestigateSession(session.task_id)
   ) {
     return intent;
   }
@@ -6825,6 +6842,62 @@ async function maybeAutoResolveCodeNoOp(
   return committedIntent;
 }
 
+/**
+ * Auto-resolves a standalone planning.noOp staged by an investigate-batch
+ * session (task_id `report-batch:<batchId>`, see isInvestigateSession)
+ * declaring one of its own dispatched reports has no actionable finding —
+ * the investigate analog of maybeAutoResolveCodeNoOp above, but resolving
+ * through updateReportState against the named report rather than
+ * applyResolvedNoOp against a real task, since an investigate session's
+ * task_id is the synthetic batch id, not a task the TaskBackend knows
+ * about. assertSessionTaskBinding (see its planning.noOp/isInvestigateSession
+ * branch) already guarantees payload.taskId names a report in this
+ * session's own dispatched batch by the time an intent reaches here.
+ */
+async function maybeAutoResolveInvestigateNoOp(
+  intent: StagedIntent,
+): Promise<StagedIntent> {
+  if (
+    intent.kind !== 'planning.noOp' ||
+    intent.groupId ||
+    !intent.sessionId ||
+    intent.state !== 'staged'
+  ) {
+    return intent;
+  }
+  const session = getSession(intent.sessionId);
+  if (!session || !isInvestigateSession(session.task_id)) {
+    return intent;
+  }
+  const payload = intent.payload as { taskId?: string; reason?: string };
+  if (!payload?.taskId || !payload.reason) return intent;
+
+  const committed = transitionStagedIntent(intent.id, 'committed');
+  const committedIntent = rowToApi(committed);
+  broadcastIntentChange(committedIntent);
+
+  recordEvent({
+    event_type: 'staged_intent_disposition',
+    actor_type: 'system',
+    actor_id: null,
+    project_id: committedIntent.projectId,
+    task_id: payload.taskId,
+    payload: { intentId: committedIntent.id, disposition: 'auto_committed' },
+  });
+
+  updateReportState(
+    payload.taskId,
+    'resolved',
+    new Date().toISOString(),
+    payload.reason,
+  );
+
+  markSessionDone(intent.sessionId, Date.now(), null, NO_OP_RESOLVED_REASON);
+  setSessionTerminalCompletionReason(intent.sessionId, NO_OP_RESOLVED_REASON);
+
+  return committedIntent;
+}
+
 export async function routeStageTimeBlock(
   intent: StagedIntent,
   sessionManager: SessionManager | undefined,
@@ -6832,7 +6905,11 @@ export async function routeStageTimeBlock(
   if (intent.kind === 'planning.noOp') {
     const resolved = await maybeAutoResolveCodeNoOp(intent);
     if (resolved.state === 'committed') return resolved;
-    intent = resolved;
+    const investigateResolved = await maybeAutoResolveInvestigateNoOp(
+      resolved,
+    );
+    if (investigateResolved.state === 'committed') return investigateResolved;
+    intent = investigateResolved;
   }
   if (intent.kind === 'session.requestCapability') {
     return maybeAutoApproveCapabilityRequest(intent, sessionManager);

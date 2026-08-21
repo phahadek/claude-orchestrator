@@ -129,6 +129,14 @@ export const CODE_INTENT_KINDS: readonly string[] = [
  * ambiguous input the skill's "resolve it before acting" rule requires;
  * `session.requestCapability` is the same mid-session escalation path every
  * planning workflow gets; `intent.withdraw` retracts a staged intent.
+ * `planning.noOp` is this session's terminal declaration that a report in
+ * its own dispatched batch has no actionable finding — its `payload.taskId`
+ * must name a report id from that batch (validated at stage time, mirroring
+ * the SESSION_TASK_BINDING_KINDS check every other task-targeting kind
+ * gets), and it auto-resolves the named report directly (via
+ * `updateReportState`), the investigate analog of
+ * routes/stagedIntents.ts's `maybeAutoResolveCodeNoOp` for a code session —
+ * see the sibling auto-resolve function for investigate sessions there.
  * Consumed by config.ts to derive `INVESTIGATE_ALLOWED_TOOLS`'s staged-intent
  * MCP entries, same precedent as `PLANNING_INTENT_KINDS`/`CODE_INTENT_KINDS`
  * above.
@@ -138,4 +146,5 @@ export const INVESTIGATE_INTENT_KINDS: readonly string[] = [
   'decision.pickOne',
   'session.requestCapability',
   'intent.withdraw',
+  'planning.noOp',
 ];
