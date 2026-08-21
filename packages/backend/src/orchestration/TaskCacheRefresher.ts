@@ -9,6 +9,7 @@ import { JiraApiError } from '../tasks/JiraClient';
 import { MilestoneNotFoundError } from '../tasks/LocalTaskBackend';
 import { ProjectService } from '../projects/ProjectService';
 import { runWithConcurrency, yieldToEventLoop } from '../utils/concurrency';
+import { getTaskCache } from '../db/queries';
 import type { Scheduler } from './Scheduler';
 
 const MIN_REFRESH_INTERVAL_MS = 10_000;
@@ -50,6 +51,31 @@ export class TaskCacheRefresher {
   private readonly milestoneFailureCounts = new Map<string, number>();
   private readonly condemnedMilestones = new Map<string, CondemnedMilestone>();
   private _refreshingOnce = false;
+  /**
+   * Last-seen raw_json per cached task id, used only to detect whether this
+   * tick's upsertTaskCache write actually changed the row's content — the
+   * upsert itself always touches fetched_at, so that alone can't tell a
+   * genuine content change from a refetch of unchanged data.
+   */
+  private readonly lastSeenRawJson = new Map<string, string>();
+
+  /**
+   * Counts how many of `tasks`' cache rows have different raw_json than the
+   * last tick observed, updating the tracked snapshot as it goes.
+   */
+  private countChangedTaskRows(tasks: { task: { id: string } }[]): number {
+    let changed = 0;
+    for (const { task } of tasks) {
+      const row = getTaskCache(task.id);
+      const rawJson = row?.raw_json;
+      if (rawJson === undefined) continue;
+      if (this.lastSeenRawJson.get(task.id) !== rawJson) {
+        changed++;
+        this.lastSeenRawJson.set(task.id, rawJson);
+      }
+    }
+    return changed;
+  }
 
   /** Best-effort mtime read; returns null if the file can't be stat'd. */
   private statMtimeMs(filePath: string): number | null {
@@ -78,13 +104,19 @@ export class TaskCacheRefresher {
         ),
       concurrency: 'skip-if-running',
       run: async () => {
-        await this.refreshOnce();
+        const itemsProcessed = await this.refreshOnce();
+        return { items_processed: itemsProcessed };
       },
     });
   }
 
-  async refreshOnce(): Promise<void> {
-    if (this._refreshingOnce) return;
+  /**
+   * Returns the number of cached task rows whose content actually changed
+   * this tick — not the number of tasks examined. A refresh that fetched and
+   * found nothing new reports 0, distinct from a job that never reports.
+   */
+  async refreshOnce(): Promise<number> {
+    if (this._refreshingOnce) return 0;
     this._refreshingOnce = true;
     const start = Date.now();
     const listProjects = this.options.listProjects ?? getAllProjects;
@@ -98,16 +130,21 @@ export class TaskCacheRefresher {
     logger.info(
       `[TaskCacheRefresher] refresh start projects=${projects.length}`,
     );
+    let itemsProcessed = 0;
     try {
-      await runWithConcurrency(projects, PROJECT_CONCURRENCY, (project) =>
-        this.refreshProject(project),
+      const changedCounts = await runWithConcurrency(
+        projects,
+        PROJECT_CONCURRENCY,
+        (project) => this.refreshProject(project),
       );
+      itemsProcessed = changedCounts.reduce((sum, n) => sum + n, 0);
     } finally {
       this._refreshingOnce = false;
       logger.info(
         `[TaskCacheRefresher] refresh complete projects=${projects.length} durationMs=${Date.now() - start}`,
       );
     }
+    return itemsProcessed;
   }
 
   async refreshProjectById(
@@ -123,13 +160,13 @@ export class TaskCacheRefresher {
   private async refreshProject(
     project: ProjectConfig,
     skipCache?: boolean,
-  ): Promise<void> {
+  ): Promise<number> {
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     let backend: TaskBackend;
     try {
       backend = resolveBackend(project.id);
     } catch {
-      return;
+      return 0;
     }
 
     const isLocalSource = project.taskSource === 'yaml';
@@ -143,6 +180,7 @@ export class TaskCacheRefresher {
     );
 
     let jiraAborted = false;
+    let changedRows = 0;
     const milestoneConcurrency =
       project.taskSource === 'jira' ? 1 : MILESTONE_CONCURRENCY;
 
@@ -179,6 +217,7 @@ export class TaskCacheRefresher {
           const tasks = skipCache
             ? await backend.fetchReadyTasks(fetchId, true)
             : await backend.fetchReadyTasks(fetchId);
+          changedRows += this.countChangedTaskRows(tasks);
           // The board cache is always keyed on the DB milestone UUID (milestone.id),
           // regardless of what identifier the backend needed to fetch the data —
           // this must match the read side (ws/router) and the write side (each
@@ -231,7 +270,7 @@ export class TaskCacheRefresher {
       },
     );
 
-    if (jiraAborted) return;
+    if (jiraAborted) return changedRows;
 
     if (project.taskSource === 'jira') {
       this.jiraNextAllowed.set(
@@ -242,10 +281,11 @@ export class TaskCacheRefresher {
 
     if (project.nonMilestoneSourceConfig?.notionDatabaseId) {
       try {
-        await backend.fetchNonMilestoneReadyTasks(
+        const nonMilestoneTasks = await backend.fetchNonMilestoneReadyTasks(
           project.nonMilestoneSourceConfig,
           project.id,
         );
+        changedRows += this.countChangedTaskRows(nonMilestoneTasks);
         this.broadcast?.({
           type: 'task_cache_updated',
           projectId: project.id,
@@ -259,5 +299,7 @@ export class TaskCacheRefresher {
         );
       }
     }
+
+    return changedRows;
   }
 }

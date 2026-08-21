@@ -71,7 +71,7 @@ export interface BootDeps {
   };
   githubClient: GitHubClient;
   autoLauncher: {
-    pollOnce(): Promise<void>;
+    pollOnce(): Promise<unknown>;
   };
   scheduler: {
     start(): void;
@@ -350,9 +350,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('gate_verify_reattachment', () =>
     deps.gateVerifyReconciler.reattachOutstanding(),
   );
-  await tracker.runStep('auto_launcher_start', () =>
-    deps.autoLauncher.pollOnce(),
-  );
+  await tracker.runStep('auto_launcher_start', async () => {
+    await deps.autoLauncher.pollOnce();
+  });
   reportRecoveryIfNeeded(deps.broadcast);
   // Boot-safety gate: scheduler (and its runOnBoot jobs) must not start until
   // boot_reconciliation_completed is emitted. Ordering is explicit, not incidental.

@@ -27,6 +27,8 @@ import { getTaskBackend } from '../../tasks/TaskBackend.js';
 import { ProjectService } from '../../projects/ProjectService.js';
 import { TaskCacheRefresher } from '../TaskCacheRefresher.js';
 import { JiraApiError } from '../../tasks/JiraClient.js';
+import { upsertTaskCache } from '../../db/queries.js';
+import { Scheduler, DEGRADED_TICK_THRESHOLD_MS } from '../Scheduler.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -597,5 +599,99 @@ describe('TaskCacheRefresher', () => {
 
       expect(backend.fetchReadyTasks).toHaveBeenCalledWith('m1');
     });
+  });
+
+  describe('items_processed reporting', () => {
+    it('returns a non-zero count when a cached task row changed, and 0 when nothing changed', async () => {
+      const project = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([project]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+      ]);
+
+      let rawJson = JSON.stringify({ v: 1 });
+      const backend = makeBackend({
+        fetchReadyTasks: vi.fn().mockImplementation(async () => {
+          upsertTaskCache('changed-row-task', rawJson);
+          return [{ task: { id: 'changed-row-task' } }];
+        }),
+      });
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      // First observation of this task's cache row counts as a change.
+      const first = await refresher.refreshOnce();
+      expect(first).toBe(1);
+
+      // Same content rewritten — the row's fetched_at moves but its content
+      // doesn't, so this must be a true zero, not just "unreported".
+      const second = await refresher.refreshOnce();
+      expect(second).toBe(0);
+
+      // Content actually changes — reported again as non-zero.
+      rawJson = JSON.stringify({ v: 2 });
+      const third = await refresher.refreshOnce();
+      expect(third).toBe(1);
+    });
+  });
+});
+
+describe('Scheduler degraded-tick reclassification (task_cache_refresher)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getAllProjects).mockReturnValue([]);
+    vi.mocked(ProjectService.listMilestones).mockReturnValue([]);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('distinguishes a long productive tick (ok) from a long zero-item tick (degraded)', async () => {
+    const project = makeProject({ id: 'p1' });
+    vi.mocked(getAllProjects).mockReturnValue([project]);
+    vi.mocked(ProjectService.listMilestones).mockReturnValue([
+      makeMilestone('m1', 'src-1'),
+    ]);
+
+    let rawJson = JSON.stringify({ v: 1 });
+    const backend = makeBackend({
+      fetchReadyTasks: vi.fn().mockImplementation(async () => {
+        // Fake timers also fake Date.now(), so advancing them synchronously
+        // during the job simulates a multi-minute tick without the test
+        // actually waiting that long.
+        vi.advanceTimersByTime(DEGRADED_TICK_THRESHOLD_MS);
+        upsertTaskCache('degraded-test-task', rawJson);
+        return [{ task: { id: 'degraded-test-task' } }];
+      }),
+    });
+    vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+    const refresher = new TaskCacheRefresher(undefined, {
+      listProjects: getAllProjects,
+      resolveBackend: getTaskBackend,
+    });
+    const scheduler = new Scheduler();
+    refresher.register(scheduler);
+
+    // Long tick, content changed — genuinely productive, must stay 'ok'.
+    await scheduler.triggerNow('task_cache_refresher');
+    const afterProductive = scheduler
+      .status()
+      .find((s) => s.name === 'task_cache_refresher');
+    expect(afterProductive?.lastStatus).toBe('ok');
+
+    // Long tick, identical content — a starved/wedged-looking tick that did
+    // no real work, must be reclassified 'degraded'.
+    await scheduler.triggerNow('task_cache_refresher');
+    const afterIdle = scheduler
+      .status()
+      .find((s) => s.name === 'task_cache_refresher');
+    expect(afterIdle?.lastStatus).toBe('degraded');
   });
 });

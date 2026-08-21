@@ -231,7 +231,22 @@ export class AutoLauncher {
         ),
       concurrency: 'skip-if-running',
       run: async () => {
-        await this.pollOnce();
+        const { eligible, launched, skipped, blockReason } =
+          await this.pollOnce();
+        // A negative items_processed mirrors gateReconciler's convention:
+        // "found runnable work but dispatched none of it for want of
+        // budget" — the same admission-block condition that drives
+        // evaluateAdmissionStall (eligible > 0, launched === 0, a block
+        // reason present). Individual per-task launch failures with no
+        // admission block (e.g. worktree setup errors) are a genuine zero,
+        // not a budget block, so they stay 0.
+        const items_processed =
+          launched > 0
+            ? launched
+            : eligible > 0 && blockReason
+              ? -skipped
+              : 0;
+        return { items_processed };
       },
     });
   }
@@ -242,26 +257,37 @@ export class AutoLauncher {
    * via the Scheduler's skip-if-running) since the boot-time call bypasses the
    * Scheduler's own tracking entirely.
    */
-  async pollOnce(): Promise<void> {
+  async pollOnce(): Promise<{
+    eligible: number;
+    launched: number;
+    skipped: number;
+    blockReason?: AdmissionBlockReason;
+  }> {
     if (this.polling) {
       logger.info('[AutoLauncher] poll already in progress — skipping');
-      return;
+      return { eligible: 0, launched: 0, skipped: 0 };
     }
     this.polling = true;
     try {
-      await this.runPollCycle();
+      return await this.runPollCycle();
     } finally {
       this.polling = false;
     }
   }
 
-  private async runPollCycle(): Promise<void> {
+  private async runPollCycle(): Promise<{
+    eligible: number;
+    launched: number;
+    skipped: number;
+    blockReason?: AdmissionBlockReason;
+  }> {
     const cycleId = ++this.cycleCounter;
     this.pollLastStartedAt = Date.now();
     logger.info(`[AutoLauncher] poll start cycle=${cycleId}`);
     let eligibleCount = 0;
     let launchedCount = 0;
     let skippedCount = 0;
+    let aggBlockReason: AdmissionBlockReason | undefined;
     try {
       const listProjects = this.options.listProjects ?? getAllProjects;
       const projects = listProjects().filter((p) => p.autoLaunchEnabled);
@@ -297,6 +323,7 @@ export class AutoLauncher {
         }
       }
       this.lastPollReadyTaskIds = newReadyTaskIds;
+      aggBlockReason = blockReason;
       this.evaluateAdmissionStall(
         eligibleCount,
         launchedCount,
@@ -309,6 +336,12 @@ export class AutoLauncher {
         `[AutoLauncher] poll complete cycle=${cycleId} (eligible=${eligibleCount}, launched=${launchedCount}, skipped=${skippedCount}) durationMs=${elapsedMs}`,
       );
     }
+    return {
+      eligible: eligibleCount,
+      launched: launchedCount,
+      skipped: skippedCount,
+      blockReason: aggBlockReason,
+    };
   }
 
   private async processProject(project: ProjectConfig): Promise<{
