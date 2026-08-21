@@ -1,25 +1,40 @@
 import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import path from 'node:path';
 import { runMigrations } from '../db/schema.js';
+import { resolveTestScratchDataDir } from '../testScratchDataDir.js';
 
 // Tests the sessions.task_id_norm generated-column migration (schema.ts).
 // SQLite rejects ALTER TABLE ADD COLUMN for STORED generated columns — only
 // VIRTUAL may be added to an existing table — so the column must be VIRTUAL,
 // and the dependent CREATE INDEX must never run against a column that a
 // failed ALTER never created.
+//
+// Column presence is verified via sqlite_master.sql (the table's DDL text),
+// not PRAGMA table_info: with the bundled better-sqlite3/SQLite build,
+// table_info never lists a VIRTUAL generated column added via ALTER TABLE
+// (as opposed to one present in the original CREATE TABLE), even though the
+// column is fully functional — see the "on-disk" test below.
 
-function getColumnNames(db: Database.Database, table: string): Set<string> {
-  const rows = db.prepare(`PRAGMA table_xinfo(${table})`).all() as Array<{
-    name: string;
-  }>;
-  return new Set(rows.map((r) => r.name));
+function getTableSql(db: Database.Database, table: string): string {
+  const row = db
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`)
+    .get(table) as { sql: string } | undefined;
+  return row?.sql ?? '';
+}
+
+function tableHasColumn(
+  db: Database.Database,
+  table: string,
+  column: string,
+): boolean {
+  return new RegExp(`\\b${column}\\b`).test(getTableSql(db, table));
 }
 
 function countTaskIdNormColumns(db: Database.Database): number {
-  const rows = db.prepare(`PRAGMA table_xinfo(sessions)`).all() as Array<{
-    name: string;
-  }>;
-  return rows.filter((r) => r.name === 'task_id_norm').length;
+  const matches = getTableSql(db, 'sessions').match(/\btask_id_norm\b/g);
+  return matches ? matches.length : 0;
 }
 
 function countTaskIdNormIndexes(db: Database.Database): number {
@@ -43,8 +58,7 @@ describe('runMigrations() — sessions.task_id_norm', () => {
   it('completes successfully against a fresh database whose sessions table lacks task_id_norm', () => {
     const mem = new Database(':memory:');
     expect(() => runMigrations(mem)).not.toThrow();
-    const columns = getColumnNames(mem, 'sessions');
-    expect(columns).toContain('task_id_norm');
+    expect(tableHasColumn(mem, 'sessions', 'task_id_norm')).toBe(true);
   });
 
   it('is idempotent — running twice leaves exactly one column and one index', () => {
@@ -53,6 +67,46 @@ describe('runMigrations() — sessions.task_id_norm', () => {
     expect(() => runMigrations(mem)).not.toThrow();
     expect(countTaskIdNormColumns(mem)).toBe(1);
     expect(countTaskIdNormIndexes(mem)).toBe(1);
+  });
+
+  it('the PRAGMA table_info blind spot (if present in this SQLite build) reproduces identically on a real on-disk database, not just :memory:', () => {
+    // Rather than hard-coding the exact table_info behavior this SQLite
+    // build exhibits (which the migration itself never relies on), compare
+    // it live against a freshly migrated :memory: database: whatever
+    // table_info does or doesn't report for the ALTER-added VIRTUAL column
+    // must be identical on disk, proving the fix (sqlite_master.sql) isn't
+    // papering over a quirk confined to :memory:.
+    const pragmaColumnNames = (db: Database.Database): string[] =>
+      (
+        db.prepare(`PRAGMA table_info(sessions)`).all() as Array<{
+          name: string;
+        }>
+      ).map((r) => r.name);
+
+    const mem = new Database(':memory:');
+    runMigrations(mem);
+    const memHasColumnViaPragma =
+      pragmaColumnNames(mem).includes('task_id_norm');
+
+    const scratchRoot = resolveTestScratchDataDir(process.pid);
+    fs.mkdirSync(scratchRoot, { recursive: true });
+    const dir = fs.mkdtempSync(path.join(scratchRoot, 'task-id-norm-'));
+    const dbPath = path.join(dir, 'test.db');
+    try {
+      const file = new Database(dbPath);
+      try {
+        runMigrations(file);
+        const diskHasColumnViaPragma =
+          pragmaColumnNames(file).includes('task_id_norm');
+
+        expect(diskHasColumnViaPragma).toBe(memHasColumnViaPragma);
+        expect(tableHasColumn(file, 'sessions', 'task_id_norm')).toBe(true);
+      } finally {
+        file.close();
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('matches hasActiveSessionForTask normalization, including a NULL task_id', () => {
