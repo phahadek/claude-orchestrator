@@ -6872,6 +6872,18 @@ async function maybeAutoResolveInvestigateNoOp(
   const payload = intent.payload as { taskId?: string; reason?: string };
   if (!payload?.taskId || !payload.reason) return intent;
 
+  // Resolve the report — the step most likely to throw (missing report row,
+  // DB error) — before transitioning the intent to 'committed' or recording
+  // its disposition, so a throw here leaves the intent untouched in
+  // 'staged' rather than permanently 'committed' with the report never
+  // resolved and the session never terminated.
+  updateReportState(
+    payload.taskId,
+    'resolved',
+    new Date().toISOString(),
+    payload.reason,
+  );
+
   const committed = transitionStagedIntent(intent.id, 'committed');
   const committedIntent = rowToApi(committed);
   broadcastIntentChange(committedIntent);
@@ -6884,13 +6896,6 @@ async function maybeAutoResolveInvestigateNoOp(
     task_id: payload.taskId,
     payload: { intentId: committedIntent.id, disposition: 'auto_committed' },
   });
-
-  updateReportState(
-    payload.taskId,
-    'resolved',
-    new Date().toISOString(),
-    payload.reason,
-  );
 
   markSessionDone(intent.sessionId, Date.now(), null, NO_OP_RESOLVED_REASON);
   setSessionTerminalCompletionReason(intent.sessionId, NO_OP_RESOLVED_REASON);
