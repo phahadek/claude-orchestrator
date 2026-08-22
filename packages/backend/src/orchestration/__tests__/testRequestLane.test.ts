@@ -74,6 +74,7 @@ import {
   countTestRequestRunsNeedingExtraction,
   insertProject,
   updateProject,
+  getFailingTestIdsForRun,
 } from '../../db/queries';
 
 beforeEach(() => {
@@ -1440,6 +1441,64 @@ describe('ingestTestRunResults', () => {
 
     // t1's passing result never got a raw row, but did reach the digest.
     expect(listRecentValidTestDurations('t1', 10)).toEqual([]); // invalid — concurrent_run_count=2
+  });
+
+  it('persists failureMessage/failureTraceExcerpt from structured_result onto the extracted row and getFailingTestIdsForRun', () => {
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [
+            { id: 't1', name: 'test one', outcome: 'passed', durationMs: 12 },
+            {
+              id: 't2',
+              name: 'test two',
+              outcome: 'failed',
+              durationMs: 34,
+              failureMessage: 'expected 1 to equal 2',
+              failureTraceExcerpt: 'at test two (spec.ts:10:5)',
+            },
+          ],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-extract-failure-content',
+      'proj-1',
+      'hash-extract-failure-content',
+      null,
+      Date.now(),
+      2,
+    );
+    completeTestRequestRun(
+      'run-extract-failure-content',
+      'passed',
+      'ok',
+      null,
+      structured,
+      true,
+    );
+
+    const run = getLatestTestRequestRun(
+      'proj-1',
+      'hash-extract-failure-content',
+    )!;
+    ingestTestRunResults(run);
+
+    const rows = listTestRunResultsForRun('run-extract-failure-content');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      test_id: 't2',
+      failure_message: 'expected 1 to equal 2',
+      failure_trace_excerpt: 'at test two (spec.ts:10:5)',
+    });
+
+    const failing = getFailingTestIdsForRun('run-extract-failure-content');
+    expect(failing).toHaveLength(1);
+    expect(failing[0]).toMatchObject({
+      test_id: 't2',
+      failure_message: 'expected 1 to equal 2',
+      failure_trace_excerpt: 'at test two (spec.ts:10:5)',
+    });
   });
 
   it('the per-run summary record reports outcome counts equal to the ingested results for a mixed pass/fail/skip run', () => {

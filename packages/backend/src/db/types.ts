@@ -1106,8 +1106,9 @@ export interface DependencyCacheEntryRow {
  * stored on test_request_runs.structured_result — produced by the
  * acquisition/parser step (see collectStructuredTestResult in
  * session/test-runner.ts) and consumed by test_run_results extraction
- * (ingestTestRunResults in orchestration/testRequestLane.ts), which only
- * reads id/name/outcome/durationMs off each test.
+ * (ingestTestRunResults in orchestration/testRequestLane.ts), which reads
+ * id/name/outcome/durationMs off each test, plus failureMessage/
+ * failureTraceExcerpt for non-passing outcomes.
  */
 interface StructuredTestCase {
   id: string;
@@ -1156,6 +1157,8 @@ export interface TestRunResultRow {
   duration_ms: number;
   concurrent_run_count: number | null;
   oom_killed: number;
+  failure_message: string | null;
+  failure_trace_excerpt: string | null;
   created_at: number;
 }
 
@@ -1164,6 +1167,8 @@ export interface NewTestRunResultRow {
   name: string;
   outcome: string;
   duration_ms: number;
+  failureMessage?: string;
+  failureTraceExcerpt?: string;
 }
 
 // ─── test_run_summaries ─────────────────────────────────────────────────────

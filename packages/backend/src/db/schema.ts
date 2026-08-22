@@ -2359,6 +2359,8 @@ export function runMigrations(target: Database.Database): void {
       duration_ms          INTEGER NOT NULL,
       concurrent_run_count INTEGER,
       oom_killed           INTEGER NOT NULL DEFAULT 0,
+      failure_message       TEXT,
+      failure_trace_excerpt TEXT,
       created_at           INTEGER NOT NULL,
       FOREIGN KEY (test_request_run_id) REFERENCES test_request_runs(id)
     );
@@ -2386,6 +2388,25 @@ export function runMigrations(target: Database.Database): void {
   try {
     target.exec(
       `ALTER TABLE test_run_results ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`,
+    );
+  } catch {
+    /* already exists */
+  }
+  // Idempotent: failure content columns for pre-existing test_run_results
+  // tables created before this migration — carries a failing test's
+  // failureMessage/failureTraceExcerpt (already present on structured_result
+  // per test, see StructuredTestCase) through to the durable per-test row,
+  // so the f2-gate base-health masking guard can compare a PR's failure
+  // content against the base probe's own recorded failure for the same
+  // test id, not just match on test id.
+  try {
+    target.exec(`ALTER TABLE test_run_results ADD COLUMN failure_message TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE test_run_results ADD COLUMN failure_trace_excerpt TEXT`,
     );
   } catch {
     /* already exists */
