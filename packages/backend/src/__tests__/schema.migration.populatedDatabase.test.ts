@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { runMigrations } from '../db/schema.js';
 import { insertRows } from '../../test/helpers/seedRows.js';
 
+// ESM modules have no built-in __dirname; derive it from import.meta.url for
+// the static-guard test's read of schema.ts below.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Every schema.migration.*.test.ts file up to this one runs runMigrations()
