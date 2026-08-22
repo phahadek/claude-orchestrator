@@ -362,7 +362,10 @@ export async function filterBaseAttributableFailuresForF2Gate(
   run: TestRequestRunRow,
   changedFiles: string[],
   triggeringTaskId: string | null,
-): Promise<{ result: BaseAttributableFilterResult; guardBlocked: FailingTest[] }> {
+): Promise<{
+  result: BaseAttributableFilterResult;
+  guardBlocked: FailingTest[];
+}> {
   const filterResult = await filterBaseAttributableFailures(
     project,
     run,

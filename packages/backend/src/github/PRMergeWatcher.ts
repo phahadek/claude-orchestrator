@@ -673,7 +673,11 @@ export class PRMergeWatcher extends EventEmitter {
           project,
           testResult,
         );
-        if (gate && gate.result.outcome !== 'unfiltered' && gate.result.passed) {
+        if (
+          gate &&
+          gate.result.outcome !== 'unfiltered' &&
+          gate.result.passed
+        ) {
           setPauseReason(
             pr.pr_number,
             pr.repo,
