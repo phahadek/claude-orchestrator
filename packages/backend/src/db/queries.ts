@@ -102,6 +102,7 @@ import type {
   OpsJournalState,
 } from './types';
 import { FLOW_IDS, DEFAULT_ARM, type FlowId } from '../orchestration/flowArm';
+import { deriveBranchSlug } from '../session/branchSlug';
 
 // ─── asOf reconstruction ────────────────────────────────────────────────────
 // Point-in-time reads for the gate-verify read path (see gate/gateItemVerifier.ts
@@ -3360,20 +3361,47 @@ export interface SessionBranchMatch {
 }
 
 /**
- * Attempt to derive a session from a PR's head_branch by matching against
- * sessions.worktree_path. Returns the match when exactly one session path
- * contains the branch name. Logs a warning and returns null for zero or
+ * Attempt to derive a session from a PR's head_branch by re-deriving the
+ * branch name each candidate session would have produced (via
+ * deriveBranchSlug, the same function SessionManager.start/respawnSession use
+ * to actually create the branch) and matching it against headBranch.
+ *
+ * sessions.worktree_path cannot be used for this — it is always
+ * `<projectDir>/.claude/worktrees/<sessionId>`, keyed purely by the session's
+ * UUID with no branch-name component, so a LIKE match against it can never
+ * succeed for a real branch name. task_name (the task title captured at
+ * session start) plus task_id is the only durable record of what branch a
+ * session's worktree was created on — so recompute it rather than storing it
+ * redundantly.
+ *
+ * Both the current (task-id-suffixed) and legacy (title-only) derivations are
+ * checked per candidate, matching resolveResumeBranchSlug's fallback for
+ * branches created before the task-id suffix landed. Returns the match when
+ * exactly one session matches. Logs a warning and returns null for zero or
  * multiple matches.
  */
 export function lookupSessionByBranch(
   headBranch: string,
 ): SessionBranchMatch | null {
-  const rows = db
-    .prepare<{ pattern: string }>(
-      `SELECT session_id, task_id FROM sessions
-       WHERE worktree_path LIKE @pattern`,
+  const candidates = db
+    .prepare(
+      `SELECT session_id, task_id, task_name FROM sessions
+       WHERE task_name IS NOT NULL`,
     )
-    .all({ pattern: `%${headBranch}%` }) as SessionBranchMatch[];
+    .all() as Array<{
+    session_id: string;
+    task_id: string | null;
+    task_name: string;
+  }>;
+
+  const rows: SessionBranchMatch[] = [];
+  for (const c of candidates) {
+    const current = deriveBranchSlug(c.task_name, c.task_id);
+    const legacy = deriveBranchSlug(c.task_name, null);
+    if (headBranch === current || headBranch === legacy) {
+      rows.push({ session_id: c.session_id, task_id: c.task_id });
+    }
+  }
 
   if (rows.length === 1) {
     return rows[0];

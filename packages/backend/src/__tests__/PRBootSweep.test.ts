@@ -53,9 +53,15 @@ function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
   };
 }
 
+/**
+ * sessions.worktree_path is always `<projectDir>/.claude/worktrees/<uuid>` in
+ * production — purely keyed by the session's own UUID, never containing the
+ * branch name. task_name/task_id (re-derived via deriveBranchSlug) is what
+ * lookupSessionByBranch actually matches against.
+ */
 function insertTestSession(
   sessionId: string,
-  worktreePath: string,
+  taskName: string,
   taskId: string | null = null,
 ): void {
   insertSession({
@@ -68,9 +74,9 @@ function insertTestSession(
     started_at: Date.now(),
     ended_at: null,
     pr_url: null,
-    worktree_path: worktreePath,
+    worktree_path: `/test/.claude/worktrees/${sessionId}`,
     session_type: 'standard',
-    task_name: null,
+    task_name: taskName,
   });
 }
 
@@ -99,11 +105,7 @@ describe('runPRBootSweep', () => {
         typeof getAllProjects
       >[number],
     ]);
-    insertTestSession(
-      'sess-aaaaaaaa',
-      '/worktrees/w1/feature/something',
-      'task-x',
-    );
+    insertTestSession('sess-aaaaaaaa', 'something', 'task-x');
     const pr = makePR();
     const github = makeGithubClient([pr]);
 
@@ -200,8 +202,8 @@ describe('runPRBootSweep', () => {
         typeof getAllProjects
       >[number],
     ]);
-    insertTestSession('sess-11111111', '/worktrees/w1/feature/ambiguous');
-    insertTestSession('sess-22222222', '/worktrees/w2/feature/ambiguous');
+    insertTestSession('sess-11111111', 'ambiguous');
+    insertTestSession('sess-22222222', 'ambiguous');
     const pr = makePR({ headBranch: 'feature/ambiguous' });
     const github = makeGithubClient([pr]);
 
@@ -344,11 +346,7 @@ describe('runPRBootSweep', () => {
         typeof getAllProjects
       >[number],
     ]);
-    insertTestSession(
-      'sess-bbbbbbbb',
-      '/worktrees/w1/feature/was-merged',
-      'task-y',
-    );
+    insertTestSession('sess-bbbbbbbb', 'was-merged', 'task-y');
     const mergedPR = makePR({
       id: 88,
       url: 'https://github.com/owner/repo/pull/88',
@@ -390,11 +388,7 @@ describe('runPRBootSweep', () => {
       >[number],
     ]);
     // Session exists (the task was launched and did work)
-    insertTestSession(
-      'sess-polimrkt',
-      '/worktrees/w1/feature/some-polimarket-task',
-      'task-polimarket-1',
-    );
+    insertTestSession('sess-polimrkt', 'some-polimarket-task', 'task-polimarket-1');
     // Simulate deletion: no row in pull_requests
     expect(getPRByNumber(201, 'polimarket/app')).toBeFalsy();
 
