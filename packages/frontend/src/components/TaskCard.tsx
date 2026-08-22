@@ -138,6 +138,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'CI is taking longer than usual to report a result — the merge sweep keeps retrying automatically and will merge once the PR goes clean. No action needed.',
   mcp_unreachable_exhausted:
     "Session's orchestrator MCP server never connected and automatic in-place respawn attempts were exhausted — review and resume manually.",
+  base_attributable_test_excluded:
+    'A failing F2 test was excluded as a confirmed base-branch break (clearing both masking guards) — does not block merge. No action needed.',
 };
 
 function verdictLabel(verdict: string): string {

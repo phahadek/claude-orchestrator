@@ -15,7 +15,13 @@ import {
   getAnalyzeContentCacheResult,
   insertAnalyzeContentCacheResult,
   addAutofixSha,
+  getTestRequestRunById,
+  updateTestRequestRunState,
 } from '../db/queries';
+import {
+  filterBaseAttributableFailuresForF2Gate,
+  renderBaseAttributableFilterDigest,
+} from '../orchestration/baseAttributableFilter';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import {
   loadAutofixCommands,
@@ -33,6 +39,7 @@ import { validateAndRepairGitConfig } from '../orchestration/gitConfigIntegrity'
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { runTestCommands } from '../session/test-runner';
 import { runProjectTestRequest } from '../orchestration/testRequestLane';
+import type { TestRequestRunResult } from '../orchestration/testRequestLane';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { formatCIFailureFeedback } from './reviewUtils';
 import { recordEvent } from '../audit/AuditLog';
@@ -479,7 +486,7 @@ export class PreReviewPipeline {
           return;
         }
 
-        const { passed } = contentHash
+        const result = contentHash
           ? await runProjectTestRequest({
               projectId: ctx.project.id,
               contentHash,
@@ -505,10 +512,89 @@ export class PreReviewPipeline {
             );
 
         logger.info(
-          `[PreReviewPipeline] tests ${passed ? 'PASSED' : 'FAILED'} for PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)}`,
+          `[PreReviewPipeline] tests ${result.passed ? 'PASSED' : 'FAILED'} for PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)}`,
         );
+
+        if (contentHash && !result.passed) {
+          await this.applyBaseAttributableF2GateFilter(
+            ctx,
+            (result as TestRequestRunResult).runId,
+          );
+        }
       },
     };
+  }
+
+  /**
+   * Base-health-aware f2-gate pre-empt, applied as soon as PreReviewPipeline
+   * itself records a failing F2 run — before PRMergeWatcher's own poll would
+   * otherwise pause the PR and nudge the session. Reuses the same
+   * filterBaseAttributableFailures the test.request lane calls
+   * (stagedIntents.ts), gated by the two f2-gate masking guards
+   * (filterBaseAttributableFailuresForF2Gate), with `changedFiles` sourced
+   * from this stage's own live session worktree (getChangedFiles) since a
+   * worktree is available here, unlike PRMergeWatcher's merge-time check.
+   * A fully-excused run has its test_request_runs row flipped to 'passed' —
+   * the same state flip stagedIntents.ts's test.request lane applies on
+   * filtered_pass — so PRMergeWatcher's own gate read never re-blocks on it,
+   * and an advisory (non-blocking) pause pill is set so the exclusion stays
+   * visible to an operator rather than passing silently. A partially-excused
+   * run leaves the row 'failed' (PRMergeWatcher's own gate re-derives the
+   * narrower remainder) but still surfaces the digest via the same pill.
+   */
+  private async applyBaseAttributableF2GateFilter(
+    ctx: StageContext,
+    runId: string,
+  ): Promise<void> {
+    const run = getTestRequestRunById(runId);
+    if (!run) return;
+
+    let changedFiles: string[];
+    try {
+      changedFiles = await getChangedFiles(
+        ctx.worktreePath,
+        getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
+          ctx.project.baseBranch,
+      );
+    } catch (err) {
+      logger.warn(
+        `[PreReviewPipeline] PR #${ctx.prNumber}: getChangedFiles failed for f2 gate masking guard: ${err instanceof Error ? err.message : err}`,
+      );
+      return;
+    }
+
+    let gate: Awaited<
+      ReturnType<typeof filterBaseAttributableFailuresForF2Gate>
+    >;
+    try {
+      gate = await filterBaseAttributableFailuresForF2Gate(
+        ctx.project,
+        run,
+        changedFiles,
+        ctx.job.taskId ?? null,
+      );
+    } catch (err) {
+      logger.warn(
+        `[PreReviewPipeline] PR #${ctx.prNumber}: base-attributable f2 gate filter failed: ${err instanceof Error ? err.message : err}`,
+      );
+      return;
+    }
+
+    if (gate.result.outcome === 'unfiltered') return;
+
+    const digest = renderBaseAttributableFilterDigest(
+      gate.result,
+      gate.guardBlocked,
+    );
+    setPauseReason(
+      ctx.prNumber,
+      ctx.repo,
+      'base_attributable_test_excluded',
+      digest.slice(0, 1000),
+    );
+    if (gate.result.passed) {
+      updateTestRequestRunState(runId, 'passed');
+    }
   }
 
   /**

@@ -692,6 +692,14 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
  * A run with no per-test detail (structured_result never ingested) is never
  * eligible — there's nothing to individually clear, so it must route through
  * the unmodified session pause+nudge path per the locked design.
+ *
+ * `baseExcusedTestIds` (default empty) is the set of test ids the gate-level
+ * baseAttributableFilter (see orchestration/baseAttributableFilter.ts's
+ * applyF2GateMaskingGuards) already excused for this same run — the two
+ * filters are independent per-test checks over the same failing-test set, so
+ * a test in this set is skipped here entirely rather than re-evaluated: it's
+ * already excused, and this function must not veto it just because it
+ * doesn't separately clear the flip-rate/breadth signal.
  */
 export function evaluateF2LaneFlakyDisposition(
   testRequestRunId: string,
@@ -701,9 +709,12 @@ export function evaluateF2LaneFlakyDisposition(
   flipRateThresholdK: number,
   breadthN: number,
   breadthWindowHours: number,
+  baseExcusedTestIds: ReadonlySet<string> = new Set(),
 ): boolean {
-  const failing = getFailingTestIdsForRun(testRequestRunId);
-  if (failing.length === 0) return false;
+  const failing = getFailingTestIdsForRun(testRequestRunId).filter(
+    (t) => !baseExcusedTestIds.has(t.test_id),
+  );
+  if (failing.length === 0) return baseExcusedTestIds.size > 0;
 
   for (const test of failing) {
     const flipFlag = computeTestFlipRateFlag(
