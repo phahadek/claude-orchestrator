@@ -253,6 +253,7 @@ import { EventEmitter } from 'events';
 import { SessionManager } from '../session/SessionManager';
 import * as queries from '../db/queries';
 import * as configModule from '../config';
+import { recordEvent } from '../audit/AuditLog';
 import fs from 'fs';
 import type { AgentSession } from '../session/AgentSession';
 
@@ -342,10 +343,12 @@ describe('SessionManager.enqueueFeedback()', () => {
     expect(queries.listUndeliveredInboxItems('sess-idle')).toHaveLength(0);
   });
 
-  it('idle session: leaves item undelivered for retry when sendOrResume throws', async () => {
+  it('idle session: leaves item undelivered for retry when sendOrResume throws, and records verdict_routing_failed', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-idle-2',
       status: 'idle',
+      task_id: 'notion:task-2',
+      project_id: 'proj-2',
     } as never);
 
     const sm = new SessionManager();
@@ -355,6 +358,37 @@ describe('SessionManager.enqueueFeedback()', () => {
 
     expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
     expect(queries.listUndeliveredInboxItems('sess-idle-2')).toHaveLength(1);
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'verdict_routing_failed',
+        actor_id: 'sess-idle-2',
+        project_id: 'proj-2',
+        task_id: 'notion:task-2',
+      }),
+    );
+  });
+
+  it('idle session: leaves item undelivered and records verdict_routing_failed when sendOrResume returns null', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-idle-3',
+      status: 'idle',
+      task_id: null,
+      project_id: null,
+    } as never);
+
+    const sm = new SessionManager();
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValue(null);
+
+    await sm.enqueueFeedback('sess-idle-3', 'system:nudge', 'nudge text');
+
+    expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-idle-3')).toHaveLength(1);
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'verdict_routing_failed',
+        actor_id: 'sess-idle-3',
+      }),
+    );
   });
 
   it('terminal, resumable session: attempts a resume (bypassing the terminal refusal) and delivers on success', async () => {

@@ -59,7 +59,8 @@ export type CanonicalPauseReason =
   | 'test_request_cycle_exceeded'
   | 'test_report_acquisition_failed'
   | 'ci_not_completing'
-  | 'mcp_unreachable_exhausted';
+  | 'mcp_unreachable_exhausted'
+  | 'verdict_routing_failed';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -389,6 +390,16 @@ export const PAUSE_REASON_REGISTRY: Record<
   // RECOVERY_ACTION_MAP entry.
   mcp_unreachable_exhausted: {
     source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // A needs_changes/incomplete verdict had no session_id to route feedback
+  // to (e.g. a boot-swept PR that never matched a session by branch — see
+  // PRBootSweep.insertIfMissing). No automated recovery path exists for a
+  // PR with no session to nudge, so — like needs_repo/workflow_scope_denied
+  // — this is a permanent operator-action-required pause.
+  verdict_routing_failed: {
+    source: 'review',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
