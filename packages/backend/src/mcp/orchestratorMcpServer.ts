@@ -265,8 +265,8 @@ export function buildMcpServer(
   // PLANNING_INTENT_KINDS.ops kinds resolveStageProposalKinds already
   // narrows above. An investigate-dispatched session (session_type 'ops',
   // task_id `report-batch:<batchId>`) has no gate item or PR to act on, so
-  // downgrade to `null` here too; the read-only registrations below stay
-  // keyed on the unchanged `workflow`.
+  // downgrade to `null` here too; the read-only registrations further below
+  // stay keyed on the unchanged `workflow`.
   const mutationWorkflow: PlanningWorkflow | null =
     workflow === 'ops' && isInvestigateSession(session?.task_id)
       ? null
