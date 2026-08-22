@@ -388,7 +388,11 @@ describe('runPRBootSweep', () => {
       >[number],
     ]);
     // Session exists (the task was launched and did work)
-    insertTestSession('sess-polimrkt', 'some-polimarket-task', 'task-polimarket-1');
+    insertTestSession(
+      'sess-polimrkt',
+      'some-polimarket-task',
+      'task-polimarket-1',
+    );
     // Simulate deletion: no row in pull_requests
     expect(getPRByNumber(201, 'polimarket/app')).toBeFalsy();
 
