@@ -318,6 +318,11 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).toContain('task.create');
     expect(names).toContain('session.requestCapability');
     expect(names).toContain('intent.withdraw');
+    // planning.noOp is part of INVESTIGATE_INTENT_KINDS (see
+    // planningIntentKinds.ts) — it lets an investigate session record why a
+    // report needed no action, distinct from the ops-flavored planning.noOp
+    // apply path this test otherwise guards against.
+    expect(names).toContain('planning.noOp');
 
     const opsOnlyKinds = [
       'journal.setState',
@@ -326,7 +331,6 @@ describe('buildMcpServer — tool surface per session type', () => {
       'task.patchBodySection',
       'gate.verify',
       'ops.prIntent',
-      'planning.noOp',
       // Registered directly off workflow === 'ops' rather than via
       // PLANNING_INTENT_KINDS.ops — see verdictTools.ts,
       // gateReclassifyTool.ts, and strandedIntentTool.ts.
