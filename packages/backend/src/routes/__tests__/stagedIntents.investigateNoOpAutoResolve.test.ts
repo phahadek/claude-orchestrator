@@ -38,7 +38,11 @@ vi.mock('../../db/db', async () => {
 import { db } from '../../db/db';
 import { insertSession, getStagedIntent, getSession } from '../../db/queries';
 import { stageIntent, routeStageTimeBlock } from '../stagedIntents';
-import { insertReport, recordDispatch, getReport } from '../../investigation/reportStore';
+import {
+  insertReport,
+  recordDispatch,
+  getReport,
+} from '../../investigation/reportStore';
 import { SessionTaskBindingError } from '../stagedIntents';
 
 function seedInvestigateSession(sessionId: string, batchId: string) {

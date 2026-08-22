@@ -6905,9 +6905,7 @@ export async function routeStageTimeBlock(
   if (intent.kind === 'planning.noOp') {
     const resolved = await maybeAutoResolveCodeNoOp(intent);
     if (resolved.state === 'committed') return resolved;
-    const investigateResolved = await maybeAutoResolveInvestigateNoOp(
-      resolved,
-    );
+    const investigateResolved = await maybeAutoResolveInvestigateNoOp(resolved);
     if (investigateResolved.state === 'committed') return investigateResolved;
     intent = investigateResolved;
   }
