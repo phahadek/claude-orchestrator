@@ -37,10 +37,11 @@
  */
 import { logger } from '../logger';
 import type { ProjectConfig } from '../config';
-import type { TestRequestRunRow } from '../db/types';
+import type { TestRequestRunRow, StructuredTestResult } from '../db/types';
 import { getFailingTestIdsForRun, getFlaggedFlakyTestIds } from '../db/queries';
 import { checkBaseBranchHealth } from './baseHealthCheck';
 import { recordAndMaybeFileBaseHealthRemediation } from '../audit/baseHealthRemediationFiling';
+import { isTestIdTouchedByChangedFiles } from '../session/test-runner';
 
 type BaseAttributableFilterOutcome =
   | 'unfiltered'
@@ -49,7 +50,7 @@ type BaseAttributableFilterOutcome =
   | 'inconclusive'
   | 'unknown';
 
-interface FailingTest {
+export interface FailingTest {
   test_id: string;
   name: string;
 }
@@ -64,6 +65,15 @@ export interface BaseAttributableFilterResult {
   flakyExcludedTests: FailingTest[];
   /** Failing tests that remain after filtering — what's actually reported as a failure, if any. */
   remainingTests: FailingTest[];
+  /**
+   * The base-health probe's own test_request_runs row, when one was
+   * consulted for this result (partial_fail only) — carried through so a
+   * gate-level caller (see applyF2GateMaskingGuards) can compare the PR
+   * run's per-test failure content against the base probe's own recorded
+   * failure content without re-triggering checkBaseBranchHealth (which can
+   * itself execute a fresh probe run).
+   */
+  baseRun: TestRequestRunRow | null;
 }
 
 const UNFILTERED = (passed: boolean): BaseAttributableFilterResult => ({
@@ -72,6 +82,7 @@ const UNFILTERED = (passed: boolean): BaseAttributableFilterResult => ({
   excludedTests: [],
   flakyExcludedTests: [],
   remainingTests: [],
+  baseRun: null,
 });
 
 /**
@@ -163,6 +174,7 @@ export async function filterBaseAttributableFailures(
       excludedTests: [],
       flakyExcludedTests: [],
       remainingTests: [],
+      baseRun: null,
     };
   }
 
@@ -173,6 +185,7 @@ export async function filterBaseAttributableFailures(
       excludedTests: [],
       flakyExcludedTests: [],
       remainingTests: [],
+      baseRun: null,
     };
   }
 
@@ -212,6 +225,7 @@ export async function filterBaseAttributableFailures(
       excludedTests,
       flakyExcludedTests,
       remainingTests: [],
+      baseRun: health.run,
     };
   }
 
@@ -221,17 +235,180 @@ export async function filterBaseAttributableFailures(
     excludedTests,
     flakyExcludedTests,
     remainingTests,
+    baseRun: health.run,
   };
+}
+
+/**
+ * Extracts the failure content JUnit recorded for `testId` in a run's
+ * structured_result JSON — the raw acquisition artifact test_run_results
+ * extraction (ingestTestRunResults) only partially denormalizes today (see
+ * this module's masking-guard-2 usage). Returns null when the run has no
+ * structured_result, the JSON fails to parse, the test id isn't present, or
+ * the matched test carries neither a failureMessage nor a
+ * failureTraceExcerpt — every one of those is a "no usable signature" case
+ * a caller must treat identically (fail closed), so they're collapsed here
+ * rather than distinguished.
+ */
+function extractFailureSignature(
+  structuredResultJson: string | null,
+  testId: string,
+): string | null {
+  if (!structuredResultJson) return null;
+  let parsed: StructuredTestResult;
+  try {
+    parsed = JSON.parse(structuredResultJson) as StructuredTestResult;
+  } catch {
+    return null;
+  }
+  for (const suite of parsed.suites ?? []) {
+    for (const test of suite.tests ?? []) {
+      if (test.id !== testId) continue;
+      if (!test.failureMessage && !test.failureTraceExcerpt) return null;
+      return `${test.failureMessage ?? ''}\n${test.failureTraceExcerpt ?? ''}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The f2-gate masking guards (see the "Wire baseAttributableFilter into
+ * PreReviewPipeline/PRMergeWatcher's f2 gate" design): a test that
+ * `filterBaseAttributableFailures` already flagged as base-attributable
+ * (present in `result.excludedTests`) is only actually excused at gate/
+ * merge time once BOTH guards clear it:
+ *
+ *  1. diff-touches-test-file — the PR's own diff must not touch the
+ *     test's file (isTestIdTouchedByChangedFiles fails closed: an
+ *     unmappable test id or a touched file blocks exclusion).
+ *  2. failure-signature match — the PR run's own recorded failure content
+ *     for the test id must match the base probe's recorded failure content
+ *     for the same id (extractFailureSignature). Missing content on either
+ *     side, or a mismatch, fails closed.
+ *
+ * A test that fails either guard is moved back into `remainingTests` (a
+ * real gate failure) rather than silently staying excused — see
+ * renderBaseAttributableFilterDigest for how a caller surfaces that a
+ * candidate exclusion was blocked.
+ */
+export function applyF2GateMaskingGuards(
+  result: BaseAttributableFilterResult,
+  prRun: TestRequestRunRow,
+  changedFiles: string[],
+): { result: BaseAttributableFilterResult; guardBlocked: FailingTest[] } {
+  if (result.excludedTests.length === 0) {
+    return { result, guardBlocked: [] };
+  }
+
+  const cleared: FailingTest[] = [];
+  const blocked: FailingTest[] = [];
+  for (const t of result.excludedTests) {
+    const { touched, confident } = isTestIdTouchedByChangedFiles(
+      t.test_id,
+      t.name,
+      changedFiles,
+    );
+    if (!confident || touched) {
+      blocked.push(t);
+      continue;
+    }
+    const prSig = extractFailureSignature(prRun.structured_result, t.test_id);
+    const baseSig = result.baseRun
+      ? extractFailureSignature(result.baseRun.structured_result, t.test_id)
+      : null;
+    if (!prSig || !baseSig || prSig !== baseSig) {
+      blocked.push(t);
+      continue;
+    }
+    cleared.push(t);
+  }
+
+  if (blocked.length === 0) {
+    return { result, guardBlocked: [] };
+  }
+
+  const remainingTests = [...result.remainingTests, ...blocked];
+  const passed = remainingTests.length === 0;
+  const outcome: BaseAttributableFilterOutcome =
+    remainingTests.length === 0
+      ? 'filtered_pass'
+      : cleared.length > 0 || result.flakyExcludedTests.length > 0
+        ? 'filtered_partial'
+        : 'unfiltered';
+
+  return {
+    result: {
+      outcome,
+      passed,
+      excludedTests: cleared,
+      flakyExcludedTests: result.flakyExcludedTests,
+      remainingTests,
+      baseRun: result.baseRun,
+    },
+    guardBlocked: blocked,
+  };
+}
+
+/**
+ * The combined gate-level entry point both PreReviewPipeline's tests stage
+ * and PRMergeWatcher's F2 gate use: filterBaseAttributableFailures followed
+ * by applyF2GateMaskingGuards, in one call. `changedFiles` is caller-sourced
+ * (a live session worktree's getChangedFiles for PreReviewPipeline, a
+ * GitHubClient.fetchDiff for PRMergeWatcher, which has no worktree at
+ * merge-check time) since this module has no way to obtain a diff itself.
+ */
+export async function filterBaseAttributableFailuresForF2Gate(
+  project: ProjectConfig,
+  run: TestRequestRunRow,
+  changedFiles: string[],
+  triggeringTaskId: string | null,
+): Promise<{
+  result: BaseAttributableFilterResult;
+  guardBlocked: FailingTest[];
+}> {
+  const filterResult = await filterBaseAttributableFailures(
+    project,
+    run,
+    triggeringTaskId,
+  );
+  if (filterResult.excludedTests.length === 0) {
+    return { result: filterResult, guardBlocked: [] };
+  }
+  return applyF2GateMaskingGuards(filterResult, run, changedFiles);
 }
 
 /**
  * Renders a session-facing digest for a filter result whose outcome isn't
  * `unfiltered` — the caller's fallback (buildTestResultDigest /
  * truncateForDelivery) already covers the unfiltered case.
+ *
+ * `guardBlocked` (gate callers only — see applyF2GateMaskingGuards) is the
+ * set of tests that were base-attributable by the raw per-test intersection
+ * but got moved back into the failing set because they failed one of the
+ * f2-gate masking guards; appended as its own section so an operator can
+ * tell "excused" apart from "candidate exclusion, blocked" at a glance,
+ * satisfying the "never silently passes" requirement even when the gate
+ * ultimately still fails (outcome 'unfiltered' after guards, or
+ * 'filtered_partial').
  */
 export function renderBaseAttributableFilterDigest(
   result: BaseAttributableFilterResult,
+  guardBlocked: FailingTest[] = [],
 ): string {
+  const guardBlockedSection = (): string =>
+    guardBlocked.length === 0
+      ? ''
+      : '\n\n**Candidate base-attributable, blocked by masking guard ' +
+        `(still counted as real failures):**\n` +
+        guardBlocked.map((t) => `- \`${t.test_id}\` — ${t.name}`).join('\n');
+
+  if (result.outcome === 'unfiltered') {
+    return (
+      '**Test results:** failed — no failing test was excused at the f2 gate.' +
+      guardBlockedSection()
+    );
+  }
+
   if (result.outcome === 'inconclusive') {
     return (
       '**Test results:** inconclusive — the base branch itself is currently broken ' +
@@ -253,7 +430,8 @@ export function renderBaseAttributableFilterDigest(
     return (
       `**Test results:** passed — ${result.excludedTests.length} failing test(s) excluded ` +
       'as confirmed base-branch breaks, and ' +
-      `${result.flakyExcludedTests.length} excluded as known-flaky, unrelated to your changes.`
+      `${result.flakyExcludedTests.length} excluded as known-flaky, unrelated to your changes.` +
+      guardBlockedSection()
     );
   }
 
@@ -267,5 +445,5 @@ export function renderBaseAttributableFilterDigest(
   for (const t of result.remainingTests) {
     lines.push(`- \`${t.test_id}\` — ${t.name}`);
   }
-  return lines.join('\n');
+  return lines.join('\n') + guardBlockedSection();
 }
