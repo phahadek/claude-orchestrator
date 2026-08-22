@@ -3018,7 +3018,11 @@ export function runMigrations(target: Database.Database): void {
   // "notion:1a2b-...") unlike sessions.task_id, so — unlike task_id_norm
   // above — this generated column also strips a recognized source prefix
   // and lowercases, mirroring normalizeBoardId (tasks/taskId.ts) exactly so
-  // the indexed column can replace that JS comparison outright.
+  // the indexed column can replace that JS comparison outright. VIRTUAL, not
+  // STORED — SQLite rejects ALTER TABLE ADD COLUMN for STORED generated
+  // columns on a table that already has rows, and the dependent CREATE
+  // INDEX below stays inside this same try for the same reason as
+  // sessions.task_id_norm above.
   try {
     target.exec(
       `ALTER TABLE audit_log ADD COLUMN task_id_norm TEXT GENERATED ALWAYS AS (
