@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runMigrations } from '../db/schema.js';
 import { insertRows } from '../../test/helpers/seedRows.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Every schema.migration.*.test.ts file up to this one runs runMigrations()
 // against a freshly created, empty in-memory database (via setupTestDb or an
@@ -89,6 +94,32 @@ const STORED_GENERATED_COLUMN_ALTER = `
     GENERATED ALWAYS AS (REPLACE(COALESCE(task_id,''),'-','')) STORED
 `;
 
+function preMigrationAuditLogShape(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE audit_log (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts         INTEGER NOT NULL,
+      event_type TEXT    NOT NULL,
+      actor_type TEXT    NOT NULL,
+      actor_id   TEXT,
+      project_id TEXT,
+      task_id    TEXT,
+      payload    TEXT    NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_project_task ON audit_log(project_id, task_id);
+  `);
+}
+
+function tableXinfoColumnNames(db: Database.Database, table: string): string[] {
+  return (
+    db.prepare(`PRAGMA table_xinfo(${table})`).all() as Array<{
+      name: string;
+    }>
+  ).map((r) => r.name);
+}
+
 describe('populated-database migration fixture', () => {
   it('seeds real rows into the pre-migration sessions shape before runMigrations executes', () => {
     const db = new Database(':memory:');
@@ -137,5 +168,120 @@ describe('populated-database migration fixture', () => {
     ).toBeGreaterThan(0);
 
     expect(() => populatedDb.exec(STORED_GENERATED_COLUMN_ALTER)).toThrow();
+  });
+});
+
+// Regression coverage for the 2026-08-21 audit_log outage: an
+// `ALTER TABLE audit_log ADD COLUMN task_id_norm ... STORED` migration
+// passed against an empty test database, then threw
+// `no such column: task_id_norm` against a populated audit_log in
+// production, because the dependent CREATE INDEX sat outside the try that
+// swallowed the ALTER's failure. See schema.ts's audit_log.task_id_norm
+// migration for the fix (VIRTUAL column, CREATE INDEX inside the same try,
+// discriminating catch).
+describe('populated-database migration fixture — audit_log.task_id_norm', () => {
+  it('seeds a populated audit_log with a notion:-prefixed task_id and completes runMigrations without throwing', () => {
+    const db = new Database(':memory:');
+    preMigrationAuditLogShape(db);
+    insertRows(db, 'audit_log', [
+      {
+        ts: 1_755_000_000,
+        event_type: 'task_body_updated',
+        actor_type: 'system',
+        task_id: 'notion:3a322f91-52f3-81e9-bdfc-d1e8ce8c6d6d',
+        payload: '{}',
+      },
+    ]);
+
+    expect(
+      (
+        db.prepare('SELECT COUNT(*) AS n FROM audit_log').get() as {
+          n: number;
+        }
+      ).n,
+    ).toBe(1);
+
+    expect(() => runMigrations(db)).not.toThrow();
+  });
+
+  it('normalizes a notion:-prefixed task_id byte-for-byte matching normalizeBoardId', () => {
+    const db = new Database(':memory:');
+    preMigrationAuditLogShape(db);
+    insertRows(db, 'audit_log', [
+      {
+        ts: 1_755_000_000,
+        event_type: 'task_body_updated',
+        actor_type: 'system',
+        task_id: 'notion:3a322f91-52f3-81e9-bdfc-d1e8ce8c6d6d',
+        payload: '{}',
+      },
+    ]);
+    runMigrations(db);
+
+    const row = db
+      .prepare('SELECT task_id_norm FROM audit_log LIMIT 1')
+      .get() as { task_id_norm: string };
+    expect(row.task_id_norm).toBe('3a322f9152f381e9bdfcd1e8ce8c6d6d');
+  });
+
+  it('creates idx_audit_log_task_id_norm_event_type and the column is visible via PRAGMA table_xinfo (not table_info)', () => {
+    const db = new Database(':memory:');
+    preMigrationAuditLogShape(db);
+    insertRows(db, 'audit_log', [
+      {
+        ts: 1_755_000_000,
+        event_type: 'task_body_updated',
+        actor_type: 'system',
+        task_id: 'notion:3a322f91-52f3-81e9-bdfc-d1e8ce8c6d6d',
+        payload: '{}',
+      },
+    ]);
+    runMigrations(db);
+
+    const index = db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`,
+      )
+      .get('idx_audit_log_task_id_norm_event_type');
+    expect(index).toBeDefined();
+
+    expect(tableXinfoColumnNames(db, 'audit_log')).toContain('task_id_norm');
+  });
+
+  it('is idempotent against a populated audit_log that already has task_id_norm (the recovered-production case)', () => {
+    const db = new Database(':memory:');
+    preMigrationAuditLogShape(db);
+    insertRows(db, 'audit_log', [
+      {
+        ts: 1_755_000_000,
+        event_type: 'task_body_updated',
+        actor_type: 'system',
+        task_id: 'notion:3a322f91-52f3-81e9-bdfc-d1e8ce8c6d6d',
+        payload: '{}',
+      },
+    ]);
+
+    expect(() => runMigrations(db)).not.toThrow();
+    expect(() => runMigrations(db)).not.toThrow();
+
+    expect(tableXinfoColumnNames(db, 'audit_log')).toContain('task_id_norm');
+  });
+});
+
+// Static guard against the third recurrence of this exact defect shape: a
+// STORED generated column declared in an ALTER TABLE ADD COLUMN, which
+// SQLite refuses on any table that already has rows. VIRTUAL is the only
+// generated-column kind SQLite allows to be added to an existing table.
+describe('schema.ts static guard — no STORED generated-column ALTER TABLE', () => {
+  it('contains no ALTER TABLE ... ADD COLUMN ... GENERATED ALWAYS AS ... STORED declaration', () => {
+    const schemaSource = fs.readFileSync(
+      path.join(__dirname, '../db/schema.ts'),
+      'utf8',
+    );
+
+    const alterAddColumnGeneratedStored =
+      /ALTER TABLE[^`]*?ADD COLUMN[^`]*?GENERATED ALWAYS AS[^`]*?\)\s*STORED/gis;
+
+    expect(schemaSource.match(alterAddColumnGeneratedStored)).toBeNull();
   });
 });

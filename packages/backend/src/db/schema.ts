@@ -3032,15 +3032,18 @@ export function runMigrations(target: Database.Database): void {
           END,
           '-', ''
         ))
-      ) STORED`,
+      ) VIRTUAL`,
     );
-  } catch {
-    /* already exists */
+    target.exec(`
+      CREATE INDEX IF NOT EXISTS idx_audit_log_task_id_norm_event_type
+        ON audit_log(task_id_norm, event_type, ts);
+    `);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('duplicate column name')) {
+      throw err;
+    }
   }
-  target.exec(`
-    CREATE INDEX IF NOT EXISTS idx_audit_log_task_id_norm_event_type
-      ON audit_log(task_id_norm, event_type, ts);
-  `);
 
   runStructuredResultExtractedClearBackfill(target);
 }
