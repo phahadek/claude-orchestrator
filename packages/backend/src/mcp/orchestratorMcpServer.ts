@@ -266,7 +266,7 @@ export function buildMcpServer(
   // narrows above. An investigate-dispatched session (session_type 'ops',
   // task_id `report-batch:<batchId>`) has no gate item or PR to act on, so
   // downgrade to `null` here too; the read-only registrations further below
-  // are unaffected, staying keyed on the unchanged `workflow`.
+  // stay unaffected, keyed on `workflow` unchanged.
   const mutationWorkflow: PlanningWorkflow | null =
     workflow === 'ops' && isInvestigateSession(session?.task_id)
       ? null
