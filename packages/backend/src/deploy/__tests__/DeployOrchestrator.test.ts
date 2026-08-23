@@ -26,6 +26,7 @@ import {
   buildShellInvocation,
   spawnShell,
   validateBindingReferences,
+  normalizeIdentityCapture,
   RESTART_STEP_ID,
   type DeployOrchestratorDeps,
   type ShellResult,
@@ -692,6 +693,26 @@ describe('DeployOrchestrator: resume after a restart', () => {
 
     expect(getDeployRun(priorRun.run_id)?.status).toBe('failed');
     expect(getProjectDeployedSha('proj')).toBeNull();
+  });
+});
+
+describe('normalizeIdentityCapture', () => {
+  it('returns the SHA unchanged for the exact body GET /api/deploy/build-sha responds with — a single line, no trailing newline', () => {
+    expect(normalizeIdentityCapture('abc123def456789')).toBe(
+      'abc123def456789',
+    );
+  });
+
+  it('still trims surrounding whitespace, e.g. a trailing newline from -o /dev/stdout-style capture', () => {
+    expect(normalizeIdentityCapture('abc123def456789\n')).toBe(
+      'abc123def456789',
+    );
+  });
+
+  it('replaces a multi-line capture (e.g. the SPA HTML shell served by an unmounted path) with the invalid marker', () => {
+    expect(normalizeIdentityCapture('<!doctype html>\n<html>\n</html>')).toBe(
+      '<identity-capture-invalid>',
+    );
   });
 });
 

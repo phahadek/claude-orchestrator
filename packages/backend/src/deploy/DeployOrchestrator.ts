@@ -119,7 +119,7 @@ function shellStdout(result: ShellResult): string {
  * still spanning multiple lines) with the explicit invalid marker rather
  * than persisting it as-is.
  */
-function normalizeIdentityCapture(stdout: string): string {
+export function normalizeIdentityCapture(stdout: string): string {
   const trimmed = stdout.trim();
   if (!trimmed || /\r|\n/.test(trimmed)) return IDENTITY_CAPTURE_INVALID;
   return trimmed;
