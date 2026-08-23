@@ -60,7 +60,7 @@ export type CanonicalPauseReason =
   | 'test_report_acquisition_failed'
   | 'ci_not_completing'
   | 'mcp_unreachable_exhausted'
-  | 'verdict_routing_failed';
+  | 'verdict_routing_failed'
   | 'base_attributable_test_excluded';
 
 export interface PauseReasonStruct {
@@ -403,6 +403,7 @@ export const PAUSE_REASON_REGISTRY: Record<
     source: 'review',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
+  },
   // Advisory-only pill: the F2 gate's baseAttributableFilter excused this
   // PR's failing test(s) as confirmed base-attributable (and, for any
   // excluded test, cleared both masking guards — see
