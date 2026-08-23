@@ -76,6 +76,7 @@ vi.mock('../pollUtils', () => ({
 vi.mock('../../orchestration/baseAttribution', () => ({
   isBaseTotalFail: vi.fn(),
   isProjectBaseHealthy: vi.fn(),
+  hasBaseTotalFailSince: vi.fn(),
 }));
 
 import { PRMergeWatcher } from '../PRMergeWatcher';
@@ -93,6 +94,7 @@ import { typedGetSetting } from '../../config/settings';
 import {
   isBaseTotalFail,
   isProjectBaseHealthy,
+  hasBaseTotalFailSince,
 } from '../../orchestration/baseAttribution';
 import {
   pauseReasonFromCanonical,
@@ -250,7 +252,7 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
     );
   });
 
-  it('charges flake_recovery_attempts normally when a re-run failure is not base-attributable', async () => {
+  it('charges flake_recovery_attempts normally when a re-run failure is not base-attributable live, but still arms the flag unconditionally on any failed re-run', async () => {
     vi.mocked(isBaseTotalFail).mockResolvedValue(false);
     const github = makeMockGitHub();
     const { watcher } = makeWatcher(github);
@@ -263,11 +265,19 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
       PR_NUMBER,
       REPO,
     );
-    expect(setFlakeRecoveryBaseExhausted).not.toHaveBeenCalled();
+    // Arming is decoupled from the live "charge this attempt or not" check —
+    // the actual base-attributability verdict for a later budget-restore is
+    // deferred to hasBaseTotalFailSince's recovery-time history comparison.
+    expect(setFlakeRecoveryBaseExhausted).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      true,
+    );
   });
 
   it('restores the budget via resetFlakeRecoveryAttempts once base recovers for a PR whose exhaustion was base-attributable, then proceeds with the re-run normally', async () => {
     vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
+    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(true);
     const github = makeMockGitHub();
     const { watcher } = makeWatcher(github);
     // Mutable PR row shared across the initial lookup and the post-reset
@@ -313,6 +323,28 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
     const pr = makePRRow({
       flake_recovery_attempts: 2,
       flake_recovery_base_exhausted: 0,
+    });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    await watcher.handleVerifiedFlakyDisposition(makePayload());
+
+    expect(resetFlakeRecoveryAttempts).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'ci_failing',
+      'flake-recovery-exhausted',
+    );
+  });
+
+  it('never restores a base-attributable-exhausted PR while base-health history shows no total_fail since exhaustion, even though the live snapshot is clean_pass', async () => {
+    vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
+    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(false);
+    const github = makeMockGitHub();
+    const { watcher } = makeWatcher(github);
+    const pr = makePRRow({
+      flake_recovery_attempts: 2,
+      flake_recovery_base_exhausted: 1,
     });
     vi.mocked(getPRByNumber).mockReturnValue(pr);
 
