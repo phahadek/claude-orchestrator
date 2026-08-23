@@ -141,6 +141,7 @@ type EventType =
   | 'admission_stall_started'
   | 'admission_stall_cleared'
   | 'session_teardown_escalated'
+  | 'stuck_session_alive_park_escalated'
   | 'stuck_session_pause_delivery_failed'
   | 'session_nudge_delivery_failed'
   | 'session_status_changed'

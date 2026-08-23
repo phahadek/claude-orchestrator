@@ -12,6 +12,8 @@ import {
   deleteStuckSessionTimer,
   getAllStuckSessionTimers,
   getStuckResultSessionRows,
+  getStuckAliveSubprocessParkRows,
+  type StuckAliveSubprocessParkRow,
   markSessionDone,
   markSessionIdle,
   getSession,
@@ -157,6 +159,7 @@ export class StuckSessionMonitor {
       run: async () => {
         this.reapTerminalTimers();
         await this.scanForStuckSessions();
+        await this.scanForStuckAliveSubprocessParks();
       },
     });
     scheduler.register({
@@ -353,6 +356,94 @@ export class StuckSessionMonitor {
     } catch (e) {
       logger.error(`[StuckSessionMonitor] scanForStuckSessions error: ${e}`);
     }
+  }
+
+  /**
+   * Bounds the stuck_session_alive_subprocess park: getStuckResultSessionRows
+   * only matches status='running', so once scanForStuckSessions parks a
+   * session there (subprocess alive, result already arrived) it drops out of
+   * that query forever and nothing revisits it — the park was meant to be a
+   * transient "operator can nudge it" state, not a silent, unbounded one.
+   * This re-finds exactly those parks (see getStuckAliveSubprocessParkRows's
+   * doc for why it can't accidentally match the legitimately long-lived
+   * stuck_session_open_pr park) and, once one has sat past the configured
+   * bound with no new session_events, escalates it to teardown rather than
+   * leaving it to hold a resident process and a memory-admission slot
+   * indefinitely.
+   *
+   * The escalation never fires on elapsed time alone: it requires both the
+   * bound to have passed AND the OS process to still be alive right now
+   * (isSessionProcessAlive, the same ground-truth signal used elsewhere) —
+   * per procedures.md's rule against a terminal action on status/age alone.
+   */
+  private async scanForStuckAliveSubprocessParks(): Promise<void> {
+    try {
+      const boundMs =
+        runtimeSettings.session_alive_park_escalation_seconds * 1000;
+      if (boundMs <= 0) return;
+      const rows = getStuckAliveSubprocessParkRows();
+      const now = Date.now();
+      for (const row of rows) {
+        // A new event since the park means the session is genuinely active
+        // again (e.g. a late-arriving event, or a respawn) — not a persistent
+        // park, regardless of how much time has passed.
+        const hasNewEvent =
+          row.latest_event_ts != null &&
+          row.latest_event_ts > row.last_known_event_ts;
+        if (hasNewEvent) continue;
+
+        const parkAgeMs = now - row.parked_at;
+        if (parkAgeMs < boundMs) continue;
+
+        if (!isSessionProcessAlive(row.session_id)) continue;
+
+        await this.escalateStuckAliveSubprocessPark(row, parkAgeMs);
+      }
+    } catch (e) {
+      logger.error(
+        `[StuckSessionMonitor] scanForStuckAliveSubprocessParks error: ${e}`,
+      );
+    }
+  }
+
+  /**
+   * Terminate a session that has sat parked at stuck_session_alive_subprocess
+   * past the configured bound. Marks the row terminal first (endSession()
+   * refuses to escalate against a non-terminal row — it exists precisely to
+   * avoid killing a live/legitimately-idle session), then reuses
+   * SessionManager.endSession's graceful-close-then-verify-and-escalate
+   * teardown — the same path that emits session_teardown_escalated when the
+   * graceful close doesn't land in time — so this never bypasses that
+   * safety net with an immediate force-kill.
+   */
+  private async escalateStuckAliveSubprocessPark(
+    row: StuckAliveSubprocessParkRow,
+    parkAgeMs: number,
+  ): Promise<void> {
+    logger.warn(
+      `[StuckSessionMonitor] escalating stuck_session_alive_subprocess park for ${row.session_id.slice(0, 8)} — ` +
+        `parked ${Math.round(parkAgeMs / 1000)}s with subprocess still alive and no new events`,
+    );
+    this.sessionManager.markSessionErrored(
+      row.session_id,
+      'killed',
+      'stuck_session_alive_subprocess_park_escalated',
+      `subprocess still alive ${Math.round(parkAgeMs / 1000)}s after park with no new events`,
+    );
+    this.sessionManager.endSession(row.session_id);
+    recordEvent({
+      event_type: 'stuck_session_alive_park_escalated',
+      actor_type: 'system',
+      actor_id: row.session_id,
+      project_id: row.project_id,
+      task_id: row.task_id,
+      payload: {
+        session_id: row.session_id,
+        session_type: row.session_type,
+        park_age_ms: parkAgeMs,
+        outcome: 'teardown_initiated',
+      },
+    });
   }
 
   /** Returns true if the monitor is currently tracking the given session. Test hook. */

@@ -913,6 +913,52 @@ export function getStuckResultSessionRows(
     .all() as StuckResultSessionRow[];
 }
 
+export interface StuckAliveSubprocessParkRow {
+  session_id: string;
+  task_id: string | null;
+  project_id: string | null;
+  pr_url: string | null;
+  worktree_path: string | null;
+  session_type: string;
+  /** audit_log.ts of the session_status_changed row that parked this session via stuck_session_alive_subprocess. */
+  parked_at: number;
+  /** sessions.ended_at as of that park — the last event timestamp known at park time. */
+  last_known_event_ts: number;
+  /** MAX(session_events.timestamp) for this session right now; null if it somehow has no events. */
+  latest_event_ts: number | null;
+}
+
+/**
+ * Sessions currently idle whose *most recent* session_status_changed transition
+ * was a stuck_session_alive_subprocess park (StuckSessionMonitor.scanForStuckSessions).
+ * getStuckResultSessionRows only matches status='running', so once a session is
+ * parked this way it drops out of that query forever — this is the query that
+ * re-finds it so the park can be bounded. Filtering on the *latest* transition's
+ * call_site (rather than merely "status is idle") is what excludes the
+ * legitimately long-lived stuck_session_open_pr park, per the cascade check in
+ * the task: a session idle for a PR-review reason must never be escalated here.
+ */
+export function getStuckAliveSubprocessParkRows(): StuckAliveSubprocessParkRow[] {
+  return db
+    .prepare(
+      `
+    SELECT s.session_id, s.task_id, s.project_id, s.pr_url, s.worktree_path,
+           s.session_type, al.ts AS parked_at, s.ended_at AS last_known_event_ts,
+           (SELECT MAX(timestamp) FROM session_events se WHERE se.session_id = s.session_id) AS latest_event_ts
+    FROM sessions s
+    JOIN audit_log al ON al.actor_id = s.session_id
+    WHERE s.status = 'idle'
+      AND al.event_type = 'session_status_changed'
+      AND json_extract(al.payload, '$.call_site') = 'stuck_session_alive_subprocess'
+      AND al.id = (
+        SELECT MAX(id) FROM audit_log
+        WHERE actor_id = s.session_id AND event_type = 'session_status_changed'
+      )
+  `,
+    )
+    .all() as StuckAliveSubprocessParkRow[];
+}
+
 /**
  * Query running sessions whose PR is already merged or closed — these should be
  * reaped on boot rather than resumed as orphans.
