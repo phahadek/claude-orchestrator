@@ -1066,6 +1066,19 @@ describe('StagedIntentPanel', () => {
           mirrorEvidence: 'confirmed via dashboard',
         }),
       );
+      // The mirror buttons disable for the duration of the in-flight apply()
+      // call; waitFor above can observe the mock invocation on the same tick
+      // the promise resolves, before the button's re-enabling re-render has
+      // committed. Wait for it explicitly so the next click isn't dropped.
+      await waitFor(() =>
+        expect(
+          (
+            screen.getByTestId(
+              'staged-intent-gate-verify-mirror-fail',
+            ) as HTMLButtonElement
+          ).disabled,
+        ).toBe(false),
+      );
 
       fireEvent.click(
         screen.getByTestId('staged-intent-gate-verify-mirror-fail'),
@@ -1077,6 +1090,15 @@ describe('StagedIntentPanel', () => {
           mirrorDisposition: 'fail',
           mirrorEvidence: 'confirmed via dashboard',
         }),
+      );
+      await waitFor(() =>
+        expect(
+          (
+            screen.getByTestId(
+              'staged-intent-gate-verify-mirror-defer',
+            ) as HTMLButtonElement
+          ).disabled,
+        ).toBe(false),
       );
 
       fireEvent.click(
