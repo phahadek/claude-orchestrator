@@ -64,6 +64,13 @@ interface TimerState {
    * purely in-memory, rebuilt from the next tool_use/tool_result pair.
    */
   pendingToolUseCount: number;
+  /**
+   * Last flagged value recorded to the audit log for stuck_session_notify_checked.
+   * Starts false (a freshly tracked session is not flagged). Used to make
+   * that event edge-triggered: a row is only written when this value
+   * actually changes, not on every check — see recordNotifyChecked.
+   */
+  lastNotifyCheckedFlagged: boolean;
 }
 
 const PAUSE_MESSAGE =
@@ -381,6 +388,7 @@ export class StuckSessionMonitor {
         suspended: row.suspended !== 0,
         lastActivityAt: now,
         pendingToolUseCount: 0,
+        lastNotifyCheckedFlagged: false,
       };
       this.timers.set(row.session_id, state);
 
@@ -570,9 +578,40 @@ export class StuckSessionMonitor {
       suspended: false,
       lastActivityAt: Date.now(),
       pendingToolUseCount: 0,
+      lastNotifyCheckedFlagged: false,
     };
     this.timers.set(sessionId, state);
     this.scheduleNotifyAndPause(sessionId, state);
+  }
+
+  /**
+   * Edge-triggered write of stuck_session_notify_checked: records a row only
+   * when the flagged state actually differs from the last recorded value for
+   * this session, instead of on every check. A session starts with an
+   * implicit lastNotifyCheckedFlagged of false, so a session that never
+   * flags never gets a row, and one that flags gets exactly one row per
+   * transition (false->true, true->false).
+   */
+  private recordNotifyChecked(
+    sessionId: string,
+    state: TimerState,
+    flagged: boolean,
+    observedGapMs: number,
+    thresholdMs: number,
+  ): void {
+    if (state.lastNotifyCheckedFlagged === flagged) return;
+    state.lastNotifyCheckedFlagged = flagged;
+    recordEvent({
+      event_type: 'stuck_session_notify_checked',
+      actor_type: 'system',
+      actor_id: sessionId,
+      payload: {
+        session_id: sessionId,
+        observed_gap_ms: observedGapMs,
+        threshold_ms: thresholdMs,
+        flagged,
+      },
+    });
   }
 
   /**
@@ -586,26 +625,22 @@ export class StuckSessionMonitor {
   private recordActivity(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state || state.suspended) return;
-    // A notify timer still pending means the session was inside the notify
-    // window and this activity arrived before it ever fired — the explicit
-    // did-not-flag counterpart to fireNotify's flagged row below, so the
-    // negative case ("still emitting events, not flagged") is checkable
-    // after the fact rather than being indistinguishable from no signal at
-    // all.
-    if (state.notifyTimer) {
+    // Activity always means "not flagged" as of now — whether it arrived
+    // while the notify timer was still pending (never fired) or after a
+    // notification already fired (the true->false recovery). recordNotifyChecked
+    // only writes a row when this differs from the last recorded value, so
+    // steady unflagged activity stays silent while an actual recovery from a
+    // firing is captured.
+    {
       const thresholdMs =
         runtimeSettings.session_notify_threshold_seconds * 1000;
-      recordEvent({
-        event_type: 'stuck_session_notify_checked',
-        actor_type: 'system',
-        actor_id: sessionId,
-        payload: {
-          session_id: sessionId,
-          observed_gap_ms: Date.now() - state.lastActivityAt,
-          threshold_ms: thresholdMs,
-          flagged: false,
-        },
-      });
+      this.recordNotifyChecked(
+        sessionId,
+        state,
+        false,
+        Date.now() - state.lastActivityAt,
+        thresholdMs,
+      );
     }
     if (state.notifyTimer) clearTimeout(state.notifyTimer);
     if (state.pauseTimer) clearTimeout(state.pauseTimer);
@@ -773,17 +808,13 @@ export class StuckSessionMonitor {
       return;
     }
     this.persistTimerState(sessionId);
-    recordEvent({
-      event_type: 'stuck_session_notify_checked',
-      actor_type: 'system',
-      actor_id: sessionId,
-      payload: {
-        session_id: sessionId,
-        observed_gap_ms: observedGapMs,
-        threshold_ms: thresholdMs,
-        flagged: true,
-      },
-    });
+    this.recordNotifyChecked(
+      sessionId,
+      state,
+      true,
+      observedGapMs,
+      thresholdMs,
+    );
     const message = `⚠️ ${state.taskName} exceeding expected duration — possible grooming gap`;
     this.broadcast({
       type: 'stuck_session_notified',
