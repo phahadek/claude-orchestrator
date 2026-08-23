@@ -273,6 +273,13 @@ describe('runProjectTestRequest — coalescing', () => {
     });
     await runProjectTestRequest(baseSpec({ contentHash: 'hash-generic' }));
 
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output: '$ uv run task test\nspawn /bin/sh ENOENT',
+      spawnFailed: true,
+    });
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-spawn' }));
+
     const reasonFor = (contentHash: string) =>
       (
         db
@@ -285,6 +292,49 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(reasonFor('hash-timeout')).toBe('timeout');
     expect(reasonFor('hash-oom')).toBe('oom_killed');
     expect(reasonFor('hash-generic')).toBe('generic');
+    // Distinct from 'generic' — the runner never executed at all, so this
+    // must never be indistinguishable from an ordinary suite failure.
+    expect(reasonFor('hash-spawn')).toBe('execution_failed');
+  });
+
+  it('a spawn failure is never replayed as a cached unchangedReplay result — a retry against the same tree re-executes', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output: 'spawn /bin/sh ENOENT',
+      spawnFailed: true,
+    });
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-spawn-retry' }));
+
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    const admission = admitTestRequest(
+      baseSpec({ contentHash: 'hash-spawn-retry' }),
+    );
+    const retryResult = await admission.result;
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    expect(admission.unchangedReplay).toBe(false);
+    expect(retryResult.unchangedReplay).toBe(false);
+    expect(retryResult.passed).toBe(true);
+  });
+
+  it('an ordinary settled failure IS replayed as unchangedReplay on a subsequent request against the same tree', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output: 'assertion failed',
+    });
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-ordinary-replay' }),
+    );
+
+    const admission = admitTestRequest(
+      baseSpec({ contentHash: 'hash-ordinary-replay' }),
+    );
+    const replay = await admission.result;
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(admission.unchangedReplay).toBe(true);
+    expect(replay.unchangedReplay).toBe(true);
+    expect(replay.passed).toBe(false);
   });
 });
 

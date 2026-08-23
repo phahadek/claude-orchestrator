@@ -200,6 +200,7 @@ type TestRunOutcome =
   | 'failed-with-no-report-acquired'
   | 'crashed-oom'
   | 'timed-out'
+  | 'execution-failed'
   | 'running';
 
 export interface TestRunOutcomeInfo {
@@ -217,6 +218,8 @@ const TEST_RUN_NEXT_ACTIONS: Record<TestRunOutcome, string> = {
     'The test run was OOM-killed — reduce test memory usage/parallelism, or retry.',
   'timed-out':
     'The test run exceeded its time limit — investigate a hang or split the run.',
+  'execution-failed':
+    'The test runner could not be started (e.g. spawn failure) — no test ever ran. This is an infrastructure failure, not a test result; retry.',
   running: 'Run is still in progress — wait for it to finish.',
 };
 
@@ -228,6 +231,8 @@ export function classifyTestRunOutcome(
     outcome = 'running';
   } else if (run.state === 'passed') {
     outcome = 'passed';
+  } else if (run.failure_reason === 'execution_failed') {
+    outcome = 'execution-failed';
   } else if (run.oom_killed || run.failure_reason === 'oom_killed') {
     outcome = 'crashed-oom';
   } else if (run.failure_reason === 'timeout') {

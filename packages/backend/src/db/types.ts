@@ -1035,7 +1035,19 @@ export type TestRequestRunState = 'running' | 'passed' | 'failed';
  * which TestCommandResult's bare `passed: false` otherwise collapses. Null
  * for `running`/`passed` rows and for historical rows predating this column.
  */
-export type TestRequestFailureReason = 'timeout' | 'oom_killed' | 'generic';
+/**
+ * 'execution_failed' names a spawn/exec-level failure (ENOENT, EAGAIN, fork
+ * failure) — the test runner process itself never started, so no test ever
+ * ran and the suite's state is unknown. Distinct from 'generic', which means
+ * the suite ran and something in it failed; conflating the two makes an
+ * infrastructure outage downstream-indistinguishable from a real code
+ * regression (see testRequestLane.ts's failureReasonFor).
+ */
+export type TestRequestFailureReason =
+  | 'timeout'
+  | 'oom_killed'
+  | 'execution_failed'
+  | 'generic';
 
 /**
  * Explicit identity a caller states about the run it's originating —

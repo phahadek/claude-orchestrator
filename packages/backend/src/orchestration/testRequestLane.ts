@@ -165,6 +165,7 @@ export interface TestRequestAdmission {
 }
 
 function failureReasonFor(result: TestCommandResult): TestRequestFailureReason {
+  if (result.spawnFailed) return 'execution_failed';
   if (result.timedOut) return 'timeout';
   if (result.oomKilled) return 'oom_killed';
   return 'generic';
@@ -343,8 +344,13 @@ export function admitTestRequest(
   // spec.contentHash, which every caller derives server-side from the live
   // worktree (computeWholeTreeContentHash) — a caller has no way to assert
   // "unchanged" independent of what the server itself recomputed.
+  // A settled run that never actually executed (failure_reason ===
+  // 'execution_failed', e.g. spawn ENOENT) carries no verdict about this
+  // tree at all — it must never be replayed as if it were one. Falling
+  // through here means admission proceeds to a fresh execution below, same
+  // as if no settled run existed.
   const settled = getLatestTestRequestRun(spec.projectId, spec.contentHash);
-  if (settled) {
+  if (settled && settled.failure_reason !== 'execution_failed') {
     const replayResult: TestRequestRunResult = {
       passed: settled.state === 'passed',
       output: settled.output,
