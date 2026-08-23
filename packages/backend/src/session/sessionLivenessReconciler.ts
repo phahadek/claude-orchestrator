@@ -20,7 +20,6 @@ import {
   type ClaudeSessionProcess,
 } from './processLiveness';
 import { killSessionCgroup } from './sessionCgroup';
-import { GRACEFUL_END_TIMEOUT_MS } from './CliSessionRunner';
 import { logger } from '../logger';
 import type { Session } from '../db/types';
 
@@ -307,8 +306,15 @@ export interface OrphanProcessReconcileResult {
   survivedEscalation: number;
 }
 
-/** Same grace period CliSessionRunner.kill() waits after SIGTERM before escalating to SIGKILL. */
-const KILL_ESCALATION_WAIT_MS = GRACEFUL_END_TIMEOUT_MS;
+/**
+ * Same grace period CliSessionRunner.kill() waits after SIGTERM before
+ * escalating to SIGKILL (its GRACEFUL_END_TIMEOUT_MS) — kept as an
+ * independent constant rather than a cross-module import, since several
+ * SessionManager tests `vi.mock` CliSessionRunner without re-exporting its
+ * constants, and this reconciler module is pulled in transitively by
+ * SessionManager.ts.
+ */
+const KILL_ESCALATION_WAIT_MS = 15_000;
 
 /**
  * Short settle window after sending SIGKILL before checking liveness —
