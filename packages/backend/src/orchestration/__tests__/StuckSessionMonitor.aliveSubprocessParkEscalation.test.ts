@@ -167,8 +167,7 @@ describe('StuckSessionMonitor — stuck_session_alive_subprocess park escalation
       expect(sessionManager.markSessionErrored).not.toHaveBeenCalled();
       expect(getStuckAliveSubprocessParkRows).not.toHaveBeenCalled();
     } finally {
-      (runtimeSettings as any).session_alive_park_escalation_seconds =
-        original;
+      (runtimeSettings as any).session_alive_park_escalation_seconds = original;
     }
   });
 

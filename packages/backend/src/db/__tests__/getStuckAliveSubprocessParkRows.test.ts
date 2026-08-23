@@ -9,9 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../db.js', async () => {
-  const { setupTestDb } = await import(
-    '../../../test/helpers/setupTestDb.js'
-  );
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
 });
 
@@ -65,7 +63,11 @@ describe('getStuckAliveSubprocessParkRows', () => {
   it('matches a session whose latest transition parked it via stuck_session_alive_subprocess', () => {
     insertSession('sess-1');
     const parkTs = Date.now() - 30 * 60 * 1000;
-    insertStatusChangedAudit('sess-1', 'stuck_session_alive_subprocess', parkTs);
+    insertStatusChangedAudit(
+      'sess-1',
+      'stuck_session_alive_subprocess',
+      parkTs,
+    );
     insertSessionEvent('sess-1', parkTs);
 
     const rows = getStuckAliveSubprocessParkRows();
@@ -122,7 +124,11 @@ describe('getStuckAliveSubprocessParkRows', () => {
   it('reports a later session_events timestamp than the park as latest_event_ts, distinct from the value known at park time', () => {
     insertSession('sess-5');
     const parkTs = Date.now() - 30 * 60 * 1000;
-    insertStatusChangedAudit('sess-5', 'stuck_session_alive_subprocess', parkTs);
+    insertStatusChangedAudit(
+      'sess-5',
+      'stuck_session_alive_subprocess',
+      parkTs,
+    );
     insertSessionEvent('sess-5', parkTs - 1000);
     const laterEventTs = Date.now() - 5000;
     insertSessionEvent('sess-5', laterEventTs);
