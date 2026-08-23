@@ -30,7 +30,7 @@
  */
 
 import type { ProjectConfig } from '../config';
-import { getFailingTestIdsForRun } from '../db/queries';
+import { getFailingTestIdsForRun, getBaseHealthProbeRunsSince } from '../db/queries';
 import type { TestRequestRunRow } from '../db/types';
 
 async function checkBaseBranchHealth(project: ProjectConfig) {
@@ -80,4 +80,30 @@ export async function isProjectBaseHealthy(
 ): Promise<boolean> {
   const health = await checkBaseBranchHealth(project);
   return health.outcome === 'clean_pass';
+}
+
+/**
+ * Recovery-time corroboration for a budget-restore decision: was the base
+ * branch confirmed `total_fail` by ANY base-health probe finishing at or
+ * after `sinceTs` (typically the PR's own escalation/exhaustion timestamp)?
+ *
+ * Exists because checkBaseBranchHealth/isBaseTotalFail is a live, content-
+ * hash-cached snapshot of whatever tree state happens to be current when
+ * it's called — a `total_fail` window is often short-lived (tens of
+ * minutes), so sampling it only once, at the exact instant a PR's stall was
+ * classified, misses a PR that stalled before the window opened and is
+ * still stalled once it closes. Comparing against the durable
+ * test_request_runs history instead of a single live sample is what lets
+ * budget-restore call sites arm eligibility by stall *kind* alone (see
+ * StalledPRReconciler's stalled_retry_base_exhausted / PRMergeWatcher's
+ * flake_recovery_base_exhausted) and defer the actual base-attributability
+ * verdict to this recovery-time check.
+ */
+export async function hasBaseTotalFailSince(
+  project: ProjectConfig,
+  sinceTs: number,
+): Promise<boolean> {
+  const { classifyRun } = await import('./baseHealthCheck');
+  const runs = getBaseHealthProbeRunsSince(project.id, sinceTs);
+  return runs.some((run) => classifyRun(run) === 'total_fail');
 }

@@ -195,7 +195,7 @@ function classifyFailedRun(
  * it's downgraded to `unknown` here — "no confirmed base verdict at all",
  * which AutoLauncher's gate already treats as never-blocking.
  */
-function classifyRun(run: TestRequestRunRow): BaseHealthOutcome {
+export function classifyRun(run: TestRequestRunRow): BaseHealthOutcome {
   if (run.state === 'passed') return 'clean_pass';
   const failed = classifyFailedRun(run);
   if (failed === 'partial_fail') return 'partial_fail';

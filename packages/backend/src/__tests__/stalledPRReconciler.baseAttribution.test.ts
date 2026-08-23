@@ -1,15 +1,23 @@
 /**
  * Base-attributable-failures exemption for StalledPRReconciler's
- * stalled_pr_retry_count — see baseAttribution.ts. Only a gate_failed stall
- * (the reconciler's sole test/build-failure kind) ever consults base health:
- *  - a gate_failed stall confirmed base-attributable (base tree total_fail)
- *    is still re-driven, but never charges the counter, and marks
- *    stalled_retry_base_exhausted so a later base-recovery pass knows this
- *    PR (and only this PR) is eligible for a budget restore.
+ * stalled_pr_retry_count — see baseAttribution.ts. gate_failed, session_inert,
+ * and pre_review_interrupted stalls (BASE_ATTRIBUTABLE_ESCALATION_KINDS) may
+ * all plausibly trace back to a broken base branch:
+ *  - a gate_failed stall confirmed base-attributable live (base tree
+ *    total_fail right now) is still re-driven, but never charges the
+ *    counter, and marks stalled_retry_base_exhausted so a later
+ *    base-recovery pass knows this PR (and only this PR) is a candidate for
+ *    a budget restore.
+ *  - on escalation (retry cap reached), any of the three eligible kinds arms
+ *    stalled_retry_base_exhausted unconditionally — no live health check at
+ *    this instant, since a total_fail window is often short-lived and may
+ *    not coincide with the exact moment of escalation.
  *  - once already escalated to stalled_reconcile_cap, a PR whose
  *    stalled_retry_base_exhausted flag is set has its budget restored (and
- *    pause cleared) the next time the base branch comes back clean_pass —
- *    scoped to that PR alone, never every open PR.
+ *    pause cleared via the base_recovery trigger) once the base branch is
+ *    clean_pass again AND base-health history corroborates a total_fail
+ *    verdict occurred at/after this PR's own escalation timestamp — scoped
+ *    to that PR alone, never every open PR.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -53,20 +61,25 @@ vi.mock('../session/sessionLifecycle.js', () => ({
 vi.mock('../orchestration/baseAttribution.js', () => ({
   isBaseTotalFail: vi.fn(),
   isProjectBaseHealthy: vi.fn(),
+  hasBaseTotalFailSince: vi.fn(),
 }));
 
 import {
   getAllOpenPRs,
+  getSession,
   setPauseReason,
   incrementStalledPRRetryCount,
   setStalledRetryBaseExhausted,
   resetStalledPRRetryCountForBaseRecovery,
+  clearTerminalPRFlags,
+  getSessionLastActivityMs,
 } from '../db/queries.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import { getProjectByGithubRepo } from '../config.js';
 import {
   isBaseTotalFail,
   isProjectBaseHealthy,
+  hasBaseTotalFailSince,
 } from '../orchestration/baseAttribution.js';
 import { StalledPRReconciler } from '../orchestration/StalledPRReconciler.js';
 import type { ServerMessage } from '../ws/types.js';
@@ -136,7 +149,7 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     vi.mocked(incrementStalledPRRetryCount).mockReturnValue(1);
   });
 
-  it('does not charge stalled_pr_retry_count for a gate_failed stall confirmed base-attributable (base tree total_fail), but still re-drives the fixer', async () => {
+  it('does not charge stalled_pr_retry_count for a gate_failed stall confirmed base-attributable live (base tree total_fail), but still re-drives the fixer', async () => {
     vi.mocked(isBaseTotalFail).mockResolvedValue(true);
     const pr = makePR({ stalled_pr_retry_count: 1 });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
@@ -157,7 +170,7 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     );
   });
 
-  it('charges stalled_pr_retry_count normally for a gate_failed stall not base-attributable', async () => {
+  it('charges stalled_pr_retry_count normally for a gate_failed stall not base-attributable live', async () => {
     vi.mocked(isBaseTotalFail).mockResolvedValue(false);
     const pr = makePR({ stalled_pr_retry_count: 1 });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
@@ -173,38 +186,86 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     expect(setStalledRetryBaseExhausted).not.toHaveBeenCalled();
   });
 
-  it('marks stalled_retry_base_exhausted (without incrementing further) on escalation when the exhausting stall was base-attributable', async () => {
-    vi.mocked(isBaseTotalFail).mockResolvedValue(true);
-    const pr = makePR({ stalled_pr_retry_count: 2 }); // already at cap
-    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+  const ARMING_CASES: Array<{
+    kind: string;
+    overrides: Record<string, unknown>;
+    configureMocks?: () => void;
+  }> = [
+    {
+      kind: 'gate_failed',
+      overrides: { review_result: JSON.stringify({ verdict: 'verify_failed' }) },
+    },
+    {
+      kind: 'session_inert',
+      // A stall kind that could never arm the escape before this change —
+      // classifyStalledPR's activity-based fallback: no verdict, a review
+      // session that resolves to a non-terminal status (so pre_review_interrupted
+      // and errored_review_session don't shadow it), and a session whose last
+      // activity is well past the inert threshold.
+      overrides: {
+        review_result: null,
+        review_session_id: 'live-review-session',
+        session_id: 'inert-session',
+      },
+      configureMocks: () => {
+        vi.mocked(getSession).mockReturnValue({ status: 'running' } as any);
+        vi.mocked(getSessionLastActivityMs).mockReturnValue(
+          Date.now() - 10 * 60 * 1000,
+        );
+      },
+    },
+    {
+      kind: 'pre_review_interrupted',
+      // Another kind that could never arm the escape before this change: no
+      // verdict yet, no pending push, and no review session holding the slot.
+      overrides: { review_result: null, review_session_id: null, pending_push: 0 },
+    },
+  ];
 
-    const { fn: broadcast, messages } = makeBroadcast();
-    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+  describe.each(ARMING_CASES)(
+    'arming on escalation for kind=$kind (BASE_ATTRIBUTABLE_ESCALATION_KINDS)',
+    ({ overrides, configureMocks }) => {
+      it('arms stalled_retry_base_exhausted unconditionally on escalation, without consulting the live base-health check', async () => {
+        configureMocks?.();
+        // isBaseTotalFail is never even resolved usefully here — rejects to
+        // prove arming does not depend on it.
+        vi.mocked(isBaseTotalFail).mockRejectedValue(
+          new Error('must not be called at escalation time'),
+        );
+        const pr = makePR({ stalled_pr_retry_count: 2, ...overrides }); // already at cap
+        vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 
-    await reconciler.reconcileOnce();
+        const { fn: broadcast, messages } = makeBroadcast();
+        const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
 
-    expect(setStalledRetryBaseExhausted).toHaveBeenCalledWith(
-      1715,
-      'org/repo',
-      true,
-    );
-    expect(setPauseReason).toHaveBeenCalledWith(
-      1715,
-      'org/repo',
-      'stalled_reconcile_cap',
-      expect.any(String),
-    );
-    expect(
-      messages.find((m) => m.type === 'pr_stalled_escalated'),
-    ).toBeDefined();
-  });
+        await reconciler.reconcileOnce();
 
-  it('restores the budget and clears the pause once base recovers for a PR whose exhaustion was base-attributable', async () => {
+        expect(setStalledRetryBaseExhausted).toHaveBeenCalledWith(
+          1715,
+          'org/repo',
+          true,
+        );
+        expect(setPauseReason).toHaveBeenCalledWith(
+          1715,
+          'org/repo',
+          'stalled_reconcile_cap',
+          expect.any(String),
+        );
+        expect(
+          messages.find((m) => m.type === 'pr_stalled_escalated'),
+        ).toBeDefined();
+      });
+    },
+  );
+
+  it('takes the base-recovery escape (kind=session_inert) once the base recovers — a kind that could never arm the escape before this change', async () => {
     vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
+    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(true);
     const pr = makePR({
       stalled_pr_retry_count: 2,
       stalled_retry_base_exhausted: 1,
       pause_reason: 'stalled_reconcile_cap',
+      pause_reason_set_at: 1000,
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
 
@@ -213,11 +274,16 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
 
     await reconciler.reconcileOnce();
 
+    expect(hasBaseTotalFailSince).toHaveBeenCalledWith(PROJECT, 1000);
     expect(resetStalledPRRetryCountForBaseRecovery).toHaveBeenCalledWith(
       1715,
       'org/repo',
     );
-    expect(setPauseReason).toHaveBeenCalledWith(1715, 'org/repo', null);
+    expect(clearTerminalPRFlags).toHaveBeenCalledWith(
+      1715,
+      'org/repo',
+      'base_recovery',
+    );
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'stalled_pr_base_recovery_reset',
@@ -226,11 +292,55 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     expect(messages.find((m) => m.type === 'pr_pause_cleared')).toBeDefined();
   });
 
-  it('never restores an escalated PR whose exhaustion was not base-attributable, even once base recovers', async () => {
+  it('takes the escape when the PR escalated before a total_fail verdict existed and is still escalated once history shows base recovery — recovery-time comparison, not just the live cached verdict', async () => {
+    // The live snapshot at recovery time is clean_pass (isProjectBaseHealthy
+    // true) — the escape must still be taken because history shows a
+    // total_fail run landed after this PR's own escalation timestamp.
     vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
+    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(true);
     const pr = makePR({
       stalled_pr_retry_count: 2,
-      stalled_retry_base_exhausted: 0, // exhausted for an unrelated reason
+      stalled_retry_base_exhausted: 1,
+      pause_reason: 'stalled_reconcile_cap',
+      pause_reason_set_at: 500, // escalated before the total_fail window opened
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+
+    await reconciler.reconcileOnce();
+
+    expect(hasBaseTotalFailSince).toHaveBeenCalledWith(PROJECT, 500);
+    expect(resetStalledPRRetryCountForBaseRecovery).toHaveBeenCalled();
+  });
+
+  it('does not take the escape when the base is clean_pass now but history shows no total_fail since escalation', async () => {
+    vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
+    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(false);
+    const pr = makePR({
+      stalled_pr_retry_count: 2,
+      stalled_retry_base_exhausted: 1,
+      pause_reason: 'stalled_reconcile_cap',
+      pause_reason_set_at: 500,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+
+    await reconciler.reconcileOnce();
+
+    expect(resetStalledPRRetryCountForBaseRecovery).not.toHaveBeenCalled();
+    expect(clearTerminalPRFlags).not.toHaveBeenCalled();
+  });
+
+  it('never restores an escalated PR whose exhaustion was for a reason unrelated to base health, even once base recovers', async () => {
+    vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
+    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(true);
+    const pr = makePR({
+      stalled_pr_retry_count: 2,
+      stalled_retry_base_exhausted: 0, // exhausted for an unrelated reason — never armed
       pause_reason: 'stalled_reconcile_cap',
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
@@ -241,11 +351,13 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     await reconciler.reconcileOnce();
 
     expect(resetStalledPRRetryCountForBaseRecovery).not.toHaveBeenCalled();
-    expect(setPauseReason).not.toHaveBeenCalled();
+    expect(clearTerminalPRFlags).not.toHaveBeenCalled();
+    expect(hasBaseTotalFailSince).not.toHaveBeenCalled();
   });
 
   it('never restores a base-attributable-exhausted PR while base is still unhealthy', async () => {
     vi.mocked(isProjectBaseHealthy).mockResolvedValue(false);
+    vi.mocked(hasBaseTotalFailSince).mockResolvedValue(true);
     const pr = makePR({
       stalled_pr_retry_count: 2,
       stalled_retry_base_exhausted: 1,
@@ -259,6 +371,6 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
     await reconciler.reconcileOnce();
 
     expect(resetStalledPRRetryCountForBaseRecovery).not.toHaveBeenCalled();
-    expect(setPauseReason).not.toHaveBeenCalled();
+    expect(clearTerminalPRFlags).not.toHaveBeenCalled();
   });
 });

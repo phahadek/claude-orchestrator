@@ -2954,10 +2954,12 @@ export function incrementStalledPRRetryCount(
 
 /**
  * Marks (or clears) whether the current stalled_pr_retry_count's most recent
- * gate_failed escalation was confirmed base-attributable — the sole scoping
- * signal the base-recovery reset in StalledPRReconciler consults before
- * restoring this PR's budget, so recovery never resets an unrelated PR's
- * counter.
+ * escalation (of a kind that may plausibly trace back to a broken base
+ * branch — see BASE_ATTRIBUTABLE_ESCALATION_KINDS in StalledPRReconciler)
+ * is a base-recovery-escape candidate — the sole scoping signal the
+ * base-recovery reset in StalledPRReconciler consults (alongside its own
+ * recovery-time base-health history check) before restoring this PR's
+ * budget, so recovery never resets an unrelated PR's counter.
  */
 export function setStalledRetryBaseExhausted(
   prNumber: number,
@@ -3742,18 +3744,22 @@ export type ClearTerminalPRFlagsTrigger =
   | 'head_sha_advance'
   | 'human_unpark'
   | 'review_verdict'
-  | 'session_reconciled';
+  | 'session_reconciled'
+  | 'base_recovery';
 
 /**
  * Triggers that are allowed to clear a 'stalled_reconcile_cap' escalation:
  * a genuine terminal transition (merged/closed), a head_sha advance (a fix
  * was actually pushed — the load-bearing signal), an explicit human
- * unpark/recovery action, or a session-initiated-close reconcile (the PR was
- * never really abandoned — the close was the session's own churn). A bare
- * automated 'review_verdict' is deliberately excluded: an approved verdict
- * does not guarantee the PR is mergeable, and clearing the cap on verdict
- * alone re-creates the open+no-pause+no-session limbo the cap escalation
- * exists to prevent.
+ * unpark/recovery action, a session-initiated-close reconcile (the PR was
+ * never really abandoned — the close was the session's own churn), or a
+ * confirmed base-branch recovery (StalledPRReconciler's own trusted signal —
+ * see hasBaseTotalFailSince/resetStalledPRRetryCountForBaseRecovery — first-
+ * class here rather than an inline setPauseReason(null) special case in the
+ * reconciler). A bare automated 'review_verdict' is deliberately excluded:
+ * an approved verdict does not guarantee the PR is mergeable, and clearing
+ * the cap on verdict alone re-creates the open+no-pause+no-session limbo the
+ * cap escalation exists to prevent.
  */
 const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
   new Set([
@@ -3762,6 +3768,7 @@ const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
     'head_sha_advance',
     'human_unpark',
     'session_reconciled',
+    'base_recovery',
   ]);
 
 /**
@@ -8367,6 +8374,30 @@ export function getLatestBaseHealthTestRequestRun(
     .get({ project_id: projectId, content_hash: contentHash }) as
     | TestRequestRunRow
     | undefined;
+}
+
+/**
+ * Every base-health-probe run (run_origin = 'base_health_probe') for a
+ * project finished at or after `sinceTs` — the history a base-recovery
+ * escape check compares a PR's escalation timestamp against, rather than
+ * sampling only the live cached verdict (checkBaseBranchHealth's
+ * content-hash cache reflects whatever tree was probed most recently, which
+ * may have never coincided with the PR's own escalation window). See
+ * baseAttribution.ts's hasBaseTotalFailSince.
+ */
+export function getBaseHealthProbeRunsSince(
+  projectId: string,
+  sinceTs: number,
+): TestRequestRunRow[] {
+  return db
+    .prepare<{ project_id: string; since: number }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id AND run_origin = 'base_health_probe'
+         AND state != 'running' AND finished_at >= @since
+       ORDER BY finished_at DESC`,
+    )
+    .all({ project_id: projectId, since: sinceTs }) as TestRequestRunRow[];
 }
 
 /**

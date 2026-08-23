@@ -78,6 +78,7 @@ import {
 import {
   isBaseTotalFail,
   isProjectBaseHealthy,
+  hasBaseTotalFailSince,
 } from '../orchestration/baseAttribution';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
@@ -1101,7 +1102,10 @@ export class PRMergeWatcher extends EventEmitter {
       // PR's counter.
       if (pr.flake_recovery_base_exhausted && project) {
         const healthy = await isProjectBaseHealthy(project);
-        if (healthy) {
+        const corroborated =
+          healthy &&
+          (await hasBaseTotalFailSince(project, pr.pause_reason_set_at ?? 0));
+        if (corroborated) {
           resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
           recordEvent({
             event_type: 'flake_recovery_base_recovery_reset',
@@ -1300,17 +1304,22 @@ export class PRMergeWatcher extends EventEmitter {
       return;
     }
 
-    // A 'failed' re-run confirmed base-attributable never charges the
-    // budget — the PR's own change isn't what's failing. Never affects
-    // GitHub's own check-run conclusion, only this internal counter.
+    // A 'failed' re-run confirmed base-attributable (live check, right now)
+    // never charges the budget — the PR's own change isn't what's failing.
+    // Never affects GitHub's own check-run conclusion, only this internal
+    // counter. Arming flake_recovery_base_exhausted is unconditional on any
+    // 'failed' outcome, independent of that live check — mirrors
+    // StalledPRReconciler's stalled_retry_base_exhausted: the live check
+    // only ever samples a possibly-transient verdict at this one instant,
+    // so the actual base-attributability verdict for a later budget-restore
+    // is deferred to hasBaseTotalFailSince's recovery-time history
+    // comparison instead.
     let baseAttributable = false;
     if (outcome === 'failed') {
+      setFlakeRecoveryBaseExhausted(pr.pr_number, pr.repo, true);
       const project = getProjectByGithubRepo(pr.repo);
       if (project) {
         baseAttributable = await isBaseTotalFail(project);
-        if (baseAttributable) {
-          setFlakeRecoveryBaseExhausted(pr.pr_number, pr.repo, true);
-        }
       }
     }
     if (!baseAttributable) {
@@ -1440,7 +1449,8 @@ export class PRMergeWatcher extends EventEmitter {
       // recovered — mirrors handleVerifiedFlakyDisposition's own restore.
       if (
         pr.flake_recovery_base_exhausted &&
-        (await isProjectBaseHealthy(project))
+        (await isProjectBaseHealthy(project)) &&
+        (await hasBaseTotalFailSince(project, pr.pause_reason_set_at ?? 0))
       ) {
         resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
         recordEvent({
