@@ -652,15 +652,13 @@ describe('runTestCommands — cgroup-scoped teardown verification', () => {
    */
   function mockCgroupProcsSurvivesThenClears(survivingReads: number): void {
     let cgroupReadCount = 0;
-    vi.mocked(fsModule.readFileSync).mockImplementation(
-      (p: unknown) => {
-        if (String(p).endsWith('cgroup.procs')) {
-          cgroupReadCount++;
-          return (cgroupReadCount <= survivingReads ? '5678\n' : '') as never;
-        }
-        return '' as never;
-      },
-    );
+    vi.mocked(fsModule.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).endsWith('cgroup.procs')) {
+        cgroupReadCount++;
+        return (cgroupReadCount <= survivingReads ? '5678\n' : '') as never;
+      }
+      return '' as never;
+    });
   }
 
   it('terminates a timed-out command whose child re-parented to init and escaped the process group', async () => {

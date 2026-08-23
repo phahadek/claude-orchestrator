@@ -438,7 +438,9 @@ describe('spawnIntoTestRunCgroup', () => {
 
     const ownPidWrites = writeSpy.mock.calls
       .map((c) => String(c[0]))
-      .filter((p) => p.endsWith('cgroup.procs') && !p.endsWith('/main/cgroup.procs'));
+      .filter(
+        (p) => p.endsWith('cgroup.procs') && !p.endsWith('/main/cgroup.procs'),
+      );
     expect(ownPidWrites).toEqual([
       '/sys/fs/cgroup/orchestrator.service/tests/session-owned-run/cgroup.procs',
       '/sys/fs/cgroup/orchestrator.service/tests/session-less-run/cgroup.procs',

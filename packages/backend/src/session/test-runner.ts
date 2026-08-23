@@ -420,7 +420,13 @@ export async function runTestCommands(
       oomKilled,
       spawnFailed,
       teardownVerificationFailed,
-    } = await runCommandWithTimeout(cmd, worktreePath, timeoutMs, maxRssMb, runId);
+    } = await runCommandWithTimeout(
+      cmd,
+      worktreePath,
+      timeoutMs,
+      maxRssMb,
+      runId,
+    );
     outputParts.push(`$ ${cmd}\n${output}`);
 
     if (spawnFailed) {
