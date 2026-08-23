@@ -26,7 +26,10 @@ import {
   killSessionCgroup,
   reapplySessionCgroupLimits,
   spawnIntoSessionCgroup,
-  spawnIntoTestsCgroup,
+  spawnIntoTestRunCgroup,
+  killTestRunCgroup,
+  isTestRunCgroupEmpty,
+  removeTestRunCgroup,
   reapOrphanedMainCgroupProcesses,
   _resetForTesting,
   _setSessionsPathForTesting,
@@ -365,21 +368,22 @@ describe('spawnIntoSessionCgroup', () => {
   });
 });
 
-describe('spawnIntoTestsCgroup', () => {
+describe('spawnIntoTestRunCgroup', () => {
   beforeEach(() => {
     _resetForTesting();
     vi.clearAllMocks();
   });
 
-  it('relocates the backend into the delegated tests/ leaf before spawnFn runs, so a forked test-lane subprocess resolves under tests/, not main', () => {
+  it('relocates the backend into a per-run sub-cgroup before spawnFn runs, so a forked test-lane subprocess resolves under tests/<runId>/, not main', () => {
     _setMainPathForTesting('/sys/fs/cgroup/orchestrator.service/main');
     _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined as any);
     const writeSpy = vi
       .spyOn(fs, 'writeFileSync')
       .mockImplementation(() => undefined);
 
     let observedCgroupDuringSpawn: string | null = null;
-    const result = spawnIntoTestsCgroup(() => {
+    const result = spawnIntoTestRunCgroup('run-xyz', () => {
       const lastOwnPidWrite = writeSpy.mock.calls
         .map((c) => String(c[0]))
         .reverse()
@@ -390,7 +394,7 @@ describe('spawnIntoTestsCgroup', () => {
 
     expect(result).toBe('spawned-test-child');
     expect(observedCgroupDuringSpawn).toBe(
-      '/sys/fs/cgroup/orchestrator.service/tests/cgroup.procs',
+      '/sys/fs/cgroup/orchestrator.service/tests/run-xyz/cgroup.procs',
     );
     expect(observedCgroupDuringSpawn).not.toContain('/main/');
   });
@@ -398,44 +402,201 @@ describe('spawnIntoTestsCgroup', () => {
   it('restores the backend to main/ after spawnFn returns', () => {
     _setMainPathForTesting('/sys/fs/cgroup/orchestrator.service/main');
     _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined as any);
     const writeSpy = vi
       .spyOn(fs, 'writeFileSync')
       .mockImplementation(() => undefined);
 
-    spawnIntoTestsCgroup(() => 'child');
+    spawnIntoTestRunCgroup('run-xyz', () => 'child');
 
     const ownPidWrites = writeSpy.mock.calls
       .map((c) => String(c[0]))
       .filter((p) => p.endsWith('cgroup.procs'));
     expect(ownPidWrites).toEqual([
-      '/sys/fs/cgroup/orchestrator.service/tests/cgroup.procs',
+      '/sys/fs/cgroup/orchestrator.service/tests/run-xyz/cgroup.procs',
       '/sys/fs/cgroup/orchestrator.service/main/cgroup.procs',
     ]);
   });
 
   it('falls back to calling spawnFn directly (unrelocated) when the delegated subtree was never set up', () => {
     const writeSpy = vi.spyOn(fs, 'writeFileSync');
-    const result = spawnIntoTestsCgroup(() => 'child');
+    const result = spawnIntoTestRunCgroup('run-xyz', () => 'child');
     expect(result).toBe('child');
     expect(writeSpy).not.toHaveBeenCalled();
   });
 
-  it('applies unconditionally regardless of session ownership — no sessionId is ever accepted, so a session-less base_health_probe/pr_pipeline run gets the same bounded placement as a session-owned one', () => {
+  it('gives two runs distinct sub-cgroups regardless of session ownership — a session-less base_health_probe/pr_pipeline run is placed the same way as a session-owned one, just keyed by its own run id', () => {
     _setMainPathForTesting('/sys/fs/cgroup/orchestrator.service/main');
     _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined as any);
     const writeSpy = vi
       .spyOn(fs, 'writeFileSync')
       .mockImplementation(() => undefined);
 
-    spawnIntoTestsCgroup(() => 'session-owned-run');
-    spawnIntoTestsCgroup(() => 'session-less-run');
+    spawnIntoTestRunCgroup('session-owned-run', () => 'a');
+    spawnIntoTestRunCgroup('session-less-run', () => 'b');
 
-    const testsLeafWrites = writeSpy.mock.calls
+    const ownPidWrites = writeSpy.mock.calls
       .map((c) => String(c[0]))
       .filter(
-        (p) => p === '/sys/fs/cgroup/orchestrator.service/tests/cgroup.procs',
+        (p) => p.endsWith('cgroup.procs') && !p.endsWith('/main/cgroup.procs'),
       );
-    expect(testsLeafWrites).toHaveLength(2);
+    expect(ownPidWrites).toEqual([
+      '/sys/fs/cgroup/orchestrator.service/tests/session-owned-run/cgroup.procs',
+      '/sys/fs/cgroup/orchestrator.service/tests/session-less-run/cgroup.procs',
+    ]);
+  });
+
+  it('sanitizes a run id containing path-unsafe characters', () => {
+    _setMainPathForTesting('/sys/fs/cgroup/orchestrator.service/main');
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined as any);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+
+    spawnIntoTestRunCgroup('../../etc/passwd', () => 'child');
+
+    const testsLeafWrite = writeSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((p) => p.startsWith('/sys/fs/cgroup/orchestrator.service/tests/'));
+    expect(testsLeafWrite).not.toContain('..');
+    expect(testsLeafWrite).not.toContain('/etc/passwd');
+  });
+});
+
+describe('killTestRunCgroup', () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+  });
+
+  it('targets a cgroup path derived from the run id, never by process name or scanning', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+
+    killTestRunCgroup('run-aaaa1111');
+
+    expect(writeSpy).toHaveBeenCalledWith(
+      '/sys/fs/cgroup/orchestrator.service/tests/run-aaaa1111/cgroup.kill',
+      '1',
+    );
+  });
+
+  it('is a no-op returning true when the sub-cgroup is already gone', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+    const writeSpy = vi.spyOn(fs, 'writeFileSync');
+
+    expect(killTestRunCgroup('run-already-gone')).toBe(true);
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op returning true when the delegated subtree was never set up', () => {
+    const existsSpy = vi.spyOn(fs, 'existsSync');
+    expect(killTestRunCgroup('some-run')).toBe(true);
+    expect(existsSpy).not.toHaveBeenCalled();
+  });
+
+  it('returns false and does not throw when the cgroup.kill write fails', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    expect(() => killTestRunCgroup('run-1')).not.toThrow();
+    expect(killTestRunCgroup('run-1')).toBe(false);
+  });
+
+  it('only ever writes under this run id — a sibling run, a session, and the Remote Control slice are all untouched', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    vi.spyOn(fs, 'existsSync').mockImplementation(
+      (p) => p === '/sys/fs/cgroup/orchestrator.service/tests/run-a',
+    );
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+
+    killTestRunCgroup('run-a');
+
+    for (const call of writeSpy.mock.calls) {
+      const p = String(call[0]);
+      expect(p).not.toContain('run-b');
+      expect(p).not.toContain('/sessions/');
+      expect(p).not.toContain('remote-control');
+    }
+    expect(writeSpy).toHaveBeenCalledWith(
+      '/sys/fs/cgroup/orchestrator.service/tests/run-a/cgroup.kill',
+      '1',
+    );
+  });
+});
+
+describe('isTestRunCgroupEmpty', () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+  });
+
+  it('reports empty (nothing to verify) when the delegated subtree was never set up', () => {
+    expect(isTestRunCgroupEmpty('run-1')).toBe(true);
+  });
+
+  it('reports empty when the run sub-cgroup directory does not exist', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+    expect(isTestRunCgroupEmpty('run-1')).toBe(true);
+  });
+
+  it('reports non-empty when cgroup.procs still lists a pid', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue('9999\n' as any);
+    expect(isTestRunCgroupEmpty('run-1')).toBe(false);
+  });
+
+  it('reports empty when cgroup.procs is blank', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue('' as any);
+    expect(isTestRunCgroupEmpty('run-1')).toBe(true);
+  });
+});
+
+describe('removeTestRunCgroup', () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+  });
+
+  it('removes the per-run sub-cgroup directory', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    const rmdirSpy = vi
+      .spyOn(fs, 'rmdirSync')
+      .mockImplementation(() => undefined as any);
+
+    removeTestRunCgroup('run-1');
+
+    expect(rmdirSpy).toHaveBeenCalledWith(
+      '/sys/fs/cgroup/orchestrator.service/tests/run-1',
+    );
+  });
+
+  it('does not throw when the directory is already gone or non-empty', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    vi.spyOn(fs, 'rmdirSync').mockImplementation(() => {
+      throw new Error('ENOTEMPTY');
+    });
+    expect(() => removeTestRunCgroup('run-1')).not.toThrow();
+  });
+
+  it('is a no-op when the delegated subtree was never set up', () => {
+    const rmdirSpy = vi.spyOn(fs, 'rmdirSync');
+    expect(() => removeTestRunCgroup('run-1')).not.toThrow();
+    expect(rmdirSpy).not.toHaveBeenCalled();
   });
 });
 

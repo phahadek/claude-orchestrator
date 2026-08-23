@@ -1042,11 +1042,18 @@ export type TestRequestRunState = 'running' | 'passed' | 'failed';
  * the suite ran and something in it failed; conflating the two makes an
  * infrastructure outage downstream-indistinguishable from a real code
  * regression (see testRequestLane.ts's failureReasonFor).
+ *
+ * 'teardown_failed' means the opposite kind of infrastructure failure: the
+ * command(s) ran, but after teardown a process was still found alive in the
+ * run's cgroup — the "no live subprocess" guarantee could not be confirmed.
+ * Distinct from every other reason here since it describes a failure of
+ * teardown itself, not of the test run it was tearing down.
  */
 export type TestRequestFailureReason =
   | 'timeout'
   | 'oom_killed'
   | 'execution_failed'
+  | 'teardown_failed'
   | 'generic';
 
 /**

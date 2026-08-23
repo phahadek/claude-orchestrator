@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import {
   readFileSync,
   readdirSync,
@@ -10,7 +11,13 @@ import path from 'path';
 import { platform } from 'process';
 import { minimatch } from 'minimatch';
 import type { StructuredTestResult } from '../db/types';
-import { spawnIntoTestsCgroup } from './sessionCgroup';
+import { logger } from '../logger';
+import {
+  spawnIntoTestRunCgroup,
+  killTestRunCgroup,
+  isTestRunCgroupEmpty,
+  removeTestRunCgroup,
+} from './sessionCgroup';
 
 export interface TestCommandResult {
   passed: boolean;
@@ -24,6 +31,15 @@ export interface TestCommandResult {
    * read as "the suite ran and failed".
    */
   spawnFailed?: boolean;
+  /**
+   * True when, after teardown (grace-period SIGINT, then SIGKILL/cgroup
+   * kill), a process was still found alive in this run's cgroup — i.e. the
+   * "no live subprocess" guarantee could not actually be confirmed. Distinct
+   * from every other failure flag: those describe why the command was torn
+   * down, this describes whether teardown actually finished the job. A
+   * caller must not treat this run as safely settled.
+   */
+  teardownVerificationFailed?: boolean;
 }
 
 export interface TestRunOptions {
@@ -31,6 +47,14 @@ export interface TestRunOptions {
   maxRssMb?: number;
   /** Stop running subsequent commands after the first failure. Default false. */
   failFast?: boolean;
+  /**
+   * Identifies this run for cgroup-scoped teardown (see sessionCgroup.ts's
+   * per-run tests/<runId>/ leaf) — callers that own a durable run id (e.g.
+   * test_request_runs.id) should pass it so teardown diagnostics can be
+   * traced back to that row. Defaults to a fresh id when omitted, so every
+   * invocation still gets an isolated, verified-on-teardown cgroup.
+   */
+  runId?: string;
 }
 
 const OUTPUT_CAP_CHARS = 50_000;
@@ -112,17 +136,61 @@ export function getChildRssMb(
   return 0;
 }
 
+/** Bounded retries for verifyRunTeardown — a cgroup.kill signal needs a moment to actually reap before cgroup.procs reflects it as empty. */
+const TEARDOWN_VERIFY_MAX_ATTEMPTS = 3;
+export const TEARDOWN_VERIFY_RETRY_MS = 200;
+
+/**
+ * Confirms no process survives in this run's cgroup before settle()
+ * resolves — the backstop for killProcessTree's process-group kill(-pid),
+ * which a setsid() grandchild or a process re-parented to init after its
+ * own parent exited both escape. cgroup-v2 membership is inherited at fork
+ * and is orthogonal to process group/parent pid, so writing cgroup.kill
+ * (via killTestRunCgroup) reaches those escapees regardless. Retries a
+ * bounded number of times since a killed process needs a moment to actually
+ * exit and be reaped before cgroup.procs reflects it as empty; if the
+ * cgroup is still non-empty after all attempts, reports `survived: true`
+ * rather than silently resolving. No-ops to `survived: false` on Windows,
+ * which has no cgroups — that path is left on process-group teardown alone.
+ */
+function verifyRunTeardown(
+  runId: string,
+  onDone: (survived: boolean) => void,
+  attempt = 0,
+): void {
+  if (platform === 'win32') {
+    onDone(false);
+    return;
+  }
+  if (isTestRunCgroupEmpty(runId)) {
+    removeTestRunCgroup(runId);
+    onDone(false);
+    return;
+  }
+  killTestRunCgroup(runId);
+  if (attempt + 1 >= TEARDOWN_VERIFY_MAX_ATTEMPTS) {
+    onDone(!isTestRunCgroupEmpty(runId));
+    return;
+  }
+  setTimeout(
+    () => verifyRunTeardown(runId, onDone, attempt + 1),
+    TEARDOWN_VERIFY_RETRY_MS,
+  );
+}
+
 function runCommandWithTimeout(
   cmd: string,
   cwd: string,
   timeoutMs: number,
   maxRssMb: number,
+  runId: string,
 ): Promise<{
   exitCode: number;
   output: string;
   timedOut: boolean;
   oomKilled: boolean;
   spawnFailed: boolean;
+  teardownVerificationFailed: boolean;
 }> {
   return new Promise((resolve) => {
     // Strip production data-plane env before the child spawns. A test
@@ -137,12 +205,13 @@ function runCommandWithTimeout(
         ? { shell: true, cwd, env }
         : { shell: true, cwd, env, detached: true };
 
-    // Relocated into the delegated tests/ cgroup for the duration of the
-    // spawn call so this subprocess (and any grandchild it forks
-    // synchronously, e.g. a temp postgres cluster) is born under that
-    // bounded leaf rather than main/ — see spawnIntoTestsCgroup's doc
-    // comment for why post-spawn placement can't close this race.
-    const proc = spawnIntoTestsCgroup(() => spawn(cmd, spawnOpts));
+    // Relocated into this run's own per-run tests/<runId>/ cgroup for the
+    // duration of the spawn call so this subprocess (and any grandchild it
+    // forks synchronously, e.g. a temp postgres cluster) is born under that
+    // bounded, run-scoped leaf rather than main/ or a leaf shared with other
+    // runs — see spawnIntoTestRunCgroup's doc comment for why post-spawn
+    // placement can't close this race.
+    const proc = spawnIntoTestRunCgroup(runId, () => spawn(cmd, spawnOpts));
     let chunks: Buffer[] = [];
     let headDroppedChars = 0;
     let settled = false;
@@ -193,7 +262,21 @@ function runCommandWithTimeout(
       if (timer !== null) clearTimeout(timer);
       if (rssPoller !== null) clearInterval(rssPoller);
       if (graceTimer !== null) clearTimeout(graceTimer);
-      resolve({ spawnFailed: false, ...result });
+      // Never settle "finished" while a process could still be alive in
+      // this run's cgroup — the run must not be recorded as torn down
+      // unless that's actually true (see verifyRunTeardown's doc comment).
+      verifyRunTeardown(runId, (survived) => {
+        if (survived) {
+          logger.error(
+            `[test-runner] teardown verification failed for run ${runId.slice(0, 8)}: a process survived cgroup kill`,
+          );
+        }
+        resolve({
+          spawnFailed: false,
+          teardownVerificationFailed: survived,
+          ...result,
+        });
+      });
     }
 
     // Escalate: SIGINT the process group so the runner can reach its normal
@@ -319,24 +402,43 @@ export async function runTestCommands(
     return { passed: true, output: '' };
   }
 
-  const { maxRssMb = 0, failFast = false } = opts;
+  const { maxRssMb = 0, failFast = false, runId = randomUUID() } = opts;
   const timeoutMs = timeoutSec * 1000;
   const outputParts: string[] = [];
   let allPassed = true;
   let anyTimedOut = false;
   let anyOomKilled = false;
   let anySpawnFailed = false;
+  let anyTeardownVerificationFailed = false;
 
   for (const cmd of commands) {
     log(`[test-runner] running: ${cmd}\n`);
-    const { exitCode, output, timedOut, oomKilled, spawnFailed } =
-      await runCommandWithTimeout(cmd, worktreePath, timeoutMs, maxRssMb);
+    const {
+      exitCode,
+      output,
+      timedOut,
+      oomKilled,
+      spawnFailed,
+      teardownVerificationFailed,
+    } = await runCommandWithTimeout(
+      cmd,
+      worktreePath,
+      timeoutMs,
+      maxRssMb,
+      runId,
+    );
     outputParts.push(`$ ${cmd}\n${output}`);
 
     if (spawnFailed) {
       log(`[test-runner] SPAWN FAILED: ${cmd}\n`);
       allPassed = false;
       anySpawnFailed = true;
+    } else if (teardownVerificationFailed) {
+      log(
+        `[test-runner] TEARDOWN VERIFICATION FAILED (process survived cgroup kill): ${cmd}\n`,
+      );
+      allPassed = false;
+      anyTeardownVerificationFailed = true;
     } else if (oomKilled) {
       log(
         `[test-runner] OOM_KILL after exceeding ${maxRssMb} MB RSS: ${cmd}\n`,
@@ -363,6 +465,7 @@ export async function runTestCommands(
     timedOut: anyTimedOut,
     oomKilled: anyOomKilled,
     spawnFailed: anySpawnFailed,
+    teardownVerificationFailed: anyTeardownVerificationFailed,
   };
 }
 
