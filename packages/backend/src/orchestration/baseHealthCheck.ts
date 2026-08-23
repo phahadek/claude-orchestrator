@@ -17,19 +17,27 @@
  *                   tests failed, the rest didn't) — a normal
  *                   test_request_runs failure.
  *  - total_fail:   base tree failed with no per-test breakdown at all (a
- *                   process crash or OOM-kill before any report was
- *                   written) — this shape is what the dispatch-gating
- *                   follow-on task branches on.
+ *                   genuine process crash before any report was written) —
+ *                   this shape is what the dispatch-gating follow-on task
+ *                   branches on. A run killed at the project's own
+ *                   test-timeout budget, or OOM-killed, never reaches
+ *                   total_fail even though it also has no per-test
+ *                   breakdown — those are the orchestrator's own
+ *                   budget/resource limits, not evidence about the base
+ *                   tree, so they classify as `unknown` instead (see
+ *                   classifyRun).
  *  - unknown:      no result could be produced at all (worktree
  *                   provisioning failure, content-hash unavailable, no test
- *                   commands configured, or the run itself errored before
- *                   leaving a durable row). Distinct from total_fail — no
- *                   per-test breakdown exists, but also no confirmed base
- *                   verdict at all, so a caller filtering a failed session
- *                   run against it (baseAttributableFilter.ts) must not
- *                   treat this as "base is healthy, the failure is yours":
- *                   it surfaces its own distinct filter outcome instead of
- *                   collapsing to unfiltered.
+ *                   commands configured, the run itself errored before
+ *                   leaving a durable row, or the run was killed at the
+ *                   timeout budget/OOM-killed before any report was
+ *                   written). Distinct from total_fail — no per-test
+ *                   breakdown exists, but also no confirmed base verdict at
+ *                   all, so a caller filtering a failed session run against
+ *                   it (baseAttributableFilter.ts) must not treat this as
+ *                   "base is healthy, the failure is yours": it surfaces
+ *                   its own distinct filter outcome instead of collapsing
+ *                   to unfiltered.
  */
 
 import { execFile } from 'node:child_process';
@@ -177,14 +185,29 @@ function classifyFailedRun(
  * ambiguous — it does not mean the run crashed — so classifyFailedRun's
  * total_fail is downgraded to `partial_fail` here (normal failure, does not
  * escalate to the base-branch dispatch hold) rather than read as a crash.
+ *
+ * A run killed at the project's configured test-timeout budget (or by an
+ * OOM-kill) carries no information about base-branch health at all — the
+ * process was truncated by the orchestrator's own budget/resource limit,
+ * not by anything the base tree did. Neither ever gets a per-test report,
+ * so classifyFailedRun always reads them as `total_fail`; that must not
+ * reach the dispatch-gating caller as a confirmed base-branch break, so
+ * it's downgraded to `unknown` here — "no confirmed base verdict at all",
+ * which AutoLauncher's gate already treats as never-blocking.
  */
 function classifyRun(run: TestRequestRunRow): BaseHealthOutcome {
   if (run.state === 'passed') return 'clean_pass';
   const failed = classifyFailedRun(run);
-  if (failed === 'total_fail' && !run.test_report_acquisition_attempted) {
-    return 'partial_fail';
+  if (failed === 'partial_fail') return 'partial_fail';
+  if (!run.test_report_acquisition_attempted) return 'partial_fail';
+  if (
+    run.failure_reason === 'timeout' ||
+    run.oom_killed ||
+    run.failure_reason === 'oom_killed'
+  ) {
+    return 'unknown';
   }
-  return failed;
+  return 'total_fail';
 }
 
 /**
