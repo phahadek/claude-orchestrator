@@ -76,6 +76,7 @@ vi.mock('../pollUtils', () => ({
 vi.mock('../../orchestration/baseAttribution', () => ({
   isBaseTotalFail: vi.fn(),
   isProjectBaseHealthy: vi.fn(),
+  wasBaseTotalFailSince: vi.fn(),
 }));
 
 import { PRMergeWatcher } from '../PRMergeWatcher';
@@ -93,6 +94,7 @@ import { typedGetSetting } from '../../config/settings';
 import {
   isBaseTotalFail,
   isProjectBaseHealthy,
+  wasBaseTotalFailSince,
 } from '../../orchestration/baseAttribution';
 import {
   pauseReasonFromCanonical,
@@ -266,7 +268,8 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
     expect(setFlakeRecoveryBaseExhausted).not.toHaveBeenCalled();
   });
 
-  it('restores the budget via resetFlakeRecoveryAttempts once base recovers for a PR whose exhaustion was base-attributable, then proceeds with the re-run normally', async () => {
+  it('restores the budget via resetFlakeRecoveryAttempts once a history probe confirms attribution and base recovers, then proceeds with the re-run normally', async () => {
+    vi.mocked(wasBaseTotalFailSince).mockResolvedValue(true);
     vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
     const github = makeMockGitHub();
     const { watcher } = makeWatcher(github);
@@ -276,6 +279,7 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
     const pr = makePRRow({
       flake_recovery_attempts: 2, // at cap (typedGetSetting mocked to 2)
       flake_recovery_base_exhausted: 1,
+      pause_reason_set_at: 1000,
     });
     vi.mocked(getPRByNumber).mockImplementation(() => pr);
     vi.mocked(resetFlakeRecoveryAttempts).mockImplementation(() => {
@@ -285,6 +289,10 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
 
     await watcher.handleVerifiedFlakyDisposition(makePayload());
 
+    expect(wasBaseTotalFailSince).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'project-1' }),
+      1000,
+    );
     expect(resetFlakeRecoveryAttempts).toHaveBeenCalledWith(PR_NUMBER, REPO);
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -307,12 +315,37 @@ describe('PRMergeWatcher — flake_recovery_attempts base-attributable exemption
   });
 
   it('never restores an exhausted PR whose exhaustion was not base-attributable, even once base recovers', async () => {
+    vi.mocked(wasBaseTotalFailSince).mockResolvedValue(true);
     vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
     const github = makeMockGitHub();
     const { watcher } = makeWatcher(github);
     const pr = makePRRow({
       flake_recovery_attempts: 2,
       flake_recovery_base_exhausted: 0,
+      pause_reason_set_at: 1000,
+    });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    await watcher.handleVerifiedFlakyDisposition(makePayload());
+
+    expect(resetFlakeRecoveryAttempts).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'ci_failing',
+      'flake-recovery-exhausted',
+    );
+  });
+
+  it('never restores a base-attributable-exhausted PR when no matching history probe exists, even though base is currently healthy', async () => {
+    vi.mocked(wasBaseTotalFailSince).mockResolvedValue(false);
+    vi.mocked(isProjectBaseHealthy).mockResolvedValue(true);
+    const github = makeMockGitHub();
+    const { watcher } = makeWatcher(github);
+    const pr = makePRRow({
+      flake_recovery_attempts: 2,
+      flake_recovery_base_exhausted: 1,
+      pause_reason_set_at: 1000,
     });
     vi.mocked(getPRByNumber).mockReturnValue(pr);
 

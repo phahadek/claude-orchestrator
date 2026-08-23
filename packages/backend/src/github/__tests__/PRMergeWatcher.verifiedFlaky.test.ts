@@ -69,6 +69,7 @@ vi.mock('../pollUtils', () => ({
 vi.mock('../../orchestration/baseAttribution', () => ({
   isBaseTotalFail: vi.fn().mockResolvedValue(false),
   isProjectBaseHealthy: vi.fn().mockResolvedValue(false),
+  wasBaseTotalFailSince: vi.fn().mockResolvedValue(false),
 }));
 
 // db/pauseReason is left un-mocked — real parse/serialize logic exercises the
