@@ -1019,9 +1019,7 @@ describe('reconcileOrphanProcesses', () => {
     // Alive after SIGTERM (first check), dead after SIGKILL (second check).
     let aliveCheckCount = 0;
     const result = await reconcileOrphanProcesses({
-      scanProcesses: () => [
-        proc({ pid: 2020, sessionId: 'ignores-sigterm' }),
-      ],
+      scanProcesses: () => [proc({ pid: 2020, sessionId: 'ignores-sigterm' })],
       killProcess: (_pid, signal) => signalsSent.push(signal),
       isPidAlive: () => {
         aliveCheckCount++;
