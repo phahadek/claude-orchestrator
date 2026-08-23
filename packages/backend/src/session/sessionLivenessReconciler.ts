@@ -256,8 +256,21 @@ export interface OrphanProcessReconcilerDeps {
   scanProcesses?: () => ClaudeSessionProcess[];
   /** Overridable for tests; defaults to the real DB row lookup. */
   getSessionRow?: (sessionId: string) => Session | undefined;
-  /** Overridable for tests; defaults to a real `process.kill(pid, 'SIGTERM')`. */
-  killProcess?: (pid: number) => void;
+  /** Overridable for tests; defaults to a real `process.kill(pid, signal)`. */
+  killProcess?: (pid: number, signal: NodeJS.Signals) => void;
+  /**
+   * Overridable for tests; defaults to a real liveness check of a specific
+   * pid via `process.kill(pid, 0)`. Used to confirm the SIGTERM/SIGKILL
+   * escalation below actually terminated the process, rather than merely
+   * having sent a signal — see defaultIsPidAlive.
+   */
+  isPidAlive?: (pid: number) => boolean;
+  /**
+   * Overridable for tests; defaults to a real `setTimeout`-backed delay.
+   * Used to wait out the SIGTERM grace period (and a short post-SIGKILL
+   * settle) before checking whether the process actually exited.
+   */
+  waitMs?: (ms: number) => Promise<void>;
   /**
    * Overridable for tests; defaults to the real cgroup-scoped kill
    * (sessionCgroup.ts's killSessionCgroup). Reaches a test-command tree
@@ -280,23 +293,86 @@ export interface OrphanProcessReconcilerDeps {
 export interface OrphanProcessReconcileResult {
   /** Candidate processes examined — those carrying a resolvable session uuid. */
   examined: number;
-  /** Processes terminated because their row was terminal/missing, past the grace floor. */
+  /** Processes whose termination was confirmed (post-SIGTERM or post-SIGKILL verification). */
   reaped: number;
   /** Candidates that resolved to a reapable state but were held back by the grace floor. */
   skippedByGrace: number;
+  /**
+   * Candidates that were escalated all the way to SIGKILL and still could
+   * not be confirmed dead (e.g. stuck in an uninterruptible D-state) — not
+   * counted in `reaped`. The cgroup/worktree-tree backstops still ran for
+   * these, and the next sweep will retry.
+   */
+  survivedEscalation: number;
 }
 
-function defaultKillProcess(pid: number): void {
+/**
+ * Same grace period CliSessionRunner.kill() waits after SIGTERM before
+ * escalating to SIGKILL (its GRACEFUL_END_TIMEOUT_MS) — kept as an
+ * independent constant rather than a cross-module import, since several
+ * SessionManager tests `vi.mock` CliSessionRunner without re-exporting its
+ * constants, and this reconciler module is pulled in transitively by
+ * SessionManager.ts.
+ */
+const KILL_ESCALATION_WAIT_MS = 15_000;
+
+/**
+ * Short settle window after sending SIGKILL before checking liveness —
+ * SIGKILL cannot be ignored, but the kernel needs a moment to reap the
+ * process and update the process table.
+ */
+const POST_SIGKILL_SETTLE_MS = 500;
+
+function defaultKillProcess(pid: number, signal: NodeJS.Signals): void {
   try {
-    process.kill(pid, 'SIGTERM');
+    process.kill(pid, signal);
   } catch (err) {
-    // ESRCH (already exited) is the expected/common case here — the sweep
-    // still counts the candidate as reaped, since the outcome (no such
-    // process) is what it was trying to achieve.
+    // ESRCH (already exited) is the expected/common case here.
     logger.warn(
-      `[sessionLivenessReconciler] kill(${pid}) failed (likely already exited): ${(err as Error).message}`,
+      `[sessionLivenessReconciler] kill(${pid}, ${signal}) failed (likely already exited): ${(err as Error).message}`,
     );
   }
+}
+
+function defaultIsPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    // Any other error (e.g. EPERM) means the process exists but is not
+    // signalable by us — fail safe and treat it as still alive.
+    return true;
+  }
+}
+
+function defaultWaitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * SIGTERM → wait → verify → SIGKILL → wait → verify, mirroring
+ * CliSessionRunner.kill()'s escalation. Returns true only once the
+ * process's death is actually confirmed, not merely once a signal was
+ * sent — a process ignoring SIGTERM (or unresponsive) must never be
+ * silently counted as reaped.
+ */
+async function killProcessWithEscalation(
+  pid: number,
+  killProcess: (pid: number, signal: NodeJS.Signals) => void,
+  isPidAlive: (pid: number) => boolean,
+  waitMs: (ms: number) => Promise<void>,
+): Promise<boolean> {
+  killProcess(pid, 'SIGTERM');
+  await waitMs(KILL_ESCALATION_WAIT_MS);
+  if (!isPidAlive(pid)) return true;
+
+  logger.warn(
+    `[sessionLivenessReconciler] pid=${pid} did not exit within ${KILL_ESCALATION_WAIT_MS}ms of SIGTERM; escalating to SIGKILL`,
+  );
+  killProcess(pid, 'SIGKILL');
+  await waitMs(POST_SIGKILL_SETTLE_MS);
+  return !isPidAlive(pid);
 }
 
 /**
@@ -323,18 +399,20 @@ function defaultKillProcess(pid: number): void {
  * case belongs to the liveness sweeps above, which reconcile the row
  * instead of touching the process.
  */
-export function reconcileOrphanProcesses(
+export async function reconcileOrphanProcesses(
   deps: OrphanProcessReconcilerDeps = {},
-): OrphanProcessReconcileResult {
+): Promise<OrphanProcessReconcileResult> {
   // API-mode sessions have no OS subprocess by design — see runLivenessSweep's
   // identical guard above.
   if (runtimeSettings.session_mode === 'api') {
-    return { examined: 0, reaped: 0, skippedByGrace: 0 };
+    return { examined: 0, reaped: 0, skippedByGrace: 0, survivedEscalation: 0 };
   }
 
   const scanProcesses = deps.scanProcesses ?? scanClaudeSessionProcesses;
   const getSessionRow = deps.getSessionRow ?? getSession;
   const killProcess = deps.killProcess ?? defaultKillProcess;
+  const isPidAlive = deps.isPidAlive ?? defaultIsPidAlive;
+  const waitMs = deps.waitMs ?? defaultWaitMs;
   const killCgroup = deps.killSessionCgroup ?? killSessionCgroup;
   const killWorktreeTree =
     deps.killWorktreeProcessTree ?? killWorktreeProcessTree;
@@ -342,8 +420,18 @@ export function reconcileOrphanProcesses(
   const now = deps.nowFn ? deps.nowFn() : Date.now();
 
   let examined = 0;
-  let reaped = 0;
   let skippedByGrace = 0;
+
+  // Candidates confirmed reapable by row/grace checks, escalated below —
+  // concurrently, not one after another. Each escalation is dominated by a
+  // fixed per-pid wait (KILL_ESCALATION_WAIT_MS, +POST_SIGKILL_SETTLE_MS on
+  // the SIGKILL path); running the loop's `await` sequentially would make a
+  // sweep's wall-clock scale with orphan count (16 orphans -> minutes) where
+  // it used to be near-instant, and since this job is skip-if-running, that
+  // also suppresses the next scheduled sweep. Promise.all keeps sweep
+  // duration ~= one escalation, independent of how many orphans it covers.
+  const candidates: Array<{ pid: number; sessionId: string; status: string }> =
+    [];
 
   for (const proc of scanProcesses()) {
     // Hard safety constraint: a process with no resolvable session uuid
@@ -372,18 +460,46 @@ export function reconcileOrphanProcesses(
       continue;
     }
 
-    killProcess(proc.pid);
     // Reach the session's whole test-command process tree, not just the
     // scanned pid — a pytest/`uv run task test` tree forked by this
     // session's own process carries no --session-id/--resume of its own,
-    // so it would otherwise survive this sweep entirely.
+    // so it would otherwise survive this sweep entirely. Run unconditionally
+    // alongside the pid-level escalation below, since neither backstop can
+    // see what the other reaches (see sessionCgroup.ts's documented no-op
+    // when cgroup delegation was never set up).
     killCgroup(proc.sessionId);
     if (row.worktree_path) killWorktreeTree(row.worktree_path);
-    evictSessionMapEntry(proc.sessionId);
-    reaped++;
-    logger.warn(
-      `[sessionLivenessReconciler] reaped orphaned process pid=${proc.pid} for session ${proc.sessionId.slice(0, 8)} (status=${row.status})`,
-    );
+
+    candidates.push({ pid: proc.pid, sessionId: proc.sessionId, status: row.status });
+  }
+
+  const escalations = await Promise.all(
+    candidates.map(async (candidate) => {
+      const confirmedDead = await killProcessWithEscalation(
+        candidate.pid,
+        killProcess,
+        isPidAlive,
+        waitMs,
+      );
+      evictSessionMapEntry(candidate.sessionId);
+      return { ...candidate, confirmedDead };
+    }),
+  );
+
+  let reaped = 0;
+  let survivedEscalation = 0;
+  for (const { pid, sessionId, status, confirmedDead } of escalations) {
+    if (confirmedDead) {
+      reaped++;
+      logger.warn(
+        `[sessionLivenessReconciler] reaped orphaned process pid=${pid} for session ${sessionId.slice(0, 8)} (status=${status})`,
+      );
+    } else {
+      survivedEscalation++;
+      logger.error(
+        `[sessionLivenessReconciler] pid=${pid} for session ${sessionId.slice(0, 8)} (status=${status}) survived SIGTERM and SIGKILL — will retry next sweep`,
+      );
+    }
   }
 
   if (reaped > 0) {
@@ -397,5 +513,5 @@ export function reconcileOrphanProcesses(
     );
   }
 
-  return { examined, reaped, skippedByGrace };
+  return { examined, reaped, skippedByGrace, survivedEscalation };
 }

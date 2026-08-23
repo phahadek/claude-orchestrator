@@ -794,13 +794,14 @@ scheduler.register({
   runOnBoot: true,
   concurrency: 'skip-if-running',
   run: async () => {
-    const { examined, reaped, skippedByGrace } =
-      sessionManager.reconcileOrphanProcesses();
+    const { examined, reaped, skippedByGrace, survivedEscalation } =
+      await sessionManager.reconcileOrphanProcesses();
     return {
       items_processed: reaped,
       examined,
       reaped,
       skippedByGrace,
+      survivedEscalation,
     };
   },
 });
