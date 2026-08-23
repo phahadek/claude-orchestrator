@@ -1794,7 +1794,15 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
-  }, 20000);
+    // This test dispatches two real worker_threads (each paying ts-node/
+    // register/transpile-only's registration + compile cost) against a real
+    // on-disk sqlite file. In isolation that's ~1-2s; under a full-suite run
+    // where many other files are concurrently spawning their own worker
+    // threads and doing heavy synchronous better-sqlite3 I/O, that startup
+    // cost has been observed stretching past 20s — a resource-contention
+    // timeout, not a correctness failure (see flakyTestRollupOffMainThread.test.ts
+    // for the same pattern). Generous timeout so it survives that contention.
+  }, 60000);
 });
 
 // ── getLatestTestRequestRunForSession — no temp b-tree over structured_result ──

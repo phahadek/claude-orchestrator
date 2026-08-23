@@ -48,6 +48,14 @@ describe('design-context-client.mjs — CLI', () => {
   it('fails loudly with no partial bundle when ORCHESTRATOR_DEVICE_TOKEN is absent', async () => {
     const env = { ...process.env };
     delete env.ORCHESTRATOR_DEVICE_TOKEN;
+    // This process's own env carries a real ORCHESTRATOR_ROUTE_CREDENTIAL_FILE
+    // (and a real ORCHESTRATOR_BACKEND_PORT pointing at a live server) when run
+    // under the orchestrator itself — resolveRouteToken() would otherwise fall
+    // back to that real credential file, turning this into a live network call
+    // against the real backend instead of exercising the "neither is set"
+    // failure path, which is what previously caused this test to hang past its
+    // timeout in a full-suite/orchestrator-hosted run.
+    delete env.ORCHESTRATOR_ROUTE_CREDENTIAL_FILE;
 
     await expect(
       execFileAsync(

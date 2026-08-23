@@ -15,6 +15,8 @@ const mockHasAnalyzeResultForSha = vi.fn().mockReturnValue(false);
 const mockUpsertAnalyzeResult = vi.fn();
 const mockGetAnalyzeResult = vi.fn().mockReturnValue(null);
 const mockDeleteAnalyzeResult = vi.fn();
+const mockGetTestRequestRunById = vi.fn().mockReturnValue(undefined);
+const mockUpdateTestRequestRunState = vi.fn();
 const mockAddAutofixSha = vi.fn();
 const mockGetAnalyzeContentCacheResult = vi.fn().mockReturnValue(undefined);
 const mockInsertAnalyzeContentCacheResult = vi.fn();
@@ -35,6 +37,10 @@ vi.mock('../../db/queries', () => ({
   upsertAnalyzeResult: (...args: unknown[]) => mockUpsertAnalyzeResult(...args),
   getAnalyzeResult: (...args: unknown[]) => mockGetAnalyzeResult(...args),
   deleteAnalyzeResult: (...args: unknown[]) => mockDeleteAnalyzeResult(...args),
+  getTestRequestRunById: (...args: unknown[]) =>
+    mockGetTestRequestRunById(...args),
+  updateTestRequestRunState: (...args: unknown[]) =>
+    mockUpdateTestRequestRunState(...args),
   getAnalyzeContentCacheResult: (...args: unknown[]) =>
     mockGetAnalyzeContentCacheResult(...args),
   insertAnalyzeContentCacheResult: (...args: unknown[]) =>
@@ -206,6 +212,7 @@ beforeEach(() => {
   mockRunTestCommands.mockResolvedValue({ passed: true, output: '' });
   mockRunProjectTestRequest.mockResolvedValue({ passed: true, output: '' });
   mockGetLatestTestRequestRun.mockReturnValue(undefined);
+  mockGetTestRequestRunById.mockReturnValue(undefined);
   mockHasAnalyzeResultForSha.mockReturnValue(false);
   mockGetAnalyzeContentCacheResult.mockReturnValue(undefined);
   mockComputeTriggerContentHash.mockResolvedValue(null);
