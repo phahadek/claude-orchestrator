@@ -115,6 +115,7 @@ type EventType =
   | 'flow_arm_changed'
   | 'milestone_wrapped'
   | 'base_fetch_failed'
+  | 'base_fetch_ref_lock_benign'
   | 'mcp_stage_credential_rejected'
   | 'mcp_connection_established'
   | 'mcp_connection_closed'
