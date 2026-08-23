@@ -193,7 +193,9 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
   }> = [
     {
       kind: 'gate_failed',
-      overrides: { review_result: JSON.stringify({ verdict: 'verify_failed' }) },
+      overrides: {
+        review_result: JSON.stringify({ verdict: 'verify_failed' }),
+      },
     },
     {
       kind: 'session_inert',
@@ -218,7 +220,11 @@ describe('StalledPRReconciler base-attributable-failures exemption', () => {
       kind: 'pre_review_interrupted',
       // Another kind that could never arm the escape before this change: no
       // verdict yet, no pending push, and no review session holding the slot.
-      overrides: { review_result: null, review_session_id: null, pending_push: 0 },
+      overrides: {
+        review_result: null,
+        review_session_id: null,
+        pending_push: 0,
+      },
     },
   ];
 

@@ -30,7 +30,10 @@
  */
 
 import type { ProjectConfig } from '../config';
-import { getFailingTestIdsForRun, getBaseHealthProbeRunsSince } from '../db/queries';
+import {
+  getFailingTestIdsForRun,
+  getBaseHealthProbeRunsSince,
+} from '../db/queries';
 import type { TestRequestRunRow } from '../db/types';
 
 async function checkBaseBranchHealth(project: ProjectConfig) {

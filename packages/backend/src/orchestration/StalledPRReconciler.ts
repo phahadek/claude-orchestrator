@@ -57,9 +57,11 @@ const DEFAULT_RETRY_CAP = 2;
  * why the actual base-attributability verdict is deferred to recovery time
  * rather than sampled live at escalation.
  */
-const BASE_ATTRIBUTABLE_ESCALATION_KINDS: ReadonlySet<StalledPRKind> = new Set(
-  ['gate_failed', 'session_inert', 'pre_review_interrupted'],
-);
+const BASE_ATTRIBUTABLE_ESCALATION_KINDS: ReadonlySet<StalledPRKind> = new Set([
+  'gate_failed',
+  'session_inert',
+  'pre_review_interrupted',
+]);
 
 /**
  * Periodic sweeper that detects PRs parked with no incoming push and re-drives
