@@ -122,3 +122,60 @@ describe('design decision.pickOne payload-shape contract', () => {
     );
   });
 });
+
+describe('design decision output-shape contract', () => {
+  const principle = CORE_PRINCIPLES.find(
+    (p) => p.id === 'design-decision-output-shape',
+  );
+
+  it('is defined and scoped to design only', () => {
+    expect(principle).toBeDefined();
+    expect(principle!.appliesTo).toEqual(['design']);
+    expect(principlesFor('design')).toContain(principle);
+    expect(principlesFor('groom')).not.toContain(principle);
+    expect(principlesFor('ops')).not.toContain(principle);
+    expect(principlesFor('split')).not.toContain(principle);
+    expect(principlesFor('docs')).not.toContain(principle);
+  });
+
+  it('instructs information density — every sentence carries a claim, no restating or throat-clearing', () => {
+    const text = renderPrinciple(principle!, 'design');
+    expect(text).toMatch(/every sentence to carry a claim/i);
+    expect(text).toMatch(/DO NOT restate the question/i);
+    expect(text).toMatch(/DO NOT throat-clear/i);
+    expect(text).toMatch(/DO NOT summarize the other options/i);
+  });
+
+  it('instructs one thesis per paragraph, separated by a blank line', () => {
+    const text = renderPrinciple(principle!, 'design');
+    expect(text).toMatch(/each paragraph exactly one thesis/i);
+    expect(text).toMatch(/two arguments is two paragraphs/i);
+    expect(text).toContain('\\n\\n');
+  });
+
+  it('instructs at most three lines per paragraph', () => {
+    const text = renderPrinciple(principle!, 'design');
+    expect(text).toMatch(/at most three lines/i);
+  });
+
+  it('instructs architectural justification, never existing-code precedent, with evidence still routed to investigation', () => {
+    const text = renderPrinciple(principle!, 'design');
+    expect(text).toMatch(/justify the recommendation architecturally/i);
+    expect(text).toMatch(/coupling, failure modes/i);
+    expect(text).toMatch(/DO NOT justify it by/i);
+    expect(text).toMatch(/existing-code precedent/i);
+    expect(text).toMatch(/not an architectural argument/i);
+    expect(text).toMatch(/`investigation` field/i);
+  });
+
+  it('cross-references the payload-shape rule rather than restating its field mapping', () => {
+    const text = renderPrinciple(principle!, 'design');
+    expect(text).toMatch(/decision\.pickOne payload shape/i);
+  });
+
+  it('is rendered into the assembled design procedure output', () => {
+    const output = renderedDesignOutput();
+    expect(output).toMatch(/decision output shape/i);
+    expect(output).toMatch(/one thesis per paragraph/i);
+  });
+});

@@ -463,7 +463,7 @@ export async function loadOpsContext(
     );
     const archUnits: OpsArchUnitRef[] =
       archSource === 'store'
-        ? selectUnitsFromStore({ regions }).map((u) => ({
+        ? selectUnitsFromStore({ projectId: project, regions }).map((u) => ({
             id: u.id,
             title: u.title,
           }))

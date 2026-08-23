@@ -1,6 +1,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { recoverStaleIndexLock } from './staleIndexLock';
+import { logger } from '../logger';
 
 const execFileAsync = promisify(execFile);
 
@@ -33,6 +34,13 @@ export async function getCurrentBranch(
 /**
  * Returns true when the diff between baseBranch..featureBranch is non-empty.
  * Uses git diff --quiet which exits 0 for empty diff and 1 for non-empty.
+ *
+ * Only exit code 1 means "has diff" — any other failure (bad revision,
+ * missing worktree, dubious ownership, etc.) means the diff could not be
+ * determined at all. Treating those as "has diff" would silently block the
+ * no-op investigator gate downstream (recoverSession requires !hasDiff), so
+ * on an indeterminate result this fails safe by reporting "no diff" and
+ * logging the underlying error instead.
  */
 export async function hasNonEmptyDiff(
   worktreePath: string,
@@ -45,8 +53,15 @@ export async function hasNonEmptyDiff(
       worktreePath,
     );
     return false; // exit 0 = no diff
-  } catch {
-    return true; // exit non-zero = has diff
+  } catch (e) {
+    const code = (e as { code?: number }).code;
+    if (code === 1) {
+      return true; // exit 1 = diff present
+    }
+    logger.error(
+      `[hasNonEmptyDiff] could not determine diff for ${baseBranch}..${featureBranch} in ${worktreePath}, failing safe as no-diff: ${e}`,
+    );
+    return false;
   }
 }
 

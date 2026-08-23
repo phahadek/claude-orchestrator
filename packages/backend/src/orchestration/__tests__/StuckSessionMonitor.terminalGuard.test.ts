@@ -27,6 +27,7 @@ vi.mock('../../config.js', () => ({
 vi.mock('../../db/queries.js', () => ({
   getPRBySessionId: vi.fn().mockReturnValue(null),
   setPauseReason: vi.fn(),
+  setTaskPauseReason: vi.fn(),
   insertPauseInterval: vi.fn(),
   closePauseInterval: vi.fn(),
   upsertStuckSessionTimer: vi.fn(),

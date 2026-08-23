@@ -19,6 +19,7 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
+import * as queries from '../../db/queries.js';
 import {
   upsertTaskCache,
   getVerifySessionsForGateItems,
@@ -1196,6 +1197,23 @@ describe('reclassifyGateItem — pending lifecycle', () => {
     const updated = reclassifyGateItem(item.id, 'Read-Only', 'pedro');
     expect(updated.state).toBe('open');
   });
+
+  it('persists a passed reason on the classification-change event evidence', () => {
+    const item = makeItem({ classification: 'Human-Observation' });
+    reclassifyGateItem(
+      item.id,
+      'Read-Only',
+      'pedro',
+      'It is actually readable.',
+    );
+
+    const events = getGateItemDetail(item.id)!.events;
+    const latest = events[events.length - 1];
+    expect(latest.disposition).toBe('reclassified');
+    expect(latest.evidence).toMatchObject({
+      reason: 'It is actually readable.',
+    });
+  });
 });
 
 describe('reopenGateItem — pending is blocked', () => {
@@ -1696,5 +1714,62 @@ describe('listMilestoneReadiness', () => {
         }),
       ]),
     );
+  });
+});
+
+describe('readiness rollups skip the per-item sources/events hydration', () => {
+  it('getGateReadiness never calls listGateItemSources/listGateItemEvents', () => {
+    const a = makeItem({ text: 'a' });
+    const b = makeItem({ text: 'b' });
+    appendGateItemEvent(a.id, { disposition: 'pass' });
+    appendGateItemEvent(b.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+
+    const sourcesSpy = vi.spyOn(queries, 'listGateItemSources');
+    const eventsSpy = vi.spyOn(queries, 'listGateItemEvents');
+
+    getGateReadiness('polimarket-analyser', 'M12');
+
+    expect(sourcesSpy).not.toHaveBeenCalled();
+    expect(eventsSpy).not.toHaveBeenCalled();
+    sourcesSpy.mockRestore();
+    eventsSpy.mockRestore();
+  });
+
+  it('listMilestoneReadiness never calls listGateItemSources/listGateItemEvents, scoped or unscoped', () => {
+    const a = makeItem({ project: 'proj-a', milestone: 'M12', text: 'a' });
+    const b = makeItem({ project: 'proj-b', milestone: 'M12', text: 'b' });
+    appendGateItemEvent(a.id, { disposition: 'pass' });
+    appendGateItemEvent(b.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+
+    const sourcesSpy = vi.spyOn(queries, 'listGateItemSources');
+    const eventsSpy = vi.spyOn(queries, 'listGateItemEvents');
+
+    listMilestoneReadiness({ project: 'proj-a' });
+    listMilestoneReadiness();
+
+    expect(sourcesSpy).not.toHaveBeenCalled();
+    expect(eventsSpy).not.toHaveBeenCalled();
+    sourcesSpy.mockRestore();
+    eventsSpy.mockRestore();
+  });
+
+  it('reconcileGateRunnability still hydrates sources/events, since it genuinely needs them', async () => {
+    const item = makeItem({ text: 'needs coverage check' });
+    mergeSource(item.id, 'sha-a', new Date(0).toISOString());
+
+    const sourcesSpy = vi.spyOn(queries, 'listGateItemSources');
+
+    await reconcileGateRunnability('sha-a', {
+      ancestrySource: orderedAncestry,
+    });
+
+    expect(sourcesSpy).toHaveBeenCalled();
+    sourcesSpy.mockRestore();
   });
 });

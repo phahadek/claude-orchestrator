@@ -1,6 +1,17 @@
 import os from 'os';
 import { runtimeSettings } from '../config';
 
+// Schema defaults from config/settings.ts's SETTINGS_DEFAULTS — Zod always
+// supplies these when reading real settings, so a production runtimeSettings
+// object can never actually be missing them. The fallback below only ever
+// engages when a caller (chiefly a test's partial runtimeSettings mock, e.g.
+// `vi.mock('../config', () => ({ runtimeSettings: { session_mode: 'cli' } }))`
+// in a suite that doesn't otherwise care about memory admission) supplies a
+// non-finite value — fail open to "headroom available" rather than let an
+// incomplete mock silently gate every respawn in that suite.
+const DEFAULT_MIN_HOST_FREE_MEMORY_MB = 4096;
+const DEFAULT_PER_SESSION_RESERVE_MB = 3072;
+
 export interface MemoryHeadroomInputs {
   /** Current host free memory, in MB. */
   freeMemMB: number;
@@ -44,8 +55,16 @@ export function hasMemoryHeadroom(
   freeMemBytes: number = os.freemem(),
 ): MemoryHeadroomResult {
   const freeMemMB = freeMemBytes / (1024 * 1024);
-  const minHostFreeMemoryMB = runtimeSettings.min_host_free_memory_mb;
-  const perSessionReserveMB = runtimeSettings.per_session_reserve_mb;
+  const minHostFreeMemoryMB = Number.isFinite(
+    runtimeSettings.min_host_free_memory_mb,
+  )
+    ? runtimeSettings.min_host_free_memory_mb
+    : DEFAULT_MIN_HOST_FREE_MEMORY_MB;
+  const perSessionReserveMB = Number.isFinite(
+    runtimeSettings.per_session_reserve_mb,
+  )
+    ? runtimeSettings.per_session_reserve_mb
+    : DEFAULT_PER_SESSION_RESERVE_MB;
   const projectedFreeMB = freeMemMB - perSessionReserveMB;
   const allowed = evaluateMemoryHeadroom({
     freeMemMB,

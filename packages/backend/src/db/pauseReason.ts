@@ -32,6 +32,7 @@ export type CanonicalPauseReason =
   | 'stalled_idle'
   | 'notion_done_update_stuck'
   | 'launch_failed'
+  | 'base_branch_broken'
   | 'diverged_branch'
   | 'diverged_branch_unresolved'
   | 'analyze_failing'
@@ -55,13 +56,25 @@ export type CanonicalPauseReason =
   | 'usage_limit_deferred'
   | 'api_overloaded_exhausted'
   | 'manual_verification_pending'
-  | 'test_request_cycle_exceeded';
+  | 'test_request_cycle_exceeded'
+  | 'test_report_acquisition_failed'
+  | 'ci_not_completing'
+  | 'mcp_unreachable_exhausted'
+  | 'verdict_routing_failed'
+  | 'base_attributable_test_excluded';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
   source: PauseSource;
   severity: PauseSeverity;
   retry_strategy: PauseRetryStrategy;
+  /**
+   * Whether this pause should block AutoMerger from merging the PR. Absent
+   * (undefined) on a registry entry means true — fail-closed, so a reason
+   * that hasn't been explicitly classified never silently becomes advisory.
+   * Only set false for a reason deliberately designed to be non-blocking.
+   */
+  blocks_merge: boolean;
   detail?: string;
 }
 
@@ -69,6 +82,8 @@ type RegistryEntry = {
   source: PauseSource;
   severity: PauseSeverity;
   retry_strategy: PauseRetryStrategy;
+  /** See PauseReasonStruct.blocks_merge. Omit to default to true (blocking). */
+  blocks_merge?: boolean;
 };
 
 export const PAUSE_REASON_REGISTRY: Record<
@@ -163,6 +178,15 @@ export const PAUSE_REASON_REGISTRY: Record<
     source: 'launch',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
+  },
+  // Base branch itself is broken at a whole-suite/build level (total_fail —
+  // no per-test breakdown, e.g. a crash or OOM-kill before any report was
+  // written). Clears itself the moment a subsequent base-health check comes
+  // back clean/partial — never requires a human, unlike launch_failed above.
+  base_branch_broken: {
+    source: 'launch',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
   },
   diverged_branch: {
     source: 'merge',
@@ -331,6 +355,70 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
+  // The project declared test_report_glob but the test.request lane's
+  // JUnit-XML acquisition/parser/normalizer left structured_result null —
+  // a missing/malformed report or a run killed before teardown. This is a
+  // manifest/config problem a human must fix (bad glob, harness not writing
+  // the report, etc.); nothing auto-recovers it. Deliberately independent
+  // of ci_failing: it never blocks mergeability when the underlying test
+  // exit code passed — see PRMergeWatcher's own-branch handling.
+  test_report_acquisition_failed: {
+    source: 'tests',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+    blocks_merge: false,
+  },
+  // AutoMerger's per-PR loop hit its deadline (ci_poll_max_minutes) without
+  // CI ever actually reporting failure — still running/pending/unknown. This
+  // is advisory only: the scheduled sweep (register()'s poll job) keeps
+  // re-attempting on its own interval and merges automatically once the PR
+  // goes clean, or this pause is superseded by a genuine ci_failing pause if
+  // CI subsequently fails for real. No RECOVERY_ACTION_MAP entry — same as
+  // test_report_acquisition_failed/awaiting_human_approval, there is nothing
+  // for an operator to click.
+  ci_not_completing: {
+    source: 'ci',
+    severity: 'needs_attention',
+    retry_strategy: 'automatic',
+    blocks_merge: false,
+  },
+  // SessionManager.reconcileMcpUnreachableSessions exhausted its bounded
+  // respawn budget (MAX_MCP_UNREACHABLE_RESPAWNS) for a session whose CLI's
+  // MCP client never connected to the orchestrator server across every
+  // attempt. Not auto-recoverable — an operator has to decide whether to
+  // keep retrying by hand or abandon the session — so, like
+  // test_request_cycle_exceeded/awaiting_human_approval, there is no
+  // RECOVERY_ACTION_MAP entry.
+  mcp_unreachable_exhausted: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // A needs_changes/incomplete verdict had no session_id to route feedback
+  // to (e.g. a boot-swept PR that never matched a session by branch — see
+  // PRBootSweep.insertIfMissing). No automated recovery path exists for a
+  // PR with no session to nudge, so — like needs_repo/workflow_scope_denied
+  // — this is a permanent operator-action-required pause.
+  verdict_routing_failed: {
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // Advisory-only pill: the F2 gate's baseAttributableFilter excused this
+  // PR's failing test(s) as confirmed base-attributable (and, for any
+  // excluded test, cleared both masking guards — see
+  // orchestration/baseAttributableFilter.ts). Never blocks merge — the
+  // point is to keep the exclusion visible to an operator rather than let
+  // it pass silently, mirroring ci_not_completing/
+  // test_report_acquisition_failed. No RECOVERY_ACTION_MAP entry — nothing
+  // for an operator to click, the pill clears itself once a subsequent run
+  // is clean or newly attributable.
+  base_attributable_test_excluded: {
+    source: 'tests',
+    severity: 'needs_attention',
+    retry_strategy: 'automatic',
+    blocks_merge: false,
+  },
 };
 
 // ── Recovery descriptor ──────────────────────────────────────────────────────
@@ -385,12 +473,50 @@ export function deriveRecoveryDescriptor(
   return { available: true, action, label: RECOVERY_LABELS[action] };
 }
 
+export interface TaskRecoveryContext {
+  /** task_pause_reasons row for this task, if any. Preferred over prReason — the more specific signal. */
+  taskReason: CanonicalPauseReason | null;
+  /** PR-side (pull_requests.pause_reason) or session pr-creation-failure reason, if any. */
+  prReason: CanonicalPauseReason | null;
+  /** Whether this task currently has a PR. */
+  hasPR: boolean;
+  /** Whether the task's most recent code session ended in a terminal status (done/error/killed). */
+  sessionTerminal: boolean;
+}
+
+/**
+ * Task-level entry point for recovery derivation: routes task_pause_reasons
+ * into deriveRecoveryDescriptor alongside the existing PR-side reason
+ * (task-level wins when both are present), and — only when no reason of
+ * either kind exists — falls back to redispatch for an orphaned task (no PR,
+ * terminal session). That fallback bypasses RECOVERY_ACTION_MAP entirely
+ * since there is no reason to look up; it must never be used to override a
+ * reason that IS present but deliberately unmapped (e.g. awaiting_human_approval).
+ */
+export function deriveTaskRecoveryDescriptor(
+  ctx: TaskRecoveryContext,
+): RecoveryDescriptor {
+  const effectiveReason = ctx.taskReason ?? ctx.prReason ?? null;
+  if (effectiveReason != null) {
+    return deriveRecoveryDescriptor(effectiveReason);
+  }
+  if (!ctx.hasPR && ctx.sessionTerminal) {
+    return {
+      available: true,
+      action: 'redispatch',
+      label: RECOVERY_LABELS.redispatch,
+    };
+  }
+  return { available: false };
+}
+
 const CANONICAL_SET = new Set<string>(Object.keys(PAUSE_REASON_REGISTRY));
 
-const UNKNOWN_FALLBACK: RegistryEntry = {
+const UNKNOWN_FALLBACK: Required<RegistryEntry> = {
   source: 'session',
   severity: 'needs_attention',
   retry_strategy: 'manual_action',
+  blocks_merge: true,
 };
 
 export function pauseReasonFromCanonical(
@@ -398,9 +524,26 @@ export function pauseReasonFromCanonical(
   detail?: string,
 ): PauseReasonStruct {
   const entry = PAUSE_REASON_REGISTRY[reason];
-  const struct: PauseReasonStruct = { reason, ...entry };
+  const struct: PauseReasonStruct = {
+    reason,
+    ...entry,
+    blocks_merge: entry.blocks_merge !== false,
+  };
   if (detail !== undefined) struct.detail = detail;
   return struct;
+}
+
+/**
+ * Whether a stored pause_reason should block AutoMerger from merging the PR.
+ * Consults the reason's classification (blocks_merge), not merely whether a
+ * pause is present — an advisory pause (e.g. test_report_acquisition_failed)
+ * must not halt a merge whose underlying tests passed. Fails closed: no
+ * pause blocks nothing (returns false), but any pause that fails to parse or
+ * carries no explicit blocks_merge:false is treated as blocking.
+ */
+export function isMergeBlockingPause(pauseReasonRaw: string | null): boolean {
+  const parsed = parsePauseReason(pauseReasonRaw);
+  return parsed !== null && parsed.blocks_merge !== false;
 }
 
 export function serializePauseReason(struct: PauseReasonStruct): string {
@@ -442,6 +585,16 @@ export function parsePauseReason(raw: string | null): PauseReasonStruct | null {
         typeof parsed.severity === 'string' &&
         typeof parsed.retry_strategy === 'string'
       ) {
+        // Rows persisted before blocks_merge existed lack the field — re-derive
+        // it from the registry (fail-closed to true if the reason is unknown)
+        // rather than trusting an absent value as non-blocking.
+        if (typeof parsed.blocks_merge !== 'boolean') {
+          const registryEntry =
+            PAUSE_REASON_REGISTRY[parsed.reason as CanonicalPauseReason];
+          parsed.blocks_merge = registryEntry
+            ? registryEntry.blocks_merge !== false
+            : true;
+        }
         return parsed as unknown as PauseReasonStruct;
       }
     } catch {

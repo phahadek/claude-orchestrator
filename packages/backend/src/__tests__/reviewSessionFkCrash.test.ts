@@ -107,6 +107,8 @@ vi.mock('../config', () => ({
   getAllProjects: vi.fn(() => [projectFixture]),
   getSessionAllowedTools: vi.fn(() => []),
   normalizePath: (p: string) => p,
+  PLANNING_DISALLOWED_TOOLS: [],
+  SCHEDULING_DISALLOWED_TOOLS: [],
   runtimeSettings: {
     session_mode: 'cli',
     code_session_model: '',
@@ -117,6 +119,7 @@ vi.mock('../config', () => ({
 }));
 
 vi.mock('../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi.fn(() => ({
     allowed_tools: [],
     prGate: { typeCheck: '', build: '' },
@@ -375,9 +378,13 @@ describe('upsertSessionEvent — defensive guard (source-level)', () => {
       'utf-8',
     );
     const upsertIdx = source.indexOf('export function upsertSessionEvent');
-    const insertIdx = source.indexOf('getStmtInsertEvent().run', upsertIdx);
+    const insertIdx = source.indexOf(
+      'getTxnInsertEventAndBumpLastEventAt()',
+      upsertIdx,
+    );
     const guardIdx = source.indexOf('getStmtGetSession().get', upsertIdx);
     expect(guardIdx).toBeGreaterThan(upsertIdx);
+    expect(insertIdx).toBeGreaterThan(-1);
     expect(guardIdx).toBeLessThan(insertIdx);
   });
 

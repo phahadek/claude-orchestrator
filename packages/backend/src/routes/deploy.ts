@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { Scheduler } from '../orchestration/Scheduler';
@@ -13,6 +15,7 @@ import {
   buildDeployAgenticTaskId,
 } from '../deploy/DeployOrchestrator';
 import type { StepDescriptor } from '../deploy/playbookSchema';
+import { loadDeployPlaybook } from '../deploy/loadPlaybook';
 import {
   getProjectRowById,
   getProjectDeployedShaRow,
@@ -20,6 +23,8 @@ import {
   getSession,
   hasActiveCapabilityRequestForSession,
   markSessionDone,
+  setSessionTerminalCompletionReason,
+  insertCompletingSignal,
   TERMINAL_SESSION_STATUSES,
   getLatestOpsSessionByTaskId,
 } from '../db/queries';
@@ -36,6 +41,26 @@ import { logger } from '../logger';
 import { asyncHandler } from './asyncHandler';
 
 const GATE_RECONCILER_JOB = 'gate_verification_reconciler';
+
+/**
+ * The SHA `npm run build` embeds into `dist/build-sha.txt` (see
+ * packages/backend/package.json's `build` script) — read once at process
+ * startup and served verbatim by `GET /deploy/build-sha`. This is verify's
+ * identity check target: it proves which build a restarted process is
+ * actually running, not merely that a restart happened (see
+ * DeployOrchestrator's `resolveIdentityCheck`). Overridable via
+ * `DEPLOY_BUILD_SHA_PATH` for tests, which don't have a real `dist/` build
+ * to read from.
+ */
+const BUILD_SHA_PATH =
+  process.env.DEPLOY_BUILD_SHA_PATH ?? path.join(__dirname, '../build-sha.txt');
+const BUILD_SHA: string = (() => {
+  try {
+    return fs.readFileSync(BUILD_SHA_PATH, 'utf8').trim();
+  } catch {
+    return 'unknown';
+  }
+})();
 
 /** Wall-clock budget per runId:stepId before an agentic step abstains to `inconclusive`. Mirrors gate-verify's default. */
 const DEFAULT_AGENTIC_STEP_BUDGET_MS = 20 * 60_000;
@@ -370,6 +395,18 @@ export class DeployAgenticStepSpawner {
     const row = getSession(sessionId);
     if (row && !TERMINAL_SESSION_STATUSES.has(row.status)) {
       markSessionDone(sessionId, Date.now(), null, reason);
+      setSessionTerminalCompletionReason(sessionId, reason);
+      // Dual-write bridge (see session/completingSignalRegistry.ts and
+      // sessionStatusDeriver.ts) — purely additive ahead of any read-side
+      // cutover; never gates or alters the writes above.
+      insertCompletingSignal({
+        session_id: sessionId,
+        task_id: row.task_id ?? null,
+        session_type: row.session_type,
+        signal_class: 'staged_intent',
+        signal_value: reason,
+        recorded_at: Date.now(),
+      });
       this.sessionManager.archiveAndEndSession(sessionId);
     }
   }
@@ -434,6 +471,29 @@ export function resumeActiveDeployRuns(projects: ProjectRow[]): void {
  * self-hosted carve-out. Fires the gate-verification reconciler on report,
  * event-driven rather than polled.
  */
+/**
+ * GET /api/deploy/build-sha — reports the SHA embedded into this running
+ * process's own build. This is the identity check verify's playbook step
+ * curls (`curl -sf .../deploy/build-sha`) and compares byte-for-byte
+ * against the run's own target_sha, so it responds with the bare SHA as
+ * plain text, not a JSON envelope.
+ *
+ * Registered as its own router, mounted in server.ts ahead of
+ * requireDeviceOrSessionRouteAuth (mirroring GET /api/readiness) rather
+ * than living inside createDeployRouter(): a restarted process must be
+ * able to report its own identity without a device token, since the
+ * restart step's identity_capture runs as an unauthenticated loopback curl.
+ * The build SHA is a build identity, not a secret. Every other deploy
+ * route stays behind auth via createDeployRouter() below.
+ */
+export function createDeployBuildShaRouter(): Router {
+  const router = Router();
+  router.get('/deploy/build-sha', (_req: Request, res: Response) => {
+    res.status(200).type('text/plain').send(BUILD_SHA);
+  });
+  return router;
+}
+
 export function createDeployRouter(): Router {
   const router = Router();
 
@@ -518,12 +578,23 @@ export function createDeployRouter(): Router {
       projectId,
       deployedShaRow?.recordedAt ?? null,
     );
+    const project = getProjectRowById(projectId);
+    const playbookResult = project
+      ? loadDeployPlaybook(project.project_dir)
+      : { ok: false as const, reason: `unknown project ${projectId}` };
+    const plan = playbookResult.ok
+      ? playbookResult.playbook.steps.map((step) => ({
+          id: step.id,
+          description: step.command_or_prompt ?? null,
+        }))
+      : [];
     res.status(200).json({
       run,
       events,
       deployedSha: deployedShaRow?.sha ?? null,
       deployedShaRecordedAt: deployedShaRow?.recordedAt ?? null,
       behind: { count: behindItems.length, items: behindItems },
+      plan,
     });
   });
 

@@ -10,9 +10,33 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { MilestoneDecisionStack } from '../MilestoneDecisionStack';
 import { stagedIntentsApi } from '../../api/stagedIntents';
 import type { StagedIntent } from '../../api/stagedIntents';
+import { reportsApi } from '../../api/reports';
+import type { InvestigationReport } from '../../api/reports';
 import type { DisplayStatus, TaskView } from '../../types/taskView';
 import { computePhaseBurndown } from '../../utils/phaseBurndown';
 import type { PanelKeyboardDeclaration } from '../../types/panelKeyboard';
+
+function makeReport(
+  overrides: Partial<InvestigationReport> & { id: string },
+): InvestigationReport {
+  return {
+    project_id: 'proj-1',
+    milestone_id: 'M1',
+    title: 'Untitled report',
+    symptom_text: 'Something looked wrong',
+    evidence_text: null,
+    state: 'committed',
+    source: 'operator',
+    origin_session_id: null,
+    origin_task_id: null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    inFlight: false,
+    resolveEligible: false,
+    dispatchedSessions: [],
+    ...overrides,
+  };
+}
 
 const RUNNING_CODE_SESSION = {
   sessionId: 'sess-1',
@@ -55,6 +79,7 @@ function makeTask(overrides: Partial<TaskView>): TaskView {
     planningSession: null,
     pr: null,
     review: null,
+    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
     ...overrides,
@@ -537,6 +562,49 @@ describe('MilestoneDecisionStack', () => {
       type: 'intent',
       intent: intents[0],
     });
+  });
+
+  it('selects a dispatched report card and jumps straight to session mode in one click, via onViewSession', async () => {
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
+    const report = makeReport({
+      id: 'report-1',
+      inFlight: true,
+      dispatchedSessions: [
+        {
+          sessionId: 'sess-report-1',
+          sessionStatus: 'running',
+          dispatchedAt: '2026-01-01T00:00:01Z',
+        },
+      ],
+    });
+    vi.spyOn(reportsApi, 'list').mockResolvedValue({
+      items: [report],
+      total: 1,
+      page: 1,
+    });
+
+    const onSelect = vi.fn();
+    const onViewSession = vi.fn();
+    render(
+      <MilestoneDecisionStack
+        projectId="proj-1"
+        milestone="M1"
+        tasks={[]}
+        phaseFilter={null}
+        selection={null}
+        onSelect={onSelect}
+        onViewSession={onViewSession}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('report-card-report-1')).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByTestId('report-card-report-1'));
+
+    expect(onSelect).toHaveBeenCalledWith({ type: 'report', report });
+    expect(onViewSession).toHaveBeenCalledWith({ type: 'report', report });
   });
 
   it("the declared panel's onApprove fires the same primary-action handler the highlighted card's own button uses", async () => {

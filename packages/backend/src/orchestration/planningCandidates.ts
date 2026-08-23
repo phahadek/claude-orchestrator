@@ -127,7 +127,7 @@ export interface GroomCandidateDeps {
    * from the committed intent, not the staging session's status: it holds
    * after that session goes terminal. An operator-initiated groom launch
    * doesn't go through isGroomCandidate at all, so it's never blocked by
-   * this. See isGroomNoOpSuppressed in db/queries.ts.
+   * this. See isNoOpSuppressed in db/queries.ts.
    */
   isNoOpSuppressed: (taskId: string) => boolean;
   /**

@@ -11,7 +11,11 @@ const GIT_CONFIG_LOCK_RE =
 
 import { recordEvent } from '../audit/AuditLog';
 import { scrubSecrets } from '../security/scrubSecrets';
-import { AgentSession, parseNotionPageIdDashed } from './AgentSession';
+import {
+  AgentSession,
+  parseNotionPageIdDashed,
+  isMcpUnreachable,
+} from './AgentSession';
 import { formatTaskId } from '../tasks/taskId';
 import { buildSessionContext } from './ContextBuilder';
 import {
@@ -28,16 +32,23 @@ import {
   loadOrchestratorConfig,
   isGrantable,
   isToolShapedCapability,
+  resolvePreGrantCapabilities,
 } from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
 import { CliSessionRunner } from './CliSessionRunner';
 import {
+  killSessionCgroup,
+  reapOrphanedMainCgroupProcesses,
+} from './sessionCgroup';
+import {
   revokeStageCredential,
   mintStageCredential,
+  setRevokedStageCredentialHandler,
 } from '../auth/SessionStageAuth';
 import {
   revokeRouteCredential,
   writeRouteCredentialFile,
+  setRevokedRouteCredentialHandler,
 } from '../auth/SessionRouteAuth';
 import {
   buildOrchestratorMcpServerEntry,
@@ -65,8 +76,10 @@ import {
 import {
   insertSession,
   updateSessionStatus,
+  recordSessionErroredWriteSkipped,
   updateSessionWorktreePath,
   markSessionDone,
+  markSessionIdle,
   applyPendingDone,
   getSessionsWithUnappliedPendingDone,
   archiveSession,
@@ -96,22 +109,41 @@ import {
   addGrantedCapability,
   removeGrantedCapability,
   getGrantedCapabilities,
+  seedGrantedCapabilities,
   setSessionDeclaredWrites,
   expireStagedIntentsForSession,
   hasStagedIntentForTask,
+  hasUndispositionedStagedIntentsForSession,
   sweepStagedIntentsForTerminalSessions,
   TERMINAL_SESSION_STATUSES,
   listStagedIntentsBySession,
+  insertCompletingSignal,
+  listCompletingSignalsForSession,
+  setSessionTerminalCompletionReason,
+  incrementSessionPokeRetryCount,
+  resetSessionPokeRetryCount,
+  hasMcpConnectionEstablishedSince,
+  countMcpUnreachableRespawnAttempts,
+  getLatestMcpUnreachableRespawnTimestamp,
+  hasMcpUnreachableExhaustedEvent,
+  listLiveSessionRows,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
-import { isSessionProcessAlive } from './processLiveness';
+import {
+  isSessionProcessAlive,
+  killWorktreeProcessTree,
+} from './processLiveness';
 import {
   reconcileSessionLiveness,
   reconcileNonPlanningSessionLiveness,
+  reconcileOrphanProcesses,
   type SessionLivenessReconcileResult,
+  type OrphanProcessReconcileResult,
 } from './sessionLivenessReconciler';
 import { isUsageAdmitted } from '../orchestration/usageAdmission';
+import { hasMemoryHeadroom } from '../orchestration/memoryAdmission';
 import { CrashBudget } from '../orchestration/crashBudget';
+import { tryDependencyCachePool } from '../orchestration/dependencyCachePool';
 import {
   countsAgainstConcurrency,
   countsAgainstCodeSessionConcurrency,
@@ -119,9 +151,11 @@ import {
   isPlanningSession,
   movesTargetInProgress,
   usesWorktree,
+  type SessionType,
 } from './sessionPredicates';
 import { eventKind } from './eventKind';
 import type { Session, StagedIntentRow } from '../db/types';
+import { deriveSessionStatus } from './sessionStatusDeriver';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { STATUS_DISPLAY } from '../tasks/statusCanonical';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -160,6 +194,37 @@ export function deriveTaskId(taskSource: string, taskUrl: string): string {
 const MAX_FILE_CHARS = 8_000;
 /** Max total chars for all file snippets combined. */
 const MAX_TOTAL_SNIPPET_CHARS = 40_000;
+
+/**
+ * Consecutive-failure budget for the sendOrResume/_doSendOrResume live poke
+ * path before flagResumeFailure's terminal disposition fires — see
+ * session_poke_retry_counts (db/schema.ts) and
+ * incrementSessionPokeRetryCount (db/queries.ts). One higher than
+ * task_crash_counts's circuit breaker (trips at 2, SessionManager.ts:1329,
+ * 1441): a poke/resume failure is more often transient (a stale git
+ * worktree registration, a momentary fetch failure) than a full session
+ * process crash, so it earns one additional retry.
+ */
+const POKE_RETRY_LIMIT = 3;
+
+/**
+ * MCP-connection grace window for reconcileMcpUnreachableSessions: the
+ * CLI's MCP client connects asynchronously after spawn, so a session
+ * legitimately shows zero mcp_connection_established events for the first
+ * stretch after every spawn/respawn — detection must never fire inside
+ * this window. See that method's doc comment for the full failure mode.
+ */
+const MCP_UNREACHABLE_GRACE_MS = 3 * 60_000;
+
+/**
+ * Cap on MCP-unreachable respawn attempts per session — same bounded-retry
+ * shape as MAX_VERIFIER_RECLASSIFY_ATTEMPTS (gateService.ts),
+ * DEFAULT_MAX_DISPATCH_ATTEMPTS (gateReconciler.ts), and
+ * flake_recovery_max_retries (settings.ts). At the cap the session is
+ * surfaced to the operator (pause_reason='mcp_unreachable_exhausted') and
+ * never respawned again by this path.
+ */
+const MAX_MCP_UNREACHABLE_RESPAWNS = 2;
 
 /**
  * Parse file paths from the task spec's "Files" section, read each file from
@@ -845,10 +910,62 @@ async function withRepoWorktreeLock<T>(
  * Outcome of a pre-launch base-branch fetch: `ok: false` means the fetch
  * failed (or lost the ref lock to a concurrent fetch outside this process)
  * and the caller is proceeding against whatever the local ref already holds.
+ * `benignRefLock: true` narrows that further: the failure was a lost
+ * `refs/remotes/origin/<base>` ref-lock race (another fetch against the same
+ * object store — a worktree, an audit/base-health check, a deploy — won the
+ * lock first) *and* the ref now holds the exact value this fetch wanted to
+ * write. The remote state the caller wanted is present; this was a no-op
+ * failure, not a stale base.
  */
 export interface BaseFetchOutcome {
   ok: boolean;
   error?: unknown;
+  benignRefLock?: boolean;
+}
+
+/** Matches git's ref-lock contention error text across git versions loosely enough to detect the failure mode without depending on exact wording. */
+const GIT_REF_LOCK_RE = /cannot lock ref|unable to update local ref/i;
+
+function extractErrorText(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const message = (error as Error).message;
+    const stderr = (error as { stderr?: unknown }).stderr;
+    return [message, stderr].filter(Boolean).join('\n');
+  }
+  return String(error);
+}
+
+/**
+ * After a failed fetch whose error text indicates a lost ref-lock race,
+ * re-read `refs/remotes/origin/<baseBranch>` and compare it against
+ * `FETCH_HEAD` (which git updates to the fetched tip regardless of whether
+ * the local ref update itself succeeded). Equal, non-empty values mean the
+ * winner of the race wrote the same value this fetch wanted — the outcome is
+ * benign. Never retries the fetch itself; this only classifies the failure
+ * already reported.
+ */
+async function isBenignRefLockLoss(
+  error: unknown,
+  projectDir: string,
+  baseBranch: string,
+): Promise<boolean> {
+  if (!GIT_REF_LOCK_RE.test(extractErrorText(error))) {
+    return false;
+  }
+  try {
+    const [{ stdout: refOut }, { stdout: fetchHeadOut }] = await Promise.all([
+      exec(`git rev-parse refs/remotes/origin/${baseBranch}`, {
+        cwd: projectDir,
+        timeout: 10_000,
+      }),
+      exec('git rev-parse FETCH_HEAD', { cwd: projectDir, timeout: 10_000 }),
+    ]);
+    const ref = refOut.trim();
+    const fetchHead = fetchHeadOut.trim();
+    return ref.length > 0 && ref === fetchHead;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -913,7 +1030,12 @@ export async function fetchBaseBranchCoalesced(
       });
       return { ok: true };
     } catch (error) {
-      return { ok: false, error };
+      const benignRefLock = await isBenignRefLockLoss(
+        error,
+        projectDir,
+        baseBranch,
+      );
+      return { ok: false, error, benignRefLock };
     }
   })();
 
@@ -1051,6 +1173,19 @@ export class SessionManager extends EventEmitter {
   /** Concurrency guard: prevents double-spawning when two concurrent sendOrResume calls race. */
   private resumesInFlight = new Map<string, Promise<string | null>>();
 
+  /**
+   * Late-bound hook to PlanningOrchestrator.tryTerminalizeIfComplete — unset
+   * until server.ts wires it via setPlanningTerminalChecker, since
+   * PlanningOrchestrator's constructor takes this SessionManager instance
+   * and so cannot be constructed first. Consulted by
+   * reconcilePlanningSessionLiveness (see sessionLivenessReconciler.ts's
+   * tryMarkPlanningTerminal dep) before that sweep would otherwise reap a
+   * dead-process planning session as a bare 'killed' with no completion
+   * reason recorded.
+   */
+  private planningTerminalChecker: ((sessionId: string) => boolean) | null =
+    null;
+
   /** Last known DisplayStatus per taskId — used to skip no-op broadcasts. */
   private _lastDisplayStatus = new Map<string, DisplayStatus>();
   /** Timestamp of last lastMessage-only task_updated per taskId. */
@@ -1088,6 +1223,20 @@ export class SessionManager extends EventEmitter {
         this.applyPendingDoneOnTurnBoundary(msg.sessionId);
       }
     });
+
+    // A still-live OS process presenting a credential this backend already
+    // revoked has no path to recover — it can never obtain a new one (see
+    // terminateSessionForRevokedCredential) — so leaving it running only
+    // buys it an infinite retry/backoff loop against a server that will
+    // never accept it again. Terminate it outright the moment that's
+    // detected, rather than relying on the process to infer it from a
+    // generic connection failure.
+    setRevokedStageCredentialHandler((sessionId) =>
+      this.terminateSessionForRevokedCredential(sessionId, 'mcp'),
+    );
+    setRevokedRouteCredentialHandler((sessionId) =>
+      this.terminateSessionForRevokedCredential(sessionId, 'route'),
+    );
   }
 
   /**
@@ -1226,6 +1375,30 @@ export class SessionManager extends EventEmitter {
   ): void {
     const endedAt = Date.now();
 
+    // Terminal guard: a row already concluded (done/error/killed) must never
+    // be downgraded by a late-arriving exit signal — e.g.
+    // sessionLivenessReconciler's SIGTERM reap of an orphaned process whose
+    // row already completed, which fires this session's exit handler
+    // outside the AgentSession object and thus outside its in-memory
+    // hasEnded flag. Reads the persisted status directly instead, mirroring
+    // markSessionIdle's terminal guard (db/queries.ts).
+    const existingRow = getSession(sessionId);
+    if (existingRow && TERMINAL_SESSION_STATUSES.has(existingRow.status)) {
+      recordSessionErroredWriteSkipped(
+        sessionId,
+        existingRow.task_id ?? null,
+        existingRow.status,
+        status,
+      );
+      // Still flip hasEnded so AgentSession's own fallback direct-write path
+      // (used only when sessionManager is absent) doesn't fire either.
+      const liveSession = this.sessions.get(sessionId);
+      if (liveSession) {
+        liveSession.hasEnded = true;
+      }
+      return;
+    }
+
     // 1. Update DB status and ended_at
     updateSessionStatus(sessionId, status, endedAt);
 
@@ -1287,8 +1460,10 @@ export class SessionManager extends EventEmitter {
       this._teardownIdleSessionWorktree(sessionId);
     }
 
-    // 3. Look up session row for taskId (already written by step 1)
-    const row = getSession(sessionId);
+    // 3. Look up session row for taskId — reuses the pre-write fetch from
+    // the terminal guard above (task_id is immutable across the status
+    // write, so a second lookup would be redundant).
+    const row = existingRow;
     const taskId = row?.task_id ?? undefined;
 
     // 4. Emit session_ended WS broadcast
@@ -1621,6 +1796,21 @@ export class SessionManager extends EventEmitter {
       task_name: taskName ?? null,
     });
 
+    // Seed the session-kind-keyed capability pre-grants (per-project
+    // .claude-orchestrator.yml `capability_pre_grants`) before the session's
+    // first turn — see orchestrator-config.ts#resolvePreGrantCapabilities.
+    // Resolved from sessionType + sessionTaskId the same way
+    // isGateVerifySession/isInvestigateSession derive their 'ops' sub-kinds,
+    // and filtered through isGrantable before being written.
+    const preGrantCapabilities = resolvePreGrantCapabilities(
+      loadOrchestratorConfig(projectDir),
+      sessionType,
+      sessionTaskId,
+    );
+    if (preGrantCapabilities.length > 0) {
+      seedGrantedCapabilities(sessionId, preGrantCapabilities);
+    }
+
     // Captured once, here at spawn — never re-derived from a live task-body
     // fetch during the session's run (see StartOptions.declaredWrites doc
     // comment). respawnSession never calls this: it reconstructs an
@@ -1783,7 +1973,22 @@ export class SessionManager extends EventEmitter {
             projectDir,
             project.baseBranch,
           );
-          if (!fetchOutcome.ok) {
+          if (!fetchOutcome.ok && fetchOutcome.benignRefLock) {
+            logger.info(
+              `[SessionManager] git fetch origin ${project.baseBranch} lost a ref-lock race but the ref already holds the fetched value (continuing): ${fetchOutcome.error}`,
+            );
+            recordEvent({
+              event_type: 'base_fetch_ref_lock_benign',
+              actor_type: 'system',
+              actor_id: sessionId,
+              project_id: projectId || null,
+              task_id: sessionTaskId || null,
+              payload: {
+                baseBranch: project.baseBranch,
+                error: String(fetchOutcome.error),
+              },
+            });
+          } else if (!fetchOutcome.ok) {
             logger.warn(
               `[SessionManager] git fetch origin ${project.baseBranch} failed (continuing with local ref): ${fetchOutcome.error}`,
             );
@@ -1986,22 +2191,67 @@ export class SessionManager extends EventEmitter {
     const orchConfig = loadOrchestratorConfig(projectDir);
 
     if (worktreeEligible && orchConfig.bootstrap_script) {
-      try {
-        await exec(`bash "${orchConfig.bootstrap_script}" "${worktreePath}"`, {
-          cwd: projectDir,
-          timeout: 120_000,
-        });
+      const dependencyCachePoolConfigured =
+        (orchConfig.dependency_lock_paths?.length ?? 0) > 0 &&
+        (orchConfig.dependency_cache_dirs?.length ?? 0) > 0 &&
+        !!orchConfig.dependency_verify_command;
+
+      let handledByCachePool = false;
+      if (dependencyCachePoolConfigured) {
+        const cachePoolStart = Date.now();
+        try {
+          handledByCachePool = await tryDependencyCachePool({
+            projectId,
+            projectDir,
+            worktreePath,
+            bootstrapScript: orchConfig.bootstrap_script,
+            lockPaths: orchConfig.dependency_lock_paths,
+            cacheDirs: orchConfig.dependency_cache_dirs,
+            verifyCommand: orchConfig.dependency_verify_command,
+            sessionId,
+          });
+          if (handledByCachePool) {
+            logger.info(
+              `[SessionManager] dependency bootstrap duration: path=cache-pool session=${sessionId.slice(0, 8)} durationMs=${Date.now() - cachePoolStart}`,
+            );
+          }
+        } catch (err) {
+          logger.warn(
+            `[SessionManager] dependency cache pool errored for ${sessionId.slice(0, 8)}, falling back to bootstrap_script: ${err}`,
+          );
+          handledByCachePool = false;
+        }
+      }
+
+      if (handledByCachePool) {
         logger.info(
-          `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,
+          `[SessionManager] dependency cache pool provisioned dependencies for ${sessionId.slice(0, 8)}`,
         );
-      } catch (err) {
-        const e = err as { stderr?: string | Buffer; message?: string };
-        const stderr = e.stderr ? e.stderr.toString().slice(0, 500) : '';
-        const detail = `bootstrap failed: ${stderr || String(err)}`;
-        logger.error(
-          `[SessionManager] ${detail} for ${sessionId.slice(0, 8)} — aborting launch`,
-        );
-        throw Object.assign(new Error(detail), { cause: err });
+      } else {
+        const bootstrapStart = Date.now();
+        try {
+          await exec(
+            `bash "${orchConfig.bootstrap_script}" "${worktreePath}"`,
+            {
+              cwd: projectDir,
+              timeout: 120_000,
+            },
+          );
+          logger.info(
+            `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,
+          );
+          logger.info(
+            `[SessionManager] dependency bootstrap duration: path=fallback session=${sessionId.slice(0, 8)} durationMs=${Date.now() - bootstrapStart}`,
+          );
+        } catch (err) {
+          const e = err as { stderr?: string | Buffer; message?: string };
+          const stderr = e.stderr ? e.stderr.toString().slice(0, 500) : '';
+          const detail = `bootstrap failed: ${stderr || String(err)}`;
+          logger.error(
+            `[SessionManager] ${detail} for ${sessionId.slice(0, 8)} — aborting launch`,
+          );
+          throw Object.assign(new Error(detail), { cause: err });
+        }
       }
     }
 
@@ -2499,14 +2749,16 @@ export class SessionManager extends EventEmitter {
    * session — resumeSession (boot recovery), sendOrResume (verdict/feedback
    * routing to a dead session), and respawnForCapabilityGrant.
    *
-   * The usage-admission check is applied here rather than in each caller so
-   * that every current and future respawn path is covered without having to
-   * remember to wire the check in individually — see isUsageAdmitted's callers
-   * elsewhere (AutoLauncher, DispatchTriggerEvaluator) for the launch-side
-   * half of this gate. A deferral is not a failure: nothing is spawned and the
-   * session row is left exactly as-is (whatever status it already had) so a
-   * later pass (poller recovery, operator retry, resumeOrphanSessions on next
-   * boot) can respawn once the deferral (persisted in usage_deferral) expires.
+   * The usage-admission and memory-admission checks are applied here rather
+   * than in each caller so that every current and future respawn path is
+   * covered without having to remember to wire the check in individually —
+   * see isUsageAdmitted's callers elsewhere (AutoLauncher,
+   * DispatchTriggerEvaluator) for the launch-side half of the usage gate,
+   * and AutoLauncher.hasCapacity() for the launch-side half of the memory
+   * gate. A deferral is not a failure: nothing is spawned and the session
+   * row is left exactly as-is (whatever status it already had) so a later
+   * pass (poller recovery, operator retry, resumeOrphanSessions on next
+   * boot) can respawn once the deferral expires.
    * Returns null when deferred; callers must not touch the DB row or kill the
    * session in that case.
    *
@@ -2536,6 +2788,38 @@ export class SessionManager extends EventEmitter {
           usageAdmission.window ?? 'unknown',
         );
       }
+      return null;
+    }
+
+    // Memory-admission gate: the same check AutoLauncher.hasCapacity()
+    // applies to fresh dispatch, applied here so every respawn path
+    // (resumeSession boot recovery, sendOrResume live poke,
+    // relaunchFixerForPR's dead-session recovery, respawnForCapabilityGrant)
+    // is covered without having to remember to wire the check into each
+    // caller individually — closes the unbounded-spawn path a sweep like
+    // AutoMerger.conflictNudgeSweep() would otherwise have over an
+    // unLIMITed candidate list. Deferral leaves the row untouched, same as
+    // the usage-admission gate above.
+    const memoryHeadroom = hasMemoryHeadroom();
+    if (!memoryHeadroom.allowed) {
+      logger.warn(
+        `[SessionManager] respawnSession: deferring ${row.session_id.slice(0, 8)} — no memory headroom ` +
+          `(freeMemMB=${memoryHeadroom.freeMemMB.toFixed(1)}, minHostFreeMemoryMB=${memoryHeadroom.minHostFreeMemoryMB}, ` +
+          `perSessionReserveMB=${memoryHeadroom.perSessionReserveMB}, projectedFreeMB=${memoryHeadroom.projectedFreeMB.toFixed(1)})`,
+      );
+      recordEvent({
+        event_type: 'memory_admission_deferred',
+        actor_type: 'system',
+        actor_id: row.session_id,
+        project_id: row.project_id ?? null,
+        task_id: row.task_id ?? null,
+        payload: {
+          freeMemMB: memoryHeadroom.freeMemMB,
+          minHostFreeMemoryMB: memoryHeadroom.minHostFreeMemoryMB,
+          perSessionReserveMB: memoryHeadroom.perSessionReserveMB,
+          projectedFreeMB: memoryHeadroom.projectedFreeMB,
+        },
+      });
       return null;
     }
 
@@ -2595,7 +2879,23 @@ export class SessionManager extends EventEmitter {
         status: 'running',
       } satisfies ServerMessage);
     }
-    updateSessionWorktreePath(row.session_id, worktreePath);
+    // Checkout-only planning sessions (groom/design/ops-without-worktree/
+    // split-without-worktree) never own a real per-session worktree —
+    // start() persists worktree_path=null for them (see the comment at
+    // insertSession's call site). Callers of respawnSession resolve a local
+    // fallback cwd (typically projectDir) so the CLI has somewhere to run
+    // `--resume` from, but that resolved fallback must never be written back
+    // into the DB column: doing so silently flips the column from null to
+    // the bare project checkout path, which downstream consumers (e.g.
+    // StuckSessionMonitor) read as "this session owns a real worktree" and
+    // then run git worktree operations directly against the shared project
+    // checkout. Real-worktree sessions keep this refresh — re-anchoring
+    // worktreePath here is legitimate for them.
+    const checkoutOnlyPlanning =
+      isPlanningSession(row.session_type) && !usesWorktree(row.session_type);
+    if (!checkoutOnlyPlanning) {
+      updateSessionWorktreePath(row.session_id, worktreePath);
+    }
     return session;
   }
 
@@ -2747,9 +3047,85 @@ export class SessionManager extends EventEmitter {
    * The session itself is still driven to a terminal DB status ('error') since
    * its process is gone, but the row is never deleted.
    */
+  /**
+   * A poke on the sendOrResume/_doSendOrResume live path failed (worktree
+   * recreation failed, planning checkout missing). Rather than immediately
+   * driving the session terminal on the first failure, count consecutive
+   * failures in session_poke_retry_counts and only escalate to
+   * flagResumeFailure once POKE_RETRY_LIMIT is reached — a poke/resume
+   * failure is often transient (see POKE_RETRY_LIMIT's doc). Below the
+   * limit, the session row is left untouched so a later poke can retry;
+   * resetSessionPokeRetryCount clears the counter on the next successful
+   * poke (see the respawnSession success paths in _doSendOrResume).
+   */
+  private handlePokeFailure(
+    row: Session,
+    reason: string,
+    detail: string,
+  ): void {
+    const count = incrementSessionPokeRetryCount(row.session_id);
+    // Always broadcast the failure so the UI/operator sees it immediately,
+    // whether or not this attempt exhausts the retry budget.
+    this.emit('message', {
+      type: 'session_action_failed',
+      sessionId: row.session_id,
+      action: 'sendOrResume',
+      reason,
+      detail,
+    } satisfies ServerMessage);
+
+    if (count < POKE_RETRY_LIMIT) {
+      logger.warn(
+        `[SessionManager] sendOrResume: poke failed for ${row.session_id.slice(0, 8)} ` +
+          `(attempt ${count}/${POKE_RETRY_LIMIT}, reason=${reason}) — ${detail}`,
+      );
+      return;
+    }
+
+    logger.warn(
+      `[SessionManager] sendOrResume: poke retry budget exhausted (${count}/${POKE_RETRY_LIMIT}) ` +
+        `for ${row.session_id.slice(0, 8)} — routing to flagResumeFailure`,
+    );
+    this.flagResumeFailure(row, `${reason}: ${detail}`);
+  }
+
   private flagResumeFailure(row: Session, detail: string): void {
     const endedAt = Date.now();
-    updateSessionStatus(row.session_id, 'error', endedAt);
+
+    // Route the terminal status write through the single status deriver
+    // (session/sessionStatusDeriver.ts) instead of writing sessions.status
+    // directly: record a 'resume_exhausted' completing signal, then let the
+    // deriver interpret it. See sessionStatusDeriver's resume_exhausted
+    // precedence rule — it applies universally, not per (session_type,
+    // task_type, hasOpenPR) triple, so this is safe for every session type
+    // flagResumeFailure is called for.
+    insertCompletingSignal({
+      session_id: row.session_id,
+      task_id: row.task_id ?? null,
+      session_type: (row.session_type ?? 'standard') as SessionType,
+      signal_class: 'resume_exhausted',
+      signal_value: 'resume_failed',
+      recorded_at: endedAt,
+    });
+    const derived = deriveSessionStatus({
+      sessionId: row.session_id,
+      sessionType: (row.session_type ?? 'standard') as SessionType,
+      taskTypeCategory: 'any',
+      hasOpenPR: false,
+      hasNewerSessionForTask: false,
+      ledgerEntries: listCompletingSignalsForSession(row.session_id),
+    });
+    // Always non-null in practice — the resume_exhausted entry just inserted
+    // above is guaranteed to match on lookup — but fall back to 'error'
+    // defensively rather than throw from within a failure-handling path.
+    const status = derived?.status ?? 'error';
+    updateSessionStatus(row.session_id, status, endedAt);
+    if (derived?.terminalCompletionReason) {
+      setSessionTerminalCompletionReason(
+        row.session_id,
+        derived.terminalCompletionReason,
+      );
+    }
     try {
       setSessionLastErrorDetail(row.session_id, detail);
     } catch {
@@ -2764,7 +3140,7 @@ export class SessionManager extends EventEmitter {
     this.emit('message', {
       type: 'session_ended',
       sessionId: row.session_id,
-      status: 'error',
+      status,
       ...(row.task_id && { taskId: row.task_id }),
     } satisfies ServerMessage);
 
@@ -2776,7 +3152,7 @@ export class SessionManager extends EventEmitter {
       task_id: null,
       payload: {
         sessionId: row.session_id,
-        status: 'error',
+        status,
         reason: 'resume_failed',
       },
     });
@@ -2976,11 +3352,49 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Kills any process sitting in main/ (the backend's own resting cgroup)
+   * with ppid=1 (see reapOrphanedMainCgroupProcesses). Called both from
+   * resumeOrphanSessions (boot) and periodically by server.ts's
+   * main_cgroup_orphan_sweep Scheduler job — a boot-only sweep cannot
+   * bound a process that leaks mid-uptime, which is exactly what produced
+   * the incident this method exists to close.
+   *
+   * Deliberately does NOT call recoverInterruptedTestRequestRuns() here:
+   * that function's "every row still 'running' is stale" assumption only
+   * holds at boot, when no test run can legitimately be in-flight yet.
+   * Mid-uptime, a genuinely in-flight test-lane run's subprocess is (as of
+   * this same change) correctly placed under the bounded tests/ cgroup and
+   * has its own live proc.on('close') listener in test-runner.ts, which
+   * already marks its row failed if that specific subprocess is killed —
+   * reaping some unrelated main/ orphan says nothing about that run's own
+   * state, so force-failing every running row here would false-fail work
+   * that's still genuinely executing and about to produce a real result.
+   */
+  reapMainCgroupOrphans(): number {
+    const reaped = reapOrphanedMainCgroupProcesses();
+    if (reaped > 0) {
+      logger.info(
+        `[SessionManager] reaped ${reaped} orphaned process(es) from main/ cgroup`,
+      );
+    }
+    return reaped;
+  }
+
+  /**
    * Detect sessions still marked 'running' in the DB after a server restart
    * and resume them via --resume so they come back to life instead of lingering
    * as unkillable ghosts. Called from server.ts after migrations and imports.
    */
   async resumeOrphanSessions(): Promise<void> {
+    // Reap any process left sitting in the backend's own main/ cgroup with
+    // ppid=1 — a daemonizing grandchild (e.g. a temp postgres cluster's
+    // postmaster) that escaped a prior boot's session placement and is now
+    // structurally unreachable by killSessionCgroup, since that only ever
+    // touches sessions/<sessionId>/. See sessionCgroup.ts's
+    // reapOrphanedMainCgroupProcesses for why ppid=1 is the safe signal.
+    // Same sweep also runs periodically post-boot — see reapMainCgroupOrphans.
+    this.reapMainCgroupOrphans();
+
     // Close the loop on deferred done-transitions that were never applied —
     // e.g. the backend restarted between markSessionDone's pending write and
     // applyPendingDoneForSettledSession's own call. Excludes status='running'
@@ -3005,6 +3419,28 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] recovering ${stuckRows.length} stuck session(s) from running→done`,
       );
       for (const row of stuckRows) {
+        // A planning session's result event can mean "parked, awaiting the
+        // operator" rather than "finished" — its last event is a result but
+        // its status hasn't made the running→idle transition yet (see
+        // AgentSession's clean-exit handling). If it's still holding staged
+        // intents nobody has dispositioned, marking it done here would feed
+        // sweepStagedIntentsForTerminalSessions a false-terminal status and
+        // it would reap a proposal no human has seen. Route it to idle
+        // instead and skip the done-path recovery below — a PR-anchored
+        // session (standard/review/depth_review) never parks this way, so
+        // this carve-out is inert for those.
+        if (
+          isPlanningSession(row.session_type) &&
+          hasUndispositionedStagedIntentsForSession(row.session_id)
+        ) {
+          markSessionIdle(
+            row.session_id,
+            row.last_ts,
+            row.pr_url ?? null,
+            'boot_orphan_result_event_parked_planning',
+          );
+          continue;
+        }
         // Boot-time recovery: no process for this session exists yet this
         // run, so status='running' here reflects a stale write from before
         // the crash/restart, not a turn actually in flight — safe to bypass
@@ -3093,13 +3529,23 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Reap orphaned Docker containers/networks from sessions no longer active.
+    const orphans = getSessionsByStatus(['running']);
+
+    // Reap orphaned Docker containers/networks from sessions no longer
+    // active. `status='running'` orphan rows are about to be resumed below
+    // and must be excluded here — this.sessions is empty for them this
+    // early in boot (they haven't been resumed yet), so without folding
+    // their IDs into the live set, the reap call below would treat their
+    // still-live containers as orphans and destroy them before the resume
+    // loop below ever gets to reattach.
     if (getCorporateMode().gates.dockerMandatory) {
-      const liveIds = new Set(this.sessions.keys());
+      const liveIds = new Set([
+        ...this.sessions.keys(),
+        ...orphans.map((row) => row.session_id),
+      ]);
       reapOrphanContainers(liveIds);
     }
 
-    const orphans = getSessionsByStatus(['running']);
     if (orphans.length === 0) return;
     logger.info(
       `[SessionManager] found ${orphans.length} orphan session(s) — resuming`,
@@ -3119,7 +3565,16 @@ export class SessionManager extends EventEmitter {
         row.session_type !== 'review' && row.session_type !== 'depth_review',
     );
     const toResume = [...reviewOrphans, ...codeOrphans.slice(0, available)];
-    const toError = codeOrphans.slice(available);
+    // These orphans were already running before the backend went down — they
+    // aren't stuck, there are simply more of them than the *new-dispatch*
+    // admission cap (max_concurrent_code_sessions, see start()) allows this
+    // boot pass to resume at once. Unlike a genuine resume failure
+    // (flagResumeFailure), nothing about them is broken, so don't mark them
+    // terminal. Leave their row exactly as-is (still 'running' in the DB) —
+    // same deferral shape resumeSession already uses for usage-admission
+    // exhaustion — so the next resumeOrphanSessions pass (next boot, or an
+    // operator-triggered retry) picks them back up once headroom frees.
+    const toDefer = codeOrphans.slice(available);
 
     for (const row of toResume) {
       try {
@@ -3137,15 +3592,9 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    for (const row of toError) {
+    for (const row of toDefer) {
       logger.warn(
-        `[SessionManager] max concurrent code sessions reached — marking orphan ${row.session_id} as error`,
-      );
-      this.markSessionErrored(
-        row.session_id,
-        'error',
-        'max_concurrent',
-        'max concurrent code sessions reached',
+        `[SessionManager] max concurrent code sessions reached — deferring orphan ${row.session_id}, left resumable for the next resumeOrphanSessions pass`,
       );
     }
   }
@@ -3217,6 +3666,17 @@ export class SessionManager extends EventEmitter {
     if (sessionRow && !TERMINAL_SESSION_STATUSES.has(sessionRow.status)) {
       return;
     }
+
+    // Kill any surviving process tree rooted in this now-terminal session
+    // before doing anything else — a session's CLI process can exit cleanly
+    // (session.run() resolving on its own, the natural-completion path into
+    // this function) while a Bash-tool-spawned test-command tree it forked
+    // (pytest, `uv run task test`) outlives it, since neither endSession()
+    // nor kill() — the only other callers of killSessionCgroup — run on
+    // that path. cgroup-scoped kill reaches the whole tree regardless of
+    // whether any of its processes carry --session-id/--resume, since
+    // cgroup-v2 membership is inherited at fork.
+    killSessionCgroup(sessionId);
 
     this.sessions.delete(sessionId);
     revokeStageCredential(sessionId, 'session_teardown');
@@ -3308,6 +3768,15 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] failed to remove system-prompt file for ${sessionId.slice(0, 8)}: ${err}`,
       );
     }
+
+    // Backstop for hosts without cgroup-v2 delegation (killSessionCgroup
+    // above was a no-op there): kill any process whose command line still
+    // names this worktree, keyed on the worktree path rather than
+    // --session-id since a test-command tree carries neither flag. Must run
+    // before `git worktree remove` — a process still holding the directory
+    // open is exactly what turns that command into a retried
+    // worktree_remove_failed event.
+    killWorktreeProcessTree(worktreePath);
 
     try {
       execSync(`git worktree remove --force "${worktreePath}"`, {
@@ -3547,9 +4016,15 @@ export class SessionManager extends EventEmitter {
    * took effect — false whenever it was never attempted (capability not
    * grantable/tool-shaped, or the session isn't live) or attempted and
    * declined by respawnForCapabilityGrant's own exits (worktree missing,
-   * usage-admission deferred). Callers must not assume the grant is usable
-   * this turn just because the capability was persisted — `granted` records
-   * the persistence outcome, `respawnApplied` records whether it is live.
+   * usage-admission deferred). This is an operator/diagnostic signal, not
+   * something to relay to the requesting session: the grant is persisted
+   * either way, non-tool-shaped capabilities (the common case) are checked
+   * directly against the granted set with no respawn ever involved, and a
+   * session has no way to act on "wait for a respawn" — a caller composing
+   * a message back to the session must use the same wording regardless of
+   * `respawnApplied`, and should route a false value to operator-facing
+   * logs/surfaces instead (respawnForCapabilityGrant already logs its own
+   * decline reasons).
    */
   async grantCapability(
     sessionId: string,
@@ -3742,6 +4217,236 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * In-place respawn for a session detected as MCP-unreachable by
+   * reconcileMcpUnreachableSessions below. Same suppress-reap /
+   * same-session-id / --resume mechanism as respawnForCapabilityGrant just
+   * above — kills the live process (if any) with the reap suppressed so
+   * staged intents survive, then respawns under the same session id with
+   * --resume, giving the CLI a fresh MCP client that re-attempts every
+   * configured server. A resumed CLI process reuses its already-failed MCP
+   * client, so only a genuinely fresh process (this respawn) can recover
+   * the connection — poking or re-prompting the same process cannot.
+   *
+   * Declines cleanly (returns false, no event, no error) when the
+   * session's worktree is missing, mirroring respawnForCapabilityGrant's
+   * own guard — there is nothing to resume onto.
+   */
+  private async respawnForMcpUnreachable(
+    sessionId: string,
+    attemptNumber: number,
+  ): Promise<boolean> {
+    const row = getSession(sessionId);
+    if (!row) return false;
+
+    const project = getProjectById(row.project_id ?? '');
+    if (!project) return false;
+    const projectDir = normalizePath(project.projectDir);
+    const defaultWorktreePath = path.join(
+      projectDir,
+      '.claude',
+      'worktrees',
+      sessionId,
+    );
+    const recordedPath =
+      isPlanningSession(row.session_type) && !usesWorktree(row.session_type)
+        ? (row.worktree_path ?? projectDir)
+        : (row.worktree_path ?? defaultWorktreePath);
+
+    if (
+      !recordedPath ||
+      !fs.existsSync(recordedPath) ||
+      !fs.existsSync(path.join(recordedPath, '.git'))
+    ) {
+      logger.warn(
+        `[SessionManager] respawnForMcpUnreachable: worktree missing for ${sessionId.slice(0, 8)} — declining respawn`,
+      );
+      return false;
+    }
+
+    // This kill is not a real death — see respawnForCapabilityGrant's
+    // identical comment above.
+    const liveSession = this.sessions.get(sessionId);
+    if (liveSession) {
+      await liveSession.kill({ suppressReap: true });
+    }
+    this.evictDeadSessionEntry(sessionId);
+
+    const orchConfig = loadOrchestratorConfig(projectDir);
+    const mode = runtimeSettings.session_mode;
+    const runner =
+      mode === 'api'
+        ? new ApiSessionRunner(sessionId)
+        : getCorporateMode().gates.dockerMandatory
+          ? new DockerSessionRunner(sessionId)
+          : new CliSessionRunner(sessionId);
+    const mcpConfigPath = writeMcpConfig(
+      projectDir,
+      sessionId,
+      orchConfig.mcp_servers,
+      project.taskSource,
+    );
+    const systemPromptFilePath =
+      mode === 'cli' && row.task_url
+        ? await this._buildAndWriteResumeSystemPrompt(
+            row,
+            project,
+            orchConfig,
+            projectDir,
+            recordedPath,
+          )
+        : undefined;
+
+    const session = this.respawnSession(
+      row,
+      recordedPath,
+      orchConfig,
+      runner,
+      mcpConfigPath,
+      systemPromptFilePath,
+    );
+    if (!session) {
+      logger.warn(
+        `[SessionManager] respawnForMcpUnreachable: respawnSession deferred/failed for ${sessionId.slice(0, 8)}`,
+      );
+      try {
+        expireStagedIntentsForSession(sessionId, 'session_killed', Date.now());
+      } catch {
+        // Best-effort — DB may be unavailable or mocked without this function.
+      }
+      return false;
+    }
+    this.wireSession(sessionId, session, projectDir, recordedPath);
+
+    recordEvent({
+      event_type: 'session_mcp_unreachable_respawned',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: row.project_id ?? null,
+      task_id: row.task_id ?? null,
+      payload: { session_id: sessionId, attempt_number: attemptNumber },
+    });
+
+    return true;
+  }
+
+  /**
+   * Detects a live session whose orchestrator MCP server never connected —
+   * the CLI-side stall documented on this task: --strict-mcp-config plus a
+   * valid stage credential still leaves the CLI's own MCP client
+   * unconnected in some observed cases, and a resumed CLI process reuses
+   * its already-failed MCP client, so no amount of poking or re-prompting
+   * recovers it. Only a fresh CLI process re-attempts every configured MCP
+   * server, so this recovers via respawnForMcpUnreachable's bounded
+   * in-place respawn — never by terminating the session, which would
+   * return its task to the dispatch pool and risk the exact thrash loop
+   * observed elsewhere (a session dies, the orphan sweeper reverts its task
+   * to Ready, a fresh session launches, repeat).
+   *
+   * Candidate population: every live (non-terminal) session. Skipped
+   * entirely in api session_mode, mirroring the other liveness
+   * reconcilers' skip — an ApiSessionRunner session has no CLI subprocess
+   * and no MCP client to fail.
+   *
+   * Grace window: no detection fires until MCP_UNREACHABLE_GRACE_MS has
+   * elapsed since the session's most recent spawn — its original
+   * started_at, or its latest respawn attempt's timestamp once this
+   * reconciler has already respawned it once (getLatestMcpUnreachableRespawnTimestamp).
+   * That reference moves forward on every respawn, so the grace window
+   * restarts each time: a session that reconnects cleanly on its new
+   * process is never flagged again (hasMcpConnectionEstablishedSince finds
+   * a fresh event), and one that doesn't gets re-detected once the next
+   * window elapses, up to MAX_MCP_UNREACHABLE_RESPAWNS.
+   */
+  async reconcileMcpUnreachableSessions(): Promise<{
+    detected: string[];
+    respawned: string[];
+    exhausted: string[];
+  }> {
+    const detected: string[] = [];
+    const respawned: string[] = [];
+    const exhausted: string[] = [];
+
+    if (runtimeSettings.session_mode === 'api') {
+      return { detected, respawned, exhausted };
+    }
+
+    const now = Date.now();
+    for (const row of listLiveSessionRows()) {
+      if (hasMcpUnreachableExhaustedEvent(row.session_id)) continue;
+
+      const lastSpawnMs =
+        getLatestMcpUnreachableRespawnTimestamp(row.session_id) ??
+        row.started_at;
+      const hasConnectedSinceSpawn = hasMcpConnectionEstablishedSince(
+        row.session_id,
+        lastSpawnMs,
+      );
+
+      if (
+        !isMcpUnreachable({
+          hasConnectedSinceSpawn,
+          nowMs: now,
+          lastSpawnMs,
+          graceMs: MCP_UNREACHABLE_GRACE_MS,
+        })
+      ) {
+        continue;
+      }
+
+      const attemptsSoFar = countMcpUnreachableRespawnAttempts(row.session_id);
+      const attemptNumber = attemptsSoFar + 1;
+
+      recordEvent({
+        event_type: 'session_mcp_unreachable_detected',
+        actor_type: 'system',
+        actor_id: row.session_id,
+        project_id: row.project_id ?? null,
+        task_id: row.task_id ?? null,
+        payload: {
+          session_id: row.session_id,
+          attempt_number: attemptNumber,
+        },
+      });
+      detected.push(row.session_id);
+
+      if (attemptsSoFar >= MAX_MCP_UNREACHABLE_RESPAWNS) {
+        setSessionPauseReason(row.session_id, 'mcp_unreachable_exhausted');
+        recordEvent({
+          event_type: 'session_mcp_unreachable_respawn_exhausted',
+          actor_type: 'system',
+          actor_id: row.session_id,
+          project_id: row.project_id ?? null,
+          task_id: row.task_id ?? null,
+          payload: {
+            session_id: row.session_id,
+            attempt_number: attemptNumber,
+            max_respawns: MAX_MCP_UNREACHABLE_RESPAWNS,
+          },
+        });
+        exhausted.push(row.session_id);
+        logger.warn(
+          `[SessionManager] reconcileMcpUnreachableSessions: session ${row.session_id.slice(0, 8)} exhausted ${MAX_MCP_UNREACHABLE_RESPAWNS} MCP-unreachable respawn attempts — surfaced to operator`,
+        );
+        continue;
+      }
+
+      try {
+        const ok = await this.respawnForMcpUnreachable(
+          row.session_id,
+          attemptNumber,
+        );
+        if (ok) respawned.push(row.session_id);
+      } catch (err) {
+        logger.error(
+          `[SessionManager] reconcileMcpUnreachableSessions: respawn failed for ${row.session_id.slice(0, 8)}: ${err}`,
+        );
+      }
+    }
+
+    return { detected, respawned, exhausted };
+  }
+
+  /**
    * Abort a session: kill the process, pre-mark the DB as killed (so orphan-resume
    * cannot re-attach on server restart), and reset the task to Ready.
    *
@@ -3835,6 +4540,59 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Terminate a session whose stage or route credential was presented after
+   * being revoked — see setRevokedStageCredentialHandler/
+   * setRevokedRouteCredentialHandler wiring in the constructor above. A
+   * session cannot request or refresh a new credential once its own is
+   * revoked, so if its process is still calling in with the old one, the
+   * only honest outcome is termination: leaving it running only buys it an
+   * infinite retry/backoff loop against a server that will never accept it
+   * again (the failure this task exists to close — see
+   * sessionLivenessReconciler.ts's doc comment on the false-positive
+   * incident this guards against).
+   *
+   * Safe to call for a row that's already terminal (idempotent — most calls
+   * land here because the row went 'killed' moments earlier via the
+   * liveness reconciler, and this only catches the process not actually
+   * having exited yet).
+   */
+  private terminateSessionForRevokedCredential(
+    sessionId: string,
+    surface: 'mcp' | 'route',
+  ): void {
+    const row = getSession(sessionId);
+    const now = Date.now();
+    const reason = `credential_revoked_${surface}`;
+    if (!row || !TERMINAL_STATUSES.has(row.status)) {
+      updateSessionStatus(sessionId, 'killed', now);
+    }
+    setSessionTerminalCompletionReason(sessionId, reason);
+
+    recordEvent({
+      event_type: 'session_terminated_revoked_credential',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: row?.project_id ?? null,
+      task_id: row?.task_id ?? null,
+      payload: { sessionId, surface, reason },
+    });
+
+    const liveSession = this.sessions.get(sessionId);
+    if (liveSession) {
+      liveSession.hasEnded = true;
+      liveSession.kill().catch((err) => {
+        logger.error(
+          `[SessionManager] terminateSessionForRevokedCredential kill error for ${sessionId.slice(0, 8)}: ${err}`,
+        );
+      });
+    }
+    this.evictSession(sessionId);
+    logger.warn(
+      `[SessionManager] session ${sessionId.slice(0, 8)} presented a revoked ${surface} credential — terminated`,
+    );
+  }
+
+  /**
    * Close stdin on the session process so the CLI can exit cleanly, then
    * verify it actually did and escalate to a forceful kill if not.
    *
@@ -3866,9 +4624,14 @@ export class SessionManager extends EventEmitter {
     // out of scope here, recovered by resumeOrphanSessions/manual sweep)
     // or a stale reference dropped by reconcileSessionsMap, which now
     // reaps the process before ever evicting the entry. Either way there
-    // is no live handle left in this process to escalate against here, so
-    // only the worktree is finalized.
+    // is no live handle left in this process to escalate the process
+    // itself against, so only the worktree is finalized. The session's
+    // cgroup is keyed by sessionId alone (no live handle required), so it
+    // is torn down here regardless — this is the only path that reaps a
+    // daemonized grandchild left behind when a prior CliSessionRunner
+    // instance (and its in-memory session) is already gone.
     this._teardownIdleSessionWorktree(sessionId);
+    killSessionCgroup(sessionId);
   }
 
   /**
@@ -4075,6 +4838,18 @@ export class SessionManager extends EventEmitter {
       logger.warn(
         `[SessionManager] ${logContext}: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
       );
+      recordEvent({
+        event_type: 'verdict_routing_failed',
+        actor_type: 'system',
+        actor_id: sessionId,
+        project_id: row.project_id ?? null,
+        task_id: row.task_id ?? null,
+        payload: {
+          session_id: sessionId,
+          log_context: logContext,
+          error: String(err),
+        },
+      });
       this.emitFeedbackPending(sessionId, false);
       return;
     }
@@ -4082,6 +4857,18 @@ export class SessionManager extends EventEmitter {
       logger.warn(
         `[SessionManager] ${logContext}: sendOrResume could not deliver to ${sessionId.slice(0, 8)} — leaving item(s) undelivered`,
       );
+      recordEvent({
+        event_type: 'verdict_routing_failed',
+        actor_type: 'system',
+        actor_id: sessionId,
+        project_id: row.project_id ?? null,
+        task_id: row.task_id ?? null,
+        payload: {
+          session_id: sessionId,
+          log_context: logContext,
+          reason: 'sendOrResume_returned_null',
+        },
+      });
       this.emitFeedbackPending(sessionId, false);
       return;
     }
@@ -4134,6 +4921,7 @@ export class SessionManager extends EventEmitter {
     if (liveSession && !liveSession.hasEnded) {
       const delivered = this.send(sessionId, text);
       if (delivered) {
+        resetSessionPokeRetryCount(sessionId);
         // Mirror the respawn path: ensure status reflects the resumed activity
         // so the UI doesn't keep rendering this session as idle. Terminal is
         // sticky — a done/error/killed row is never silently overwritten with
@@ -4344,6 +5132,7 @@ export class SessionManager extends EventEmitter {
         } satisfies ServerMessage);
         return null;
       }
+      resetSessionPokeRetryCount(sessionId);
 
       // Proactive ceiling-escalation: if the session's persisted context occupancy
       // is at/over the HWM, spawn directly on large_task_model and deliver the
@@ -4388,19 +5177,7 @@ export class SessionManager extends EventEmitter {
       logger.error(
         `[SessionManager] sendOrResume: ${detail} for planning session ${sessionId}`,
       );
-      this.markSessionErrored(
-        sessionId,
-        'error',
-        'planning_checkout_missing',
-        detail,
-      );
-      this.emit('message', {
-        type: 'session_action_failed',
-        sessionId,
-        action: 'sendOrResume',
-        reason: 'planning_checkout_missing',
-        detail,
-      } satisfies ServerMessage);
+      this.handlePokeFailure(row, 'planning_checkout_missing', detail);
       return sessionId;
     }
 
@@ -4425,7 +5202,22 @@ export class SessionManager extends EventEmitter {
           projectDir,
           project.baseBranch,
         );
-        if (!fetchOutcome.ok) {
+        if (!fetchOutcome.ok && fetchOutcome.benignRefLock) {
+          logger.info(
+            `[SessionManager] sendOrResume: git fetch origin ${project.baseBranch} lost a ref-lock race but the ref already holds the fetched value (continuing): ${fetchOutcome.error}`,
+          );
+          recordEvent({
+            event_type: 'base_fetch_ref_lock_benign',
+            actor_type: 'system',
+            actor_id: sessionId,
+            project_id: row.project_id || null,
+            task_id: row.task_id || null,
+            payload: {
+              baseBranch: project.baseBranch,
+              error: String(fetchOutcome.error),
+            },
+          });
+        } else if (!fetchOutcome.ok) {
           logger.warn(
             `[SessionManager] sendOrResume: git fetch origin ${project.baseBranch} failed (continuing with local ref): ${fetchOutcome.error}`,
           );
@@ -4545,15 +5337,7 @@ export class SessionManager extends EventEmitter {
         ? `${BACKEND_SPAWN_DEGRADED_MESSAGE}\nworktree recreation failed: ${(err as Error).message}`
         : `worktree recreation failed: ${(err as Error).message}`;
 
-      this.markSessionErrored(sessionId, 'error', reason, detail);
-
-      this.emit('message', {
-        type: 'session_action_failed',
-        sessionId,
-        action: 'sendOrResume',
-        reason,
-        detail: stderr || (err as Error).message,
-      } satisfies ServerMessage);
+      this.handlePokeFailure(row, reason, stderr || detail);
 
       return sessionId;
     }
@@ -4636,6 +5420,7 @@ export class SessionManager extends EventEmitter {
       } satisfies ServerMessage);
       return null;
     }
+    resetSessionPokeRetryCount(sessionId);
 
     // Register the pending text on the session so that if the resumed context
     // overflows, the escalated spawn re-delivers the original message rather
@@ -4782,7 +5567,18 @@ export class SessionManager extends EventEmitter {
     return reconcileSessionLiveness({
       evictSessionMapEntry: (sessionId) =>
         this.evictDeadSessionEntry(sessionId),
+      tryMarkPlanningTerminal: this.planningTerminalChecker ?? undefined,
     });
+  }
+
+  /**
+   * Wires PlanningOrchestrator.tryTerminalizeIfComplete in — called once
+   * from server.ts after both instances exist (PlanningOrchestrator takes
+   * this SessionManager in its own constructor, so the dependency can't run
+   * the other direction).
+   */
+  setPlanningTerminalChecker(checker: (sessionId: string) => boolean): void {
+    this.planningTerminalChecker = checker;
   }
 
   /**
@@ -4793,6 +5589,19 @@ export class SessionManager extends EventEmitter {
    */
   reconcileNonPlanningSessionLiveness(): SessionLivenessReconcileResult {
     return reconcileNonPlanningSessionLiveness({
+      evictSessionMapEntry: (sessionId) =>
+        this.evictDeadSessionEntry(sessionId),
+    });
+  }
+
+  /**
+   * OS → DB reconciliation sweep: reaps a claude OS process whose session
+   * row is already terminal (or missing entirely) — the fourth cell in the
+   * coverage matrix none of the three sweeps above can reach. See
+   * sessionLivenessReconciler.reconcileOrphanProcesses.
+   */
+  reconcileOrphanProcesses(): Promise<OrphanProcessReconcileResult> {
+    return reconcileOrphanProcesses({
       evictSessionMapEntry: (sessionId) =>
         this.evictDeadSessionEntry(sessionId),
     });
@@ -4890,13 +5699,32 @@ export class SessionManager extends EventEmitter {
    * Backstop for expireStagedIntentsForSession: reaps staged/approved intents
    * left behind by sessions that reached a terminal status (done/error/killed)
    * without going through the terminal-transition hook — e.g. a process crash.
-   * Safe to call repeatedly (a scheduled job, or at boot).
+   * Safe to call repeatedly (a scheduled job, or at boot). Tells each swept
+   * session what it lost, reusing markSessionErrored's expiry notice —
+   * persist-only (enqueueFeedbackItem, not the full enqueueFeedback path),
+   * for the same reason markSessionErrored's call site documents: a swept
+   * session is terminal and not necessarily coming back right now, so
+   * delivery is left to reconcileInboxAtBoot / redeliverUndeliveredFeedback
+   * on its next actual resume.
    */
   reapStagedIntentsBackstopSweep(): number {
-    return sweepStagedIntentsForTerminalSessions(
+    const swept = sweepStagedIntentsForTerminalSessions(
       'session_terminal_backstop_sweep',
       Date.now(),
     );
+    for (const { sessionId, expired } of swept) {
+      if (expired.length === 0) continue;
+      try {
+        enqueueFeedbackItem(
+          sessionId,
+          'staged-intent-expiry',
+          formatExpiredIntentsFeedback(expired),
+        );
+      } catch {
+        // Best-effort — DB may be unavailable or mocked without this function.
+      }
+    }
+    return swept.reduce((total, { expired }) => total + expired.length, 0);
   }
 
   /**

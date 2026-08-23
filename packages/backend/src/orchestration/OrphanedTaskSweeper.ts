@@ -14,6 +14,7 @@ import {
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
   isSessionAwaitingCapabilityDisposition,
+  isNoOpSuppressed,
   getPRBySessionId,
   getLocalBranchBySession,
   setSessionPauseReason,
@@ -168,6 +169,13 @@ export class OrphanedTaskSweeper {
     taskType: string,
     backend: TaskBackend,
   ): Promise<void> {
+    // A committed planning.noOp still stands for this task — a session
+    // already declared its work satisfied elsewhere and drove it to Done
+    // (see routes/stagedIntents.ts's maybeAutoResolveCodeNoOp). Never revert
+    // that decision back to Ready; it retires automatically the moment the
+    // task is next edited (see isNoOpSuppressed in db/queries.ts).
+    if (isNoOpSuppressed(taskId)) return;
+
     // Docs is the one non-Code sweepable type that opens its own session and
     // can open a PR (human_merge_only) — resolve its own-type session here so
     // the PR-exemption and idle-nudge logic below (written against 'standard'

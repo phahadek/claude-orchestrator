@@ -30,7 +30,11 @@ import {
   type DeployOrchestratorDeps,
 } from '../../deploy/DeployOrchestrator';
 import { getDeployRun } from '../../deploy/deployService';
-import { insertSessionOrIgnore } from '../../db/queries';
+import {
+  insertSessionOrIgnore,
+  getSession,
+  listCompletingSignalsForSession,
+} from '../../db/queries';
 import type {
   DeployPlaybook,
   StepDescriptor,
@@ -193,6 +197,17 @@ describe('DeployAgenticStepSpawner: budget timeout', () => {
       expect(completed?.status).toBe('failed');
       expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith(
         'sess-timeout',
+      );
+      expect(getSession('sess-timeout')?.terminal_completion_reason).toBe(
+        'deploy_agentic_step_timeout',
+      );
+      const signals = listCompletingSignalsForSession('sess-timeout');
+      expect(signals).toContainEqual(
+        expect.objectContaining({
+          signal_class: 'staged_intent',
+          signal_value: 'deploy_agentic_step_timeout',
+          session_type: 'ops',
+        }),
       );
     } finally {
       vi.useRealTimers();

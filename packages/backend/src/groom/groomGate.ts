@@ -54,6 +54,9 @@ import {
 import { ProjectService } from '../projects/ProjectService';
 import type { SeedItemClassification } from '../db/types';
 import { extractPathToken } from './groomLoad';
+import type { TrackedFileSetCache } from './groomLoad';
+import { getCachedStatus, getCachedType } from '../tasks/TaskWriteCommands';
+import { STATUS_DISPLAY } from '../tasks/statusCanonical';
 
 const SIZE_CHECK_DECISIONS = new Set([
   'no_split',
@@ -523,6 +526,7 @@ async function resolveFilesPathsEntriesServerSide(
   entries: FilesPathsEntry[] | undefined,
   projectId: string | undefined,
   taskBody: string | undefined,
+  trackedFileSetCache?: TrackedFileSetCache,
 ): Promise<{ entries: FilesPathsEntry[] | undefined; blockedReason?: string }> {
   if (type !== '💻 Code') {
     return { entries };
@@ -583,7 +587,7 @@ async function resolveFilesPathsEntriesServerSide(
   } = await import('./groomLoad');
   let trackedFiles: Set<string>;
   try {
-    trackedFiles = await resolveTrackedFileSet(repoRoot);
+    trackedFiles = await resolveTrackedFileSet(repoRoot, trackedFileSetCache);
   } catch (err) {
     return {
       entries,
@@ -701,10 +705,37 @@ function isFilesPathsDeclaringRepoWork(
 }
 
 /**
+ * Re-derives each Depends On dependency's status/type from `task_cache`
+ * (`getCachedStatus`/`getCachedType`) by id — the same precedent
+ * `resolveFilesPathsEntriesServerSide` sets for Files/paths: a caller-staged
+ * `dependsOnTasks` snapshot can carry a stale or wrong-vocabulary status
+ * (e.g. the canonical `'Done'` rather than the display `'✅ Done'` the
+ * DONE_STATUSES check actually compares against), so `dep.status`/`dep.type`
+ * are never trusted directly. Falls back to the caller-supplied value only
+ * when the dep id has no `task_cache` row — preserving the pre-existing
+ * fail-closed posture for an unresolvable dependency.
+ */
+function resolveDependsOnTasksServerSide(
+  dependsOnTasks: DependsOnTaskRef[] | undefined,
+): DependsOnTaskRef[] {
+  return (dependsOnTasks ?? []).map((dep) => {
+    const cachedStatus = getCachedStatus(dep.id);
+    const cachedType = getCachedType(dep.id);
+    return {
+      id: dep.id,
+      type: cachedType ?? dep.type,
+      status: cachedStatus ? STATUS_DISPLAY[cachedStatus] : dep.status,
+    };
+  });
+}
+
+/**
  * FM3 signal (a) — a non-Done 📐 Design / 📋 Planning / 🔎 Investigation
  * Depends On task can still reshape this task's scope, invalidating whatever
  * was groomed against it. Blocks promotion until that dependency reaches
- * ✅ Done (or is ⏭️ Deferred).
+ * ✅ Done (or is ⏭️ Deferred). `dependsOnTasks` must already be server-side
+ * resolved (`resolveDependsOnTasksServerSide`) — this function trusts the
+ * status/type it's handed.
  */
 function isDependsOnGateClear(dependsOnTasks: DependsOnTaskRef[] | undefined): {
   ok: boolean;
@@ -732,9 +763,14 @@ function isDependsOnGateClear(dependsOnTasks: DependsOnTaskRef[] | undefined): {
  * per constraint, and validate each disposition's shape: n/a needs a reason,
  * conflict_route needs a recorded routed 📐 Design Depends On task, and a
  * complies citing a Design decision needs that citation to resolve to
- * ✅ Done.
+ * ✅ Done. `dependsOnTasks` must already be server-side resolved
+ * (`resolveDependsOnTasksServerSide`) — a caller-supplied `status`/`type` is
+ * never trusted for the routed/cited lookups below.
  */
-function isConstraintsDispositioned(entry: GroomingGateEntry): {
+function isConstraintsDispositioned(
+  entry: GroomingGateEntry,
+  dependsOnTasks: DependsOnTaskRef[],
+): {
   ok: boolean;
   reasons: string[];
 } {
@@ -742,7 +778,6 @@ function isConstraintsDispositioned(entry: GroomingGateEntry): {
     entry.regions ?? { packages: [], files: [] },
   );
   const dispositioned = entry.constraintsDispositioned ?? {};
-  const dependsOnTasks = entry.dependsOnTasks ?? [];
   const reasons: string[] = [];
 
   for (const id of ids) {
@@ -830,6 +865,7 @@ function isTriageEligibleForType(
 function isInteractiveTriageClean(
   type: string | undefined,
   entry: GroomingGateEntry,
+  dependsOnTasks: DependsOnTaskRef[],
 ): { ok: boolean; reasons: string[] } {
   if (!isTriageEligibleType(type)) return { ok: true, reasons: [] };
   if (!entry.triage) {
@@ -843,7 +879,6 @@ function isInteractiveTriageClean(
       ],
     };
   }
-  const dependsOnTasks = entry.dependsOnTasks ?? [];
   const hardBlockDepNotDone = dependsOnTasks.some(
     (dep) =>
       dep.type &&
@@ -899,6 +934,12 @@ function isInteractiveTriageClean(
  * section into its groomingGate payload). Every caller that already has the
  * task body in hand (or fetches it anyway for `checkReadiness`) should pass
  * it through so the verdict tracks the artifact, not the paraphrase.
+ *
+ * `trackedFileSetCache`, when supplied, memoizes the `git ls-files`-backed
+ * tracked-file set `resolveFilesPathsEntriesServerSide` resolves against, so
+ * a multi-member group commit (commitGroupIntents) can share one resolution
+ * across every 💻 Code Ready-flip in the same commit instead of re-spawning
+ * the subprocess once per member.
  */
 export async function checkGroomingPromotionGate(
   entry: GroomingGateEntry,
@@ -907,6 +948,7 @@ export async function checkGroomingPromotionGate(
   accretionOpts?: AccretionCheckOptions,
   projectId?: string,
   taskBody?: string,
+  trackedFileSetCache?: TrackedFileSetCache,
 ): Promise<GroomingGateResult> {
   const reasons: string[] = [];
   const resolvedType = authoritativeType ?? entry.type;
@@ -946,6 +988,7 @@ export async function checkGroomingPromotionGate(
       entry.filesPathsEntries,
       projectId,
       taskBody,
+      trackedFileSetCache,
     );
   if (blockedReason) {
     reasons.push(blockedReason);
@@ -958,10 +1001,18 @@ export async function checkGroomingPromotionGate(
         .reasons,
     );
   }
-  reasons.push(...isDependsOnGateClear(entry.dependsOnTasks).reasons);
-  reasons.push(...isConstraintsDispositioned(entry).reasons);
+  const resolvedDependsOnTasks = resolveDependsOnTasksServerSide(
+    entry.dependsOnTasks,
+  );
+  reasons.push(...isDependsOnGateClear(resolvedDependsOnTasks).reasons);
+  reasons.push(
+    ...isConstraintsDispositioned(entry, resolvedDependsOnTasks).reasons,
+  );
   reasons.push(...isTriageEligibleForType(resolvedType, entry).reasons);
-  reasons.push(...isInteractiveTriageClean(resolvedType, entry).reasons);
+  reasons.push(
+    ...isInteractiveTriageClean(resolvedType, entry, resolvedDependsOnTasks)
+      .reasons,
+  );
 
   return { allowed: reasons.length === 0, reasons };
 }

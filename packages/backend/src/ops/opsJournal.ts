@@ -123,15 +123,26 @@ const OPERATIONAL_SESSION_TERMINAL_STATES: ReadonlySet<OpsState> = new Set([
   'blocked',
 ]);
 
+/**
+ * The session-reachable terminal ops_journal states for a task Type — the
+ * same per-Type sets isSessionTerminalOpsState checks membership against,
+ * exposed directly so callers that need to name the remaining valid
+ * target(s) (rather than just test one candidate state) don't have to
+ * duplicate the Investigation-vs-Operational branch.
+ */
+export function sessionTerminalOpsStates(
+  taskType: string | null | undefined,
+): ReadonlySet<OpsState> {
+  return taskType === '🔎 Investigation'
+    ? INVESTIGATION_SESSION_TERMINAL_STATES
+    : OPERATIONAL_SESSION_TERMINAL_STATES;
+}
+
 export function isSessionTerminalOpsState(
   state: OpsState,
   taskType: string | null | undefined,
 ): boolean {
-  const allowed =
-    taskType === '🔎 Investigation'
-      ? INVESTIGATION_SESSION_TERMINAL_STATES
-      : OPERATIONAL_SESSION_TERMINAL_STATES;
-  return allowed.has(state);
+  return sessionTerminalOpsStates(taskType).has(state);
 }
 
 /**

@@ -3,7 +3,11 @@ import type { ProjectMilestone } from './ProjectService';
 import { getTaskCache, getGateItem } from '../db/queries';
 import { normalizeTaskId } from '../tasks/taskId';
 import type { NotionTask } from '../notion/types';
-import { isGateVerifySession } from '../session/sessionPredicates';
+import {
+  isGateVerifySession,
+  isInvestigateSession,
+} from '../session/sessionPredicates';
+import { getReportsForBatchTaskId } from '../investigation/reportStore';
 
 /**
  * Thrown when a milestone reference doesn't resolve to exactly one known
@@ -35,6 +39,52 @@ function findMilestone<
       m.name === milestone ||
       canonicalMilestoneKey(m).toLowerCase() === milestone.toLowerCase(),
   );
+}
+
+/**
+ * True once the milestone a gate item belongs to has been wrapped
+ * (milestones.wrapped_at set — see /milestone-wrap). Resolves through the
+ * same id/name/canonical-short-id matching as resolveMilestoneRowForProject,
+ * so a gate_item row that still holds a raw milestone UUID (the shadow
+ * key-space documented in context.md) resolves to the same row — and the
+ * same wrapped/unwrapped answer — as its canonical-short-id counterpart,
+ * rather than silently missing the match. An unresolvable milestone
+ * (unknown project, typo, stale reference) is treated as NOT wrapped —
+ * the safe default that keeps it in scope exactly as before this predicate
+ * existed, rather than excluding it on a lookup failure.
+ */
+export function isMilestoneWrapped(
+  projectId: string,
+  milestone: string,
+): boolean {
+  const project = ProjectService.getById(projectId);
+  if (!project) return false;
+  const match = findMilestone(project.milestones, milestone);
+  return match?.wrappedAt != null;
+}
+
+/**
+ * A cached variant of isMilestoneWrapped for hot loops that check many gate
+ * items against the same small set of projects/milestones within a single
+ * pass (the reconciler tick) — memoizes ProjectService.getById per project
+ * so checking N items costs at most one DB round-trip per distinct project,
+ * not one per item.
+ */
+export function createWrappedMilestoneChecker(): (
+  project: string,
+  milestone: string,
+) => boolean {
+  const cache = new Map<string, ReturnType<typeof ProjectService.getById>>();
+  return (project, milestone) => {
+    let proj = cache.get(project);
+    if (proj === undefined && !cache.has(project)) {
+      proj = ProjectService.getById(project);
+      cache.set(project, proj);
+    }
+    if (!proj) return false;
+    const match = findMilestone(proj.milestones, milestone);
+    return match?.wrappedAt != null;
+  };
 }
 
 /**
@@ -172,6 +222,18 @@ export function resolveMilestoneForTaskId(
  * fix already stages with no conversion step); otherwise delegates
  * unchanged to resolveMilestoneForTaskId. Returns null — never throws — when
  * the gate item is missing or itself carries no milestone.
+ *
+ * Mirrors that carve-out for an investigate session's sentinel task id
+ * (`report-batch:<batchId>`, see isInvestigateSession): resolves the
+ * dispatched batch's report(s) via getReportsForBatchTaskId and reads
+ * reports[0].milestone_id, matching launchInvestigateBatch's own
+ * first-report rule for a batch that spans multiple reports. That id is in
+ * the milestones.id UUID key space (investigation_report.milestone_id), so
+ * it is normalized through resolveMilestoneForProject to the canonical
+ * short-form key staged_intent.milestone stores — never the raw UUID.
+ * Returns null — never throws — for a batch with no dispatch row, no
+ * report, a report whose milestone is unset, or a milestone id that no
+ * longer resolves for the project.
  */
 export function resolveMilestoneForSessionTask(
   projectId: string,
@@ -180,6 +242,16 @@ export function resolveMilestoneForSessionTask(
   if (isGateVerifySession(taskId)) {
     const itemId = taskId.slice('gate-item:'.length);
     return getGateItem(itemId)?.milestone ?? null;
+  }
+  if (isInvestigateSession(taskId)) {
+    const milestoneId = getReportsForBatchTaskId(taskId)[0]?.milestone_id;
+    if (!milestoneId) return null;
+    try {
+      return resolveMilestoneForProject(projectId, milestoneId);
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) return null;
+      throw err;
+    }
   }
   return resolveMilestoneForTaskId(projectId, taskId);
 }
@@ -193,6 +265,23 @@ export function resolveMilestoneAnyProject(milestone: string): string {
   for (const project of ProjectService.list()) {
     const match = findMilestone(project.milestones, milestone);
     if (match) return canonicalMilestoneKey(match);
+  }
+  throw new UnknownMilestoneError(
+    `"${milestone}" is not a known milestone display name for any project`,
+  );
+}
+
+/**
+ * Same as resolveMilestoneRowForProject, without a project scope — for read
+ * surfaces (e.g. the investigation_report list filter) that accept a bare
+ * `milestone` query param with no `project` alongside it.
+ */
+export function resolveMilestoneRowAnyProject(
+  milestone: string,
+): ProjectMilestone {
+  for (const project of ProjectService.list()) {
+    const match = findMilestone(project.milestones, milestone);
+    if (match) return match;
   }
   throw new UnknownMilestoneError(
     `"${milestone}" is not a known milestone display name for any project`,

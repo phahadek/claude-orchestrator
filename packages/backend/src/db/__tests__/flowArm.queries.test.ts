@@ -27,6 +27,7 @@ describe('DEFAULT_ARM', () => {
       design: false,
       ops: false,
       docs: false,
+      investigate: false,
     });
   });
 });

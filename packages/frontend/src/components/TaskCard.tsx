@@ -82,6 +82,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'PR merged but Notion status update failed repeatedly — update Notion to Done manually and clear the pause.',
   launch_failed:
     'Launch failed repeatedly — fix the underlying issue (e.g. delete the stale branch) then restart the backend.',
+  base_branch_broken:
+    'Base branch is broken (whole-suite/build-level failure) — new session dispatch is held for this project until a subsequent base-health check clears it. No action needed.',
   diverged_branch:
     'Branch has diverged from origin — manual reconciliation needed before auto-push can resume.',
   diverged_branch_unresolved:
@@ -130,6 +132,16 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Manual verification required — review the checklist and sign off to allow auto-merge.',
   test_request_cycle_exceeded:
     'Session exceeded its test.request cycle limit — review and resume manually.',
+  test_report_acquisition_failed:
+    'Test report declared but not acquired — the report was missing, malformed, or the run was killed before teardown. Fix the test harness/glob; this does not block merge if tests passed.',
+  ci_not_completing:
+    'CI is taking longer than usual to report a result — the merge sweep keeps retrying automatically and will merge once the PR goes clean. No action needed.',
+  mcp_unreachable_exhausted:
+    "Session's orchestrator MCP server never connected and automatic in-place respawn attempts were exhausted — review and resume manually.",
+  verdict_routing_failed:
+    'A review verdict had no session to route feedback to (e.g. an orphaned PR with no linked session) — assign a session or redispatch manually.',
+  base_attributable_test_excluded:
+    'A failing F2 test was excluded as a confirmed base-branch break (clearing both masking guards) — does not block merge. No action needed.',
 };
 
 function verdictLabel(verdict: string): string {

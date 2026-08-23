@@ -76,6 +76,8 @@ export function SessionControls({
 
   const isActive =
     session.status === 'running' || session.status === 'needs_permission';
+  const isIdle = session.status === 'idle';
+  const canKill = isActive || isIdle;
 
   function handleKill() {
     if (confirm('Kill this session? It will have 15 seconds to wrap up.')) {
@@ -309,14 +311,14 @@ export function SessionControls({
             End Session
           </button>
         )}
-        {isActive && (
+        {canKill && (
           <button className={styles.killButton} onClick={handleKill}>
             Kill
           </button>
         )}
 
         {/* Admin chrome group C: archive + delete (inactive sessions) — CSS-hidden on mobile */}
-        {!isActive && (
+        {!canKill && (
           <div className={adminChromeClass}>
             {session.archived ? (
               <button
@@ -397,12 +399,12 @@ export function SessionControls({
             {visibleCapabilities.map(({ capability, provenance }) => (
               <span
                 key={capability}
-                className={`${styles.capabilityChip} ${provenance === 'auto' ? styles['capabilityChip--auto'] : styles['capabilityChip--operator']}`}
+                className={`${styles.capabilityChip} ${styles[`capabilityChip--${provenance}`]}`}
                 title={capability}
               >
                 <span className={styles.capabilityText}>{capability}</span>
                 <span className={styles.capabilityProvenance}>
-                  {provenance === 'auto' ? 'auto' : 'operator'}
+                  {provenance}
                 </span>
                 <button
                   className={styles.capabilityRemove}

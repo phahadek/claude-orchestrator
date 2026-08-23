@@ -5,6 +5,7 @@ import {
   BASH_MAX_OUTPUT_LENGTH,
   BASH_DEFAULT_TIMEOUT_MS,
   PLANNING_DISALLOWED_TOOLS,
+  SCHEDULING_DISALLOWED_TOOLS,
 } from '../config';
 import type {
   ISessionRunner,
@@ -12,7 +13,11 @@ import type {
   SessionRunnerOptions,
 } from './SessionRunner';
 import { logger } from '../logger';
-import { placeSessionPid } from './sessionCgroup';
+import {
+  placeSessionPid,
+  killSessionCgroup,
+  spawnIntoSessionCgroup,
+} from './sessionCgroup';
 import { isPlanningSession, isCodeSession } from './sessionPredicates';
 import {
   getSessionAddDirs,
@@ -159,9 +164,8 @@ export class CliSessionRunner implements ISessionRunner {
         : []),
       '--allowed-tools',
       ...allowedTools,
-      ...(isPlanning
-        ? ['--disallowed-tools', ...PLANNING_DISALLOWED_TOOLS]
-        : []),
+      '--disallowed-tools',
+      ...(isPlanning ? PLANNING_DISALLOWED_TOOLS : SCHEDULING_DISALLOWED_TOOLS),
       ...addDirs.flatMap((dir) => ['--add-dir', dir]),
     ];
 
@@ -200,20 +204,31 @@ export class CliSessionRunner implements ISessionRunner {
       ...inheritedEnv
     } = process.env;
 
-    this.proc = spawn(config.claudePath, spawnArgs, {
-      cwd: worktreePath,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...inheritedEnv,
-        BASH_MAX_OUTPUT_LENGTH: String(BASH_MAX_OUTPUT_LENGTH),
-        BASH_DEFAULT_TIMEOUT_MS: String(BASH_DEFAULT_TIMEOUT_MS),
-        ...extraEnv,
-      },
-      ...(process.platform !== 'win32' && { detached: true }),
-    });
+    // Spawned with the backend temporarily relocated into this session's
+    // cgroup (see spawnIntoSessionCgroup) so the child — and anything it
+    // forks before the placeSessionPid backstop below runs — is born
+    // directly into sessions/<sessionId>/ rather than briefly landing in
+    // main/ and staying there for life (a daemonizing grandchild, e.g. a
+    // temp postgres cluster's postmaster, never gets migrated later).
+    this.proc = spawnIntoSessionCgroup(this.sessionId, () =>
+      spawn(config.claudePath, spawnArgs, {
+        cwd: worktreePath,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          ...inheritedEnv,
+          BASH_MAX_OUTPUT_LENGTH: String(BASH_MAX_OUTPUT_LENGTH),
+          BASH_DEFAULT_TIMEOUT_MS: String(BASH_DEFAULT_TIMEOUT_MS),
+          ...extraEnv,
+        },
+        ...(process.platform !== 'win32' && { detached: true }),
+      }),
+    );
 
+    // Belt-and-suspenders: idempotent when spawnIntoSessionCgroup already
+    // placed the pid correctly; a real backstop when it no-opped (e.g. the
+    // relocation write failed but the spawn itself still succeeded).
     if (this.proc.pid) {
-      placeSessionPid(this.proc.pid);
+      placeSessionPid(this.proc.pid, this.sessionId);
     }
 
     // Async stdin errors (e.g. EPIPE when the child exits) must not bubble up
@@ -331,7 +346,13 @@ export class CliSessionRunner implements ISessionRunner {
     if (this.proc?.stdin?.writable) {
       this.proc.stdin.end();
     }
-    return this.waitForExitOrEscalate(concludedCleanly);
+    const escalated = await this.waitForExitOrEscalate(concludedCleanly);
+    // Backstop, always run regardless of how the CLI process itself exited:
+    // a daemonized grandchild (setsid()) can outlive this.proc — and thus
+    // outlive the process-group kill above — even when this.proc exited
+    // cleanly on its own and waitForExitOrEscalate never called kill().
+    killSessionCgroup(this.sessionId);
+    return escalated;
   }
 
   /**
@@ -364,26 +385,43 @@ export class CliSessionRunner implements ISessionRunner {
   }
 
   async kill(): Promise<void> {
-    if (!this.proc || this.proc.exitCode !== null) return;
-    try {
-      this.killProcessTree(this.proc.pid!, 'SIGTERM');
-    } catch {
-      // Process may have exited between guard check and here
-    }
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        try {
-          this.killProcessTree(this.proc!.pid!, 'SIGKILL');
-        } catch {
-          // Already gone
-        }
-        resolve();
-      }, 15_000);
-      this.proc!.once('exit', () => {
-        clearTimeout(timeout);
-        resolve();
+    if (this.proc && this.proc.exitCode === null) {
+      try {
+        this.killProcessTree(this.proc.pid!, 'SIGTERM');
+      } catch {
+        // Process may have exited between guard check and here
+      }
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => {
+          try {
+            this.killProcessTree(this.proc!.pid!, 'SIGKILL');
+          } catch {
+            // Already gone
+          }
+          resolve();
+        }, 15_000);
+        this.proc!.once('exit', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
       });
-    });
+    }
+    // Backstop: reaches grandchildren that escaped this.proc's process
+    // group (setsid()) or were re-parented after it exited — the
+    // process-group kill above can never see those. Runs unconditionally
+    // (even when this.proc was already gone above) since such a
+    // grandchild can outlive this.proc entirely.
+    killSessionCgroup(this.sessionId);
+  }
+
+  /**
+   * CLI mode has no destructible durable state beyond the OS process itself
+   * — killing it is exactly what a graceful-restart pause needs, since
+   * `resumeOrphanSessions` reattaches via `claude --resume <session-id>`
+   * against the same on-disk state regardless of how the prior process exited.
+   */
+  async pause(): Promise<void> {
+    await this.kill();
   }
 
   private killProcessTree(

@@ -1,13 +1,21 @@
-import { useEffect, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import type { StagedIntent } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { gateApi } from '../api/gate';
+import type { InvestigationReport } from '../api/reports';
 import type { TaskView } from '../types/taskView';
 import type { SessionTaskNameLookup } from '../utils/milestoneStack';
 import { phaseForTask } from '../utils/phaseBurndown';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { DecisionPickOnePanel } from './DecisionPickOnePanel';
 import { TriageBatchPanel } from './TriageBatchPanel';
+import { InvestigationReportSection } from './InvestigationReportSection';
 import { GroupCard } from './GroupCard';
 import { taskIdFor } from './triageVerdict';
 import {
@@ -35,10 +43,14 @@ interface Props {
   sessions?: SessionTaskNameLookup[];
   /** The currently drill-down-selected intent/group card id, if any — highlights that card. */
   selectedCardId?: string | null;
+  /** The currently drill-down-selected investigation report id, if any — highlights that card. */
+  selectedReportId?: string | null;
   /** Drives the middle-stack selection -> right drill-down wiring. Omit to render read-only (no selection affordance). */
   onSelectIntent?: (intent: StagedIntent) => void;
   /** Selects the intent's owning card *and* switches the drill-down to session mode — the "View session" button's handler. Distinct from onSelectIntent, which only selects. */
   onViewSession?: (intent: StagedIntent) => void;
+  /** Selects a report card *and* jumps the drill-down straight to session mode, in one step — mirrors onViewSession, but a report card has no separate plain-select step. */
+  onSelectReport?: (report: InvestigationReport) => void;
   /** The shared phase filter emitted by the burndown (left column) — matched against each card's target task's derived phase. A card with no resolvable task ref stays visible under every phase. */
   phaseFilter?: string | null;
   /** True when phaseFilter was activated via a phase's ⚠ warning badge — narrows to cards whose target task is blocked, same as the task rows. */
@@ -49,6 +61,24 @@ interface Props {
   onCardsRemoved?: (ids: string[]) => void;
   /** The keyboard ring's current highlight (an intent id or groupId) — the matching card enables its local 'a'/'r' bindings. */
   keyboardHighlightedId?: string | null;
+  /** The centre column's scrollable ancestor — when set, a live intent arrival that inserts a card above cards already on screen (see useDecisionQueue's insertAtTopOfTier) nudges scrollTop to keep the operator's view pinned instead of letting the insertion silently shift it. Omit to skip compensation. */
+  scrollContainerRef?: React.RefObject<HTMLElement | null>;
+  /** Called just before the compensation effect nudges scrollTop itself, so a caller with its own scroll-follow listener (MilestoneDecisionStack) can ignore the one scroll event that nudge fires. */
+  suppressNextScroll?: () => void;
+}
+
+/** Distance (px) from the scroll container's top edge within which a card still counts as "at the top" — mirrors MilestoneDecisionStack's scroll-follow threshold. */
+const TOP_THRESHOLD_PX = 8;
+
+/**
+ * Nudges a scroll container's scrollTop by `delta` — pulled out to a plain
+ * (non-component) function because eslint's react-hooks/immutability rule
+ * treats any direct mutation of a prop-sourced ref's `.current` properties
+ * as an illegal props mutation, even though DOM refs are inherently mutable
+ * and this runs inside a layout effect, not render.
+ */
+function nudgeScrollTop(container: HTMLElement, delta: number): void {
+  container.scrollTop += delta;
 }
 
 interface TaskLabel {
@@ -174,15 +204,32 @@ export function MilestoneDecisionInbox({
   tasks = [],
   sessions = [],
   selectedCardId = null,
+  selectedReportId = null,
   onSelectIntent,
   onViewSession,
+  onSelectReport,
   phaseFilter = null,
   flaggedOnly = false,
   registerScrollTarget,
   onCardsRemoved,
   keyboardHighlightedId = null,
+  scrollContainerRef,
+  suppressNextScroll,
 }: Props) {
   const taskById = new Map(tasks.map((t) => [t.taskId, t]));
+
+  // Card DOM nodes in render order, local to this component so the
+  // scroll-compensation effect below can measure them on every one of this
+  // component's own commits — the parent's registerScrollTarget map isn't
+  // usable for that, since populating it doesn't cause the parent to
+  // re-render.
+  const cardElsRef = useRef<Map<string, HTMLElement>>(new Map());
+  const cardPositionsRef = useRef<Map<string, number>>(new Map());
+  const cardOrderRef = useRef<string[]>([]);
+  const registerCardEl = useCallback((id: string, el: HTMLElement | null) => {
+    if (el) cardElsRef.current.set(id, el);
+    else cardElsRef.current.delete(id);
+  }, []);
   const {
     intents,
     loaded,
@@ -302,7 +349,74 @@ export function MilestoneDecisionInbox({
     };
   }, [gateItemIdsKey]);
 
-  if (!loaded || intents.length === 0) return null;
+  // Keeps the operator's view pinned when a live intent arrival (see
+  // useDecisionQueue's insertAtTopOfTier) inserts a new card above cards
+  // already on screen — otherwise the scroll container's fixed scrollTop now
+  // renders different content, which reads as an unrequested auto-scroll.
+  // Lives here (not in the parent MilestoneDecisionStack) because this
+  // component is the one that actually re-renders when useDecisionQueue's
+  // `intents` changes — a parent's own effects don't re-run just because a
+  // child's internal state changed.
+  //
+  // Runs every commit: measures each card's current top offset, and if the
+  // set/order of card ids actually changed since the last commit (an
+  // insertion/removal, not just a re-render triggered by something else —
+  // e.g. scroll-follow's own onSelect — while the operator happened to have
+  // scrolled for real), nudges scrollTop by however far the card that was
+  // previously topmost-visible moved, so the same content stays put. Empty
+  // `cardPositionsRef` (nothing measured yet — first mount, or the inbox
+  // just went from 0 to N intents) yields no anchor, so a fresh render is
+  // left alone, matching the "0 intents before" exception.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef?.current;
+    const prevPositions = cardPositionsRef.current;
+    const prevOrder = cardOrderRef.current;
+    const nextPositions = new Map<string, number>();
+    const nextOrder = Array.from(cardElsRef.current.keys());
+
+    if (!container) {
+      cardPositionsRef.current = nextPositions;
+      cardOrderRef.current = nextOrder;
+      return;
+    }
+
+    const containerTop = container.getBoundingClientRect().top;
+    for (const [id, el] of cardElsRef.current) {
+      nextPositions.set(id, el.getBoundingClientRect().top - containerTop);
+    }
+
+    const orderChanged =
+      prevOrder.length !== nextOrder.length ||
+      prevOrder.some((id, i) => id !== nextOrder[i]);
+
+    if (orderChanged && container.scrollTop > 0) {
+      let anchorId: string | null = null;
+      let anchorPrevTop = Infinity;
+      for (const [id, prevTop] of prevPositions) {
+        if (prevTop < -TOP_THRESHOLD_PX) continue;
+        if (!nextPositions.has(id)) continue;
+        if (prevTop < anchorPrevTop) {
+          anchorPrevTop = prevTop;
+          anchorId = id;
+        }
+      }
+      if (anchorId !== null) {
+        const delta = nextPositions.get(anchorId)! - anchorPrevTop;
+        if (delta !== 0) {
+          suppressNextScroll?.();
+          nudgeScrollTop(container, delta);
+          for (const [id, top] of nextPositions) {
+            nextPositions.set(id, top - delta);
+          }
+        }
+      }
+    }
+
+    cardOrderRef.current = nextOrder;
+    cardPositionsRef.current = nextPositions;
+  });
+
+  if (!loaded) return null;
 
   const cardOrder = buildCardOrder(intents).filter((card) => {
     const taskId =
@@ -314,15 +428,26 @@ export function MilestoneDecisionInbox({
 
   return (
     <div className={styles.inbox} data-testid="milestone-decision-inbox">
-      <div className={styles.heading}>Decisions ({intents.length})</div>
-
-      <TriageBatchPanel
-        cleanGroupIds={cleanGroupIds}
-        includedCount={includedCleanGroupIds.length}
-        inFlight={batchInFlight}
-        error={batchError}
-        onApprove={() => void handleApproveAllClean()}
+      <InvestigationReportSection
+        projectId={projectId}
+        milestone={milestone}
+        selectedReportId={selectedReportId}
+        onSelectReport={onSelectReport}
       />
+
+      {intents.length > 0 && (
+        <>
+          <div className={styles.heading}>Decisions ({intents.length})</div>
+
+          <TriageBatchPanel
+            cleanGroupIds={cleanGroupIds}
+            includedCount={includedCleanGroupIds.length}
+            inFlight={batchInFlight}
+            error={batchError}
+            onApprove={() => void handleApproveAllClean()}
+          />
+        </>
+      )}
 
       {cardOrder.map((card) => {
         if (card.type === 'intent') {
@@ -339,14 +464,15 @@ export function MilestoneDecisionInbox({
           return (
             <div
               key={intent.id}
-              ref={(el) =>
+              ref={(el) => {
+                registerCardEl(intent.id, el);
                 registerScrollTarget?.(
                   intent.id,
                   el && onSelectIntent
                     ? { el, select: () => onSelectIntent(intent) }
                     : null,
-                )
-              }
+                );
+              }}
               className={`${panelStyles.group}${
                 selectedCardId === intent.id ? ` ${styles.selectedCard}` : ''
               }`}
@@ -442,14 +568,15 @@ export function MilestoneDecisionInbox({
         return (
           <div
             key={groupId}
-            ref={(el) =>
+            ref={(el) => {
+              registerCardEl(groupId, el);
               registerScrollTarget?.(
                 groupId,
                 el && onSelectIntent && groupIntents[0]
                   ? { el, select: () => onSelectIntent(groupIntents[0]) }
                   : null,
-              )
-            }
+              );
+            }}
           >
             <GroupCard
               groupId={groupId}

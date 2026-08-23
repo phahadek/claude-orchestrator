@@ -101,7 +101,7 @@ describe('procedureCore', () => {
       { principles: number; steps: number }
     > = {
       groom: { principles: 15, steps: 8 },
-      design: { principles: 24, steps: 7 },
+      design: { principles: 25, steps: 7 },
       ops: { principles: 17, steps: 5 },
       split: { principles: 6, steps: 4 },
     };
@@ -1240,6 +1240,25 @@ describe('procedureCore', () => {
       expect(rendered).toMatch(/## Declared writes/);
       expect(rendered).toMatch(/Non-Prod-Mutating/);
       expect(rendered).toMatch(/auto-approves/);
+    });
+
+    it('the ask-permission-not-speculative principle tells a dispatched ops session (covering gate-verify/investigate) to check pre-grants before requesting a capability it already holds', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'ask-permission-not-speculative',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(
+        /DO NOT stage `session\.requestCapability` out of habit for a capability this project already pre-grants this session's kind/,
+      );
+      expect(rendered).toMatch(/short-circuits to an immediate no-op/);
+    });
+
+    it('the present-for-signoff ops step summary tells a dispatched ops session a pre-granted capability needs no request', () => {
+      const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+      const rendered = stepSummaryFor(step, 'ops');
+      expect(rendered).toMatch(
+        /this project's `capability_pre_grants` hasn't already seeded it/,
+      );
     });
   });
 });

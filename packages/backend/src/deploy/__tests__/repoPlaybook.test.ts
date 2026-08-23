@@ -141,6 +141,18 @@ describe('the repo-committed deploy playbook', () => {
     expect(recordSha?.rollback_ref).toBeUndefined();
   });
 
+  it("restart's identity_capture curls the build-sha route's actual mount path (/api/deploy/build-sha), not the unmounted SPA-shadowed /deploy/build-sha", () => {
+    const result = loadDeployPlaybook(REPO_ROOT);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const restart = result.playbook.steps.find((s) => s.id === 'restart');
+    expect(restart).toBeDefined();
+    expect(restart?.identity_capture).toContain(
+      'http://localhost:3000/api/deploy/build-sha',
+    );
+  });
+
   it('carries no device-token credential literal — report-in no longer references it at all', () => {
     const raw = fs.readFileSync(
       path.join(REPO_ROOT, '.claude-deploy-playbook.yml'),

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { db } from '../db/db';
 import { recordEvent } from '../audit/AuditLog';
 import {
   getArchUnit,
@@ -29,6 +30,8 @@ import type {
  */
 export interface ArchUnit {
   id: string;
+  /** Owning project's registry id — arch_unit is project-scoped, never global. */
+  project: string;
   title: string;
   kind: ArchUnitKind;
   topic: string;
@@ -64,6 +67,7 @@ function stringifyJson(value: unknown): string | null {
 
 function toArchUnit(row: {
   id: string;
+  project: string;
   title: string;
   kind: ArchUnitKind;
   topic: string;
@@ -78,6 +82,7 @@ function toArchUnit(row: {
 }): ArchUnit {
   return {
     id: row.id,
+    project: row.project,
     title: row.title,
     kind: row.kind,
     topic: row.topic,
@@ -108,6 +113,7 @@ export function getUnitEvents(id: string): ArchUnitEvent[] {
 }
 
 export interface NewArchUnitInput {
+  project: string;
   title: string;
   kind: ArchUnitKind;
   topic: string;
@@ -120,30 +126,33 @@ export interface NewArchUnitInput {
 /** Creates a fresh unit and appends a 'created' event. */
 export function createUnit(input: NewArchUnitInput): ArchUnit {
   const id = crypto.randomUUID();
-  insertArchUnit({
-    id,
-    title: input.title,
-    kind: input.kind,
-    topic: input.topic,
-    regions: JSON.stringify(input.regions),
-    status: input.status ?? 'active',
-    body: input.body,
-    supersedes: null,
-    version: 1,
-    created_at: input.at,
-    updated_at: input.at,
-  });
-  insertArchUnitEvent({
-    arch_unit_id: id,
-    event_type: 'created',
-    payload: stringifyJson({ title: input.title, kind: input.kind }),
-    at: input.at,
-  });
-  recordEvent({
-    event_type: 'arch_unit_created',
-    actor_type: 'system',
-    payload: { archUnitId: id, kind: input.kind, topic: input.topic },
-  });
+  db.transaction(() => {
+    insertArchUnit({
+      id,
+      project: input.project,
+      title: input.title,
+      kind: input.kind,
+      topic: input.topic,
+      regions: JSON.stringify(input.regions),
+      status: input.status ?? 'active',
+      body: input.body,
+      supersedes: null,
+      version: 1,
+      created_at: input.at,
+      updated_at: input.at,
+    });
+    insertArchUnitEvent({
+      arch_unit_id: id,
+      event_type: 'created',
+      payload: stringifyJson({ title: input.title, kind: input.kind }),
+      at: input.at,
+    });
+    recordEvent({
+      event_type: 'arch_unit_created',
+      actor_type: 'system',
+      payload: { archUnitId: id, kind: input.kind, topic: input.topic },
+    });
+  })();
   const unit = getUnit(id);
   if (!unit) {
     throw new Error(`arch_unit: failed to read back unit ${id} after insert`);
@@ -181,18 +190,20 @@ export function updateUnit(
     version: row.version + 1,
     updated_at: at,
   };
-  updateArchUnit(next);
-  insertArchUnitEvent({
-    arch_unit_id: id,
-    event_type: 'updated',
-    payload: stringifyJson({ before: fields, after: toArchUnit(next) }),
-    at,
-  });
-  recordEvent({
-    event_type: 'arch_unit_updated',
-    actor_type: 'system',
-    payload: { archUnitId: id, fields: Object.keys(fields) },
-  });
+  db.transaction(() => {
+    updateArchUnit(next);
+    insertArchUnitEvent({
+      arch_unit_id: id,
+      event_type: 'updated',
+      payload: stringifyJson({ before: fields, after: toArchUnit(next) }),
+      at,
+    });
+    recordEvent({
+      event_type: 'arch_unit_updated',
+      actor_type: 'system',
+      payload: { archUnitId: id, fields: Object.keys(fields) },
+    });
+  })();
   const unit = getUnit(id);
   if (!unit) {
     throw new Error(`arch_unit: failed to read back unit ${id} after update`);
@@ -215,43 +226,46 @@ export function supersedeUnit(
     throw new Error(`arch_unit: no unit ${id} to supersede`);
   }
   const newId = crypto.randomUUID();
-  insertArchUnit({
-    id: newId,
-    title: replacement.title,
-    kind: replacement.kind,
-    topic: replacement.topic,
-    regions: JSON.stringify(replacement.regions),
-    status: replacement.status ?? 'active',
-    body: replacement.body,
-    supersedes: id,
-    version: 1,
-    created_at: at,
-    updated_at: at,
-  });
-  insertArchUnitEvent({
-    arch_unit_id: newId,
-    event_type: 'created',
-    payload: stringifyJson({ supersedes: id }),
-    at,
-  });
-  updateArchUnit({
-    ...row,
-    status: 'superseded',
-    superseded_by: newId,
-    version: row.version + 1,
-    updated_at: at,
-  });
-  insertArchUnitEvent({
-    arch_unit_id: id,
-    event_type: 'superseded',
-    payload: stringifyJson({ supersededBy: newId }),
-    at,
-  });
-  recordEvent({
-    event_type: 'arch_unit_superseded',
-    actor_type: 'system',
-    payload: { archUnitId: id, supersededBy: newId },
-  });
+  db.transaction(() => {
+    insertArchUnit({
+      id: newId,
+      project: replacement.project,
+      title: replacement.title,
+      kind: replacement.kind,
+      topic: replacement.topic,
+      regions: JSON.stringify(replacement.regions),
+      status: replacement.status ?? 'active',
+      body: replacement.body,
+      supersedes: id,
+      version: 1,
+      created_at: at,
+      updated_at: at,
+    });
+    insertArchUnitEvent({
+      arch_unit_id: newId,
+      event_type: 'created',
+      payload: stringifyJson({ supersedes: id }),
+      at,
+    });
+    updateArchUnit({
+      ...row,
+      status: 'superseded',
+      superseded_by: newId,
+      version: row.version + 1,
+      updated_at: at,
+    });
+    insertArchUnitEvent({
+      arch_unit_id: id,
+      event_type: 'superseded',
+      payload: stringifyJson({ supersededBy: newId }),
+      at,
+    });
+    recordEvent({
+      event_type: 'arch_unit_superseded',
+      actor_type: 'system',
+      payload: { archUnitId: id, supersededBy: newId },
+    });
+  })();
   const previous = getUnit(id);
   const next = getUnit(newId);
   if (!previous || !next) {
@@ -269,11 +283,11 @@ export function queryUnits(query: ArchUnitQuery = {}): ArchUnit[] {
 }
 
 /** Live distinct topic vocabulary, across all statuses — see queries.listArchUnitTopics. */
-export function listTopics(): string[] {
-  return listArchUnitTopics();
+export function listTopics(project?: string): string[] {
+  return listArchUnitTopics(project);
 }
 
 /** Live distinct region vocabulary, across all statuses — see queries.listArchUnitRegions. */
-export function listRegions(): string[] {
-  return listArchUnitRegions();
+export function listRegions(project?: string): string[] {
+  return listArchUnitRegions(project);
 }

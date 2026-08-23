@@ -66,7 +66,9 @@ vi.mock('../orchestrator-config', () => ({
     bootstrap_script: '',
     required_env: [],
     required_files: [],
+    capability_pre_grants: {},
   }),
+  resolvePreGrantCapabilities: vi.fn(() => []),
 }));
 vi.mock('../sessionRecovery', () => ({
   recoverSession: vi.fn().mockResolvedValue(undefined),

@@ -91,6 +91,33 @@ export interface AdmissionStallState {
   detail?: Record<string, unknown>;
 }
 
+/**
+ * The test.request lane run lifecycle, as broadcast by testRequestLane.ts on
+ * run-started and run-completed transitions — independent of
+ * isVisibleOnDecisionSurface, since a lane run's progress is not a
+ * decision-surface concept (unlike the test.request staged intent itself,
+ * which staged_intent_changed withholds while `state === 'approved'`).
+ * Mirrors the REST-truth + WS-notification pattern of task_updated: GET
+ * /test-request-runs is the fetch/apply source of truth for an on-load
+ * snapshot, this message only tells a connected client to refetch.
+ */
+type TestRequestRunStatus = 'running' | 'passed' | 'failed-with-cause';
+
+export interface TestRequestRunStatusPayload {
+  runId: string;
+  projectId: string;
+  contentHash: string;
+  status: TestRequestRunStatus;
+  /** Present only when status is 'failed-with-cause' — the run's captured output. */
+  output?: string;
+  /** Originating session, when the run was triggered by a test.request staged intent — the correlation key a session-scoped client (TaskCard/SessionPanel) filters on. */
+  sessionId: string | null;
+  /** When the run was requested — startedAt - requestedAt is the admission-wait a session spent queued behind the per-project concurrency cap before execution actually began. */
+  requestedAt?: number;
+  startedAt: number;
+  finishedAt?: number;
+}
+
 /** Full live-state snapshot of a task, sent in task_updated WS messages. */
 export interface TaskView {
   taskId: string;
@@ -157,6 +184,12 @@ export interface TaskView {
     iterationCount: number;
     inputTokens: number;
     outputTokens: number;
+  } | null;
+  /** Depth-review (post-conformance) session for this task's PR, resolved via depth_review_verdicts keyed on (pr_number, repo) — null when the PR has no depth_review session. */
+  depthReview: {
+    sessionId: string;
+    status: string;
+    verdict: string | null;
   } | null;
   totalTokens: { input: number; output: number };
   /** Assigned target repo slug for multi-repo projects, e.g. "owner/repo". Null when unassigned. */
@@ -337,6 +370,7 @@ export type ServerMessage =
       type: 'staged_intent_changed';
       intent: StagedIntent;
     }
+  | ({ type: 'test_request_run_status' } & TestRequestRunStatusPayload)
   | {
       type: 'auto_launch';
       projectId: string;
@@ -494,6 +528,12 @@ export type ServerMessage =
       error?: string;
     }
   | {
+      /** Emitted mid-step by a long-running boot step to report it's still working, and how much is left. */
+      type: 'boot_reconciliation_progress';
+      step: string;
+      remaining: number;
+    }
+  | {
       type: 'boot_reconciliation_completed';
       duration_ms: number;
       completed_at: string;
@@ -501,7 +541,7 @@ export type ServerMessage =
   | {
       type: 'scheduler_job_run';
       job: string;
-      status: 'ok' | 'failed' | 'skipped';
+      status: 'ok' | 'failed' | 'skipped' | 'degraded';
       started_at: string;
       completed_at: string;
       duration_ms: number;

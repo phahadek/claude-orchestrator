@@ -61,6 +61,25 @@ function rememberRevokedToken(token: string, sessionId: string): void {
 }
 
 /**
+ * Fired when a request presents a token this process knows was minted and
+ * then revoked (as opposed to one that was never recognized at all) — i.e.
+ * an OS process is still alive and calling in on a credential the backend
+ * has already terminated server-side. That combination means the session
+ * is not merely unable to reach the server (which would self-resolve), so
+ * leaving it to keep retrying is a guaranteed infinite backoff. Wired by
+ * SessionManager (see setRevokedStageCredentialHandler) to actually
+ * terminate the session's process rather than leaving it stranded.
+ */
+let onRevokedCredentialPresented: ((sessionId: string) => void) | null = null;
+
+/** Wires the handler above — called once at server startup from SessionManager. */
+export function setRevokedStageCredentialHandler(
+  handler: (sessionId: string) => void,
+): void {
+  onRevokedCredentialPresented = handler;
+}
+
+/**
  * On-disk mirror of the maps above, under the app data dir (mode 600 — same
  * protection as the per-session mcp config file that carries this same
  * token). A dispatched session's CLI process runs detached from the backend
@@ -277,6 +296,23 @@ export function requireSessionStageAuth(
         ...(attribution ? { sessionId: attribution.sessionId } : {}),
       },
     });
+    if (attribution) {
+      // Distinguishable from a generic/never-recognized credential (and
+      // from a connection failure) — 410 Gone tells the caller this
+      // credential once worked and will never work again, not "try again".
+      try {
+        onRevokedCredentialPresented?.(attribution.sessionId);
+      } catch {
+        // Best-effort — the auth rejection response below still fires.
+      }
+      res.status(410).json({
+        error: 'unauthorized',
+        code: 'session_credential_revoked',
+        message:
+          'This session credential was revoked; the session is terminal and will not be reconnected.',
+      });
+      return;
+    }
     res
       .status(401)
       .json({ error: 'unauthorized', code: 'invalid_stage_credential' });

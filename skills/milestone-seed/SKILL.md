@@ -7,9 +7,9 @@ description: >-
   decision-shaped 📐 Design (and 🔎 Investigation) tasks grounded in real code.
   Use when the user says "let's start planning milestone X", "seed milestone X",
   "let's seed M15", or opens a session to stand up the next milestone. Ends with
-  the board SEEDED AND INERT — registering and activating it belongs to
-  /milestone-wrap. Distinct from /groom and /design, which work an EXISTING
-  milestone's backlog.
+  the board SEEDED AND REGISTERED (a `milestones` row + grooming-manifest entry)
+  but NOT ACTIVATED — that belongs to /milestone-wrap. Distinct from /groom and
+  /design, which work an EXISTING milestone's backlog.
 ---
 
 # Milestone Seed
@@ -20,17 +20,21 @@ and the part that decays if it lives only in chat. The tail is mechanical: a boa
 a charter, a seed set, four homes updated.
 
 ```
-/milestone-seed ──▶ board + charter + seed tasks (INERT)
+/milestone-seed ──▶ board + charter + seed tasks + milestones row (REGISTERED, NOT ACTIVE)
                           │
                           ├──▶ /design  (works the 📐 Design tasks)
                           ├──▶ /groom   (brings 🔲 Backlog to 🗂️ Ready)
-                          └──▶ /milestone-wrap  (registers + activates it, when the prior one closes)
+                          └──▶ /milestone-wrap  (activates it, when the prior one closes)
 ```
 
 > **You do not activate the milestone.** `/milestone-wrap` Steps 4–5 own marking the
 > next milestone active — repointing `projects.auto_launch_milestone_id`, the Notion
-> "Active Task Board" callout, the phase line. This skill stops at *seeded*. That
-> boundary is what makes it safe to seed while the prior milestone is still running.
+> "Active Task Board" callout, the phase line. This skill registers the milestone (a
+> `milestones` row + grooming-manifest entry, via `POST /api/projects/<id>/milestones`
+> in Step 4) but stops short of activating it. Every flow's arm defaults to
+> `armed=false` (`DEFAULT_ARM`), so a registered-but-unactivated milestone is still
+> inert — nothing on it can be groomed or dispatched. That boundary is what makes it
+> safe to seed while the prior milestone is still running.
 
 > **Not `/groom` or `/design`.** Those work an existing milestone's backlog. This
 > creates the milestone. Don't conflate them.
@@ -223,6 +227,27 @@ Record the new **data-source id** (`collection://…`) in the project's `context
 alongside the prior boards; `notion-create-pages` needs it, and the database id will not
 do.
 
+**Register the milestone.** Once the board and its data-source id are confirmed,
+create the `milestones` row and the grooming-manifest entry in one call:
+
+```
+POST /api/projects/<projectId>/milestones
+Authorization: Bearer $ORCHESTRATOR_DEVICE_TOKEN
+{"name": "<milestone display name>", "sourceId": "<new board's data-source id>"}
+```
+
+This is `ProjectService.createMilestone` — it inserts the `milestones` row **and**
+registers the `canonicalShortId`/board/neighbour entry into
+`config/projects/<dir>/grooming.json` (a no-op if that project has no manifest file;
+idempotent if the `canonicalShortId` is already registered). It does **not** activate
+the milestone — `auto_launch_milestone_id` is untouched and every flow's arm defaults
+to `armed=false`, so the milestone stays inert for groom/design/dispatch purposes until
+`/milestone-wrap` repoints and arms it.
+
+**Verify by reading it back**, through a different path than the one you wrote it
+with: `GET /api/projects/<projectId>/milestones` and confirm the new row is present
+with the expected `canonicalShortId`.
+
 ---
 
 ## Step 5 — Seed the tasks (two gates)
@@ -282,8 +307,10 @@ separate.
 ## Step 7 — Update the homes, then stop
 
 - **The project's `context.md`** — board link, data-source id, and a short note that the
-  milestone is seeded but **not registered**, so a future session knows filing on it is
-  inert. Include the charter's most load-bearing non-goal.
+  milestone is seeded and registered (has a `milestones` row + grooming-manifest entry)
+  but **not activated**, so a future session knows filing on it is still inert until
+  `/milestone-wrap` flips `auto_launch_milestone_id` and arms it. Include the charter's
+  most load-bearing non-goal.
 - **The master Project Context page** — add one row to 🏁 Project Milestones (one concise
   sentence). **Do not** change the "Active Task Board" callout or the phase line; the
   prior milestone is still active and `/milestone-wrap` owns that flip.
@@ -300,8 +327,9 @@ Then **report and stop.** Do not offer to register, activate, or arm the milesto
 ## Rules (hard)
 
 1. **Nothing is created before the charter is signed off.** Not the board, not a task.
-2. **Never activate the milestone.** No `milestones` row, no `auto_launch_milestone_id`
-   repoint, no arming. That is `/milestone-wrap`.
+2. **Never activate the milestone.** No `auto_launch_milestone_id` repoint, no arming.
+   That is `/milestone-wrap`. (Registering it — the `milestones` row + grooming-manifest
+   entry, Step 4 — is this skill's job and does not by itself activate anything.)
 3. **Never create a task at `🗂️ Ready`.**
 4. **Never file on the *prior* milestone's board** to park an idea without telling the
    operator its groom arm state — on an armed milestone that is a live dispatch.

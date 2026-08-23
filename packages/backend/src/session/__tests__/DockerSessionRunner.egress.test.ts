@@ -4,6 +4,8 @@ import { Readable, Writable } from 'stream';
 
 vi.mock('../../config', () => ({
   config: { claudePath: '/fake/claude' },
+  PLANNING_DISALLOWED_TOOLS: [],
+  SCHEDULING_DISALLOWED_TOOLS: [],
 }));
 
 // Capture every execSync command so we can assert on the docker network /

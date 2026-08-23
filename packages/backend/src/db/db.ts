@@ -1,5 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
+import path from 'path';
+import { Worker } from 'worker_threads';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { getDataDir } from '../config/dataDir';
 import { resolveDbPath } from '../config/resolveDbPath';
@@ -11,7 +13,7 @@ const _configDbPath = getOrchestratorConfig().db.path || './dashboard.db';
 // path is set by whatever launched the process (e.g. a systemd drop-in), not
 // by the operator, and silently pointed a production install at an empty
 // database at the wrong location.
-const dbPath = resolveDbPath(_configDbPath, getDataDir());
+export const dbPath = resolveDbPath(_configDbPath, getDataDir());
 
 // A test process (vitest, or anything with NODE_ENV=test) must never bind a
 // real on-disk database file: an inherited/misconfigured DB_PATH pointing at
@@ -34,9 +36,169 @@ if (isTestMode && dbPath !== ':memory:') {
 // would otherwise make a pre-existing file indistinguishable from a fresh one.
 const dbFileExistedBeforeOpen = dbPath !== ':memory:' && fs.existsSync(dbPath);
 
+// Chosen at grooming (2026-08-17) against this host's live `free -h`: 30 GiB
+// total, 9.9 GiB available, 9.6 GiB of 23 GiB swap already in use — real
+// memory pressure alongside a large postgres instance sharing the box.
+// cache_size covers ~6% and mmap_size ~23% of the 4.4 GB db file, enough to
+// hold a real working set without competing meaningfully with postgres for
+// the already-strained remaining headroom. See applyPerformancePragmas below
+// for why the defaults (16 MB cache, mmap disabled) caused 30.8M read()
+// syscalls and pinned the disk at 100% utilisation.
+export const DB_CACHE_SIZE_PRAGMA_KB = -262144; // 256 MB (negative = KiB, per SQLite pragma semantics)
+export const DB_MMAP_SIZE_BYTES = 1073741824; // 1 GB
+
+// Applied to every connection the backend opens against the on-disk database
+// (not just the primary `db` export below) — a connection left on SQLite's
+// defaults (16 MB cache, mmap disabled) re-reads the whole working set from
+// disk on every query. Values are read back and asserted so a future edit to
+// this file, or a driver upgrade that changes pragma defaults, fails loudly
+// at startup instead of silently reverting to the pathological defaults.
+export function applyPerformancePragmas(
+  database: Database.Database,
+  targetPath: string,
+): void {
+  database.pragma(`cache_size = ${DB_CACHE_SIZE_PRAGMA_KB}`);
+  const actualCacheSize = (
+    database.pragma('cache_size') as { cache_size: number }[]
+  )[0]?.cache_size;
+  if (actualCacheSize !== DB_CACHE_SIZE_PRAGMA_KB) {
+    throw new Error(
+      `[db] cache_size pragma did not apply: expected ${DB_CACHE_SIZE_PRAGMA_KB}, got ${actualCacheSize}`,
+    );
+  }
+
+  // mmap_size has no effect on an in-memory database (no file to map) and
+  // better-sqlite3 returns an empty pragma result for it there — skip the
+  // (otherwise-failing) assertion in that case rather than the pragma itself.
+  database.pragma(`mmap_size = ${DB_MMAP_SIZE_BYTES}`);
+  if (targetPath !== ':memory:') {
+    const actualMmapSize = (
+      database.pragma('mmap_size') as { mmap_size: number }[]
+    )[0]?.mmap_size;
+    if (actualMmapSize !== DB_MMAP_SIZE_BYTES) {
+      throw new Error(
+        `[db] mmap_size pragma did not apply: expected ${DB_MMAP_SIZE_BYTES}, got ${actualMmapSize}`,
+      );
+    }
+  }
+}
+
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+applyPerformancePragmas(db, dbPath);
+
+export interface WalTruncateCheckpointResult {
+  walSizeBeforeBytes: number;
+  walSizeAfterBytes: number;
+  busy: number;
+  log: number;
+  checkpointed: number;
+}
+
+function walFileSizeBytes(targetPath: string): number {
+  if (targetPath === ':memory:') return 0;
+  try {
+    return fs.statSync(`${targetPath}-wal`).size;
+  } catch {
+    return 0;
+  }
+}
+
+// PASSIVE autocheckpoints (SQLite's default wal_autocheckpoint of 1000
+// pages) already write every committed page back to the main database file
+// correctly on their own — a live measurement on 2026-08-17 against the
+// deployed database (busy=0, log=0, checkpointed=0 on a manual TRUNCATE
+// against a then-103.5 MB WAL) ruled out reader overlap as ever having
+// blocked one. What a PASSIVE checkpoint never does is shrink the file: it
+// only resets the WAL write position, so the file stays at its historic
+// high-water mark indefinitely until something runs a TRUNCATE. See
+// wal_truncate_checkpoint in server.ts for the schedule that does this.
+export function runWalTruncateCheckpoint(
+  database: Database.Database,
+  targetPath: string,
+): WalTruncateCheckpointResult {
+  const walSizeBeforeBytes = walFileSizeBytes(targetPath);
+  const rows = database.pragma('wal_checkpoint(TRUNCATE)') as
+    | { busy: number; log: number; checkpointed: number }[]
+    | undefined;
+  const result = rows?.[0] ?? { busy: 0, log: 0, checkpointed: 0 };
+  const walSizeAfterBytes = walFileSizeBytes(targetPath);
+  return {
+    walSizeBeforeBytes,
+    walSizeAfterBytes,
+    busy: result.busy,
+    log: result.log,
+    checkpointed: result.checkpointed,
+  };
+}
+
+// Dispatches the TRUNCATE checkpoint to a worker thread that opens its own
+// connection against the same on-disk WAL-mode file, instead of running
+// wal_checkpoint(TRUNCATE) synchronously on the shared main-thread `db`
+// connection. That pragma call has to flush every dirty WAL page into the
+// (multi-GB) main database file and then truncate the WAL — real, slow disk
+// I/O — and better-sqlite3 is fully synchronous with no worker-thread or
+// libuv-pool offload of its own, so issuing it on `db` directly would block
+// every Express route, WebSocket handler, and other scheduled job on the
+// process for the full duration of the checkpoint. See
+// walTruncateCheckpointWorker.ts for the worker entry point.
+//
+// An in-memory database has no file a second connection could open against,
+// so it runs in-process there (test-only path; production always has a
+// real dbPath).
+export function runWalTruncateCheckpointOffMainThread(
+  targetPath: string,
+): Promise<WalTruncateCheckpointResult> {
+  if (targetPath === ':memory:') {
+    return Promise.resolve(runWalTruncateCheckpoint(db, targetPath));
+  }
+  return new Promise((resolve, reject) => {
+    const isTsNode = __filename.endsWith('.ts');
+    const workerPath = path.join(
+      __dirname,
+      isTsNode
+        ? 'walTruncateCheckpointWorker.ts'
+        : 'walTruncateCheckpointWorker.js',
+    );
+    const worker = new Worker(workerPath, {
+      workerData: { dbPath: targetPath },
+      execArgv: isTsNode ? ['-r', 'ts-node/register/transpile-only'] : [],
+    });
+    let settled = false;
+    worker.once(
+      'message',
+      (
+        msg:
+          | { ok: true; result: WalTruncateCheckpointResult }
+          | { ok: false; error: string },
+      ) => {
+        settled = true;
+        if (msg.ok) {
+          resolve(msg.result);
+        } else {
+          reject(
+            new Error(`[wal_truncate_checkpoint] worker failed: ${msg.error}`),
+          );
+        }
+        void worker.terminate();
+      },
+    );
+    worker.once('error', (err) => {
+      settled = true;
+      reject(err);
+    });
+    worker.once('exit', (code) => {
+      if (!settled) {
+        reject(
+          new Error(
+            `[wal_truncate_checkpoint] worker exited with code ${code} before reporting a result`,
+          ),
+        );
+      }
+    });
+  });
+}
 
 assertDatabaseSchema(db, dbPath, dbFileExistedBeforeOpen);
 

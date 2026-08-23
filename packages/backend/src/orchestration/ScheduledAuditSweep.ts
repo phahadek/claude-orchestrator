@@ -34,15 +34,21 @@ const TASK_TYPE = '💻 Code';
 // isn't a live `sessions` row, and this sweep is never a dispatched session
 // (no `sessions` row backs it).
 
-/** The dedicated worktree path for a project's scheduled audit sweep — never the shared projectDir. */
+/**
+ * The dedicated worktree path for a project's scheduled audit sweep — never
+ * the shared projectDir. `namespace` defaults to 'scheduled-audit'; other
+ * zero-diff base-tree checkouts (e.g. baseHealthCheck.ts) pass their own
+ * namespace segment so their worktree never collides with the sweep's.
+ */
 export function getAuditWorktreePath(
   project: Pick<ProjectConfig, 'projectDir' | 'id'>,
+  namespace: string = 'scheduled-audit',
 ): string {
   return path.join(
     project.projectDir,
     '.claude',
     'worktrees',
-    'scheduled-audit',
+    namespace,
     project.id,
   );
 }
@@ -499,7 +505,7 @@ export interface AuditSweepDeps {
 }
 
 const defaultDeps: AuditSweepDeps = {
-  listProjects: getAllProjects,
+  listProjects: () => getAllProjects(),
   gitRunner: defaultGitRunner,
   runAnalyzeCommand: defaultRunAnalyzeCommand,
   retryCap: DEFAULT_RETRY_CAP,

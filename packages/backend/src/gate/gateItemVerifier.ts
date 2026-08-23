@@ -4,6 +4,8 @@ import {
   getSession,
   hasActiveCapabilityRequestForSession,
   markSessionDone,
+  setSessionTerminalCompletionReason,
+  insertCompletingSignal,
   TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import type { SessionManager } from '../session/SessionManager';
@@ -223,6 +225,22 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'and end the turn — an operator grant resumes you with it. Never fabricate ' +
       'a pass/fail to route around a permission denial — a blocked read is ' +
       'grounds for needs-setup, not for guessing.',
+    '',
+    'For a DB table with no dedicated MCP read tool and no session-record/audit-log ' +
+      'broker above (e.g. `ops_journal`, `gate_item`, `deploy_run`) — the case most ' +
+      'likely to look unreachable — request the read-only ad hoc query capability ' +
+      'instead of abstaining: call `session.requestCapability` with ' +
+      '`{"payload":{"capability":"Bash(npx ts-node packages/backend/scripts/' +
+      'adhoc-query.ts:*)","plan":"<what this session will do with the result>",' +
+      '"evidence":"<the exact SELECT/WITH query text and why it settles this>"}}`. ' +
+      'This runs `packages/backend/scripts/adhoc-query.ts`, a single-statement, ' +
+      'driver-enforced-read-only `SELECT`/`WITH` (a syntactic check before any ' +
+      'connection opens, plus the connection itself is `readonly: true` at the ' +
+      'SQLite driver level), so an operator can approve the exact query text on ' +
+      'sight. This is the sanctioned route for exactly this gap, offered before a ' +
+      '`needs-setup` abstain: for a claim about DB state, `needs-setup` should mean ' +
+      "this specific request is pending, refused, or the tooling isn't installed — " +
+      "never that this class of claim can't be settled at all.",
     '',
     '**Before abstaining for a missing identifier** (e.g. "no target session ' +
       'ID to read"): exhaust the record surfaces your base tools already ' +
@@ -482,6 +500,21 @@ export class SessionGateItemVerifier implements GateItemVerifier {
             null,
             'gate_item_verifier_consumed',
           );
+          setSessionTerminalCompletionReason(
+            sessionId,
+            'gate_item_verifier_consumed',
+          );
+          // Dual-write bridge (see session/completingSignalRegistry.ts and
+          // sessionStatusDeriver.ts) — purely additive ahead of any
+          // read-side cutover; never gates or alters the writes above.
+          insertCompletingSignal({
+            session_id: sessionId,
+            task_id: row.task_id ?? null,
+            session_type: row.session_type,
+            signal_class: 'staged_intent',
+            signal_value: 'gate_item_verifier_consumed',
+            recorded_at: Date.now(),
+          });
           sessionManager.archiveAndEndSession(sessionId);
         }
         resolve(result);

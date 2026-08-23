@@ -50,6 +50,7 @@ import {
   broadcastIntentById,
   READY_PATH_KINDS,
   OPS_TERMINAL_KINDS,
+  isOpsTerminalClosingSetMember,
 } from '../routes/stagedIntents';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
@@ -1014,6 +1015,57 @@ describe('the ops-terminal closing set is mandated under one shared groupId', ()
     }
   });
 
+  it('does not treat a task.create staged by an investigate session (report-batch:<batchId> task_id) as an ops-terminal member, but still does for an ops session bound to a real Notion task', () => {
+    insertSession({
+      session_id: 'investigate-kind-check-1',
+      task_id: 'report-batch:batch-kind-check-1',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+    });
+    insertSession({
+      session_id: 'ops-kind-check-1',
+      task_id: 'notion:real-task-kind-check-1',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+    });
+
+    const investigateRow = {
+      id: 'row-investigate-kind-check-1',
+      kind: 'task.create',
+      payload: JSON.stringify({ title: 'Finding', body: 'x' }),
+      payload_hash: 'h1',
+      task_id: null,
+      project_id: 'proj-1',
+      session_id: 'investigate-kind-check-1',
+      group_id: null,
+      milestone: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    } as unknown as StagedIntentRow;
+    expect(isOpsTerminalClosingSetMember(investigateRow)).toBe(false);
+
+    const opsRow = {
+      ...investigateRow,
+      id: 'row-ops-kind-check-1',
+      session_id: 'ops-kind-check-1',
+    } as unknown as StagedIntentRow;
+    expect(isOpsTerminalClosingSetMember(opsRow)).toBe(true);
+  });
+
   it('accepts the same closing set once staged under one shared groupId', async () => {
     const { upsertOpsJournalEntry } = await import('../db/queries');
     upsertOpsJournalEntry({
@@ -1285,6 +1337,75 @@ describe('an ops-terminal closing group is refused at commit unless it actually 
     expect(result.body.error).toContain('blocked');
     expect(result.body.error).toContain('incident-frozen');
     expect(result.body.error).toContain('staged-proposal');
+  });
+
+  /**
+   * Investigate sessions are dispatched with session_type='ops' and a
+   * synthetic report-batch:<batchId> task_id (investigateDispatcher.ts) —
+   * their tool envelope (INVESTIGATE_INTENT_KINDS) deliberately excludes
+   * journal.setState, so a task.create they stage must not be treated as
+   * an ops-terminal closing member demanding a journal transition they are
+   * incapable of staging. Regression for session e1406e9e-18ad-4230-
+   * a6a9-cec850d7063d, which staged exactly this shape and was rejected
+   * with OpsTerminalGroupIncompleteError.
+   */
+  function seedInvestigateSession(sessionId: string, batchId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: `report-batch:${batchId}`,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+    });
+  }
+
+  it('commits an investigate session group containing only a task.create, with no journal.setState member', async () => {
+    seedInvestigateSession('investigate-commit-1', 'batch-1');
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask: vi.fn().mockResolvedValue('notion:new-followon-investigate'),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const groupId = 'investigate-batch-1-duplicate-groom-dispatch';
+    stageIntent(
+      'task.create',
+      { title: 'Finding from investigation', body: 'x', databaseId: 'db-1' },
+      'proj-ops-commit',
+      groupId,
+      'investigate-commit-1',
+    );
+
+    const result = await approveAndCommitGroup(agent, groupId);
+    expect(result.status).toBe(200);
+    expect(result.body.committed).toHaveLength(1);
+  });
+
+  it('still refuses an ops session bound to a real Notion Investigation task staging a task.create with no journal member', async () => {
+    seedOpsSession(
+      'ops-real-investigation-1',
+      'notion:real-investigation-task-1',
+    );
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const groupId = 'group-ops-real-investigation-1';
+    stageIntent(
+      'task.create',
+      { title: 'Follow-on from investigation', body: 'x', databaseId: 'db-1' },
+      'proj-ops-commit',
+      groupId,
+      'ops-real-investigation-1',
+    );
+
+    const result = await approveAndCommitGroup(agent, groupId);
+    expect(result.status).toBe(409);
+    expect(result.body.error).toContain('journal.setState');
+    expect(result.body.committed ?? []).toEqual([]);
   });
 });
 

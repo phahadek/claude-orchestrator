@@ -63,6 +63,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'intent.withdraw',
     'gate.verify',
     'ops.prIntent',
+    'planning.noOp',
   ],
   split: [
     'task.updateBody',
@@ -92,9 +93,58 @@ export const PLANNING_INTENT_KINDS: Record<
  * it concludes is wrong (see db/types.ts). test.request is how it runs a
  * test command blocked at the CLI permission layer. Consumed by config.ts to
  * derive ALLOWED_TOOLS's matching entries, same precedent as
- * PLANNING_INTENT_KINDS above.
+ * PLANNING_INTENT_KINDS above. report.file is a dispatched code/review
+ * session's route to file an inert investigation report about a defect it
+ * must not fix itself — see mcp/tools/stageProposalTools.ts's report.file
+ * registration and routes/stagedIntents.ts's report.file apply case.
+ * planning.noOp is a code session's terminal declaration that a dispatched
+ * task's work is already satisfied elsewhere (a re-dispatch of an
+ * already-settled task) — see routes/stagedIntents.ts's
+ * maybeAutoResolveCodeNoOp, which auto-commits it and closes the task on
+ * stage rather than waiting on an operator Acknowledge the way a
+ * groom/design no-op does.
  */
 export const CODE_INTENT_KINDS: readonly string[] = [
   'review.dispute',
   'test.request',
+  'report.file',
+  'planning.noOp',
+];
+
+/**
+ * Stage-proposal kinds an investigate-dispatched session (sessionType
+ * 'ops', task_id `report-batch:<batchId>` — see
+ * sessionPredicates.ts#isInvestigateSession) may stage. A sibling constant
+ * to `PLANNING_INTENT_KINDS`, not an entry inside it: that record is keyed
+ * by `SkillId`, which is `Extract<SessionType, 'groom'|'design'|'ops'|
+ * 'split'|'docs'>` and structurally excludes 'investigate' (no such
+ * SessionType literal exists — investigate reuses 'ops'). Deliberately
+ * narrower than `PLANNING_INTENT_KINDS.ops`: no `journal.setState`
+ * (investigate has no ops_journal analog), no `task.setStatus`/
+ * `task.updateBody`/`task.patchBodySection` (an investigate session files
+ * new Backlog tasks, it never edits an existing one — see the /investigate
+ * skill's "Never edit a filed task. File a new one."), no `gate.verify`/
+ * `ops.prIntent` (no gate item or PR to report against). `task.create`
+ * files the grounded Backlog output; `decision.pickOne` resolves an
+ * ambiguous input the skill's "resolve it before acting" rule requires;
+ * `session.requestCapability` is the same mid-session escalation path every
+ * planning workflow gets; `intent.withdraw` retracts a staged intent.
+ * `planning.noOp` is this session's terminal declaration that a report in
+ * its own dispatched batch has no actionable finding — its `payload.taskId`
+ * must name a report id from that batch (validated at stage time, mirroring
+ * the SESSION_TASK_BINDING_KINDS check every other task-targeting kind
+ * gets), and it auto-resolves the named report directly (via
+ * `updateReportState`), the investigate analog of
+ * routes/stagedIntents.ts's `maybeAutoResolveCodeNoOp` for a code session —
+ * see the sibling auto-resolve function for investigate sessions there.
+ * Consumed by config.ts to derive `INVESTIGATE_ALLOWED_TOOLS`'s staged-intent
+ * MCP entries, same precedent as `PLANNING_INTENT_KINDS`/`CODE_INTENT_KINDS`
+ * above.
+ */
+export const INVESTIGATE_INTENT_KINDS: readonly string[] = [
+  'task.create',
+  'decision.pickOne',
+  'session.requestCapability',
+  'intent.withdraw',
+  'planning.noOp',
 ];

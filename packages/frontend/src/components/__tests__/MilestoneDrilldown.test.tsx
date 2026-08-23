@@ -7,6 +7,30 @@ import { sessionsApi } from '../../api/projects';
 import { gateApi } from '../../api/gate';
 import type { StagedIntent } from '../../api/stagedIntents';
 import type { TaskView } from '../../types/taskView';
+import type { InvestigationReport } from '../../api/reports';
+import type { Session } from '@claude-orchestrator/backend/src/db/types';
+
+function makeReport(
+  overrides: Partial<InvestigationReport> & { id: string },
+): InvestigationReport {
+  return {
+    project_id: 'proj-1',
+    milestone_id: 'M1',
+    title: 'Report title',
+    symptom_text: 'Symptom text',
+    evidence_text: null,
+    state: 'committed',
+    source: 'operator',
+    origin_session_id: null,
+    origin_task_id: null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    inFlight: false,
+    resolveEligible: false,
+    dispatchedSessions: [],
+    ...overrides,
+  };
+}
 
 vi.mock('../../hooks/stagedIntentBus', () => ({
   subscribeStagedIntentChange: () => () => {},
@@ -29,6 +53,7 @@ function makeTask(overrides: Partial<TaskView>): TaskView {
     planningSession: null,
     pr: null,
     review: null,
+    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
     ...overrides,
@@ -134,8 +159,8 @@ describe('MilestoneDrilldown', () => {
     expect(screen.getByTestId('milestone-drilldown-empty')).toBeTruthy();
   });
 
-  describe('depth-review dispositions', () => {
-    it('renders a failing depth verdict, naming the failing dimension(s) and the PR it belongs to', () => {
+  describe('depth-review disposition placement', () => {
+    it('never renders a milestone-wide depth-dispositions section, regardless of selection', () => {
       render(
         <MilestoneDrilldown
           selection={null}
@@ -147,93 +172,89 @@ describe('MilestoneDrilldown', () => {
           setSessionFavorited={noop}
           mode="task"
           onModeChange={noop}
-          depthDispositions={[
-            {
-              prNumber: 915,
-              prUrl: 'https://github.com/org/repo/pull/915',
-              repo: 'org/repo',
-              taskName: 'Fix the thing',
-              verdict: 'fail',
-              summary: 'Found a defect beyond spec-conformance',
-              failingDimensions: [
-                { name: 'reliability', notes: 'Retries are unbounded' },
-              ],
-              escalated: true,
-            },
-          ]}
-        />,
-      );
-
-      const entry = screen.getByTestId('depth-disposition-915');
-      expect(entry.textContent).toContain('915');
-      expect(entry.textContent).toContain('reliability');
-      expect(entry.textContent).toContain('Retries are unbounded');
-    });
-
-    it('renders a routed finding and an escalated finding distinguishably', () => {
-      render(
-        <MilestoneDrilldown
-          selection={null}
-          tasks={[]}
-          projectId="proj-1"
-          sessions={[]}
-          send={noop}
-          setSessionArchived={noop}
-          setSessionFavorited={noop}
-          mode="task"
-          onModeChange={noop}
-          depthDispositions={[
-            {
-              prNumber: 915,
-              prUrl: 'https://github.com/org/repo/pull/915',
-              repo: 'org/repo',
-              taskName: 'Escalated task',
-              verdict: 'fail',
-              summary: 'Escalated',
-              failingDimensions: [{ name: 'reliability', notes: 'bad' }],
-              escalated: true,
-            },
-            {
-              prNumber: 918,
-              prUrl: 'https://github.com/org/repo/pull/918',
-              repo: 'org/repo',
-              taskName: 'Routed task',
-              verdict: 'fail',
-              summary: 'Routed',
-              failingDimensions: [
-                { name: 'size-proportionality', notes: 'too big' },
-              ],
-              escalated: false,
-            },
-          ]}
-        />,
-      );
-
-      const escalatedBadge = screen.getByTestId('depth-disposition-915-badge');
-      const routedBadge = screen.getByTestId('depth-disposition-918-badge');
-      expect(escalatedBadge.textContent).toContain('Escalated to operator');
-      expect(routedBadge.textContent).toContain('Routed to session');
-      expect(escalatedBadge.textContent).not.toBe(routedBadge.textContent);
-      expect(escalatedBadge.className).not.toBe(routedBadge.className);
-    });
-
-    it('renders no depth-disposition section when there are no depth verdicts', () => {
-      render(
-        <MilestoneDrilldown
-          selection={null}
-          tasks={[]}
-          projectId="proj-1"
-          sessions={[]}
-          send={noop}
-          setSessionArchived={noop}
-          setSessionFavorited={noop}
-          mode="task"
-          onModeChange={noop}
+          depthReviewStatusBySessionId={{
+            'sess-depth-1': { escalated: true, routeCount: 0 },
+          }}
         />,
       );
 
       expect(screen.queryByTestId('milestone-depth-dispositions')).toBeNull();
       expect(screen.getByTestId('milestone-drilldown-empty')).toBeTruthy();
+    });
+
+    it("surfaces the escalated/routed disposition inside the depth_review session's own detail view, not milestone-wide", async () => {
+      vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+      const task = makeTask({
+        taskId: 'task-1',
+        codeSession: {
+          sessionId: 'sess-depth-1',
+          status: 'done',
+          startedAt: 1,
+          endedAt: 2,
+          lastMessage: '',
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+      });
+
+      render(
+        <DrilldownHarness
+          initialMode="session"
+          selection={{ type: 'task', task }}
+          tasks={[task]}
+          projectId="proj-1"
+          sessions={[
+            {
+              sessionId: 'sess-depth-1',
+              taskName: 'Fix the thing',
+              notionTaskUrl: '',
+              sessionType: 'depth_review',
+              status: 'done',
+              events: [
+                {
+                  eventType: 'text',
+                  timestamp: 1,
+                  content: JSON.stringify({
+                    type: 'assistant',
+                    message: {
+                      content: [
+                        {
+                          type: 'text',
+                          text: JSON.stringify({
+                            verdict: 'fail',
+                            dimensions: [
+                              {
+                                name: 'reliability',
+                                passed: false,
+                                notes: 'Retries are unbounded',
+                              },
+                            ],
+                            summary: 'Found a defect beyond spec-conformance',
+                          }),
+                        },
+                      ],
+                    },
+                  }),
+                },
+              ],
+            },
+          ]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          depthReviewStatusBySessionId={{
+            'sess-depth-1': { escalated: true, routeCount: 0 },
+          }}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId('depth-review-status')).toBeTruthy(),
+      );
+      expect(screen.getByTestId('depth-review-status').textContent).toContain(
+        'Escalated to operator',
+      );
+      expect(screen.queryByTestId('milestone-depth-dispositions')).toBeNull();
     });
   });
 
@@ -869,6 +890,150 @@ describe('MilestoneDrilldown', () => {
           screen.getByTestId('milestone-gate-item-reader').textContent,
         ).toContain('Verify the widget renders'),
       );
+    });
+  });
+
+  describe('report selection', () => {
+    it("renders the report's title/symptom/state as a fallback pane in task mode (no task spec to show)", () => {
+      const report = makeReport({
+        id: 'report-1',
+        title: 'Something is broken',
+        symptom_text: 'Users see a 500 on checkout',
+        state: 'committed',
+      });
+
+      render(
+        <MilestoneDrilldown
+          selection={{ type: 'report', report }}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="task"
+          onModeChange={noop}
+        />,
+      );
+
+      const reader = screen.getByTestId('milestone-report-reader');
+      expect(reader.textContent).toContain('Something is broken');
+      expect(reader.textContent).toContain('Users see a 500 on checkout');
+      expect(reader.textContent).toContain('committed');
+    });
+
+    it('resolves sessionId from dispatchedSessions[0] (most recent first) and renders the running session inline, with no extra click needed', async () => {
+      const report = makeReport({
+        id: 'report-2',
+        dispatchedSessions: [
+          {
+            sessionId: 'sess-running',
+            sessionStatus: 'running',
+            dispatchedAt: '2026-01-02T00:00:00Z',
+          },
+          {
+            sessionId: 'sess-older',
+            sessionStatus: 'done',
+            dispatchedAt: '2026-01-01T00:00:00Z',
+          },
+        ],
+      });
+
+      render(
+        <MilestoneDrilldown
+          selection={{ type: 'report', report }}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[
+            {
+              sessionId: 'sess-running',
+              taskName: 'Investigate the widget',
+              notionTaskUrl: '',
+              status: 'running',
+              events: [],
+            },
+          ]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="session"
+          onModeChange={noop}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByText('No events yet.')).toBeTruthy(),
+      );
+      const embed = screen.getByTestId('milestone-session-embed');
+      expect(embed.textContent).not.toContain('No associated session');
+    });
+
+    it('resolves a completed session no longer in the live store via the by-id fallback fetch, and renders it inline', async () => {
+      const report = makeReport({
+        id: 'report-3',
+        inFlight: false,
+        resolveEligible: true,
+        dispatchedSessions: [
+          {
+            sessionId: 'sess-completed',
+            sessionStatus: 'done',
+            dispatchedAt: '2026-01-01T00:00:00Z',
+          },
+        ],
+      });
+
+      vi.spyOn(sessionsApi, 'getById').mockResolvedValue({
+        session: {
+          session_id: 'sess-completed',
+          task_id: null,
+          task_url: null,
+          project_context_url: null,
+          project_id: 'proj-1',
+          status: 'done',
+          started_at: 1,
+          ended_at: 2,
+          pr_url: null,
+          worktree_path: null,
+          archived: 0,
+          favorited: 0,
+          session_type: 'standard',
+          note: null,
+          tags: null,
+          total_input_tokens: 0,
+          total_output_tokens: 0,
+          compaction_count: 0,
+          context_occupancy_tokens: 0,
+          model: null,
+          task_name: 'Investigate the widget',
+          metadata: null,
+          review_result: null,
+          pause_reason: null,
+          last_error_detail: null,
+          events_pruned_at: null,
+          granted_capabilities: '[]',
+        } as Session,
+        events: [],
+      });
+
+      render(
+        <MilestoneDrilldown
+          selection={{ type: 'report', report }}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="session"
+          onModeChange={noop}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByText('No events yet.')).toBeTruthy(),
+      );
+      const embed = screen.getByTestId('milestone-session-embed');
+      expect(embed.textContent).not.toContain('Transcript not available');
     });
   });
 });

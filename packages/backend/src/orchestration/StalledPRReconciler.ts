@@ -18,6 +18,8 @@ import {
   linkPRTaskAndSession,
   setPendingPush,
   getSessionLastActivityMs,
+  setStalledRetryBaseExhausted,
+  resetStalledPRRetryCountForBaseRecovery,
 } from '../db/queries';
 import { parsePauseReason } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
@@ -30,6 +32,12 @@ import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import { classifyStalledPR, parseVerdict } from '../github/pollUtils';
 import type { StalledPRKind } from '../github/pollUtils';
+import { sessionBusyInFlightToolCall } from '../session/sessionLifecycle';
+import {
+  isBaseTotalFail,
+  isProjectBaseHealthy,
+  hasBaseTotalFailSince,
+} from './baseAttribution';
 import {
   formatCIFailureFeedback,
   formatMergeConflictFeedback,
@@ -37,6 +45,23 @@ import {
 
 const DEFAULT_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_RETRY_CAP = 2;
+
+/**
+ * Stall kinds whose escalation may plausibly trace back to a broken base
+ * branch rather than the PR/session's own change — gate_failed (a genuine
+ * test/build failure), session_inert (the implementing session going silent
+ * can itself be caused by a broken base hanging/crashing it), and
+ * pre_review_interrupted (the pre-review pipeline never got a slot/verdict,
+ * which a broken base can also cause). Arming stalled_retry_base_exhausted
+ * for one of these kinds is unconditional — see hasBaseTotalFailSince for
+ * why the actual base-attributability verdict is deferred to recovery time
+ * rather than sampled live at escalation.
+ */
+const BASE_ATTRIBUTABLE_ESCALATION_KINDS: ReadonlySet<StalledPRKind> = new Set([
+  'gate_failed',
+  'session_inert',
+  'pre_review_interrupted',
+]);
 
 /**
  * Periodic sweeper that detects PRs parked with no incoming push and re-drives
@@ -55,7 +80,10 @@ const DEFAULT_RETRY_CAP = 2;
  *  - session_inert: no other kind matched but the implementing session has
  *    emitted no session_events row past the inert threshold, regardless of
  *    its status field (running or idle) → relaunch the coding fixer with a
- *    nudge prompt
+ *    nudge prompt. Suppressed while the session is busy inside a single
+ *    long-running tool call (in-flight tool_use + live OS process — see
+ *    sessionBusyInFlightToolCall), which would otherwise emit nothing to
+ *    session_events for the tool's whole duration and be misread as inert
  *
  * Retry bound: after DEFAULT_RETRY_CAP attempts per head_sha the PR is escalated
  * to pause_reason='stalled_reconcile_cap' and left for human intervention.
@@ -117,9 +145,47 @@ export class StalledPRReconciler {
       // relying on that alone).
       if (pr.human_merge_only) continue;
 
-      // Skip PRs already escalated to the human-attention queue
+      // Skip PRs already escalated to the human-attention queue — unless
+      // this PR's own most recent exhaustion was confirmed base-attributable
+      // (stalled_retry_base_exhausted) and the base branch has since
+      // recovered AND base-health history corroborates a total_fail verdict
+      // actually occurred at/after this PR's own escalation timestamp (not
+      // just the live cached verdict — see hasBaseTotalFailSince), in which
+      // case restore the budget via the same reset primitive setHeadSha's
+      // head_sha-change trigger already uses, then fall through to
+      // reconcile this PR fresh this cycle. Scoped to this PR alone — never
+      // a blanket reset of every escalated PR's counter.
       const existing = parsePauseReason(pr.pause_reason);
-      if (existing?.reason === 'stalled_reconcile_cap') continue;
+      if (existing?.reason === 'stalled_reconcile_cap') {
+        if (pr.stalled_retry_base_exhausted) {
+          const project = getProjectByGithubRepo(pr.repo);
+          if (
+            project &&
+            (await isProjectBaseHealthy(project)) &&
+            (await hasBaseTotalFailSince(project, pr.pause_reason_set_at ?? 0))
+          ) {
+            resetStalledPRRetryCountForBaseRecovery(pr.pr_number, pr.repo);
+            clearTerminalPRFlags(pr.pr_number, pr.repo, 'base_recovery');
+            recordEvent({
+              event_type: 'stalled_pr_base_recovery_reset',
+              actor_type: 'system',
+              actor_id: null,
+              project_id: project.id,
+              task_id: pr.task_id ?? null,
+              payload: { pr_number: pr.pr_number, repo: pr.repo },
+            });
+            this.broadcast({
+              type: 'pr_pause_cleared',
+              prNumber: pr.pr_number,
+              repo: pr.repo,
+            });
+            logger.info(
+              `[StalledPRReconciler] PR #${pr.pr_number} (${pr.repo}): base recovered — restoring stalled_pr_retry_count budget`,
+            );
+          }
+        }
+        continue;
+      }
 
       // A pause reason declaring retry_strategy: 'manual_action' (e.g.
       // depth_review_escalation) is already an operator action item, parked
@@ -166,6 +232,15 @@ export class StalledPRReconciler {
       const inertThresholdMs =
         typedGetSetting('session_inert_threshold_seconds') * 1000;
 
+      // Suppress the session_inert fallback below while the implementing
+      // session is legitimately busy inside a single long-running tool call
+      // (in-flight tool_use + live OS process) — see the intra-tool
+      // heartbeat mechanism sessionBusyInFlightToolCall shares with
+      // StuckSessionMonitor.
+      const isBusyInFlightToolCall = pr.session_id
+        ? sessionBusyInFlightToolCall(pr.session_id)
+        : false;
+
       const stalled = classifyStalledPR(
         effectivePr,
         reviewSessionStatus,
@@ -173,11 +248,26 @@ export class StalledPRReconciler {
         hasUndeliveredFeedback,
         lastActivityAgeMs,
         inertThresholdMs,
+        isBusyInFlightToolCall,
       );
       if (!stalled) continue;
 
       const count = effectivePr.stalled_pr_retry_count ?? 0;
       if (count >= retryCap) {
+        // A stall of one of BASE_ATTRIBUTABLE_ESCALATION_KINDS may plausibly
+        // trace back to a broken base branch — arm unconditionally (no live
+        // health check here) so a later base-recovery pass knows this PR
+        // (and only this PR) is a candidate for having its budget restored.
+        // The actual base-attributability verdict is deferred to that
+        // recovery-time pass, which corroborates against base-health
+        // history rather than a single live sample taken here.
+        if (BASE_ATTRIBUTABLE_ESCALATION_KINDS.has(stalled.kind)) {
+          setStalledRetryBaseExhausted(
+            effectivePr.pr_number,
+            effectivePr.repo,
+            true,
+          );
+        }
         this.escalate(
           effectivePr.pr_number,
           effectivePr.repo,
@@ -508,7 +598,7 @@ export class StalledPRReconciler {
 
     if (kind === 'gate_failed') {
       if (pr.pending_push) {
-        return this.reDriveViaPendingPushConsume(pr);
+        return await this.reDriveViaPendingPushConsume(pr);
       }
       const pushed = await this.reDriveIfPushDetected(pr);
       if (pushed !== null) return pushed;
@@ -521,11 +611,20 @@ export class StalledPRReconciler {
       return false;
     }
 
-    const newCount = incrementStalledPRRetryCount(prNumber, repo);
     const project = getProjectByGithubRepo(repo);
+    const baseAttributable =
+      kind === 'gate_failed' && project
+        ? await isBaseTotalFail(project)
+        : false;
+    if (baseAttributable) {
+      setStalledRetryBaseExhausted(prNumber, repo, true);
+    }
+    const newCount = baseAttributable
+      ? (pr.stalled_pr_retry_count ?? 0)
+      : incrementStalledPRRetryCount(prNumber, repo);
 
     logger.info(
-      `[StalledPRReconciler] PR #${prNumber} (${repo}): re-driving kind=${kind} via fixer relaunch (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): re-driving kind=${kind} via fixer relaunch (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP}${baseAttributable ? ', base-attributable — not charged' : ''})`,
     );
 
     recordEvent({
@@ -620,7 +719,9 @@ export class StalledPRReconciler {
    * hasn't evaluated, so a fresh review (not a fixer relaunch) is the correct
    * re-drive.
    */
-  private reDriveViaPendingPushConsume(pr: PullRequestRow): boolean {
+  private async reDriveViaPendingPushConsume(
+    pr: PullRequestRow,
+  ): Promise<boolean> {
     const { pr_number: prNumber, repo } = pr;
 
     if (!this.reviewOrchestrator) {
@@ -630,11 +731,17 @@ export class StalledPRReconciler {
       return false;
     }
 
-    const newCount = incrementStalledPRRetryCount(prNumber, repo);
     const project = getProjectByGithubRepo(repo);
+    const baseAttributable = project ? await isBaseTotalFail(project) : false;
+    if (baseAttributable) {
+      setStalledRetryBaseExhausted(prNumber, repo, true);
+    }
+    const newCount = baseAttributable
+      ? (pr.stalled_pr_retry_count ?? 0)
+      : incrementStalledPRRetryCount(prNumber, repo);
 
     logger.info(
-      `[StalledPRReconciler] PR #${prNumber} (${repo}): consuming stuck pending_push and re-driving gate_failed pipeline (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): consuming stuck pending_push and re-driving gate_failed pipeline (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP}${baseAttributable ? ', base-attributable — not charged' : ''})`,
     );
 
     recordEvent({

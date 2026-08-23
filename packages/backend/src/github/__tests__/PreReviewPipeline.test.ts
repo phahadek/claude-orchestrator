@@ -15,6 +15,8 @@ const mockHasAnalyzeResultForSha = vi.fn().mockReturnValue(false);
 const mockUpsertAnalyzeResult = vi.fn();
 const mockGetAnalyzeResult = vi.fn().mockReturnValue(null);
 const mockDeleteAnalyzeResult = vi.fn();
+const mockGetTestRequestRunById = vi.fn().mockReturnValue(undefined);
+const mockUpdateTestRequestRunState = vi.fn();
 const mockAddAutofixSha = vi.fn();
 const mockGetAnalyzeContentCacheResult = vi.fn().mockReturnValue(undefined);
 const mockInsertAnalyzeContentCacheResult = vi.fn();
@@ -35,6 +37,10 @@ vi.mock('../../db/queries', () => ({
   upsertAnalyzeResult: (...args: unknown[]) => mockUpsertAnalyzeResult(...args),
   getAnalyzeResult: (...args: unknown[]) => mockGetAnalyzeResult(...args),
   deleteAnalyzeResult: (...args: unknown[]) => mockDeleteAnalyzeResult(...args),
+  getTestRequestRunById: (...args: unknown[]) =>
+    mockGetTestRequestRunById(...args),
+  updateTestRequestRunState: (...args: unknown[]) =>
+    mockUpdateTestRequestRunState(...args),
   getAnalyzeContentCacheResult: (...args: unknown[]) =>
     mockGetAnalyzeContentCacheResult(...args),
   insertAnalyzeContentCacheResult: (...args: unknown[]) =>
@@ -122,6 +128,7 @@ const mockLoadOrchestratorConfig = vi.fn().mockReturnValue({
   bootstrap_script: '',
 });
 vi.mock('../../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: (...args: unknown[]) =>
     mockLoadOrchestratorConfig(...args),
 }));
@@ -205,6 +212,7 @@ beforeEach(() => {
   mockRunTestCommands.mockResolvedValue({ passed: true, output: '' });
   mockRunProjectTestRequest.mockResolvedValue({ passed: true, output: '' });
   mockGetLatestTestRequestRun.mockReturnValue(undefined);
+  mockGetTestRequestRunById.mockReturnValue(undefined);
   mockHasAnalyzeResultForSha.mockReturnValue(false);
   mockGetAnalyzeContentCacheResult.mockReturnValue(undefined);
   mockComputeTriggerContentHash.mockResolvedValue(null);
@@ -411,6 +419,35 @@ describe('PreReviewPipeline — autofix gate', () => {
       expect.objectContaining({
         type: 'pipeline_stage_failed',
         stage: 'autofix',
+      }),
+    );
+  });
+
+  it('records durable autofix_started/autofix_complete audit rows with project_id', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: true,
+      summary: 'fixed',
+      commitSha: null,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'autofix_started',
+        project_id: 'proj-1',
+        task_id: 'task-1',
+      }),
+    );
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'autofix_complete',
+        project_id: 'proj-1',
+        task_id: 'task-1',
+        payload: expect.objectContaining({ success: true }),
       }),
     );
   });
@@ -1228,7 +1265,10 @@ describe('PreReviewPipeline — stage transition sequence', () => {
       }),
     );
     expect(mockRecordEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ event_type: 'pipeline_stage_failed' }),
+      expect.objectContaining({
+        event_type: 'pipeline_stage_failed',
+        project_id: 'proj-1',
+      }),
     );
   });
 });
@@ -1330,7 +1370,8 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
       commands: ['npm test'],
       timeoutSec: 300,
       maxRssMb: 0,
-      failFast: true,
+      sessionId: null,
+      runOrigin: 'pr_pipeline',
     });
   });
 

@@ -17,10 +17,20 @@ export interface AuditRow {
  * Resolves a project id for an event that didn't supply one, so the write
  * path — not each of its many call sites — is the single place the
  * actor/task → project invariant is enforced. Tries actor_id first (when it
- * names a known session), then falls back to task_id (via
- * task_repo_assignments). Returns null when neither resolves (e.g.
- * process_boot, which is attributed to neither) — recordEvent still writes
- * the row in that case, just without a project_id.
+ * names a known session), then falls back to task_id — first via
+ * task_repo_assignments, then via sessions.task_id. Returns null when none
+ * resolve (e.g. process_boot, which is attributed to neither) —
+ * recordEvent still writes the row in that case, just without a
+ * project_id.
+ *
+ * task_repo_assignments is populated ONLY for multi-repo projects, and only
+ * once a human explicitly assigns a repo via POST /tasks/:taskId/assign-repo
+ * (routes/tasks.ts) — single-repo projects (the common case) never write a
+ * row there at all, so that lookup alone resolves to null for effectively
+ * every task_id on a single-repo project. sessions.task_id + sessions
+ * .project_id are populated unconditionally for every dispatched session
+ * regardless of repo count, so it's tried next as a fallback that actually
+ * covers the common case.
  */
 function resolveProjectId(
   actorId: string | null,
@@ -38,14 +48,24 @@ function resolveProjectId(
     }
   }
   if (taskId) {
-    const row = db
+    const assignmentRow = db
       .prepare<
         [string],
         { project_id: string }
       >(`SELECT project_id FROM task_repo_assignments WHERE task_id = ?`)
       .get(taskId);
-    if (row?.project_id) {
-      return row.project_id;
+    if (assignmentRow?.project_id) {
+      return assignmentRow.project_id;
+    }
+    const sessionRow = db
+      .prepare<[string], { project_id: string | null }>(
+        `SELECT project_id FROM sessions
+         WHERE task_id = ? AND project_id IS NOT NULL
+         ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(taskId);
+    if (sessionRow?.project_id) {
+      return sessionRow.project_id;
     }
   }
   return null;
@@ -379,31 +399,38 @@ export function getLatestEventByType(eventType: string): AuditRow | undefined {
  * True when a task_body_updated or task_deps_updated event has been recorded
  * for `taskId` after `sinceTs` — the orchestrator-authored-write signal a
  * committed planning.noOp's grooming suppression retires on (see
- * isGroomNoOpSuppressed in db/queries.ts). Both event types are written by
+ * isNoOpSuppressed in db/queries.ts). Both event types are written by
  * AuditingTaskBackend for every orchestrator-authored body/deps edit; a raw
  * break-glass Notion edit doesn't itself retire the suppression, only the
  * next orchestrator-authored write does.
  *
- * `taskId` and `audit_log.task_id` are compared via normalizeBoardId rather
- * than literal equality — callers pass the bare board-cache id while
- * audit_log rows for edit events are written with a `source:`-prefixed id
- * (see TaskBackend.updateBody/updateBodyRaw/patchBodySection), so a literal
- * match silently misses every edit.
+ * `taskId` is compared against `audit_log.task_id_norm` — a STORED generated
+ * column (schema.ts) mirroring normalizeBoardId's prefix-strip +
+ * hyphen-strip + lowercase exactly — rather than literal equality, since
+ * callers pass the bare board-cache id while audit_log rows for edit events
+ * are written with a `source:`-prefixed id (see
+ * TaskBackend.updateBody/updateBodyRaw/patchBodySection), so a literal
+ * match silently misses every edit. Matching against the indexed generated
+ * column (idx_audit_log_task_id_norm_event_type) instead of applying
+ * normalizeBoardId to every row in JS turns this into an index seek scoped
+ * to this task, rather than hydrating every body/deps-edit row account-wide
+ * since `sinceTs`.
  */
 export function hasTaskEditSinceTimestamp(
   taskId: string,
   sinceTs: number,
 ): boolean {
   const norm = normalizeBoardId(taskId);
-  const rows = db
-    .prepare<[number], { task_id: string | null }>(
+  const row = db
+    .prepare<[string, number], { task_id: string | null }>(
       `SELECT task_id FROM audit_log
-       WHERE event_type IN ('task_body_updated', 'task_deps_updated') AND ts > ?`,
+       WHERE task_id_norm = ?
+         AND event_type IN ('task_body_updated', 'task_deps_updated')
+         AND ts > ?
+       LIMIT 1`,
     )
-    .all(sinceTs);
-  return rows.some(
-    (r) => r.task_id !== null && normalizeBoardId(r.task_id) === norm,
-  );
+    .get(norm, sinceTs);
+  return row !== undefined;
 }
 
 /**

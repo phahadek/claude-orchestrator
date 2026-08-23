@@ -82,6 +82,12 @@ export interface TaskView {
     inputTokens: number;
     outputTokens: number;
   } | null;
+  /** Depth-review (post-conformance) session for this task's PR — null when the PR has no depth_review session. */
+  depthReview: {
+    sessionId: string;
+    status: string;
+    verdict: string | null;
+  } | null;
   totalTokens: { input: number; output: number };
   /** Assigned target repo slug for multi-repo projects. Null when unassigned. */
   assignedRepo: string | null;

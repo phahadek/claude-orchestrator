@@ -71,6 +71,16 @@ function rememberRevokedToken(token: string, sessionId: string): void {
   }
 }
 
+/** Mirrors SessionStageAuth.ts's onRevokedCredentialPresented handler for the route surface. */
+let onRevokedCredentialPresented: ((sessionId: string) => void) | null = null;
+
+/** Wires the handler above — called once at server startup from SessionManager. */
+export function setRevokedRouteCredentialHandler(
+  handler: (sessionId: string) => void,
+): void {
+  onRevokedCredentialPresented = handler;
+}
+
 /** On-disk mirror of the maps above — survives a backend restart, same rationale as SessionStageAuth.ts's mirror. */
 function credentialsFilePath(): string {
   return path.join(getDataDir(), 'session-route-credentials.json');
@@ -330,6 +340,21 @@ export function requireDeviceOrSessionRouteAuth(
           path: req.path,
         },
       });
+      try {
+        onRevokedCredentialPresented?.(attribution.sessionId);
+      } catch {
+        // Best-effort — the auth rejection response below still fires.
+      }
+      // Distinguishable from falling through to requireDeviceAuth's generic
+      // "bad/missing device token" response — this token once worked and
+      // will never work again, not "present a different credential".
+      res.status(410).json({
+        error: 'unauthorized',
+        code: 'session_credential_revoked',
+        message:
+          'This session credential was revoked; the session is terminal and will not be reconnected.',
+      });
+      return;
     }
   }
   requireDeviceAuth(req, res, next);

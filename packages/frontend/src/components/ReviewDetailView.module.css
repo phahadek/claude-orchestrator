@@ -60,6 +60,25 @@
   border: 1px solid var(--border, #45475a);
 }
 
+.depthStatusBadgeRouted,
+.depthStatusBadgeEscalated {
+  display: inline-flex;
+  align-self: flex-start;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm, 6px);
+}
+
+.depthStatusBadgeRouted {
+  color: var(--text-muted, #9399b2);
+  border: 1px solid var(--border, #45475a);
+}
+
+.depthStatusBadgeEscalated {
+  color: #f38ba8;
+  border: 1px solid #f38ba8;
+}
+
 /* ── Dimensions ──────────────────────────────────────────────────── */
 .dimensions {
   display: flex;

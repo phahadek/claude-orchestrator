@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TaskView } from '../types/taskView';
 import type { StagedIntent } from '../api/stagedIntents';
+import type { InvestigationReport } from '../api/reports';
 import type { SessionState } from '../hooks/useSessionStore';
 import { phaseForTask } from '../utils/phaseBurndown';
 import type { PanelKeyboardDeclaration } from '../types/panelKeyboard';
@@ -11,10 +12,11 @@ import {
 import { CompactTaskCard } from './CompactTaskCard';
 import styles from './MilestoneDecisionStack.module.css';
 
-/** A middle-stack selection — either a pending intent/group card or a task row. Drives the right drill-down. */
+/** A middle-stack selection — either a pending intent/group card, a task row, or an investigation report card. Drives the right drill-down. */
 export type MilestoneStackSelection =
   | { type: 'intent'; intent: StagedIntent }
-  | { type: 'task'; task: TaskView };
+  | { type: 'task'; task: TaskView }
+  | { type: 'report'; report: InvestigationReport };
 
 interface Props {
   projectId: string;
@@ -77,6 +79,8 @@ export function MilestoneDecisionStack({
     selection?.type === 'intent' ? selection.intent.id : null;
   const selectedTaskId =
     selection?.type === 'task' ? selection.task.taskId : null;
+  const selectedReportId =
+    selection?.type === 'report' ? selection.report.id : null;
 
   // Scroll-follow bookkeeping lives in refs, not state — a scroll handler
   // firing on every frame shouldn't force a re-render, and an explicit click
@@ -212,6 +216,14 @@ export function MilestoneDecisionStack({
     return () => container.removeEventListener('scroll', handleScroll);
   }, [scrollContainerRef, selectTopmost]);
 
+  // The inbox's own compensation effect (it, not this component, re-renders
+  // when a live intent arrival changes useDecisionQueue's list) needs to
+  // suppress the one scroll event its own scrollTop nudge triggers, same as
+  // an explicit card click does above.
+  const suppressNextScroll = useCallback(() => {
+    suppressNextScrollRef.current = true;
+  }, []);
+
   // Fires once a disposition (single, group, or batch) has removed the
   // currently-selected card and the removal's DOM update has committed —
   // ref cleanups (registerInboxTarget/registerTaskTarget) run during commit,
@@ -242,13 +254,19 @@ export function MilestoneDecisionStack({
         phaseFilter={phaseFilter}
         flaggedOnly={flaggedOnly}
         selectedCardId={selectedIntentCardId}
+        selectedReportId={selectedReportId}
         onSelectIntent={(intent) => handleSelect({ type: 'intent', intent })}
         onViewSession={(intent) =>
           handleViewSession({ type: 'intent', intent })
         }
+        onSelectReport={(report) =>
+          handleViewSession({ type: 'report', report })
+        }
         registerScrollTarget={registerInboxTarget}
         onCardsRemoved={handleCardsRemoved}
         keyboardHighlightedId={keyboardHighlightedId}
+        scrollContainerRef={scrollContainerRef}
+        suppressNextScroll={suppressNextScroll}
       />
 
       <TaskSection

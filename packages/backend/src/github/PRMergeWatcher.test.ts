@@ -52,6 +52,7 @@ vi.mock('../session/orchestrator-config.js', () => ({
 vi.mock('../session/autofix-runner.js', () => ({
   loadAutofixCommands: vi.fn().mockReturnValue([]),
   runAutofix: vi.fn().mockResolvedValue({ success: true, summary: 'no diff' }),
+  getChangedFiles: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -61,6 +62,24 @@ vi.mock('../audit/AuditLog.js', () => ({
 vi.mock('../session/analyzeGating.js', () => ({
   computeWholeTreeContentHash: vi.fn().mockResolvedValue('content-hash-x'),
   computeTriggerContentHash: vi.fn().mockResolvedValue(null),
+}));
+
+// filterBaseAttributableFailures (via checkBaseBranchHealth) provisions a real
+// git worktree when unmocked — never available in this unit-test sandbox
+// (spawn git ENOENT), and its 'unknown' outcome would otherwise silently
+// replace every raw ci_failing digest below with a base-health-unavailable
+// message. Default to clean_pass ("base is healthy") so filterBaseAttributableFailures
+// collapses to 'unfiltered' and F2-gate tests see the raw testResult output
+// they assert on; tests exercising the base-attributable filter itself
+// override this mock directly.
+vi.mock('../orchestration/baseHealthCheck.js', () => ({
+  checkBaseBranchHealth: vi.fn().mockResolvedValue({
+    outcome: 'clean_pass',
+    projectId: 'proj-1',
+    contentHash: 'content-hash-x',
+    cacheHit: false,
+    run: null,
+  }),
 }));
 
 import { PRMergeWatcher } from './PRMergeWatcher';
@@ -82,8 +101,14 @@ import {
   setPendingPush,
   setConflictNudgeSha,
   recordMergeCommitForSession,
+  recordTestPerfDigestSample,
 } from '../db/queries';
-import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import {
+  loadAutofixCommands,
+  runAutofix,
+  getChangedFiles,
+} from '../session/autofix-runner';
+import { db } from '../db/db';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { recordEvent } from '../audit/AuditLog';
 import { getProjectByGithubRepo } from '../config';
@@ -3684,6 +3709,766 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       0,
       true,
     );
+  });
+
+  it('sets test_report_acquisition_failed and still evaluates mergeability when report is missing but test passed', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_report_glob: '**/junit.xml',
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      structured_result: null,
+      test_report_acquisition_attempted: 1,
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'test_report_acquisition_failed',
+      'All tests passed',
+    );
+    // Non-blocking: mergeability evaluation still proceeded
+    expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
+  });
+
+  it('kicks AutoMerger.attempt() directly when setting test_report_acquisition_failed, since merge_state may already be clean and never transition', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+      merge_state: 'clean',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_report_glob: '**/junit.xml',
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      structured_result: null,
+      test_report_acquisition_attempted: 1,
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    const autoMerger = makeMockAutoMerger();
+    watcher.setAutoMerger(autoMerger);
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'test_report_acquisition_failed',
+      'All tests passed',
+    );
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
+  });
+
+  it('does not set test_report_acquisition_failed when test_report_glob is not configured', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_report_glob: '',
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      structured_result: null,
+      test_report_acquisition_attempted: 0,
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'test_report_acquisition_failed',
+      expect.anything(),
+    );
+  });
+
+  it('does not set test_report_acquisition_failed when acquisition was never attempted, even if structured_result is null', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_report_glob: '**/junit.xml',
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    // Historical/unattempted run: the producer never tried acquisition for
+    // this particular row (e.g. it predates the attempted column), even
+    // though the project currently declares a glob — this null must not be
+    // misread as an acquisition failure.
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      structured_result: null,
+      test_report_acquisition_attempted: null,
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'test_report_acquisition_failed',
+      expect.anything(),
+    );
+  });
+
+  it('clears a stale test_report_acquisition_failed pause once a report is successfully acquired', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+      pause_reason: 'test_report_acquisition_failed',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_report_glob: '**/junit.xml',
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-2',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'All tests passed',
+      structured_result: '{"tests":[]}',
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      null,
+    );
+  });
+});
+
+// ── f2-only lane-side flaky auto-disposition ──────────────────────────────────
+
+describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
+  let seq = 0;
+
+  function insertHistoryRun(): string {
+    seq += 1;
+    const id = `hist-run-${seq}`;
+    db.prepare(
+      `INSERT INTO test_request_runs
+         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
+       VALUES (@id, 'proj-1', @content_hash, NULL, 'passed', '', 0, 0, 0)`,
+    ).run({ id, content_hash: `hist-hash-${seq}` });
+    return id;
+  }
+
+  function insertHistorySample(opts: {
+    testId: string;
+    outcome: 'passed' | 'failed';
+    createdAt: number;
+  }): void {
+    insertHistoryRun();
+    // computeTestFlipRateFlag (behind evaluateF2LaneFlakyDisposition) now
+    // reads the test_perf_baselines digest rather than raw test_run_results
+    // rows. createdAt doubles as the digest's caller-assigned sequenced-at
+    // value, preserving the beforeMs cutoff semantics these tests exercise.
+    recordTestPerfDigestSample(
+      opts.testId,
+      'proj-1',
+      opts.testId,
+      opts.outcome,
+      1,
+      0,
+      false,
+      opts.createdAt,
+    );
+  }
+
+  /** Flags `testId` by seeding 4 alternating pass/fail history samples before `cutoff`. */
+  function flagTest(testId: string, cutoff: number): void {
+    const outcomes: Array<'passed' | 'failed'> = [
+      'passed',
+      'failed',
+      'passed',
+      'failed',
+    ];
+    outcomes.forEach((outcome, i) =>
+      insertHistorySample({ testId, outcome, createdAt: cutoff - 100 + i }),
+    );
+  }
+
+  function seedRunFailures(
+    runId: string,
+    tests: Array<{ testId: string; name: string }>,
+  ): void {
+    db.prepare(
+      `INSERT INTO test_request_runs
+         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
+       VALUES (@id, 'proj-1', 'content-hash-x', NULL, 'failed', '', 0, 0, 0)`,
+    ).run({ id: runId });
+    for (const t of tests) {
+      db.prepare(
+        `INSERT INTO test_run_results
+           (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+         VALUES (@run_id, @test_id, @name, 'failed', 1, 0, 0, @created_at)`,
+      ).run({
+        run_id: runId,
+        test_id: t.testId,
+        name: t.name,
+        created_at: Date.now(),
+      });
+    }
+  }
+
+  /** One breadth-signal failure for `testId`, on its own distinct content_hash, at `createdAt`. */
+  function seedBreadthFailure(testId: string, createdAt: number): void {
+    seq += 1;
+    const runId = `breadth-run-${seq}`;
+    db.prepare(
+      `INSERT INTO test_request_runs
+         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
+       VALUES (@id, 'proj-1', @content_hash, NULL, 'failed', '', 0, 0, 0)`,
+    ).run({ id: runId, content_hash: `breadth-hash-${seq}` });
+    db.prepare(
+      `INSERT INTO test_run_results
+         (test_request_run_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+       VALUES (@run_id, @test_id, @name, 'failed', 1, 0, 0, @created_at)`,
+    ).run({
+      run_id: runId,
+      test_id: testId,
+      name: testId,
+      created_at: createdAt,
+    });
+  }
+
+  function makeMockReviewOrchestratorWithF2(
+    outcome: 'passed' | 'failed' = 'passed',
+  ): ReviewOrchestrator {
+    return {
+      rerunFlakyTests: vi.fn().mockResolvedValue({
+        outcome,
+        passed: outcome === 'passed',
+        output: '',
+      }),
+    } as unknown as ReviewOrchestrator;
+  }
+
+  // PR "opened" well before any of the flip-rate history samples above (all
+  // seeded at/after PR_CREATED_AT_MS via the `cutoff` param below), so the
+  // pre-PR-window masking guard never itself blocks a test that isn't
+  // exercising it on purpose.
+  const PR_CREATED_AT_MS = 50_000;
+  const PR_CREATED_AT_ISO = new Date(PR_CREATED_AT_MS).toISOString();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    seq = 0;
+    db.prepare('DELETE FROM test_run_results').run();
+    db.prepare('DELETE FROM test_request_runs').run();
+    db.prepare('DELETE FROM test_perf_baselines').run();
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/wt/session',
+    } as any);
+  });
+
+  it('auto-recovers with no session pause/nudge when every failing test clears both masking guards', async () => {
+    flagTest('tests.unit.test_foo.test_bar', PR_CREATED_AT_MS);
+    const runId = 'f2-run-clean';
+    seedRunFailures(runId, [
+      { testId: 'tests.unit.test_foo.test_bar', name: 'test_bar' },
+    ]);
+
+    const pr = makePRRow({
+      head_sha: 'sha-flaky',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: null,
+      created_at: PR_CREATED_AT_ISO,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: runId,
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'failed',
+      output: 'FAIL',
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    vi.mocked(getChangedFiles).mockResolvedValue(['src/unrelated.ts']);
+
+    const github = makeMockGitHub();
+    const sessions = makeMockSessions();
+    const reviewOrchestrator = makeMockReviewOrchestratorWithF2('passed');
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.poll();
+
+    expect(vi.mocked(reviewOrchestrator.rerunFlakyTests)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-flaky',
+      '/wt/session',
+      expect.objectContaining({ id: 'proj-1' }),
+    );
+    // Recovered — never falls through to the pause+nudge path.
+    expect(vi.mocked(setCiRemediationAttemptedSha)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'ci_failing',
+      expect.anything(),
+    );
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+    // Pause is explicitly cleared as part of the successful re-run outcome.
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      null,
+    );
+  });
+
+  it('auto-recovers a deterministically-failing test (never flip-rate flagged) once it clears the breadth-of-trees guard instead', async () => {
+    const testId = 'tests.unit.test_foo.test_deterministic';
+    // Fails on 3 distinct trees before the PR was created — never alternates
+    // (flip-rate stays unflagged), but breadth alone clears guard 1.
+    seedBreadthFailure(testId, PR_CREATED_AT_MS - 300);
+    seedBreadthFailure(testId, PR_CREATED_AT_MS - 200);
+    seedBreadthFailure(testId, PR_CREATED_AT_MS - 100);
+
+    const runId = 'f2-run-breadth';
+    seedRunFailures(runId, [{ testId, name: 'test_deterministic' }]);
+
+    const pr = makePRRow({
+      head_sha: 'sha-breadth',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: null,
+      created_at: PR_CREATED_AT_ISO,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: runId,
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'failed',
+      output: 'FAIL',
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    vi.mocked(getChangedFiles).mockResolvedValue(['src/unrelated.ts']);
+
+    const github = makeMockGitHub();
+    const sessions = makeMockSessions();
+    const reviewOrchestrator = makeMockReviewOrchestratorWithF2('passed');
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.poll();
+
+    expect(vi.mocked(reviewOrchestrator.rerunFlakyTests)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-breadth',
+      '/wt/session',
+      expect.objectContaining({ id: 'proj-1' }),
+    );
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      null,
+    );
+
+    // Auto-filing is retired — clearing the F2 guard must never itself
+    // create a flaky_remediation_tracking row; filing is operator-driven now.
+    const tracking = db
+      .prepare(`SELECT * FROM flaky_remediation_tracking WHERE test_id = ?`)
+      .get(testId);
+    expect(tracking).toBeUndefined();
+  });
+
+  it('still pauses and nudges when only some failing tests are flip-rate-flagged (mixed failures)', async () => {
+    flagTest('tests.unit.test_foo.test_bar', PR_CREATED_AT_MS);
+    // 'test_qux' has no flip-rate history — never flagged.
+    const runId = 'f2-run-mixed';
+    seedRunFailures(runId, [
+      { testId: 'tests.unit.test_foo.test_bar', name: 'test_bar' },
+      { testId: 'tests.unit.test_baz.test_qux', name: 'test_qux' },
+    ]);
+
+    const pr = makePRRow({
+      head_sha: 'sha-mixed',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: null,
+      created_at: PR_CREATED_AT_ISO,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: runId,
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'failed',
+      output: 'FAIL mixed',
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    vi.mocked(getChangedFiles).mockResolvedValue(['src/unrelated.ts']);
+
+    const github = makeMockGitHub();
+    const sessions = makeMockSessions();
+    const reviewOrchestrator = makeMockReviewOrchestratorWithF2('passed');
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.poll();
+
+    expect(
+      vi.mocked(reviewOrchestrator.rerunFlakyTests),
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(setCiRemediationAttemptedSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-mixed',
+    );
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'ci_failing',
+      'FAIL mixed',
+    );
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalled();
+  });
+
+  it("does not auto-recover when the diff touches the flagged test's own file", async () => {
+    flagTest('tests.unit.test_foo.test_bar', PR_CREATED_AT_MS);
+    const runId = 'f2-run-touched';
+    seedRunFailures(runId, [
+      { testId: 'tests.unit.test_foo.test_bar', name: 'test_bar' },
+    ]);
+
+    const pr = makePRRow({
+      head_sha: 'sha-touched',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: null,
+      created_at: PR_CREATED_AT_ISO,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: runId,
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'failed',
+      output: 'FAIL touched',
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    // The diff touches the flagged test's own file.
+    vi.mocked(getChangedFiles).mockResolvedValue(['tests/unit/test_foo.py']);
+
+    const github = makeMockGitHub();
+    const sessions = makeMockSessions();
+    const reviewOrchestrator = makeMockReviewOrchestratorWithF2('passed');
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.poll();
+
+    expect(
+      vi.mocked(reviewOrchestrator.rerunFlakyTests),
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'ci_failing',
+      'FAIL touched',
+    );
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalled();
+  });
+
+  it("does not auto-recover when the flip-rate window would only flag using a sample from this PR's own runs", async () => {
+    const testId = 'tests.unit.test_foo.test_bar';
+    // Two stable (non-flapping) samples predate the PR.
+    insertHistorySample({
+      testId,
+      outcome: 'passed',
+      createdAt: PR_CREATED_AT_MS - 200,
+    });
+    insertHistorySample({
+      testId,
+      outcome: 'passed',
+      createdAt: PR_CREATED_AT_MS - 100,
+    });
+    // A flip only shows up via samples recorded at/after the PR's own first
+    // run — must be excluded from the flip-rate window.
+    insertHistorySample({
+      testId,
+      outcome: 'failed',
+      createdAt: PR_CREATED_AT_MS + 50,
+    });
+    insertHistorySample({
+      testId,
+      outcome: 'passed',
+      createdAt: PR_CREATED_AT_MS + 60,
+    });
+
+    const runId = 'f2-run-window';
+    seedRunFailures(runId, [{ testId, name: 'test_bar' }]);
+
+    const pr = makePRRow({
+      head_sha: 'sha-window',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: null,
+      created_at: PR_CREATED_AT_ISO,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: runId,
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'failed',
+      output: 'FAIL window',
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+    vi.mocked(getChangedFiles).mockResolvedValue(['src/unrelated.ts']);
+
+    const github = makeMockGitHub();
+    const sessions = makeMockSessions();
+    const reviewOrchestrator = makeMockReviewOrchestratorWithF2('passed');
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.poll();
+
+    expect(
+      vi.mocked(reviewOrchestrator.rerunFlakyTests),
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'ci_failing',
+      'FAIL window',
+    );
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalled();
+  });
+
+  it('leaves a plain GitHub-check ci_failed categorization (no F2 tests configured) unaffected by the lane-side check', async () => {
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: [],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    const pr = makePRRow({
+      head_sha: 'sha-ci',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(
+      (
+        github as unknown as {
+          categorizeMergeability: (...a: unknown[]) => Promise<unknown>;
+        }
+      ).categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'build', conclusion: 'failure' }],
+    });
+    const sessions = makeMockSessions();
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(getChangedFiles)).not.toHaveBeenCalled();
+    // The plain GitHub-check ci_failed remediation path still runs exactly
+    // as before — a session nudge, driven by the unmodified categorization
+    // branch, not the new F2 lane-side interception.
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalled();
   });
 });
 

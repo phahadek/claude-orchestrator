@@ -27,6 +27,7 @@ function makeTask(overrides: Partial<TaskView> = {}): TaskView {
     planningSession: null,
     pr: null,
     review: null,
+    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
     hasAwaitingDispositionIntent: false,
@@ -61,6 +62,7 @@ function makeConvergence(
       },
       seed: { status: 'green', blockingCount: 0, blocking: [] },
       ops: { status: 'green', blockingCount: 0, blocking: [] },
+      investigationReport: { status: 'green', blockingCount: 0, blocking: [] },
     },
     ...overrides,
   };
@@ -321,6 +323,11 @@ describe('computePhaseBurndown', () => {
         },
         seed: { status: 'green', blockingCount: 0, blocking: [] },
         ops: { status: 'green', blockingCount: 0, blocking: [] },
+        investigationReport: {
+          status: 'green',
+          blockingCount: 0,
+          blocking: [],
+        },
       },
     });
 

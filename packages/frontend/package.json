@@ -1,6 +1,6 @@
 {
   "name": "@claude-orchestrator/frontend",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "Frontend (React + Vite) for Claude Code Orchestrator.",
   "homepage": "https://github.com/phahadek/claude-orchestrator#readme",
@@ -18,7 +18,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run --reporter=junit --outputFile=.test-reports/frontend.xml",
     "test:watch": "vitest"
   },
   "dependencies": {

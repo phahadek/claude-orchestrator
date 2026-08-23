@@ -19,6 +19,8 @@ import {
   isSanctionedAutoApproveCapability,
   bashCapabilityConfersFileMutation,
   isDeclaredWriteAutoApprove,
+  resolvePreGrantSessionKind,
+  resolvePreGrantCapabilities,
 } from '../orchestrator-config';
 import { NOTION_READ_MCP_TOOLS } from '../../config';
 import {
@@ -183,6 +185,120 @@ describe('loadOrchestratorConfig', () => {
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.autofix_skip_ci).toBe(true);
   });
+
+  it('parses test_report_format and test_report_glob when set in config', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'test_report_format: junit-xml',
+        'test_report_glob: "**/test-results/*.xml"',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.test_report_format).toBe('junit-xml');
+    expect(config.test_report_glob).toBe('**/test-results/*.xml');
+  });
+
+  it('falls back to defaults for absent or malformed test_report_format/test_report_glob', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      ['test_report_format: cobertura', 'test_report_glob: 42'].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.test_report_format).toBeUndefined();
+    expect(config.test_report_glob).toBe('');
+  });
+
+  it('defaults test_report_format and test_report_glob when the config file is absent', () => {
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.test_report_format).toBeUndefined();
+    expect(config.test_report_glob).toBe('');
+  });
+
+  it('defaults capability_pre_grants to {} when .claude-orchestrator.yml is absent', () => {
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.capability_pre_grants).toEqual({});
+  });
+
+  it('parses capability_pre_grants for a well-formed config with all six session kinds', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'capability_pre_grants:',
+        '  gate-verify:',
+        '    - "read:audit-log:proj-1"',
+        '  investigate:',
+        '    - "read:session-events:proj-1"',
+        '  ops:',
+        '    - "read:audit-log:proj-1"',
+        '  groom:',
+        '    - "read:path:/etc/foo"',
+        '  design:',
+        '    - "read:session-events:proj-1"',
+        '  docs:',
+        '    - "read:path:/etc/bar"',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.capability_pre_grants).toEqual({
+      'gate-verify': ['read:audit-log:proj-1'],
+      investigate: ['read:session-events:proj-1'],
+      ops: ['read:audit-log:proj-1'],
+      groom: ['read:path:/etc/foo'],
+      design: ['read:session-events:proj-1'],
+      docs: ['read:path:/etc/bar'],
+    });
+  });
+
+  it('drops unknown session-kind keys and non-string entries from capability_pre_grants', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'capability_pre_grants:',
+        '  ops:',
+        '    - "read:audit-log:proj-1"',
+        '    - 42',
+        '  not-a-real-kind:',
+        '    - "read:audit-log:proj-1"',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.capability_pre_grants).toEqual({
+      ops: ['read:audit-log:proj-1'],
+    });
+  });
+
+  it('falls back to {} when capability_pre_grants is not an object', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      'capability_pre_grants:\n  - ops\n  - groom\n',
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.capability_pre_grants).toEqual({});
+  });
+
+  it('falls back to {} for capability_pre_grants when the YAML is malformed', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      ': invalid: yaml: {',
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.capability_pre_grants).toEqual({});
+    expect(warnSpy).toHaveBeenCalledOnce();
+  });
 });
 
 describe('getSessionAllowedTools', () => {
@@ -263,6 +379,32 @@ describe('getSessionAllowedTools', () => {
       allowed_tools: ['mcp__analyst__query_alarm_rules'],
     });
     expect(tools).toContain('mcp__analyst__query_alarm_rules');
+  });
+
+  it('an investigate-dispatched (ops sessionType, report-batch task id) session gets INVESTIGATE_ALLOWED_TOOLS, not OPS_ALLOWED_TOOLS', () => {
+    const plainOps = getSessionAllowedTools(
+      'ops',
+      { allowed_tools: [] },
+      [],
+      undefined,
+      [],
+      'notion:some-task-id',
+    );
+    const investigate = getSessionAllowedTools(
+      'ops',
+      { allowed_tools: [] },
+      [],
+      undefined,
+      [],
+      'report-batch:batch-1',
+    );
+    expect(investigate).not.toEqual(plainOps);
+    expect(investigate).not.toContain(
+      orchestratorMcpToolName('journal.setState'),
+    );
+    expect(investigate).not.toContain(orchestratorMcpToolName('gate.verify'));
+    expect(investigate).toContain(orchestratorMcpToolName('decision.pickOne'));
+    expect(plainOps).toContain(orchestratorMcpToolName('gate.verify'));
   });
 
   it('ops base profile is read + stage + safe live-data surface, distinct from groom/design/standard', () => {
@@ -510,6 +652,32 @@ describe('isGrantable', () => {
       isGrantable(pathReadCapability('/some/dir/containing/apply/or/resolve')),
     ).toBe(true);
   });
+
+  it('returns true for a Bash(...) capability whose quoted query-argument text embeds "resolve" as a column-name substring, not the command verb', () => {
+    expect(
+      isGrantable(
+        'Bash(node readonly-db-query.js "SELECT resolved_at FROM capability_disqualification")',
+      ),
+    ).toBe(true);
+  });
+
+  it.each(['apply', 'resolve', 'done', 'task-intent'])(
+    'returns true when "%s" only appears inside quoted query text, not as the command verb',
+    (word) => {
+      expect(
+        isGrantable(`Bash(psql -c "SELECT * FROM t WHERE col = '${word}'")`),
+      ).toBe(true);
+    },
+  );
+
+  it.each(['apply', 'resolve', 'done', 'task-intent'])(
+    'still returns false when "%s" appears unquoted as the command verb/action',
+    (word) => {
+      expect(isGrantable(`Bash(scripts/${word}-staged-intent.sh:*)`)).toBe(
+        false,
+      );
+    },
+  );
 });
 
 describe('pathReadCapability / parsePathReadCapability', () => {
@@ -938,6 +1106,24 @@ describe('isSanctionedAutoApproveCapability', () => {
       ),
     ).toBe(true);
   });
+
+  it.each([
+    ['audit-log', auditLogReadCapability('project-abc')],
+    ['session-events', sessionEventsReadCapability('project-abc')],
+  ])(
+    'auto-approves the %s capability for an investigate-dispatched session (sessionType ops, report-batch task id)',
+    (_label, capability) => {
+      expect(
+        isSanctionedAutoApproveCapability(
+          capability,
+          'session-1',
+          'project-abc',
+          'ops',
+          'report-batch:batch-1',
+        ),
+      ).toBe(true);
+    },
+  );
 });
 
 describe('isDeclaredWriteAutoApprove', () => {
@@ -975,5 +1161,107 @@ describe('isDeclaredWriteAutoApprove', () => {
 
   it('is false for an empty declared-writes set', () => {
     expect(isDeclaredWriteAutoApprove('Bash(npm ci:*)', [])).toBe(false);
+  });
+});
+
+describe('resolvePreGrantSessionKind', () => {
+  it('resolves an ops session on a gate-item task to gate-verify', () => {
+    expect(resolvePreGrantSessionKind('ops', 'gate-item:abc123')).toBe(
+      'gate-verify',
+    );
+  });
+
+  it('resolves an ops session on a report-batch task to investigate', () => {
+    expect(resolvePreGrantSessionKind('ops', 'report-batch:xyz789')).toBe(
+      'investigate',
+    );
+  });
+
+  it('resolves a plain ops session to ops', () => {
+    expect(resolvePreGrantSessionKind('ops', 'notion:abc123')).toBe('ops');
+  });
+
+  it('resolves groom/design/docs sessions to themselves', () => {
+    expect(resolvePreGrantSessionKind('groom', 'notion:abc123')).toBe('groom');
+    expect(resolvePreGrantSessionKind('design', 'notion:abc123')).toBe(
+      'design',
+    );
+    expect(resolvePreGrantSessionKind('docs', 'notion:abc123')).toBe('docs');
+  });
+
+  it('returns null for session types with no pre-grant key', () => {
+    expect(resolvePreGrantSessionKind('standard', 'notion:abc123')).toBeNull();
+    expect(resolvePreGrantSessionKind('review', 'notion:abc123')).toBeNull();
+    expect(resolvePreGrantSessionKind('split', 'notion:abc123')).toBeNull();
+    expect(
+      resolvePreGrantSessionKind('depth_review', 'notion:abc123'),
+    ).toBeNull();
+  });
+
+  it('returns null for a null/undefined taskId on a non-ops-sub-kind session type', () => {
+    expect(resolvePreGrantSessionKind('standard', null)).toBeNull();
+    expect(resolvePreGrantSessionKind('standard', undefined)).toBeNull();
+  });
+});
+
+describe('resolvePreGrantCapabilities', () => {
+  it('returns the configured pre-grant list for each of the six resolvable kinds', () => {
+    const orchConfig = {
+      capability_pre_grants: {
+        'gate-verify': ['read:audit-log:proj-1'],
+        investigate: ['read:session-events:proj-1'],
+        ops: ['read:audit-log:proj-1'],
+        groom: ['read:path:/etc/foo'],
+        design: ['read:session-events:proj-1'],
+        docs: ['read:path:/etc/bar'],
+      },
+    };
+
+    expect(
+      resolvePreGrantCapabilities(orchConfig, 'ops', 'gate-item:abc'),
+    ).toEqual(['read:audit-log:proj-1']);
+    expect(
+      resolvePreGrantCapabilities(orchConfig, 'ops', 'report-batch:abc'),
+    ).toEqual(['read:session-events:proj-1']);
+    expect(
+      resolvePreGrantCapabilities(orchConfig, 'ops', 'notion:abc'),
+    ).toEqual(['read:audit-log:proj-1']);
+    expect(
+      resolvePreGrantCapabilities(orchConfig, 'groom', 'notion:abc'),
+    ).toEqual(['read:path:/etc/foo']);
+    expect(
+      resolvePreGrantCapabilities(orchConfig, 'design', 'notion:abc'),
+    ).toEqual(['read:session-events:proj-1']);
+    expect(
+      resolvePreGrantCapabilities(orchConfig, 'docs', 'notion:abc'),
+    ).toEqual(['read:path:/etc/bar']);
+  });
+
+  it('drops a configured entry that fails isGrantable rather than writing it', () => {
+    const orchConfig = {
+      capability_pre_grants: {
+        ops: ['read:audit-log:proj-1', 'Bash(git task-intent apply:*)'],
+      },
+    };
+
+    expect(
+      resolvePreGrantCapabilities(orchConfig, 'ops', 'notion:abc'),
+    ).toEqual(['read:audit-log:proj-1']);
+  });
+
+  it('returns [] for a session type with no pre-grant key, regardless of config', () => {
+    const orchConfig = {
+      capability_pre_grants: { ops: ['read:audit-log:proj-1'] },
+    };
+    expect(
+      resolvePreGrantCapabilities(orchConfig, 'standard', 'notion:abc'),
+    ).toEqual([]);
+  });
+
+  it('returns [] when the resolved kind has no configured entry', () => {
+    const orchConfig = { capability_pre_grants: {} };
+    expect(
+      resolvePreGrantCapabilities(orchConfig, 'ops', 'notion:abc'),
+    ).toEqual([]);
   });
 });

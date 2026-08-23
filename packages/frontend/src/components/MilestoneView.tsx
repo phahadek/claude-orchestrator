@@ -9,96 +9,102 @@ import { useMilestoneConvergence } from '../hooks/useMilestoneConvergence';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { apiRequest } from '../api/projects';
 import { MilestoneBurndown } from './MilestoneBurndown';
+import { DeploySection } from './DeploySection';
 import { FlowArmToggle } from './FlowArmToggle';
 import {
   MilestoneDecisionStack,
   type MilestoneStackSelection,
 } from './MilestoneDecisionStack';
-import {
-  MilestoneDrilldown,
-  type DrilldownMode,
-  type DepthReviewDisposition,
-} from './MilestoneDrilldown';
+import { MilestoneDrilldown, type DrilldownMode } from './MilestoneDrilldown';
+import type { DepthReviewStatus } from './ReviewDetailView';
 import { GateReadinessPanel } from './GateReadinessPanel';
+import { LaneHealthPanel } from './LaneHealthPanel';
 import { isGatePhase } from '../utils/phaseBurndown';
 import type { PanelKeyboardDeclaration } from '../types/panelKeyboard';
 import styles from './MilestoneView.module.css';
 
-/** The subset of the GET /api/prs response item shape this view needs to build depth dispositions. */
+/** The subset of the GET /api/prs response item shape this view needs to match a depth-review session back to its disposition. */
 interface PrsApiItem {
   prNumber: number;
-  prUrl: string;
-  repo: string;
   depthVerdict: {
     verdict: string;
-    dimensions: Array<{ name: string; passed: boolean; notes: string }>;
-    summary: string;
     escalated: boolean;
+    sessionId: string | null;
+    routeCount: number;
   } | null;
 }
 
 /**
- * Fetches the project's PRs and reduces them to non-passing depth-review
- * dispositions for the milestone's own PRs (matched against `tasks`, which
- * the caller already scopes to the active milestone). Not milestone-scoped
- * server-side — pull_requests carries no milestone column — so the match
- * happens against the milestone's task set instead.
+ * Fetches non-passing depth-review verdicts for the milestone's own PRs,
+ * resolved by PR number against `tasks` (which the caller already scopes to
+ * the active milestone), and reduces them to a map of depth_review session
+ * id -> escalated/routed status. Hits the DB-only
+ * /api/prs/depth-dispositions endpoint — scoped to exactly the PR numbers
+ * this milestone's tasks reference — rather than the project-wide,
+ * live-GitHub-reconciling /api/prs endpoint. Since `tasks` is already
+ * milestone-scoped upstream, the derived PR-number set (and thus this
+ * effect) only changes on updates relevant to this milestone — a
+ * task/staged-intent change belonging to a different milestone never
+ * touches `tasks` and so never re-fires it. Keyed by session id (rather
+ * than PR) so a depth_review session's own detail view can look up its
+ * disposition.
  */
-function useMilestoneDepthDispositions(
+function useMilestoneDepthReviewStatusBySession(
   projectId: string | null,
   tasks: TaskView[],
-  invalidationKey: unknown,
-): DepthReviewDisposition[] {
-  const [dispositions, setDispositions] = useState<DepthReviewDisposition[]>(
-    [],
-  );
+): Record<string, DepthReviewStatus> {
+  const [statusBySession, setStatusBySession] = useState<
+    Record<string, DepthReviewStatus>
+  >({});
+
+  const prNumbersKey = useMemo(() => {
+    const nums = new Set<number>();
+    for (const t of tasks) {
+      if (t.pr) nums.add(t.pr.prNumber);
+    }
+    return Array.from(nums)
+      .sort((a, b) => a - b)
+      .join(',');
+  }, [tasks]);
 
   useEffect(() => {
-    if (!projectId) {
-      setDispositions([]);
+    if (!projectId || !prNumbersKey) {
+      setStatusBySession({});
       return;
     }
     let cancelled = false;
     apiRequest<PrsApiItem[]>(
-      `/api/prs?projectId=${encodeURIComponent(projectId)}`,
+      `/api/prs/depth-dispositions?projectId=${encodeURIComponent(projectId)}&prNumbers=${encodeURIComponent(prNumbersKey)}`,
     )
       .then((items) => {
         if (cancelled) return;
-        const prToTaskName = new Map<number, string>();
-        for (const t of tasks) {
-          if (t.pr) prToTaskName.set(t.pr.prNumber, t.taskName);
+        const milestonePrs = new Set(
+          tasks.filter((t) => t.pr).map((t) => t.pr!.prNumber),
+        );
+        const next: Record<string, DepthReviewStatus> = {};
+        for (const item of items) {
+          if (!milestonePrs.has(item.prNumber)) continue;
+          if (!item.depthVerdict || item.depthVerdict.verdict === 'pass') {
+            continue;
+          }
+          if (!item.depthVerdict.sessionId) continue;
+          next[item.depthVerdict.sessionId] = {
+            escalated: item.depthVerdict.escalated,
+            routeCount: item.depthVerdict.routeCount,
+          };
         }
-        const next = items
-          .filter(
-            (item) =>
-              prToTaskName.has(item.prNumber) &&
-              item.depthVerdict &&
-              item.depthVerdict.verdict !== 'pass',
-          )
-          .map((item) => ({
-            prNumber: item.prNumber,
-            prUrl: item.prUrl,
-            repo: item.repo,
-            taskName: prToTaskName.get(item.prNumber) ?? null,
-            verdict: item.depthVerdict!.verdict,
-            summary: item.depthVerdict!.summary,
-            failingDimensions: item
-              .depthVerdict!.dimensions.filter((d) => !d.passed)
-              .map((d) => ({ name: d.name, notes: d.notes })),
-            escalated: item.depthVerdict!.escalated,
-          }));
-        setDispositions(next);
+        setStatusBySession(next);
       })
       .catch(() => {
         if (cancelled) return;
-        setDispositions([]);
+        setStatusBySession({});
       });
     return () => {
       cancelled = true;
     };
-  }, [projectId, tasks, invalidationKey]);
+  }, [projectId, prNumbersKey, tasks]);
 
-  return dispositions;
+  return statusBySession;
 }
 
 const MIN_MIDDLE_WIDTH_PCT = 30;
@@ -118,9 +124,9 @@ function selectionKey(
   selection: MilestoneStackSelection | null,
 ): string | null {
   if (!selection) return null;
-  return selection.type === 'task'
-    ? `task:${selection.task.taskId}`
-    : `intent:${selection.intent.id}`;
+  if (selection.type === 'task') return `task:${selection.task.taskId}`;
+  if (selection.type === 'report') return `report:${selection.report.id}`;
+  return `intent:${selection.intent.id}`;
 }
 
 interface Props {
@@ -207,10 +213,9 @@ export function MilestoneView({
   // used to scope /api/tasks/active).
   const milestoneKey = convergence?.milestone ?? null;
 
-  const depthDispositions = useMilestoneDepthDispositions(
+  const depthReviewStatusBySessionId = useMilestoneDepthReviewStatusBySession(
     activeProjectId,
     tasks,
-    invalidationKey,
   );
 
   const [middleWidthPct, setMiddleWidthPct] = useState(
@@ -218,6 +223,7 @@ export function MilestoneView({
   );
   const middleWidthRef = useRef(middleWidthPct);
   const containerRef = useRef<HTMLDivElement>(null);
+  const leftColumnRef = useRef<HTMLDivElement>(null);
   // The centre column's actual scrollable element — only mounted on desktop
   // (mobile shows one region at a time via tabs, so scroll-follow never
   // observes an ancestor there and stays a no-op).
@@ -255,7 +261,10 @@ export function MilestoneView({
 
     const onMove = (ev: MouseEvent) => {
       const rect = container.getBoundingClientRect();
-      const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+      const leftColumnWidth =
+        leftColumnRef.current?.getBoundingClientRect().width ?? 0;
+      const pct =
+        ((ev.clientX - rect.left - leftColumnWidth) / rect.width) * 100;
       const clamped = Math.min(
         MAX_MIDDLE_WIDTH_PCT,
         Math.max(MIN_MIDDLE_WIDTH_PCT, pct),
@@ -302,10 +311,16 @@ export function MilestoneView({
         projectId={activeProjectId}
         milestoneId={activeBoardMilestone ? activeBoardId : null}
       />
+      <DeploySection activeProjectId={activeProjectId} />
       <FlowArmToggle
         milestoneId={activeBoardId}
         projectId={activeProjectId}
         autoLaunchEnabled={project?.autoLaunchEnabled}
+      />
+      <LaneHealthPanel
+        projectId={activeProjectId}
+        invalidationKey={invalidationKey}
+        milestoneId={activeBoardMilestone ? activeBoardId : null}
       />
     </>
   );
@@ -353,7 +368,7 @@ export function MilestoneView({
       project={project}
       mode={drilldownMode}
       onModeChange={setDrilldownMode}
-      depthDispositions={depthDispositions}
+      depthReviewStatusBySessionId={depthReviewStatusBySessionId}
     />
   );
 
@@ -415,7 +430,11 @@ export function MilestoneView({
       ref={containerRef}
       data-testid="milestone-view-shell"
     >
-      <div className={styles.leftColumn} data-testid="milestone-burndown-mount">
+      <div
+        ref={leftColumnRef}
+        className={styles.leftColumn}
+        data-testid="milestone-burndown-mount"
+      >
         {burndownContent}
       </div>
 
@@ -431,6 +450,7 @@ export function MilestoneView({
       <div
         className={styles.resizeHandle}
         onMouseDown={handleResizeMouseDown}
+        data-testid="milestone-resize-handle"
       />
 
       <div

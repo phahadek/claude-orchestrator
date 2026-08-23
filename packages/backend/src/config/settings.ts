@@ -27,6 +27,7 @@ const SettingsSchema = z.object({
   max_concurrent_code_sessions: z.coerce.number().int().min(1),
   max_concurrent_planning_sessions: z.coerce.number().int().min(1),
   max_concurrent_verify_sessions: z.coerce.number().int().min(1),
+  max_concurrent_investigate_sessions: z.coerce.number().int().min(1),
   human_reserve: z.coerce.number().int().min(0),
   auto_review_concurrency: z.coerce.number().int().min(1),
   card_preview_lines: z.coerce.number().int().min(1),
@@ -40,6 +41,7 @@ const SettingsSchema = z.object({
   session_pause_threshold_seconds: z.coerce.number().int().min(0),
   session_inert_threshold_seconds: z.coerce.number().int().min(0),
   session_hard_stop_window_seconds: z.coerce.number().int().min(0),
+  session_alive_park_escalation_seconds: z.coerce.number().int().min(0),
   ci_poll_interval_seconds: z.coerce.number().int().min(1),
   ci_poll_max_minutes: z.coerce.number().int().min(1),
   max_review_iterations: z.coerce.number().int().min(1),
@@ -51,6 +53,8 @@ const SettingsSchema = z.object({
   flake_recovery_max_retries: z.coerce.number().int().min(0),
   test_request_max_concurrent_per_project: z.coerce.number().int().min(1),
   test_request_cycle_limit: z.coerce.number().int().min(1),
+  dependency_cache_max_age_hours: z.coerce.number().int().min(1),
+  dependency_cache_max_total_size_mb: z.coerce.number().int().min(1),
   session_cgroup_prod_reserve_mb: z.coerce.number().int().min(0),
   session_cgroup_memory_high_fraction: z.coerce.number().min(0).max(1),
   milestone_attention_aging_threshold_seconds: z.coerce.number().int().min(0),
@@ -58,6 +62,24 @@ const SettingsSchema = z.object({
     .number()
     .int()
     .min(0),
+  // Capped at 200 — the outcome-sequence digest on test_perf_baselines
+  // (TEST_OUTCOME_DIGEST_CAPACITY, db/queries.ts) only retains the most
+  // recent 200 valid outcomes per test. Every production caller passes this
+  // setting straight through to computeTestFlipRateFlag as windowN; a value
+  // above the digest's capacity would silently degrade flip-rate accuracy
+  // (the digest simply couldn't return more samples than it retains) with
+  // no error, so the bound here keeps that impossible.
+  flip_rate_window_n: z.coerce.number().int().min(1).max(200),
+  flip_rate_threshold_k: z.coerce.number().int().min(1),
+  // Supplements flip_rate_threshold_k with a breadth-of-trees signal: a test
+  // failing across this many distinct content hashes within the lookback
+  // window below cannot be attributable to any single diff, so it clears
+  // the same masking guard a flip-rate flag would — see
+  // evaluateF2LaneFlakyDisposition (orchestration/testRequestLane.ts).
+  flip_rate_breadth_n: z.coerce.number().int().min(1),
+  flip_rate_breadth_window_hours: z.coerce.number().int().min(1),
+  flaky_remediation_file_threshold: z.coerce.number().int().min(1),
+  decision_pick_one_paragraph_threshold: z.coerce.number().int().min(100),
 
   // Boolean settings (stored as 'true'/'false' strings; also accepts native booleans)
   auto_review: zodBoolCoerce,
@@ -71,6 +93,7 @@ const SettingsSchema = z.object({
   planning_session_model: z.string(),
   ops_session_model: z.string(),
   gate_verify_session_model: z.string(),
+  investigate_session_model: z.string(),
   groom_session_model: z.string(),
   design_session_model: z.string(),
   docs_session_model: z.string(),
@@ -100,6 +123,14 @@ const SettingsSchema = z.object({
     'xhigh',
     'max',
   ]),
+  investigate_session_effort: z.enum([
+    '',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+  ]),
   groom_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
   design_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
   docs_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
@@ -118,6 +149,7 @@ export const SETTING_DEFAULTS: Settings = {
   max_concurrent_code_sessions: 20,
   max_concurrent_planning_sessions: 5,
   max_concurrent_verify_sessions: 5,
+  max_concurrent_investigate_sessions: 5,
   human_reserve: 1,
   auto_review_concurrency: 20,
   card_preview_lines: 3,
@@ -131,6 +163,12 @@ export const SETTING_DEFAULTS: Settings = {
   session_pause_threshold_seconds: 7200,
   session_inert_threshold_seconds: 600,
   session_hard_stop_window_seconds: 60,
+  // A stuck_session_alive_subprocess park (StuckSessionMonitor.scanForStuckSessions)
+  // is normally transient — the CLI's clean-exit reap runs within seconds. This
+  // bounds how long one may sit with no new session_events before StuckSessionMonitor
+  // escalates to teardown. Deliberately well above a normal cleanup so a
+  // genuinely-transient park is unaffected; 0 disables escalation entirely.
+  session_alive_park_escalation_seconds: 900,
   ci_poll_interval_seconds: 30,
   ci_poll_max_minutes: 30,
   max_review_iterations: 3,
@@ -142,10 +180,18 @@ export const SETTING_DEFAULTS: Settings = {
   flake_recovery_max_retries: 2,
   test_request_max_concurrent_per_project: 2,
   test_request_cycle_limit: 5,
+  dependency_cache_max_age_hours: 168,
+  dependency_cache_max_total_size_mb: 10_240,
   session_cgroup_prod_reserve_mb: 4096,
   session_cgroup_memory_high_fraction: 0.9,
   milestone_attention_aging_threshold_seconds: 24 * 60 * 60,
   milestone_attention_flat_convergence_window_seconds: 48 * 60 * 60,
+  flip_rate_window_n: 20,
+  flip_rate_threshold_k: 2,
+  flip_rate_breadth_n: 3,
+  flip_rate_breadth_window_hours: 24,
+  flaky_remediation_file_threshold: 2,
+  decision_pick_one_paragraph_threshold: 560,
   auto_review: true,
   auto_archive_enabled: true,
   session_cgroup_deny_swap: true,
@@ -155,6 +201,7 @@ export const SETTING_DEFAULTS: Settings = {
   planning_session_model: '',
   ops_session_model: '',
   gate_verify_session_model: '',
+  investigate_session_model: '',
   groom_session_model: '',
   design_session_model: '',
   docs_session_model: '',
@@ -168,6 +215,7 @@ export const SETTING_DEFAULTS: Settings = {
   planning_session_effort: '',
   ops_session_effort: '',
   gate_verify_session_effort: '',
+  investigate_session_effort: '',
   groom_session_effort: '',
   design_session_effort: '',
   docs_session_effort: '',

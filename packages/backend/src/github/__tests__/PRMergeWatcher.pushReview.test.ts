@@ -11,6 +11,7 @@ vi.mock('../../config/settings', () => ({
   typedGetSetting: vi.fn().mockReturnValue(5),
 }));
 vi.mock('../../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi.fn().mockReturnValue({
     test: [],
     test_timeout_sec: 300,

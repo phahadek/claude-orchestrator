@@ -11,11 +11,68 @@ import type { GitHubClient } from './GitHubClient';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { ServerMessage } from '../ws/types';
 import { eventKind } from '../session/eventKind';
+import { recordEvent } from '../audit/AuditLog';
+
+function recordInvestigationFailure(
+  ctx: Pick<NoOpInvestigatorContext, 'taskId' | 'projectId'>,
+  investigatorSessionId: string,
+  stage: string,
+  reason: string,
+): void {
+  try {
+    recordEvent({
+      event_type: 'no_op_investigation_failed',
+      actor_type: 'system',
+      actor_id: investigatorSessionId,
+      project_id: ctx.projectId || null,
+      task_id: ctx.taskId || null,
+      payload: { stage, reason },
+    });
+  } catch (e) {
+    logger.error(
+      `[NoOpInvestigator] recordEvent(no_op_investigation_failed) failed: ${e}`,
+    );
+  }
+}
 
 export type NoOpVerdict =
   | { kind: 'resolved'; resolvedByPrUrl: string; reason: string }
   | { kind: 'retry'; reason: string }
   | { kind: 'human'; reason: string };
+
+/**
+ * Shared "already resolved elsewhere" disposition: closes the task Done and
+ * records the resolving evidence as an implementation note, so a Done with
+ * no PR of its own is explicable later. Used both by this investigator's own
+ * `resolved` verdict (reached via a secondary investigator session) and by
+ * routes/stagedIntents.ts's maybeAutoResolveCodeNoOp (reached directly, when
+ * a standard/ops session already did that investigation itself and named the
+ * evidence in its own planning.noOp `reason`) — one place for "what closing
+ * a task via an already-satisfied no-op durably records" to avoid the two
+ * paths drifting apart.
+ */
+export async function applyResolvedNoOp(
+  taskBackend: TaskBackend,
+  taskId: string,
+  evidenceText: string,
+): Promise<void> {
+  try {
+    await taskBackend.updateStatus(taskId, '✅ Done');
+  } catch (e) {
+    logger.error(
+      `[NoOpInvestigator] updateStatus(Done) failed for ${taskId}:`,
+      e,
+    );
+  }
+  try {
+    await taskBackend.appendImplementationNote(taskId, evidenceText);
+  } catch (e) {
+    logger.error(
+      `[NoOpInvestigator] appendImplementationNote failed for ${taskId}:`,
+      e,
+    );
+  }
+}
 
 export interface NoOpInvestigatorContext {
   taskId: string;
@@ -183,6 +240,12 @@ export class NoOpInvestigator {
       if (firstHeading) taskTitle = firstHeading[1];
     } catch (e) {
       logger.error(`[NoOpInvestigator] fetchTaskPage failed for ${taskId}:`, e);
+      recordInvestigationFailure(
+        ctx,
+        investigatorSessionId,
+        'fetch_task_page',
+        String(e),
+      );
     }
 
     const noOpSessionEvents = getEventsBySession(noOpSessionId);
@@ -209,6 +272,12 @@ export class NoOpInvestigator {
         );
       } catch (e) {
         logger.error(`[NoOpInvestigator] listMergedPRsSince failed:`, e);
+        recordInvestigationFailure(
+          ctx,
+          investigatorSessionId,
+          'list_merged_prs_since',
+          String(e),
+        );
       }
       try {
         recentCommits = await this.githubClient.listCommitsSince(
@@ -218,6 +287,12 @@ export class NoOpInvestigator {
         );
       } catch (e) {
         logger.error(`[NoOpInvestigator] listCommitsSince failed:`, e);
+        recordInvestigationFailure(
+          ctx,
+          investigatorSessionId,
+          'list_commits_since',
+          String(e),
+        );
       }
     }
 
@@ -250,6 +325,12 @@ export class NoOpInvestigator {
       logger.error(
         `[NoOpInvestigator] sessionManager.start failed — sessionId=${investigatorSessionId} taskId=${taskId} reason=${String(e)}`,
       );
+      recordInvestigationFailure(
+        ctx,
+        investigatorSessionId,
+        'session_manager_start',
+        String(e),
+      );
       return;
     }
 
@@ -265,12 +346,24 @@ export class NoOpInvestigator {
       logger.error(
         `[NoOpInvestigator] verdict wait failed — sessionId=${investigatorSessionId} taskId=${taskId} reason=${String(e)}`,
       );
+      recordInvestigationFailure(
+        ctx,
+        investigatorSessionId,
+        'verdict_wait',
+        String(e),
+      );
       return;
     }
 
     if (!verdict) {
       logger.error(
         `[NoOpInvestigator] session ended with no parseable verdict — sessionId=${investigatorSessionId} taskId=${taskId} — leaving task status unchanged`,
+      );
+      recordInvestigationFailure(
+        ctx,
+        investigatorSessionId,
+        'no_parseable_verdict',
+        'session ended without a parseable verdict',
       );
       return;
     }
@@ -286,25 +379,11 @@ export class NoOpInvestigator {
     const { taskId, repo, featureBranchName } = ctx;
 
     if (verdict.kind === 'resolved') {
-      try {
-        await this.taskBackend.updateStatus(taskId, '✅ Done');
-      } catch (e) {
-        logger.error(
-          `[NoOpInvestigator] updateStatus(Done) failed for ${taskId}:`,
-          e,
-        );
-      }
-      try {
-        await this.taskBackend.appendImplementationNote(
-          taskId,
-          `Auto-resolved by investigator: ${verdict.resolvedByPrUrl} — ${verdict.reason}`,
-        );
-      } catch (e) {
-        logger.error(
-          `[NoOpInvestigator] appendImplementationNote failed for ${taskId}:`,
-          e,
-        );
-      }
+      await applyResolvedNoOp(
+        this.taskBackend,
+        taskId,
+        `Auto-resolved by investigator: ${verdict.resolvedByPrUrl} — ${verdict.reason}`,
+      );
       if (this.githubClient && repo && featureBranchName) {
         try {
           await this.githubClient.deleteBranch(repo, featureBranchName);

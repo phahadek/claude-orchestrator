@@ -7,13 +7,37 @@ import {
   GROOM_ALLOWED_TOOLS,
   DESIGN_ALLOWED_TOOLS,
   OPS_ALLOWED_TOOLS,
+  INVESTIGATE_ALLOWED_TOOLS,
   DOCS_ALLOWED_TOOLS,
   DEPTH_REVIEW_ALLOWED_TOOLS,
   docsWebFetchTools,
   NOTION_READ_MCP_TOOLS,
   runtimeSettings,
 } from '../config';
-import { isPlanningSession } from './sessionPredicates';
+import {
+  isPlanningSession,
+  isInvestigateSession,
+  isGateVerifySession,
+} from './sessionPredicates';
+
+/**
+ * The closed set of session-kind keys a project's `.claude-orchestrator.yml`
+ * can pre-grant capabilities to — the six session kinds
+ * resolvePreGrantSessionKind can resolve a spawn to. 'gate-verify' and
+ * 'investigate' are sub-kinds of sessionType 'ops', resolved from `task_id`
+ * the same way isGateVerifySession/isInvestigateSession do; the remaining
+ * four map 1:1 onto their SessionType literal.
+ */
+const PRE_GRANT_SESSION_KINDS = [
+  'gate-verify',
+  'investigate',
+  'ops',
+  'groom',
+  'design',
+  'docs',
+] as const;
+
+export type PreGrantSessionKind = (typeof PRE_GRANT_SESSION_KINDS)[number];
 
 /**
  * Locates the central config tree (the sibling `config/` checkout holding
@@ -103,6 +127,10 @@ export interface OrchestratorConfig {
   test_max_rss_mb: number;
   /** Stop running subsequent test commands after the first failure. Default true. */
   test_fail_fast: boolean;
+  /** Structured report format the project's `test:` commands write. Only 'junit-xml' is supported (native to both pytest and vitest). Undefined = no structured report. */
+  test_report_format?: 'junit-xml';
+  /** Glob matched once after every `test:` command finishes, collecting every matching report file into one normalized result. Applies globally across the whole test: list, not per-command. */
+  test_report_glob: string;
   /** Commands the orchestrator runs as static analysis gate, between verify and test. Empty = gate skipped. */
   analyze: AnalyzeCommand[];
   /** Per-command timeout in seconds for analyze commands. Default 300. */
@@ -119,6 +147,44 @@ export interface OrchestratorConfig {
    * projects confirmed to have no required status checks on the base branch.
    */
   autofix_skip_ci: boolean;
+  /**
+   * Lockfile path(s) (relative to project root) that key the dependency-cache
+   * fast-path lookup hash for the governed test lane's per-session worktree
+   * bootstrap (e.g. `['package-lock.json']` for npm, `['uv.lock']` for uv).
+   * Empty = dependency-cache pooling opt-out (default).
+   */
+  dependency_lock_paths: string[];
+  /**
+   * Untracked directories (relative to project root) that `bootstrap_script`
+   * populates and that should be cached/restored across sessions (e.g.
+   * `['node_modules']`, `['.venv']`). May list more than one entry in a
+   * workspace layout. Empty = dependency-cache pooling opt-out (default).
+   */
+  dependency_cache_dirs: string[];
+  /**
+   * Project-authored command that exits zero iff the currently-materialized
+   * `dependency_cache_dirs` content satisfies the current lockfile(s),
+   * non-zero otherwise. Treated as the correctness gate on every cache hit —
+   * a failure is treated exactly like a cache miss. The orchestrator never
+   * interprets lockfile format or ecosystem itself; this command is the
+   * project's own verification. Empty = no verify command (default).
+   */
+  dependency_verify_command: string;
+  /**
+   * Session-kind-keyed capability pre-grants, seeded directly into
+   * `sessions.granted_capabilities` at spawn time (SessionManager.start,
+   * via resolvePreGrantCapabilities/seedGrantedCapabilities) — before the
+   * session's first turn, so a gate-verify/investigate/ops/groom/design/docs
+   * session starts already holding the capability-shaped reads a project
+   * always intends it to have, with no `session.requestCapability` round
+   * trip needed. Each key is one of PRE_GRANT_SESSION_KINDS; each value is a
+   * list of raw capability strings (e.g. `read:audit-log:<projectId>`).
+   * Every resolved entry is still filtered through `isGrantable` before it's
+   * written — this field cannot widen past the same ceiling an
+   * operator-approved grant is held to. Missing/omitted = no pre-grants
+   * (default).
+   */
+  capability_pre_grants: Partial<Record<PreGrantSessionKind, string[]>>;
 }
 
 const DEFAULTS: OrchestratorConfig = {
@@ -136,12 +202,36 @@ const DEFAULTS: OrchestratorConfig = {
   test_timeout_sec: 300,
   test_max_rss_mb: 0,
   test_fail_fast: true,
+  test_report_format: undefined,
+  test_report_glob: '',
   analyze: [],
   analyze_timeout_sec: 300,
   analyze_max_rss_mb: 0,
   analyze_fail_fast: true,
   autofix_skip_ci: false,
+  dependency_lock_paths: [],
+  dependency_cache_dirs: [],
+  dependency_verify_command: '',
+  capability_pre_grants: {},
 };
+
+function isPreGrantSessionKind(v: string): v is PreGrantSessionKind {
+  return (PRE_GRANT_SESSION_KINDS as readonly string[]).includes(v);
+}
+
+function parseCapabilityPreGrants(
+  raw: unknown,
+): Partial<Record<PreGrantSessionKind, string[]>> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return DEFAULTS.capability_pre_grants;
+  }
+  const result: Partial<Record<PreGrantSessionKind, string[]>> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isPreGrantSessionKind(key) || !Array.isArray(value)) continue;
+    result[key] = value.filter((v): v is string => typeof v === 'string');
+  }
+  return result;
+}
 
 function isValidAnalyzeEntry(v: unknown): v is AnalyzeCommand {
   if (typeof v === 'string') return true;
@@ -238,6 +328,14 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.test_fail_fast === 'boolean'
           ? parsed.test_fail_fast
           : DEFAULTS.test_fail_fast,
+      test_report_format:
+        parsed.test_report_format === 'junit-xml'
+          ? parsed.test_report_format
+          : DEFAULTS.test_report_format,
+      test_report_glob:
+        typeof parsed.test_report_glob === 'string'
+          ? parsed.test_report_glob
+          : DEFAULTS.test_report_glob,
       analyze: Array.isArray(parsed.analyze)
         ? (parsed.analyze as unknown[]).filter(isValidAnalyzeEntry)
         : DEFAULTS.analyze,
@@ -261,6 +359,23 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.autofix_skip_ci === 'boolean'
           ? parsed.autofix_skip_ci
           : DEFAULTS.autofix_skip_ci,
+      dependency_lock_paths: Array.isArray(parsed.dependency_lock_paths)
+        ? (parsed.dependency_lock_paths as unknown[])
+            .filter((v) => typeof v === 'string')
+            .map((v) => v as string)
+        : DEFAULTS.dependency_lock_paths,
+      dependency_cache_dirs: Array.isArray(parsed.dependency_cache_dirs)
+        ? (parsed.dependency_cache_dirs as unknown[])
+            .filter((v) => typeof v === 'string')
+            .map((v) => v as string)
+        : DEFAULTS.dependency_cache_dirs,
+      dependency_verify_command:
+        typeof parsed.dependency_verify_command === 'string'
+          ? parsed.dependency_verify_command
+          : DEFAULTS.dependency_verify_command,
+      capability_pre_grants: parseCapabilityPreGrants(
+        parsed.capability_pre_grants,
+      ),
       mcp_servers:
         parsed.mcp_servers !== null &&
         typeof parsed.mcp_servers === 'object' &&
@@ -303,6 +418,20 @@ const GRANT_DENYLIST_PATTERNS = [
 ];
 
 /**
+ * Strips single- and double-quoted literal spans from a capability string
+ * before it's tested against GRANT_DENYLIST_PATTERNS. A `Bash(...)`-shaped
+ * capability's command verb sits outside any quotes; quoted spans are query
+ * text / literal arguments (e.g. a `readonly-db-query.js "SELECT resolved_at
+ * FROM ..."` capability) that can innocently contain "resolve"/"apply"/
+ * "done"/"task-intent" as an ordinary word or column-name substring without
+ * the capability itself resembling the mutating actions the denylist exists
+ * to catch.
+ */
+function stripQuotedLiterals(capability: string): string {
+  return capability.replace(/'[^']*'|"[^"]*"/g, '');
+}
+
+/**
  * Prefix for the grantable single-path filesystem-read capability: widens a
  * dispatched planning/ops session's read envelope (the `--add-dir` list
  * passed to the CLI, or the matching read-only bind mount in Docker mode —
@@ -319,7 +448,8 @@ const PATH_READ_PREFIX = 'read:path:';
 
 export function isGrantable(capability: string): boolean {
   if (capability.startsWith(PATH_READ_PREFIX)) return true;
-  return !GRANT_DENYLIST_PATTERNS.some((re) => re.test(capability));
+  const testable = stripQuotedLiterals(capability);
+  return !GRANT_DENYLIST_PATTERNS.some((re) => re.test(testable));
 }
 
 /**
@@ -429,6 +559,51 @@ export function parsePathReadCapability(capability: string): string | null {
 }
 
 /**
+ * Resolves a spawn's `sessionType` + `taskId` to the pre-grant session kind
+ * whose `.claude-orchestrator.yml` `capability_pre_grants` entry applies —
+ * mirroring how isGateVerifySession/isInvestigateSession derive their two
+ * sessionType-'ops' sub-kinds from the task_id prefix. Returns null for a
+ * sessionType with no pre-grant key (standard/review/split/depth_review).
+ */
+export function resolvePreGrantSessionKind(
+  sessionType: string,
+  taskId: string | null | undefined,
+): PreGrantSessionKind | null {
+  if (sessionType === 'ops') {
+    if (isGateVerifySession(taskId)) return 'gate-verify';
+    if (isInvestigateSession(taskId)) return 'investigate';
+    return 'ops';
+  }
+  if (
+    sessionType === 'groom' ||
+    sessionType === 'design' ||
+    sessionType === 'docs'
+  ) {
+    return sessionType;
+  }
+  return null;
+}
+
+/**
+ * The resolved, `isGrantable`-filtered capability list a spawn should be
+ * seeded with — see OrchestratorConfig.capability_pre_grants's doc comment
+ * for the write path (SessionManager.start ->
+ * db/queries.ts#seedGrantedCapabilities). Returns `[]` for a sessionType with
+ * no pre-grant key, an unconfigured key, or when every configured entry is
+ * denylisted.
+ */
+export function resolvePreGrantCapabilities(
+  orchConfig: Pick<OrchestratorConfig, 'capability_pre_grants'>,
+  sessionType: string,
+  taskId: string | null | undefined,
+): string[] {
+  const kind = resolvePreGrantSessionKind(sessionType, taskId);
+  if (kind === null) return [];
+  const configured = orchConfig.capability_pre_grants[kind] ?? [];
+  return configured.filter(isGrantable);
+}
+
+/**
  * Curated, operator-editable allowlist of sanctioned read-only capabilities
  * that `session.requestCapability` auto-approves without an operator park
  * (see stagedIntents.ts's auto-approve branch). Every entry must be an exact
@@ -469,20 +644,34 @@ function sanctionedAutoApproveCapabilities(): readonly string[] {
  * auto-approved its own read:session-events grant, used it to run its target
  * Investigation to conclusion, then promoted the task to Ready). A groom
  * request for either capability now falls through to the ordinary
- * operator-park path instead. ops/design/gate-verify sessions are unaffected
- * — those flows are supposed to read the record — and the own-record reader
- * and the allowlist are untouched for every session type, including groom.
+ * operator-park path instead. ops/design/gate-verify/investigate sessions
+ * are unaffected — those flows are supposed to read the record — and the
+ * own-record reader and the allowlist are untouched for every session type,
+ * including groom.
+ *
+ * An investigate-dispatched session (`requestingTaskId` matching
+ * sessionPredicates.ts#isInvestigateSession's `report-batch:` prefix) is
+ * explicitly folded into the non-groom carve-out rather than left to pass it
+ * incidentally by virtue of its sessionType staying 'ops' — the /investigate
+ * skill's read-only-by-default posture makes this record exactly the
+ * evidence an investigate session is dispatched to read (§ Evidence law:
+ * "Session S did / didn't do Y" admits only its session_events transcript),
+ * so this is named as a first-class case rather than relying on "not groom"
+ * to cover it.
  */
 export function isSanctionedAutoApproveCapability(
   capability: string,
   requestingSessionId: string,
   requestingProjectId?: string | null,
   requestingSessionType?: string | null,
+  requestingTaskId?: string | null,
 ): boolean {
+  const nonGroomCarveOut =
+    requestingSessionType !== 'groom' || isInvestigateSession(requestingTaskId);
   return (
     capability === sessionRecordReadCapability(requestingSessionId) ||
     (requestingProjectId != null &&
-      requestingSessionType !== 'groom' &&
+      nonGroomCarveOut &&
       (capability === auditLogReadCapability(requestingProjectId) ||
         capability === sessionEventsReadCapability(requestingProjectId))) ||
     sanctionedAutoApproveCapabilities().includes(capability)
@@ -605,6 +794,14 @@ export function bashCapabilityConfersFileMutation(capability: string): boolean {
  * task-body convention). Only merged in for sessionType 'docs' — every other
  * session type ignores it. Never widens to an open WebFetch/WebSearch: an
  * empty/omitted list grants no WebFetch at all.
+ *
+ * `taskId` distinguishes an investigate-dispatched session from a plain ops
+ * session: both spawn with sessionType 'ops' (see
+ * sessionPredicates.ts#isInvestigateSession — no dedicated SessionType
+ * literal exists for investigate), so the narrower INVESTIGATE_ALLOWED_TOOLS
+ * envelope can only be selected by inspecting `taskId`'s `report-batch:`
+ * prefix, ahead of the generic 'ops' branch below. Omitted (or a non-'ops'
+ * sessionType) has no effect.
  */
 export function getSessionAllowedTools(
   sessionType: string,
@@ -612,6 +809,7 @@ export function getSessionAllowedTools(
   granted: string[] = [],
   taskSource?: 'notion' | 'yaml' | 'jira' | 'github',
   docsSourceDomains: string[] = [],
+  taskId?: string | null,
 ): string[] {
   const grantable = granted.filter(isGrantable).filter(isToolShapedCapability);
   const notionExtras = taskSource === 'notion' ? NOTION_READ_MCP_TOOLS : [];
@@ -620,17 +818,27 @@ export function getSessionAllowedTools(
       ? [...GROOM_ALLOWED_TOOLS, ...notionExtras]
       : sessionType === 'design'
         ? [...DESIGN_ALLOWED_TOOLS, ...notionExtras]
-        : sessionType === 'ops'
-          ? [...OPS_ALLOWED_TOOLS, ...notionExtras, ...orchConfig.allowed_tools]
-          : sessionType === 'docs'
+        : sessionType === 'ops' && isInvestigateSession(taskId)
+          ? [
+              ...INVESTIGATE_ALLOWED_TOOLS,
+              ...notionExtras,
+              ...orchConfig.allowed_tools,
+            ]
+          : sessionType === 'ops'
             ? [
-                ...DOCS_ALLOWED_TOOLS,
+                ...OPS_ALLOWED_TOOLS,
                 ...notionExtras,
-                ...docsWebFetchTools(docsSourceDomains),
+                ...orchConfig.allowed_tools,
               ]
-            : sessionType === 'depth_review'
-              ? [...DEPTH_REVIEW_ALLOWED_TOOLS, ...notionExtras]
-              : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
+            : sessionType === 'docs'
+              ? [
+                  ...DOCS_ALLOWED_TOOLS,
+                  ...notionExtras,
+                  ...docsWebFetchTools(docsSourceDomains),
+                ]
+              : sessionType === 'depth_review'
+                ? [...DEPTH_REVIEW_ALLOWED_TOOLS, ...notionExtras]
+                : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
   return [...new Set([...base, ...grantable])];
 }
 

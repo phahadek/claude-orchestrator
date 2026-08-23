@@ -152,6 +152,11 @@ describe('orchestrator-claudemd.ts — no board-discovery instruction', () => {
     expect(source).toMatch(/no remaining work.*stop|stop.*wait/i);
   });
 
+  it('instructs the session to stage a planning.noOp declaration instead of stopping silently when the work is already satisfied', () => {
+    expect(source).toMatch(/planning\.noOp/);
+    expect(source).toMatch(/already satisfied/i);
+  });
+
   it('does not instruct sessions to search the board for a task to do', () => {
     // The lifecycle section must not contain open-ended board-search instructions
     expect(source).not.toMatch(/fetch.*board.*task|search.*board.*for.*task/i);
@@ -563,13 +568,19 @@ describe('SessionManager.resumeOrphanSessions()', () => {
     const flagIdx = source.indexOf('private flagResumeFailure(');
     const nextMethod = source.indexOf('\n  private ', flagIdx + 1);
     const flagBlock = source.slice(flagIdx, nextMethod);
+    // The terminal write now routes through the single status deriver
+    // (session/sessionStatusDeriver.ts) rather than writing sessions.status
+    // directly: record a 'resume_exhausted' completing signal, derive the
+    // outcome, then persist whatever the deriver returns.
+    expect(flagBlock).toMatch(/signal_class:\s*'resume_exhausted'/);
+    expect(flagBlock).toMatch(/deriveSessionStatus\s*\(/);
     expect(flagBlock).toMatch(
-      /updateSessionStatus\s*\(\s*row\.session_id\s*,\s*'error'/,
+      /updateSessionStatus\s*\(\s*row\.session_id\s*,\s*status\s*,/,
     );
     expect(flagBlock).toMatch(/reason:\s*'resume_failed'/);
   });
 
-  it('respects max_concurrent_code_sessions — slices code orphans into toResume and toError', () => {
+  it('respects max_concurrent_code_sessions — slices code orphans into toResume and toDefer', () => {
     expect(source).toMatch(
       /runtimeSettings\.max_concurrent_code_sessions\s*-\s*codeSessionCount/,
     );
@@ -577,9 +588,14 @@ describe('SessionManager.resumeOrphanSessions()', () => {
     expect(source).toMatch(/codeOrphans\.slice\s*\(\s*available\s*\)/);
   });
 
-  it('logs a warning and marks excess code orphans as error when limit is exceeded', () => {
-    expect(source).toMatch(/for\s*\(.*of\s+toError/);
-    expect(source).toMatch(/marking orphan.*as error/);
+  it('logs a warning and leaves excess code orphans resumable (never terminal) when limit is exceeded', () => {
+    // Excess orphans were already running before the restart — they aren't
+    // stuck, only outnumbering this boot pass's admission cap, so they must
+    // never be routed through markSessionErrored.
+    expect(source).toMatch(/for\s*\(.*of\s+toDefer/);
+    expect(source).not.toMatch(
+      /this\.markSessionErrored\s*\(\s*row\.session_id/,
+    );
   });
 
   it('always resumes review orphans regardless of code session count', () => {

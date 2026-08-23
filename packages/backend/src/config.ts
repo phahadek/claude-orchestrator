@@ -2,7 +2,10 @@ import { getSecret } from './security/secrets';
 import { getOrchestratorConfig } from './config/appConfig';
 import type { NonMilestoneSourceConfig } from './tasks/TaskBackend';
 import { orchestratorMcpToolName, notionMcpToolName } from './mcp/toolNaming';
-import { PLANNING_INTENT_KINDS } from './planning/planningIntentKinds';
+import {
+  PLANNING_INTENT_KINDS,
+  INVESTIGATE_INTENT_KINDS,
+} from './planning/planningIntentKinds';
 
 interface Board {
   /** Milestone row id — used as the milestoneId for WS fetch_tasks. */
@@ -29,6 +32,8 @@ export interface ProjectConfig {
   nonMilestoneSourceConfig?: NonMilestoneSourceConfig | null; // config for the non-milestone task pool
   dataResidencyConfirmed: boolean; // ZDR attestation — user confirms Anthropic ZDR is enabled
   baseBranch: string; // default branch used when creating worktrees (e.g. 'dev' or 'main')
+  /** Per-project test-lane concurrency cap. Null = fall back to the global test_request_max_concurrent_per_project setting. */
+  testRequestMaxConcurrent: number | null;
 }
 
 export function resolveClaudePath(
@@ -200,6 +205,25 @@ export const ALLOWED_TOOLS = [
   // trigger. Named through orchestratorMcpToolName so it emits the
   // underscore CLI form the model actually calls.
   orchestratorMcpToolName('review.dispute'),
+  // report.file is a dispatched code/review session's route to file an
+  // inert investigation report about a defect it must not fix itself (see
+  // CODE_INTENT_KINDS, planningIntentKinds.ts). Same failure mode as
+  // test.request/review.dispute above without this entry: the tool is
+  // registered server-side but unlisted here, so every call is denied by
+  // the CLI before it reaches the MCP server. Named through
+  // orchestratorMcpToolName so it emits the underscore CLI form the model
+  // actually calls.
+  orchestratorMcpToolName('report.file'),
+  // planning.noOp is a code session's terminal declaration that a
+  // dispatched task's work is already satisfied elsewhere — the scaffold
+  // now directs it to stage this instead of stopping silently, which would
+  // otherwise leave the task to be re-dispatched forever (see
+  // CODE_INTENT_KINDS, planningIntentKinds.ts, and routes/stagedIntents.ts's
+  // maybeAutoResolveCodeNoOp). Same failure mode as test.request/
+  // review.dispute/report.file above without this entry: registered
+  // server-side but unlisted here, every call denied by the CLI before it
+  // reaches the MCP server.
+  orchestratorMcpToolName('planning.noOp'),
   ...TIER_B_READ_MCP_TOOLS,
 ];
 
@@ -310,11 +334,15 @@ const ARCHITECTURE_READ_MCP_TOOLS = [
   orchestratorMcpToolName('architecture.queryUnits'),
 ];
 
-// task.getById — the read-only task-summary ({title, type, status}) lookup
-// (mcp/tools/taskReadTools.ts), always-on for groom/design/ops by the same
-// precedent as ARCHITECTURE_READ_MCP_TOOLS above. Not a staged-intent kind,
-// so it isn't in PLANNING_INTENT_KINDS — added here explicitly.
-const TASK_READ_MCP_TOOLS = [orchestratorMcpToolName('task.getById')];
+// task.getById / task.queryTasks — the read-only task-summary
+// ({title, type, status}) lookup and board search (mcp/tools/taskReadTools.ts),
+// always-on for groom/design/ops by the same precedent as
+// ARCHITECTURE_READ_MCP_TOOLS above. Not staged-intent kinds, so neither is
+// in PLANNING_INTENT_KINDS — added here explicitly.
+const TASK_READ_MCP_TOOLS = [
+  orchestratorMcpToolName('task.getById'),
+  orchestratorMcpToolName('task.queryTasks'),
+];
 
 // pullRequest.getByTaskId — the read-only PR lookup
 // (mcp/tools/pullRequestReadTools.ts), registered unconditionally by
@@ -326,8 +354,17 @@ const TASK_READ_MCP_TOOLS = [orchestratorMcpToolName('task.getById')];
 // server also registers it unconditionally for groom/design — a groom/design
 // session must never be CLI-permitted to call it, only ever see it listed
 // (see orchestrator-config.test.ts's "never a mutating gate/seed tool" guard).
+// testHealth.getFlakyHistory — the read-only flagged_flaky_tests_rollup /
+// base_health_remediation_test_tracking lookup (mcp/tools/testHealthReadTools.ts),
+// also registered unconditionally by buildMcpServer for any session resolving
+// to a project. Unlike gateSeed.getState, this one IS CLI-allowed for
+// groom/design too: a groom session investigating a base-health remediation
+// task needs to actually call it (that's the entire point — consulting the
+// orchestrator's own accumulated flaky-test evidence instead of re-running
+// the test suite), not just see it listed.
 const PROJECT_READ_MCP_TOOLS = [
   orchestratorMcpToolName('pullRequest.getByTaskId'),
+  orchestratorMcpToolName('testHealth.getFlakyHistory'),
 ];
 
 const GROOM_MCP_TOOLS = [
@@ -408,6 +445,22 @@ const OPS_MCP_TOOLS = [
 ];
 
 /**
+ * Self-scheduling/re-entry built-ins — any tool that grants a scheduling or
+ * re-entry path the orchestrator doesn't own. Dispatched sessions (planning
+ * one-shot turns, and code/review sessions that should await pushed
+ * feedback rather than respawn to poll for it) must never hold these
+ * (--allowed-tools omission alone doesn't gate CLI built-ins, so this must
+ * be an explicit --disallowed-tools entry). Shared so every disallow list
+ * that needs it composes from one source instead of restating the names.
+ */
+export const SCHEDULING_DISALLOWED_TOOLS = [
+  'ScheduleWakeup',
+  'CronCreate',
+  'CronDelete',
+  'CronList',
+];
+
+/**
  * Dispatched planning sessions (groom/design/ops) are one-shot turns that end
  * and park idle, re-driven only by an operator disposition. Any built-in
  * that grants a scheduling or re-entry path the orchestrator doesn't own —
@@ -419,10 +472,7 @@ export const PLANNING_DISALLOWED_TOOLS = [
   'Skill',
   'Write',
   'Edit',
-  'ScheduleWakeup',
-  'CronCreate',
-  'CronDelete',
-  'CronList',
+  ...SCHEDULING_DISALLOWED_TOOLS,
 ];
 
 /**
@@ -477,6 +527,50 @@ export const DESIGN_ALLOWED_TOOLS = [
 export const OPS_ALLOWED_TOOLS = [
   ...PLANNING_READONLY_BASH_TOOLS,
   ...OPS_MCP_TOOLS,
+  'Bash(git log:*)',
+  'Bash(git diff:*)',
+  'Bash(git show:*)',
+  'Bash(git status:*)',
+  'Bash(git blame:*)',
+  'Bash(git ls-files:*)',
+  'Bash(git rev-parse:*)',
+  'Bash(git branch --list:*)',
+  'Bash(git grep:*)',
+];
+
+// The orchestrator MCP tools an investigate-dispatched session (sessionType
+// 'ops', task_id `report-batch:<batchId>` — see
+// sessionPredicates.ts#isInvestigateSession) is allowed to call — derived
+// from INVESTIGATE_INTENT_KINDS (planning/planningIntentKinds.ts) rather than
+// PLANNING_INTENT_KINDS.ops, same precedent as GROOM_MCP_TOOLS/
+// DESIGN_MCP_TOOLS/OPS_MCP_TOOLS above. Deliberately omits gateSeed.getState,
+// deploy.verdict, gate.reclassify, and intent.dispositionStranded — the
+// OPS_MCP_TOOLS entries added explicitly outside PLANNING_INTENT_KINDS.ops —
+// since none of them have an investigate analog either.
+const INVESTIGATE_MCP_TOOLS = [
+  ORCHESTRATOR_MCP_HEALTH_TOOL,
+  ...INVESTIGATE_INTENT_KINDS.map(orchestratorMcpToolName),
+  ...ARCHITECTURE_READ_MCP_TOOLS,
+  ...TASK_READ_MCP_TOOLS,
+  ...PROJECT_READ_MCP_TOOLS,
+  ...TIER_B_READ_MCP_TOOLS,
+];
+
+/**
+ * investigate session tool set: OPS_ALLOWED_TOOLS's domain-agnostic base
+ * (read-only Bash, the always-on read tools) with the ops_journal/gate/
+ * deploy-specific MCP surface swapped out for INVESTIGATE_MCP_TOOLS — no
+ * `journal.setState`, `gate.verify`, `gateSeed.getState`, `deploy.verdict`,
+ * `gate.reclassify`, `intent.dispositionStranded`, or `ops.prIntent`, none
+ * of which have an investigate analog (see investigation/
+ * investigateDispatcher.ts). Investigate sessions are dispatched with
+ * sessionType 'ops' (see sessionPredicates.ts#isInvestigateSession), so
+ * getSessionAllowedTools must special-case this constant in ahead of its
+ * generic 'ops' branch — see orchestrator-config.ts.
+ */
+export const INVESTIGATE_ALLOWED_TOOLS = [
+  ...PLANNING_READONLY_BASH_TOOLS,
+  ...INVESTIGATE_MCP_TOOLS,
   'Bash(git log:*)',
   'Bash(git diff:*)',
   'Bash(git show:*)',
@@ -587,6 +681,7 @@ function hydrateProject(p: {
   nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
   dataResidencyConfirmed: boolean;
   baseBranch: string;
+  testRequestMaxConcurrent: number | null;
   milestones: { id: string; sourceId: string | null; name: string }[];
 }): ProjectConfig {
   // boards[].id is now the milestone row id (used as milestoneId for fetch_tasks).
@@ -612,6 +707,7 @@ function hydrateProject(p: {
     nonMilestoneSourceConfig: p.nonMilestoneSourceConfig,
     dataResidencyConfirmed: p.dataResidencyConfirmed,
     baseBranch: p.baseBranch ?? 'dev',
+    testRequestMaxConcurrent: p.testRequestMaxConcurrent,
   };
   if (boards.length > 0) config.boards = boards;
   if (p.githubRepo) config.githubRepo = p.githubRepo;
@@ -693,6 +789,12 @@ export interface RuntimeSettings {
   session_inert_threshold_seconds: number;
   /** After pause, seconds during which a tool_use triggers a hard-stop. */
   session_hard_stop_window_seconds: number;
+  /**
+   * Bound on a stuck_session_alive_subprocess park (StuckSessionMonitor):
+   * seconds a session may sit idle with its subprocess still alive and no new
+   * session_events before StuckSessionMonitor escalates to teardown. 0 disables.
+   */
+  session_alive_park_escalation_seconds: number;
   /** Auto-merger: seconds between CI status polls while waiting for green. */
   ci_poll_interval_seconds: number;
   /** Auto-merger: minutes before the merge attempt gives up and pauses. */
@@ -734,6 +836,10 @@ export interface RuntimeSettings {
   gate_verify_session_model: string;
   /** Reasoning effort for gate-verify sessions; empty string = fall back to ops_session_effort. */
   gate_verify_session_effort: string;
+  /** Model used for investigate sessions (task_id `report-batch:<id>`); empty string = fall back to ops_session_model. */
+  investigate_session_model: string;
+  /** Reasoning effort for investigate sessions; empty string = fall back to ops_session_effort. */
+  investigate_session_effort: string;
   /** Model used for grooming sessions; empty string = fall back to planning_session_model. */
   groom_session_model: string;
   /** Reasoning effort for grooming sessions; empty string = fall back to planning_session_effort. */
@@ -761,12 +867,26 @@ export interface RuntimeSettings {
    * real ceiling.
    */
   max_concurrent_verify_sessions: number;
+  /**
+   * Sub-limit of max_concurrent_planning_sessions dedicated to investigate
+   * dispatch (see investigation/investigationReconciler.ts) — investigate
+   * sessions still count against the shared planning pool at
+   * SessionManager.start; this only bounds how many of that pool the
+   * reconciler will claim for investigate in one tick. Mirrors
+   * max_concurrent_verify_sessions's precedent; addresses the "burst of
+   * session-filed reports" concern from the Investigate dispatch flow arm
+   * semantics decision. Setting it above max_concurrent_planning_sessions
+   * does not raise the real ceiling.
+   */
+  max_concurrent_investigate_sessions: number;
   /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
   task_cache_refresh_interval_ms: number;
   /** GateReconciler: built but not activated by default (no-coexistence rule) — off until an operator opts in. */
   gate_verification_enabled: boolean;
   /** GateReconciler: interval in milliseconds between reconcile ticks. */
   gate_verification_interval_ms: number;
+  /** InvestigationReconciler: interval in milliseconds between reconcile ticks. */
+  investigation_reconciler_interval_ms: number;
   /** Model used by the Tier-3 semantic readiness advisory (paraphrased-deferral) classifier. */
   tier3_classifier_model: string;
   /**
@@ -804,6 +924,8 @@ export interface RuntimeSettings {
   hourly_usage_pause_threshold_percent: string;
   /** Soft-pause auto-launch when the polled weekly usage percent reaches this threshold; '' = disabled. */
   weekly_usage_pause_threshold_percent: string;
+  /** decision.pickOne fields (decisionProposal/investigation/option description) over this many characters must contain a \n\n paragraph break. */
+  decision_pick_one_paragraph_threshold: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -824,6 +946,8 @@ export const runtimeSettings: RuntimeSettings = {
   ops_session_effort: '',
   gate_verify_session_model: '',
   gate_verify_session_effort: '',
+  investigate_session_model: '',
+  investigate_session_effort: '',
   groom_session_model: '',
   groom_session_effort: '',
   design_session_model: '',
@@ -836,6 +960,9 @@ export const runtimeSettings: RuntimeSettings = {
   max_concurrent_verify_sessions: Number(
     process.env.MAX_CONCURRENT_VERIFY_SESSIONS ?? 5,
   ),
+  max_concurrent_investigate_sessions: Number(
+    process.env.MAX_CONCURRENT_INVESTIGATE_SESSIONS ?? 5,
+  ),
   session_mode: process.env.SESSION_MODE === 'api' ? 'api' : 'cli',
   auto_launch_concurrency: Number(process.env.AUTO_LAUNCH_CONCURRENCY ?? 1),
   auto_launch_poll_interval_ms: Number(
@@ -843,6 +970,7 @@ export const runtimeSettings: RuntimeSettings = {
   ),
   hourly_usage_pause_threshold_percent: '',
   weekly_usage_pause_threshold_percent: '',
+  decision_pick_one_paragraph_threshold: 560,
   min_host_free_memory_mb: Number(process.env.MIN_HOST_FREE_MEMORY_MB ?? 4096),
   per_session_reserve_mb: Number(process.env.PER_SESSION_RESERVE_MB ?? 3072),
   session_cgroup_prod_reserve_mb: Number(
@@ -863,6 +991,9 @@ export const runtimeSettings: RuntimeSettings = {
   ),
   session_hard_stop_window_seconds: Number(
     process.env.SESSION_HARD_STOP_WINDOW_SECONDS ?? 60,
+  ),
+  session_alive_park_escalation_seconds: Number(
+    process.env.SESSION_ALIVE_PARK_ESCALATION_SECONDS ?? 900,
   ),
   milestone_attention_aging_threshold_seconds: Number(
     process.env.MILESTONE_ATTENTION_AGING_THRESHOLD_SECONDS ?? 24 * 60 * 60,
@@ -904,6 +1035,9 @@ export const runtimeSettings: RuntimeSettings = {
   gate_verification_enabled: process.env.GATE_VERIFICATION_ENABLED === 'true',
   gate_verification_interval_ms: Number(
     process.env.GATE_VERIFICATION_INTERVAL_MS ?? 60_000,
+  ),
+  investigation_reconciler_interval_ms: Number(
+    process.env.INVESTIGATION_RECONCILER_INTERVAL_MS ?? 60_000,
   ),
   tier3_classifier_model: 'claude-haiku-4-5-20251001',
   capability_auto_approve_enabled:

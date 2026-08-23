@@ -23,6 +23,9 @@ import {
   clearPausedPrReasonForTask,
   resetTaskCrashCount,
   getTaskRepoAssignment,
+  isNoOpSuppressed,
+  hasOpenBaseHealthRemediation,
+  getBaseHealthRemediationReasonTrackingByOpenTaskId,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency, yieldToEventLoop } from '../utils/concurrency';
@@ -34,6 +37,7 @@ import {
   isUsageThresholdAdmitted,
   parseThresholdPercent,
 } from './usageAdmission';
+import type { BaseHealthCheckResult } from './baseHealthCheck';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -147,6 +151,10 @@ export class AutoLauncher {
       resolveBackend?: (projectId: string) => TaskBackend;
       /** Whether to immediately run a poll cycle when start() is called. Defaults to true. */
       pollOnStart?: boolean;
+      /** Base-branch health checker — defaulted to checkBaseBranchHealth for production. */
+      checkBaseHealth?: (
+        project: ProjectConfig,
+      ) => Promise<BaseHealthCheckResult>;
     } = {},
   ) {
     // Subscribe to SessionManager events so launch_failed notifications trigger
@@ -223,10 +231,45 @@ export class AutoLauncher {
         ),
       concurrency: 'skip-if-running',
       run: async () => {
+        // cycleCounter only advances inside runPollCycle() — i.e. when
+        // pollOnce() actually ran a fresh cycle, not when its own `polling`
+        // guard turned this call into a no-op (e.g. racing the boot-time
+        // direct pollOnce() call). Comparing before/after distinguishes the
+        // two: reading lastTickResult after a no-op would report a stale,
+        // unrelated prior cycle's counts instead of this tick's own (zero).
+        const cycleBefore = this.cycleCounter;
         await this.pollOnce();
+        if (this.cycleCounter === cycleBefore) {
+          return { items_processed: 0 };
+        }
+        const { eligible, launched, skipped, blockReason } =
+          this.lastTickResult;
+        // A negative items_processed mirrors gateReconciler's convention:
+        // "found runnable work but dispatched none of it for want of
+        // budget" — the same admission-block condition that drives
+        // evaluateAdmissionStall (eligible > 0, launched === 0, a block
+        // reason present). Individual per-task launch failures with no
+        // admission block (e.g. worktree setup errors) are a genuine zero,
+        // not a budget block, so they stay 0.
+        const items_processed =
+          launched > 0 ? launched : eligible > 0 && blockReason ? -skipped : 0;
+        return { items_processed };
       },
     });
   }
+
+  /**
+   * Aggregated outcome of the most recently completed poll cycle, consumed
+   * by register()'s run callback to derive items_processed. pollOnce()
+   * itself stays Promise<void> — callers (boot sequence, AutoMerger-style
+   * dispatch, existing tests) only ever awaited completion, never a value.
+   */
+  private lastTickResult: {
+    eligible: number;
+    launched: number;
+    skipped: number;
+    blockReason?: AdmissionBlockReason;
+  } = { eligible: 0, launched: 0, skipped: 0 };
 
   /**
    * Run a single poll cycle. Called directly on boot (after resumeOrphanSessions)
@@ -241,19 +284,25 @@ export class AutoLauncher {
     }
     this.polling = true;
     try {
-      await this.runPollCycle();
+      this.lastTickResult = await this.runPollCycle();
     } finally {
       this.polling = false;
     }
   }
 
-  private async runPollCycle(): Promise<void> {
+  private async runPollCycle(): Promise<{
+    eligible: number;
+    launched: number;
+    skipped: number;
+    blockReason?: AdmissionBlockReason;
+  }> {
     const cycleId = ++this.cycleCounter;
     this.pollLastStartedAt = Date.now();
     logger.info(`[AutoLauncher] poll start cycle=${cycleId}`);
     let eligibleCount = 0;
     let launchedCount = 0;
     let skippedCount = 0;
+    let aggBlockReason: AdmissionBlockReason | undefined;
     try {
       const listProjects = this.options.listProjects ?? getAllProjects;
       const projects = listProjects().filter((p) => p.autoLaunchEnabled);
@@ -289,6 +338,7 @@ export class AutoLauncher {
         }
       }
       this.lastPollReadyTaskIds = newReadyTaskIds;
+      aggBlockReason = blockReason;
       this.evaluateAdmissionStall(
         eligibleCount,
         launchedCount,
@@ -301,6 +351,12 @@ export class AutoLauncher {
         `[AutoLauncher] poll complete cycle=${cycleId} (eligible=${eligibleCount}, launched=${launchedCount}, skipped=${skippedCount}) durationMs=${elapsedMs}`,
       );
     }
+    return {
+      eligible: eligibleCount,
+      launched: launchedCount,
+      skipped: skippedCount,
+      blockReason: aggBlockReason,
+    };
   }
 
   private async processProject(project: ProjectConfig): Promise<{
@@ -432,6 +488,27 @@ export class AutoLauncher {
       this.maybeClearStaleReadyTransitionPauses(resolved.task.id);
     }
 
+    // Base-health gate: only evaluated on-demand — never a proactive poller.
+    // checkBaseBranchHealth is only invoked once some task's own test-request
+    // failure has already triggered an on-demand confirmation (see
+    // baseAttributableFilter.ts), which is what leaves an open total_fail
+    // remediation tracking row for this project, or once a task is already
+    // sitting under a base_branch_broken pause from an earlier tick that
+    // needs to be maintained/cleared. A project no task has ever failed a
+    // test-request against never calls checkBaseHealth at all.
+    const readyCodeTasks = allTasks.filter((t) => this.isReadyCodeCandidate(t));
+    if (readyCodeTasks.length > 0) {
+      const hasActiveOrPendingBreak =
+        hasOpenBaseHealthRemediation(project.id) ||
+        readyCodeTasks.some(
+          ({ task }) =>
+            getTaskPauseReason(task.id)?.reason === 'base_branch_broken',
+        );
+      if (hasActiveOrPendingBreak) {
+        await this.applyBaseHealthGate(project, readyCodeTasks);
+      }
+    }
+
     const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
     if (candidates.length === 0)
       return { eligible: 0, launched: 0, skipped: 0, readyTaskIds };
@@ -515,8 +592,14 @@ export class AutoLauncher {
     return firstWithSource?.id ?? null;
   }
 
-  /** Decide whether a ResolvedTask is eligible for auto-launch this cycle. */
-  private isLaunchCandidate(resolved: ResolvedTask): boolean {
+  /**
+   * Status/type/dependency/manual-pause eligibility, ignoring the persisted
+   * task_pause_reasons check — used both as the first half of
+   * isLaunchCandidate and to decide which tasks the base-health gate applies
+   * to (a task already excluded here shouldn't have its pause reason touched
+   * by a base-health check).
+   */
+  private isReadyCodeCandidate(resolved: ResolvedTask): boolean {
     const { task } = resolved;
     if (task.status !== READY_STATUS) return false;
     if (task.type !== CODE_TYPE) return false;
@@ -527,6 +610,13 @@ export class AutoLauncher {
     const maybePauseReason = (task as { pause_reason?: string | null })
       .pause_reason;
     if (maybePauseReason != null && maybePauseReason !== '') return false;
+    return true;
+  }
+
+  /** Decide whether a ResolvedTask is eligible for auto-launch this cycle. */
+  private isLaunchCandidate(resolved: ResolvedTask): boolean {
+    const { task } = resolved;
+    if (!this.isReadyCodeCandidate(resolved)) return false;
     // Skip tasks blocked by the crash budget or escalated to needs_attention (persisted).
     if (getTaskPauseReason(task.id) != null) return false;
     // Skip tasks in launch_failed cooldown (in-memory, resets on process restart).
@@ -538,6 +628,11 @@ export class AutoLauncher {
     // status wasn't updated yet. The Notion catch-up update is handled in
     // processProject so we have access to the backend.
     if (getMergedPRForTask(task.id) != null) return false;
+    // Skip if a committed planning.noOp still stands — a session already
+    // declared this task's work satisfied elsewhere and drove it to Done
+    // (see routes/stagedIntents.ts's maybeAutoResolveCodeNoOp). Retires
+    // automatically the moment the task is next edited (isNoOpSuppressed).
+    if (isNoOpSuppressed(task.id)) return false;
     return true;
   }
 
@@ -626,6 +721,86 @@ export class AutoLauncher {
       };
     }
     return { allowed: true };
+  }
+
+  /**
+   * Holds new dispatch for a project when its base branch is broken at a
+   * whole-suite/build level (checkBaseBranchHealth's `total_fail` outcome —
+   * a crash/OOM-kill with no per-test breakdown), and lifts the hold as soon
+   * as a subsequent check comes back anything else. `partial_fail` (an
+   * ordinary per-test breakdown, however large) and `unknown` (provisioning
+   * failure/timeout) must never block — both fall through to the else branch
+   * below, matching today's pre-this-design behavior. Applied per-task via
+   * the existing task_pause_reasons mechanism so isLaunchCandidate's
+   * pre-existing pause check does the actual blocking.
+   */
+  private async applyBaseHealthGate(
+    project: ProjectConfig,
+    readyCodeTasks: ResolvedTask[],
+  ): Promise<void> {
+    // Dynamically imported rather than statically — baseHealthCheck.ts pulls
+    // in ScheduledAuditSweep.ts, whose module-level defaultDeps reads
+    // getAllProjects from '../config' at import time. A static import here
+    // would make every existing test's `vi.mock('../config.js', ...)`
+    // — most of them intentionally partial, since they never needed
+    // getAllProjects before — throw at module-load time. Deferring to a
+    // dynamic import keeps that failure (if it ever happens) inside this
+    // function's own try/catch, which already treats a thrown check as
+    // fail-open.
+    const checkBaseHealth =
+      this.options.checkBaseHealth ??
+      (async (p: ProjectConfig) => {
+        const { checkBaseBranchHealth } = await import('./baseHealthCheck');
+        return checkBaseBranchHealth(p);
+      });
+    let result: BaseHealthCheckResult;
+    try {
+      result = await checkBaseHealth(project);
+    } catch (err) {
+      logger.warn(
+        `[AutoLauncher] project ${project.id}: base-health check threw — treating as unknown (fail-open): ${err}`,
+      );
+      return;
+    }
+
+    if (result.outcome === 'total_fail') {
+      for (const { task } of readyCodeTasks) {
+        // Never pause (and always clear) the task that is itself the linked
+        // open remediation task for this exact break — it's the one task
+        // capable of ever landing the fix that clears this gate. Pausing it
+        // would deadlock the project: no commit could ever land on base, so
+        // no subsequent check could ever come back non-total_fail.
+        if (getBaseHealthRemediationReasonTrackingByOpenTaskId(task.id)) {
+          if (getTaskPauseReason(task.id)?.reason === 'base_branch_broken') {
+            clearTaskPauseReason(task.id);
+            logger.info(
+              `[AutoLauncher] project ${project.id}: task ${task.id} is the open base-health remediation task for this break — clearing its dispatch hold`,
+            );
+          }
+          continue;
+        }
+        if (getTaskPauseReason(task.id)?.reason === 'base_branch_broken')
+          continue;
+        setTaskPauseReason(
+          task.id,
+          'base_branch_broken',
+          result.contentHash ?? '',
+        );
+        logger.warn(
+          `[AutoLauncher] project ${project.id}: base branch total_fail (contentHash=${result.contentHash}) — holding task ${task.id} from dispatch`,
+        );
+      }
+      return;
+    }
+
+    for (const { task } of readyCodeTasks) {
+      if (getTaskPauseReason(task.id)?.reason !== 'base_branch_broken')
+        continue;
+      clearTaskPauseReason(task.id);
+      logger.info(
+        `[AutoLauncher] project ${project.id}: base-health cleared (${result.outcome}) — resuming dispatch for task ${task.id}`,
+      );
+    }
   }
 
   /**

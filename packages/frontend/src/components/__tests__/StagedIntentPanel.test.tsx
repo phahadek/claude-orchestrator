@@ -10,6 +10,7 @@ import { StagedIntentPanel } from '../StagedIntentPanel';
 import { stagedIntentsApi } from '../../api/stagedIntents';
 import type { StagedIntent } from '../../api/stagedIntents';
 import { gateApi } from '../../api/gate';
+import { TERMINAL_ON_APPROVE_INTENT_KINDS } from '@claude-orchestrator/backend/src/db/types';
 
 function fireKey(key: string, target?: EventTarget) {
   const event = new KeyboardEvent('keydown', { key, bubbles: true });
@@ -981,7 +982,7 @@ describe('StagedIntentPanel', () => {
       expect(park.disabled).toBe(true);
 
       fireEvent.change(
-        screen.getByTestId('staged-intent-gate-verify-mirror-park-evidence'),
+        screen.getByTestId('staged-intent-gate-verify-mirror-evidence'),
         {
           target: {
             value: 'not triggerable yet — waiting on the real-world event',
@@ -1018,8 +1019,145 @@ describe('StagedIntentPanel', () => {
           override: false,
           reason: undefined,
           mirrorDisposition: 'deferred',
-          mirrorEvidence: undefined,
+          mirrorEvidence: '',
         }),
+      );
+    });
+
+    it('renders exactly one textarea, with a placeholder that is not park-specific', () => {
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      const textareas = screen.getAllByRole('textbox');
+      expect(textareas.length).toBe(1);
+      expect((textareas[0] as HTMLTextAreaElement).placeholder).not.toMatch(
+        /park/i,
+      );
+    });
+
+    it('does not render the Pushback/Decline radio pair or its revise textarea', () => {
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      expect(screen.queryByRole('radio', { name: /pushback/i })).toBeNull();
+      expect(screen.queryByRole('radio', { name: /decline/i })).toBeNull();
+      expect(
+        screen.queryByPlaceholderText('What should the session revise?'),
+      ).toBeNull();
+    });
+
+    it('sends the shared evidence box contents as mirrorEvidence on Pass, Fail, and Defer', async () => {
+      const apply = vi
+        .spyOn(stagedIntentsApi, 'apply')
+        .mockResolvedValue({ ok: true, result: {} });
+
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+      fireEvent.change(
+        screen.getByTestId('staged-intent-gate-verify-mirror-evidence'),
+        { target: { value: 'confirmed via dashboard' } },
+      );
+
+      fireEvent.click(
+        screen.getByTestId('staged-intent-gate-verify-mirror-pass'),
+      );
+      await waitFor(() =>
+        expect(apply).toHaveBeenLastCalledWith('intent-1', {
+          override: false,
+          reason: undefined,
+          mirrorDisposition: 'pass',
+          mirrorEvidence: 'confirmed via dashboard',
+        }),
+      );
+      // The mirror buttons disable for the duration of the in-flight apply()
+      // call; waitFor above can observe the mock invocation on the same tick
+      // the promise resolves, before the button's re-enabling re-render has
+      // committed. Wait for it explicitly so the next click isn't dropped.
+      await waitFor(() =>
+        expect(
+          (
+            screen.getByTestId(
+              'staged-intent-gate-verify-mirror-fail',
+            ) as HTMLButtonElement
+          ).disabled,
+        ).toBe(false),
+      );
+
+      fireEvent.click(
+        screen.getByTestId('staged-intent-gate-verify-mirror-fail'),
+      );
+      await waitFor(() =>
+        expect(apply).toHaveBeenLastCalledWith('intent-1', {
+          override: false,
+          reason: undefined,
+          mirrorDisposition: 'fail',
+          mirrorEvidence: 'confirmed via dashboard',
+        }),
+      );
+      await waitFor(() =>
+        expect(
+          (
+            screen.getByTestId(
+              'staged-intent-gate-verify-mirror-defer',
+            ) as HTMLButtonElement
+          ).disabled,
+        ).toBe(false),
+      );
+
+      fireEvent.click(
+        screen.getByTestId('staged-intent-gate-verify-mirror-defer'),
+      );
+      await waitFor(() =>
+        expect(apply).toHaveBeenLastCalledWith('intent-1', {
+          override: false,
+          reason: undefined,
+          mirrorDisposition: 'deferred',
+          mirrorEvidence: 'confirmed via dashboard',
+        }),
+      );
+    });
+
+    it('reclassifies the item to Read-Only via gateApi.reclassifyItem with the shared evidence text as the reason', async () => {
+      vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+        item: { classification: 'Human-Observation' } as never,
+        sources: [],
+        events: [],
+      });
+      const reclassifyItem = vi
+        .spyOn(gateApi, 'reclassifyItem')
+        .mockResolvedValue({} as never);
+
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+      fireEvent.change(
+        screen.getByTestId('staged-intent-gate-verify-mirror-evidence'),
+        { target: { value: 'this is actually readable' } },
+      );
+      fireEvent.click(
+        screen.getByTestId(
+          'staged-intent-gate-verify-mirror-reclassify-readonly',
+        ),
+      );
+
+      await waitFor(() =>
+        expect(reclassifyItem).toHaveBeenCalledWith('gate-mirror-1', {
+          classification: 'Read-Only',
+          reason: 'this is actually readable',
+        }),
+      );
+    });
+
+    it('does not render the Read-Only reclassify control once the item is confirmed already Read-Only', async () => {
+      vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+        item: { classification: 'Read-Only' } as never,
+        sources: [],
+        events: [],
+      });
+
+      render(<StagedIntentPanel intent={makeMirrorIntent()} />);
+
+      await waitFor(() =>
+        expect(
+          screen.queryByTestId(
+            'staged-intent-gate-verify-mirror-reclassify-readonly',
+          ),
+        ).toBeNull(),
       );
     });
   });
@@ -1172,6 +1310,205 @@ describe('StagedIntentPanel', () => {
       expect(
         screen.queryByTestId('staged-intent-capability-file-mutation-warning'),
       ).toBeNull();
+    });
+  });
+
+  describe('test.request operator override', () => {
+    function makeTestRequestIntent(overrides: Partial<StagedIntent> = {}) {
+      return makeIntent({
+        kind: 'test.request',
+        payload: { command: 'npm test', reason: 'verify the fix' },
+        ...overrides,
+      });
+    }
+
+    it('renders Approve and not Commit for a staged, ungrouped test.request intent', () => {
+      render(<StagedIntentPanel intent={makeTestRequestIntent()} />);
+
+      expect(screen.getByRole('button', { name: /^approve$/i })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
+    });
+
+    it('approving a staged test.request calls the approve route, not apply', async () => {
+      const approve = vi
+        .spyOn(stagedIntentsApi, 'approve')
+        .mockResolvedValue({ ...makeTestRequestIntent(), state: 'approved' });
+      const apply = vi.spyOn(stagedIntentsApi, 'apply');
+
+      render(<StagedIntentPanel intent={makeTestRequestIntent()} />);
+      fireEvent.click(screen.getByRole('button', { name: /^approve$/i }));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('intent-1'));
+      expect(apply).not.toHaveBeenCalled();
+    });
+
+    it("'a' fires Approve (not Commit) for a highlighted test.request card", async () => {
+      const approve = vi
+        .spyOn(stagedIntentsApi, 'approve')
+        .mockResolvedValue({ ...makeTestRequestIntent(), state: 'approved' });
+      const apply = vi.spyOn(stagedIntentsApi, 'apply');
+
+      render(
+        <StagedIntentPanel intent={makeTestRequestIntent()} highlighted />,
+      );
+
+      act(() => fireKey('a'));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('intent-1'));
+      expect(apply).not.toHaveBeenCalled();
+    });
+
+    it('reject with a reason remains available on a staged test.request and posts to the reject route', async () => {
+      const reject = vi
+        .spyOn(stagedIntentsApi, 'reject')
+        .mockResolvedValue({ ok: true });
+
+      render(<StagedIntentPanel intent={makeTestRequestIntent()} />);
+
+      fireEvent.change(
+        screen.getByPlaceholderText('What should the session revise?'),
+        { target: { value: 'not needed right now' } },
+      );
+      fireEvent.click(
+        screen.getByRole('button', { name: /pushback|decline/i }),
+      );
+
+      await waitFor(() =>
+        expect(reject).toHaveBeenCalledWith(
+          'intent-1',
+          expect.objectContaining({ reason: 'not needed right now' }),
+        ),
+      );
+    });
+  });
+
+  describe('ops.prIntent operator approval', () => {
+    function makeOpsPrIntent(overrides: Partial<StagedIntent> = {}) {
+      return makeIntent({
+        kind: 'ops.prIntent',
+        payload: {
+          taskId: 'notion:abc',
+          title: 'add retry to X poller',
+          scope: 'packages/backend/src/x.ts',
+          reason: 'fix flaky poll loop',
+        },
+        ...overrides,
+      });
+    }
+
+    it('renders a working Approve control and no Commit button for an ungrouped ops.prIntent', () => {
+      render(<StagedIntentPanel intent={makeOpsPrIntent()} />);
+
+      expect(screen.getByRole('button', { name: /^approve$/i })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
+    });
+
+    it('clicking Approve calls the approve route, not apply, and succeeds', async () => {
+      const approve = vi
+        .spyOn(stagedIntentsApi, 'approve')
+        .mockResolvedValue({ ...makeOpsPrIntent(), state: 'committed' });
+      const apply = vi.spyOn(stagedIntentsApi, 'apply');
+
+      render(<StagedIntentPanel intent={makeOpsPrIntent()} />);
+      fireEvent.click(screen.getByRole('button', { name: /^approve$/i }));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('intent-1'));
+      expect(apply).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('review.dispute operator approval', () => {
+    function makeReviewDisputeIntent(overrides: Partial<StagedIntent> = {}) {
+      return makeIntent({
+        kind: 'review.dispute',
+        payload: {
+          taskId: 'notion:abc',
+          prNumber: 42,
+          repo: 'org/repo',
+          rationale: 'the flagged file was never touched by this diff',
+        },
+        ...overrides,
+      });
+    }
+
+    it('renders a working Approve control and no Commit button for an ungrouped review.dispute', () => {
+      render(<StagedIntentPanel intent={makeReviewDisputeIntent()} />);
+
+      expect(screen.getByRole('button', { name: /^approve$/i })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
+    });
+
+    it('clicking Approve calls the approve route, not apply', async () => {
+      const approve = vi
+        .spyOn(stagedIntentsApi, 'approve')
+        .mockResolvedValue({ ...makeReviewDisputeIntent(), state: 'approved' });
+      const apply = vi.spyOn(stagedIntentsApi, 'apply');
+
+      render(<StagedIntentPanel intent={makeReviewDisputeIntent()} />);
+      fireEvent.click(screen.getByRole('button', { name: /^approve$/i }));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('intent-1'));
+      expect(apply).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('terminal-on-approve kind coverage', () => {
+    // A representative payload per known terminal-on-approve kind, since a
+    // few kinds' headline renderers assume payload shape (e.g.
+    // completeness.disposition's `payload.questions.length`). A kind added
+    // to TERMINAL_ON_APPROVE_INTENT_KINDS without an entry here fails loudly
+    // below rather than crashing on an unrelated payload assumption.
+    const PAYLOAD_BY_KIND: Record<string, unknown> = {
+      'session.requestCapability': {
+        capability: 'Bash(npm test)',
+        plan: 'run the suite',
+        evidence: 'see failing CI run',
+      },
+      'completeness.disposition': {
+        taskId: 'notion:design1',
+        rowId: 1,
+        project: 'demo',
+        milestone: 'M13',
+        probed: [],
+        questions: [],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+      'review.dispute': {
+        taskId: 'notion:abc',
+        prNumber: 42,
+        repo: 'org/repo',
+        rationale: 'the flagged file was never touched by this diff',
+      },
+      'test.request': { taskId: 'notion:abc', reason: 'verify the fix' },
+      'ops.prIntent': {
+        taskId: 'notion:abc',
+        title: 'add retry to X poller',
+        scope: 'packages/backend/src/x.ts',
+        reason: 'fix flaky poll loop',
+      },
+    };
+
+    it('renders Approve (not Commit) for every kind in the shared terminal-on-approve set', () => {
+      for (const kind of TERMINAL_ON_APPROVE_INTENT_KINDS) {
+        const payload = PAYLOAD_BY_KIND[kind];
+        expect(
+          payload,
+          `add a PAYLOAD_BY_KIND entry for "${kind}"`,
+        ).toBeDefined();
+
+        const { unmount } = render(
+          <StagedIntentPanel intent={makeIntent({ kind, payload })} />,
+        );
+
+        expect(
+          screen.getByRole('button', { name: /^approve$|^✓ grant$/i }),
+        ).toBeTruthy();
+        expect(
+          screen.queryByRole('button', { name: /^✓ commit$/i }),
+        ).toBeNull();
+
+        unmount();
+      }
     });
   });
 

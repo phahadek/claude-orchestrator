@@ -27,6 +27,7 @@ vi.mock('../../db/queries', () => ({
   clearSessionInitiatedPRClose: vi.fn(),
   incrementFlakeRecoveryAttempts: vi.fn(),
   resetFlakeRecoveryAttempts: vi.fn(),
+  setFlakeRecoveryBaseExhausted: vi.fn(),
 }));
 
 vi.mock('../../config', () => ({
@@ -39,6 +40,7 @@ vi.mock('../../config/settings', () => ({
 }));
 
 vi.mock('../../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi
     .fn()
     .mockReturnValue({ ci_check_name: [], test: [], test_timeout_sec: 300 }),
@@ -59,6 +61,16 @@ vi.mock('../conflictNudge', () => ({ sendConflictNudge: vi.fn() }));
 
 vi.mock('../pollUtils', () => ({
   isTerminalStalePR: vi.fn().mockReturnValue(false),
+}));
+
+// Never base-attributable / never base-healthy in this suite — preserves
+// this file's pre-exemption assertions untouched. See
+// PRMergeWatcher.baseAttribution.test.ts for the exemption/restore behavior
+// itself.
+vi.mock('../../orchestration/baseAttribution', () => ({
+  isBaseTotalFail: vi.fn().mockResolvedValue(false),
+  isProjectBaseHealthy: vi.fn().mockResolvedValue(false),
+  hasBaseTotalFailSince: vi.fn().mockResolvedValue(false),
 }));
 
 // db/pauseReason is left un-mocked — real parse/serialize logic exercises the
@@ -156,7 +168,10 @@ function makePayload(
 
 function makeMockGitHub(): GitHubClient {
   return {
-    rerunFailedJobs: vi.fn().mockResolvedValue([1, 2]),
+    rerunFailedJobs: vi.fn().mockResolvedValue([
+      { id: 1, priorStartedAt: '2026-01-01T00:00:00Z', rerequested: true },
+      { id: 2, priorStartedAt: '2026-01-01T00:00:00Z', rerequested: true },
+    ]),
     waitForCheckRunsCompletion: vi.fn().mockResolvedValue(true),
     getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha: HEAD_SHA }),
     categorizeMergeability: vi.fn().mockResolvedValue({
@@ -239,11 +254,15 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — same-SHA re-run actu
     expect(vi.mocked(github.rerunFailedJobs)).toHaveBeenCalledWith(
       HEAD_SHA,
       REPO,
+      [],
     );
     expect(vi.mocked(github.waitForCheckRunsCompletion)).toHaveBeenCalledWith(
       HEAD_SHA,
       REPO,
-      [1, 2],
+      [
+        { id: 1, priorStartedAt: '2026-01-01T00:00:00Z', rerequested: true },
+        { id: 2, priorStartedAt: '2026-01-01T00:00:00Z', rerequested: true },
+      ],
     );
     expect(vi.mocked(github.getPRState)).toHaveBeenCalledWith(PR_NUMBER, REPO);
     expect(vi.mocked(incrementFlakeRecoveryAttempts)).toHaveBeenCalledWith(

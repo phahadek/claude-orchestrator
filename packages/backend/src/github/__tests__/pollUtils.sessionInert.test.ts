@@ -150,6 +150,42 @@ describe('classifyStalledPR — session_inert', () => {
     expect(first).toEqual({ kind: 'session_inert' });
   });
 
+  it('does not classify session_inert when the session is busy inside an in-flight tool call, even past the threshold', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+
+    expect(
+      classifyStalledPR(
+        pr,
+        'done',
+        'running',
+        false,
+        TEN_MIN_MS + 1,
+        TEN_MIN_MS,
+        true,
+      ),
+    ).toBeNull();
+  });
+
+  it('still classifies session_inert past the threshold when sessionBusyInFlightToolCall is false', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+
+    expect(
+      classifyStalledPR(
+        pr,
+        'done',
+        'running',
+        false,
+        TEN_MIN_MS + 1,
+        TEN_MIN_MS,
+        false,
+      ),
+    ).toEqual({ kind: 'session_inert' });
+  });
+
   describe('pre-existing kinds still win over session_inert (activity age past threshold on every fixture)', () => {
     it('conflict_dead_session', () => {
       const pr = makePR({

@@ -11,6 +11,8 @@ import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
 /** Per-connection context the architecture read tools are scoped to. */
 export interface ArchitectureReadToolContext {
   workflow: PlanningWorkflow | null;
+  /** The calling session's project — every read is scoped to this project's own units. */
+  projectId: string;
 }
 
 const archUnitKindSchema = z.enum([
@@ -63,7 +65,8 @@ export function registerArchitectureReadTools(
       inputSchema: { id: z.string() },
     },
     async (args) => {
-      const unit = getUnit(args.id);
+      const found = getUnit(args.id);
+      const unit = found && found.project === ctx.projectId ? found : undefined;
       if (!unit) {
         const looksLikeConstraintId = !UUID_RE.test(args.id);
         return {
@@ -110,6 +113,7 @@ export function registerArchitectureReadTools(
     },
     async (args) => {
       const units = queryUnits({
+        project: ctx.projectId,
         topic: args.topic,
         kind: args.kind,
         region: args.region,
@@ -136,7 +140,7 @@ export function registerArchitectureReadTools(
         } = { units: [] };
 
         if (args.topic !== undefined) {
-          const availableTopics = listTopics();
+          const availableTopics = listTopics(ctx.projectId);
           const recognized = availableTopics.includes(args.topic);
           result.topic = recognized
             ? { value: args.topic, recognized: true }
@@ -144,7 +148,7 @@ export function registerArchitectureReadTools(
         }
 
         if (args.region !== undefined) {
-          const availableRegions = listRegions();
+          const availableRegions = listRegions(ctx.projectId);
           const recognized = availableRegions.some((r) =>
             r.includes(args.region!),
           );

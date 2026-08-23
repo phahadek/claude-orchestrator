@@ -7,7 +7,7 @@
  * active set with superseded excluded by default.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -15,6 +15,7 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
+import * as queries from '../../db/queries.js';
 import {
   getUnit,
   getUnitEvents,
@@ -47,6 +48,7 @@ describe('arch_unit schema', () => {
 describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
   it('creates a unit, reads it back, and logs a created event', () => {
     const unit = createUnit({
+      project: 'proj-1',
       title: 'Session lifecycle',
       kind: 'subsystem',
       topic: 'sessions',
@@ -68,6 +70,7 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
 
   it('updates a unit and appends an updated event', () => {
     const unit = createUnit({
+      project: 'proj-1',
       title: 'Gate item shape',
       kind: 'invariant',
       topic: 'gate',
@@ -92,6 +95,7 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
 
   it('supersedes a unit: old retained as superseded, new unit created linking back', () => {
     const original = createUnit({
+      project: 'proj-1',
       title: 'Old decision',
       kind: 'decision',
       topic: 'architecture-store',
@@ -103,6 +107,7 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
     const { previous, next } = supersedeUnit(
       original.id,
       {
+        project: 'proj-1',
         title: 'New decision',
         kind: 'decision',
         topic: 'architecture-store',
@@ -128,9 +133,109 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
   });
 });
 
+describe('atomicity of multi-statement writes', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('rolls back the whole createUnit apply when the event insert throws', () => {
+    vi.spyOn(queries, 'insertArchUnitEvent').mockImplementation(() => {
+      throw new Error('simulated mid-sequence failure');
+    });
+
+    expect(() =>
+      createUnit({
+        project: 'proj-1',
+        title: 'Should not persist',
+        kind: 'subsystem',
+        topic: 'sessions',
+        regions: [],
+        body: 'body',
+        at: '2026-01-01T00:00:00Z',
+      }),
+    ).toThrow('simulated mid-sequence failure');
+
+    const rows = db.prepare('SELECT * FROM arch_unit').all();
+    expect(rows).toHaveLength(0);
+  });
+
+  it('rolls back the whole updateUnit apply when recordEvent throws', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Original title',
+      kind: 'subsystem',
+      topic: 'sessions',
+      regions: [],
+      body: 'original body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    vi.spyOn(queries, 'insertArchUnitEvent').mockImplementation(() => {
+      throw new Error('simulated mid-sequence failure');
+    });
+
+    expect(() =>
+      updateUnit(unit.id, { body: 'revised body' }, '2026-01-02T00:00:00Z'),
+    ).toThrow('simulated mid-sequence failure');
+
+    const persisted = getUnit(unit.id);
+    expect(persisted?.body).toBe('original body');
+    expect(persisted?.version).toBe(1);
+    const events = getUnitEvents(unit.id);
+    expect(events).toHaveLength(1);
+  });
+
+  it('rolls back the whole supersedeUnit apply when the second event insert throws', () => {
+    const original = createUnit({
+      project: 'proj-1',
+      title: 'Old decision',
+      kind: 'decision',
+      topic: 'architecture-store',
+      regions: [],
+      body: 'old decision body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const realInsertArchUnitEvent = queries.insertArchUnitEvent;
+    let calls = 0;
+    vi.spyOn(queries, 'insertArchUnitEvent').mockImplementation((row) => {
+      calls += 1;
+      if (calls === 2) {
+        throw new Error('simulated mid-sequence failure');
+      }
+      return realInsertArchUnitEvent(row);
+    });
+
+    expect(() =>
+      supersedeUnit(
+        original.id,
+        {
+          project: 'proj-1',
+          title: 'New decision',
+          kind: 'decision',
+          topic: 'architecture-store',
+          regions: [],
+          body: 'new decision body',
+          at: '2026-01-03T00:00:00Z',
+        },
+        '2026-01-03T00:00:00Z',
+      ),
+    ).toThrow('simulated mid-sequence failure');
+
+    const rows = db
+      .prepare('SELECT * FROM arch_unit WHERE id != ?')
+      .all(original.id);
+    expect(rows).toHaveLength(0);
+    const persisted = getUnit(original.id);
+    expect(persisted?.status).toBe('active');
+    expect(persisted?.version).toBe(1);
+  });
+});
+
 describe('queryUnits', () => {
   beforeEach(() => {
     createUnit({
+      project: 'proj-1',
       title: 'Sessions subsystem',
       kind: 'subsystem',
       topic: 'sessions',
@@ -139,6 +244,7 @@ describe('queryUnits', () => {
       at: '2026-01-01T00:00:00Z',
     });
     createUnit({
+      project: 'proj-1',
       title: 'Gate invariant',
       kind: 'invariant',
       topic: 'gate',
@@ -147,6 +253,7 @@ describe('queryUnits', () => {
       at: '2026-01-01T00:00:00Z',
     });
     const deferred = createUnit({
+      project: 'proj-1',
       title: 'Deferred reference',
       kind: 'reference',
       topic: 'gate',
@@ -157,6 +264,7 @@ describe('queryUnits', () => {
     });
     void deferred;
     const superseded = createUnit({
+      project: 'proj-1',
       title: 'Old contract',
       kind: 'contract',
       topic: 'sessions',
@@ -167,6 +275,7 @@ describe('queryUnits', () => {
     supersedeUnit(
       superseded.id,
       {
+        project: 'proj-1',
         title: 'New contract',
         kind: 'contract',
         topic: 'sessions',
@@ -222,5 +331,36 @@ describe('queryUnits', () => {
   it('includes superseded when includeSuperseded is set with no status filter', () => {
     const all = queryUnits({ includeSuperseded: true });
     expect(all.some((u) => u.status === 'superseded')).toBe(true);
+  });
+});
+
+describe('project scoping', () => {
+  it('stamps a created unit with its project and filters queryUnits by project', () => {
+    createUnit({
+      project: 'proj-a',
+      title: 'Proj A unit',
+      kind: 'subsystem',
+      topic: 'x',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+    createUnit({
+      project: 'proj-b',
+      title: 'Proj B unit',
+      kind: 'subsystem',
+      topic: 'x',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const projA = queryUnits({ project: 'proj-a' });
+    expect(projA.map((u) => u.title)).toEqual(['Proj A unit']);
+
+    const all = queryUnits();
+    expect(all.map((u) => u.title).sort()).toEqual(
+      ['Proj A unit', 'Proj B unit'].sort(),
+    );
   });
 });

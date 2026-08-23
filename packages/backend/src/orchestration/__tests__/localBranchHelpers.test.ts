@@ -102,6 +102,29 @@ describe('hasNonEmptyDiff', () => {
     const result = await hasNonEmptyDiff(repoDir, 'dev', 'feature/has-changes');
     expect(result).toBe(true);
   });
+
+  it('fails safe (returns false) when the diff cannot be determined at all, e.g. an unknown branch', async () => {
+    // Regression: a genuine git error (bad revision, not "has diff") must
+    // NOT be reported as hasDiff=true — that would silently block the
+    // downstream !hasDiff no-op investigator gate in recoverSession forever,
+    // since git diff --quiet exits non-zero (but not 1) for this case and
+    // the old implementation treated ANY non-zero exit as "has diff".
+    const result = await hasNonEmptyDiff(
+      repoDir,
+      'dev',
+      'this-branch-does-not-exist',
+    );
+    expect(result).toBe(false);
+  });
+
+  it('fails safe (returns false) when the worktree path itself does not exist', async () => {
+    // Simulates a resumed session whose worktree was torn down between
+    // turns — execFile itself fails (ENOENT), which must not be reported
+    // as hasDiff=true either.
+    const missingDir = path.join(repoDir, 'does-not-exist');
+    const result = await hasNonEmptyDiff(missingDir, 'dev', 'dev');
+    expect(result).toBe(false);
+  });
 });
 
 // ── detectMergeConflict ──────────────────────────────────────────────────────

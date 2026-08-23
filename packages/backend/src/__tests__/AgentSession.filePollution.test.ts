@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mocks must be declared before imports ─────────────────────────────────────
@@ -156,6 +159,8 @@ function fakeBackend(): TaskBackend {
 }
 
 describe('AgentSession — file pollution E2E integration', () => {
+  let worktreePath: string;
+
   beforeEach(() => {
     mockProc = createMockProc();
     vi.clearAllMocks();
@@ -168,6 +173,13 @@ describe('AgentSession — file pollution E2E integration', () => {
       bannedFiles: ['CLAUDE.md'],
       reason: 'hard_banned',
     });
+    // Isolated per-test dir so collectGitignoreSources walks a handful of
+    // test-created entries instead of the shared host /tmp tree.
+    worktreePath = mkdtempSync(join(tmpdir(), 'agentsession-filepollution-'));
+  });
+
+  afterEach(() => {
+    rmSync(worktreePath, { recursive: true, force: true });
   });
 
   it('E2E: PR opened with CLAUDE.md in diff → handlePRCreatedFromContent triggers reverter → file_pollution_reverted audit entry written with { files, pr_number, commit_sha }', async () => {
@@ -186,7 +198,7 @@ describe('AgentSession — file pollution E2E integration', () => {
       'https://notion.so/task-e2e',
       'https://notion.so/ctx-e2e',
       fakeBackend(),
-      '/tmp', // worktreePath — just needs to exist for collectGitignoreSources
+      worktreePath,
       'task-e2e-id',
       undefined, // resumeSessionId
       undefined, // customPrompt
@@ -238,8 +250,14 @@ describe('AgentSession — file pollution E2E integration', () => {
       }) + '\n',
     );
 
-    // Wait for the async handlePRCreatedFromContent + runFilePollutionCheck to complete
-    await new Promise((r) => setTimeout(r, 300));
+    // Wait for the async handlePRCreatedFromContent + runFilePollutionCheck to
+    // complete by polling the (mocked) recordEvent spy rather than a fixed delay —
+    // there is no real audit write to await since AuditLog is mocked.
+    await vi.waitFor(() => {
+      expect(recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ event_type: 'file_pollution_reverted' }),
+      );
+    });
 
     // Verify getPRFiles was called on the GitHub client
     expect(mockGitHubClient.getPRFiles).toHaveBeenCalledWith(
@@ -256,7 +274,7 @@ describe('AgentSession — file pollution E2E integration', () => {
     // Verify revertBannedFiles was called with the correct parameters
     expect(revertBannedFiles).toHaveBeenCalledWith(
       expect.objectContaining({
-        worktreePath: '/tmp',
+        worktreePath,
         baseBranch: 'dev',
         bannedFiles: ['CLAUDE.md'],
         prNumber: 77,
@@ -321,13 +339,15 @@ function emitPush(stdout: Readable, toolUseId: string, msgId?: string): void {
   );
 }
 
+let pushWorktreePath: string;
+
 function makeSession(sessionId: string, ghClient: GitHubClient): AgentSession {
   return new AgentSession(
     sessionId,
     'https://notion.so/task',
     'https://notion.so/ctx',
     fakeBackend(),
-    '/tmp',
+    pushWorktreePath,
     'task-id',
     undefined,
     undefined,
@@ -358,6 +378,9 @@ describe('AgentSession — file pollution on push-detected', () => {
     vi.mocked(getPRBySessionId).mockReturnValue(
       MOCK_PR_ROW as ReturnType<typeof getPRBySessionId>,
     );
+    pushWorktreePath = mkdtempSync(
+      join(tmpdir(), 'agentsession-filepollution-push-'),
+    );
   });
 
   afterEach(async () => {
@@ -365,6 +388,7 @@ describe('AgentSession — file pollution on push-detected', () => {
     await new Promise((r) => setTimeout(r, 0));
     mockProc.proc.emit('exit', 0);
     await runPromise;
+    rmSync(pushWorktreePath, { recursive: true, force: true });
   });
 
   it('second push_detected event triggers a fresh validator + reverter cycle when HEAD SHA differs from last revert SHA', async () => {

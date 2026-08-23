@@ -1,0 +1,157 @@
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.newReportButton {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 0.7rem;
+  padding: 3px 8px;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.newReportButton:hover:not(:disabled) {
+  border-color: #89b4fa;
+}
+
+.newReportButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.stateTabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.stateTab {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.stateTabActive {
+  border-color: #89b4fa;
+  color: var(--text-primary);
+}
+
+.batchBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.clearSelectionButton {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.cardTitle {
+  color: var(--text-primary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stateBadge {
+  background: rgba(137, 180, 250, 0.12);
+  border: 1px solid rgba(137, 180, 250, 0.35);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  padding: 2px 6px;
+}
+
+/* Mirrors GateReadinessPanel's statusBlocked/🚫 Blocked treatment for a gate_item that blocks convergence. */
+.blockingBadge {
+  font-weight: 700;
+  font-size: 0.75rem;
+  color: var(--warning, #f38ba8);
+  white-space: nowrap;
+}
+
+.blockingCard {
+  border-color: rgba(243, 139, 168, 0.5);
+}
+
+.inFlightBadge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent, #89b4fa);
+  white-space: nowrap;
+}
+
+/* The middle-stack -> right drill-down selection highlight, mirrors MilestoneDecisionInbox's .selectedCard. */
+.selectedCard {
+  outline: 2px solid #89b4fa;
+  outline-offset: -1px;
+}
+
+.symptomText {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.cardActions {
+  display: flex;
+  gap: 6px;
+}
+
+.draftInput,
+.draftTextarea {
+  width: 100%;
+  background: var(--bg-secondary, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 4px 6px;
+  font: inherit;
+}
+
+.draftTextarea {
+  min-height: 60px;
+  resize: vertical;
+}
+
+.draftActions {
+  display: flex;
+  gap: 6px;
+}
+
+.actionError {
+  color: var(--warning, #f38ba8);
+  font-size: 0.75rem;
+}

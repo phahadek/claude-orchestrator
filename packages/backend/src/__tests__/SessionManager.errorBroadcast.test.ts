@@ -98,9 +98,11 @@ vi.mock('../session/orchestrator-config', () => ({
     required_files: [],
     review_rules: [],
     session_rules: [],
+    capability_pre_grants: {},
     mcp_servers: undefined,
   }),
   getSessionAllowedTools: vi.fn(() => []),
+  resolvePreGrantCapabilities: vi.fn(() => []),
 }));
 
 vi.mock('../session/ContextBuilder', () => ({

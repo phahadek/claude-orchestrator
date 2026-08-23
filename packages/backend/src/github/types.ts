@@ -45,6 +45,11 @@ export interface PullRequest {
   draft: boolean;
 }
 
+export interface PRFileEntry {
+  filename: string;
+  status: string; // 'added' | 'modified' | 'removed' | 'renamed' | etc, from GET /pulls/:id/files
+}
+
 export interface PRDiff {
   prId: number;
   diff: string; // raw unified diff text
@@ -55,6 +60,26 @@ export interface MergeResult {
   merged: boolean;
   message: string;
   sha: string | null;
+}
+
+/**
+ * A check-run to wait on after a flake-recovery rerun, together with its
+ * pre-rerequest `started_at` marker. waitForCheckRunsCompletion requires a
+ * genuinely later `started_at` (not just status='completed') before treating
+ * the run as done, so a stale first-poll read of the pre-rerequest state
+ * can't be mistaken for the rerun's actual result.
+ *
+ * `rerequested` is false for a run that was already non-terminal (queued/
+ * in_progress) at rerunFailedJobs time — e.g. reset by a prior attempt or
+ * GitHub's own lag — and so was included to wait on without issuing a fresh
+ * rerequest call. For those, waitForCheckRunsCompletion only requires
+ * status='completed', since there is no meaningful pre-rerequest baseline to
+ * compare `started_at` against.
+ */
+export interface RerequestedCheckRun {
+  id: number;
+  priorStartedAt: string | null;
+  rerequested: boolean;
 }
 
 export interface FailingCheck {

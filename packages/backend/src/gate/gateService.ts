@@ -1,4 +1,5 @@
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
+import { promisify } from 'util';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import type { GateItemClassification } from '../db/types';
@@ -12,7 +13,8 @@ import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
 import { normalizeTaskId } from '../tasks/taskId';
 import { getCachedType, getCachedStatus } from '../tasks/TaskWriteCommands';
-import { yieldToEventLoop } from '../utils/concurrency';
+import { yieldToEventLoop, runWithConcurrency } from '../utils/concurrency';
+import { isMilestoneWrapped } from '../projects/milestoneResolver';
 
 /**
  * Recomputes whether a deploy contains a given commit. This is the git-ancestry
@@ -54,6 +56,48 @@ export function createLocalGitAncestrySource(
     },
   };
 }
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * The non-blocking twin of DeployAncestrySource, for hot paths that run this
+ * check across many items in a single tick (reconcileGateRunnability) — a
+ * synchronous execFileSync spawn there blocks the whole Node process (every
+ * concurrent request, not just this one) for the git subprocess's full
+ * lifetime, once per item, per tick. isAncestor is async here so the git
+ * spawn's I/O wait yields to the event loop instead of stalling it.
+ */
+export interface AsyncDeployAncestrySource {
+  isAncestor(
+    ancestorSha: string,
+    descendantSha: string,
+  ): boolean | Promise<boolean>;
+}
+
+/** Scoped to a specific local clone, like createLocalGitAncestrySource. */
+export function createLocalAsyncGitAncestrySource(
+  cwd?: string,
+): AsyncDeployAncestrySource {
+  return {
+    async isAncestor(ancestorSha, descendantSha) {
+      if (ancestorSha === descendantSha) return true;
+      try {
+        await execFileAsync(
+          'git',
+          ['merge-base', '--is-ancestor', ancestorSha, descendantSha],
+          { cwd },
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
+/** The default non-blocking git-ancestry source, used by reconcileGateRunnability. */
+const asyncGitAncestrySource: AsyncDeployAncestrySource =
+  createLocalAsyncGitAncestrySource();
 
 /**
  * The closed disposition vocabulary an event may carry. Anything outside this
@@ -177,7 +221,24 @@ export function getGateReadiness(
   project: string,
   milestone: string,
 ): GateReadiness {
-  const items = gateStore.listByMilestone(project, milestone);
+  // A wrapped milestone's items are no longer reconciled by the scheduled
+  // tick (see reconcileGateRunnability's isMilestoneWrapped option) — if
+  // this rollup still counted them, a wrapped milestone with unresolved
+  // items would report `blocked` forever with nothing left to ever
+  // re-evaluate it. Excluding it here, independent of what the caller
+  // already filtered, keeps this the single source of truth for readiness.
+  if (isMilestoneWrapped(project, milestone)) {
+    return {
+      status: 'green',
+      blocking: [],
+      parked: [],
+      bespokeStates: [],
+      nonResolvingItems: [],
+      counts: {},
+      awaitingSetupCount: 0,
+    };
+  }
+  const items = gateStore.listByMilestoneShallow(project, milestone);
   const toBlockingItem = (item: GateItem): GateBlockingItem => ({
     id: item.id,
     project: item.project,
@@ -224,9 +285,18 @@ export interface ReconcileGateRunnabilityResult {
 }
 
 export interface ReconcileOptions {
-  ancestrySource?: DeployAncestrySource;
+  ancestrySource?: AsyncDeployAncestrySource;
   /** Scope reconciliation to one project's items — every deploy SHA is project-specific. */
   project?: string;
+  /**
+   * Predicate excluding a wrapped milestone's items from this pass — passed
+   * by the scheduled tick (gateReconciler.ts) via
+   * createWrappedMilestoneChecker, so this function never hydrates a
+   * wrapped milestone's rows in the first place. Omitted by the manual
+   * POST /gate/reconcile route, which still reconciles everything
+   * unconditionally on operator request.
+   */
+  isMilestoneWrapped?: (project: string, milestone: string) => boolean;
 }
 
 /**
@@ -269,85 +339,137 @@ function minDeployedCommitAtLastFail(item: GateItem): string | null {
  * 🎨 Assets, 🔧 Operational — produces no branch/PR, so "live" instead means
  * the source task itself has reached ✅ Done.
  */
-function isSourceCovered(
+async function isSourceCovered(
   source: GateItem['sources'][number],
   deploySha: string,
-  ancestry: DeployAncestrySource,
-): boolean {
+  ancestry: AsyncDeployAncestrySource,
+  ancestryCache: Map<string, Promise<boolean>>,
+): Promise<boolean> {
   const type = getCachedType(source.sourceTaskId);
   if (type !== null && type !== '💻 Code') {
     return getCachedStatus(source.sourceTaskId) === 'Done';
   }
-  return (
-    !!source.mergeCommit && ancestry.isAncestor(source.mergeCommit, deploySha)
-  );
+  if (!source.mergeCommit) return false;
+  // Memoized per (mergeCommit, deploySha) pair — multiple items (or
+  // multiple sources within one item) commonly share the same pair within
+  // a single tick, and git ancestry between two fixed shas can't change
+  // mid-tick, so a repeat pair is a spawn worth skipping entirely.
+  const key = `${source.mergeCommit}::${deploySha}`;
+  let pending = ancestryCache.get(key);
+  if (!pending) {
+    pending = Promise.resolve(
+      ancestry.isAncestor(source.mergeCommit, deploySha),
+    );
+    ancestryCache.set(key, pending);
+  }
+  return pending;
 }
+
+/** True once every source is covered — see isSourceCovered for the per-source, Type-dependent test. */
+async function isItemCovered(
+  item: GateItem,
+  deploySha: string,
+  ancestry: AsyncDeployAncestrySource,
+  ancestryCache: Map<string, Promise<boolean>>,
+): Promise<boolean> {
+  if (item.sources.length === 0) return true;
+  for (const source of item.sources) {
+    if (!(await isSourceCovered(source, deploySha, ancestry, ancestryCache)))
+      return false;
+  }
+  return true;
+}
+
+/**
+ * Bound on simultaneous in-flight `git merge-base` spawns per tick — high
+ * enough that the ancestry checks (see isSourceCovered) no longer serialize
+ * one-at-a-time behind each other's I/O wait, low enough to not fork-bomb a
+ * tick with hundreds of open gate items.
+ */
+const RECONCILE_ANCESTRY_CONCURRENCY = 8;
 
 export async function reconcileGateRunnability(
   deploySha: string,
   options: ReconcileOptions = {},
 ): Promise<ReconcileGateRunnabilityResult> {
-  const ancestry = options.ancestrySource ?? gitAncestrySource;
+  const ancestry = options.ancestrySource ?? asyncGitAncestrySource;
   const now = new Date().toISOString();
   const markedRunnable: string[] = [];
   const reopened: string[] = [];
 
-  const items = options.project
-    ? gateStore.listByProject(options.project)
-    : gateStore.listAll();
+  // Filtered on the cheap shallow (no sources/events) rows first, then only
+  // the surviving ids pay the per-item sources/events hydration cost —
+  // both the terminal-`pass` filter and the wrapped-milestone exclusion
+  // below used to run *after* gateStore.listAll/listByProject had already
+  // hydrated every row, which is exactly the cost the wrapped-milestone
+  // predicate exists to avoid.
+  const shallowItems = options.project
+    ? gateStore.listByProjectShallow(options.project)
+    : gateStore.listAllShallow();
 
-  for (const item of items) {
-    // The dominant blocking cost of this loop: isSourceCovered calls
-    // execFileSync('git', ['merge-base', ...]) once per source, still
-    // synchronous, but yielding between items lets pending HTTP/WS request
-    // handling interleave rather than starving for the tick's full duration
-    // (mirroring TaskCacheRefresher's per-milestone yield).
-    await yieldToEventLoop();
+  // A pass is terminal for runnability — a redeploy never re-opens it.
+  // Filtered out before the ancestry check below: re-checking coverage for
+  // an item that can never change state is pure wasted git-spawn cost.
+  const candidates = shallowItems
+    .filter(
+      (item) =>
+        item.state !== 'pass' &&
+        !(options.isMilestoneWrapped?.(item.project, item.milestone) ?? false),
+    )
+    .map((item) => gateStore.getItem(item.id))
+    .filter((item): item is GateItem => item !== undefined);
 
-    // Covered only once every source is live — see isSourceCovered for the
-    // per-source, Type-dependent test. An item with no sources at all has no
-    // dependency, so it's trivially covered.
-    const covered =
-      item.sources.length === 0 ||
-      item.sources.every((source) =>
-        isSourceCovered(source, deploySha, ancestry),
+  const ancestryCache = new Map<string, Promise<boolean>>();
+
+  await runWithConcurrency(
+    candidates,
+    RECONCILE_ANCESTRY_CONCURRENCY,
+    async (item) => {
+      // The dominant cost of this loop is the per-source git-ancestry check
+      // (see isSourceCovered) — async so the git subprocess's I/O wait
+      // yields to the event loop instead of blocking the whole Node
+      // process. runWithConcurrency above already keeps several of these
+      // in flight at once rather than serializing them item by item.
+      await yieldToEventLoop();
+
+      const covered = await isItemCovered(
+        item,
+        deploySha,
+        ancestry,
+        ancestryCache,
       );
 
-    if (item.state === 'pass') {
-      // A pass is terminal for runnability — a redeploy never re-opens it.
-      continue;
-    }
+      let state = item.state;
+      let currentDisposition = item.currentDisposition;
 
-    let state = item.state;
-    let currentDisposition = item.currentDisposition;
-
-    if (state === 'fail') {
-      const failedAtCommit = minDeployedCommitAtLastFail(item);
-      const advanced = (item.minDeployedCommit ?? null) !== failedAtCommit;
-      if (advanced && covered) {
-        gateStore.appendEvent(item.id, {
-          disposition: 'reopened',
-          operator: 'gate-reconciler',
-          evidence: { reason: 'follow-up fix source deployed' },
-          at: now,
-        });
-        gateStore.advanceState(item.id, 'open', 'reopened', now);
-        reopened.push(item.id);
-        state = 'open';
-        currentDisposition = 'reopened';
+      if (state === 'fail') {
+        const failedAtCommit = minDeployedCommitAtLastFail(item);
+        const advanced = (item.minDeployedCommit ?? null) !== failedAtCommit;
+        if (advanced && covered) {
+          gateStore.appendEvent(item.id, {
+            disposition: 'reopened',
+            operator: 'gate-reconciler',
+            evidence: { reason: 'follow-up fix source deployed' },
+            at: now,
+          });
+          gateStore.advanceState(item.id, 'open', 'reopened', now);
+          reopened.push(item.id);
+          state = 'open';
+          currentDisposition = 'reopened';
+        }
       }
-    }
 
-    if (state === 'open' && covered) {
-      gateStore.advanceState(item.id, 'runnable', currentDisposition, now);
-      markedRunnable.push(item.id);
-      continue;
-    }
+      if (state === 'open' && covered) {
+        gateStore.advanceState(item.id, 'runnable', currentDisposition, now);
+        markedRunnable.push(item.id);
+        return;
+      }
 
-    if (state === 'runnable' && !covered) {
-      gateStore.advanceState(item.id, 'open', currentDisposition, now);
-    }
-  }
+      if (state === 'runnable' && !covered) {
+        gateStore.advanceState(item.id, 'open', currentDisposition, now);
+      }
+    },
+  );
 
   return { markedRunnable, reopened };
 }
@@ -581,8 +703,8 @@ export function listMilestoneReadiness(
   options: ListMilestoneReadinessOptions = {},
 ): MilestoneReadiness[] {
   const items = options.project
-    ? gateStore.listByProject(options.project)
-    : gateStore.listAll();
+    ? gateStore.listByProjectShallow(options.project)
+    : gateStore.listAllShallow();
 
   const groups = new Map<string, MilestoneGroup>();
   for (const item of items) {
@@ -950,6 +1072,7 @@ export function reclassifyGateItem(
   gateItemId: string,
   classification: GateItemClassification,
   operator?: string,
+  reason?: string,
 ): GateItem {
   if (!RECLASSIFY_TARGETS.has(classification)) {
     throw new Error(
@@ -966,6 +1089,7 @@ export function reclassifyGateItem(
     classification,
     now,
     operator,
+    reason ? { reason } : undefined,
   );
   if (
     item.state === 'pending' &&

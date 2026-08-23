@@ -87,6 +87,22 @@ way, the groomer is inclined toward **removing** the section post-accretion — 
 leaving it in place, and never replacing it with boilerplate ("Covered by the Manual
 Verification Gate."); a post-groom Code task carries no manual-verification section.
 
+**Re-running the test suite to "confirm" or "refute" a flakiness/base-health claim.**
+A flaky test has no guaranteed per-execution failure rate — a green local rerun (even
+several, even the full suite) proves nothing about whether the failure reproduces,
+and is not evidence that a base-health remediation task's premise is stale. Don't
+shell out to `vitest`/the project's test runner to verify one of these claims, and
+don't stage a `task.setStatus` move (e.g. to Deferred) on the strength of a rerun.
+Instead call the `testHealth.getFlakyHistory` MCP tool, which surfaces the
+orchestrator's own accumulated evidence: the `flagged_flaky_tests_rollup` sample/
+transition history and the `base_health_remediation_test_tracking` open/closed claim
+state for the test in question. Cite that data in the disposition, not a rerun's
+pass/fail outcome. This is the same failure mode the project's real history shows: a
+groom session re-ran a base-health task's named test a few times, found it green, and
+staged Deferred on "investigation is complete and conclusively shows nothing
+reproduces" — the operator pushed back precisely because a flaky test's pass in one
+or a few executions is not conclusive.
+
 **Leaving a task's operational seed in an inline note but never accreting it to the
 seed store (the "seeded-then-dropped" pattern).** The operational twin of
 stripped-then-dropped. A Code task frequently ships pure dispatchable code plus a

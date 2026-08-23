@@ -48,3 +48,7 @@ installers/windows/dist/
 # (package-anchored by the resolver, but this is defence-in-depth against
 # any cwd it might still be created under).
 .test-scratch-datadir-DO-NOT-COMMIT/
+
+# Structured test-report artifacts (junit-xml), written by the test: commands
+# per .claude-orchestrator.yml's test_report_glob — generated, never committed.
+.test-reports/

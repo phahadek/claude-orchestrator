@@ -5,6 +5,8 @@ import {
   serializePauseReason,
   pauseReasonFromCanonical,
   deriveRecoveryDescriptor,
+  deriveTaskRecoveryDescriptor,
+  isMergeBlockingPause,
 } from '../db/pauseReason.js';
 import type { CanonicalPauseReason } from '../db/pauseReason.js';
 
@@ -13,8 +15,8 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 42 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(42);
+  it('contains exactly 48 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(48);
   });
 
   it('includes depth_review_pending as a recoverable, automatic reason, distinct from depth_review_escalation', () => {
@@ -310,6 +312,166 @@ describe('deriveRecoveryDescriptor', () => {
     expect(deriveRecoveryDescriptor('stuck_timeout')).toEqual({
       available: false,
     });
+  });
+});
+
+// ── deriveTaskRecoveryDescriptor ────────────────────────────────────────────
+
+describe('deriveTaskRecoveryDescriptor', () => {
+  it('a task-level reason with no PR resolves to its mapped action', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: 'launch_failed',
+      prReason: null,
+      hasPR: false,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({
+      available: true,
+      action: 'redispatch',
+      label: 'Redispatch',
+    });
+  });
+
+  it('terminal session, no PR, no pause row of either kind → redispatch', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: null,
+      hasPR: false,
+      sessionTerminal: true,
+    });
+    expect(d).toEqual({
+      available: true,
+      action: 'redispatch',
+      label: 'Redispatch',
+    });
+  });
+
+  it('non-terminal session, no PR, no pause row → unavailable', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: null,
+      hasPR: false,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({ available: false });
+  });
+
+  it('terminal session but a PR exists, no pause row → unavailable (PR still open)', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: null,
+      hasPR: true,
+      sessionTerminal: true,
+    });
+    expect(d).toEqual({ available: false });
+  });
+
+  it('a PR-side reason with no task-level reason continues to resolve to its mapped action', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: 'ci_failing',
+      hasPR: true,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({ available: true, action: 'resume', label: 'Resume' });
+  });
+
+  it('task-level reason takes precedence over a PR-side reason when both are present', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: 'launch_failed',
+      prReason: 'ci_failing',
+      hasPR: true,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({
+      available: true,
+      action: 'redispatch',
+      label: 'Redispatch',
+    });
+  });
+
+  it('a task-level reason deliberately absent from RECOVERY_ACTION_MAP never defaults to an action', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: 'awaiting_human_approval',
+      prReason: null,
+      hasPR: false,
+      sessionTerminal: true,
+    });
+    expect(d).toEqual({ available: false });
+  });
+
+  it('a PR-side reason deliberately absent from RECOVERY_ACTION_MAP never defaults to an action', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: 'max_reviews',
+      hasPR: true,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({ available: false });
+  });
+});
+
+// ── isMergeBlockingPause ──────────────────────────────────────────────────────
+
+describe('isMergeBlockingPause', () => {
+  it('returns false for no pause (null)', () => {
+    expect(isMergeBlockingPause(null)).toBe(false);
+  });
+
+  it('test_report_acquisition_failed is classified non-blocking', () => {
+    expect(
+      PAUSE_REASON_REGISTRY.test_report_acquisition_failed.blocks_merge,
+    ).toBe(false);
+    expect(isMergeBlockingPause('test_report_acquisition_failed')).toBe(false);
+    const serialized = serializePauseReason(
+      pauseReasonFromCanonical('test_report_acquisition_failed'),
+    );
+    expect(isMergeBlockingPause(serialized)).toBe(false);
+  });
+
+  it('ci_not_completing is classified non-blocking', () => {
+    expect(PAUSE_REASON_REGISTRY.ci_not_completing.blocks_merge).toBe(false);
+    expect(isMergeBlockingPause('ci_not_completing')).toBe(false);
+    const serialized = serializePauseReason(
+      pauseReasonFromCanonical('ci_not_completing'),
+    );
+    expect(isMergeBlockingPause(serialized)).toBe(false);
+  });
+
+  it.each(['merge_conflict', 'max_reviews', 'stalled_reconcile_cap'] as const)(
+    '%s remains merge-blocking',
+    (reason) => {
+      expect(isMergeBlockingPause(reason)).toBe(true);
+      const serialized = serializePauseReason(pauseReasonFromCanonical(reason));
+      expect(isMergeBlockingPause(serialized)).toBe(true);
+    },
+  );
+
+  it('defaults to blocking (fail-closed) for an unclassified/unknown reason', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(isMergeBlockingPause('totally_unknown_reason')).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it('defaults to blocking for a legacy-persisted JSON blob missing blocks_merge', () => {
+    // Simulates a row written before blocks_merge existed on the struct.
+    const legacyRaw = JSON.stringify({
+      reason: 'ci_failing',
+      source: 'ci',
+      severity: 'needs_attention',
+      retry_strategy: 'automatic',
+    });
+    expect(isMergeBlockingPause(legacyRaw)).toBe(true);
+  });
+
+  it('re-derives false from the registry for a legacy test_report_acquisition_failed blob missing blocks_merge', () => {
+    const legacyRaw = JSON.stringify({
+      reason: 'test_report_acquisition_failed',
+      source: 'tests',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+    expect(isMergeBlockingPause(legacyRaw)).toBe(false);
   });
 });
 

@@ -12,10 +12,20 @@ import {
   upsertPullRequest,
   getPRByNumber,
 } from '../db/queries.js';
+import { deriveBranchSlug } from '../session/branchSlug.js';
+
+/**
+ * sessions.worktree_path is always `<projectDir>/.claude/worktrees/<uuid>` in
+ * production (see SessionManager.start/respawnSession) — purely keyed by the
+ * session's own UUID, with no branch-name component anywhere in it.
+ */
+function realisticWorktreePath(sessionId: string): string {
+  return `/home/user/projects/demo/.claude/worktrees/${sessionId}`;
+}
 
 function insertTestSession(
   sessionId: string,
-  worktreePath: string,
+  taskName: string | null,
   taskId: string | null = null,
 ): void {
   insertSession({
@@ -28,9 +38,9 @@ function insertTestSession(
     started_at: Date.now(),
     ended_at: null,
     pr_url: null,
-    worktree_path: worktreePath,
+    worktree_path: realisticWorktreePath(sessionId),
     session_type: 'standard',
-    task_name: null,
+    task_name: taskName,
   });
 }
 
@@ -46,36 +56,49 @@ beforeEach(() => {
 });
 
 describe('lookupSessionByBranch', () => {
-  it('returns session when exactly one worktree_path matches', () => {
-    insertTestSession(
-      'sess-aabbccdd',
-      '/worktrees/abc123/feature/my-task',
-      'task-001',
-    );
-    const match = lookupSessionByBranch('feature/my-task');
+  it('matches a session whose worktree_path is realistically UUID-keyed and does not contain the branch name', () => {
+    const sessionId = 'a1b2c3d4-0000-0000-0000-000000000001';
+    insertTestSession(sessionId, 'My Task', 'task-001');
+    const headBranch = deriveBranchSlug('My Task', 'task-001');
+
+    // Sanity-check the fixture is realistic: the branch name is NOT a
+    // substring of worktree_path, so the old LIKE-based lookup would (and did)
+    // always return null here.
+    expect(realisticWorktreePath(sessionId).includes(headBranch)).toBe(false);
+
+    const match = lookupSessionByBranch(headBranch);
     expect(match).not.toBeNull();
-    expect(match!.session_id).toBe('sess-aabbccdd');
+    expect(match!.session_id).toBe(sessionId);
     expect(match!.task_id).toBe('task-001');
   });
 
-  it('returns null when no session worktree_path matches', () => {
-    insertTestSession('sess-11111111', '/worktrees/abc/feature/other-task');
+  it('returns null when no session derives a matching branch', () => {
+    insertTestSession('sess-11111111', 'Other Task', 'task-002');
     const match = lookupSessionByBranch('feature/no-such-branch');
     expect(match).toBeNull();
   });
 
-  it('returns null when multiple sessions match (ambiguous)', () => {
-    insertTestSession('sess-aaaaaaaa', '/worktrees/w1/feature/shared-name');
-    insertTestSession('sess-bbbbbbbb', '/worktrees/w2/feature/shared-name');
-    const match = lookupSessionByBranch('feature/shared-name');
+  it('returns null when multiple sessions derive the same branch (ambiguous)', () => {
+    insertTestSession('sess-aaaaaaaa', 'Shared Name', 'task-a');
+    insertTestSession('sess-bbbbbbbb', 'Shared Name', 'task-b');
+    const headBranch = deriveBranchSlug('Shared Name', 'task-a');
+    const match = lookupSessionByBranch(headBranch);
     expect(match).toBeNull();
   });
 
-  it('matches a session/<id> style branch embedded in worktree_path', () => {
-    insertTestSession('sess-cccccccc', '/worktrees/ba902f90/session/d02abb9b');
-    const match = lookupSessionByBranch('session/d02abb9b');
+  it('matches the legacy title-only derivation for branches created before the task-id suffix', () => {
+    const sessionId = 'sess-cccccccc';
+    const longTitle =
+      'A very long task title that exceeds the branch slug length cap and therefore gets a task-id-derived hash suffix appended';
+    insertTestSession(sessionId, longTitle, 'task-long-id');
+
+    const legacyBranch = deriveBranchSlug(longTitle, null);
+    const currentBranch = deriveBranchSlug(longTitle, 'task-long-id');
+    expect(legacyBranch).not.toBe(currentBranch);
+
+    const match = lookupSessionByBranch(legacyBranch);
     expect(match).not.toBeNull();
-    expect(match!.session_id).toBe('sess-cccccccc');
+    expect(match!.session_id).toBe(sessionId);
   });
 });
 

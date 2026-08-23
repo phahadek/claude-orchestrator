@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   countsAgainstConcurrency,
   isCodeSession,
+  isGateVerifySession,
+  isInvestigateSession,
   isPlanningSession,
   isTaskTypeCompatibleWithSessionType,
   movesTargetInProgress,
@@ -116,6 +118,22 @@ describe('sessionPredicates', () => {
         (PLANNING_SESSION_TYPES as readonly string[]).includes(type),
       );
     }
+  });
+
+  it('isGateVerifySession is true only for a gate-item: taskId', () => {
+    expect(isGateVerifySession('gate-item:abc123')).toBe(true);
+    expect(isGateVerifySession('report-batch:abc123')).toBe(false);
+    expect(isGateVerifySession('report:abc123')).toBe(false);
+    expect(isGateVerifySession(null)).toBe(false);
+    expect(isGateVerifySession(undefined)).toBe(false);
+  });
+
+  it('isInvestigateSession is true only for a report-batch: taskId', () => {
+    expect(isInvestigateSession('report-batch:abc123')).toBe(true);
+    expect(isInvestigateSession('gate-item:abc123')).toBe(false);
+    expect(isInvestigateSession('report:abc123')).toBe(false);
+    expect(isInvestigateSession(null)).toBe(false);
+    expect(isInvestigateSession(undefined)).toBe(false);
   });
 
   describe('isTaskTypeCompatibleWithSessionType', () => {

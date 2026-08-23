@@ -5,7 +5,11 @@ vi.mock('../db/queries.js', () => ({
 }));
 
 import { insertSchedulerAudit } from '../db/queries.js';
-import { Scheduler } from '../orchestration/Scheduler.js';
+import {
+  Scheduler,
+  GLOBAL_MAX_CONCURRENT_JOBS,
+  DEGRADED_TICK_THRESHOLD_MS,
+} from '../orchestration/Scheduler.js';
 
 const mockInsertAudit = vi.mocked(insertSchedulerAudit);
 
@@ -113,6 +117,76 @@ describe('Scheduler.start / run', () => {
     // Allow microtasks to flush (boot run is async)
     await vi.advanceTimersByTimeAsync(1);
     expect(runFn).toHaveBeenCalledOnce();
+    await scheduler.stopAll();
+  });
+
+  it('initialDelayMs seeds the first fire at last_run + intervalMs instead of intervalMs from registration', async () => {
+    const { scheduler } = makeScheduler();
+    const runFn = vi.fn().mockResolvedValue(undefined);
+    // Job's durable last run was 21h into a 24h interval — 3h (10_800_000ms)
+    // of "credit" remains toward the next fire.
+    scheduler.register({
+      name: 'j_seeded',
+      intervalMs: 24 * 60 * 60 * 1000,
+      runOnBoot: false,
+      initialDelayMs: 3 * 60 * 60 * 1000,
+      run: runFn,
+    });
+    scheduler.start();
+    // Just short of the seeded delay — must not have fired yet.
+    await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000 - 100);
+    expect(runFn).not.toHaveBeenCalled();
+    // Crossing the seeded delay fires it, well short of a fresh 24h wait.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(runFn).toHaveBeenCalledOnce();
+    await scheduler.stopAll();
+  });
+
+  it('repeated restarts inside one interval do not postpone the fire beyond the originally seeded delay', async () => {
+    // Simulates a job restarted several times before its durable last-run
+    // + intervalMs is reached: each restart re-registers with the SAME
+    // initialDelayMs (derived from the unchanged durable record), not a
+    // fresh intervalMs from that restart's own registration time.
+    const seededDelayMs = 3 * 60 * 60 * 1000;
+    const intervalMs = 24 * 60 * 60 * 1000;
+    let elapsedAcrossRestarts = 0;
+
+    for (let restart = 0; restart < 3; restart++) {
+      const { scheduler } = makeScheduler();
+      const runFn = vi.fn().mockResolvedValue(undefined);
+      const remaining = Math.max(0, seededDelayMs - elapsedAcrossRestarts);
+      scheduler.register({
+        name: 'j_restart_seeded',
+        intervalMs,
+        runOnBoot: remaining === 0,
+        initialDelayMs: remaining,
+        run: runFn,
+      });
+      scheduler.start();
+      const advanceBy = 60 * 60 * 1000; // simulate 1h of uptime before "restart"
+      await vi.advanceTimersByTimeAsync(advanceBy);
+      elapsedAcrossRestarts += advanceBy;
+      if (elapsedAcrossRestarts < seededDelayMs) {
+        expect(runFn).not.toHaveBeenCalled();
+      }
+      await scheduler.stopAll();
+    }
+
+    // Final restart: remaining delay has elapsed — fires at/before
+    // seededDelayMs total uptime, never at a re-pushed intervalMs.
+    const { scheduler } = makeScheduler();
+    const finalRunFn = vi.fn().mockResolvedValue(undefined);
+    const finalRemaining = Math.max(0, seededDelayMs - elapsedAcrossRestarts);
+    scheduler.register({
+      name: 'j_restart_seeded',
+      intervalMs,
+      runOnBoot: finalRemaining === 0,
+      initialDelayMs: finalRemaining,
+      run: finalRunFn,
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(finalRemaining + 10);
+    expect(finalRunFn).toHaveBeenCalledOnce();
     await scheduler.stopAll();
   });
 });
@@ -378,5 +452,179 @@ describe('Scheduler.triggerNow', () => {
     await expect(scheduler.triggerNow('nonexistent')).rejects.toThrow(
       'Unknown job',
     );
+  });
+});
+
+describe('Scheduler global concurrency bound', () => {
+  function registerBusyJobs(
+    scheduler: Scheduler,
+    count: number,
+    tracker: {
+      inFlight: number;
+      peakInFlight: number;
+      completed: number;
+      active: Array<() => void>;
+    },
+  ) {
+    for (let i = 0; i < count; i++) {
+      scheduler.register({
+        name: `bound_job_${i}`,
+        intervalMs: 60_000,
+        runOnBoot: true,
+        run: () =>
+          new Promise<void>((resolve) => {
+            tracker.inFlight++;
+            tracker.peakInFlight = Math.max(
+              tracker.peakInFlight,
+              tracker.inFlight,
+            );
+            tracker.active.push(() => {
+              tracker.inFlight--;
+              tracker.completed++;
+              resolve();
+            });
+          }),
+      });
+    }
+  }
+
+  it('never admits more than GLOBAL_MAX_CONCURRENT_JOBS jobs at once when all their timers expire simultaneously', async () => {
+    const { scheduler } = makeScheduler();
+    const jobCount = GLOBAL_MAX_CONCURRENT_JOBS + 6;
+    const tracker = {
+      inFlight: 0,
+      peakInFlight: 0,
+      completed: 0,
+      active: [] as Array<() => void>,
+    };
+    registerBusyJobs(scheduler, jobCount, tracker);
+
+    scheduler.start();
+    // All jobs are runOnBoot — their timers "expire" together on start().
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(tracker.peakInFlight).toBe(GLOBAL_MAX_CONCURRENT_JOBS);
+    expect(tracker.inFlight).toBeLessThanOrEqual(GLOBAL_MAX_CONCURRENT_JOBS);
+
+    // Release everything so the test doesn't leak pending jobs.
+    while (tracker.completed < jobCount) {
+      const batch = tracker.active.splice(0, tracker.active.length);
+      batch.forEach((release) => release());
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    await scheduler.stopAll();
+  });
+
+  it('runs every deferred job across repeated drains — none is dropped or starved behind the global bound', async () => {
+    const { scheduler } = makeScheduler();
+    const jobCount = GLOBAL_MAX_CONCURRENT_JOBS + 6;
+    const tracker = {
+      inFlight: 0,
+      peakInFlight: 0,
+      completed: 0,
+      active: [] as Array<() => void>,
+    };
+    registerBusyJobs(scheduler, jobCount, tracker);
+
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(1);
+
+    let drains = 0;
+    while (tracker.completed < jobCount) {
+      const batch = tracker.active.splice(0, tracker.active.length);
+      expect(batch.length).toBeGreaterThan(0);
+      batch.forEach((release) => release());
+      await vi.advanceTimersByTimeAsync(1);
+      drains++;
+      // Guard against an infinite loop if a job were ever dropped/starved.
+      expect(drains).toBeLessThanOrEqual(jobCount);
+    }
+
+    expect(tracker.completed).toBe(jobCount);
+    await scheduler.stopAll();
+  });
+
+  it("leaves a job's own concurrency: 'skip-if-running' behaviour unchanged when the global bound is not saturated", async () => {
+    expect(GLOBAL_MAX_CONCURRENT_JOBS).toBeGreaterThan(1);
+    const { scheduler } = makeScheduler();
+    let resolveRun!: () => void;
+    const pending = new Promise<void>((r) => {
+      resolveRun = r;
+    });
+    scheduler.register({
+      name: 'j_skip_unsaturated',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      concurrency: 'skip-if-running',
+      run: () => pending,
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(1);
+    void scheduler.triggerNow('j_skip_unsaturated');
+    await vi.advanceTimersByTimeAsync(1);
+    const skipped = mockInsertAudit.mock.calls.filter(
+      (c) => c[0].status === 'skipped',
+    );
+    expect(skipped.length).toBeGreaterThanOrEqual(1);
+    resolveRun();
+    await scheduler.stopAll();
+  });
+});
+
+describe('Scheduler items_processed reporting', () => {
+  it('records items_processed as an explicit 0 when a job returns no value', async () => {
+    const { scheduler } = makeScheduler();
+    scheduler.register({
+      name: 'no_return',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      run: async () => {},
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(10);
+    const auditArg = mockInsertAudit.mock.calls[0][0];
+    expect(auditArg.items_processed).toBe(0);
+    expect(auditArg.items_processed).not.toBeNull();
+    await scheduler.stopAll();
+  });
+});
+
+describe('Scheduler degraded tick classification', () => {
+  it('records an ok, zero-item tick exceeding the degraded threshold as degraded', async () => {
+    const { scheduler } = makeScheduler();
+    scheduler.register({
+      name: 'slow_zero',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      run: async () => {
+        // Fake timers also fake Date.now(), so advancing them synchronously
+        // during the job simulates a multi-minute tick without the test
+        // actually waiting that long.
+        vi.advanceTimersByTime(DEGRADED_TICK_THRESHOLD_MS);
+        return { items_processed: 0 };
+      },
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(10);
+    const auditArg = mockInsertAudit.mock.calls[0][0];
+    expect(auditArg.status).toBe('degraded');
+    expect(auditArg.items_processed).toBe(0);
+    await scheduler.stopAll();
+  });
+
+  it('keeps a fast zero-item tick recorded as ok', async () => {
+    const { scheduler } = makeScheduler();
+    scheduler.register({
+      name: 'fast_zero',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      run: async () => ({ items_processed: 0 }),
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(10);
+    const auditArg = mockInsertAudit.mock.calls[0][0];
+    expect(auditArg.status).toBe('ok');
+    expect(auditArg.items_processed).toBe(0);
+    await scheduler.stopAll();
   });
 });

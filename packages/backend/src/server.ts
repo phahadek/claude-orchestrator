@@ -5,7 +5,7 @@ import http from 'http';
 import path from 'path';
 import os from 'os';
 import { runMigrations } from './db/schema';
-import { db } from './db/db';
+import { db, dbPath, runWalTruncateCheckpointOffMainThread } from './db/db';
 import { SessionManager } from './session/SessionManager';
 import { handleMessage, setWsRouterRefreshFn } from './ws/router';
 import { setTaskWriteRefreshFn } from './tasks/TaskWriteCommands';
@@ -31,6 +31,7 @@ import {
 } from './routes/tasks';
 import { TaskCacheRefresher } from './orchestration/TaskCacheRefresher';
 import { ConvergenceSnapshotJob } from './orchestration/ConvergenceSnapshotJob';
+import { FlakyTestRollupJob } from './orchestration/FlakyTestRollupJob';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
 import { validateWsToken, isLoopbackIp } from './auth/DeviceAuth';
@@ -44,6 +45,8 @@ import {
   getActiveDeviceCount,
   pruneSchedulerAudit,
   listProjectRows,
+  getJobBootSchedule,
+  SCHEDULER_AUDIT_KEEP_PER_JOB,
 } from './db/queries';
 import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
@@ -75,6 +78,7 @@ import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiv
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
+import { register as registerDependencyCacheReconciler } from './orchestration/DependencyCacheReconciler';
 import { register as registerScheduledAuditSweep } from './orchestration/ScheduledAuditSweep';
 import {
   register as registerGateReconciler,
@@ -85,12 +89,14 @@ import {
 import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
 import { latestDispositionEvidence } from './gate/gateService';
 import { SessionGateItemVerifier } from './gate/gateItemVerifier';
+import { register as registerInvestigationReconciler } from './investigation/investigationReconciler';
+import { createInvestigateRouter } from './routes/investigate';
 import {
   deleteGhostSessions,
   getPRBySessionId,
   backfillStagedIntentMilestones,
 } from './db/queries';
-import { resolveMilestoneForTaskId } from './projects/milestoneResolver';
+import { resolveMilestoneForSessionTask } from './projects/milestoneResolver';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
@@ -101,6 +107,7 @@ import {
 } from './routes/diagnostics';
 import {
   createDeployRouter,
+  createDeployBuildShaRouter,
   setDeployScheduler,
   setDeploySessionManager,
   resumeActiveDeployRuns,
@@ -112,11 +119,17 @@ import {
   stageIntent,
   withdrawGateVerifyMirror,
 } from './routes/stagedIntents';
+import {
+  setTestRequestLaneBroadcast,
+  sweepTestRunResultsExtraction,
+  EXTRACTION_SWEEP_DEFAULT_CAP,
+} from './orchestration/testRequestLane';
 import { createOrchestratorMcpRouter } from './mcp/orchestratorMcpServer';
 import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
 import { createOpsJournalRouter } from './routes/opsJournal';
 import { createTaskAbortRouter } from './routes/taskAbort';
 import { createGateStateRouter } from './routes/gateState';
+import { createReportStateRouter } from './routes/reportState';
 import { createSeedStateRouter } from './routes/seedState';
 import { createConvergenceRouter } from './routes/convergence';
 import { createArchitectureRouter } from './routes/architecture';
@@ -132,7 +145,11 @@ import {
   OpsSessionLauncher,
   setOpsSessionLauncherRefreshFn,
 } from './orchestration/OpsSessionLauncher';
-import { runBootSequence, getActiveBootTracker } from './bootSequence';
+import {
+  runBootSequence,
+  getActiveBootTracker,
+  getReadinessState,
+} from './bootSequence';
 import { logger } from './logger';
 import {
   handleUncaughtException,
@@ -150,7 +167,7 @@ importProjectsFromEnv(process.env.PROJECTS);
 // blocks boot, and rows that don't resolve just stay in the "unattributed"
 // bucket (see backfillStagedIntentMilestones in db/queries.ts).
 try {
-  backfillStagedIntentMilestones(resolveMilestoneForTaskId);
+  backfillStagedIntentMilestones(resolveMilestoneForSessionTask);
 } catch (err) {
   logger.error(
     `[server] staged_intent milestone backfill failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -202,6 +219,9 @@ const reviewOrchestrator = new ReviewOrchestrator(
 reviewOrchestrator.setDepthReviewService(depthReviewService);
 setSettingsReviewOrchestrator(reviewOrchestrator);
 const planningOrchestrator = new PlanningOrchestrator(sessionManager);
+sessionManager.setPlanningTerminalChecker((sessionId) =>
+  planningOrchestrator.tryTerminalizeIfComplete(sessionId),
+);
 
 // Wire sessionManager into the deploy-agentic-step spawner before any
 // deploy_run resume below could reach an `agentic` step.
@@ -225,6 +245,15 @@ logConfigProvenanceSummary();
 
 const app = express();
 app.use(express.json());
+// Readiness surface — public, no token required. Distinguishes a slow boot
+// (migrating / boot_steps_running) from a crashed process; only reachable at
+// all once the listener has bound, which only happens after migrations
+// complete, so 'migrating' is reported by direct callers of
+// getReadinessState() rather than ever observed over this route itself.
+app.get('/api/readiness', (_req, res) => {
+  const state = getReadinessState();
+  res.status(state === 'serving' ? 200 : 503).json({ state });
+});
 // Public enrollment routes (bootstrap, request, status) — no token required
 app.use('/api/enrollment', createPublicEnrollmentRouter());
 // Long-lived, loopback-only orchestrator MCP server (streamable-HTTP): the
@@ -248,6 +277,12 @@ app.use('/api', createOpsJournalRouter());
 // Device-authed-only abort route for a mis-filed Backlog task — flips it to
 // Deferred and kills its bound groom session, if any (see routes/taskAbort.ts).
 app.use('/api', createTaskAbortRouter(sessionManager));
+// Build-identity read — public, no token required. The restart step's
+// identity_capture is an unauthenticated loopback curl that must resolve
+// to the running process's build SHA to prove verify against the right
+// build; the SHA is a build identity, not a secret. Every other deploy
+// route stays behind requireDeviceOrSessionRouteAuth via createDeployRouter().
+app.use('/api', createDeployBuildShaRouter());
 // Setup endpoints are public — wizard UI uses them before credentials exist
 app.use('/api', setupRouter);
 // Gate all other /api routes when setup has not been completed
@@ -332,6 +367,8 @@ app.use(
   ),
 );
 app.use('/api', createGateStateRouter());
+app.use('/api', createReportStateRouter());
+app.use('/api', createInvestigateRouter(sessionManager));
 app.use('/api', createDeployRouter());
 app.use('/api', createSeedStateRouter());
 app.use('/api', createConvergenceRouter(sessionManager));
@@ -378,19 +415,69 @@ setTaskBroadcast(broadcast);
 setEnrollmentBroadcast(broadcast);
 // Wire broadcast into the staged-intents route (for staged_intent_changed WS messages)
 setStagedIntentBroadcast(broadcast);
+// Wire broadcast into the test.request lane (for test_request_run_status WS messages)
+setTestRequestLaneBroadcast(broadcast);
 
 // Scheduler: constructed once, broadcast wired in, exposed to diagnostics route
 const scheduler = new Scheduler();
 scheduler.setBroadcast(broadcast);
 setScheduler(scheduler);
 setDeployScheduler(scheduler);
-// Bound retention: prune scheduler_audit to last 1000 rows per job, daily.
+// Bound retention: prune scheduler_audit to last 1000 rows per job, daily
+// (SCHEDULER_AUDIT_KEEP_PER_JOB rows retained per job — see db/queries.ts).
+// The first-fire schedule is derived from the durable scheduler_audit
+// record rather than process-registration time: an overdue job fires
+// immediately, and one that's mid-interval is seeded to fire at
+// last_ok_started_at + intervalMs rather than intervalMs from *this* boot
+// — so a restart landing mid-interval doesn't push the next run out by a
+// fresh interval — see getJobBootSchedule.
+const SCHEDULER_AUDIT_PRUNER_INTERVAL_MS = 24 * 60 * 60_000;
+const schedulerAuditPrunerSchedule = getJobBootSchedule(
+  'scheduler_audit_pruner',
+  SCHEDULER_AUDIT_PRUNER_INTERVAL_MS,
+);
 scheduler.register({
   name: 'scheduler_audit_pruner',
-  intervalMs: 24 * 60 * 60_000,
-  runOnBoot: false,
+  intervalMs: SCHEDULER_AUDIT_PRUNER_INTERVAL_MS,
+  runOnBoot: schedulerAuditPrunerSchedule.runOnBoot,
+  initialDelayMs: schedulerAuditPrunerSchedule.initialDelayMs,
   run: async () => {
-    pruneSchedulerAudit(1000);
+    pruneSchedulerAudit(SCHEDULER_AUDIT_KEEP_PER_JOB);
+  },
+});
+// Scheduled WAL truncate: PASSIVE autocheckpoints already write every
+// committed page back to the main database correctly on their own — what
+// never happens on its own is truncation, so the WAL file sits at its
+// historic high-water mark indefinitely (see runWalTruncateCheckpoint in
+// db.ts for the 2026-08-17 measurement that ruled out reader overlap as the
+// blocker). Hourly comfortably keeps it bounded against the measured
+// hours-to-days growth to 103.5 MB between manual checkpoints.
+scheduler.register({
+  name: 'wal_truncate_checkpoint',
+  intervalMs: 60 * 60 * 1000,
+  runOnBoot: false,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const result = await runWalTruncateCheckpointOffMainThread(dbPath);
+    const bytesFreed = Math.max(
+      0,
+      result.walSizeBeforeBytes - result.walSizeAfterBytes,
+    );
+    if (result.busy) {
+      // A busy checkpoint is an expected, non-error outcome — a reader held
+      // the WAL open at the moment this ran. It's logged distinctly (not as
+      // a success) and simply retried on the next hourly tick.
+      logger.warn(
+        `[wal_truncate_checkpoint] blocked by a reader (busy=1): log=${result.log} checkpointed=${result.checkpointed}, ` +
+          `wal size ${result.walSizeBeforeBytes} -> ${result.walSizeAfterBytes} bytes`,
+      );
+      return { items_processed: 0 };
+    }
+    logger.info(
+      `[wal_truncate_checkpoint] wal size ${result.walSizeBeforeBytes} -> ${result.walSizeAfterBytes} bytes ` +
+        `[busy=0 log=${result.log} checkpointed=${result.checkpointed}]`,
+    );
+    return { items_processed: bytesFreed };
   },
 });
 // Backstop for the terminal-status reap hook in SessionManager: catches
@@ -558,6 +645,11 @@ const sessionEventsPruner = new SessionEventsPruner();
 // minutes and writes a durable burndown row only when it changes.
 const convergenceSnapshotJob = new ConvergenceSnapshotJob();
 
+// Flaky-test rollup: recomputes flagged_flaky_tests_rollup for every project
+// every 15 minutes so lane-health reads a precomputed table instead of
+// scanning full test_run_results history on the request path.
+const flakyTestRollupJob = new FlakyTestRollupJob();
+
 const stalledPRReconciler = new StalledPRReconciler(broadcast);
 stalledPRReconciler.setReviewOrchestrator(reviewOrchestrator);
 stalledPRReconciler.setSessionManager(sessionManager);
@@ -588,11 +680,50 @@ sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 convergenceSnapshotJob.register(scheduler);
+flakyTestRollupJob.register(scheduler);
 registerWorktreeReconciler(scheduler);
+registerDependencyCacheReconciler(scheduler);
 // Daily base-branch dependency/license-audit sweep — independent of any PR,
 // closes the gap the per-PR analyze gate's diff-triggered skip leaves for
 // manifests no PR ever touches.
 registerScheduledAuditSweep(scheduler);
+// Drains whatever the boot-time extraction sweep's cap left behind (see
+// EXTRACTION_SWEEP_BOOT_CAP in bootSequence.ts) — a few runs per tick rather
+// than one unbounded inline pass, so a large backlog never blocks boot or a
+// single scheduler tick.
+scheduler.register({
+  name: 'test_run_results_extraction_drain',
+  intervalMs: 5 * 60_000,
+  runOnBoot: false,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const result = await sweepTestRunResultsExtraction({
+      cap: EXTRACTION_SWEEP_DEFAULT_CAP,
+    });
+    if (result.remaining > 0) {
+      logger.info(
+        `[test_run_results_extraction_drain] processed ${result.processed}, ${result.remaining} still pending`,
+      );
+    }
+    return { items_processed: result.processed };
+  },
+});
+// Periodic counterpart to resumeOrphanSessions' boot-only reap of the
+// backend's own main/ cgroup: a process that gets reparented to ppid=1 (a
+// daemonizing grandchild that escaped a session/test-lane placement) mid
+// uptime was previously invisible to any sweep until the next restart —
+// exactly the gap that let a leaked test.request subprocess swap the host
+// unbounded for the incident this job exists to close.
+scheduler.register({
+  name: 'main_cgroup_orphan_sweep',
+  intervalMs: 10 * 60_000,
+  runOnBoot: false,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const reaped = sessionManager.reapMainCgroupOrphans();
+    return { items_processed: reaped };
+  },
+});
 // Session-map reconciler: defense-in-depth sweep dropping stale in-memory
 // this.sessions entries whose DB row is terminal or missing, so a slot leak
 // from any (known or future) code path self-heals without operator
@@ -619,8 +750,14 @@ scheduler.register({
   runOnBoot: true,
   concurrency: 'skip-if-running',
   run: async () => {
-    const { reconciled } = sessionManager.reconcilePlanningSessionLiveness();
-    return { items_processed: reconciled.length };
+    const { reconciled, examined, alive } =
+      sessionManager.reconcilePlanningSessionLiveness();
+    return {
+      items_processed: reconciled.length,
+      examined,
+      alive,
+      terminalized: reconciled.length,
+    };
   },
 });
 // Non-planning counterpart to session_liveness_reconciler above: covers
@@ -634,8 +771,59 @@ scheduler.register({
   runOnBoot: true,
   concurrency: 'skip-if-running',
   run: async () => {
-    const { reconciled } = sessionManager.reconcileNonPlanningSessionLiveness();
-    return { items_processed: reconciled.length };
+    const { reconciled, examined, alive } =
+      sessionManager.reconcileNonPlanningSessionLiveness();
+    return {
+      items_processed: reconciled.length,
+      examined,
+      alive,
+      terminalized: reconciled.length,
+    };
+  },
+});
+// Orphan-process reconciler: the OS → DB mirror of session_map_reconciler
+// and the fourth cell in the coverage matrix — a claude process whose
+// session row is already terminal (or missing) and whose in-memory map
+// entry is gone is invisible to session_map_reconciler (iterates the map)
+// and both liveness reconcilers above (iterate non-terminal rows). This
+// sweep enumerates the OS process table directly and reaps that process,
+// never writing a session status itself. Same cadence pattern.
+scheduler.register({
+  name: 'orphan_process_reconciler',
+  intervalMs: 10 * 60_000,
+  runOnBoot: true,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const { examined, reaped, skippedByGrace, survivedEscalation } =
+      await sessionManager.reconcileOrphanProcesses();
+    return {
+      items_processed: reaped,
+      examined,
+      reaped,
+      skippedByGrace,
+      survivedEscalation,
+    };
+  },
+});
+// MCP-unreachable reconciler: detects a live session whose orchestrator MCP
+// server never connected (the CLI-side stall — see
+// SessionManager.reconcileMcpUnreachableSessions's doc comment) and
+// recovers it with a bounded in-place respawn, never a termination. Same
+// cadence pattern as the liveness reconcilers above.
+scheduler.register({
+  name: 'mcp_unreachable_reconciler',
+  intervalMs: 10 * 60_000,
+  runOnBoot: true,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const { detected, respawned, exhausted } =
+      await sessionManager.reconcileMcpUnreachableSessions();
+    return {
+      items_processed: detected.length,
+      detected: detected.length,
+      respawned: respawned.length,
+      exhausted: exhausted.length,
+    };
   },
 });
 // Gate-verification reconciler: runnability/readiness reconcile on every
@@ -654,6 +842,13 @@ const gateVerificationOptions = {
 };
 registerGateReconciler(scheduler, gateVerificationOptions);
 configureGateVerification(gateVerificationOptions);
+
+// Investigate reconciler: scans committed investigation reports with no
+// live non-terminal session and auto-dispatches them, gated per report by
+// that report's milestone's (milestone, 'investigate') arm. Also registers
+// the report-resolve watcher, which runs unconditionally. Mirrors the
+// gate-verification reconciler wired just above.
+registerInvestigationReconciler(scheduler, sessionManager);
 
 // Gate-item mirror sink: surfaces two states that would otherwise be
 // invisible outside GateReadinessPanel as `gate.verify` staged intents in

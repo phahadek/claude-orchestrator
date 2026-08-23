@@ -9,6 +9,10 @@ vi.mock('../db/queries', () => ({
   bumpTaskNoOpAttempts: vi.fn(),
 }));
 
+vi.mock('../audit/AuditLog', () => ({
+  recordEvent: vi.fn(),
+}));
+
 import {
   NoOpInvestigator,
   tryParseNoOpVerdict,
@@ -20,6 +24,7 @@ import {
   getTaskNoOpAttempts,
   bumpTaskNoOpAttempts,
 } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { ResolvedTask } from '../tasks/types';
@@ -347,6 +352,14 @@ describe('NoOpInvestigator.investigate', () => {
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringMatching(/sessionManager\.start failed.*notion:abc123/),
     );
+    // Regression: a silent skip here must be diagnosable from the audit
+    // log alone, not just live server logs.
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'no_op_investigation_failed',
+        payload: expect.objectContaining({ stage: 'session_manager_start' }),
+      }),
+    );
 
     consoleSpy.mockRestore();
   });
@@ -376,6 +389,12 @@ describe('NoOpInvestigator.investigate', () => {
     expect(backend.updateStatus).not.toHaveBeenCalled();
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringMatching(/no parseable verdict.*notion:abc123/),
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'no_op_investigation_failed',
+        payload: expect.objectContaining({ stage: 'no_parseable_verdict' }),
+      }),
     );
 
     consoleSpy.mockRestore();

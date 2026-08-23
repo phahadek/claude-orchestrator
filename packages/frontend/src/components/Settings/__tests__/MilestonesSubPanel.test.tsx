@@ -50,6 +50,7 @@ const PROJECT: Project = {
   taskSourceConfig: null,
   dataResidencyConfirmed: false,
   baseBranch: 'dev',
+  testRequestMaxConcurrent: null,
   createdAt: 1,
   updatedAt: 1,
   milestones: [],

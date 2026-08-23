@@ -1,6 +1,6 @@
 {
   "name": "claude-orchestrator",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "A local web dashboard for browsing, managing, and orchestrating Claude Code sessions.",
   "main": "index.js",
@@ -30,7 +30,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "scan:identifiers": "node scripts/scan-identifiers.mjs",
     "check:markdown-paths": "node scripts/check-markdown-paths.mjs",
-    "test:scripts": "node --test scripts/__tests__/",
+    "check:query-plans": "node scripts/check-query-plans.mjs",
+    "test:scripts": "node --test scripts/__tests__/ scripts/tests/",
     "backup:db": "node scripts/backup-database.mjs",
     "audit:licenses": "npx --yes license-checker --failOn 'GPL;AGPL'",
     "start:win": "powershell -ExecutionPolicy Bypass -File start.ps1",

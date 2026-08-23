@@ -43,7 +43,9 @@ import {
   approveGateItem,
   appendGateItemEvent,
   reconcileGateRunnability,
+  getGateReadiness,
 } from '../gateService.js';
+import { catchUpMergeCommits } from '../gateMergeConsumer.js';
 import {
   runGateReconcilerTick,
   register,
@@ -65,6 +67,11 @@ import {
 // once here so every test's flow_arm writes below key on the same id the
 // reconciler resolves to.
 let m12Id: string;
+// A second, wrapped (closed-out) milestone in the same project — used by
+// the wrapped-milestone-scoping tests below. Its gate_item rows exist in
+// the same tables as M12's, so scoping must key off milestones.wrapped_at,
+// not off some other project-level or table-level split.
+let m11Id: string;
 
 beforeAll(() => {
   ProjectService.create({
@@ -78,6 +85,13 @@ beforeAll(() => {
     name: 'M12',
     canonicalShortId: 'M12',
   }).id;
+  m11Id = ProjectService.createMilestone({
+    id: 'ms-uuid-m11',
+    projectId: 'polimarket-analyser',
+    name: 'M11',
+    canonicalShortId: 'M11',
+  }).id;
+  ProjectService.updateMilestone(m11Id, { wrapped_at: 1 });
 });
 
 beforeEach(() => {
@@ -1236,6 +1250,110 @@ describe('runGateReconcilerTick — event loop yielding', () => {
   });
 });
 
+describe('reconcileGateRunnability — synchronous git-spawn hot-path regression', () => {
+  it('skips the git-ancestry check entirely for an item already in a terminal pass state', async () => {
+    const isAncestor = vi.fn(() => true);
+    const item = makeItem();
+    mergeSource(item.id, 'sha1', new Date(1).toISOString());
+    await reconcileGateRunnability('sha1', { ancestrySource: { isAncestor } });
+    expect(isAncestor).toHaveBeenCalled();
+
+    appendGateItemEvent(item.id, { disposition: 'pass' });
+    isAncestor.mockClear();
+
+    await reconcileGateRunnability('sha2', { ancestrySource: { isAncestor } });
+
+    expect(isAncestor).not.toHaveBeenCalled();
+  });
+
+  it('a regression test for runGateReconcilerTick: a realistic number of already-pass items issue no per-item ancestry check', async () => {
+    const isAncestor = vi.fn(() => true);
+    const passItemCount = 50;
+    for (let i = 0; i < passItemCount; i++) {
+      const item = makeItem({ text: `pass item ${i}` });
+      mergeSource(item.id, 'sha1', new Date(1).toISOString(), 'notion:abc');
+      appendGateItemEvent(item.id, { disposition: 'pass' });
+    }
+    // One still-open item, so the tick still has real reconciliation work to do.
+    const openItem = makeItem({ text: 'still open' });
+    mergeSource(openItem.id, 'sha1', new Date(1).toISOString());
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      ancestrySourceForProject: () => ({ isAncestor }),
+    });
+
+    // Only the one non-pass item's source should have reached the ancestry check.
+    expect(isAncestor).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not use a synchronous child-process call — the event loop stays responsive while a check is in flight', async () => {
+    const { createLocalAsyncGitAncestrySource } =
+      await import('../gateService.js');
+    const ancestry = createLocalAsyncGitAncestrySource(process.cwd());
+
+    const order: string[] = [];
+    const timer = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        order.push('timer');
+        resolve();
+      }, 0);
+    });
+    const check = Promise.resolve(
+      ancestry.isAncestor(
+        '0000000000000000000000000000000000000a',
+        '0000000000000000000000000000000000000b',
+      ),
+    ).then(() => {
+      order.push('ancestry');
+    });
+
+    await Promise.all([timer, check]);
+
+    // A synchronous execFileSync call would run the whole ancestry check
+    // (including its subprocess spawn) to completion before this function
+    // even returns control to the microtask queue, so the timer scheduled
+    // above would have no chance to fire first.
+    expect(order[0]).toBe('timer');
+  });
+
+  it('runs ancestry checks with bounded concurrency rather than fully serial, one item at a time', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const isAncestor = vi.fn(async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      inFlight--;
+      return true;
+    });
+
+    for (let i = 0; i < 6; i++) {
+      const item = makeItem({ text: `item ${i}` });
+      mergeSource(item.id, `sha-${i}`, new Date(1).toISOString());
+    }
+
+    await reconcileGateRunnability('sha1', { ancestrySource: { isAncestor } });
+
+    // A fully serial loop can never have more than one ancestry check in
+    // flight at a time — more than one overlapping proves the checks are
+    // actually running concurrently, not just yielding between each other.
+    expect(maxInFlight).toBeGreaterThan(1);
+  });
+
+  it('issues only one isAncestor call for two items sharing the same (mergeCommit, deploySha) pair within a tick', async () => {
+    const isAncestor = vi.fn(() => true);
+    const itemA = makeItem({ text: 'item a' });
+    const itemB = makeItem({ text: 'item b' });
+    mergeSource(itemA.id, 'sha-shared', new Date(1).toISOString());
+    mergeSource(itemB.id, 'sha-shared', new Date(1).toISOString());
+
+    await reconcileGateRunnability('sha1', { ancestrySource: { isAncestor } });
+
+    expect(isAncestor).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('runGateReconcilerTick — verify concurrency budgeting', () => {
   /** Seeds a live (non-terminal) session row directly — bypasses SessionManager, for exercising the DB-backed count the reconciler budgets against. */
   function insertLiveSession(opts: {
@@ -1570,5 +1688,217 @@ describe('reattachOutstandingGateVerifications', () => {
       reattachOutstandingGateVerifications(),
     ).resolves.toBeUndefined();
     expect(getItem(item.id)?.state).toBe('runnable');
+  });
+});
+
+describe('runGateReconcilerTick — wrapped-milestone scoping', () => {
+  it('does not load, reconcile, or auto-run a gate item belonging to a wrapped milestone, while an item on an open milestone in the same project is unaffected', async () => {
+    upsertArm(m11Id, 'gate-verify', true, 1);
+    const openItem = await makeRunnableItem({
+      milestone: 'M12',
+      classification: 'Read-Only',
+    });
+    const wrappedItem = await makeRunnableItem({
+      milestone: 'M11',
+      classification: 'Read-Only',
+    });
+
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    // Only the open milestone's item was ever handed to the verifier — the
+    // wrapped milestone's item was excluded before auto-run even pulled a
+    // tier, not merely skipped after being loaded.
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(result.processed).toEqual([
+      {
+        itemId: openItem.id,
+        classification: 'Read-Only',
+        disposition: 'pass',
+      },
+    ]);
+    expect(getItem(openItem.id)?.state).toBe('pass');
+    // Untouched: still sitting at 'runnable', exactly where
+    // makeRunnableItem left it — the reconciler never reconsidered it.
+    expect(getItem(wrappedItem.id)?.state).toBe('runnable');
+
+    // The readiness rollup this tick produces is keyed off the same
+    // filtered working set, so a wrapped milestone never appears in it.
+    expect(result.readiness['polimarket-analyser::M12']).toBeDefined();
+    expect(result.readiness['polimarket-analyser::M11']).toBeUndefined();
+  });
+
+  it('excludes a wrapped milestone item from reconcileGateRunnability when isMilestoneWrapped is supplied, while behavior for the open milestone is unchanged', async () => {
+    // Both items start 'open' with a merged-but-not-yet-deployed source —
+    // reconcileGateRunnability, given deploySha 'sha1', should mark the
+    // open-milestone item runnable exactly as it always has, and leave the
+    // wrapped-milestone item alone entirely.
+    const openItem = makeItem({ milestone: 'M12' });
+    mergeSource(openItem.id, 'sha1', new Date(1).toISOString());
+    const wrappedItem = makeItem({ milestone: 'M11' });
+    mergeSource(wrappedItem.id, 'sha1', new Date(1).toISOString());
+
+    const result = await reconcileGateRunnability('sha1', {
+      project: 'polimarket-analyser',
+      isMilestoneWrapped: (project, milestone) =>
+        project === 'polimarket-analyser' && milestone === 'M11',
+    });
+
+    expect(result.markedRunnable).toEqual([openItem.id]);
+    expect(getItem(openItem.id)?.state).toBe('runnable');
+    expect(getItem(wrappedItem.id)?.state).toBe('open');
+  });
+
+  it('reopens a fail item on an open milestone identically whether or not a wrapped-milestone item exists alongside it', async () => {
+    const item = await makeRunnableItem({ milestone: 'M12' });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      evidence: { minDeployedCommitAtFail: 'sha1' },
+    });
+    expect(getItem(item.id)?.state).toBe('fail');
+
+    const wrappedItem = await makeRunnableItem({ milestone: 'M11' });
+    appendGateItemEvent(wrappedItem.id, {
+      disposition: 'fail',
+      evidence: { minDeployedCommitAtFail: 'sha1' },
+    });
+    expect(getItem(wrappedItem.id)?.state).toBe('fail');
+
+    // The follow-up fix source merges and pushes min_deployed_commit
+    // forward on both items.
+    setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
+    setMinDeployedCommit(wrappedItem.id, 'sha2', new Date(2).toISOString());
+
+    // A total order over sha strings ('sha2' > 'sha1') — avoids spawning a
+    // real `git merge-base` against fixture shas that share no actual git
+    // history, mirroring gateService.test.ts's own orderedAncestry fixture.
+    const orderedAncestry = {
+      isAncestor: (ancestorSha: string, descendantSha: string) =>
+        ancestorSha <= descendantSha,
+    };
+
+    const result = await reconcileGateRunnability('sha2', {
+      project: 'polimarket-analyser',
+      ancestrySource: orderedAncestry,
+      isMilestoneWrapped: (project, milestone) =>
+        project === 'polimarket-analyser' && milestone === 'M11',
+    });
+
+    expect(result.reopened).toEqual([item.id]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+    // The wrapped item's follow-up fix landed too, but the reconciler never
+    // looked at it — it stays parked at 'fail' rather than reopening.
+    expect(getItem(wrappedItem.id)?.state).toBe('fail');
+  });
+
+  it('handles a gate item whose milestone holds a raw milestone UUID deterministically — it resolves to the same wrapped/unwrapped answer as its canonical short-id counterpart', async () => {
+    // M12 (m12Id) is unwrapped: a UUID-keyed item on it must be treated as
+    // in-scope, same as a canonical-'M12'-keyed item.
+    const uuidKeyedOpenItem = await makeRunnableItem({
+      milestone: m12Id,
+      classification: 'Read-Only',
+    });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const firstTick = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    expect(firstTick.processed).toEqual([
+      {
+        itemId: uuidKeyedOpenItem.id,
+        classification: 'Read-Only',
+        disposition: 'pass',
+      },
+    ]);
+
+    // Now the same check against M11 (m11Id), which IS wrapped: a
+    // UUID-keyed item on it must be excluded, same as a canonical-'M11'
+    // -keyed item — this is the side the predicate falls on for a raw
+    // milestone UUID.
+    upsertArm(m11Id, 'gate-verify', true, 1);
+    const uuidKeyedWrappedItem = await makeRunnableItem({
+      milestone: m11Id,
+      classification: 'Read-Only',
+    });
+    verify.mockClear();
+    const secondTick = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(secondTick.processed).toEqual([]);
+    expect(getItem(uuidKeyedWrappedItem.id)?.state).toBe('runnable');
+  });
+
+  it('preserves the negative items_processed ("runnable work found, no budget") convention when a wrapped-milestone item is also present — it must not be counted as skipped-for-budget', async () => {
+    typedSetSetting('max_concurrent_verify_sessions', 1);
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, session_type, status, started_at)
+       VALUES ('live-verify-1', 'gate-item:already-live', 'ops', 'running', 0)`,
+    ).run();
+    await makeRunnableItem({ milestone: 'M12', classification: 'Read-Only' });
+    upsertArm(m11Id, 'gate-verify', true, 1);
+    await makeRunnableItem({ milestone: 'M11', classification: 'Read-Only' });
+
+    const run = vi.fn(async () => undefined);
+    const scheduler = {
+      register: vi.fn(({ run: r }) => run.mockImplementation(r)),
+    };
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    register(scheduler as never, {
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    const opts = scheduler.register.mock.calls[0][0];
+    const result = await opts.run({ signal: new AbortController().signal });
+
+    expect(verify).not.toHaveBeenCalled();
+    // Exactly -1: the open milestone's item was skipped for budget; the
+    // wrapped milestone's item was excluded entirely and never entered the
+    // skippedForBudget count.
+    expect(result.items_processed).toBe(-1);
+
+    typedSetSetting('max_concurrent_verify_sessions', 5);
+  });
+});
+
+describe('getGateReadiness — wrapped-milestone exclusion', () => {
+  it('reports green with no blocking items for a wrapped milestone, even though it has an unresolved gate item the reconciler no longer touches', async () => {
+    await makeRunnableItem({ milestone: 'M11', classification: 'Read-Only' });
+
+    const readiness = getGateReadiness('polimarket-analyser', 'M11');
+
+    expect(readiness.status).toBe('green');
+    expect(readiness.blocking).toEqual([]);
+    expect(readiness.parked).toEqual([]);
+    expect(readiness.counts).toEqual({});
+  });
+
+  it('is unaffected for an open milestone', async () => {
+    await makeRunnableItem({ milestone: 'M12', classification: 'Read-Only' });
+
+    const readiness = getGateReadiness('polimarket-analyser', 'M12');
+
+    expect(readiness.status).toBe('blocked');
+    expect(readiness.blocking).toHaveLength(1);
+  });
+});
+
+describe('catchUpMergeCommits — duration isolated from the rest of the tick', () => {
+  it('runs and completes as a standalone call, so its contribution to a tick is measurable independent of the item-scan/reconcile phases that follow it', async () => {
+    // catchUpMergeCommits is awaited on its own line before gate items are
+    // ever loaded (see runGateReconcilerTick) — calling it directly here,
+    // outside of a full tick, demonstrates it is a separately-timeable unit
+    // rather than work folded into the item scan this task scopes down.
+    const start = performance.now();
+    const result = await catchUpMergeCommits();
+    const elapsedMs = performance.now() - start;
+
+    expect(result).toEqual({ filled: 0 });
+    expect(elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(elapsedMs)).toBe(true);
   });
 });

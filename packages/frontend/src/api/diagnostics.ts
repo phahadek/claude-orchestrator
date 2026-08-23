@@ -2,7 +2,7 @@ export interface JobStatus {
   name: string;
   running: boolean;
   lastRunAt: string | null;
-  lastStatus: 'ok' | 'failed' | 'skipped' | null;
+  lastStatus: 'ok' | 'failed' | 'skipped' | 'degraded' | null;
   nextRunAt: string | null;
   lastDurationMs?: number | null;
   runCount24h?: number | null;

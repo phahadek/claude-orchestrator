@@ -15,12 +15,14 @@
  * the store's invariant/contract units, and grooming consults both rather
  * than one subsuming the other. Reasons this is the right split, not a
  * shortcut past the design question:
- *  - Scope mismatch: the store is per-project (a project's `archStoreAdopted`
- *    flag gates whether it has one at all); this catalog encodes
- *    orchestrator-wide non-negotiables that hold across every project
- *    regardless of that flag. Deriving it from a per-project store would
- *    make catalog coverage a function of what any given project happened to
- *    author into its store.
+ *  - Scope mismatch: `archStoreAdopted` gates whether a project *reads* the
+ *    arch_unit store (vs. Notion) — it does not gate what the store
+ *    contains. Each row is scoped by its own `project` column, but this
+ *    catalog encodes orchestrator-wide non-negotiables that must hold across
+ *    every project's grooming regardless of that flag. Deriving it from the
+ *    store would make catalog coverage a function of what the *current*
+ *    project happened to author into its own rows, not a fixed cross-project
+ *    baseline.
  *  - Different failure mode: `bindingConstraintIdsForRegions` feeds
  *    groomGate.ts's server-side re-derivation — a hard promotion gate that
  *    must stay available even for a project that has no store units yet (or

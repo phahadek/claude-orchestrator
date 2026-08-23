@@ -31,8 +31,9 @@ function makeProc(
   stdout = '',
   stderr = '',
   delayMs = 0,
+  signal: string | null = null,
 ): MockProc {
-  const closeCbs: Array<(c: number | null) => void> = [];
+  const closeCbs: Array<(c: number | null, s: string | null) => void> = [];
   const outCbs: Array<(d: Buffer) => void> = [];
   const errCbs: Array<(d: Buffer) => void> = [];
 
@@ -49,14 +50,15 @@ function makeProc(
       },
     },
     on: (e, cb) => {
-      if (e === 'close') closeCbs.push(cb as (c: number | null) => void);
+      if (e === 'close')
+        closeCbs.push(cb as (c: number | null, s: string | null) => void);
     },
   };
 
   setTimeout(() => {
     if (stdout) outCbs.forEach((cb) => cb(Buffer.from(stdout)));
     if (stderr) errCbs.forEach((cb) => cb(Buffer.from(stderr)));
-    closeCbs.forEach((cb) => cb(exitCode));
+    closeCbs.forEach((cb) => cb(exitCode, signal));
   }, delayMs);
 
   return proc;
@@ -68,7 +70,13 @@ import {
   runTestCommands,
   collapseProgressRuns,
   truncateForDelivery,
+  TEARDOWN_VERIFY_RETRY_MS,
 } from '../test-runner';
+import {
+  _setTestsPathForTesting,
+  _setMainPathForTesting,
+  _resetForTesting,
+} from '../sessionCgroup';
 
 /**
  * A proc whose stdout streams once (after listeners attach) but that never
@@ -289,6 +297,32 @@ describe('runTestCommands — fail-fast', () => {
     expect(result.passed).toBe(false);
     expect(result.output).toContain('TIMEOUT');
   });
+
+  it('runs the second command after the first times out, when failFast is false — each command is bounded independently by its own timeout', async () => {
+    let callCount = 0;
+    _spawnHook = (cmd) => {
+      if (cmd !== 'taskkill') callCount++;
+      // First command hangs past the timeout; second returns immediately.
+      return callCount === 1
+        ? makeProc(0, '', '', 9999_000)
+        : makeProc(0, 'cmd2');
+    };
+
+    const promise = runTestCommands(
+      '/worktree',
+      ['slow-cmd', 'second-cmd'],
+      5,
+      () => {},
+      { failFast: false },
+    );
+    await vi.advanceTimersByTimeAsync(11_000);
+    const result = await promise;
+
+    expect(callCount).toBe(2);
+    expect(result.passed).toBe(false);
+    expect(result.output).toContain('TIMEOUT');
+    expect(result.output).toContain('cmd2');
+  });
 });
 
 describe('runTestCommands — RSS kill', () => {
@@ -381,6 +415,53 @@ describe('runTestCommands — RSS kill', () => {
     expect(callCount).toBe(1);
     expect(result.passed).toBe(false);
     expect(result.output).toContain('OOM_KILL');
+  });
+});
+
+describe('runTestCommands — externally signal-killed process (host/container OOM-killer)', () => {
+  it('marks oomKilled:true on an unescalated SIGKILL close even when the RSS poller is disabled (maxRssMb: 0)', async () => {
+    // No maxRssMb passed — the RSS poller never starts — yet the subprocess
+    // still exits via SIGKILL (the OS/container OOM-killer, not our own
+    // escalate()), so this must be caught purely from the close event's
+    // signal arg.
+    _spawnHook = () =>
+      makeProc(null as unknown as number, '', '', 0, 'SIGKILL');
+
+    const promise = runTestCommands(
+      '/worktree',
+      ['npm run test -w backend'],
+      300,
+      () => {},
+    );
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.passed).toBe(false);
+    expect(result.oomKilled).toBe(true);
+    expect(result.output).toContain('SIGKILL');
+  });
+
+  it('does not mark oomKilled for an ordinary nonzero exit with no signal', async () => {
+    _spawnHook = () => makeProc(1, 'failure output', '', 0, null);
+
+    const promise = runTestCommands('/worktree', ['npm test'], 300, () => {});
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.passed).toBe(false);
+    expect(result.oomKilled).toBe(false);
+  });
+
+  it('does not mark oomKilled for a non-SIGKILL signal (e.g. SIGTERM)', async () => {
+    _spawnHook = () =>
+      makeProc(null as unknown as number, '', '', 0, 'SIGTERM');
+
+    const promise = runTestCommands('/worktree', ['npm test'], 300, () => {});
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.passed).toBe(false);
+    expect(result.oomKilled).toBe(false);
   });
 });
 
@@ -540,6 +621,144 @@ describe('runTestCommands — SIGINT escalation', () => {
     await promise;
 
     expect(resolveCount).toBe(1);
+  });
+});
+
+describe('runTestCommands — cgroup-scoped teardown verification', () => {
+  const TESTS_CGROUP_PATH = '/sys/fs/cgroup/orchestrator.service/tests';
+
+  beforeEach(() => {
+    // Mock call history (e.g. rmdirSync) is not cleared between tests by
+    // default — without this, an earlier test's cgroup-cleanup call would
+    // leak into a later test's "was never called" assertion.
+    vi.clearAllMocks();
+    _setTestsPathForTesting(TESTS_CGROUP_PATH);
+    // mainCgroupPath left null so spawnIntoTestRunCgroup takes its
+    // unrelocated fallback path — these tests exercise kill/verify only.
+    _setMainPathForTesting(null);
+    vi.mocked(fsModule.existsSync).mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    _resetForTesting();
+  });
+
+  /**
+   * Configures the cgroup.procs read to report non-empty for the first
+   * `survivingReads` reads and empty thereafter — simulating a process that
+   * is still alive in the run's cgroup until cgroup.kill (written by
+   * killTestRunCgroup) actually reaps it, which takes a moment to be
+   * reflected. RSS-poll reads of /proc/<pid>/status are left unaffected.
+   */
+  function mockCgroupProcsSurvivesThenClears(survivingReads: number): void {
+    let cgroupReadCount = 0;
+    vi.mocked(fsModule.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).endsWith('cgroup.procs')) {
+        cgroupReadCount++;
+        return (cgroupReadCount <= survivingReads ? '5678\n' : '') as never;
+      }
+      return '' as never;
+    });
+  }
+
+  it('terminates a timed-out command whose child re-parented to init and escaped the process group', async () => {
+    // killProcessTree's process-group signal is a no-op against this
+    // escapee by construction (process.kill is mocked and has no bearing on
+    // the fake cgroup.procs state) — only killTestRunCgroup's cgroup.kill
+    // write, verified via isTestRunCgroupEmpty, can observe it terminate.
+    vi.spyOn(process, 'kill').mockImplementation(() => true as never);
+    mockCgroupProcsSurvivesThenClears(1);
+    _spawnHook = () => makeProc(0, '', '', 9999_000);
+
+    const promise = runTestCommands('/worktree', ['slow-cmd'], 5, () => {});
+    await vi.advanceTimersByTimeAsync(11_000 + TEARDOWN_VERIFY_RETRY_MS * 2);
+    const result = await promise;
+
+    expect(vi.mocked(fsModule.writeFileSync)).toHaveBeenCalledWith(
+      expect.stringContaining('cgroup.kill'),
+      '1',
+    );
+    expect(result.teardownVerificationFailed).toBe(false);
+  });
+
+  it('terminates a timed-out command whose child called setsid()', async () => {
+    // Same escape shape as re-parenting from test-runner's perspective:
+    // cgroup-v2 membership is orthogonal to both process group and parent
+    // pid, so the verify-and-kill loop is what reaches it either way.
+    vi.spyOn(process, 'kill').mockImplementation(() => true as never);
+    mockCgroupProcsSurvivesThenClears(2);
+    _spawnHook = () => makeProc(0, '', '', 9999_000);
+
+    const promise = runTestCommands('/worktree', ['slow-cmd'], 5, () => {});
+    await vi.advanceTimersByTimeAsync(11_000 + TEARDOWN_VERIFY_RETRY_MS * 3);
+    const result = await promise;
+
+    expect(vi.mocked(fsModule.writeFileSync)).toHaveBeenCalledWith(
+      expect.stringContaining('cgroup.kill'),
+      '1',
+    );
+    expect(result.teardownVerificationFailed).toBe(false);
+  });
+
+  it('records a distinct outcome, not a silent success, when a process survives every teardown attempt', async () => {
+    vi.spyOn(process, 'kill').mockImplementation(() => true as never);
+    // Always reports non-empty — nothing ever reaps.
+    vi.mocked(fsModule.readFileSync).mockImplementation(
+      (p: unknown) =>
+        (String(p).endsWith('cgroup.procs') ? '5678\n' : '') as never,
+    );
+    _spawnHook = () => makeProc(0, '', '', 9999_000);
+
+    const promise = runTestCommands('/worktree', ['slow-cmd'], 5, () => {});
+    await vi.advanceTimersByTimeAsync(11_000 + TEARDOWN_VERIFY_RETRY_MS * 5);
+    const result = await promise;
+
+    expect(result.teardownVerificationFailed).toBe(true);
+    expect(result.passed).toBe(false);
+  });
+
+  it('never removes the per-run cgroup dir while a process still survives in it', async () => {
+    vi.spyOn(process, 'kill').mockImplementation(() => true as never);
+    vi.mocked(fsModule.readFileSync).mockImplementation(
+      (p: unknown) =>
+        (String(p).endsWith('cgroup.procs') ? '5678\n' : '') as never,
+    );
+    _spawnHook = () => makeProc(0, '', '', 9999_000);
+
+    const promise = runTestCommands('/worktree', ['slow-cmd'], 5, () => {});
+    await vi.advanceTimersByTimeAsync(11_000 + TEARDOWN_VERIFY_RETRY_MS * 5);
+    await promise;
+
+    expect(vi.mocked(fsModule.rmdirSync)).not.toHaveBeenCalled();
+  });
+
+  it('a runner that exits cleanly within the SIGINT grace period still writes its report and is not hard-killed, and settles once its cgroup is confirmed empty', async () => {
+    vi.mocked(fsModule.readFileSync).mockImplementation(
+      (p: unknown) => (String(p).endsWith('cgroup.procs') ? '' : '') as never,
+    );
+    const killSpy = vi
+      .spyOn(process, 'kill')
+      .mockImplementation(() => true as never);
+    const closeCbs: Array<(c: number | null) => void> = [];
+    const proc: MockProc = {
+      pid: 4321,
+      stdout: { on: () => {} },
+      stderr: { on: () => {} },
+      on: (e, cb) => {
+        if (e === 'close') closeCbs.push(cb as (c: number | null) => void);
+      },
+    };
+    _spawnHook = () => proc;
+
+    const promise = runTestCommands('/worktree', ['slow-cmd'], 5, () => {});
+    await vi.advanceTimersByTimeAsync(5_000);
+    closeCbs.forEach((cb) => cb(130));
+    const result = await promise;
+
+    const signals = killSpy.mock.calls.map((c) => c[1]);
+    expect(signals).toEqual(['SIGINT']);
+    expect(result.timedOut).toBe(true);
+    expect(result.teardownVerificationFailed).toBe(false);
   });
 });
 

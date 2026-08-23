@@ -120,6 +120,7 @@ vi.mock('../config', () => ({
   AUTO_REVIEW_ENABLED: false,
   ALLOWED_TOOLS: [],
   PLANNING_DISALLOWED_TOOLS: [],
+  SCHEDULING_DISALLOWED_TOOLS: [],
   GITHUB_REPO: '',
   BASH_MAX_OUTPUT_LENGTH: 30_000,
   BASH_DEFAULT_TIMEOUT_MS: 120_000,
@@ -141,7 +142,21 @@ vi.mock('../config', () => ({
   },
 }));
 
+vi.mock('../orchestration/memoryAdmission', () => ({
+  // respawnSession's memory-admission gate — real os.freemem() is
+  // unreliable/low in CI/sandboxed hosts, so tests always see headroom
+  // unless a test explicitly overrides this mock.
+  hasMemoryHeadroom: vi.fn().mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  }),
+}));
+
 vi.mock('../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi.fn(() => ({
     autofix: [],
     verify: [],
@@ -205,6 +220,7 @@ vi.mock('../db/queries', () =>
     markSessionDone: vi.fn(),
     markSessionIdle: vi.fn(),
     getStuckResultSessionRows: vi.fn(() => []),
+    hasUndispositionedStagedIntentsForSession: vi.fn(() => false),
     getRunningSessionsWithMergedOrClosedPR: vi.fn(() => []),
     insertSession: vi.fn(),
     insertEvent: vi.fn(),
@@ -249,6 +265,7 @@ import * as queries from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 import type { Session } from '../db/types';
 import { recoverSession } from '../session/sessionRecovery';
+import { hasMemoryHeadroom } from '../orchestration/memoryAdmission';
 
 function makeRunningSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -278,6 +295,17 @@ beforeEach(() => {
   vi.clearAllMocks();
   // execSync no-op stub (used for git fetch / git rev-parse / git worktree).
   vi.mocked(execSync).mockReturnValue('');
+  // Re-established every test: the afterEach below calls vi.restoreAllMocks(),
+  // which wipes the mockReturnValue the vi.mock('../orchestration/memoryAdmission')
+  // factory set only once at module init — without this, every test after
+  // the first would see hasMemoryHeadroom() return undefined and throw.
+  vi.mocked(hasMemoryHeadroom).mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  });
 });
 
 afterEach(() => {
@@ -499,6 +527,95 @@ describe('resumeOrphanSessions() — stuck session boot recovery', () => {
   });
 });
 
+// ── Test 3b: parked planning session (undispositioned staged intents) ─────
+describe('resumeOrphanSessions() — parked planning session with staged intents', () => {
+  function makeStuckRow(
+    overrides: Partial<queries.StuckResultSessionRow> = {},
+  ) {
+    return {
+      session_id: 'stuck-sess',
+      task_id: 'task-1',
+      task_url: 'https://notion.so/task',
+      project_context_url: 'https://notion.so/ctx',
+      project_id: 'test-project',
+      pr_url: null,
+      worktree_path: '/fake/wt',
+      session_type: 'standard',
+      last_ts: 1_000_000,
+      ...overrides,
+    };
+  }
+
+  it('transitions a planning-family session with undispositioned staged intents to idle, not done', async () => {
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
+    vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([
+      makeStuckRow({ session_type: 'groom' }),
+    ]);
+    vi.mocked(
+      queries.hasUndispositionedStagedIntentsForSession,
+    ).mockReturnValue(true);
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    expect(queries.markSessionIdle).toHaveBeenCalledWith(
+      'stuck-sess',
+      1_000_000,
+      null,
+      expect.stringContaining('parked'),
+    );
+    expect(queries.markSessionDone).not.toHaveBeenCalled();
+    expect(recoverSession).not.toHaveBeenCalled();
+  });
+
+  it('still marks a planning-family session with no staged/approved intents as done', async () => {
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
+    vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([
+      makeStuckRow({ session_type: 'groom' }),
+    ]);
+    vi.mocked(
+      queries.hasUndispositionedStagedIntentsForSession,
+    ).mockReturnValue(false);
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    expect(queries.markSessionDone).toHaveBeenCalledWith(
+      'stuck-sess',
+      1_000_000,
+      null,
+      'boot_orphan_result_event',
+      { skipInFlightGuard: true },
+    );
+    expect(queries.markSessionIdle).not.toHaveBeenCalled();
+  });
+
+  it.each(['standard', 'review', 'depth_review'])(
+    'marks a %s session done regardless of staged intents — PR-anchored path is unchanged',
+    async (sessionType) => {
+      vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
+      vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([
+        makeStuckRow({ session_type: sessionType }),
+      ]);
+      vi.mocked(
+        queries.hasUndispositionedStagedIntentsForSession,
+      ).mockReturnValue(true);
+
+      const sm = new SessionManager();
+      await sm.resumeOrphanSessions();
+
+      expect(queries.markSessionDone).toHaveBeenCalledWith(
+        'stuck-sess',
+        1_000_000,
+        null,
+        'boot_orphan_result_event',
+        { skipInFlightGuard: true },
+      );
+      expect(queries.markSessionIdle).not.toHaveBeenCalled();
+    },
+  );
+});
+
 // ── Test 4: pr_url carry-forward ─────────────────────────────────────────
 describe('resumeOrphanSessions() — pr_url carry-forward (integration)', () => {
   it('copies row.pr_url onto AgentSession.prUrl so cleanupWorktree does NOT delete the branch on clean exit', async () => {
@@ -642,6 +759,12 @@ describe('resumeOrphanSessions() — planning-session resumability pre-check', (
       'error',
       expect.any(Number),
     );
+    // Regression guard: the resolved fallback cwd (projectDir) used to spawn
+    // the CLI must never be written back into worktree_path for a
+    // checkout-only planning session — that would flip the DB column from
+    // null to the bare project checkout path, a shape start() never
+    // produces (see respawnSession's checkoutOnlyPlanning guard).
+    expect(queries.updateSessionWorktreePath).not.toHaveBeenCalled();
   });
 
   it('still fails a standard coding session whose recorded worktree is absent (no regression)', async () => {

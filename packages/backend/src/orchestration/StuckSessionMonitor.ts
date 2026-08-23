@@ -6,12 +6,15 @@ import type { Scheduler } from './Scheduler';
 import {
   getPRBySessionId,
   setPauseReason,
+  setTaskPauseReason,
   insertPauseInterval,
   closePauseInterval,
   upsertStuckSessionTimer,
   deleteStuckSessionTimer,
   getAllStuckSessionTimers,
   getStuckResultSessionRows,
+  getStuckAliveSubprocessParkRows,
+  type StuckAliveSubprocessParkRow,
   markSessionDone,
   markSessionIdle,
   getSession,
@@ -24,6 +27,7 @@ import { recoverSession } from '../session/sessionRecovery';
 import { getCurrentBranch, hasNonEmptyDiff } from './localBranchHelpers';
 import { submitLocalBranch } from './localBranchSubmission';
 import { sessionIsLive } from '../session/sessionLifecycle';
+import { isSessionProcessAlive } from '../session/processLiveness';
 
 interface TimerState {
   taskName: string;
@@ -51,6 +55,25 @@ interface TimerState {
    * observed event-gap recorded alongside both the notify and the
    * explicit did-not-notify audit rows. */
   lastActivityAt: number;
+  /**
+   * Count of tool_use session_events seen with no matching tool_result yet.
+   * Incremented on tool_use, decremented (floored at 0) on tool_result.
+   * While > 0 the intra-tool heartbeat sweep (see runHeartbeatSweep) treats
+   * the session as busy inside a tool call rather than idle, and keeps
+   * resetting the notify/pause deadlines as long as the OS process is still
+   * alive — without this, a single long tool call (e.g. a lengthy Bash
+   * build/test run) emits nothing between its tool_use and tool_result and
+   * would otherwise be misread as a hang. Not persisted across restarts —
+   * purely in-memory, rebuilt from the next tool_use/tool_result pair.
+   */
+  pendingToolUseCount: number;
+  /**
+   * Last flagged value recorded to the audit log for stuck_session_notify_checked.
+   * Starts false (a freshly tracked session is not flagged). Used to make
+   * that event edge-triggered: a row is only written when this value
+   * actually changes, not on every check — see recordNotifyChecked.
+   */
+  lastNotifyCheckedFlagged: boolean;
 }
 
 const PAUSE_MESSAGE =
@@ -81,10 +104,16 @@ function isSessionTerminal(status: string | null | undefined): boolean {
  * activity. Three escalating responses:
  *
  *   1. Notify threshold — emit a toast (orchestration continues).
- *   2. Pause threshold — inject a pause message, set pause_reason on the PR,
- *      arm a hard-stop window.
- *   3. Hard-stop — if any tool_use arrives within the hard-stop window after
- *      pause, force-kill the session process.
+ *   2. Pause threshold — inject a pause message, set pause_reason on the PR
+ *      (and a durable task_pause_reasons entry regardless of whether a PR
+ *      exists yet), arm a hard-stop window.
+ *   3. Hard-stop — if a tool_use arrives within the hard-stop window after
+ *      pause, force-kill the session process immediately (checkHardStop).
+ *      If the window instead elapses with no further activity at all (a
+ *      session gone completely silent, not just between tool calls),
+ *      handleHardStopWindowExpiry force-kills it too — unless there's a
+ *      still-live, in-flight tool_use, which the intra-tool heartbeat sweep
+ *      (see runHeartbeatSweep) is already protecting.
  *
  * Both thresholds measure time since the session's most recent activity, not
  * time since launch: every session_event (of any kind — tool_use, text,
@@ -108,6 +137,15 @@ function isSessionTerminal(status: string | null | undefined): boolean {
 const PERIODIC_MIN_AGE_MS = 5 * 60 * 1000;
 /** Default cadence for the periodic stuck-session scan. */
 const DEFAULT_SCAN_INTERVAL_MS = 60 * 1000;
+/**
+ * Cadence for the intra-tool heartbeat sweep. Bounded well under the
+ * default notify threshold (3600s) so it always resets the deadline before
+ * it would otherwise elapse, while staying coarse enough that it doesn't
+ * invoke isSessionProcessAlive's ps scan too often under load — the sweep
+ * does one ps check per distinct session with an in-flight tool_use, not
+ * one per tool call.
+ */
+const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 
 export class StuckSessionMonitor {
   private timers = new Map<string, TimerState>();
@@ -128,8 +166,48 @@ export class StuckSessionMonitor {
       run: async () => {
         this.reapTerminalTimers();
         await this.scanForStuckSessions();
+        await this.scanForStuckAliveSubprocessParks();
       },
     });
+    scheduler.register({
+      name: 'stuck_session_heartbeat',
+      intervalMs: HEARTBEAT_INTERVAL_MS,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        this.runHeartbeatSweep();
+      },
+    });
+  }
+
+  /**
+   * Reset notify/pause deadlines for every tracked session that currently
+   * has an in-flight tool_use (see pendingToolUseCount) and whose OS
+   * process is still alive per isSessionProcessAlive — the intra-tool
+   * heartbeat. Reuses recordActivity, the same code path a real
+   * session_event already drives, so a long-running tool call is treated
+   * identically to continuous activity.
+   *
+   * A session with no in-flight tool_use, or whose process has actually
+   * exited mid-call, is left untouched here — its notify/pause/hard-stop
+   * timers keep running exactly as they do today, so a genuinely hung
+   * session still escalates.
+   */
+  private runHeartbeatSweep(): void {
+    for (const [sessionId, state] of this.timers) {
+      if (state.suspended) continue;
+      if (state.pendingToolUseCount <= 0) continue;
+      if (!isSessionProcessAlive(sessionId)) continue;
+      this.recordActivity(sessionId);
+      recordEvent({
+        event_type: 'stuck_session_heartbeat_tick',
+        actor_type: 'system',
+        actor_id: sessionId,
+        payload: {
+          session_id: sessionId,
+          pending_tool_use_count: state.pendingToolUseCount,
+        },
+      });
+    }
   }
 
   /**
@@ -170,7 +248,12 @@ export class StuckSessionMonitor {
         const pr = getPRBySessionId(row.session_id);
         if (pr && (pr.state === 'open' || pr.state === 'draft')) {
           const prUrl = row.pr_url ?? pr.pr_url;
-          markSessionIdle(row.session_id, row.last_ts, prUrl);
+          markSessionIdle(
+            row.session_id,
+            row.last_ts,
+            prUrl,
+            'stuck_session_open_pr',
+          );
           this.broadcast({
             type: 'stuck_session_idle_open_pr',
             sessionId: row.session_id,
@@ -185,7 +268,12 @@ export class StuckSessionMonitor {
         // up yet, or the pr_body upsert failed leaving no PR row). Route to idle
         // so the operator can nudge via the composer per Task 10.
         if (this.sessionManager.isAlive(row.session_id)) {
-          markSessionIdle(row.session_id, row.last_ts, row.pr_url ?? null);
+          markSessionIdle(
+            row.session_id,
+            row.last_ts,
+            row.pr_url ?? null,
+            'stuck_session_alive_subprocess',
+          );
           this.broadcast({
             type: 'stuck_session_idle_open_pr',
             sessionId: row.session_id,
@@ -277,6 +365,94 @@ export class StuckSessionMonitor {
     }
   }
 
+  /**
+   * Bounds the stuck_session_alive_subprocess park: getStuckResultSessionRows
+   * only matches status='running', so once scanForStuckSessions parks a
+   * session there (subprocess alive, result already arrived) it drops out of
+   * that query forever and nothing revisits it — the park was meant to be a
+   * transient "operator can nudge it" state, not a silent, unbounded one.
+   * This re-finds exactly those parks (see getStuckAliveSubprocessParkRows's
+   * doc for why it can't accidentally match the legitimately long-lived
+   * stuck_session_open_pr park) and, once one has sat past the configured
+   * bound with no new session_events, escalates it to teardown rather than
+   * leaving it to hold a resident process and a memory-admission slot
+   * indefinitely.
+   *
+   * The escalation never fires on elapsed time alone: it requires both the
+   * bound to have passed AND the OS process to still be alive right now
+   * (isSessionProcessAlive, the same ground-truth signal used elsewhere) —
+   * per procedures.md's rule against a terminal action on status/age alone.
+   */
+  private async scanForStuckAliveSubprocessParks(): Promise<void> {
+    try {
+      const boundMs =
+        runtimeSettings.session_alive_park_escalation_seconds * 1000;
+      if (boundMs <= 0) return;
+      const rows = getStuckAliveSubprocessParkRows();
+      const now = Date.now();
+      for (const row of rows) {
+        // A new event since the park means the session is genuinely active
+        // again (e.g. a late-arriving event, or a respawn) — not a persistent
+        // park, regardless of how much time has passed.
+        const hasNewEvent =
+          row.latest_event_ts != null &&
+          row.latest_event_ts > row.last_known_event_ts;
+        if (hasNewEvent) continue;
+
+        const parkAgeMs = now - row.parked_at;
+        if (parkAgeMs < boundMs) continue;
+
+        if (!isSessionProcessAlive(row.session_id)) continue;
+
+        await this.escalateStuckAliveSubprocessPark(row, parkAgeMs);
+      }
+    } catch (e) {
+      logger.error(
+        `[StuckSessionMonitor] scanForStuckAliveSubprocessParks error: ${e}`,
+      );
+    }
+  }
+
+  /**
+   * Terminate a session that has sat parked at stuck_session_alive_subprocess
+   * past the configured bound. Marks the row terminal first (endSession()
+   * refuses to escalate against a non-terminal row — it exists precisely to
+   * avoid killing a live/legitimately-idle session), then reuses
+   * SessionManager.endSession's graceful-close-then-verify-and-escalate
+   * teardown — the same path that emits session_teardown_escalated when the
+   * graceful close doesn't land in time — so this never bypasses that
+   * safety net with an immediate force-kill.
+   */
+  private async escalateStuckAliveSubprocessPark(
+    row: StuckAliveSubprocessParkRow,
+    parkAgeMs: number,
+  ): Promise<void> {
+    logger.warn(
+      `[StuckSessionMonitor] escalating stuck_session_alive_subprocess park for ${row.session_id.slice(0, 8)} — ` +
+        `parked ${Math.round(parkAgeMs / 1000)}s with subprocess still alive and no new events`,
+    );
+    this.sessionManager.markSessionErrored(
+      row.session_id,
+      'killed',
+      'stuck_session_alive_subprocess_park_escalated',
+      `subprocess still alive ${Math.round(parkAgeMs / 1000)}s after park with no new events`,
+    );
+    this.sessionManager.endSession(row.session_id);
+    recordEvent({
+      event_type: 'stuck_session_alive_park_escalated',
+      actor_type: 'system',
+      actor_id: row.session_id,
+      project_id: row.project_id,
+      task_id: row.task_id,
+      payload: {
+        session_id: row.session_id,
+        session_type: row.session_type,
+        park_age_ms: parkAgeMs,
+        outcome: 'teardown_initiated',
+      },
+    });
+  }
+
   /** Returns true if the monitor is currently tracking the given session. Test hook. */
   isTracking(sessionId: string): boolean {
     return this.timers.has(sessionId);
@@ -309,6 +485,8 @@ export class StuckSessionMonitor {
         hardStopArmed: row.hard_stop_armed !== 0,
         suspended: row.suspended !== 0,
         lastActivityAt: now,
+        pendingToolUseCount: 0,
+        lastNotifyCheckedFlagged: false,
       };
       this.timers.set(row.session_id, state);
 
@@ -380,13 +558,10 @@ export class StuckSessionMonitor {
           this.persistTimerState(row.session_id);
         } else {
           state.hardStopDeadline = deadline;
-          state.hardStopTimer = setTimeout(() => {
-            const s = this.timers.get(row.session_id);
-            if (s) {
-              s.hardStopArmed = false;
-              s.hardStopTimer = null;
-            }
-          }, remaining);
+          state.hardStopTimer = setTimeout(
+            () => this.handleHardStopWindowExpiry(row.session_id),
+            remaining,
+          );
           state.hardStopTimer.unref?.();
         }
       }
@@ -431,12 +606,29 @@ export class StuckSessionMonitor {
         this.recordActivity(msg.sessionId);
         if (msg.eventType === 'tool_use') {
           this.checkHardStop(msg.sessionId);
+          this.markToolUseStarted(msg.sessionId);
+        } else if (msg.eventType === 'tool_result') {
+          this.markToolUseFinished(msg.sessionId);
         }
         return;
       }
       default:
         return;
     }
+  }
+
+  /** Marks the start of an in-flight tool_use for the intra-tool heartbeat. */
+  private markToolUseStarted(sessionId: string): void {
+    const state = this.timers.get(sessionId);
+    if (!state) return;
+    state.pendingToolUseCount += 1;
+  }
+
+  /** Marks the end of an in-flight tool_use for the intra-tool heartbeat. */
+  private markToolUseFinished(sessionId: string): void {
+    const state = this.timers.get(sessionId);
+    if (!state) return;
+    state.pendingToolUseCount = Math.max(0, state.pendingToolUseCount - 1);
   }
 
   private parseRateLimitStatus(content: string): string | null {
@@ -480,9 +672,41 @@ export class StuckSessionMonitor {
       hardStopArmed: false,
       suspended: false,
       lastActivityAt: Date.now(),
+      pendingToolUseCount: 0,
+      lastNotifyCheckedFlagged: false,
     };
     this.timers.set(sessionId, state);
     this.scheduleNotifyAndPause(sessionId, state);
+  }
+
+  /**
+   * Edge-triggered write of stuck_session_notify_checked: records a row only
+   * when the flagged state actually differs from the last recorded value for
+   * this session, instead of on every check. A session starts with an
+   * implicit lastNotifyCheckedFlagged of false, so a session that never
+   * flags never gets a row, and one that flags gets exactly one row per
+   * transition (false->true, true->false).
+   */
+  private recordNotifyChecked(
+    sessionId: string,
+    state: TimerState,
+    flagged: boolean,
+    observedGapMs: number,
+    thresholdMs: number,
+  ): void {
+    if (state.lastNotifyCheckedFlagged === flagged) return;
+    state.lastNotifyCheckedFlagged = flagged;
+    recordEvent({
+      event_type: 'stuck_session_notify_checked',
+      actor_type: 'system',
+      actor_id: sessionId,
+      payload: {
+        session_id: sessionId,
+        observed_gap_ms: observedGapMs,
+        threshold_ms: thresholdMs,
+        flagged,
+      },
+    });
   }
 
   /**
@@ -496,26 +720,22 @@ export class StuckSessionMonitor {
   private recordActivity(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state || state.suspended) return;
-    // A notify timer still pending means the session was inside the notify
-    // window and this activity arrived before it ever fired — the explicit
-    // did-not-flag counterpart to fireNotify's flagged row below, so the
-    // negative case ("still emitting events, not flagged") is checkable
-    // after the fact rather than being indistinguishable from no signal at
-    // all.
-    if (state.notifyTimer) {
+    // Activity always means "not flagged" as of now — whether it arrived
+    // while the notify timer was still pending (never fired) or after a
+    // notification already fired (the true->false recovery). recordNotifyChecked
+    // only writes a row when this differs from the last recorded value, so
+    // steady unflagged activity stays silent while an actual recovery from a
+    // firing is captured.
+    {
       const thresholdMs =
         runtimeSettings.session_notify_threshold_seconds * 1000;
-      recordEvent({
-        event_type: 'stuck_session_notify_checked',
-        actor_type: 'system',
-        actor_id: sessionId,
-        payload: {
-          session_id: sessionId,
-          observed_gap_ms: Date.now() - state.lastActivityAt,
-          threshold_ms: thresholdMs,
-          flagged: false,
-        },
-      });
+      this.recordNotifyChecked(
+        sessionId,
+        state,
+        false,
+        Date.now() - state.lastActivityAt,
+        thresholdMs,
+      );
     }
     if (state.notifyTimer) clearTimeout(state.notifyTimer);
     if (state.pauseTimer) clearTimeout(state.pauseTimer);
@@ -644,13 +864,10 @@ export class StuckSessionMonitor {
     if (state.hardStopRemainingMs !== null) {
       const remaining = state.hardStopRemainingMs;
       state.hardStopDeadline = now + remaining;
-      state.hardStopTimer = setTimeout(() => {
-        const s = this.timers.get(sessionId);
-        if (s) {
-          s.hardStopArmed = false;
-          s.hardStopTimer = null;
-        }
-      }, remaining);
+      state.hardStopTimer = setTimeout(
+        () => this.handleHardStopWindowExpiry(sessionId),
+        remaining,
+      );
       state.hardStopTimer.unref?.();
       state.hardStopRemainingMs = null;
     }
@@ -683,17 +900,13 @@ export class StuckSessionMonitor {
       return;
     }
     this.persistTimerState(sessionId);
-    recordEvent({
-      event_type: 'stuck_session_notify_checked',
-      actor_type: 'system',
-      actor_id: sessionId,
-      payload: {
-        session_id: sessionId,
-        observed_gap_ms: observedGapMs,
-        threshold_ms: thresholdMs,
-        flagged: true,
-      },
-    });
+    this.recordNotifyChecked(
+      sessionId,
+      state,
+      true,
+      observedGapMs,
+      thresholdMs,
+    );
     const message = `⚠️ ${state.taskName} exceeding expected duration — possible grooming gap`;
     this.broadcast({
       type: 'stuck_session_notified',
@@ -736,6 +949,15 @@ export class StuckSessionMonitor {
     if (pr) {
       setPauseReason(pr.pr_number, pr.repo, 'stuck_timeout');
     }
+    // Durable, PR-independent pause signal: written unconditionally (not
+    // just when getPRBySessionId comes up empty) so a session that later
+    // opens a PR still has a task_pause_reasons row until something clears
+    // it — same durability the PR-keyed write above gets. This is what lets
+    // needs_attention (TaskStatusEngine / attentionSignals) see a stuck
+    // pre-PR session, which pull_requests.pause_reason alone can't reach.
+    if (session.task_id) {
+      setTaskPauseReason(session.task_id, 'stuck_timeout', 'stuck_timeout');
+    }
     insertPauseInterval(sessionId, 'stuck_timeout');
 
     try {
@@ -763,13 +985,10 @@ export class StuckSessionMonitor {
     state.hardStopArmed = true;
     state.hardStopDeadline = Date.now() + windowMs;
     if (state.hardStopTimer) clearTimeout(state.hardStopTimer);
-    state.hardStopTimer = setTimeout(() => {
-      const s = this.timers.get(sessionId);
-      if (s) {
-        s.hardStopArmed = false;
-        s.hardStopTimer = null;
-      }
-    }, windowMs);
+    state.hardStopTimer = setTimeout(
+      () => this.handleHardStopWindowExpiry(sessionId),
+      windowMs,
+    );
     state.hardStopTimer.unref?.();
     this.persistTimerState(sessionId);
 
@@ -779,6 +998,55 @@ export class StuckSessionMonitor {
       taskName: state.taskName,
       ...(pr ? { prNumber: pr.pr_number, repo: pr.repo } : {}),
     });
+  }
+
+  /**
+   * Fires when the hard-stop window armed by firePause elapses without
+   * checkHardStop having already fired (which clears hardStopTimer/disarms
+   * on its own). Previously this only disarmed — a session that goes fully
+   * silent after the pause nudge (no tool_use, no session_event of any
+   * kind) was never force-killed by anything, so it ran forever holding a
+   * subprocess and its sessions row stuck non-terminal.
+   *
+   * Must not kill a session that's mid-tool-call at expiry time: that's the
+   * intra-tool heartbeat case (pendingToolUseCount > 0 with a live OS
+   * process), which runHeartbeatSweep already protects by continuously
+   * resetting notify/pause — this window's disarm was only ever a guard
+   * against a stray tool_use race right after pause, not a liveness
+   * verdict, so silence on that case is correct and must be preserved.
+   */
+  private handleHardStopWindowExpiry(sessionId: string): void {
+    const state = this.timers.get(sessionId);
+    if (!state) return;
+    state.hardStopArmed = false;
+    state.hardStopTimer = null;
+    this.persistTimerState(sessionId);
+
+    if (state.pendingToolUseCount > 0 && isSessionProcessAlive(sessionId)) {
+      return;
+    }
+
+    const session = getSession(sessionId);
+    if (isSessionTerminal(session?.status)) {
+      this.clear(sessionId);
+      return;
+    }
+
+    logger.warn(
+      `[StuckSessionMonitor] force-killing session ${sessionId.slice(0, 8)} — hard-stop window expired with no further activity after pause`,
+    );
+    this.broadcast({
+      type: 'stuck_session_killed',
+      sessionId,
+      taskName: state.taskName,
+    });
+    this.sessionManager
+      .kill(sessionId)
+      .catch((err: unknown) =>
+        logger.warn(
+          `[StuckSessionMonitor] kill failed for ${sessionId}: ${(err as Error).message}`,
+        ),
+      );
   }
 
   private checkHardStop(sessionId: string): void {

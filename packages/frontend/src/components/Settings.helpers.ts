@@ -15,6 +15,8 @@ export interface SettingsValues {
   ops_session_effort: string;
   gate_verify_session_model: string;
   gate_verify_session_effort: string;
+  investigate_session_model: string;
+  investigate_session_effort: string;
   groom_session_model: string;
   groom_session_effort: string;
   design_session_model: string;
@@ -39,6 +41,7 @@ export interface SettingsValues {
   large_task_effort: string;
   tier3_classifier_model: string;
   capability_auto_approve_allowlist: string[];
+  decision_pick_one_paragraph_threshold: string;
 }
 
 export const MIN_POLL_INTERVAL_MS = 5000;
@@ -71,6 +74,8 @@ const NON_NUMERIC_KEYS = new Set<keyof SettingsValues>([
   'ops_session_effort',
   'gate_verify_session_model',
   'gate_verify_session_effort',
+  'investigate_session_model',
+  'investigate_session_effort',
   'groom_session_model',
   'groom_session_effort',
   'design_session_model',
@@ -110,5 +115,7 @@ export function validateField(
     return 'Minimum is 1';
   if (key === 'auto_launch_poll_interval_ms' && num < MIN_POLL_INTERVAL_MS)
     return `Minimum is ${MIN_POLL_INTERVAL_MS} ms`;
+  if (key === 'decision_pick_one_paragraph_threshold' && num < 100)
+    return 'Minimum is 100';
   return null;
 }

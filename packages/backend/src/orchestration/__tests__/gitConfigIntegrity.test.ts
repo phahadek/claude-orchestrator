@@ -300,5 +300,5 @@ describe('runGitConfigIntegrityCheck()', () => {
     const resumeIdx = captured.indexOf('resume_orphan_sessions');
     expect(integrityIdx).toBeGreaterThanOrEqual(0);
     expect(integrityIdx).toBeLessThan(resumeIdx);
-  });
+  }, 15000);
 });

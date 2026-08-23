@@ -16,6 +16,7 @@ import { registerArchitectureReadTools } from './tools/architectureReadTools';
 import { registerTaskReadTools } from './tools/taskReadTools';
 import { registerPullRequestReadTools } from './tools/pullRequestReadTools';
 import { registerGateSeedReadTools } from './tools/gateSeedReadTools';
+import { registerTestHealthReadTools } from './tools/testHealthReadTools';
 import { registerSessionRecordReadTool } from './tools/sessionRecordReadTool';
 import { registerAuditLogReadTools } from './tools/auditLogReadTools';
 import { registerSessionEventsReadTools } from './tools/sessionEventsReadTools';
@@ -23,10 +24,12 @@ import type { SessionManager } from '../session/SessionManager';
 import {
   PLANNING_INTENT_KINDS,
   CODE_INTENT_KINDS,
+  INVESTIGATE_INTENT_KINDS,
 } from '../planning/planningIntentKinds';
 import type { PlanningWorkflow } from '../planning/planningIntentKinds';
 import { resolveMilestoneForSessionTask } from '../projects/milestoneResolver';
 import { normalizeTaskId, parseTaskId } from '../tasks/taskId';
+import { isInvestigateSession } from '../session/sessionPredicates';
 
 const NOTION_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -130,6 +133,26 @@ function toPlanningWorkflow(
 }
 
 /**
+ * Resolves the stage-proposal kinds registered on a connection. An
+ * investigate-dispatched session (session_type 'ops', task_id
+ * `report-batch:<batchId>` — see sessionPredicates.ts#isInvestigateSession)
+ * gets `INVESTIGATE_INTENT_KINDS`, not `PLANNING_INTENT_KINDS.ops`: it has
+ * no journal/task-status/gate/PR-intent analog, and needs `decision.pickOne`,
+ * which `PLANNING_INTENT_KINDS.ops` lacks. A null workflow (code/review
+ * sessions) registers CODE_INTENT_KINDS, not every kind — see
+ * planningIntentKinds.ts.
+ */
+function resolveStageProposalKinds(
+  workflow: PlanningWorkflow | null,
+  taskId: string | null | undefined,
+): readonly string[] {
+  if (workflow === 'ops' && isInvestigateSession(taskId)) {
+    return INVESTIGATE_INTENT_KINDS;
+  }
+  return workflow ? PLANNING_INTENT_KINDS[workflow] : CODE_INTENT_KINDS;
+}
+
+/**
  * Instrumentation must never fail the MCP request it observes — a
  * recordEvent failure (e.g. a transient DB error) is swallowed here rather
  * than left to propagate into the request path.
@@ -180,7 +203,12 @@ export function buildOrchestratorMcpServerEntry(
  * the device-authed gate-state-client.mjs `reclassify` command) and the
  * 'ops'-scoped stranded-intent disposition verb (intent.dispositionStranded,
  * see mcp/tools/strandedIntentTool.ts), both acting immediately rather than
- * staging an intent for later operator disposition,
+ * staging an intent for later operator disposition — none of gate.verify /
+ * deploy.verdict / gate.reclassify / intent.dispositionStranded are
+ * registered for an investigate-dispatched session (session_type 'ops',
+ * task_id `report-batch:<batchId>`, see
+ * sessionPredicates.ts#isInvestigateSession): it has no gate item or PR to
+ * act on, so these fall back to their workflow=null (unregistered) case,
  * — for a 'design' workflow session — the completeness-safeguard direct-
  * write/read surface (completeness.disposition / completeness.traceCoverage,
  * see mcp/tools/completenessTools.ts), and — for a 'groom' workflow session
@@ -231,6 +259,18 @@ export function buildMcpServer(
   );
 
   const workflow = toPlanningWorkflow(session?.session_type);
+  // gate.verify / deploy.verdict / gate.reclassify / intent.dispositionStranded
+  // register directly off `workflow === 'ops'` (verdictTools.ts,
+  // gateReclassifyTool.ts, strandedIntentTool.ts) — outside the
+  // PLANNING_INTENT_KINDS.ops kinds resolveStageProposalKinds already
+  // narrows above. An investigate-dispatched session (session_type 'ops',
+  // task_id `report-batch:<batchId>`) has no gate item or PR to act on, so
+  // downgrade to `null` here too; the read-only registrations further below
+  // stay unaffected — still keyed on `workflow`.
+  const mutationWorkflow: PlanningWorkflow | null =
+    workflow === 'ops' && isInvestigateSession(session?.task_id)
+      ? null
+      : workflow;
 
   if (session?.project_id) {
     // Best-effort — a task not found in any cached milestone board (e.g. a
@@ -242,9 +282,7 @@ export function buildMcpServer(
     registerStageProposalTools(server, {
       sessionId,
       projectId: session.project_id,
-      // A null workflow (code/review sessions) registers CODE_INTENT_KINDS,
-      // not every kind — see planningIntentKinds.ts.
-      kinds: workflow ? PLANNING_INTENT_KINDS[workflow] : CODE_INTENT_KINDS,
+      kinds: resolveStageProposalKinds(workflow, session.task_id),
       sessionManager,
       milestone,
     });
@@ -258,6 +296,7 @@ export function buildMcpServer(
     });
     registerPullRequestReadTools(server);
     registerGateSeedReadTools(server, { projectId: session.project_id });
+    registerTestHealthReadTools(server, { projectId: session.project_id });
     registerCompletenessTools(server, {
       sessionId,
       workflow,
@@ -271,13 +310,24 @@ export function buildMcpServer(
   registerVerdictTools(server, {
     sessionId,
     getSession: () => sessionManager.getLiveSession(sessionId),
-    workflow,
+    workflow: mutationWorkflow,
   });
 
-  registerGateReclassifyTool(server, { sessionId, workflow });
-  registerStrandedIntentTool(server, { sessionId, workflow });
+  registerGateReclassifyTool(server, {
+    sessionId,
+    workflow: mutationWorkflow,
+  });
+  registerStrandedIntentTool(server, {
+    sessionId,
+    workflow: mutationWorkflow,
+  });
 
-  registerArchitectureReadTools(server, { workflow });
+  if (session?.project_id) {
+    registerArchitectureReadTools(server, {
+      workflow,
+      projectId: session.project_id,
+    });
+  }
 
   registerSessionRecordReadTool(server, { sessionId });
   registerAuditLogReadTools(server, { sessionId });

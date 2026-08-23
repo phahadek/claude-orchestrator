@@ -1,17 +1,41 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SessionPanel } from '../SessionPanel';
 import { SessionDetail } from '../SessionDetail';
 import type { SessionState } from '../../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 
+// Multiple sources hit globalThis.fetch (DiffViewer's own diff fetch, and
+// the new self-fetching useDepthReviewStatus hook's /api/prs/depth-dispositions
+// call) — route by URL so each gets the response shape it expects, rather
+// than a single fixed response colliding across callers.
 const fetchMock = vi.fn();
+let depthDispositionsResponse: unknown[] = [];
 
 beforeEach(() => {
   fetchMock.mockReset();
-  fetchMock.mockResolvedValue(
-    new Response(JSON.stringify({ diff: '' }), { status: 200 }),
-  );
+  depthDispositionsResponse = [];
+  fetchMock.mockImplementation((input: RequestInfo) => {
+    const url = typeof input === 'string' ? input : (input as Request).url;
+    if (url.includes('/api/prs/depth-dispositions')) {
+      return Promise.resolve(
+        new Response(JSON.stringify(depthDispositionsResponse), {
+          status: 200,
+        }),
+      );
+    }
+    // DecisionPanel (rendered by default) fetches staged intents on mount
+    // and expects an array back — route it separately from the diff stub
+    // below so it doesn't crash on `{ diff: '' }` not being iterable.
+    if (url.includes('/api/staged-intents')) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ intents: [] }), { status: 200 }),
+      );
+    }
+    return Promise.resolve(
+      new Response(JSON.stringify({ diff: '' }), { status: 200 }),
+    );
+  });
   globalThis.fetch = fetchMock as unknown as typeof fetch;
 });
 
@@ -216,6 +240,207 @@ describe('SessionPanel — review session', () => {
     );
     const btn = screen.getByText('▶ Show session transcript');
     expect(btn.tagName).toBe('BUTTON');
+  });
+});
+
+describe('SessionPanel — depth_review session', () => {
+  function depthReviewEvent(verdict: 'pass' | 'fail') {
+    return {
+      eventType: 'text',
+      timestamp: 1,
+      content: JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                verdict,
+                dimensions: [
+                  {
+                    name: 'reliability',
+                    passed: false,
+                    notes: 'Retries are unbounded',
+                  },
+                ],
+                summary: 'Found a defect beyond spec-conformance',
+              }),
+            },
+          ],
+        },
+      }),
+    };
+  }
+
+  it('renders ReviewDetailView (verdict, failing dimension, summary) for a depth_review session', () => {
+    render(
+      <SessionPanel
+        session={makeSession({
+          sessionType: 'depth_review',
+          status: 'done',
+          events: [depthReviewEvent('fail')],
+        })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('Fail')).toBeTruthy();
+    expect(screen.getByText('reliability')).toBeTruthy();
+    expect(screen.getByText('Retries are unbounded')).toBeTruthy();
+    expect(
+      screen.getByText('Found a defect beyond spec-conformance'),
+    ).toBeTruthy();
+  });
+
+  it('renders the escalated/routed disposition when supplied via depthReviewStatus', () => {
+    render(
+      <SessionPanel
+        session={makeSession({
+          sessionType: 'depth_review',
+          status: 'done',
+          events: [depthReviewEvent('fail')],
+        })}
+        {...defaultProps}
+        depthReviewStatus={{ escalated: true, routeCount: 0 }}
+      />,
+    );
+    expect(screen.getByTestId('depth-review-status').textContent).toContain(
+      'Escalated to operator',
+    );
+  });
+
+  it('self-fetches and renders the escalated badge when no depthReviewStatus prop is supplied', async () => {
+    depthDispositionsResponse = [
+      {
+        prNumber: 42,
+        depthVerdict: {
+          verdict: 'fail',
+          escalated: true,
+          sessionId: 'sess-1',
+          routeCount: 0,
+        },
+      },
+    ];
+    render(
+      <SessionPanel
+        session={makeSession({
+          sessionType: 'depth_review',
+          status: 'done',
+          events: [depthReviewEvent('fail')],
+          prNumber: 42,
+          project_id: 'proj-1',
+        })}
+        {...defaultProps}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('depth-review-status').textContent).toContain(
+        'Escalated to operator',
+      ),
+    );
+  });
+
+  it('self-fetches and renders the routed badge for a session reached via SessionDetail (no explicit prop)', async () => {
+    depthDispositionsResponse = [
+      {
+        prNumber: 42,
+        depthVerdict: {
+          verdict: 'fail',
+          escalated: false,
+          sessionId: 'sess-1',
+          routeCount: 2,
+        },
+      },
+    ];
+    render(
+      <SessionDetail
+        session={makeSession({
+          sessionType: 'depth_review',
+          status: 'done',
+          events: [depthReviewEvent('fail')],
+          prNumber: 42,
+          project_id: 'proj-1',
+        })}
+        {...defaultProps}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('depth-review-status').textContent).toContain(
+        'Routed to session (×2)',
+      ),
+    );
+  });
+
+  it('honors an explicit null depthReviewStatus over any self-fetched value', async () => {
+    depthDispositionsResponse = [
+      {
+        prNumber: 42,
+        depthVerdict: {
+          verdict: 'fail',
+          escalated: true,
+          sessionId: 'sess-1',
+          routeCount: 0,
+        },
+      },
+    ];
+    render(
+      <SessionPanel
+        session={makeSession({
+          sessionType: 'depth_review',
+          status: 'done',
+          events: [depthReviewEvent('fail')],
+          prNumber: 42,
+          project_id: 'proj-1',
+        })}
+        {...defaultProps}
+        depthReviewStatus={null}
+      />,
+    );
+    // Give the self-fetch a tick to resolve before asserting it was ignored.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId('depth-review-status')).toBeNull();
+  });
+
+  it('renders no badge (and does not throw) when the self-fetch fails', async () => {
+    fetchMock.mockImplementation((input: RequestInfo) => {
+      const url = typeof input === 'string' ? input : (input as Request).url;
+      if (url.includes('/api/prs/depth-dispositions')) {
+        return Promise.reject(new Error('network error'));
+      }
+      if (url.includes('/api/staged-intents')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ intents: [] }), { status: 200 }),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ diff: '' }), { status: 200 }),
+      );
+    });
+    render(
+      <SessionPanel
+        session={makeSession({
+          sessionType: 'depth_review',
+          status: 'done',
+          events: [depthReviewEvent('fail')],
+          prNumber: 42,
+          project_id: 'proj-1',
+        })}
+        {...defaultProps}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText('Fail')).toBeTruthy());
+    expect(screen.queryByTestId('depth-review-status')).toBeNull();
+  });
+
+  it('does not render Transcript/Diff tabs for a depth_review session', () => {
+    render(
+      <SessionPanel
+        session={makeSession({ sessionType: 'depth_review', status: 'done' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.queryByText('Transcript')).toBeNull();
+    expect(screen.queryByText('Diff')).toBeNull();
   });
 });
 

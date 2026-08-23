@@ -18,6 +18,7 @@ import {
   routeCredentialFilePath,
   writeRouteCredentialFile,
   isRouteAuthorizedForSession,
+  setRevokedRouteCredentialHandler,
   _resetRouteCredentialsForTesting,
   _simulateRouteCredentialProcessRestartForTesting,
 } from '../auth/SessionRouteAuth';
@@ -110,7 +111,7 @@ describe('SessionRouteAuth — requireDeviceOrSessionRouteAuth middleware', () =
     expect(res.body.code).toBe('invalid_token');
   });
 
-  it('rejects a revoked credential — a subsequent request is unauthorized', async () => {
+  it('rejects a revoked credential with a distinguishable code — a subsequent request is unauthorized', async () => {
     vi.mocked(queries.getGrantedCapabilities).mockImplementation((sessionId) =>
       sessionId === 'ops-session-4' ? [GATE_GRANT] : [],
     );
@@ -121,7 +122,23 @@ describe('SessionRouteAuth — requireDeviceOrSessionRouteAuth middleware', () =
       .get('/api/gate/readiness')
       .set('Authorization', `Bearer ${token}`);
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(410);
+    expect(res.body.code).toBe('session_credential_revoked');
+  });
+
+  it('invokes the revoked-credential handler with the owning session id when a revoked route token is presented', async () => {
+    const token = mintRouteCredential('ops-session-4b');
+    revokeRouteCredential('ops-session-4b', 'session_teardown');
+    const seen: string[] = [];
+    setRevokedRouteCredentialHandler((sessionId) => seen.push(sessionId));
+    try {
+      await supertest(buildApp())
+        .get('/api/gate/readiness')
+        .set('Authorization', `Bearer ${token}`);
+      expect(seen).toEqual(['ops-session-4b']);
+    } finally {
+      setRevokedRouteCredentialHandler(() => {});
+    }
   });
 });
 

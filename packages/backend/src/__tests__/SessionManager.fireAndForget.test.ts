@@ -93,7 +93,9 @@ vi.mock('../session/orchestrator-config', () => ({
     allowedTools: [],
     required_env: [],
     required_files: [],
+    capability_pre_grants: {},
   }),
+  resolvePreGrantCapabilities: vi.fn(() => []),
 }));
 
 vi.mock('../session/ContextBuilder', () => ({
@@ -212,24 +214,44 @@ beforeEach(() => {
 // ── start() returns fast even when git is slow ────────────────────────────────
 
 describe('SessionManager.start() fire-and-forget timing', () => {
-  it('returns <100ms (fire-and-forget: no blocking on git operations)', async () => {
-    // With fire-and-forget, start() always returns fast — the exec timing is irrelevant
+  it('resolves before the mocked git exec callback has fired (fire-and-forget: no blocking on git operations)', async () => {
+    // Track whether the exec callback (the thing completeStart() awaits) has
+    // fired yet. If start() were changed to await completeStart() synchronously,
+    // start() could not resolve until *after* this flag flips to true — making
+    // this assertion a deterministic proxy for the fire-and-forget contract,
+    // immune to host CPU contention (unlike a Date.now() wall-clock budget).
+    let execCallbackFired = false;
+    vi.mocked(execCb).mockImplementation(
+      (
+        _cmd: string,
+        _opts: unknown,
+        cb: (err: null, result: { stdout: string; stderr: string }) => void,
+      ) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        process.nextTick(() => {
+          execCallbackFired = true;
+          callback(null, { stdout: '', stderr: '' });
+        });
+      },
+    );
+
     const sm = new SessionManager();
-    const t0 = Date.now();
     await sm.start(TASK_URL, CTX_URL, START_OPTS);
-    expect(Date.now() - t0).toBeLessThan(100);
-    // Flush background chain to avoid state leaking into next test
+    expect(execCallbackFired).toBe(false);
+
+    // Sanity check: the mock does eventually fire once the background chain
+    // is flushed, proving the flag isn't simply stuck at false forever.
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(execCallbackFired).toBe(true);
   });
 
-  it('returns <100ms even when git worktree add simulates a 5-second delay', async () => {
-    // Simulate a 5-second git worktree add by never resolving the exec callback.
-    // This is equivalent to — and stronger than — a fixed 5-second delay: proves
-    // that start() caller isolation is unconditional, not just "fast enough".
+  it('resolves without waiting for a hung git worktree add (fire-and-forget: caller isolation is unconditional)', async () => {
+    // Simulate a permanently hung git worktree add: the exec callback is
+    // never invoked. If start() awaited completeStart() synchronously, this
+    // test would hang until the test framework's own timeout below — a
+    // deterministic failure that doesn't depend on wall-clock budgets.
     vi.mocked(execCb).mockImplementation(() => {
       // Intentionally never calls the callback — simulates a hung git operation.
-      // completeStart() will be permanently stalled in the background;
-      // start() must still return in <100ms.
       return {} as never;
     });
     // The stalled background completeStart() holds SessionManager's per-repo
@@ -252,11 +274,14 @@ describe('SessionManager.start() fire-and-forget timing', () => {
     );
 
     const sm = new SessionManager();
-    const t0 = Date.now();
     try {
+      // If this hangs (synchronous-await regression), the explicit 200ms
+      // test timeout below fails the test fast instead of stalling forever.
       await sm.start(TASK_URL, CTX_URL, START_OPTS);
-      expect(Date.now() - t0).toBeLessThan(100);
-      // Test ends here. The stalled background promise is abandoned — no 5-second wait.
+      // Reaching here at all proves start() did not wait on the hung exec
+      // callback, since that callback is never invoked in this test.
+      expect(vi.mocked(execCb)).toHaveBeenCalled();
+      // Test ends here. The stalled background promise is abandoned.
     } finally {
       vi.mocked(getProjectById).mockImplementation(
         () =>
@@ -270,7 +295,7 @@ describe('SessionManager.start() fire-and-forget timing', () => {
           }) as never,
       );
     }
-  });
+  }, 200);
 
   it('emits session_starting synchronously before returning', async () => {
     const sm = new SessionManager();

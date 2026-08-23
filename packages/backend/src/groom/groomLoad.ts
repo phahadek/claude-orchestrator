@@ -170,13 +170,15 @@ export interface GroomLoadResult {
   /**
    * Which dual-read branch this milestone resolved architecture from — driven
    * by the project's `archStoreAdopted` flag (`ProjectService`/`opts.projectId`).
-   * `contextPages` below is unrelated to that flag — it carries the
+   * `contextPages` below is mostly unrelated to that flag — it carries the
    * manifest's non-architecture context pages (project context, product
    * design doc, dev setup, future scope), which are fetched from Notion
    * regardless of `archSource`. Only the two pages that were architecture
-   * (Technical Architecture, Coding Guidelines) moved into the store; once
-   * a project adopts it, each target task's `archUnits` carries the
-   * region-intersected store units instead (see `TaskDoc.archUnits`).
+   * (Technical Architecture, Coding Guidelines) moved into the store; those
+   * entries are expected to carry `migratedToStore: true` in the manifest,
+   * which makes the fetch loop skip their body once the project has adopted
+   * the store — each target task's `archUnits` carries the region-
+   * intersected store units instead (see `TaskDoc.archUnits`).
    */
   archSource: 'store' | 'notion';
   contextPages: PageDoc[];
@@ -204,7 +206,19 @@ export interface GroomManifest {
   integration_branch?: string;
   packages?: string[];
   area_aliases?: Record<string, string>;
-  context_pages?: { id: string; title?: string }[];
+  context_pages?: {
+    id: string;
+    title?: string;
+    /**
+     * Marks a context page whose content has moved into the arch_unit
+     * store (e.g. Technical Architecture, Coding Guidelines). Once the
+     * project's `archStoreAdopted` flag is set, the fetch loop skips this
+     * entry's full body — the store, not this stale/stubbed Notion page,
+     * is the source of truth. Not the manifest's default: only the two
+     * pages that were actually migrated should carry it.
+     */
+    migratedToStore?: boolean;
+  }[];
   milestones?: Record<string, GroomManifestMilestone>;
 }
 
@@ -445,6 +459,17 @@ async function listTrackedFiles(repoRoot: string): Promise<string[]> {
 }
 
 /**
+ * Caller-scoped memo for `resolveTrackedFileSet`, keyed by repoRoot — lets a
+ * multi-member group commit (commitGroupIntents) share one `git ls-files`
+ * shell-out across every 💻 Code Ready-flip in the same commit instead of
+ * re-spawning it per member, since the tracked-file set is identical for
+ * every member within one commit. Caching the in-flight promise (not just
+ * the resolved value) also collapses concurrent same-repo lookups into one
+ * subprocess. Callers that don't pass one get the prior uncached behaviour.
+ */
+export type TrackedFileSetCache = Map<string, Promise<Set<string>>>;
+
+/**
  * The tracked-file set for a project's repo, for server-side re-derivation
  * of a Files/paths entry's `existsInRepo` at promotion time (groomGate.ts) —
  * reuses the same git-backed source of truth this loader's own
@@ -455,8 +480,25 @@ async function listTrackedFiles(repoRoot: string): Promise<string[]> {
  */
 export async function resolveTrackedFileSet(
   repoRoot: string,
+  cache?: TrackedFileSetCache,
 ): Promise<Set<string>> {
-  return new Set(await gitLsFilesOrThrow(repoRoot));
+  if (!cache) {
+    return new Set(await gitLsFilesOrThrow(repoRoot));
+  }
+  let pending = cache.get(repoRoot);
+  if (!pending) {
+    pending = gitLsFilesOrThrow(repoRoot).then((files) => new Set(files));
+    cache.set(repoRoot, pending);
+  }
+  try {
+    return await pending;
+  } catch (err) {
+    // A failed resolution must not poison the cache for the rest of the
+    // commit — a subsequent member gets a fresh retry rather than the same
+    // rejected promise forever.
+    if (cache.get(repoRoot) === pending) cache.delete(repoRoot);
+    throw err;
+  }
 }
 
 /** Freshness of a repo-relative package path vs. the cached prior SHA. */
@@ -672,16 +714,18 @@ export async function loadGroomContext(
     : false;
   const archSource: 'store' | 'notion' = archStoreAdopted ? 'store' : 'notion';
 
-  // contextPages is independent of archStoreAdopted: the manifest's context
-  // pages are mostly non-architecture (project context, product design doc,
-  // dev setup, future scope) and were never migrated into the store, so they
-  // are fetched from Notion regardless of dual-read branch. Only the two
-  // pages that were architecture (Technical Architecture, Coding Guidelines)
-  // moved into the store; once the sibling operational retirement lands they
-  // become read-only stub pages here, with their live content carried
-  // instead by the target tasks' `archUnits`.
+  // contextPages is mostly independent of archStoreAdopted: the manifest's
+  // context pages are mostly non-architecture (project context, product
+  // design doc, dev setup, future scope) and are fetched from Notion
+  // regardless of dual-read branch. The exception is an entry explicitly
+  // flagged `migratedToStore` (Technical Architecture, Coding Guidelines) —
+  // once the project has adopted the store, that page's full body is
+  // skipped here so it isn't delivered a second time alongside the target
+  // tasks' store-derived `archUnits`. Skipped when the flag isn't set, so a
+  // non-adopted project still receives every context page in full.
   const contextPages: PageDoc[] = [];
   for (const pg of manifest.context_pages ?? []) {
+    if (pg.migratedToStore && archStoreAdopted) continue;
     const page = await notion.fetchTaskPage(formatTaskId('notion', pg.id));
     contextPages.push({
       id: pg.id,
@@ -729,9 +773,10 @@ export async function loadGroomContext(
       ),
       archSource,
       archUnits: archStoreAdopted
-        ? selectUnitsFromStore({ regions: regionsForBinding(regions) }).map(
-            (u) => ({ id: u.id, title: u.title, body: u.body }),
-          )
+        ? selectUnitsFromStore({
+            projectId: opts?.projectId as string,
+            regions: regionsForBinding(regions),
+          }).map((u) => ({ id: u.id, title: u.title, body: u.body }))
         : notionArchUnits,
       filesPathsEntries: parseFilesPathsEntries(
         page.filesSection,

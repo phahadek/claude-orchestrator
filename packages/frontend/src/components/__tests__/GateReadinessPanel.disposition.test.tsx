@@ -79,7 +79,12 @@ describe('GateReadinessPanel — operator disposition controls', () => {
       currentDisposition: 'pass',
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
     await screen.findByText('item a');
 
     fireEvent.change(screen.getByTestId('gate-operator-input'), {
@@ -110,7 +115,12 @@ describe('GateReadinessPanel — operator disposition controls', () => {
     });
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
     await screen.findByText('item a');
 
     fireEvent.click(screen.getByTestId('gate-item-reopen-a'));
@@ -135,7 +145,12 @@ describe('GateReadinessPanel — operator disposition controls', () => {
     });
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
     await screen.findByText('item a');
 
     fireEvent.click(screen.getByTestId('gate-item-reopen-a'));
@@ -166,7 +181,12 @@ describe('GateReadinessPanel — operator disposition controls', () => {
     });
     const confirmSpy = vi.spyOn(window, 'confirm');
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
     await screen.findByText('item a');
 
     fireEvent.click(screen.getByTestId('gate-item-reopen-a'));
@@ -197,7 +217,12 @@ describe('GateReadinessPanel — operator disposition controls', () => {
       currentDisposition: 'pass',
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
     await screen.findByText('item a');
 
     fireEvent.click(screen.getByTestId('gate-item-approve-a'));
@@ -217,7 +242,12 @@ describe('GateReadinessPanel — operator disposition controls', () => {
       page: 1,
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
     await screen.findByText('item a');
 
     expect(screen.queryByTestId('gate-item-approve-a')).toBeNull();
@@ -235,7 +265,12 @@ describe('GateReadinessPanel — operator disposition controls', () => {
       page: 1,
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
     await screen.findByText('item a');
 
     const table = screen.getByTestId('gate-items-table');
@@ -254,7 +289,12 @@ describe('GateReadinessPanel — operator disposition controls', () => {
       page: 1,
     });
 
-    render(<GateReadinessPanel activeProjectId="proj-1" />);
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
+    );
     await screen.findByText('item a');
 
     const table = screen.getByTestId('gate-items-table');

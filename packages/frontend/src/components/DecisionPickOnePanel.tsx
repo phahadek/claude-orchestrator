@@ -91,7 +91,12 @@ export function DecisionPickOnePanel({
 
       <p className={styles.text}>{payload.prompt}</p>
       {intent.decisionProposal && (
-        <p className={styles.rationale}>{intent.decisionProposal}</p>
+        <div className={styles.rationale}>
+          <span className={pickOneStyles.recommendationLabel}>
+            Recommendation
+          </span>
+          <CollapsibleField text={intent.decisionProposal} />
+        </div>
       )}
       {intent.investigation && (
         <div className={styles.rationale} data-testid="decision-investigation">

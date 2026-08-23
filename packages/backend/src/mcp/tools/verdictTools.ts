@@ -12,6 +12,16 @@ import {
   gateVerifyResultSchema,
   deployAgenticVerdictSchema,
 } from './schemas';
+import {
+  getPRBySessionId,
+  evaluateTestFlakinessCorpus,
+} from '../../db/queries';
+import {
+  isTestIdTouchedByChangedFiles,
+  classnameFromTestId,
+} from '../../session/test-runner';
+import { getChangedFiles } from '../../session/autofix-runner';
+import { typedGetSetting } from '../../config/settings';
 
 /** Per-connection context a verdict-delivery tool call is scoped to. */
 export interface VerdictToolContext {
@@ -50,6 +60,29 @@ function invalid(message: string): {
     content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
     isError: true,
   };
+}
+
+/**
+ * Names the specific changed file that masks `testId`/`testName` — mirrors
+ * isTestIdTouchedByChangedFiles's own matching predicate (session/test-runner.ts)
+ * so the flaky.confirm refusal can name the file, not just say "touched".
+ */
+function findTouchedTestFile(
+  testId: string,
+  testName: string,
+  changedFiles: string[],
+): string | undefined {
+  const classname = classnameFromTestId(testId, testName);
+  if (!classname) return undefined;
+  const candidatePath = classname.replace(/\./g, '/');
+  return changedFiles.find((f) => {
+    const noExt = f.replace(/\.[^./]+$/, '');
+    return (
+      noExt === candidatePath ||
+      candidatePath.startsWith(`${noExt}/`) ||
+      noExt.endsWith(`/${candidatePath}`)
+    );
+  });
 }
 
 /**
@@ -98,15 +131,77 @@ export function registerVerdictTools(
       {
         title: 'Confirm a verified-flaky CI/gate failure',
         description:
-          'Reports that this session cleared the flake-verification bar (ran the failing check in isolation, re-ran the full suite/gate, confirmed the failure is unrelated to its diff) instead of pushing an empty commit. gate is "ci" for a failing GitHub check, "f2" for the orchestrator-run test gate, or "analyze" for the orchestrator-run static-analysis gate.',
+          'Reports a failing CI/F2/analyze gate as flaky/unrelated to this diff, instead of pushing an empty commit. Call once with what you observed — do not re-run the suite yourself first: the backend adjudicates against its own cross-SHA outcome corpus and refuses if the test does not clear it or if its file is in your diff. For gate "ci"/"f2" pass testId and testName identifying the failing test (as reported by the failing run) — required for those gates. gate "analyze" (the orchestrator-run static-analysis gate) has no per-test id and is not checked against the corpus.',
         inputSchema: {
           gate: flakyGateSchema,
           reason: z.string(),
+          testId: z.string().optional(),
+          testName: z.string().optional(),
         },
       },
       async (args) => {
         const session = ctx.getSession();
         if (!session) return notLive();
+
+        if (args.gate !== 'analyze') {
+          if (!args.testId || !args.testName) {
+            return invalid(
+              `gate "${args.gate}" requires testId and testName identifying the failing test so the backend can check it against the cross-SHA corpus`,
+            );
+          }
+          const pr = getPRBySessionId(ctx.sessionId);
+          if (!pr) return invalid('no open PR for this session');
+          const beforeMs = pr.created_at ? Date.parse(pr.created_at) : NaN;
+          if (!Number.isFinite(beforeMs)) {
+            return invalid(
+              'this PR has no recorded creation time to scope the corpus check against',
+            );
+          }
+          const corpus = evaluateTestFlakinessCorpus(
+            args.testId,
+            beforeMs,
+            typedGetSetting('flip_rate_window_n'),
+            typedGetSetting('flip_rate_threshold_k'),
+            typedGetSetting('flip_rate_breadth_n'),
+            typedGetSetting('flip_rate_breadth_window_hours'),
+          );
+          if (!corpus.eligible) {
+            return invalid(`${args.testName} ${corpus.reason}`);
+          }
+
+          let changedFiles: string[];
+          try {
+            changedFiles = await getChangedFiles(
+              session.worktreePath,
+              pr.base_branch ?? 'dev',
+            );
+          } catch (err) {
+            return invalid(
+              `could not resolve this session's changed files: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+          const { touched, confident } = isTestIdTouchedByChangedFiles(
+            args.testId,
+            args.testName,
+            changedFiles,
+          );
+          if (!confident) {
+            return invalid(
+              `${args.testName} could not be confidently mapped to a source file to check against this session's diff`,
+            );
+          }
+          if (touched) {
+            const touchedFile = findTouchedTestFile(
+              args.testId,
+              args.testName,
+              changedFiles,
+            );
+            return invalid(
+              `${touchedFile ?? `${args.testName}'s own file`} is in this session's diff — a session cannot wave through a failure it may have caused`,
+            );
+          }
+        }
+
         session.recordVerifiedFlakyDisposition({
           gate: args.gate,
           reason: args.reason,

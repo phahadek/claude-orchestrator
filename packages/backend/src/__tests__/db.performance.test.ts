@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { makeEventRow } from '../../test/helpers/eventFixtures';
 
 // ── In-memory SQLite — schema must be applied inside the factory ───────────────
@@ -22,9 +22,28 @@ import {
   insertSession,
   upsertPullRequest,
   insertEvent,
+  insertEventOrIgnore,
   getActiveSessions,
+  getStuckResultSessionRows,
+  insertProject,
+  insertStagedIntent,
+  listAllActiveStagedIntents,
+  archiveSession,
+  getLastActivityMsForArchivedSessions,
+  querySessionEventsByProjectAggregate,
+  querySessionEventsByProjectRows,
+  UnboundedPatternQueryError,
+  replaceFlaggedFlakyTestsRollupOffMainThread,
+  getFlaggedFlakyTestsRollup,
+  getLatestTestRequestRunForSession,
+  recordTestPerfDigestSample,
 } from '../db/queries.js';
 import type Database from 'better-sqlite3';
+import RealDatabase from 'better-sqlite3';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import type { StagedIntentRow, TestRequestRunRow } from '../db/types.js';
 
 const typedDb = db as Database.Database;
 
@@ -34,7 +53,10 @@ const EXPECTED_INDEXES = [
   'idx_session_events_timestamp',
   'idx_sessions_archived_started_at',
   'idx_sessions_notion_task_id_session_type',
+  'idx_sessions_status',
   'idx_pull_requests_task_id_pr_number',
+  'idx_test_request_runs_session_state_started',
+  'idx_test_request_runs_session_finished',
 ];
 
 function indexNames(): string[] {
@@ -91,7 +113,7 @@ const SESSION_DEFAULTS = {
 // ── Migration idempotency ─────────────────────────────────────────────────────
 
 describe('runMigrations — index idempotency', () => {
-  it('creates all six covering indexes on a fresh DB', () => {
+  it('creates all covering indexes on a fresh DB', () => {
     runMigrations(typedDb);
     const names = indexNames();
     for (const idx of EXPECTED_INDEXES) {
@@ -106,6 +128,77 @@ describe('runMigrations — index idempotency', () => {
     for (const idx of EXPECTED_INDEXES) {
       expect(names).toContain(idx);
     }
+  });
+});
+
+// ── getStuckResultSessionRows — index usage and correctness ──────────────────
+
+describe('getStuckResultSessionRows — sessions(status) index', () => {
+  beforeEach(() => {
+    clearTables();
+    runMigrations(typedDb);
+  });
+
+  it('uses idx_sessions_status instead of a bare scan of sessions', () => {
+    const plan = typedDb
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT s.session_id, s.task_id, s.task_url, s.project_context_url,
+                s.project_id, s.pr_url, s.worktree_path, s.session_type,
+                e.timestamp AS last_ts
+         FROM sessions s
+         JOIN session_events e ON e.session_id = s.session_id
+         WHERE s.status = 'running'
+           AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
+           AND e.event_type = 'system'
+           AND json_extract(e.payload, '$.type') = 'result'`,
+      )
+      .all() as { detail: string }[];
+
+    const scanSessionsBare = plan.some((row) =>
+      /^SCAN\s+(s|sessions)\s*$/.test(row.detail.trim()),
+    );
+    expect(scanSessionsBare).toBe(false);
+    const usesStatusIndex = plan.some((row) =>
+      row.detail.includes('idx_sessions_status'),
+    );
+    expect(usesStatusIndex).toBe(true);
+  });
+
+  it('returns only running sessions whose last event is a system/result event', () => {
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'stuck-running',
+      task_id: 'task-stuck',
+      status: 'running',
+      started_at: 1000,
+    });
+    insertEvent({
+      session_id: 'stuck-running',
+      ...makeEventRow('text').live,
+      timestamp: 1,
+    });
+    insertEvent({
+      session_id: 'stuck-running',
+      ...makeEventRow('result').live,
+      timestamp: 2,
+    });
+
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'not-running',
+      task_id: 'task-not-running',
+      status: 'completed',
+      started_at: 1000,
+    });
+    insertEvent({
+      session_id: 'not-running',
+      ...makeEventRow('result').live,
+      timestamp: 1,
+    });
+
+    const rows = getStuckResultSessionRows();
+    expect(rows.map((r) => r.session_id)).toEqual(['stuck-running']);
   });
 });
 
@@ -140,6 +233,180 @@ describe('getActiveTaskAggregates — single statement execution', () => {
     getActiveTaskAggregates(['t1']);
     expect(prepareSpy).toHaveBeenCalledTimes(1);
     prepareSpy.mockRestore();
+  });
+});
+
+// ── CTE task-id predicate pushdown ────────────────────────────────────────────
+
+describe('getActiveTaskAggregates — CTE task-id predicate pushdown', () => {
+  beforeEach(() => clearTables());
+
+  function captureSql(fn: () => void): string {
+    let capturedSql = '';
+    const originalPrepare = typedDb.prepare.bind(typedDb);
+    const prepareSpy = vi
+      .spyOn(typedDb, 'prepare')
+      .mockImplementation((sql: string, ...rest: unknown[]) => {
+        capturedSql = sql;
+
+        return (originalPrepare as any)(sql, ...rest);
+      });
+    fn();
+    prepareSpy.mockRestore();
+    return capturedSql;
+  }
+
+  it('produces no unrestricted SCAN sessions step for a single-task-id call', () => {
+    upsertTaskCache(
+      'plan-task',
+      JSON.stringify({ id: 'plan-task', title: 'P', status: '🗂️ Ready' }),
+    );
+
+    const sql = captureSql(() => {
+      getActiveTaskAggregates(['plan-task']);
+    });
+
+    const plan = typedDb
+      .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+      .all('plan-task', 'plan-task', 'plan-task', 'plan-task', 'plan-task') as {
+      detail: string;
+    }[];
+    const details = plan.map((r) => r.detail).join('\n');
+    const scansUnrestrictedSessions = plan.some(
+      (row) =>
+        /SCAN sessions\b/.test(row.detail) &&
+        !row.detail.includes('USING INDEX'),
+    );
+    expect(scansUnrestrictedSessions, details).toBe(false);
+  });
+
+  it('preserves the latest-per-task selection when three code sessions exist', () => {
+    const tid = 'latest-task';
+    upsertTaskCache(
+      tid,
+      JSON.stringify({ id: tid, title: 'L', status: '🗂️ Ready' }),
+    );
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'latest-sess-1',
+      task_id: tid,
+      started_at: 1000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'latest-sess-2',
+      task_id: tid,
+      started_at: 3000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'latest-sess-3',
+      task_id: tid,
+      started_at: 2000,
+    });
+
+    const rows = getActiveTaskAggregates([tid]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].code_session_id).toBe('latest-sess-2');
+  });
+
+  it('returns the same row for a single-id call and a multi-id call containing that id', () => {
+    const tid = 'shared-task';
+    upsertTaskCache(
+      tid,
+      JSON.stringify({ id: tid, title: 'S', status: '🗂️ Ready' }),
+    );
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'shared-sess',
+      task_id: tid,
+      started_at: 1000,
+    });
+    upsertPullRequest({
+      ...PR_DEFAULTS,
+      pr_number: 500,
+      pr_url: `https://github.com/o/r/pull/500`,
+      task_id: tid,
+      session_id: 'shared-sess',
+    });
+
+    const otherIds = ['other-task-1', 'other-task-2'];
+    for (const oid of otherIds) {
+      upsertTaskCache(
+        oid,
+        JSON.stringify({ id: oid, title: 'O', status: '🗂️ Ready' }),
+      );
+      insertSession({
+        ...SESSION_DEFAULTS,
+        session_id: `sess-${oid}`,
+        task_id: oid,
+        started_at: 1000,
+      });
+    }
+
+    const soloRows = getActiveTaskAggregates([tid]);
+    const multiRows = getActiveTaskAggregates([tid, ...otherIds]);
+    const multiRow = multiRows.find((r) => r.task_id === tid);
+
+    expect(soloRows).toHaveLength(1);
+    expect(multiRow).toEqual(soloRows[0]);
+  });
+
+  it('short-circuits an empty taskIds array without preparing a statement', () => {
+    const prepareSpy = vi.spyOn(typedDb, 'prepare');
+    const rows = getActiveTaskAggregates([]);
+    expect(rows).toEqual([]);
+    expect(prepareSpy).not.toHaveBeenCalled();
+    prepareSpy.mockRestore();
+  });
+
+  it('binds parameters correctly for a multi-id call spanning code, planning, review and PR rows', () => {
+    const ids = ['multi-a', 'multi-b', 'multi-c'];
+    for (const [i, tid] of ids.entries()) {
+      upsertTaskCache(
+        tid,
+        JSON.stringify({ id: tid, title: `M${i}`, status: '🗂️ Ready' }),
+      );
+      insertSession({
+        ...SESSION_DEFAULTS,
+        session_id: `${tid}-code`,
+        task_id: tid,
+        session_type: 'standard',
+        started_at: 1000 + i,
+      });
+      insertSession({
+        ...SESSION_DEFAULTS,
+        session_id: `${tid}-planning`,
+        task_id: tid,
+        session_type: 'groom',
+        started_at: 1000 + i,
+      });
+      insertSession({
+        ...SESSION_DEFAULTS,
+        session_id: `${tid}-review`,
+        task_id: tid,
+        session_type: 'review',
+        started_at: 1000 + i,
+      });
+      upsertPullRequest({
+        ...PR_DEFAULTS,
+        pr_number: 900 + i,
+        pr_url: `https://github.com/o/r/pull/${900 + i}`,
+        task_id: tid,
+        session_id: `${tid}-code`,
+      });
+    }
+
+    expect(() => getActiveTaskAggregates(ids)).not.toThrow();
+    const rows = getActiveTaskAggregates(ids);
+    expect(rows).toHaveLength(3);
+    for (const [i, tid] of ids.entries()) {
+      const row = rows.find((r) => r.task_id === tid);
+      expect(row?.code_session_id).toBe(`${tid}-code`);
+      expect(row?.planning_session_id).toBe(`${tid}-planning`);
+      expect(row?.review_session_id).toBe(`${tid}-review`);
+      expect(row?.pr_number).toBe(900 + i);
+    }
   });
 });
 
@@ -418,5 +685,1263 @@ describe('bench: getActiveSessions (sessions route query)', () => {
       elapsed,
       `getActiveSessions took ${elapsed.toFixed(1)}ms, expected <300ms`,
     ).toBeLessThan(300);
+  });
+});
+
+// ── listAllActiveStagedIntents — idx_staged_intent_state_created_at ─────────
+
+describe('listAllActiveStagedIntents — state-only predicate index usage', () => {
+  function stagedIntentRow(
+    overrides: Partial<StagedIntentRow> & { id: string; project_id: string },
+  ): StagedIntentRow {
+    return {
+      kind: 'task.setStatus',
+      payload: '{}',
+      payload_hash: 'hash',
+      task_id: null,
+      session_id: null,
+      group_id: null,
+      milestone: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      investigation: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      applied_task_id: null,
+      created_at: 1000,
+      updated_at: 1000,
+      ...overrides,
+    };
+  }
+
+  it('creates idx_staged_intent_state_created_at on a fresh database', () => {
+    runMigrations(typedDb);
+    expect(indexNames()).toContain('idx_staged_intent_state_created_at');
+  });
+
+  it('EXPLAIN QUERY PLAN contains no full scan of staged_intent and no temp b-tree sort', () => {
+    // listAllActiveStagedIntents runs this as two single-value equality
+    // searches (see its doc comment) rather than one `state IN (...)`
+    // query — SQLite can't serve a multi-value IN's ORDER BY from the
+    // index without a temp b-tree merge, but a single equality can.
+    runMigrations(typedDb);
+    for (const state of ['staged', 'approved']) {
+      const plan = typedDb
+        .prepare(
+          `EXPLAIN QUERY PLAN SELECT * FROM staged_intent WHERE state = ? ORDER BY created_at ASC`,
+        )
+        .all(state) as { detail: string }[];
+      const details = plan.map((r) => r.detail).join('\n');
+      expect(details).not.toContain('SCAN staged_intent');
+      expect(details).not.toContain('USE TEMP B-TREE FOR ORDER BY');
+    }
+  });
+
+  it('returns the same rows in the same order, excluding non-visible states, across projects', () => {
+    runMigrations(typedDb);
+    typedDb.exec(`DELETE FROM staged_intent; DELETE FROM projects;`);
+    insertProject({
+      id: 'proj-a',
+      name: 'Project A',
+      project_dir: '/a',
+      context_url: null,
+      github_repo: 'o/a',
+      task_source: 'notion',
+    });
+    insertProject({
+      id: 'proj-b',
+      name: 'Project B',
+      project_dir: '/b',
+      context_url: null,
+      github_repo: 'o/b',
+      task_source: 'notion',
+    });
+
+    const rows: StagedIntentRow[] = [
+      stagedIntentRow({
+        id: 'a-staged',
+        project_id: 'proj-a',
+        state: 'staged',
+        created_at: 3000,
+      }),
+      stagedIntentRow({
+        id: 'b-approved',
+        project_id: 'proj-b',
+        state: 'approved',
+        created_at: 1000,
+      }),
+      stagedIntentRow({
+        id: 'a-approved',
+        project_id: 'proj-a',
+        state: 'approved',
+        created_at: 2000,
+      }),
+      stagedIntentRow({
+        id: 'b-committed',
+        project_id: 'proj-b',
+        state: 'committed',
+        created_at: 500,
+      }),
+      stagedIntentRow({
+        id: 'a-rejected',
+        project_id: 'proj-a',
+        state: 'rejected',
+        created_at: 4000,
+      }),
+      stagedIntentRow({
+        id: 'b-withdrawn',
+        project_id: 'proj-b',
+        state: 'withdrawn',
+        created_at: 4500,
+      }),
+    ];
+    for (const row of rows) insertStagedIntent(row);
+
+    const result = listAllActiveStagedIntents();
+    expect(result.map((r) => r.id)).toEqual([
+      'b-approved',
+      'a-approved',
+      'a-staged',
+    ]);
+  });
+});
+
+// ── sessions.last_event_at denormalisation ────────────────────────────────────
+
+describe('runMigrations — sessions.last_event_at', () => {
+  beforeEach(() => {
+    clearTables();
+  });
+
+  it('adds the column to a fresh database and backfills pre-existing sessions', () => {
+    runMigrations(typedDb);
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'backfill-sess-1',
+      task_id: null,
+      started_at: 1000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'backfill-sess-2',
+      task_id: null,
+      started_at: 1000,
+    });
+    typedDb
+      .prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      )
+      .run('backfill-sess-1', 'text', '{}', 500);
+    typedDb
+      .prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      )
+      .run('backfill-sess-1', 'text', '{}', 900);
+    typedDb
+      .prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      )
+      .run('backfill-sess-2', 'text', '{}', 700);
+
+    // Simulate rows that predate the write-path maintenance (e.g. imported
+    // by a prior deploy before this column was populated at insert time).
+    typedDb.exec(`UPDATE sessions SET last_event_at = NULL`);
+
+    runMigrations(typedDb);
+
+    const rows = typedDb
+      .prepare(
+        `SELECT session_id, last_event_at FROM sessions ORDER BY session_id`,
+      )
+      .all() as { session_id: string; last_event_at: number | null }[];
+    expect(rows).toEqual([
+      { session_id: 'backfill-sess-1', last_event_at: 900 },
+      { session_id: 'backfill-sess-2', last_event_at: 700 },
+    ]);
+  });
+
+  it('running runMigrations twice does not throw and leaves the column present', () => {
+    runMigrations(typedDb);
+    expect(() => runMigrations(typedDb)).not.toThrow();
+    const columns = typedDb.prepare(`PRAGMA table_info(sessions)`).all() as {
+      name: string;
+    }[];
+    expect(columns.map((c) => c.name)).toContain('last_event_at');
+  });
+});
+
+describe('last_event_at write-path maintenance', () => {
+  beforeEach(() => {
+    clearTables();
+    runMigrations(typedDb);
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'maint-sess',
+      task_id: null,
+      started_at: 1000,
+    });
+  });
+
+  function lastEventAt(sessionId: string): number | null {
+    const row = typedDb
+      .prepare(`SELECT last_event_at FROM sessions WHERE session_id = ?`)
+      .get(sessionId) as { last_event_at: number | null } | undefined;
+    return row?.last_event_at ?? null;
+  }
+
+  it('insertEvent bumps the owning session last_event_at', () => {
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 500,
+    });
+    expect(lastEventAt('maint-sess')).toBe(500);
+  });
+
+  it('insertEvent does not move last_event_at backwards for an out-of-order event', () => {
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 900,
+    });
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 300,
+    });
+    expect(lastEventAt('maint-sess')).toBe(900);
+  });
+
+  it('insertEventOrIgnore bumps the owning session last_event_at for a new event', () => {
+    insertEventOrIgnore({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 600,
+    });
+    expect(lastEventAt('maint-sess')).toBe(600);
+  });
+
+  it('insertEventOrIgnore does not move last_event_at backwards for an out-of-order event', () => {
+    insertEventOrIgnore({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 800,
+    });
+    insertEventOrIgnore({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 100,
+    });
+    expect(lastEventAt('maint-sess')).toBe(800);
+  });
+});
+
+describe('getLastActivityMsForArchivedSessions — denormalised read', () => {
+  beforeEach(() => {
+    clearTables();
+    runMigrations(typedDb);
+  });
+
+  it('matches the pre-change aggregate for archived sessions with and without events', () => {
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'arch-with-events',
+      task_id: null,
+      started_at: 1000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'arch-no-events',
+      task_id: null,
+      started_at: 1000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'live-sess',
+      task_id: null,
+      started_at: 1000,
+    });
+    insertEvent({
+      session_id: 'arch-with-events',
+      ...makeEventRow('text').live,
+      timestamp: 111,
+    });
+    insertEvent({
+      session_id: 'arch-with-events',
+      ...makeEventRow('text').live,
+      timestamp: 222,
+    });
+    insertEvent({
+      session_id: 'live-sess',
+      ...makeEventRow('text').live,
+      timestamp: 999,
+    });
+    archiveSession('arch-with-events');
+    archiveSession('arch-no-events');
+
+    // Pre-change aggregate, reproduced directly against session_events, for
+    // comparison against the denormalised read.
+    const legacyRows = typedDb
+      .prepare(
+        `SELECT se.session_id AS session_id, MAX(se.timestamp) AS ts
+         FROM session_events se
+         JOIN sessions s ON s.session_id = se.session_id
+         WHERE s.archived = 1
+         GROUP BY se.session_id`,
+      )
+      .all() as { session_id: string; ts: number }[];
+    const legacyMap = new Map(legacyRows.map((r) => [r.session_id, r.ts]));
+
+    const result = getLastActivityMsForArchivedSessions();
+    expect(result).toEqual(legacyMap);
+  });
+
+  it('plan contains no reference to session_events', () => {
+    const plan = typedDb
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT session_id, last_event_at AS ts FROM sessions WHERE archived = 1`,
+      )
+      .all() as { detail: string }[];
+    const details = plan.map((r) => r.detail).join('\n');
+    expect(details).not.toContain('session_events');
+  });
+});
+
+// ── sessions.first_event_at / event_count denormalisation ──────────────────
+
+describe('runMigrations — sessions.first_event_at / event_count', () => {
+  beforeEach(() => {
+    clearTables();
+  });
+
+  it('adds both columns to a fresh database and backfills pre-existing sessions', () => {
+    runMigrations(typedDb);
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'backfill-sess-1',
+      task_id: null,
+      started_at: 1000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'backfill-sess-2',
+      task_id: null,
+      started_at: 1000,
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'backfill-sess-no-events',
+      task_id: null,
+      started_at: 1000,
+    });
+    typedDb
+      .prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      )
+      .run('backfill-sess-1', 'text', '{}', 500);
+    typedDb
+      .prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      )
+      .run('backfill-sess-1', 'text', '{}', 900);
+    typedDb
+      .prepare(
+        `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+      )
+      .run('backfill-sess-2', 'text', '{}', 700);
+
+    // Simulate rows that predate the write-path maintenance.
+    typedDb.exec(
+      `UPDATE sessions SET last_event_at = NULL, first_event_at = NULL, event_count = 0`,
+    );
+
+    runMigrations(typedDb);
+
+    const rows = typedDb
+      .prepare(
+        `SELECT session_id, first_event_at, event_count FROM sessions ORDER BY session_id`,
+      )
+      .all() as {
+      session_id: string;
+      first_event_at: number | null;
+      event_count: number;
+    }[];
+    expect(rows).toEqual([
+      {
+        session_id: 'backfill-sess-1',
+        first_event_at: 500,
+        event_count: 2,
+      },
+      {
+        session_id: 'backfill-sess-2',
+        first_event_at: 700,
+        event_count: 1,
+      },
+      {
+        session_id: 'backfill-sess-no-events',
+        first_event_at: null,
+        event_count: 0,
+      },
+    ]);
+  });
+
+  it('running runMigrations twice does not throw and leaves both columns present', () => {
+    runMigrations(typedDb);
+    expect(() => runMigrations(typedDb)).not.toThrow();
+    const columns = typedDb.prepare(`PRAGMA table_info(sessions)`).all() as {
+      name: string;
+    }[];
+    expect(columns.map((c) => c.name)).toContain('first_event_at');
+    expect(columns.map((c) => c.name)).toContain('event_count');
+  });
+});
+
+describe('first_event_at / event_count write-path maintenance', () => {
+  beforeEach(() => {
+    clearTables();
+    runMigrations(typedDb);
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'maint-sess',
+      task_id: null,
+      started_at: 1000,
+    });
+  });
+
+  function readAggregates(sessionId: string): {
+    first_event_at: number | null;
+    last_event_at: number | null;
+    event_count: number;
+  } {
+    return typedDb
+      .prepare(
+        `SELECT first_event_at, last_event_at, event_count FROM sessions WHERE session_id = ?`,
+      )
+      .get(sessionId) as {
+      first_event_at: number | null;
+      last_event_at: number | null;
+      event_count: number;
+    };
+  }
+
+  it('insertEvent increments event_count and sets first_event_at/last_event_at', () => {
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 500,
+    });
+    expect(readAggregates('maint-sess')).toEqual({
+      first_event_at: 500,
+      last_event_at: 500,
+      event_count: 1,
+    });
+
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 700,
+    });
+    expect(readAggregates('maint-sess')).toEqual({
+      first_event_at: 500,
+      last_event_at: 700,
+      event_count: 2,
+    });
+  });
+
+  it('an out-of-order event older than the stored first_event_at moves first_event_at backwards but not last_event_at', () => {
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 500,
+    });
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 900,
+    });
+    insertEvent({
+      session_id: 'maint-sess',
+      ...makeEventRow('text').live,
+      timestamp: 200,
+    });
+    expect(readAggregates('maint-sess')).toEqual({
+      first_event_at: 200,
+      last_event_at: 900,
+      event_count: 3,
+    });
+  });
+});
+
+// ── querySessionEventsByProjectAggregate — denormalised unfiltered path ────
+
+describe('querySessionEventsByProjectAggregate', () => {
+  beforeEach(() => {
+    clearTables();
+    runMigrations(typedDb);
+    typedDb.exec(`DELETE FROM projects;`);
+    insertProject({
+      id: 'proj-a',
+      name: 'Project A',
+      project_dir: '/a',
+      context_url: null,
+      github_repo: 'o/a',
+      task_source: 'notion',
+    });
+    insertProject({
+      id: 'proj-b',
+      name: 'Project B',
+      project_dir: '/b',
+      context_url: null,
+      github_repo: 'o/b',
+      task_source: 'notion',
+    });
+
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'a-sess-1',
+      task_id: null,
+      started_at: 1000,
+      project_id: 'proj-a',
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'a-sess-2',
+      task_id: null,
+      started_at: 1000,
+      project_id: 'proj-a',
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'a-sess-no-events',
+      task_id: null,
+      started_at: 1000,
+      project_id: 'proj-a',
+    });
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'b-sess-1',
+      task_id: null,
+      started_at: 1000,
+      project_id: 'proj-b',
+    });
+
+    insertEvent({
+      session_id: 'a-sess-1',
+      ...makeEventRow('text').live,
+      timestamp: 100,
+    });
+    insertEvent({
+      session_id: 'a-sess-1',
+      ...makeEventRow('text').live,
+      timestamp: 300,
+    });
+    insertEvent({
+      session_id: 'a-sess-2',
+      ...makeEventRow('text').live,
+      timestamp: 200,
+    });
+    insertEvent({
+      session_id: 'b-sess-1',
+      ...makeEventRow('text').live,
+      timestamp: 400,
+    });
+  });
+
+  function legacyAggregate(projectId: string): {
+    session_id: string;
+    count: number;
+    first_timestamp: number;
+    last_timestamp: number;
+  }[] {
+    return typedDb
+      .prepare(
+        `SELECT session_events.session_id AS session_id,
+                COUNT(*) AS count,
+                MIN(session_events.timestamp) AS first_timestamp,
+                MAX(session_events.timestamp) AS last_timestamp
+         FROM session_events
+         JOIN sessions ON sessions.session_id = session_events.session_id
+         WHERE sessions.project_id = ?
+         GROUP BY session_events.session_id
+         ORDER BY last_timestamp DESC`,
+      )
+      .all(projectId) as {
+      session_id: string;
+      count: number;
+      first_timestamp: number;
+      last_timestamp: number;
+    }[];
+  }
+
+  it('unfiltered call matches the pre-change aggregate, in the same order, excluding event-less sessions', () => {
+    expect(querySessionEventsByProjectAggregate('proj-a')).toEqual(
+      legacyAggregate('proj-a'),
+    );
+    expect(querySessionEventsByProjectAggregate('proj-b')).toEqual(
+      legacyAggregate('proj-b'),
+    );
+  });
+
+  it('excludes a session with zero events', () => {
+    const rows = querySessionEventsByProjectAggregate('proj-a');
+    expect(rows.map((r) => r.session_id)).not.toContain('a-sess-no-events');
+  });
+
+  it('a filtered call still aggregates over session_events and returns the filtered result', () => {
+    const rows = querySessionEventsByProjectAggregate('proj-a', {
+      since: 250,
+    });
+    expect(rows).toEqual([
+      {
+        session_id: 'a-sess-1',
+        count: 1,
+        first_timestamp: 300,
+        last_timestamp: 300,
+      },
+    ]);
+  });
+});
+
+// ── querySessionEventsByProject{Aggregate,Rows} — filtered path at scale ───
+// Regression coverage for the pattern/since/until-filtered path falling
+// back to a full unindexed session_events scan (payload LIKE '%...%' can
+// never use an index, and since/until-only calls used to fall through to
+// the same unbounded join). See UnboundedPatternQueryError and the
+// CROSS JOIN-driven queries in db/queries.ts.
+
+describe('bench: querySessionEventsByProject{Aggregate,Rows} — filtered reads at scale', () => {
+  const SESSION_COUNT = 200;
+  const EVENTS_PER_SESSION = 2_600; // ~520k rows total, representative of production scale
+  const EVENT_COUNT = SESSION_COUNT * EVENTS_PER_SESSION;
+
+  function seed(): { sessionIds: string[] } {
+    clearTables();
+    runMigrations(typedDb);
+    typedDb.exec(`DELETE FROM projects;`);
+    insertProject({
+      id: 'proj-bench-large',
+      name: 'Bench Large',
+      project_dir: '/bench-large',
+      context_url: null,
+      github_repo: 'o/bench-large',
+      task_source: 'notion',
+    });
+    insertProject({
+      id: 'proj-bench-noise',
+      name: 'Bench Noise',
+      project_dir: '/bench-noise',
+      context_url: null,
+      github_repo: 'o/bench-noise',
+      task_source: 'notion',
+    });
+
+    const sessionIds: string[] = [];
+    for (let i = 0; i < SESSION_COUNT; i++) {
+      const sid = `bench-large-sess-${i}`;
+      sessionIds.push(sid);
+      insertSession({
+        ...SESSION_DEFAULTS,
+        session_id: sid,
+        task_id: null,
+        project_id: 'proj-bench-large',
+        started_at: 1000,
+      });
+    }
+    // Noise from a different project, so the project_id filter has to do
+    // real work rather than the table only ever containing one project.
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'bench-noise-sess-0',
+      task_id: null,
+      project_id: 'proj-bench-noise',
+      started_at: 1000,
+    });
+
+    const insertStmt = typedDb.prepare(
+      `INSERT INTO session_events (session_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?)`,
+    );
+    const bulkInsert = typedDb.transaction(() => {
+      for (let i = 0; i < EVENT_COUNT; i++) {
+        const sid = sessionIds[i % SESSION_COUNT];
+        const payload =
+          i % 10_000 === 0
+            ? `{"text":"needle-${i}"}`
+            : `{"text":"haystack ${i}"}`;
+        insertStmt.run(sid, 'text', payload, i);
+      }
+      insertStmt.run(
+        'bench-noise-sess-0',
+        'text',
+        '{"text":"needle-noise"}',
+        0,
+      );
+    });
+    bulkInsert();
+
+    return { sessionIds };
+  }
+
+  // Seeded once for the whole describe block (not per-test): re-running a
+  // ~520k-row bulk insert (with 4 session_events indexes to maintain) four
+  // times over blows vitest's default per-test timeout. The tests below are
+  // read-only, so sharing one seed across them is safe.
+  beforeAll(() => {
+    seed();
+  }, 60_000);
+
+  it(`seeds ${EVENT_COUNT.toLocaleString()} session_events rows for one project`, () => {
+    const count = (
+      typedDb.prepare(`SELECT COUNT(*) AS n FROM session_events`).get() as {
+        n: number;
+      }
+    ).n;
+    expect(count).toBeGreaterThanOrEqual(500_000);
+  });
+
+  it('a since/until-only aggregate call (no pattern) completes within budget', () => {
+    const start = performance.now();
+    const rows = querySessionEventsByProjectAggregate('proj-bench-large', {
+      since: EVENT_COUNT - 500,
+      until: EVENT_COUNT,
+    });
+    const elapsed = performance.now() - start;
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(
+      rows.every((r) => r.session_id.startsWith('bench-large-sess-')),
+    ).toBe(true);
+    expect(
+      elapsed,
+      `since/until-only querySessionEventsByProjectAggregate took ${elapsed.toFixed(1)}ms, expected <300ms`,
+    ).toBeLessThan(300);
+  });
+
+  it('a pattern call bounded by since/until completes within budget', () => {
+    const start = performance.now();
+    const rows = querySessionEventsByProjectRows('proj-bench-large', {
+      pattern: 'needle',
+      since: 0,
+      until: 20_000,
+    });
+    const elapsed = performance.now() - start;
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.payload.includes('needle'))).toBe(true);
+    expect(
+      elapsed,
+      `bounded pattern querySessionEventsByProjectRows took ${elapsed.toFixed(1)}ms, expected <300ms`,
+    ).toBeLessThan(300);
+  });
+
+  it('a pattern call with no since/until bound is rejected instead of scanning', () => {
+    const start = performance.now();
+    expect(() =>
+      querySessionEventsByProjectAggregate('proj-bench-large', {
+        pattern: 'needle',
+      }),
+    ).toThrow(UnboundedPatternQueryError);
+    const elapsed = performance.now() - start;
+
+    expect(
+      elapsed,
+      `rejected unbounded pattern call took ${elapsed.toFixed(1)}ms, expected <50ms`,
+    ).toBeLessThan(50);
+  });
+});
+
+// ── flagged_flaky_tests_rollup — incremental recompute ──────────────────────
+
+describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
+  let seq = 0;
+
+  function insertTestResult(opts: {
+    projectId: string;
+    testId: string;
+    name: string;
+    outcome: 'passed' | 'failed';
+    createdAt: number;
+  }): void {
+    seq += 1;
+    const runId = `flaky-run-${seq}`;
+    typedDb
+      .prepare(
+        `INSERT INTO test_request_runs
+           (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
+         VALUES (@id, @project_id, @content_hash, NULL, 'passed', '', 0, 0, 0)`,
+      )
+      .run({
+        id: runId,
+        project_id: opts.projectId,
+        content_hash: `flaky-hash-${seq}`,
+      });
+    typedDb
+      .prepare(
+        `INSERT INTO test_run_results
+           (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+         VALUES (@run_id, @project_id, @test_id, @name, @outcome, 1, 0, 0, @created_at)`,
+      )
+      .run({
+        run_id: runId,
+        project_id: opts.projectId,
+        test_id: opts.testId,
+        name: opts.name,
+        outcome: opts.outcome,
+        created_at: opts.createdAt,
+      });
+    // The candidate scan/computeTestFlipRateFlag now read the
+    // test_perf_baselines digest, not raw test_run_results rows — this
+    // dispatches through the ':memory:' sync path onto the same shared `db`
+    // these tests already use, so the queries.ts writer works directly here.
+    recordTestPerfDigestSample(
+      opts.testId,
+      opts.projectId,
+      opts.name,
+      opts.outcome,
+      1,
+      0,
+      false,
+      opts.createdAt,
+    );
+  }
+
+  beforeEach(() => {
+    typedDb.exec(`
+      DELETE FROM test_run_results;
+      DELETE FROM test_request_runs;
+      DELETE FROM flagged_flaky_tests_rollup;
+      DELETE FROM flagged_flaky_tests_rollup_watermark;
+      DELETE FROM test_perf_baselines;
+    `);
+    seq = 0;
+  });
+
+  it("the guard query's EXPLAIN QUERY PLAN searches test_perf_baselines directly by (project_id, updated_at, test_id), with no join to test_request_runs", () => {
+    const plan = typedDb
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT test_id, name, updated_at
+         FROM test_perf_baselines
+         WHERE project_id = @project_id
+           AND (updated_at > @since_updated_at
+                OR (updated_at = @since_updated_at AND test_id > @since_test_id))
+         ORDER BY updated_at ASC, test_id ASC`,
+      )
+      .all({
+        project_id: 'proj-1',
+        since_updated_at: 0,
+        since_test_id: '',
+      }) as { detail: string }[];
+
+    const referencesTestRequestRuns = plan.some(
+      (row) =>
+        row.detail.includes('test_request_runs') ||
+        row.detail.includes('test_run_results'),
+    );
+    expect(referencesTestRequestRuns).toBe(false);
+    const usesProjectUpdatedIndex = plan.some((row) =>
+      row.detail.includes('idx_test_perf_baselines_project_updated'),
+    );
+    expect(usesProjectUpdatedIndex).toBe(true);
+  });
+
+  it('a second tick with no new test_run_results rows recomputes zero tests and leaves the rollup unchanged', async () => {
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-flaky',
+        name: 'suite > flaky test',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: i,
+      }),
+    );
+
+    const first = await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      1000,
+    );
+    expect(first.itemsProcessed).toBe(1);
+    const afterFirst = getFlaggedFlakyTestsRollup('proj-1');
+
+    const second = await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      2000,
+    );
+    expect(second.itemsProcessed).toBe(0);
+    expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual(afterFirst);
+  }, 10000);
+
+  it('a tick following N new result rows recomputes only the test ids those rows belong to', async () => {
+    // Two tests get their first, from-scratch tick out of the way so the
+    // watermark is past both of their existing rows.
+    insertTestResult({
+      projectId: 'proj-1',
+      testId: 'test-a',
+      name: 'suite > a',
+      outcome: 'passed',
+      createdAt: 1,
+    });
+    insertTestResult({
+      projectId: 'proj-1',
+      testId: 'test-b',
+      name: 'suite > b',
+      outcome: 'passed',
+      createdAt: 2,
+    });
+    await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      1000,
+    );
+
+    // Only test-a gets a new row this tick.
+    insertTestResult({
+      projectId: 'proj-1',
+      testId: 'test-a',
+      name: 'suite > a',
+      outcome: 'failed',
+      createdAt: 3,
+    });
+
+    const StatementProto = Object.getPrototypeOf(typedDb.prepare('SELECT 1'));
+    const allSpy = vi.spyOn(StatementProto, 'all');
+    const result = await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      2000,
+    );
+    // One `.all()` call resolves the candidate test-id set from
+    // test_perf_baselines (project_id, updated_at, test_id) — recomputing
+    // each candidate's flip-rate window (computeTestFlipRateFlag) reads its
+    // single digest row via `.get()`, not `.all()`, so with a single test id
+    // (test-a) carrying new rows, exactly 1 `.all()` call fires, not one per
+    // test in the project.
+    expect(allSpy).toHaveBeenCalledTimes(1);
+    allSpy.mockRestore();
+
+    expect(result.itemsProcessed).toBe(1);
+  }, 10000);
+
+  it('a test id whose new results cross the flip-rate threshold becomes flagged on the next incremental tick', async () => {
+    // Starts stable — not flagged.
+    ['passed', 'passed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-c',
+        name: 'suite > c',
+        outcome: outcome as 'passed',
+        createdAt: i,
+      }),
+    );
+    const first = await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      1000,
+    );
+    expect(first.itemsProcessed).toBe(1);
+    expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual([]);
+
+    // New results flip pass/fail enough times to cross thresholdK=2.
+    ['failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-c',
+        name: 'suite > c',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: 10 + i,
+      }),
+    );
+    const second = await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      2000,
+    );
+    expect(second.itemsProcessed).toBe(1);
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
+      'test-c',
+    ]);
+  }, 10000);
+
+  it('reports non-zero itemsProcessed when it examined rows but flagged nothing', async () => {
+    ['passed', 'passed', 'passed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-stable',
+        name: 'suite > stable',
+        outcome: outcome as 'passed',
+        createdAt: i,
+      }),
+    );
+
+    const result = await replaceFlaggedFlakyTestsRollupOffMainThread(
+      ':memory:',
+      'proj-1',
+      20,
+      2,
+      1000,
+    );
+    expect(result.itemsProcessed).toBe(1);
+    expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual([]);
+  }, 10000);
+
+  it('the watermark advances across ticks and is durable across a simulated restart', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flaky-watermark-test-'));
+    try {
+      const file = path.join(dir, 'test.db');
+      const fileDb = new RealDatabase(file);
+      runMigrations(fileDb);
+
+      let seqLocal = 0;
+      function insertRow(outcome: 'passed' | 'failed', createdAt: number) {
+        seqLocal += 1;
+        const runId = `wm-run-${seqLocal}`;
+        fileDb
+          .prepare(
+            `INSERT INTO test_request_runs
+                 (id, project_id, content_hash, state, output, started_at, finished_at)
+               VALUES (@id, 'proj-wm', @content_hash, 'passed', '', 0, 0)`,
+          )
+          .run({ id: runId, content_hash: `wm-hash-${seqLocal}` });
+        fileDb
+          .prepare(
+            `INSERT INTO test_run_results
+                 (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+               VALUES (@run_id, 'proj-wm', 'test-wm', 'suite > wm', @outcome, 1, 0, 0, @created_at)`,
+          )
+          .run({ run_id: runId, outcome, created_at: createdAt });
+
+        // The worker's candidate scan/computeTestFlipRateFlag now read the
+        // test_perf_baselines digest — replicate recordTestPerfDigestSample's
+        // upsert directly against this file-backed connection (this test
+        // opens its own connection, not the app's shared `db` singleton).
+        const existing = fileDb
+          .prepare(
+            `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = 'test-wm'`,
+          )
+          .get() as { recent_outcomes: string } | undefined;
+        const outcomes = existing ? JSON.parse(existing.recent_outcomes) : [];
+        outcomes.push({ o: outcome === 'passed' ? 'P' : 'F', t: createdAt });
+        fileDb
+          .prepare(
+            `INSERT INTO test_perf_baselines
+               (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, updated_at)
+             VALUES ('test-wm', 'proj-wm', 'suite > wm', 0, 0, 0, 1, 0, @recent_outcomes, '[]', @updated_at)
+             ON CONFLICT(test_id) DO UPDATE SET
+               recent_outcomes = excluded.recent_outcomes,
+               updated_at = excluded.updated_at`,
+          )
+          .run({
+            recent_outcomes: JSON.stringify(outcomes),
+            updated_at: createdAt,
+          });
+      }
+
+      insertRow('passed', 1);
+      insertRow('failed', 2);
+      fileDb.close();
+
+      const first = await replaceFlaggedFlakyTestsRollupOffMainThread(
+        file,
+        'proj-wm',
+        20,
+        2,
+        1000,
+      );
+      expect(first.itemsProcessed).toBe(1);
+
+      // Simulate a restart: open a brand-new connection against the same
+      // file and read the watermark back — never held in process memory.
+      const reopened = new RealDatabase(file);
+      const row = reopened
+        .prepare(
+          `SELECT last_digest_updated_at, last_digest_test_id FROM flagged_flaky_tests_rollup_watermark WHERE project_id = ?`,
+        )
+        .get('proj-wm') as
+        | { last_digest_updated_at: number; last_digest_test_id: string }
+        | undefined;
+      expect(row?.last_digest_updated_at).toBe(2);
+      expect(row?.last_digest_test_id).toBe('test-wm');
+      reopened.close();
+
+      // A second, independent worker dispatch against the same file reads
+      // the watermark it just persisted (not a fresh in-memory 0) and sees
+      // no new rows to recompute.
+      const second = await replaceFlaggedFlakyTestsRollupOffMainThread(
+        file,
+        'proj-wm',
+        20,
+        2,
+        2000,
+      );
+      expect(second.itemsProcessed).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    // This test dispatches two real worker_threads (each paying ts-node/
+    // register/transpile-only's registration + compile cost) against a real
+    // on-disk sqlite file. In isolation that's ~1-2s; under a full-suite run
+    // where many other files are concurrently spawning their own worker
+    // threads and doing heavy synchronous better-sqlite3 I/O, that startup
+    // cost has been observed stretching past 20s — a resource-contention
+    // timeout, not a correctness failure (see flakyTestRollupOffMainThread.test.ts
+    // for the same pattern). Generous timeout so it survives that contention.
+  }, 60000);
+});
+
+// ── getLatestTestRequestRunForSession — no temp b-tree over structured_result ──
+
+describe('getLatestTestRequestRunForSession — index usage and blob-free sort path', () => {
+  function insertRun(row: {
+    id: string;
+    session_id: string;
+    state: string;
+    started_at: number;
+    finished_at: number | null;
+    structured_result?: string | null;
+  }): void {
+    typedDb
+      .prepare(
+        `INSERT INTO test_request_runs
+           (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result)
+         VALUES (@id, 'proj-1', 'hash', @session_id, @state, '', @started_at, @started_at, @finished_at, NULL, @structured_result)`,
+      )
+      .run({
+        id: row.id,
+        session_id: row.session_id,
+        state: row.state,
+        started_at: row.started_at,
+        finished_at: row.finished_at,
+        structured_result: row.structured_result ?? null,
+      });
+  }
+
+  beforeEach(() => {
+    typedDb.exec(`DELETE FROM test_request_runs;`);
+    runMigrations(typedDb);
+  });
+
+  it('the sort-path statements it prepares select no structured_result column', () => {
+    const prepareSpy = vi.spyOn(typedDb, 'prepare');
+    getLatestTestRequestRunForSession('proj-1', 'sess-spy');
+    const sortPathSql = prepareSpy.mock.calls
+      .map((args) => String(args[0]))
+      .filter(
+        (sql) => sql.includes('test_request_runs') && sql.includes('ORDER BY'),
+      );
+    prepareSpy.mockRestore();
+
+    expect(sortPathSql.length).toBeGreaterThan(0);
+    for (const sql of sortPathSql) {
+      expect(sql).not.toContain('structured_result');
+    }
+  });
+
+  it('plan for the running-state lookup has no temp b-tree sort', () => {
+    const plan = typedDb
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT id FROM test_request_runs
+         WHERE project_id = ? AND session_id = ? AND state = 'running'
+         ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+      )
+      .all('proj-1', 'sess-1') as { detail: string }[];
+    const details = plan.map((r) => r.detail).join('\n');
+    expect(details).not.toContain('USE TEMP B-TREE FOR ORDER BY');
+  });
+
+  it('plan for the non-running fallback lookup has no temp b-tree sort', () => {
+    const plan = typedDb
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT id FROM test_request_runs
+         WHERE project_id = ? AND session_id = ? AND state != 'running'
+         ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+      )
+      .all('proj-1', 'sess-1') as { detail: string }[];
+    const details = plan.map((r) => r.detail).join('\n');
+    expect(details).not.toContain('USE TEMP B-TREE FOR ORDER BY');
+  });
+
+  it('prefers the running row over a more recent non-running row (fallback precedence preserved)', () => {
+    insertRun({
+      id: 'run-old-running',
+      session_id: 'sess-1',
+      state: 'running',
+      started_at: 1000,
+      finished_at: null,
+    });
+    insertRun({
+      id: 'run-new-passed',
+      session_id: 'sess-1',
+      state: 'passed',
+      started_at: 2000,
+      finished_at: 3000,
+      structured_result: 'x'.repeat(1000),
+    });
+
+    const row = getLatestTestRequestRunForSession('proj-1', 'sess-1');
+    expect(row?.id).toBe('run-old-running');
+  });
+
+  it('returns the same row as the pre-change statement across multiple runs in both states', () => {
+    insertRun({
+      id: 'run-a',
+      session_id: 'sess-3',
+      state: 'passed',
+      started_at: 1000,
+      finished_at: 1500,
+      structured_result: '{"a":1}',
+    });
+    insertRun({
+      id: 'run-b',
+      session_id: 'sess-3',
+      state: 'failed',
+      started_at: 2000,
+      finished_at: 2500,
+      structured_result: '{"b":2}',
+    });
+    insertRun({
+      id: 'run-c',
+      session_id: 'sess-3',
+      state: 'passed',
+      started_at: 500,
+      finished_at: 3500,
+      structured_result: '{"c":3}',
+    });
+
+    const legacy = typedDb
+      .prepare(
+        `SELECT id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result
+         FROM test_request_runs
+         WHERE project_id = ? AND session_id = ? AND state != 'running'
+         ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get('proj-1', 'sess-3') as TestRequestRunRow | undefined;
+
+    const row = getLatestTestRequestRunForSession('proj-1', 'sess-3');
+    expect(row?.id).toBe(legacy?.id);
+    expect(row).toMatchObject({
+      id: legacy?.id,
+      state: legacy?.state,
+      structured_result: legacy?.structured_result,
+      finished_at: legacy?.finished_at,
+    });
   });
 });

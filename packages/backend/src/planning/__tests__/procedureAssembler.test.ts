@@ -1996,6 +1996,34 @@ describe('injected-procedure style standard', () => {
     );
     expect(capabilitiesSection).toMatch(/^DO stage/m);
   });
+
+  it('names the read-only ad hoc query capability as the sanctioned route for a DB table with no dedicated MCP tool', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
+      },
+    });
+    const capIdx = output.indexOf('## Capabilities');
+    const transportIdx = output.indexOf('## Transport');
+    const capabilitiesSection = output.slice(capIdx, transportIdx);
+    expect(capabilitiesSection).toContain(
+      'packages/backend/scripts/adhoc-query.ts',
+    );
+    expect(capabilitiesSection).toMatch(
+      /Bash\(npx ts-node packages\/backend\/scripts\/adhoc-query\.ts:\*\)/,
+    );
+    expect(capabilitiesSection).toMatch(/no dedicated MCP read tool/);
+    // Offered as the sanctioned route before a needs-setup abstain — not
+    // just "this class of claim can never be settled".
+    expect(capabilitiesSection).toMatch(
+      /needs-setup.+should mean this specific request is pending, refused/s,
+    );
+  });
 });
 
 // ─── WORKFLOW_LOADERS ───────────────────────────────────────────────────────

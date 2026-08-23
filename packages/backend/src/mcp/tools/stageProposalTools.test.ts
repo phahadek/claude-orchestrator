@@ -78,7 +78,7 @@ beforeEach(() => {
 });
 
 describe('stage-proposal MCP tools — registration', () => {
-  it('registers exactly the 21 stage-proposal tool names', async () => {
+  it('registers exactly the 22 stage-proposal tool names', async () => {
     const { client, close } = await connectedClient();
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -94,6 +94,7 @@ describe('stage-proposal MCP tools — registration', () => {
         'notion.pageEdit',
         'ops.prIntent',
         'planning.noOp',
+        'report.file',
         'review.dispute',
         'seed.stage',
         'session.requestCapability',
@@ -203,6 +204,31 @@ describe('stage-proposal MCP tools — delegation', () => {
     const text = result.content[0]?.text ?? '';
     expect(text).toMatch(/priority/);
     expect(text).toMatch(/🔴 High/);
+    await close();
+  });
+
+  it('journal.setState forwards standDownReason into the staged intent payload on a transition to blocked', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'journal.setState',
+      arguments: {
+        payload: {
+          taskId: 't-1',
+          state: 'blocked',
+          standDownReason:
+            'No sanctioned capability request could unblock this task.',
+        },
+      },
+    });
+    const intent = parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(intent.kind).toBe('journal.setState');
+    const stored = getStagedIntent(intent.id as string);
+    expect(stored).toBeTruthy();
+    expect(JSON.parse(stored!.payload as string).standDownReason).toBe(
+      'No sanctioned capability request could unblock this task.',
+    );
     await close();
   });
 

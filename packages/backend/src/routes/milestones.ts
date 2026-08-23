@@ -1,10 +1,28 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getArm, listArm, upsertArm } from '../db/queries';
+import { getArm, listArm, upsertArm, getLaneHealthRollup } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { FLOW_IDS, isFlowId } from '../orchestration/flowArm';
 import { ProjectService } from '../projects/ProjectService';
 import { checkMilestoneRegistered } from '../groom/groomLoad';
+import { asyncHandler } from './asyncHandler';
+import {
+  fileFlakyInvestigationTask,
+  FlakyInvestigationFilingError,
+} from '../audit/flakyRemediationFiling';
+
+/** FlakyInvestigationFilingError.reason -> HTTP status. */
+const FLAKY_INVESTIGATION_ERROR_STATUS: Record<
+  FlakyInvestigationFilingError['reason'],
+  number
+> = {
+  'no-test-ids': 400,
+  'not-flagged-flaky': 409,
+  'already-open': 409,
+  'claim-conflict': 409,
+  'unknown-milestone': 400,
+  'backend-unsupported': 400,
+};
 
 /**
  * Per-flow auto-dispatch arm surface (Technical Architecture § "Per-flow
@@ -74,6 +92,68 @@ export function createMilestonesRouter(): Router {
 
       res.json({ milestoneId, flow, armed: getArm(milestoneId, flow) });
     },
+  );
+
+  // GET /api/milestones/:project/lane-health -> project-scoped test-lane
+  // health rollup (pass rate, timeout rate, queue-wait vs execution-time
+  // distributions). Fleet-scoped, not milestone-scoped — test_request_runs
+  // carries no milestone column — so :project is a project id, matching the
+  // convergence router's convention.
+  router.get(
+    '/milestones/:project/lane-health',
+    (req: Request, res: Response) => {
+      const project = String(req.params.project);
+      const limitParam = req.query.limit;
+      let limit: number | undefined;
+      if (typeof limitParam === 'string' && limitParam.trim() !== '') {
+        const parsed = Number(limitParam);
+        if (Number.isFinite(parsed) && parsed > 0) limit = Math.floor(parsed);
+      }
+      res.json(getLaneHealthRollup(project, limit ?? 500));
+    },
+  );
+
+  // POST /api/milestones/:project/flaky-investigation -> file one operator-
+  // driven 🔎 Investigation task at 🔲 Backlog covering an operator-selected
+  // group of currently-flagged-flaky tests. Replaces the retired per-test
+  // auto-filing path (see audit/flakyRemediationFiling.ts).
+  router.post(
+    '/milestones/:project/flaky-investigation',
+    asyncHandler(async (req: Request, res: Response) => {
+      const project = String(req.params.project);
+      const body = req.body as { testIds?: unknown; milestoneId?: unknown };
+      if (
+        !Array.isArray(body.testIds) ||
+        body.testIds.some((id) => typeof id !== 'string') ||
+        body.testIds.length === 0
+      ) {
+        res
+          .status(400)
+          .json({ error: 'testIds must be a non-empty array of strings' });
+        return;
+      }
+      if (typeof body.milestoneId !== 'string' || body.milestoneId === '') {
+        res.status(400).json({ error: 'milestoneId must be a string' });
+        return;
+      }
+
+      try {
+        const result = await fileFlakyInvestigationTask({
+          projectId: project,
+          testIds: body.testIds as string[],
+          milestoneId: body.milestoneId,
+        });
+        res.json({ taskId: result.taskId });
+      } catch (err) {
+        if (err instanceof FlakyInvestigationFilingError) {
+          res
+            .status(FLAKY_INVESTIGATION_ERROR_STATUS[err.reason])
+            .json({ error: err.message, reason: err.reason });
+          return;
+        }
+        res.status(500).json({ error: (err as Error).message });
+      }
+    }),
   );
 
   return router;

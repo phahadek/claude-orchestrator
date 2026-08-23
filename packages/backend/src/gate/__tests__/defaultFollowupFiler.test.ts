@@ -100,6 +100,33 @@ describe('defaultFollowupFiler.fileFollowupFixTask', () => {
     expect(result.taskId).toBe('notion:new-followup-task');
   });
 
+  it('derives 📐 Design, not 💻 Code, for a Human-Observation gate item — a documentation assertion no headless Code session can satisfy', async () => {
+    const item = makeItem({
+      text: "Read the design's stated cost expectation and confirm the arch unit reflects it",
+      classification: 'Human-Observation',
+    });
+
+    await defaultFollowupFiler.fileFollowupFixTask(item, {
+      disposition: 'fail',
+    });
+
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: '📐 Design' }),
+    );
+  });
+
+  it('still derives 💻 Code for a Prod-Mutating gate item', async () => {
+    const item = makeItem({ classification: 'Prod-Mutating' });
+
+    await defaultFollowupFiler.fileFollowupFixTask(item, {
+      disposition: 'fail',
+    });
+
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: '💻 Code' }),
+    );
+  });
+
   it('throws UnknownMilestoneError — not project.boardId — for a milestone that does not resolve, and never calls createTask', async () => {
     const item = makeItem({ milestone: 'not-a-real-milestone' });
 

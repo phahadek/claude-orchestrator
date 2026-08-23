@@ -1,6 +1,7 @@
 import type { ResolvedTask } from './types';
 import type { TaskBodySections } from './bodyRender';
 import type { GroomingGateEntry } from '../groom/groomGate';
+import type { TrackedFileSetCache } from '../groom/groomLoad';
 import { ProjectService } from '../projects/ProjectService';
 import { NotionClient } from '../notion/NotionClient';
 import { NotionTaskBackend } from './NotionTaskBackend';
@@ -17,11 +18,26 @@ import {
 import { GitHubClient } from '../github/GitHubClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 import { recordEvent } from '../audit/AuditLog';
+import { closeFlakyRemediationTaskIfLinked } from '../audit/flakyRemediationFiling';
 import {
   upsertTaskCache,
   updateTaskStatusInBoardCaches,
   getTaskStatusFromCache,
+  recordTaskStatusWrite,
 } from '../db/queries';
+
+/**
+ * Statuses a task never leaves once reached — mirrors the DONE_STATUSES
+ * convention used elsewhere (e.g. groomLoad.ts, mergeCandidates.ts). A
+ * transition into one of these is the sole signal that clears the way for a
+ * fresh flaky-remediation filing on any test tracked against this task,
+ * since a PR-less 🔎 Investigation task (the operator-driven filing route's
+ * output) has no PR-merge event to close it via AutoMerger/PRMergeWatcher.
+ */
+const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set([
+  '✅ Done',
+  '⏭️ Deferred',
+]);
 
 /**
  * Per-project configuration that identifies where non-milestone tasks are sourced from.
@@ -65,6 +81,27 @@ export interface UpdateStatusOptions {
    * (💻 Code) stay per-task-gated and ignore this field.
    */
   triageCleanDesign?: { milestoneLabel: string };
+  /**
+   * The Type to gate a Ready transition against, resolved by the caller from
+   * a group-pending task.setType when one is staged alongside this
+   * task.setStatus, falling back to the committed board cache otherwise (see
+   * resolveEffectiveType in routes/stagedIntents.ts). Only honored by
+   * TaskWriteCommands.setStatus, which otherwise falls back to its own
+   * getCachedType(taskId) lookup — that fallback alone is what let a
+   * same-pass retype-and-promote gate against the stale, about-to-be-
+   * superseded type.
+   */
+  authoritativeType?: string;
+  /**
+   * Shared memo for the `git ls-files`-backed tracked-file set that a
+   * Ready-transition's grooming-gate Files/paths check re-derives
+   * (checkGroomingPromotionGate → resolveFilesPathsEntriesServerSide). Only
+   * honored by TaskWriteCommands.setStatus. A multi-member group commit
+   * (commitGroupIntents) passes one shared cache across every member so the
+   * resolution runs at most once per commit instead of once per 💻 Code
+   * Ready-flip.
+   */
+  trackedFileSetCache?: TrackedFileSetCache;
 }
 
 /** Provenance options shared by the write-side port methods (create / deps). */
@@ -320,6 +357,10 @@ export class AuditingTaskBackend implements TaskBackend {
     }
     await this.inner.updateStatus(taskId, status);
     updateTaskStatusInBoardCaches(taskId, status);
+    recordTaskStatusWrite(taskId, status);
+    if (TERMINAL_TASK_STATUSES.has(status)) {
+      closeFlakyRemediationTaskIfLinked(taskId, new Date().toISOString());
+    }
     const source = options?.source ?? 'orchestrator';
     const sessionId = options?.sessionId ?? null;
     recordEvent({

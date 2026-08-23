@@ -142,6 +142,13 @@ describe('PlanningOrchestrator approve disposition', () => {
     expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
     expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
     expect(getSession(SESSION_ID)?.status).toBe('done');
+    // A groom session's approved task.setStatus Ready flip is genuinely its
+    // terminal deliverable — it has no ops journal entry, so
+    // incompleteOpsJournalStateFor returns null and this settles exactly as
+    // before the per-type-predicate change.
+    expect(getSession(SESSION_ID)?.terminal_completion_reason).toBe(
+      'planning_approved',
+    );
   });
 
   it('approving the last intent of a group when other intents remain staged produces no feedback and does not resume', async () => {

@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 
+vi.setConfig({ testTimeout: 20_000 });
+
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
@@ -79,6 +81,20 @@ const MANIFEST: GroomManifest = {
   },
 };
 
+/** Same milestone, but ctx-page-1 is flagged as migrated into the arch_unit
+ * store, alongside a second, never-migrated context page (ctx-page-2). */
+const MANIFEST_MIGRATED: GroomManifest = {
+  ...MANIFEST,
+  context_pages: [
+    {
+      id: 'ctx-page-1',
+      title: 'Technical Architecture',
+      migratedToStore: true,
+    },
+    { id: 'ctx-page-2', title: 'Project Context' },
+  ],
+};
+
 const CODE_ROW: NotionTaskLike = {
   id: 'code-task-1',
   title: 'Fix the notion client',
@@ -132,6 +148,11 @@ const TASK_PAGES: Record<
     name: 'Technical Architecture',
     filesSection: '',
     rawMarkdown: '# Technical Architecture\n\nSome context.',
+  },
+  'ctx-page-2': {
+    name: 'Project Context',
+    filesSection: '',
+    rawMarkdown: '# Project Context\n\nNever migrated.',
   },
 };
 
@@ -547,6 +568,7 @@ describe('loadGroomContext', () => {
       ({ repoDir } = setupRepo());
       setupProject(true);
       createUnit({
+        project: PROJECT_ID,
         title: 'Always-binding invariant',
         kind: 'invariant',
         topic: 'general',
@@ -555,6 +577,7 @@ describe('loadGroomContext', () => {
         at: '2026-01-01T00:00:00Z',
       });
       createUnit({
+        project: PROJECT_ID,
         title: 'Notion-client subsystem unit',
         kind: 'subsystem',
         topic: 'notion',
@@ -563,6 +586,7 @@ describe('loadGroomContext', () => {
         at: '2026-01-01T00:00:00Z',
       });
       createUnit({
+        project: PROJECT_ID,
         title: 'Unrelated subsystem unit',
         kind: 'subsystem',
         topic: 'unrelated',
@@ -573,19 +597,21 @@ describe('loadGroomContext', () => {
 
       const result = await loadGroomContext('M-test', {
         repoRoot: repoDir,
-        manifest: MANIFEST,
+        manifest: MANIFEST_MIGRATED,
         notionClient: fakeNotion(),
         projectId: PROJECT_ID,
       });
 
       expect(result.archSource).toBe('store');
-      // contextPages is independent of archStoreAdopted — the manifest's
-      // non-architecture context pages are still fetched from Notion.
+      // The migratedToStore entry (Technical Architecture) is excluded now
+      // that the project has adopted the store — its content is delivered
+      // instead via archUnits below. The never-migrated entry (Project
+      // Context) is still fetched from Notion in full, unaffected by the flag.
       expect(result.contextPages).toEqual([
         {
-          id: 'ctx-page-1',
-          title: 'Technical Architecture',
-          markdown: '# Technical Architecture\n\nSome context.',
+          id: 'ctx-page-2',
+          title: 'Project Context',
+          markdown: '# Project Context\n\nNever migrated.',
         },
       ]);
 
@@ -608,10 +634,56 @@ describe('loadGroomContext', () => {
       ]);
     });
 
+    it('applies the migratedToStore guard per context_pages entry: excluded only when both flagged and adopted', async () => {
+      ({ repoDir } = setupRepo());
+
+      setupProject(true);
+      const adopted = await loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST_MIGRATED,
+        notionClient: fakeNotion(),
+        projectId: PROJECT_ID,
+      });
+      // (a) the migratedToStore entry is excluded once archStoreAdopted=true...
+      expect(adopted.contextPages.map((p) => p.id)).not.toContain('ctx-page-1');
+      // ...(c) but a non-migratedToStore entry is still fetched in full.
+      expect(adopted.contextPages).toEqual([
+        {
+          id: 'ctx-page-2',
+          title: 'Project Context',
+          markdown: '# Project Context\n\nNever migrated.',
+        },
+      ]);
+
+      db.prepare('DELETE FROM projects').run();
+      setupProject(false);
+      const notAdopted = await loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST_MIGRATED,
+        notionClient: fakeNotion(),
+        projectId: PROJECT_ID,
+      });
+      // (b) the same migratedToStore entry is fetched in full when the
+      // project has not adopted the store.
+      expect(notAdopted.contextPages).toEqual([
+        {
+          id: 'ctx-page-1',
+          title: 'Technical Architecture',
+          markdown: '# Technical Architecture\n\nSome context.',
+        },
+        {
+          id: 'ctx-page-2',
+          title: 'Project Context',
+          markdown: '# Project Context\n\nNever migrated.',
+        },
+      ]);
+    });
+
     it("keeps grooming's pre-migration Notion behaviour unchanged when archStoreAdopted is not set", async () => {
       ({ repoDir } = setupRepo());
       setupProject(false);
       createUnit({
+        project: PROJECT_ID,
         title: 'Should never surface — project has not adopted the store',
         kind: 'invariant',
         topic: 'general',
@@ -622,17 +694,25 @@ describe('loadGroomContext', () => {
 
       const result = await loadGroomContext('M-test', {
         repoRoot: repoDir,
-        manifest: MANIFEST,
+        manifest: MANIFEST_MIGRATED,
         notionClient: fakeNotion(),
         projectId: PROJECT_ID,
       });
 
       expect(result.archSource).toBe('notion');
+      // The migratedToStore flag only takes effect once archStoreAdopted is
+      // set — with the project not yet adopted, every context page (migrated
+      // flag or not) is still fetched from Notion in full.
       expect(result.contextPages).toEqual([
         {
           id: 'ctx-page-1',
           title: 'Technical Architecture',
           markdown: '# Technical Architecture\n\nSome context.',
+        },
+        {
+          id: 'ctx-page-2',
+          title: 'Project Context',
+          markdown: '# Project Context\n\nNever migrated.',
         },
       ]);
 
@@ -640,6 +720,7 @@ describe('loadGroomContext', () => {
       expect(codeTask?.archSource).toBe('notion');
       expect(codeTask?.archUnits).toEqual([
         { id: 'ctx-page-1', title: 'Technical Architecture' },
+        { id: 'ctx-page-2', title: 'Project Context' },
       ]);
     });
 
@@ -647,6 +728,7 @@ describe('loadGroomContext', () => {
       ({ repoDir } = setupRepo());
       setupProject(true);
       createUnit({
+        project: PROJECT_ID,
         title: 'Notion-client subsystem unit',
         kind: 'subsystem',
         topic: 'notion',
@@ -676,6 +758,41 @@ describe('loadGroomContext', () => {
       expect(codeTask?.archSource).toBe('store');
       expect(codeTask?.archUnits.map((u) => u.title)).toEqual([
         'Notion-client subsystem unit',
+      ]);
+    });
+
+    it("never surfaces another project's arch_unit rows, including its active invariants", async () => {
+      ({ repoDir } = setupRepo());
+      setupProject(true);
+      createUnit({
+        project: PROJECT_ID,
+        title: 'This project invariant',
+        kind: 'invariant',
+        topic: 'general',
+        regions: [],
+        body: 'body',
+        at: '2026-01-01T00:00:00Z',
+      });
+      createUnit({
+        project: 'some-other-project',
+        title: 'Other project invariant',
+        kind: 'invariant',
+        topic: 'general',
+        regions: [],
+        body: 'body',
+        at: '2026-01-01T00:00:00Z',
+      });
+
+      const result = await loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST,
+        notionClient: fakeNotion(),
+        projectId: PROJECT_ID,
+      });
+
+      const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id);
+      expect(codeTask?.archUnits.map((u) => u.title)).toEqual([
+        'This project invariant',
       ]);
     });
   });

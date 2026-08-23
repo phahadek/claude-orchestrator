@@ -60,6 +60,19 @@ vi.mock('../config', () => ({
   ALLOWED_TOOLS: [],
 }));
 
+vi.mock('../orchestration/memoryAdmission', () => ({
+  // respawnSession's memory-admission gate — real os.freemem() is
+  // unreliable/low in CI/sandboxed hosts, so tests always see headroom
+  // unless a test explicitly overrides this mock.
+  hasMemoryHeadroom: vi.fn().mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  }),
+}));
+
 vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn(),
 }));
@@ -117,6 +130,7 @@ vi.mock('../session/AgentSession', () => ({
 }));
 
 vi.mock('../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi.fn().mockReturnValue({
     allowedTools: [],
     verify: [],
@@ -1071,5 +1085,226 @@ describe('SessionManager.markSessionErrored() — expiry notification', () => {
     });
 
     expect(queries.listUndeliveredInboxItems('test-session')).toHaveLength(0);
+  });
+});
+
+// ── Terminal guard: reap of an already-terminal row must never downgrade it ──
+
+describe('SessionManager.markSessionErrored() — terminal guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupFakeBackend();
+  });
+
+  it('skips the DB write and records a skip audit event when the row is already done (SIGTERM/143 reap)', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'done' }) as never,
+    );
+    const sm = new SessionManager();
+
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      'runner_non_zero',
+      'process exited with code 143',
+    );
+
+    expect(queries.updateSessionStatus).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_errored_write_skipped_terminal',
+        actor_id: 'test-session',
+        payload: expect.objectContaining({
+          status_before: 'done',
+          attempted_status: 'error',
+        }),
+      }),
+    );
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'session_errored' }),
+    );
+  });
+
+  it('leaves an already-error or already-killed row alone the same way', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'killed' }) as never,
+    );
+    const sm = new SessionManager();
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+
+    expect(queries.updateSessionStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not emit session_ended, reap staged intents, or touch Notion when skipped', async () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'done' }) as never,
+    );
+    const staged = stageIntent('test-session');
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    const messages: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => messages.push(m));
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(messages.find((m) => m.type === 'session_ended')).toBeUndefined();
+    expect(queries.getStagedIntent(staged)!.state).toBe('staged');
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('sets hasEnded on the live in-memory session even though the DB write is skipped', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'done' }) as never,
+    );
+    const sm = new SessionManager();
+    const liveSession = { hasEnded: false } as never;
+    (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(
+      'test-session',
+      liveSession,
+    );
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+
+    expect((liveSession as { hasEnded: boolean }).hasEnded).toBe(true);
+  });
+
+  it('a genuine non-zero exit on a NOT-terminal row still transitions to error unchanged', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }) as never,
+    );
+    const sm = new SessionManager();
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      'test-session',
+      'error',
+      expect.any(Number),
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_errored',
+        payload: expect.objectContaining({ reason: 'runner_non_zero' }),
+      }),
+    );
+  });
+
+  it('guard is based on the persisted status, not any in-memory hasEnded flag', () => {
+    // No live in-memory session is ever registered for this id — the guard
+    // must still fire purely from the persisted row, exactly the case where
+    // sessionLivenessReconciler reaps an orphaned process whose AgentSession
+    // object never observed a clean end (or no longer exists at all).
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'done' }) as never,
+    );
+    const sm = new SessionManager();
+
+    sm.markSessionErrored('test-session', 'killed', 'runner_killed_unexpected');
+
+    expect(queries.updateSessionStatus).not.toHaveBeenCalled();
+  });
+});
+
+// ── Backstop-sweep expiry notification (this task) ──────────────────────────
+
+function insertRealSession(sessionId: string, status: string): void {
+  db.prepare(
+    `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+       status, started_at, session_type)
+     VALUES (?, 'task-1', 'https://notion.so/task', 'https://notion.so/ctx', ?, ?, 'standard')`,
+  ).run(sessionId, status, Date.now() - 10 * 60 * 1000);
+}
+
+describe('SessionManager.reapStagedIntentsBackstopSweep() — expiry notification', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
+    setupFakeBackend();
+    db.prepare('DELETE FROM session_feedback_inbox').run();
+    db.prepare('DELETE FROM sessions').run();
+  });
+
+  it('notifies a session whose staged intents were reaped by the backstop sweep, naming each id and kind', () => {
+    insertRealSession('sess-backstop', 'killed');
+    const staged = stageIntent('sess-backstop', { kind: 'task.create' });
+    const approved = stageIntent('sess-backstop', {
+      kind: 'journal.setState',
+      state: 'approved',
+    });
+
+    const sm = new SessionManager();
+    sm.reapStagedIntentsBackstopSweep();
+
+    const items = queries.listUndeliveredInboxItems('sess-backstop');
+    expect(items).toHaveLength(1);
+    expect(items[0].source).toBe('staged-intent-expiry');
+    expect(items[0].payload).toContain(staged);
+    expect(items[0].payload).toContain('task.create');
+    expect(items[0].payload).toContain(approved);
+    expect(items[0].payload).toContain('journal.setState');
+  });
+
+  it('names the group id when a swept intent belonged to a group', () => {
+    insertRealSession('sess-backstop-group', 'error');
+    stageIntent('sess-backstop-group', {
+      kind: 'decision.pickOne',
+      group_id: 'md-path-validation-descope-1617',
+    });
+
+    const sm = new SessionManager();
+    sm.reapStagedIntentsBackstopSweep();
+
+    const items = queries.listUndeliveredInboxItems('sess-backstop-group');
+    expect(items[0].payload).toContain('md-path-validation-descope-1617');
+  });
+
+  it('sends a bounded, summarized message for a session with many swept intents', () => {
+    insertRealSession('sess-backstop-many', 'killed');
+    const ids: string[] = [];
+    for (let i = 0; i < 15; i++) {
+      ids.push(stageIntent('sess-backstop-many', { kind: 'task.create' }));
+    }
+
+    const sm = new SessionManager();
+    sm.reapStagedIntentsBackstopSweep();
+
+    const items = queries.listUndeliveredInboxItems('sess-backstop-many');
+    expect(items).toHaveLength(1);
+    const listedCount = ids.filter((id) =>
+      items[0].payload.includes(id),
+    ).length;
+    expect(listedCount).toBeLessThan(15);
+    expect(items[0].payload).toMatch(/more expired intent/);
+  });
+
+  it('enqueues no inbox row when the sweep expires nothing', () => {
+    insertRealSession('sess-backstop-clean', 'done');
+
+    const sm = new SessionManager();
+    sm.reapStagedIntentsBackstopSweep();
+
+    expect(
+      queries.listUndeliveredInboxItems('sess-backstop-clean'),
+    ).toHaveLength(0);
+  });
+
+  it('leaves the enqueued row undelivered — the sweep does not attempt an immediate resume', () => {
+    insertRealSession('sess-backstop-undelivered', 'killed');
+    stageIntent('sess-backstop-undelivered', { kind: 'task.create' });
+
+    const sm = new SessionManager();
+    sm.reapStagedIntentsBackstopSweep();
+
+    const row = db
+      .prepare(
+        `SELECT delivered_at FROM session_feedback_inbox WHERE session_id = ? AND source = 'staged-intent-expiry'`,
+      )
+      .get('sess-backstop-undelivered') as
+      | { delivered_at: number | null }
+      | undefined;
+    expect(row).toBeDefined();
+    expect(row?.delivered_at).toBeNull();
   });
 });

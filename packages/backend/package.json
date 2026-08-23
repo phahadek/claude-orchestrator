@@ -1,6 +1,6 @@
 {
   "name": "@claude-orchestrator/backend",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "Backend (Node.js + Express + WebSocket) for Claude Code Orchestrator.",
   "main": "dist/server.js",
@@ -17,8 +17,8 @@
   "license": "MIT",
   "scripts": {
     "dev": "ts-node src/server.ts",
-    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
-    "test": "vitest run"
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc && node -e \"require('fs').writeFileSync('dist/build-sha.txt', require('child_process').execSync('git rev-parse HEAD').toString().trim())\"",
+    "test": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --reporter=junit --outputFile=.test-reports/backend.xml"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.91",

@@ -1,17 +1,50 @@
+import { performance } from 'node:perf_hooks';
 import { logger } from '../logger';
 import { insertSchedulerAudit } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
+
+export type JobRunStatus = 'ok' | 'failed' | 'skipped' | 'degraded';
+
+/**
+ * Scheduler-wide cap on jobs actually executing at once. Each job already
+ * serializes against itself (see `concurrency`), but with no cross-job bound
+ * every job's independent setTimeout can expire during the same event-loop
+ * block and all become runnable the instant the loop drains — a thundering
+ * herd that then serializes into one contiguous mega-block. This bound
+ * forces the rest to queue (FIFO) and run in sequence instead.
+ */
+export const GLOBAL_MAX_CONCURRENT_JOBS = 4;
+
+/**
+ * A completed ('ok') tick that processed zero items and ran at/above this
+ * duration or event-loop-blocked time is reclassified as 'degraded' — a
+ * multi-minute tick that did no work is indistinguishable from a wedged one,
+ * not a healthy no-op, and must not be reported as ok.
+ */
+export const DEGRADED_TICK_THRESHOLD_MS = 5 * 60 * 1000;
 
 export interface JobOptions {
   name: string;
   intervalMs: number | (() => number);
   runOnBoot?: boolean;
+  /**
+   * Delay before the FIRST fire, overriding intervalMs for that one
+   * scheduling call only — seeded from a job's durable last-run time
+   * (last_ok_started_at + intervalMs, clamped at zero) so a restart that
+   * lands mid-interval resumes the original schedule instead of restarting
+   * a fresh intervalMs-long wait from registration. Ignored when
+   * runOnBoot is true. Every reschedule after the first fire uses the
+   * normal intervalMs.
+   */
+  initialDelayMs?: number;
   jitterMs?: number;
   enabled?: () => boolean;
   concurrency?: 'skip-if-running' | 'queue-next' | 'serial-no-overlap';
   run: (ctx: {
     signal: AbortSignal;
-  }) => Promise<{ items_processed?: number } | void>;
+  }) => Promise<
+    ({ items_processed?: number } & Record<string, unknown>) | void
+  >;
   onError?: (err: unknown) => void;
 }
 
@@ -19,7 +52,7 @@ export interface JobStatus {
   name: string;
   running: boolean;
   lastRunAt: string | null;
-  lastStatus: 'ok' | 'failed' | 'skipped' | null;
+  lastStatus: JobRunStatus | null;
   nextRunAt: string | null;
 }
 
@@ -30,7 +63,7 @@ interface JobState {
   queued: boolean;
   abortController: AbortController | null;
   lastRunAt: string | null;
-  lastStatus: 'ok' | 'failed' | 'skipped' | null;
+  lastStatus: JobRunStatus | null;
   nextRunAt: string | null;
   stopped: boolean;
 }
@@ -38,6 +71,8 @@ interface JobState {
 export class Scheduler {
   private jobs = new Map<string, JobState>();
   private broadcast: ((msg: ServerMessage) => void) | null = null;
+  private globalRunning = 0;
+  private admissionQueue: Array<() => void> = [];
 
   setBroadcast(fn: (msg: ServerMessage) => void): void {
     this.broadcast = fn;
@@ -79,27 +114,62 @@ export class Scheduler {
     state.stopped = false;
     if (state.opts.runOnBoot) {
       void this._runJob(state);
+    } else if (state.opts.initialDelayMs !== undefined) {
+      this._scheduleNext(state, state.opts.initialDelayMs);
     } else {
       this._scheduleNext(state);
     }
   }
 
-  private _scheduleNext(state: JobState): void {
+  private _scheduleNext(state: JobState, delayOverride?: number): void {
     if (state.stopped) return;
-    const base =
-      typeof state.opts.intervalMs === 'function'
-        ? state.opts.intervalMs()
-        : state.opts.intervalMs;
-    const jitter = state.opts.jitterMs
-      ? Math.random() * state.opts.jitterMs
-      : 0;
-    const delay = base + jitter;
+    let delay: number;
+    if (delayOverride !== undefined) {
+      delay = delayOverride;
+    } else {
+      const base =
+        typeof state.opts.intervalMs === 'function'
+          ? state.opts.intervalMs()
+          : state.opts.intervalMs;
+      const jitter = state.opts.jitterMs
+        ? Math.random() * state.opts.jitterMs
+        : 0;
+      delay = base + jitter;
+    }
     state.nextRunAt = new Date(Date.now() + delay).toISOString();
     state.timer = setTimeout(() => {
       state.timer = null;
       void this._runJob(state);
     }, delay);
     state.timer.unref?.();
+  }
+
+  /**
+   * Resolves once the caller is admitted into the global concurrency
+   * window. When the window is saturated the resolver is queued FIFO, so a
+   * job deferred here is always released in arrival order — never starved
+   * behind jobs that keep getting readmitted ahead of it.
+   */
+  private _admitGlobalSlot(): Promise<void> {
+    if (
+      this.globalRunning < GLOBAL_MAX_CONCURRENT_JOBS &&
+      this.admissionQueue.length === 0
+    ) {
+      this.globalRunning++;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.admissionQueue.push(resolve);
+    });
+  }
+
+  private _releaseGlobalSlot(): void {
+    this.globalRunning--;
+    const next = this.admissionQueue.shift();
+    if (next) {
+      this.globalRunning++;
+      next();
+    }
   }
 
   private async _runJob(state: JobState): Promise<void> {
@@ -143,7 +213,19 @@ export class Scheduler {
     state.running = true;
     state.queued = false;
     state.nextRunAt = null;
+
+    // Cross-job admission bound: waits here if the global concurrency
+    // window is saturated, so timing/measurement below reflects actual
+    // execution, not queueing.
+    await this._admitGlobalSlot();
+
     const startedAt = Date.now();
+    // Sampled immediately before the job's await and diffed at completion —
+    // eventLoopUtilization(startElu) yields the loop-active time attributable
+    // to this window, not the cumulative-since-boot absolute. This must not
+    // itself block: eventLoopUtilization() reads process-internal counters,
+    // it never touches the DB or does I/O.
+    const startElu = performance.eventLoopUtilization();
     const ac = new AbortController();
     state.abortController = ac;
 
@@ -166,11 +248,18 @@ export class Scheduler {
       }
     } finally {
       const completedAt = Date.now();
+      const eventLoopBlockedMs = Math.round(
+        performance.eventLoopUtilization(startElu).active,
+      );
       state.running = false;
       state.abortController = null;
-      const itemsProcessed = (
-        result as { items_processed?: number } | undefined
-      )?.items_processed;
+      this._releaseGlobalSlot();
+      // Jobs must report items_processed explicitly, so a genuine zero is
+      // distinguishable from "unreported" — a job that returns nothing
+      // (or omits the field) is recorded as having processed zero items.
+      const itemsProcessed =
+        (result as { items_processed?: number } | undefined)?.items_processed ??
+        0;
 
       if (state.queued && !state.stopped) {
         state.queued = false;
@@ -179,24 +268,35 @@ export class Scheduler {
         this._scheduleNext(state);
       }
 
+      const durationMs = completedAt - startedAt;
+      const finalStatus: JobRunStatus =
+        runStatus === 'ok' &&
+        itemsProcessed === 0 &&
+        (durationMs >= DEGRADED_TICK_THRESHOLD_MS ||
+          eventLoopBlockedMs >= DEGRADED_TICK_THRESHOLD_MS)
+          ? 'degraded'
+          : runStatus;
+
       await this._emitAudit(
         state,
-        runStatus,
+        finalStatus,
         startedAt,
         completedAt,
         itemsProcessed,
         runError,
+        eventLoopBlockedMs,
       );
     }
   }
 
   private async _emitAudit(
     state: JobState,
-    status: 'ok' | 'failed' | 'skipped',
+    status: JobRunStatus,
     startedAtMs: number,
     completedAtMs: number,
     itemsProcessed: number | undefined,
     error: { message: string; stack?: string } | undefined,
+    eventLoopBlockedMs?: number,
   ): Promise<void> {
     const startedAt = new Date(startedAtMs).toISOString();
     const completedAt = new Date(completedAtMs).toISOString();
@@ -212,6 +312,7 @@ export class Scheduler {
         started_at: startedAt,
         completed_at: completedAt,
         duration_ms: durationMs,
+        event_loop_blocked_ms: eventLoopBlockedMs ?? null,
         items_processed: itemsProcessed ?? null,
         error: error ? JSON.stringify(error) : null,
       });

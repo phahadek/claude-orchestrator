@@ -17,10 +17,15 @@ import {
 } from '../db/queries';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
+import {
+  renderTaskBodyMarkdown,
+  type TaskBodySections,
+} from '../tasks/bodyRender';
 import { catchUpMergeCommits } from './gateMergeConsumer';
 import {
   resolveMilestoneDatabaseId,
   resolveMilestoneRowForProject,
+  createWrappedMilestoneChecker,
   UnknownMilestoneError,
 } from '../projects/milestoneResolver';
 import {
@@ -29,12 +34,12 @@ import {
   nextRunnableGateItems,
   nextPendingGateItems,
   appendGateItemEvent,
-  createLocalGitAncestrySource,
+  createLocalAsyncGitAncestrySource,
   isFollowupTaskDone,
   proposeGateItemReclassification,
   type GateReadiness,
   type ReconcileGateRunnabilityResult,
-  type DeployAncestrySource,
+  type AsyncDeployAncestrySource,
 } from './gateService';
 import type { GateItemClassification } from '../db/types';
 
@@ -161,10 +166,127 @@ export interface FollowupFixTaskFiler {
   ): Promise<FollowupFixTask>;
 }
 
-const FOLLOWUP_TASK_TYPE = '💻 Code';
+/**
+ * The follow-up fix task's Type, derived from the gate item it remediates
+ * rather than hardcoded — a mis-typed follow-up (e.g. a documentation
+ * assertion filed as 💻 Code, which auto-dispatches to a headless session
+ * with no Notion write access) cannot actually satisfy the gate item it
+ * exists to fix. Human-Observation items are, by this module's own auto-run
+ * exclusion above, "unverifiable by any headless session" — the same
+ * headless-session limitation applies to fixing one, so its follow-up goes
+ * to 📐 Design (interactive, human-driven) instead of Code. Every other
+ * classification (Read-Only, Prod-Mutating, needs-triage) keeps the prior
+ * Code default, since those items describe verifiable code/config behavior.
+ */
+function deriveFollowupTaskType(item: GateItem): string {
+  return item.classification === 'Human-Observation' ? '📐 Design' : '💻 Code';
+}
+
+/** Every filed follow-up fix blocks the gate the item belongs to — none of them are ever low-priority busywork. */
+const FOLLOWUP_TASK_PRIORITY = '🔴 High';
+
+/**
+ * The verifier's evidence contract (see gateVerifyEvidenceSchema in
+ * mcp/tools/schemas.ts) is `expected`/`found`/`query` required, `source`
+ * optional — but GateVerificationResult.evidence is typed `unknown` since
+ * non-verifier-authored fail events (dispatch failures, budget exceeded,
+ * ...) carry other shapes (e.g. `{ reason }`). Narrows to the structured
+ * shape when present, so a followup body can quote it verbatim without
+ * assuming it's always there.
+ */
+function extractVerifierEvidence(
+  evidence: unknown,
+):
+  | { expected: string; found: string; query: string; source?: string }
+  | undefined {
+  if (typeof evidence !== 'object' || evidence === null) return undefined;
+  const e = evidence as Record<string, unknown>;
+  if (
+    typeof e.expected === 'string' &&
+    typeof e.found === 'string' &&
+    typeof e.query === 'string'
+  ) {
+    return {
+      expected: e.expected,
+      found: e.found,
+      query: e.query,
+      source: typeof e.source === 'string' ? e.source : undefined,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Builds the follow-up fix task's body from the gate item and the failure
+ * that spawned it — a groom session working this task should never need to
+ * go looking for the gate item or its event history to recover what the
+ * verifier already found. Rendered through renderTaskBodyMarkdown so the
+ * body parses under the same section model the promotion gate uses.
+ */
+function buildFollowupTaskBody(
+  item: GateItem,
+  failure: GateVerificationResult,
+): string {
+  const evidence = extractVerifierEvidence(failure.evidence);
+  const originatingSource = item.sources[0];
+
+  const context: TaskBodySections['context'] = [
+    {
+      type: 'paragraph',
+      text: `Gate item ${item.id} — ${item.classification}, milestone ${item.milestone}.`,
+    },
+    { type: 'heading_3', text: 'Gate item text' },
+    { type: 'paragraph', text: item.text },
+    { type: 'heading_3', text: 'Verifier evidence' },
+  ];
+
+  if (evidence) {
+    context.push(
+      { type: 'bulleted_list_item', text: `Expected: ${evidence.expected}` },
+      { type: 'bulleted_list_item', text: `Found: ${evidence.found}` },
+      { type: 'bulleted_list_item', text: `Query: ${evidence.query}` },
+    );
+    if (evidence.source) {
+      context.push({
+        type: 'bulleted_list_item',
+        text: `Source: ${evidence.source}`,
+      });
+    }
+  } else {
+    context.push({
+      type: 'paragraph',
+      text: 'No structured verifier evidence was recorded for this failure.',
+    });
+  }
+
+  context.push(
+    { type: 'heading_3', text: 'Deploy' },
+    {
+      type: 'paragraph',
+      text: `Deployed SHA at failure: ${item.minDeployedCommit ?? 'unknown'}`,
+    },
+  );
+
+  if (originatingSource) {
+    context.push({
+      type: 'paragraph',
+      text: `Originating source task: ${originatingSource.sourceTaskId} (${originatingSource.sourceTaskTitle})`,
+    });
+  }
+
+  const sections: TaskBodySections = {
+    summary: `Fix gate item ${item.id}: ${item.text}`,
+    dependencies: [],
+    context,
+    automatedCriteria: [`Gate item ${item.id} re-verifies as pass.`],
+    manualCriteria: [],
+    taskType: deriveFollowupTaskType(item),
+  };
+  return renderTaskBodyMarkdown(sections);
+}
 
 export const defaultFollowupFiler: FollowupFixTaskFiler = {
-  async fileFollowupFixTask(item) {
+  async fileFollowupFixTask(item, failure) {
     const databaseId = resolveMilestoneDatabaseId(item.project, item.milestone);
     const backend = getTaskBackend(item.project);
     if (!backend.createTask) {
@@ -176,7 +298,9 @@ export const defaultFollowupFiler: FollowupFixTaskFiler = {
     const taskId = await backend.createTask({
       databaseId,
       title,
-      type: FOLLOWUP_TASK_TYPE,
+      type: deriveFollowupTaskType(item),
+      priority: FOLLOWUP_TASK_PRIORITY,
+      body: buildFollowupTaskBody(item, failure),
     });
     return { taskId, taskTitle: title };
   },
@@ -236,7 +360,7 @@ export interface GateReconcilerOptions {
   followupFiler?: FollowupFixTaskFiler;
   tierLimit?: number;
   /** Per-project git-ancestry source; defaults to a local clone at that project's projectDir. */
-  ancestrySourceForProject?: (project: string) => DeployAncestrySource;
+  ancestrySourceForProject?: (project: string) => AsyncDeployAncestrySource;
   concurrency?: GateVerificationConcurrencyConfig;
 }
 
@@ -274,14 +398,14 @@ export interface GateReconcileTickResult {
 
 function defaultAncestrySourceForProject(
   project: string,
-): DeployAncestrySource {
+): AsyncDeployAncestrySource {
   let projectDir: string | undefined;
   try {
     projectDir = getProjectById(project)?.projectDir;
   } catch {
     projectDir = undefined;
   }
-  return createLocalGitAncestrySource(projectDir);
+  return createLocalAsyncGitAncestrySource(projectDir);
 }
 
 /** Most recent `fail` event carrying a filedFollowon, or undefined if the item has never failed-with-followup. */
@@ -754,7 +878,17 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
   if (!configuredMirrorSink) return { staged, retired };
   const sink = configuredMirrorSink;
 
-  const allItems = gateStore.listAll();
+  // Shallow to pick candidates: isMirrorCandidate/isConsentCandidate below
+  // only read project/milestone/classification/state, so scanning with
+  // listAll()'s N+1 sources+events hydration on every all-time gate_item row
+  // was pure waste here. sink.stageMirror, however, is an injected callback
+  // (see server.ts) that DOES read a matched item's .events (the consent
+  // origin's evidence is latestDispositionEvidence(item)) — so each matched
+  // candidate is re-hydrated individually via getItem before being handed to
+  // the sink. That keeps the N+1 bounded to only the (normally small) set of
+  // items actually eligible for a mirror this tick, not every item ever
+  // filed.
+  const allItems = gateStore.listAllShallow();
   const candidatesByOrigin: [
     GateItemMirrorOrigin,
     (item: GateItem) => boolean,
@@ -763,8 +897,10 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
     ['consent', isConsentCandidate],
   ];
   for (const [origin, matches] of candidatesByOrigin) {
-    for (const item of allItems.filter(matches)) {
-      if (findActiveGateVerifyMirrorForItem(item.id, origin)) continue;
+    for (const shallowItem of allItems.filter(matches)) {
+      if (findActiveGateVerifyMirrorForItem(shallowItem.id, origin)) continue;
+      const item = gateStore.getItem(shallowItem.id);
+      if (!item) continue;
       sink.stageMirror(item, origin);
       staged.push(item.id);
     }
@@ -823,7 +959,22 @@ export async function runGateReconcilerTick(
   // merge_completed event left unfilled before reconciling runnability.
   await catchUpMergeCommits();
 
-  const allItems = gateStore.listAll();
+  // Shallow: this tick only reads project/milestone/classification/state off
+  // allItems (below, and via reconcileHumanObservationMirrors) — never
+  // .sources/.events — so the full sources+events N+1 hydration listAll()
+  // does per row (2N+1 queries, doubled since this ran twice per tick) was
+  // pure waste that scaled with all-time gate_item history. Also excludes a
+  // wrapped milestone's items outright — see createWrappedMilestoneChecker
+  // — since two thirds of all-time volume belongs to milestones already
+  // closed out, with nothing left to reconcile.
+  //
+  // Cached once per tick: checking every item's milestone against
+  // ProjectService would otherwise cost one DB round-trip per item rather
+  // than per distinct project. See createWrappedMilestoneChecker.
+  const isWrapped = createWrappedMilestoneChecker();
+  const allItems = gateStore
+    .listAllShallow()
+    .filter((item) => !isWrapped(item.project, item.milestone));
   const projects = new Set(allItems.map((item) => item.project));
   const deployShaByProject: Record<string, string | null> = {};
   let reconciled: ReconcileGateRunnabilityResult | null = null;
@@ -835,6 +986,7 @@ export async function runGateReconcilerTick(
     const result = await reconcileGateRunnability(sha, {
       project,
       ancestrySource: ancestrySourceForProject(project),
+      isMilestoneWrapped: isWrapped,
     });
     reconciled = reconciled
       ? {

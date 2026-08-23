@@ -3,6 +3,7 @@ import {
   getIdleSessionsWithResolvedPRs,
   getIdleReviewSessionsWithTerminalCodingOrPR,
   markSessionDone,
+  recordPrAnchoredCompletingSignal,
   setSessionLastErrorDetail,
   updateSessionStatus,
 } from '../db/queries';
@@ -86,6 +87,7 @@ function _runPass1(): void {
   for (const row of rows) {
     if (row.pr_state === 'merged') {
       markSessionDone(row.session_id, now, row.pr_url, 'boot_idle_merged_pr');
+      recordPrAnchoredCompletingSignal(row.session_id, 'pr_merged', now);
       logger.info(
         `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} idle→done (PR #${row.pr_number} ${row.repo} merged)`,
       );
@@ -96,6 +98,11 @@ function _runPass1(): void {
           row.pr_url,
           'boot_idle_merged_pr',
         );
+        recordPrAnchoredCompletingSignal(
+          row.review_session_id,
+          'pr_merged',
+          now,
+        );
         logger.info(
           `[BootIdleReconciliation] review ${row.review_session_id.slice(0, 8)} idle→done (PR #${row.pr_number} ${row.repo} merged)`,
         );
@@ -103,11 +110,21 @@ function _runPass1(): void {
     } else {
       const detail = `PR #${row.pr_number} ${row.repo} closed`;
       _errorSession(row.session_id, now, detail);
+      recordPrAnchoredCompletingSignal(
+        row.session_id,
+        'pr_closed_without_merge',
+        now,
+      );
       logger.info(
         `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} idle→error (${detail})`,
       );
       if (row.review_session_id) {
         _errorSession(row.review_session_id, now, detail);
+        recordPrAnchoredCompletingSignal(
+          row.review_session_id,
+          'pr_closed_without_merge',
+          now,
+        );
         logger.info(
           `[BootIdleReconciliation] review ${row.review_session_id.slice(0, 8)} idle→error (${detail})`,
         );
@@ -137,12 +154,18 @@ function _runPass2(): void {
         row.pr_url,
         'boot_idle_orphan_review',
       );
+      recordPrAnchoredCompletingSignal(row.session_id, 'pr_merged', now);
       logger.info(
         `[BootIdleReconciliation] review ${row.session_id.slice(0, 8)} idle→done (coding=${row.coding_session_status ?? 'none'} pr=${row.pr_state})`,
       );
     } else {
       const detail = `review session orphaned — coding=${row.coding_session_status ?? 'none'} pr=${row.pr_state}`;
       _errorSession(row.session_id, now, detail);
+      recordPrAnchoredCompletingSignal(
+        row.session_id,
+        'pr_closed_without_merge',
+        now,
+      );
       logger.info(
         `[BootIdleReconciliation] review ${row.session_id.slice(0, 8)} idle→error (coding=${row.coding_session_status ?? 'none'} pr=${row.pr_state})`,
       );

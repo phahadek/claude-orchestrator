@@ -20,13 +20,13 @@ const {
   mockGetProjectById,
   mockLoadOrchestratorConfig,
   mockComputeHash,
-  mockRunProjectTestRequest,
+  mockAdmitTestRequest,
   mockGetTaskBackend,
 } = vi.hoisted(() => ({
   mockGetProjectById: vi.fn(),
   mockLoadOrchestratorConfig: vi.fn(),
   mockComputeHash: vi.fn(),
-  mockRunProjectTestRequest: vi.fn(),
+  mockAdmitTestRequest: vi.fn(),
   mockGetTaskBackend: vi.fn(),
 }));
 
@@ -48,7 +48,7 @@ vi.mock('../../session/analyzeGating', async (importOriginal) => {
 });
 
 vi.mock('../../orchestration/testRequestLane', () => ({
-  runProjectTestRequest: mockRunProjectTestRequest,
+  admitTestRequest: mockAdmitTestRequest,
 }));
 
 vi.mock('../../tasks/TaskBackend', async (importOriginal) => {
@@ -68,6 +68,7 @@ import {
   updateSessionWorktreePath,
   setStagedIntentGroup,
   transitionStagedIntent,
+  getSessionTestRequestCycleCount,
 } from '../../db/queries';
 import { typedSetSetting } from '../../config/settings';
 import { logger } from '../../logger';
@@ -103,11 +104,28 @@ function makeSessionManager() {
   };
 }
 
+/** Default admitTestRequest stub: every call admits fresh (never reused), immediately running. */
+function stubFreshAdmission(runId = 'run-preview') {
+  return {
+    runId,
+    status: 'running' as const,
+    position: 0,
+    queueDepth: 0,
+    reused: false,
+    result: Promise.resolve({
+      runId,
+      passed: true,
+      output: 'ok',
+      joined: false,
+    }),
+  };
+}
+
 beforeEach(() => {
   mockGetProjectById.mockReset();
   mockLoadOrchestratorConfig.mockReset();
   mockComputeHash.mockReset();
-  mockRunProjectTestRequest.mockReset();
+  mockAdmitTestRequest.mockReset();
   mockGetTaskBackend.mockReset();
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
@@ -123,7 +141,7 @@ beforeEach(() => {
     test_fail_fast: true,
   });
   mockComputeHash.mockResolvedValue('hash-1');
-  mockRunProjectTestRequest.mockResolvedValue({ passed: true, output: 'ok' });
+  mockAdmitTestRequest.mockImplementation(() => stubFreshAdmission());
   typedSetSetting('test_request_cycle_limit', 3);
 });
 
@@ -160,7 +178,7 @@ describe('test.request stage-time auto-grant (routeStageTimeBlock)', () => {
     expect(mockComputeHash).toHaveBeenCalledWith('/tmp/wt');
   });
 
-  it('a session exceeding the cycle limit is paused instead of further auto-running (and is not converted into a rejection)', async () => {
+  it('a session exceeding the cycle limit keeps auto-approving and records the crossing durably instead of pausing', async () => {
     setUpSession('session-3');
 
     for (let i = 0; i < 3; i++) {
@@ -173,12 +191,25 @@ describe('test.request stage-time auto-grant (routeStageTimeBlock)', () => {
     const overLimit = stageTestRequest('session-3');
     const checkedOverLimit = await routeStageTimeBlock(overLimit, undefined);
 
-    expect(checkedOverLimit.state).toBe('staged');
+    expect(checkedOverLimit.state).toBe('approved');
 
     const session = db
       .prepare('SELECT pause_reason FROM sessions WHERE session_id = ?')
       .get('session-3') as { pause_reason: string | null };
-    expect(session.pause_reason).toBe('test_request_cycle_exceeded');
+    expect(session.pause_reason).toBeNull();
+
+    const auditRow = db
+      .prepare(
+        "SELECT payload FROM audit_log WHERE event_type = 'test_request_cycle_limit_crossed' AND actor_id = ?",
+      )
+      .get('session-3') as { payload: string } | undefined;
+    expect(auditRow).toBeDefined();
+    const payload = JSON.parse(auditRow!.payload);
+    expect(payload).toEqual({
+      session_id: 'session-3',
+      cycle_count: 4,
+      cycle_limit: 3,
+    });
   });
 
   it('declines and reports — rather than stranding the intent at staged — when the originating session has no resolvable worktree', async () => {
@@ -190,7 +221,7 @@ describe('test.request stage-time auto-grant (routeStageTimeBlock)', () => {
     const checked = await routeStageTimeBlock(intent, sessionManager);
 
     expect(checked.state).toBe('rejected');
-    expect(mockRunProjectTestRequest).not.toHaveBeenCalled();
+    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
     expect(sessionManager.enqueueFeedback).toHaveBeenCalledWith(
       'session-no-worktree',
       'test_request',
@@ -257,6 +288,108 @@ describe('test.request stage-time auto-grant (routeStageTimeBlock)', () => {
       )
       .all();
     expect(active).toEqual([]);
+  });
+});
+
+describe('test.request queue position + session-pending dedupe', () => {
+  it('reports the admission (status/position/queueDepth/runId) via the approved annotation', async () => {
+    mockAdmitTestRequest.mockImplementation(() => ({
+      runId: 'run-queued',
+      status: 'queued',
+      position: 3,
+      queueDepth: 5,
+      reused: false,
+      result: new Promise(() => {}),
+    }));
+    setUpSession('session-position');
+    const intent = stageTestRequest('session-position');
+
+    const checked = await routeStageTimeBlock(intent, undefined);
+
+    expect(checked.state).toBe('approved');
+    expect(checked.annotation).toEqual({
+      testRequestQueue: {
+        runId: 'run-queued',
+        status: 'queued',
+        position: 3,
+        queueDepth: 5,
+        reused: false,
+      },
+    });
+  });
+
+  it('a reused admission (session already has one pending against this tree) does not advance the cycle counter, while a fresh one still does', async () => {
+    setUpSession('session-reuse');
+
+    mockAdmitTestRequest.mockImplementationOnce(() =>
+      stubFreshAdmission('run-first'),
+    );
+    const first = stageTestRequest('session-reuse');
+    await routeStageTimeBlock(first, undefined);
+    expect(getSessionTestRequestCycleCount('session-reuse')).toBe(1);
+
+    mockAdmitTestRequest.mockImplementationOnce(() => ({
+      runId: 'run-first',
+      status: 'queued',
+      position: 1,
+      queueDepth: 1,
+      reused: true,
+      result: Promise.resolve({
+        runId: 'run-first',
+        passed: true,
+        output: 'ok',
+        joined: true,
+      }),
+    }));
+    const second = stageTestRequest('session-reuse');
+    const checkedSecond = await routeStageTimeBlock(second, undefined);
+
+    // Reused: withdrawn immediately rather than staged as a second live
+    // intent — see the locked "stages no new intent" design.
+    expect(checkedSecond.state).toBe('withdrawn');
+    expect(getSessionTestRequestCycleCount('session-reuse')).toBe(1);
+    expect(checkedSecond.annotation).toMatchObject({
+      testRequestQueue: { runId: 'run-first', reused: true },
+    });
+
+    // A genuinely fresh (non-reused) third request still advances the budget.
+    mockAdmitTestRequest.mockImplementationOnce(() =>
+      stubFreshAdmission('run-third'),
+    );
+    const third = stageTestRequest('session-reuse');
+    await routeStageTimeBlock(third, undefined);
+    expect(getSessionTestRequestCycleCount('session-reuse')).toBe(2);
+  });
+
+  it('an unchangedReplay admission (settled-run guard, distinct from a pending-request reuse) does not advance the cycle counter and stages/commits normally rather than withdrawing', async () => {
+    setUpSession('session-replay');
+
+    mockAdmitTestRequest.mockImplementationOnce(() => ({
+      runId: 'run-settled',
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: true,
+      result: Promise.resolve({
+        runId: 'run-settled',
+        passed: true,
+        output: 'ok',
+        joined: false,
+        unchangedReplay: true,
+      }),
+    }));
+    const intent = stageTestRequest('session-replay');
+    const checked = await routeStageTimeBlock(intent, undefined);
+
+    // Unlike a pending-request reuse, an unchangedReplay answer is not
+    // withdrawn — there is no other in-flight execution left to deliver a
+    // result later, so this intent itself must commit and deliver it.
+    expect(checked.state).toBe('approved');
+    expect(checked.annotation).toMatchObject({
+      testRequestQueue: { runId: 'run-settled', unchangedReplay: true },
+    });
+    expect(getSessionTestRequestCycleCount('session-replay')).toBe(0);
   });
 });
 

@@ -40,15 +40,21 @@ export const RESTART_STEP_ID = 'restart';
 /**
  * Conventional step id for the validation step that must confirm the
  * restarted process is serving before report-in/record-sha run. The engine
- * gates this step's poll on a differing `identity_capture` reading (see
- * playbookSchema) in addition to its own `poll_until` health check, so it
- * can't green against the outgoing process still bound during the restart
- * window.
+ * gates this step's poll on the restart step's `identity_capture` command
+ * (see playbookSchema) reading back a value that *equals the run's own
+ * target_sha* — not merely a value that differs from some pre-restart
+ * baseline, which proves a restart happened but never which build came up.
+ * This is in addition to the step's own `poll_until` health check, so it
+ * can't green against a healthy-but-wrong-SHA process (e.g. an unrelated
+ * manual restart or rollback landing during the poll window).
  */
 const VERIFY_STEP_ID = 'verify';
 
-/** Event type recording the restart step's `identity_capture` output, read before it executes. */
-const PRE_RESTART_IDENTITY_EVENT = 'pre_restart_identity_captured';
+/** Event type recording verify's bounded wall-clock budget expiring before its identity+health check ever passed. */
+const VERIFY_TIMEOUT_EVENT = 'step_timed_out';
+
+/** Default wall-clock budget for the `verify` step, timed from its own (first) `step_started` event — not reset by a resume. */
+const DEFAULT_VERIFY_TIMEOUT_MS = 10 * 60_000;
 
 /**
  * Persisted in place of an `identity_capture` reading that doesn't look like
@@ -58,7 +64,7 @@ const PRE_RESTART_IDENTITY_EVENT = 'pre_restart_identity_captured';
  * marker keeps a malformed capture from being persisted as if it were a
  * usable identity value.
  */
-export const IDENTITY_CAPTURE_INVALID = '<identity-capture-invalid>';
+const IDENTITY_CAPTURE_INVALID = '<identity-capture-invalid>';
 
 export type AgenticVerdict = 'approved' | 'rejected' | 'inconclusive';
 
@@ -113,7 +119,7 @@ function shellStdout(result: ShellResult): string {
  * still spanning multiple lines) with the explicit invalid marker rather
  * than persisting it as-is.
  */
-function normalizeIdentityCapture(stdout: string): string {
+export function normalizeIdentityCapture(stdout: string): string {
   const trimmed = stdout.trim();
   if (!trimmed || /\r|\n/.test(trimmed)) return IDENTITY_CAPTURE_INVALID;
   return trimmed;
@@ -185,11 +191,15 @@ export interface DeployOrchestratorDeps {
   /** Poll attempts/interval for a `validation` step's `poll_until`. */
   pollMaxAttempts?: number;
   pollDelayMs?: number;
+  /** Wall-clock budget for the `verify` step, timed from its first `step_started` event. Defaults to `DEFAULT_VERIFY_TIMEOUT_MS`. */
+  verifyTimeoutMs?: number;
 }
 
 interface StepOutcome {
   ok: boolean;
   detail?: string;
+  /** True when the outcome is verify's bounded wall-clock budget expiring, rather than an ordinary poll failure — recorded as a distinct event type. */
+  timedOut?: boolean;
 }
 
 /** Deploy steps build artifacts; they must not inherit the host service's
@@ -455,6 +465,7 @@ export class DeployOrchestrator {
   private readonly now: () => string;
   private readonly pollMaxAttempts: number;
   private readonly pollDelayMs: number;
+  private readonly verifyTimeoutMs: number;
   private pendingAgenticVerdicts = new Map<
     string,
     (verdict: AgenticVerdict) => void
@@ -487,6 +498,7 @@ export class DeployOrchestrator {
     this.now = deps.now ?? (() => new Date().toISOString());
     this.pollMaxAttempts = deps.pollMaxAttempts ?? 5;
     this.pollDelayMs = deps.pollDelayMs ?? 1000;
+    this.verifyTimeoutMs = deps.verifyTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS;
   }
 
   /**
@@ -685,30 +697,6 @@ export class DeployOrchestrator {
       });
 
       if (step.id === RESTART_STEP_ID) {
-        // Capture the pre-restart process identity (e.g. the outgoing
-        // MainPID) BEFORE the restart is issued, so the verify step can
-        // later require a differing reading rather than greening against
-        // the process this step is about to replace.
-        if (step.identity_capture) {
-          const identityResult = await this.runShell(step.identity_capture, {
-            runAs: step.run_as,
-            cwd: this.projectDir,
-            bindings,
-          });
-          const stderr = (identityResult.stderr ?? '').trim();
-          if (stderr) {
-            logger.warn(
-              `[DeployOrchestrator] run ${runId} (${this.project}) identity_capture for step "${step.id}" wrote to stderr: ${stderr}`,
-            );
-          }
-          appendDeployRunEvent({
-            runId,
-            step: step.id,
-            eventType: PRE_RESTART_IDENTITY_EVENT,
-            detail: normalizeIdentityCapture(shellStdout(identityResult)),
-            at: this.now(),
-          });
-        }
         // Record success and advance current_step past this step BEFORE
         // the restart is issued — the shell command may kill this very
         // process before it returns, so the resuming backend must already
@@ -759,7 +747,7 @@ export class DeployOrchestrator {
         appendDeployRunEvent({
           runId,
           step: step.id,
-          eventType: 'step_failed',
+          eventType: outcome.timedOut ? VERIFY_TIMEOUT_EVENT : 'step_failed',
           detail: outcome.detail ?? null,
           at: this.now(),
         });
@@ -894,13 +882,19 @@ export class DeployOrchestrator {
 
       case 'validation': {
         const command = step.poll_until ?? (step.command_or_prompt as string);
-        const identityCheck = this.resolveIdentityCheck(runId, step, playbook);
+        const identityCheck = this.resolveIdentityCheck(
+          step,
+          playbook,
+          targetSha,
+        );
+        const deadlineMs = this.resolveVerifyDeadline(runId, step.id);
         return this.pollUntil(
           step.id,
           command,
           step.run_as,
           bindings,
           identityCheck,
+          deadlineMs,
         );
       }
 
@@ -957,29 +951,46 @@ export class DeployOrchestrator {
   }
 
   /**
-   * For the conventional `verify` validation step, resolves the pre-restart
-   * identity baseline (captured off the `restart` step's `identity_capture`
-   * command, and persisted as a deploy_run_event so it survives a self-deploy
-   * restart into a fresh process) plus the command to re-read it on each poll
-   * attempt. Returns undefined when the playbook declares no identity_capture
-   * — verify then falls back to its plain poll_until health check alone.
+   * For the conventional `verify` validation step, resolves the command that
+   * re-reads build identity on each poll attempt (the `restart` step's
+   * `identity_capture`, conventionally `curl -sf .../deploy/build-sha`) plus
+   * the target it must equal — the run's own `target_sha`, never merely a
+   * value that differs from some pre-restart baseline. A restart from any
+   * source (an operator, a rollback, systemd's own retry) satisfies a diff
+   * check; only equality with target_sha proves this run's build is what's
+   * serving. Returns undefined when the playbook declares no
+   * identity_capture — verify then falls back to its plain poll_until health
+   * check alone.
    */
   private resolveIdentityCheck(
-    runId: string,
     step: StepDescriptor,
     playbook: DeployPlaybook,
-  ): { command: string; baseline: string } | undefined {
+    targetSha: string,
+  ): { command: string; target: string } | undefined {
     if (step.id !== VERIFY_STEP_ID) return undefined;
     const restartStep = playbook.steps.find((s) => s.id === RESTART_STEP_ID);
     if (!restartStep?.identity_capture) return undefined;
-    const captured = listDeployRunEvents(runId)
-      .filter((e) => e.event_type === PRE_RESTART_IDENTITY_EVENT)
-      .pop();
-    if (!captured) return undefined;
-    return {
-      command: restartStep.identity_capture,
-      baseline: captured.detail ?? '',
-    };
+    return { command: restartStep.identity_capture, target: targetSha };
+  }
+
+  /**
+   * Bounds the conventional `verify` step's wall-clock budget, timed from
+   * its own FIRST `step_started` event in this run's log rather than the
+   * event about to be appended for this attempt — so a run that resumes
+   * hours later (e.g. after a boot crash-loop) inherits the elapsed time
+   * instead of getting a fresh unbounded window on every resume. Returns
+   * `undefined` (no deadline) for any step other than `verify`.
+   */
+  private resolveVerifyDeadline(
+    runId: string,
+    stepId: string,
+  ): number | undefined {
+    if (stepId !== VERIFY_STEP_ID) return undefined;
+    const priorStart = listDeployRunEvents(runId).find(
+      (e) => e.step === stepId && e.event_type === 'step_started',
+    );
+    const anchor = priorStart?.at ?? this.now();
+    return Date.parse(anchor) + this.verifyTimeoutMs;
   }
 
   private async pollUntil(
@@ -987,10 +998,18 @@ export class DeployOrchestrator {
     command: string,
     runAs: string | undefined,
     bindings: DeployBindings,
-    identityCheck?: { command: string; baseline: string },
+    identityCheck?: { command: string; target: string },
+    deadlineMs?: number,
   ): Promise<StepOutcome> {
     let lastResult: ShellResult = { ok: false, output: '', exitCode: null };
     for (let attempt = 0; attempt < this.pollMaxAttempts; attempt++) {
+      if (deadlineMs !== undefined && Date.parse(this.now()) >= deadlineMs) {
+        return {
+          ok: false,
+          timedOut: true,
+          detail: `step "${stepId}" exceeded its ${this.verifyTimeoutMs}ms verify budget without confirming the target build was serving`,
+        };
+      }
       if (identityCheck) {
         const identityResult = await this.runShell(identityCheck.command, {
           runAs,
@@ -1006,10 +1025,10 @@ export class DeployOrchestrator {
         const currentIdentity = normalizeIdentityCapture(
           shellStdout(identityResult),
         );
-        if (!identityResult.ok || currentIdentity === identityCheck.baseline) {
+        if (!identityResult.ok || currentIdentity !== identityCheck.target) {
           lastResult = {
             ok: false,
-            output: `post-restart identity still matches the pre-restart baseline ("${identityCheck.baseline}")`,
+            output: `observed build identity ("${currentIdentity}") does not equal the run's target SHA ("${identityCheck.target}")`,
             exitCode: null,
           };
           if (attempt < this.pollMaxAttempts - 1) {

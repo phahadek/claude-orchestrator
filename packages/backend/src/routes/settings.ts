@@ -44,6 +44,7 @@ const SETTING_KEYS = [
   'session_pause_threshold_seconds',
   'session_inert_threshold_seconds',
   'session_hard_stop_window_seconds',
+  'session_alive_park_escalation_seconds',
   'ci_poll_interval_seconds',
   'ci_poll_max_minutes',
   'max_review_iterations',
@@ -59,6 +60,8 @@ const SETTING_KEYS = [
   'ops_session_effort',
   'gate_verify_session_model',
   'gate_verify_session_effort',
+  'investigate_session_model',
+  'investigate_session_effort',
   'groom_session_model',
   'groom_session_effort',
   'design_session_model',
@@ -69,6 +72,7 @@ const SETTING_KEYS = [
   'capability_auto_approve_allowlist',
   'milestone_attention_aging_threshold_seconds',
   'milestone_attention_flat_convergence_window_seconds',
+  'decision_pick_one_paragraph_threshold',
 ] as const satisfies readonly SettingKey[];
 
 type RouteSettingKey = (typeof SETTING_KEYS)[number];
@@ -154,6 +158,9 @@ function applyToRuntime(
     case 'session_hard_stop_window_seconds':
       runtimeSettings.session_hard_stop_window_seconds = value as number;
       break;
+    case 'session_alive_park_escalation_seconds':
+      runtimeSettings.session_alive_park_escalation_seconds = value as number;
+      break;
     case 'ci_poll_interval_seconds':
       runtimeSettings.ci_poll_interval_seconds = value as number;
       break;
@@ -199,6 +206,12 @@ function applyToRuntime(
     case 'gate_verify_session_effort':
       runtimeSettings.gate_verify_session_effort = value as string;
       break;
+    case 'investigate_session_model':
+      runtimeSettings.investigate_session_model = value as string;
+      break;
+    case 'investigate_session_effort':
+      runtimeSettings.investigate_session_effort = value as string;
+      break;
     case 'groom_session_model':
       runtimeSettings.groom_session_model = value as string;
       break;
@@ -230,6 +243,9 @@ function applyToRuntime(
     case 'milestone_attention_flat_convergence_window_seconds':
       runtimeSettings.milestone_attention_flat_convergence_window_seconds =
         value as number;
+      break;
+    case 'decision_pick_one_paragraph_threshold':
+      runtimeSettings.decision_pick_one_paragraph_threshold = value as number;
       break;
   }
 }
@@ -291,6 +307,9 @@ function runtimeSettingsAsRecord(): {
     session_hard_stop_window_seconds: String(
       runtimeSettings.session_hard_stop_window_seconds,
     ),
+    session_alive_park_escalation_seconds: String(
+      runtimeSettings.session_alive_park_escalation_seconds,
+    ),
     ci_poll_interval_seconds: String(runtimeSettings.ci_poll_interval_seconds),
     ci_poll_max_minutes: String(runtimeSettings.ci_poll_max_minutes),
     max_review_iterations: String(runtimeSettings.max_review_iterations),
@@ -312,6 +331,8 @@ function runtimeSettingsAsRecord(): {
     ops_session_effort: runtimeSettings.ops_session_effort,
     gate_verify_session_model: runtimeSettings.gate_verify_session_model,
     gate_verify_session_effort: runtimeSettings.gate_verify_session_effort,
+    investigate_session_model: runtimeSettings.investigate_session_model,
+    investigate_session_effort: runtimeSettings.investigate_session_effort,
     groom_session_model: runtimeSettings.groom_session_model,
     groom_session_effort: runtimeSettings.groom_session_effort,
     design_session_model: runtimeSettings.design_session_model,
@@ -326,6 +347,9 @@ function runtimeSettingsAsRecord(): {
     ),
     milestone_attention_flat_convergence_window_seconds: String(
       runtimeSettings.milestone_attention_flat_convergence_window_seconds,
+    ),
+    decision_pick_one_paragraph_threshold: String(
+      runtimeSettings.decision_pick_one_paragraph_threshold,
     ),
   };
 }

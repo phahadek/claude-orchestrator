@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
@@ -73,14 +73,25 @@ vi.mock('../branchModel', () => ({
   resolveResumeBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
 }));
 vi.mock('../orchestrator-config', () => ({
-  loadOrchestratorConfig: vi
-    .fn()
-    .mockReturnValue({ mcp_servers: undefined, allowed_tools: [] }),
+  loadOrchestratorConfig: vi.fn().mockReturnValue({
+    mcp_servers: undefined,
+    allowed_tools: [],
+    capability_pre_grants: {},
+  }),
+  resolvePreGrantCapabilities: vi.fn(() => []),
 }));
 vi.mock('../sessionRecovery', () => ({
   recoverSession: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
+vi.mock('../sessionCgroup', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../sessionCgroup')>();
+  return { ...actual, killSessionCgroup: vi.fn() };
+});
+vi.mock('../processLiveness', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../processLiveness')>();
+  return { ...actual, killWorktreeProcessTree: vi.fn().mockReturnValue(0) };
+});
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({
     updateStatus: vi.fn().mockResolvedValue(undefined),
@@ -141,6 +152,25 @@ vi.mock('../../db/queries', () =>
     enqueueFeedbackItem: vi.fn(),
     listUndeliveredInboxItems: vi.fn().mockReturnValue([]),
     markInboxItemsDelivered: vi.fn(),
+    insertCompletingSignal: vi.fn(),
+    // A canned resume_exhausted row so deriveSessionStatus (a real,
+    // unmocked function) derives 'error' from flagResumeFailure's write —
+    // mirrors what insertCompletingSignal would actually persist, without
+    // wiring these tests through the real completing_signal_ledger table.
+    listCompletingSignalsForSession: vi.fn().mockReturnValue([
+      {
+        id: 1,
+        session_id: 'unused',
+        task_id: null,
+        session_type: 'standard',
+        signal_class: 'resume_exhausted',
+        signal_value: 'resume_failed',
+        recorded_at: 1,
+      },
+    ]),
+    setSessionTerminalCompletionReason: vi.fn(),
+    incrementSessionPokeRetryCount: vi.fn().mockReturnValue(1),
+    resetSessionPokeRetryCount: vi.fn(),
   }),
 );
 
@@ -153,6 +183,19 @@ vi.mock('../../config', () => ({
     corporate_mode_enabled: false,
     max_concurrent_code_sessions: 5,
   },
+}));
+
+vi.mock('../../orchestration/memoryAdmission', () => ({
+  // respawnSession's memory-admission gate — real os.freemem() is
+  // unreliable/low in CI/sandboxed hosts, so tests always see headroom
+  // unless a test explicitly overrides this mock.
+  hasMemoryHeadroom: vi.fn().mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  }),
 }));
 
 vi.mock('child_process', () => ({
@@ -236,8 +279,12 @@ import {
   markInboxItemsDelivered,
   setSessionPauseReason,
   getTaskCache,
+  insertCompletingSignal,
+  incrementSessionPokeRetryCount,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
+import { getCorporateMode } from '../../config/corporateMode';
+import { reapOrphanContainers } from '../DockerSessionRunner';
 import { AgentSession } from '../AgentSession';
 import { buildSessionContext } from '../ContextBuilder';
 import { deriveBranchSlug } from '../branchModel';
@@ -246,6 +293,9 @@ import { recordEvent } from '../../audit/AuditLog';
 import * as fsModule from 'fs';
 import { loadOrchestratorConfig } from '../orchestrator-config';
 import { getTaskBackend } from '../../tasks/TaskBackend';
+import { hasMemoryHeadroom } from '../../orchestration/memoryAdmission';
+import { killSessionCgroup } from '../sessionCgroup';
+import { killWorktreeProcessTree } from '../processLiveness';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -952,6 +1002,128 @@ describe('respawnSession shared helper — wires all three events', () => {
   });
 });
 
+// ── respawnSession — memory-admission gate ────────────────────────────────────
+
+describe('respawnSession — memory-admission gate', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: true,
+      freeMemMB: 8192,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 5120,
+    });
+  });
+
+  afterEach(() => {
+    // The sweep test below installs a stateful mockImplementation (not just
+    // a mockReturnValue) — vi.clearAllMocks() in the next test's beforeEach
+    // clears call history but does NOT remove a mockImplementation, so
+    // without this reset it would leak into every subsequent describe block
+    // in this file and silently block every later respawnSession call.
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: true,
+      freeMemMB: 8192,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 5120,
+    });
+  });
+
+  it('refuses to spawn and leaves the row untouched when no memory headroom is reported', async () => {
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: false,
+      freeMemMB: 1000,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: -2072,
+    });
+
+    const result = await sm.sendOrResume(SESSION_ID, 'hello');
+
+    expect(result).toBeNull();
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    // Deferred, not a failure — the row must not be touched or terminalized.
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
+  });
+
+  it('spawns normally once memory headroom is available (existing behavior unaffected)', async () => {
+    const p = sm.sendOrResume(SESSION_ID, 'hello');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
+  });
+
+  it('capacity-gates respawns across a sweep of N stale/dead sessions instead of spawning unboundedly', async () => {
+    // Mirrors AutoMerger.conflictNudgeSweep(): an unLIMITed candidate list of
+    // dead sessions, each poked (respawned) sequentially via sendOrResume —
+    // relaunchFixerForPR's dead-session recovery path routes through the
+    // same respawnSession chokepoint this gate protects.
+    const staleSessionIds = ['stale-1', 'stale-2', 'stale-3', 'stale-4'];
+    // Headroom available for the first two, exhausted from the third onward —
+    // simulates memory pressure building up mid-sweep as prior respawns land.
+    let admittedCount = 0;
+    vi.mocked(hasMemoryHeadroom).mockImplementation(() => {
+      const allowed = admittedCount < 2;
+      if (allowed) admittedCount++;
+      return {
+        allowed,
+        freeMemMB: allowed ? 8192 : 1000,
+        minHostFreeMemoryMB: 4096,
+        perSessionReserveMB: 3072,
+        projectedFreeMB: allowed ? 5120 : -2072,
+      };
+    });
+
+    const results: (string | null)[] = [];
+    for (const staleId of staleSessionIds) {
+      vi.mocked(getSession).mockReturnValue(makeDeadRow(staleId));
+      const sessionsBefore = capturedSessions.length;
+      const p = sm.sendOrResume(staleId, 'rebase please');
+      if (capturedSessions.length === sessionsBefore) {
+        // Spawn is async — give it a tick to register before checking
+        // whether this attempt was admitted. A deferred (not-admitted)
+        // attempt never spawns, so this intentionally times out for those.
+        await vi
+          .waitFor(
+            () =>
+              expect(capturedSessions.length).toBeGreaterThan(sessionsBefore),
+            { timeout: 50, interval: 10 },
+          )
+          .catch(() => {});
+      }
+      if (capturedSessions.length > sessionsBefore) {
+        capturedSessions[capturedSessions.length - 1].emit('message', {
+          type: 'session_event',
+          sessionId: staleId,
+          eventType: 'system',
+          content: 'boot',
+        });
+      }
+      results.push(await p);
+    }
+
+    // Exactly the first two (headroom available) were admitted; the rest
+    // were deferred rather than spawned unboundedly.
+    expect(results.filter((r) => r !== null)).toHaveLength(2);
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(2);
+  });
+});
+
 // ── resumeOrphanSessions — boot recovery regression ──────────────────────────
 
 describe('resumeOrphanSessions — boot recovery regression', () => {
@@ -1014,6 +1186,40 @@ describe('resumeOrphanSessions — boot recovery regression', () => {
   });
 });
 
+// ── resumeOrphanSessions — Docker orphan-container reap ordering ─────────────
+
+describe('resumeOrphanSessions — Docker orphan-container reap ordering', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([]);
+    vi.mocked(getCorporateMode).mockReturnValue({
+      gates: { dockerMandatory: true },
+    } as ReturnType<typeof getCorporateMode>);
+  });
+
+  afterEach(() => {
+    vi.mocked(getCorporateMode).mockReturnValue({
+      gates: { dockerMandatory: false },
+    } as ReturnType<typeof getCorporateMode>);
+  });
+
+  it('does not reap a status=running orphan session before it has had a chance to resume', async () => {
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+
+    await sm.resumeOrphanSessions();
+
+    expect(reapOrphanContainers).toHaveBeenCalledTimes(1);
+    const liveIds = vi.mocked(reapOrphanContainers).mock.calls[0][0];
+    expect(liveIds.has(SESSION_ID)).toBe(true);
+  });
+});
+
 // ── resumeOrphanSessions — usage admission gate ───────────────────────────────
 
 describe('resumeOrphanSessions — usage admission gate', () => {
@@ -1068,6 +1274,69 @@ describe('resumeOrphanSessions — usage admission gate', () => {
     await sm.resumeOrphanSessions();
 
     expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
+  });
+});
+
+// ── resumeOrphanSessions — max concurrent code sessions admission gate ───────
+//
+// Policy: orphans exceeding max_concurrent_code_sessions at boot were already
+// running before the restart — they aren't stuck, just outnumbering the
+// *new-dispatch* cap. They must be left resumable (row untouched, still
+// 'running'), never driven to a terminal 'error' status.
+
+describe('resumeOrphanSessions — max concurrent code sessions admission gate', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([]);
+  });
+
+  it('does not error excess code-session orphans beyond the cap — leaves them running/resumable', async () => {
+    // runtimeSettings.max_concurrent_code_sessions is mocked to 5 — seed 7
+    // running code-session orphans so 2 exceed it.
+    const orphanRows = Array.from({ length: 7 }, (_, i) => ({
+      ...makeDeadRow(`orphan-${i}`),
+      status: 'running',
+    }));
+    vi.mocked(getSessionsByStatus).mockReturnValue(orphanRows);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(5);
+    // The excess must never be marked terminal via markSessionErrored's
+    // updateSessionStatus write.
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^orphan-/),
+      'error',
+      expect.any(Number),
+    );
+  });
+
+  it('resumes review/depth_review orphans regardless of the code-session cap', async () => {
+    const codeOrphans = Array.from({ length: 5 }, (_, i) => ({
+      ...makeDeadRow(`code-${i}`),
+      status: 'running',
+    }));
+    const reviewOrphan = {
+      ...makeDeadRow('review-0'),
+      status: 'running',
+      session_type: 'review',
+    };
+    vi.mocked(getSessionsByStatus).mockReturnValue([
+      ...codeOrphans,
+      reviewOrphan,
+    ]);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(6);
+    expect(vi.mocked(AgentSession).mock.calls.map((c) => c[0])).toContain(
+      'review-0',
+    );
   });
 });
 
@@ -1590,6 +1859,80 @@ describe('cleanupWorktree chokepoint guard', () => {
   });
 });
 
+// ── cleanupWorktree — kills the session's test-command process tree before
+//    the worktree it's rooted in is ever removed ────────────────────────────
+
+describe('cleanupWorktree — process-tree termination', () => {
+  let sm: SessionManager;
+  const WORKTREE_PATH = `${PROJECT_DIR}/.claude/worktrees/${SESSION_ID}`;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  it('a session reaching a terminal status has killSessionCgroup invoked for it — reaches a test-command tree that carries no --session-id of its own', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'done',
+    });
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      WORKTREE_PATH,
+      'https://github.com/org/repo/pull/1',
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(killSessionCgroup)).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('worktree teardown kills the worktree-path-attributed process tree before attempting git worktree remove', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'done',
+    });
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      WORKTREE_PATH,
+      'https://github.com/org/repo/pull/1',
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(killWorktreeProcessTree)).toHaveBeenCalledWith(
+      WORKTREE_PATH,
+    );
+
+    const killCallOrder = vi.mocked(killWorktreeProcessTree).mock
+      .invocationCallOrder[0];
+    const removeCall = vi
+      .mocked(execSync)
+      .mock.calls.findIndex(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
+    const removeCallOrder =
+      vi.mocked(execSync).mock.invocationCallOrder[removeCall];
+    expect(killCallOrder).toBeLessThan(removeCallOrder);
+  });
+
+  it('a live, non-terminal (idle) session is never a termination candidate — the chokepoint guard fires before any kill', () => {
+    vi.mocked(getSession).mockReturnValue(makeDeadRow()); // status='idle'
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      WORKTREE_PATH,
+      'https://github.com/org/repo/pull/1',
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(killSessionCgroup)).not.toHaveBeenCalled();
+    expect(vi.mocked(killWorktreeProcessTree)).not.toHaveBeenCalled();
+  });
+});
+
 // ── cleanupWorktree — stage-credential revocation is gated by the terminal
 //    status guard, not by an unconditional teardown ──────────────────────────
 
@@ -2095,12 +2438,21 @@ describe('terminal cleanup for idle sessions (not live)', () => {
   });
 
   it('markSessionErrored on non-live session (PR closed) triggers worktree teardown', () => {
-    // Session is now 'error' (DB already updated). No task_id so getTaskBackend is skipped.
-    vi.mocked(getSession).mockReturnValue({
-      ...makeDeadRow(),
-      status: 'error',
-      task_id: null,
-    });
+    // First read is markSessionErrored's pre-write terminal guard — row is
+    // still non-terminal ('idle') at that point. Later reads (teardown's own
+    // getSession calls, including cleanupWorktree's chokepoint guard) see
+    // the row as it stands after the (mocked) write: 'error'. No task_id so
+    // getTaskBackend is skipped.
+    vi.mocked(getSession)
+      .mockReturnValueOnce({
+        ...makeDeadRow(),
+        task_id: null,
+      })
+      .mockReturnValue({
+        ...makeDeadRow(),
+        status: 'error',
+        task_id: null,
+      });
 
     sm.markSessionErrored(SESSION_ID, 'error', 'pr_closed');
 
@@ -2140,7 +2492,6 @@ describe('markSessionErrored — Notion status revert respects the task current 
   it('user_kill on a ✅ Done task performs no updateStatus call', () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
-      status: 'killed',
     });
     vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('✅ Done'));
 
@@ -2153,7 +2504,6 @@ describe('markSessionErrored — Notion status revert respects the task current 
   it('user_kill on a ⏭️ Deferred task performs no updateStatus call', () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
-      status: 'killed',
     });
     vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('⏭️ Deferred'));
 
@@ -2166,7 +2516,6 @@ describe('markSessionErrored — Notion status revert respects the task current 
   it('user_kill on a 🔄 In Progress task still reverts it to 🗂️ Ready (majority case)', () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
-      status: 'killed',
     });
     vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('🔄 In Progress'));
 
@@ -2186,7 +2535,6 @@ describe('markSessionErrored — Notion status revert respects the task current 
   it('a cache miss falls back to the existing revert behaviour rather than silently skipping it', () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
-      status: 'killed',
     });
     vi.mocked(getTaskCache).mockReturnValue(undefined);
 
@@ -2206,7 +2554,6 @@ describe('markSessionErrored — Notion status revert respects the task current 
   it('a counted reason (crash budget path) does not set 🚫 Blocked on an already ✅ Done task', () => {
     vi.mocked(getSession).mockReturnValue({
       ...makeDeadRow(),
-      status: 'error',
     });
     vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('✅ Done'));
     vi.mocked(incrementTaskCrashCount).mockReturnValue(2);
@@ -2227,7 +2574,6 @@ describe('markSessionErrored — Notion status revert respects the task current 
     (reason) => {
       vi.mocked(getSession).mockReturnValue({
         ...makeDeadRow(),
-        status: 'killed',
         session_type: 'groom',
       });
       vi.mocked(getTaskCache).mockReturnValue(taskCacheRow('🔄 In Progress'));
@@ -2428,6 +2774,20 @@ describe('sendOrResume — surviving worktree reuse (idle resume fast path)', ()
     );
     expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
   });
+
+  it('a checkout-only planning session (groom, worktree_path=null) never has the resolved projectDir fallback written back to worktree_path', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(SESSION_ID),
+      session_type: 'groom',
+      worktree_path: null,
+    });
+    await doResume();
+    // respawnSession is passed the resolved fallback cwd (projectDir) so the
+    // CLI has somewhere to run --resume from, but that resolved value must
+    // never be persisted — the DB column must stay null for this session
+    // shape, same as start() would leave it.
+    expect(vi.mocked(updateSessionWorktreePath)).not.toHaveBeenCalled();
+  });
 });
 
 describe('sendOrResume — usage admission gate', () => {
@@ -2602,6 +2962,51 @@ describe('sendOrResume — missing worktree falls through to recreation', () => 
       expect.stringContaining('stale'),
     );
     // The resume still proceeded despite the fetch failure.
+    expect(capturedSessions.length).toBeGreaterThan(0);
+  });
+
+  it('a benign lost ref-lock race on resume does not set a stale-base error or record base_fetch_failed', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      projectDir: '/project-resume-fetch-benign',
+    });
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at fc7b2df8 but expected 863d2513",
+          });
+          return callback(err);
+        }
+        // The ref already holds the value the fetch wanted to write.
+        callback(null, {
+          stdout: 'fc7b2df8870355a1bb8b3cbb0eda4fac44f31456\n',
+        });
+      },
+    );
+
+    const p = sm.sendOrResume(SESSION_ID, 'hello');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event' as const,
+      sessionId: SESSION_ID,
+      eventType: 'system' as const,
+      content: 'boot',
+    });
+    await p;
+
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'base_fetch_failed' }),
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'base_fetch_ref_lock_benign' }),
+    );
+    expect(vi.mocked(setSessionLastErrorDetail)).not.toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('stale'),
+    );
+    // The resume still proceeded despite the ref-lock race.
     expect(capturedSessions.length).toBeGreaterThan(0);
   });
 });
@@ -2910,11 +3315,16 @@ describe('fetchBaseBranchCoalesced — direct unit tests', () => {
   it('returns ok:false on failure without throwing, retrying, or forcing past the lock', async () => {
     vi.mocked(execCb).mockImplementation(
       (cmd: string, _opts: unknown, callback: any) => {
-        const err = Object.assign(new Error('cmd failed'), {
-          stderr:
-            "error: cannot lock ref 'refs/remotes/origin/dev': is at ae9f9803 but expected 066b562e",
-        });
-        callback(err);
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at ae9f9803 but expected 066b562e",
+          });
+          return callback(err);
+        }
+        // rev-parse ref-lock classification calls: leave unresolvable so the
+        // outcome is classified as a non-benign (genuine) failure.
+        callback(new Error('unknown revision'));
       },
     );
 
@@ -2925,10 +3335,98 @@ describe('fetchBaseBranchCoalesced — direct unit tests', () => {
 
     expect(outcome.ok).toBe(false);
     expect(outcome.error).toBeDefined();
-    // Exactly one attempt — no retry loop chasing the lock mismatch.
-    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
-    const [cmd] = vi.mocked(execCb).mock.calls[0];
-    expect(String(cmd)).not.toContain('--force');
+    // Exactly one fetch attempt — no retry loop chasing the lock mismatch.
+    const fetchCalls = vi
+      .mocked(execCb)
+      .mock.calls.filter(([cmd]) => String(cmd).startsWith('git fetch'));
+    expect(fetchCalls).toHaveLength(1);
+    expect(String(fetchCalls[0][0])).not.toContain('--force');
+  });
+
+  it('classifies a lost ref-lock race as benign when the ref already holds the value the fetch wanted', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at fc7b2df8 but expected 863d2513",
+          });
+          return callback(err);
+        }
+        // Both the local ref and FETCH_HEAD now hold the winner's value.
+        callback(null, {
+          stdout: 'fc7b2df8870355a1bb8b3cbb0eda4fac44f31456\n',
+        });
+      },
+    );
+
+    const outcome = await fetchBaseBranchCoalesced(
+      '/fetch-test-benign-ref-lock',
+      'dev',
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.benignRefLock).toBe(true);
+  });
+
+  it('does not classify a ref-lock loss as benign when the ref differs from FETCH_HEAD', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at ae9f9803 but expected 066b562e",
+          });
+          return callback(err);
+        }
+        if (String(cmd).includes('refs/remotes/origin/dev')) {
+          return callback(null, {
+            stdout: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n',
+          });
+        }
+        // FETCH_HEAD
+        callback(null, {
+          stdout: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n',
+        });
+      },
+    );
+
+    const outcome = await fetchBaseBranchCoalesced(
+      '/fetch-test-genuine-stale',
+      'dev',
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.benignRefLock).toBe(false);
+  });
+
+  it('does not classify a non-ref-lock failure (network/timeout) as benign', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr: 'fatal: unable to access origin: Could not resolve host',
+          });
+          return callback(err);
+        }
+        callback(null, {
+          stdout: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n',
+        });
+      },
+    );
+
+    const outcome = await fetchBaseBranchCoalesced(
+      '/fetch-test-network-failure',
+      'dev',
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.benignRefLock).toBe(false);
+    // Never re-reads refs for a non-ref-lock failure.
+    const revParseCalls = vi
+      .mocked(execCb)
+      .mock.calls.filter(([cmd]) => String(cmd).startsWith('git rev-parse'));
+    expect(revParseCalls).toHaveLength(0);
   });
 });
 
@@ -3007,7 +3505,7 @@ describe('sendOrResume — degraded spawn on worktree recreation is a backend-he
     );
   });
 
-  it('classifies as backend_spawn_degraded, does not hit the crash budget, and surfaces a restart-recommending detail', async () => {
+  it('below the poke-retry limit: classifies as backend_spawn_degraded, does not hit the crash budget or terminalize the session', async () => {
     vi.mocked(execCb).mockImplementation(
       (_cmd: string, _opts: unknown, callback: any) => {
         if (String(_cmd).includes('worktree add')) {
@@ -3020,6 +3518,9 @@ describe('sendOrResume — degraded spawn on worktree recreation is a backend-he
         callback(null, { stdout: '', stderr: '' });
       },
     );
+    // Default mock (1) — below POKE_RETRY_LIMIT (3), so this is a retriable
+    // failure, not yet routed to flagResumeFailure.
+    vi.mocked(incrementSessionPokeRetryCount).mockReturnValue(1);
 
     const emittedMessages: any[] = [];
     sm.on('message', (msg) => emittedMessages.push(msg));
@@ -3031,17 +3532,15 @@ describe('sendOrResume — degraded spawn on worktree recreation is a backend-he
     // count against the crash budget (would otherwise misattribute a
     // degraded backend spawn to the session/task).
     expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
-
-    const lastErrorDetailCall = vi
-      .mocked(setSessionLastErrorDetail)
-      .mock.calls.find((call) => call[0] === SESSION_ID);
-    expect(lastErrorDetailCall?.[1]).toMatch(/restart/i);
-
-    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+    expect(vi.mocked(incrementSessionPokeRetryCount)).toHaveBeenCalledWith(
       SESSION_ID,
-      'error',
-      expect.any(Number),
     );
+
+    // Not yet exhausted — the session row must be left untouched so a later
+    // poke can retry, not driven to a terminal 'error' on the first failure.
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
+    expect(vi.mocked(setSessionLastErrorDetail)).not.toHaveBeenCalled();
+    expect(vi.mocked(setTaskPauseReason)).not.toHaveBeenCalled();
 
     // The distinct reason code surfaced to the dashboard, not a generic
     // worktree_recreate_failed — lets the UI/operator recognize this as a
@@ -3050,6 +3549,56 @@ describe('sendOrResume — degraded spawn on worktree recreation is a backend-he
       (m) => m.type === 'session_action_failed',
     );
     expect(actionFailedMsg?.reason).toBe(BACKEND_SPAWN_DEGRADED_REASON);
+    expect(actionFailedMsg?.detail).toMatch(/restart/i);
+  });
+
+  it('poke-retry limit exhausted: routes to flagResumeFailure exactly once instead of retrying indefinitely', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        if (String(_cmd).includes('worktree add')) {
+          const err = Object.assign(new Error('Command failed'), {
+            stderr: '',
+            killed: true,
+          });
+          return callback(err);
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+    // The 3rd consecutive poke failure (N=3, per acceptance criteria).
+    vi.mocked(incrementSessionPokeRetryCount).mockReturnValue(3);
+
+    const result = await sm.sendOrResume(SESSION_ID, 'hello');
+
+    expect(result).toBe(SESSION_ID);
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+
+    // flagResumeFailure's terminal disposition fires exactly once.
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
+    );
+    // The write goes through the single status deriver's completing-signal
+    // ledger, not a bare column write.
+    expect(vi.mocked(insertCompletingSignal)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: SESSION_ID,
+        signal_class: 'resume_exhausted',
+        signal_value: 'resume_failed',
+      }),
+    );
+    expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+      'task-1',
+      'resume_failed',
+      expect.stringMatching(/restart/i),
+    );
+
+    const lastErrorDetailCall = vi
+      .mocked(setSessionLastErrorDetail)
+      .mock.calls.find((call) => call[0] === SESSION_ID);
+    expect(lastErrorDetailCall?.[1]).toMatch(/restart/i);
   });
 });
 
@@ -3113,7 +3662,7 @@ describe('sendOrResume — lock-contention retry in worktree creation', () => {
     expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
   });
 
-  it('persistent lock error (all retries) → worktree_recreate_failed, crash count incremented', async () => {
+  it('persistent lock error (all retries) → worktree_recreate_failed, routed through the poke-retry counter (not the crash budget)', async () => {
     vi.mocked(execCb).mockImplementation(
       (_cmd: string, _opts: unknown, callback: any) => {
         if (String(_cmd).includes('worktree add')) {
@@ -3131,8 +3680,13 @@ describe('sendOrResume — lock-contention retry in worktree creation', () => {
 
     // sendOrResume returns sessionId even on failure.
     expect(result).toBe(SESSION_ID);
-    // After exhausting retries, markSessionErrored is called → crash count incremented.
-    expect(vi.mocked(incrementTaskCrashCount)).toHaveBeenCalledWith('task-1');
+    // This live-poke failure path no longer feeds the task_crash_counts
+    // circuit breaker directly — it goes through the session-scoped
+    // poke-retry counter instead (see handlePokeFailure).
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+    expect(vi.mocked(incrementSessionPokeRetryCount)).toHaveBeenCalledWith(
+      SESSION_ID,
+    );
   });
 });
 
@@ -3550,6 +4104,48 @@ describe('start() — pre-launch fetch serialization/coalescing (integration)', 
       expect.objectContaining({ event_type: 'base_fetch_failed' }),
     );
     expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('stale'),
+    );
+  });
+
+  it('a benign lost ref-lock race on launch does not set a stale-base error or record base_fetch_failed', async () => {
+    const projectDir = '/project-integ-benign-ref-lock';
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      projectDir,
+    });
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at fc7b2df8 but expected 863d2513",
+          });
+          return callback(err);
+        }
+        // The ref already holds the value the fetch wanted to write.
+        callback(null, {
+          stdout: 'fc7b2df8870355a1bb8b3cbb0eda4fac44f31456\n',
+        });
+      },
+    );
+
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'non_milestone',
+      taskName: 'task-benign',
+    });
+
+    await vi.waitFor(() => expect(capturedSessions).toHaveLength(1));
+
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'base_fetch_failed' }),
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'base_fetch_ref_lock_benign' }),
+    );
+    expect(vi.mocked(setSessionLastErrorDetail)).not.toHaveBeenCalledWith(
       expect.any(String),
       expect.stringContaining('stale'),
     );

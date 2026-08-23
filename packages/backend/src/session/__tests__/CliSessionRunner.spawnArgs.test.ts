@@ -15,6 +15,12 @@ vi.mock('../../config', () => ({
     'CronDelete',
     'CronList',
   ],
+  SCHEDULING_DISALLOWED_TOOLS: [
+    'ScheduleWakeup',
+    'CronCreate',
+    'CronDelete',
+    'CronList',
+  ],
 }));
 
 // We capture the args and options passed to spawn so we can assert on them.
@@ -349,8 +355,8 @@ describe('CliSessionRunner --disallowed-tools', () => {
     },
   );
 
-  it.each(['standard', 'review'] as const)(
-    'omits --disallowed-tools for a %s (non-planning) session',
+  it.each(['standard', 'review', 'depth_review'] as const)(
+    'includes only --disallowed-tools ScheduleWakeup, CronCreate, CronDelete, CronList (no Write/Edit) for a %s (non-planning) session',
     async (sessionType) => {
       const runner = new CliSessionRunner(SESSION_ID);
       await runner.run(
@@ -360,15 +366,27 @@ describe('CliSessionRunner --disallowed-tools', () => {
         () => {},
       );
 
-      expect(capturedSpawnArgs).not.toContain('--disallowed-tools');
+      const idx = capturedSpawnArgs.indexOf('--disallowed-tools');
+      expect(idx).not.toBe(-1);
+      expect(capturedSpawnArgs[idx + 1]).toBe('ScheduleWakeup');
+      expect(capturedSpawnArgs[idx + 2]).toBe('CronCreate');
+      expect(capturedSpawnArgs[idx + 3]).toBe('CronDelete');
+      expect(capturedSpawnArgs[idx + 4]).toBe('CronList');
+      expect(capturedSpawnArgs).not.toContain('Write');
+      expect(capturedSpawnArgs).not.toContain('Edit');
     },
   );
 
-  it('omits --disallowed-tools when sessionType is absent', async () => {
+  it('includes the scheduling-only --disallowed-tools set when sessionType is absent', async () => {
     const runner = new CliSessionRunner(SESSION_ID);
     await runner.run('hello', undefined, defaultOptions, () => {});
 
-    expect(capturedSpawnArgs).not.toContain('--disallowed-tools');
+    const idx = capturedSpawnArgs.indexOf('--disallowed-tools');
+    expect(idx).not.toBe(-1);
+    expect(capturedSpawnArgs[idx + 1]).toBe('ScheduleWakeup');
+    expect(capturedSpawnArgs[idx + 2]).toBe('CronCreate');
+    expect(capturedSpawnArgs[idx + 3]).toBe('CronDelete');
+    expect(capturedSpawnArgs[idx + 4]).toBe('CronList');
   });
 });
 

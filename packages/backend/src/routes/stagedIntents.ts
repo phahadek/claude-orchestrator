@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
+import { execSync } from 'child_process';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   BackendTaskWriteCommands,
   NotionWriteCommands,
   getCachedType,
+  getCachedStatus,
   type TaskStatus,
   type TaskType,
   type MoveTaskContent,
@@ -34,7 +36,9 @@ import {
   findAutoApproveIneligibleTaskCreate,
   type GroomingGateEntry,
 } from '../groom/groomGate';
+import type { TrackedFileSetCache } from '../groom/groomLoad';
 import { isInteractiveTaskType } from '../planning/triage';
+import { isInvestigateSession } from '../session/sessionPredicates';
 import type {
   StagedIntentRow,
   StagedIntentState,
@@ -46,7 +50,9 @@ import type {
   CompletenessProbedGapClass,
   ReviewDisputePayload,
   OpsPrIntentPayload,
+  ReportFilePayload,
 } from '../db/types';
+import { TERMINAL_ON_APPROVE_INTENT_KINDS } from '../db/types';
 import {
   hashIntentPayload,
   insertStagedIntent,
@@ -70,6 +76,7 @@ import {
   clearStagedIntentGroup,
   getTaskCache,
   getSession,
+  getGrantedCapabilities,
   hasActiveCapabilityRequestForSession,
   hasDecisionPickOneForTask,
   updateCompletenessDispositionApproval,
@@ -81,10 +88,17 @@ import {
   getSessionDeclaredWrites,
   getLatestOpsSessionByTaskId,
   getAllBoardCacheTasks,
+  type CachedBoardTaskEntry,
+  markSessionDone,
+  setSessionTerminalCompletionReason,
 } from '../db/queries';
 import type { OpsReconciliationAssertion } from '../db/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
-import { parseTaskId, normalizeTaskId } from '../tasks/taskId';
+import {
+  parseTaskId,
+  normalizeTaskId,
+  normalizeBoardId,
+} from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
 import { recordEvent } from '../audit/AuditLog';
 import type {
@@ -127,13 +141,19 @@ import {
   defaultFollowupFiler,
   type GateVerificationResult,
 } from '../gate/gateReconciler';
-import type { ServerMessage } from '../ws/types';
+import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
 import { logger } from '../logger';
 import { getMilestoneConvergence } from '../convergence/convergenceService';
 import {
   UnknownMilestoneError,
   resolveMilestoneForProject,
+  resolveMilestoneRowForProject,
 } from '../projects/milestoneResolver';
+import {
+  insertReport,
+  updateReportState,
+  getReportsForBatchTaskId,
+} from '../investigation/reportStore';
 import { rankDecisions } from '../convergence/decisionRanking';
 import { resolveSessionCompleteForDisplay } from '../convergence/attentionSignals';
 import {
@@ -152,17 +172,38 @@ import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import type { TestCommandResult } from '../session/test-runner';
 import { truncateForDelivery } from '../session/test-runner';
-import { runProjectTestRequest } from '../orchestration/testRequestLane';
+import {
+  admitTestRequest,
+  type TestRequestAdmission,
+  type TestRequestAdmissionStatus,
+} from '../orchestration/testRequestLane';
+import { isRunFailureBaseAttributable } from '../orchestration/baseAttribution';
 import {
   getSessionTestRequestCycleCount,
   incrementSessionTestRequestCycleCount,
-  setSessionPauseReason,
+  decrementSessionTestRequestCycleCount,
+  listRunningTestRequestRuns,
+  getLatestTestRequestRun,
+  getLatestTestRequestRunForSession,
+  getTestRequestRunById,
+  updateTestRequestRunState,
+  listTestRequestRunsForSession,
+  listTestRunResultsForRun,
+  countTestRunResultsForRun,
+  getTaskTestFlipRateFlags,
 } from '../db/queries';
-import type { TestRequestPayload } from '../db/types';
+import { classifyTestRunOutcome } from '../orchestration/baseHealthCheck';
+import type { TestRequestPayload, TestRequestRunRow } from '../db/types';
+import { buildTestResultDigest } from '../session/testResultDigest';
+import {
+  filterBaseAttributableFailures,
+  renderBaseAttributableFilterDigest,
+} from '../orchestration/baseAttributableFilter';
 import type {
   PRReviewService,
   PRReviewResult,
 } from '../github/PRReviewService';
+import { applyResolvedNoOp } from '../github/NoOpInvestigator';
 import { asyncHandler } from './asyncHandler';
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
@@ -264,8 +305,10 @@ class ReadyPathMissingGroupError extends Error {
  * ReadyPathMissingGroupError above): rejects a live Ready-path member staged
  * with no groupId at all, before the row ever reaches `staged`. Kinds outside
  * the Ready-path member set — decision.pickOne (which cannot belong to a
- * group at all), planning.noOp (a standalone marker), and a Deferred-target
- * task.setStatus — are untouched.
+ * group at all), planning.noOp (which may be staged standalone via the
+ * acknowledge route, or as a member of a design closing-synthesis group —
+ * see assertExpectedTerminalKinds), and a Deferred-target task.setStatus —
+ * are untouched.
  */
 function assertReadyPathGrouped(
   kind: string,
@@ -329,7 +372,9 @@ function isOpsTerminalKind(
   }
   if (!OPS_TERMINAL_KINDS.includes(kind) || !sessionId) return false;
   const session = getSession(sessionId);
-  return session?.session_type === 'ops';
+  return (
+    session?.session_type === 'ops' && !isInvestigateSession(session.task_id)
+  );
 }
 
 /**
@@ -596,19 +641,22 @@ class DependsOnCompletenessError extends Error {
 
 /**
  * The Deferred twin of DependsOnCompletenessError, but about *other* tasks
- * rather than the subject itself: a task.setStatus -> Deferred apply is only
- * allowed, when the task still has non-terminal dependents
- * (DependencyResolver.findDependents — anything not already ✅ Done/⏭️
- * Deferred whose Depends On names this task), if the same intent group also
- * carries a live task.setDependsOn for *each* of those dependent task ids
- * re-pointing it — forcing an explicit re-point decision instead of letting
- * a Deferred blocker silently wedge a Ready dependent forever (see
- * DependencyResolver.findBlockers, which treats Deferred as never-satisfied).
- * Unlike DependsOnCompletenessError, the companion intents name the
- * dependents, never the task being deferred — a task.setDependsOn for the
- * deferred task itself does not satisfy this. Fires only when at least one
- * non-terminal dependent actually exists; deferring a task nothing depends
- * on (or whose dependents are already terminal) needs no companion intent.
+ * rather than the subject itself: a task.setStatus -> Deferred apply, when
+ * the task still has non-terminal dependents (DependencyResolver.findDependents
+ * — anything not already ✅ Done/⏭️ Deferred whose Depends On names this
+ * task), must never leave one silently wedged behind a blocker that can
+ * never resolve (see DependencyResolver.findBlockers, which treats Deferred
+ * as never-satisfied). computeDeferralAutoRepoints handles the mechanical
+ * case — a dependent the group leaves unaddressed just has this task's id
+ * dropped from its Depends On automatically, at apply time, no companion
+ * intent required. This error is the fallback for the one case that
+ * mechanical removal itself can't cover: the project's task backend doesn't
+ * support task.setDependsOn writes at all (TaskWriteCommands.setDependsOn),
+ * so there is no way to perform the removal — the deferral must fail loudly
+ * rather than proceed and leave the dependent wedged. A dependent already
+ * covered by a live companion task.setDependsOn in the same group (e.g.
+ * re-pointing it to a substitute task) is unaffected either way — that
+ * explicit value is used as-is.
  */
 class DeferralOrphansDependentsError extends Error {
   constructor(
@@ -618,8 +666,9 @@ class DeferralOrphansDependentsError extends Error {
     super(
       `[stagedIntents] task.setStatus -> Deferred for task "${taskId}" is blocked: ` +
         `it still has non-terminal dependent(s) (${dependentTaskIds.join(', ')}) that ` +
-        'would be permanently wedged. Stage a task.setDependsOn for each dependent, ' +
-        're-pointing it away from this task, in the same group before deferring.',
+        "would be permanently wedged, and this project's task backend does not support " +
+        'task.setDependsOn writes, so their Depends On cannot be automatically re-pointed away ' +
+        'from this task. Stage a task.setDependsOn for each dependent in the same group before deferring.',
     );
     this.name = 'DeferralOrphansDependentsError';
   }
@@ -630,41 +679,54 @@ class DeferralOrphansDependentsError extends Error {
  * `taskId`, read off the board cache the same way
  * TaskWriteCommands.surfaceDependentsOfDeferredTask does — best-effort: an
  * empty/unavailable cache yields no dependents rather than failing the
- * guard open or closed on stale data.
+ * guard open or closed on stale data. Returns the full cached entry (not
+ * just the id) so callers can read each dependent's current Depends On.
  */
-function findNonTerminalDependents(taskId: string): string[] {
+function findNonTerminalDependents(taskId: string): CachedBoardTaskEntry[] {
   const boardTasks = getAllBoardCacheTasks();
   if (boardTasks.length === 0) return [];
-  return new DependencyResolver()
-    .findDependents(taskId, boardTasks)
-    .map((t) => t.id);
+  return new DependencyResolver().findDependents(taskId, boardTasks);
 }
 
 /**
- * Commit-time/apply-time enforcement of the guard DeferralOrphansDependentsError
- * describes: null when the task has no non-terminal dependents, or when the
- * group already carries a live task.setDependsOn for each one (checked
- * against the durable store via hasGroupDependsOn, so a companion committed
- * in an earlier apply of the same group still satisfies it).
+ * Computes the automatic Depends On repoint each of `taskId`'s non-terminal
+ * dependents needs when the group leaves it unaddressed by a companion
+ * task.setDependsOn (see DeferralOrphansDependentsError for why this is safe
+ * to do mechanically) — each dependent's current Depends On minus just this
+ * task's id, id comparison via normalizeBoardId (matching
+ * DependencyResolver.findDependents), never a bare `[]`. A dependent already
+ * covered by a live task.setDependsOn in the group (hasGroupDependsOn,
+ * checked against the durable store so a companion committed in an earlier
+ * apply of the same group still counts) is excluded — that sibling intent's
+ * own apply supplies the value instead.
  */
-function checkDeferralDependentsRepointed(
+function computeDeferralAutoRepoints(
   groupId: string | null | undefined,
   taskId: string,
-): DeferralOrphansDependentsError | null {
+): Array<{ rawDependentId: string; dependentId: string; dependsOn: string[] }> {
+  const dependents = findNonTerminalDependents(taskId);
+  if (dependents.length === 0) return [];
   // Board-cache ids are the raw Notion ids the board API returns, while a
-  // staged task.setDependsOn's payload.taskId is always normalized to
-  // "source:externalId" (see normalizeOrRejectTaskId) — the same
-  // representation mismatch DependencyResolver.findDependents bridges
+  // staged task.setDependsOn's payload.taskId — and every write this
+  // function feeds into TaskWriteCommands.setDependsOn — is always
+  // normalized to "source:externalId" (see normalizeOrRejectTaskId). The
+  // same representation mismatch DependencyResolver.findDependents bridges
   // internally via normalizeBoardId, but hasGroupDependsOn's lookup does a
   // plain string match against the stored payload, so each dependent id
-  // must be normalized the same way before that lookup.
-  const dependentIds = findNonTerminalDependents(taskId);
-  if (dependentIds.length === 0) return null;
-  const missing = dependentIds.filter(
-    (id) => !groupId || !hasGroupDependsOn(groupId, normalizeTaskId(id)),
-  );
-  if (missing.length === 0) return null;
-  return new DeferralOrphansDependentsError(taskId, missing);
+  // must be normalized the same way before that lookup — and again before
+  // it's used as a write target or reported in an error.
+  const normTaskId = normalizeBoardId(taskId);
+  return dependents
+    .filter(
+      (d) => !groupId || !hasGroupDependsOn(groupId, normalizeTaskId(d.id)),
+    )
+    .map((d) => ({
+      rawDependentId: d.id,
+      dependentId: normalizeTaskId(d.id),
+      dependsOn: d.dependsOn
+        .filter((depId) => normalizeBoardId(depId) !== normTaskId)
+        .map((depId) => normalizeTaskId(depId)),
+    }));
 }
 
 /**
@@ -1112,6 +1174,18 @@ function assertSessionTaskBinding(
   const session = getSession(sessionId);
   if (!session?.task_id) return;
 
+  // An investigate session's planning.noOp targets one report from its own
+  // dispatched batch, never the synthetic 'report-batch:<batchId>' task_id
+  // itself — bind against the batch's dispatched report ids instead of the
+  // generic session.task_id equality check below.
+  if (kind === 'planning.noOp' && isInvestigateSession(session.task_id)) {
+    const dispatchedReportIds = new Set(
+      getReportsForBatchTaskId(session.task_id).map((r) => r.id),
+    );
+    if (dispatchedReportIds.has(payloadTaskId)) return;
+    throw new SessionTaskBindingError(kind, session.task_id, payloadTaskId);
+  }
+
   if (normalizeTaskId(payloadTaskId) === normalizeTaskId(session.task_id)) {
     return;
   }
@@ -1401,6 +1475,21 @@ export interface StagedIntent {
     | { advisory: true; violations: ReadinessViolation[] }
     | { autoRejected: true }
     | { autoApproved: true }
+    | {
+        /**
+         * A test.request's live lane standing at the moment it was
+         * auto-approved — set by maybeAutoApproveTestRequest, superseded by
+         * the `{testRequest: {passed}}` annotation once the run commits.
+         */
+        testRequestQueue: {
+          runId: string;
+          status: TestRequestAdmissionStatus;
+          position: number;
+          queueDepth: number;
+          reused: boolean;
+          unchangedReplay: boolean;
+        };
+      }
     | null;
   /**
    * Correlates multiple intents that form one structural-change unit (e.g. a
@@ -1536,6 +1625,58 @@ function computeGroupKind(
 let stagedIntentSessionManager: SessionManager | undefined;
 
 /**
+ * Request-scoped memoization for the three per-row lookups rowToApi
+ * recomputes independently for every row (groupKind, sessionComplete, and
+ * computeGroupBlockedSignals' full-group re-read): without it, a `.map(
+ * rowToApi)` over a milestone's staged-intent set re-reads every member of
+ * a shared group once per member of that group (quadratic in group size —
+ * see computeGroupBlockedSignals), and re-resolves the same session's
+ * complete/kind state once per row that references it. Scoped to a single
+ * request/list call — never held across requests, since sessionComplete and
+ * groupKind can change between polls.
+ */
+interface RowToApiCache {
+  sessionComplete: Map<string, boolean>;
+  groupKind: Map<string, 'groom' | 'investigation' | 'other'>;
+  groupBlockedSignals: Map<
+    string,
+    { blocked: boolean; blockedMemberCount: number; sessionIncomplete: boolean }
+  >;
+}
+
+function createRowToApiCache(): RowToApiCache {
+  return {
+    sessionComplete: new Map(),
+    groupKind: new Map(),
+    groupBlockedSignals: new Map(),
+  };
+}
+
+function getSessionCompleteCached(
+  sessionId: string,
+  sessionManager: SessionManager | undefined,
+  cache: RowToApiCache,
+): boolean {
+  const cached = cache.sessionComplete.get(sessionId);
+  if (cached !== undefined) return cached;
+  const result = resolveSessionCompleteForDisplay(sessionId, sessionManager);
+  cache.sessionComplete.set(sessionId, result);
+  return result;
+}
+
+function getGroupKindCached(
+  sessionId: string | null,
+  cache: RowToApiCache,
+): 'groom' | 'investigation' | 'other' {
+  const key = sessionId ?? '';
+  const cached = cache.groupKind.get(key);
+  if (cached !== undefined) return cached;
+  const result = computeGroupKind(sessionId);
+  cache.groupKind.set(key, result);
+  return result;
+}
+
+/**
  * Mirrors commitGroupIntents' non-committability predicate for display: a
  * group is blocked when any member (any state, any visibility) sits in
  * needs_revision/pending_verification, or when any live member's owning
@@ -1549,11 +1690,14 @@ let stagedIntentSessionManager: SessionManager | undefined;
 function computeGroupBlockedSignals(
   groupId: string,
   sessionManager: SessionManager | undefined,
+  cache?: RowToApiCache,
 ): {
   blocked: boolean;
   blockedMemberCount: number;
   sessionIncomplete: boolean;
 } {
+  const cached = cache?.groupBlockedSignals.get(groupId);
+  if (cached) return cached;
   const allMembers = listStagedIntentsByGroup(groupId);
   const blockedMemberCount = allMembers.filter(
     (r) => r.state === 'needs_revision' || r.state === 'pending_verification',
@@ -1563,16 +1707,45 @@ function computeGroupBlockedSignals(
     .some(
       (r) =>
         !!r.session_id &&
-        !resolveSessionCompleteForDisplay(r.session_id, sessionManager),
+        !(cache
+          ? getSessionCompleteCached(r.session_id, sessionManager, cache)
+          : resolveSessionCompleteForDisplay(r.session_id, sessionManager)),
     );
-  return {
+  const result = {
     blocked: blockedMemberCount > 0 || sessionIncomplete,
     blockedMemberCount,
     sessionIncomplete,
   };
+  cache?.groupBlockedSignals.set(groupId, result);
+  return result;
 }
 
-function rowToApi(row: StagedIntentRow): StagedIntent {
+/** Maps a test_request_runs row to the same shape testRequestLane.ts broadcasts over WS. */
+function testRequestRunRowToApi(
+  row: TestRequestRunRow,
+): TestRequestRunStatusPayload {
+  return {
+    runId: row.id,
+    projectId: row.project_id,
+    contentHash: row.content_hash,
+    status:
+      row.state === 'running'
+        ? 'running'
+        : row.state === 'passed'
+          ? 'passed'
+          : 'failed-with-cause',
+    output: row.state === 'failed' ? row.output : undefined,
+    sessionId: row.session_id,
+    requestedAt: row.requested_at ?? undefined,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at ?? undefined,
+  };
+}
+
+function rowToApi(
+  row: StagedIntentRow,
+  cache: RowToApiCache = createRowToApiCache(),
+): StagedIntent {
   const payload = JSON.parse(row.payload) as unknown;
   const capability =
     row.kind === 'session.requestCapability'
@@ -1603,12 +1776,13 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
     dispositionReason: row.disposition_reason,
     answer: row.answer ? (JSON.parse(row.answer) as StagedIntentAnswer) : null,
     sessionComplete: row.session_id
-      ? resolveSessionCompleteForDisplay(
+      ? getSessionCompleteCached(
           row.session_id,
           stagedIntentSessionManager,
+          cache,
         )
       : null,
-    groupKind: computeGroupKind(row.session_id),
+    groupKind: getGroupKindCached(row.session_id, cache),
     confersFileMutation:
       typeof capability === 'string'
         ? bashCapabilityConfersFileMutation(capability)
@@ -1618,6 +1792,7 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
           const signals = computeGroupBlockedSignals(
             row.group_id!,
             stagedIntentSessionManager,
+            cache,
           );
           return {
             groupBlocked: signals.blocked,
@@ -1636,8 +1811,9 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
 /**
  * Kinds carry their target task at `payload.taskId`, except task.create — a
  * new task has no pre-existing id, so it dedups on title instead (see
- * extractTitleKey) — and gate.accrete/seed.stage, whose source task lives at
- * `payload.sourceTask.id`.
+ * extractTitleKey) — gate.accrete/seed.stage, whose source task lives at
+ * `payload.sourceTask.id`, and gate.verify, which dedups on its gate item
+ * (`payload.gateItemId`, no `taskId` field at all) via a `gate-item:<id>` key.
  */
 function extractTaskId(kind: string, payload: unknown): string | null {
   if (kind === 'task.create' || kind === 'arch.createUnit') return null;
@@ -1660,6 +1836,15 @@ function extractTaskId(kind: string, payload: unknown): string | null {
     // one superseding the other, while same-section patches still supersede
     // via the existing tombstone mechanism above.
     return `${p.taskId}::${p.section.trim()}`;
+  }
+  if (kind === 'gate.verify') {
+    const gateItemId = (payload as { gateItemId?: unknown } | null)?.gateItemId;
+    // Reuses the `gate-item:<id>` shape already established elsewhere for a
+    // gate-verify session's own task_id sentinel (gateItemVerifier.ts,
+    // sessionPredicates.ts, milestoneResolver.ts) — same identity, applied
+    // here as the staged-intent dedup key so a second gate.verify for the
+    // same item supersedes the first instead of accumulating alongside it.
+    return typeof gateItemId === 'string' ? `gate-item:${gateItemId}` : null;
   }
   if (kind === 'planning.noOp') {
     const p = payload as Partial<NoOpPayload> | null;
@@ -1831,6 +2016,10 @@ interface GateVerifyIntentPayload {
  * stale-base (old_str no longer matches) rejection behaviour.
  */
 interface NotionPageEditPayload {
+  /**
+   * A bare Notion page uuid or a `notion:<uuid>`-prefixed task id — either
+   * form is accepted; NotionClient.applyPageEdit normalizes it before use.
+   */
   page_id: string;
   content_updates: { old_str: string; new_str: string }[];
 }
@@ -1902,8 +2091,10 @@ interface ArchSupersedeUnitPayload {
 
 function toNewArchUnitFields(
   payload: ArchCreateUnitPayload,
+  projectId: string,
 ): NewArchUnitCommandFields {
   return {
+    project: projectId,
     title: payload.title,
     kind: payload.metadata.kind,
     topic: payload.metadata.topic,
@@ -2130,10 +2321,30 @@ class DecisionPickOneValidationError extends Error {
   }
 }
 
+/**
+ * Mechanical backstop for the prose-only "Decision output shape" design-
+ * procedure rule (procedureCore.ts's "one thesis per paragraph"): a field
+ * over the operator-configured threshold with zero `\n\n` breaks is an
+ * unbroken wall of text a Design session failed to structure, regardless of
+ * what the procedure asked for. Short fields are exempt — a single
+ * paragraph under the threshold is legitimately prose, not a wall.
+ */
+function assertParagraphBreaksIfLong(fieldLabel: string, value: string): void {
+  const threshold = runtimeSettings.decision_pick_one_paragraph_threshold;
+  if (value.length > threshold && !value.includes('\n\n')) {
+    throw new DecisionPickOneValidationError(
+      `${fieldLabel} is ${value.length} characters with no paragraph breaks — ` +
+        `text over ${threshold} characters must be split into multiple ` +
+        'paragraphs separated by a blank line (\\n\\n)',
+    );
+  }
+}
+
 function validateDecisionPickOnePayload(
   payload: unknown,
   groupId: string | null | undefined,
   decisionProposal: string | null | undefined,
+  investigation: string | null | undefined,
 ): asserts payload is DecisionPickOnePayload {
   if (groupId) {
     throw new DecisionPickOneValidationError(
@@ -2144,6 +2355,10 @@ function validateDecisionPickOnePayload(
     throw new DecisionPickOneValidationError(
       'a substantive decisionProposal (why this fork needs an operator decision) is required',
     );
+  }
+  assertParagraphBreaksIfLong('decisionProposal', decisionProposal);
+  if (investigation?.trim()) {
+    assertParagraphBreaksIfLong('investigation', investigation);
   }
   const p = payload as Partial<DecisionPickOnePayload> | null;
   if (!p || typeof p.prompt !== 'string' || !p.prompt.trim()) {
@@ -2165,6 +2380,10 @@ function validateDecisionPickOnePayload(
         `option "${opt.label}" requires a substantive description`,
       );
     }
+    assertParagraphBreaksIfLong(
+      `option "${opt.label}" description`,
+      opt.description,
+    );
   }
   if (typeof p.allowFreeForm !== 'boolean') {
     throw new DecisionPickOneValidationError(
@@ -2762,6 +2981,7 @@ const SUBJECT_TASK_ID_KINDS: ReadonlySet<string> = new Set([
   'task.updateBody',
   'task.patchBodySection',
   'task.setProperties',
+  'task.setType',
   'task.setDependsOn',
   'planning.noOp',
 ]);
@@ -2804,6 +3024,16 @@ export async function validateAndNormalizeTaskReferences(
   payload: unknown,
   projectId: string,
   groupId?: string | null,
+  /**
+   * The staging session's own bound-task milestone (StageProposalToolContext's
+   * ctx.milestone) — the server-known fallback for a task.create payload
+   * that supplies neither `databaseId` nor `milestone`. Null/undefined for
+   * a session bound to a non-milestone task, or a human/loopback caller
+   * with no session context — in that case the payload passes through
+   * unchanged, and createTask's own "requires either databaseId or
+   * milestone" error fires unchanged at apply time.
+   */
+  sessionMilestone?: string | null,
 ): Promise<unknown> {
   // gate.accrete/seed.stage key off `sourceTask.id` rather than a top-level
   // `taskId` — normalized here on the same rule as SUBJECT_TASK_ID_KINDS
@@ -2893,6 +3123,15 @@ export async function validateAndNormalizeTaskReferences(
     p.taskId = normalized;
   }
 
+  if (
+    kind === 'task.create' &&
+    p.databaseId === undefined &&
+    p.milestone === undefined &&
+    sessionMilestone
+  ) {
+    p.milestone = sessionMilestone;
+  }
+
   if (kind === 'task.setDependsOn' || kind === 'task.create') {
     const rawDependsOn = p.dependsOn;
     if (rawDependsOn !== undefined) {
@@ -2969,6 +3208,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'review.dispute',
   'ops.prIntent',
   'test.request',
+  'report.file',
 ]);
 
 /**
@@ -3625,6 +3865,53 @@ function assertNotSessionStagedDone(
   throw new SessionStagedDoneError(p.taskId ?? 'unknown');
 }
 
+/**
+ * Thrown at stage time when a `task.setStatus` targets the task's own
+ * current (cached) status — never a legal transition (isValidTransition has
+ * no self-loops; see statusCanonical.ts), so it would only ever fail later
+ * at commit time and land in `needs_revision` as an "invalid status
+ * transition ... X -> X" the staging session has no legal way to retire
+ * (intent.withdraw refuses needs_revision, and the only "corrected" retry is
+ * the exact same self-transition). Refusing here, before the row is ever
+ * inserted, means the caller gets an actionable error synchronously instead
+ * of an orphaned stuck intent.
+ */
+class SameStatusSelfTransitionError extends Error {
+  constructor(taskId: string, status: string) {
+    super(
+      `[stagedIntents] "task.setStatus" -> ${status} for task "${taskId}" is a no-op: the task is ` +
+        `already at "${status}" — this would only fail later as an invalid ${status} -> ${status} ` +
+        'transition. Do not stage this intent; the task already reflects the desired status.',
+    );
+    this.name = 'SameStatusSelfTransitionError';
+  }
+}
+
+/**
+ * Stage-time twin of TaskWriteCommands.setStatus's apply-time transition
+ * guard, scoped to the same-status case specifically (isValidTransition
+ * already rejects every other illegal transition at commit time, but a
+ * same-status self-transition is common enough — e.g. a corrective
+ * task.setStatus proposed against a stale cached view of the task's status —
+ * to warrant catching it before it becomes a permanently stuck
+ * needs_revision row). Compares against the cached status (the same source
+ * of truth TaskWriteCommands.setStatus itself reads), so it is a no-op when
+ * the cache has no row yet (a brand-new task) rather than blocking staging
+ * on a cache miss.
+ */
+function assertNotSameStatusSelfTransition(
+  kind: string,
+  payload: unknown,
+): void {
+  if (kind !== 'task.setStatus') return;
+  const p = payload as Partial<SetStatusPayload> | null;
+  if (!p?.taskId || !p?.status) return;
+  const current = getCachedStatus(p.taskId);
+  if (current && current === p.status) {
+    throw new SameStatusSelfTransitionError(p.taskId, p.status);
+  }
+}
+
 function applyDesignClosingSynthesisGeneration(
   kind: string,
   payload: unknown,
@@ -3687,7 +3974,12 @@ export function stageIntent(
     milestone != null ? resolveMilestoneForProject(projectId, milestone) : null;
 
   if (kind === 'decision.pickOne') {
-    validateDecisionPickOnePayload(payload, groupId, decisionProposal);
+    validateDecisionPickOnePayload(
+      payload,
+      groupId,
+      decisionProposal,
+      investigation,
+    );
   }
   if (kind === 'session.requestCapability') {
     validateCapabilityRequestPayload(payload, projectId, sessionId);
@@ -3711,6 +4003,7 @@ export function stageIntent(
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
   assertNotSessionStagedDone(kind, payload, sessionId);
+  assertNotSameStatusSelfTransition(kind, payload);
   assertCompletenessApproval(kind, sessionId);
   assertCompletenessRequiresDecision(kind, sessionId);
   assertDesignTaskCreateHasPriority(kind, payload, sessionId);
@@ -4422,6 +4715,7 @@ async function applyIntent(
   triageMilestoneLabel?: string,
   sessionManager?: SessionManager,
   mirrorDisposition?: GateVerifyMirrorDisposition,
+  trackedFileSetCache?: TrackedFileSetCache,
 ): Promise<unknown> {
   if (HUMAN_APPLY_ONLY_KINDS.has(intent.kind) && actorType !== 'human') {
     throw new HumanApplyOnlyError(intent.kind);
@@ -4470,12 +4764,22 @@ async function applyIntent(
       ) {
         throw new ManualVerificationStripCompletenessError(payload.taskId);
       }
+      let deferralAutoRepoints: Array<{
+        rawDependentId: string;
+        dependentId: string;
+        dependsOn: string[];
+      }> = [];
       if (payload.status === 'Deferred') {
-        const deferralFailure = checkDeferralDependentsRepointed(
+        deferralAutoRepoints = computeDeferralAutoRepoints(
           intent.groupId,
           payload.taskId,
         );
-        if (deferralFailure) throw deferralFailure;
+        if (deferralAutoRepoints.length > 0 && !backend.setDependsOn) {
+          throw new DeferralOrphansDependentsError(
+            payload.taskId,
+            deferralAutoRepoints.map((r) => r.rawDependentId),
+          );
+        }
       }
       // approve-by-standard (planning/triage.ts): a task.setStatus intent
       // carrying a recorded triage verdict is eligible for the standard
@@ -4491,7 +4795,18 @@ async function applyIntent(
         readinessOverride: override,
         groomingGate: payload.groomingGate,
         triageCleanDesign,
+        authoritativeType: resolveEffectiveType(
+          intent.groupId,
+          payload.taskId,
+          payload.groomingGate?.type,
+        ),
+        trackedFileSetCache,
       });
+      for (const repoint of deferralAutoRepoints) {
+        await commands.setDependsOn(repoint.dependentId, repoint.dependsOn, {
+          source: 'human',
+        });
+      }
       return { ok: true };
     }
     case 'task.setDependsOn': {
@@ -4674,7 +4989,9 @@ async function applyIntent(
         }
       }
       const payload = intent.payload as ArchCreateUnitPayload;
-      const unit = await archCommands.createUnit(toNewArchUnitFields(payload));
+      const unit = await archCommands.createUnit(
+        toNewArchUnitFields(payload, intent.projectId),
+      );
       setStagedIntentAppliedTaskId(intent.id, unit.id);
       return { id: unit.id, version: unit.version };
     }
@@ -4692,13 +5009,56 @@ async function applyIntent(
       const result = await archCommands.supersedeUnit(
         payload.unitId,
         payload.baseVersion,
-        toNewArchUnitFields(payload.replacement),
+        toNewArchUnitFields(payload.replacement, intent.projectId),
       );
       return {
         previousId: result.previous.id,
         nextId: result.next.id,
         nextVersion: result.next.version,
       };
+    }
+    case 'planning.noOp':
+      // Nothing to apply: the payload IS the decision not to produce an
+      // artifact. Committing it is the whole disposition. A noOp is a normal
+      // member of a design closing-synthesis group (see
+      // assertExpectedTerminalKinds, which counts one as satisfying an
+      // expected terminal kind), so it must commit through the group path;
+      // the /acknowledge route remains the disposition for a standalone
+      // noOp.
+      return {};
+    case 'report.file': {
+      const payload = intent.payload as ReportFilePayload;
+      if (!intent.milestone) {
+        throw new Error(
+          `[stagedIntents] report.file apply: intent ${intent.id} has no milestone attribution`,
+        );
+      }
+      const milestoneRow = resolveMilestoneRowForProject(
+        intent.projectId,
+        intent.milestone,
+      );
+      const session = intent.sessionId ? getSession(intent.sessionId) : null;
+      const headSha = resolveReportFileHeadSha(session?.worktree_path ?? null);
+      const evidenceText = [
+        `HEAD: ${headSha ?? 'unknown'}`,
+        payload.evidence_text,
+      ]
+        .filter((part): part is string => Boolean(part))
+        .join('\n\n');
+      const now = new Date().toISOString();
+      const report = insertReport({
+        projectId: intent.projectId,
+        milestoneId: milestoneRow.id,
+        title: payload.title,
+        symptomText: payload.symptom_text,
+        evidenceText,
+        source: 'session',
+        originSessionId: intent.sessionId ?? undefined,
+        originTaskId: session?.task_id ?? undefined,
+        createdAt: now,
+      });
+      const committed = updateReportState(report.id, 'committed', now);
+      return { id: committed.id, state: committed.state };
     }
     case 'test.request':
     case 'ops.prIntent':
@@ -4735,6 +5095,7 @@ function transitionRejectedIntent(
   outcome: StagedIntentRejectOutcome,
   reason: string,
   provenance: 'auto' | 'operator' = 'operator',
+  cache?: RowToApiCache,
 ): { intent: StagedIntent; row: StagedIntentRow } {
   // pushback (including an apply-time failure, which is always pushback) is
   // revisable — it lands in needs_revision, the same state the stage-time
@@ -4764,7 +5125,7 @@ function transitionRejectedIntent(
       ? { annotation: JSON.stringify({ autoRejected: true }) }
       : {}),
   });
-  const rejectedIntent = rowToApi(rejected);
+  const rejectedIntent = rowToApi(rejected, cache);
   broadcastIntentChange(rejectedIntent);
 
   recordEvent({
@@ -4907,19 +5268,22 @@ async function resumeCapabilityRequester(
 
   if (!sessionManager) return;
 
-  let respawnApplied = false;
   if (outcome === 'approved') {
-    ({ respawnApplied } = await sessionManager.grantCapability(
-      intent.sessionId,
-      payload.capability,
-    ));
+    await sessionManager.grantCapability(intent.sessionId, payload.capability);
   }
 
+  // Whether a respawn actually ran (grantCapability's respawnApplied) is not
+  // the session's problem: by the time this message is composed the grant is
+  // already durably persisted, and a live session that missed an in-place
+  // respawn still picks it up on its very next spawn (getSessionAllowedTools
+  // reads getGrantedCapabilities fresh every time). A respawn that was
+  // attempted and failed (e.g. worktree missing) is an operator concern,
+  // already logged by respawnForCapabilityGrant — not something to tell the
+  // session to sit and wait for, since the session has no way to act on
+  // "wait for a resume" and no way to know one happened.
   const message =
     outcome === 'approved'
-      ? respawnApplied
-        ? `Capability request approved: "${payload.capability}" has been granted for this session.`
-        : `Capability request approved: "${payload.capability}" has been recorded but is not yet active in this session — it will take effect on the next resume, not this turn. Do not attempt to use it now.`
+      ? `Capability request approved: "${payload.capability}" has been granted — you can use it now.`
       : outcome === 'pushback'
         ? `Capability request "${payload.capability}" was sent back for revision. Feedback: ${reason ?? ''}`
         : `Capability request "${payload.capability}" was declined. Reason: ${reason ?? ''}`;
@@ -5029,6 +5393,13 @@ async function resumeReviewDisputeAuthor(
  * in the task's declared-writes section — declaration only ever narrows an
  * already-grantable request down to auto-approved, it never widens what's
  * grantable.
+ *
+ * Checked before either auto-approve path: a request for a capability the
+ * session already holds (config-pre-granted or previously approved) is an
+ * immediate no-op — transitioned straight to `withdrawn`, never staged as a
+ * fresh `pending`/`approved` intent and never re-run through
+ * `resumeCapabilityRequester` (no redundant grant, respawn, or
+ * capability_request_disposition audit entry).
  */
 async function maybeAutoApproveCapabilityRequest(
   intent: StagedIntent,
@@ -5045,11 +5416,21 @@ async function maybeAutoApproveCapabilityRequest(
   const payload = intent.payload as CapabilityRequestPayload;
   const requestingSession = getSession(intent.sessionId);
 
+  if (getGrantedCapabilities(intent.sessionId).includes(payload.capability)) {
+    const withdrawn = transitionStagedIntent(intent.id, 'withdrawn', {
+      dispositionReason: `"${payload.capability}" is already granted to this session — no request needed.`,
+    });
+    const withdrawnIntent = rowToApi(withdrawn);
+    broadcastIntentChange(withdrawnIntent);
+    return withdrawnIntent;
+  }
+
   const sanctioned = isSanctionedAutoApproveCapability(
     payload.capability,
     intent.sessionId,
     intent.projectId,
     requestingSession?.session_type,
+    requestingSession?.task_id,
   );
 
   const declaredWriteEligible =
@@ -5184,6 +5565,89 @@ async function maybeAutoApproveSeedStage(
   return approved ? rowToApi(approved) : intent;
 }
 
+/**
+ * Best-effort HEAD sha for the worktree a report.file intent's owning
+ * session ran in — resolved from the session's own DB row's worktree_path,
+ * the same pattern resolveTestRequestExecutionInputs uses for test.request's
+ * execution inputs (AgentSession.currentHeadSha is private and unreachable
+ * from this apply path). Null (never throws) when there's no worktree path
+ * or git is unavailable — the caller folds that into evidence_text as
+ * "HEAD: unknown" rather than blocking the report from filing.
+ */
+function resolveReportFileHeadSha(worktreePath: string | null): string | null {
+  if (!worktreePath) return null;
+  try {
+    return execSync('git rev-parse HEAD', { cwd: worktreePath })
+      .toString()
+      .trim();
+  } catch {
+    return null;
+  }
+}
+
+/** Hard per-session ceiling on report.file stages — see routeStageTimeBlock's report.file branch. */
+const REPORT_FILE_SESSION_CAP = 5;
+
+/**
+ * Stage-time checks for report.file, run from routeStageTimeBlock: (1) a
+ * hard per-session cap — a session that has already staged
+ * REPORT_FILE_SESSION_CAP live report.file intents has this one declined
+ * outright, the same auto-reject path declineTestRequestAutoGrant uses; (2)
+ * a server-side duplicate check — the payload's session-supplied fingerprint
+ * compared against every other staged/approved report.file intent in the
+ * same project. A match is tagged via the annotation column
+ * (`{duplicateOf}`, mirroring the `{autoApproved}`/`{autoRejected}`
+ * pattern) for triage-surfaced grouping only — it is never rejected or
+ * suppressed on a fingerprint match.
+ */
+async function routeReportFileStageTimeChecks(
+  intent: StagedIntent,
+  sessionManager: SessionManager | undefined,
+): Promise<StagedIntent> {
+  if (!intent.sessionId) return intent;
+
+  const liveForSession = listStagedIntentsBySession(intent.sessionId).filter(
+    (row) =>
+      row.kind === 'report.file' &&
+      (row.state === 'staged' || row.state === 'approved'),
+  );
+  if (liveForSession.length > REPORT_FILE_SESSION_CAP) {
+    const row = getStagedIntentRow(intent.id);
+    if (!row) return intent;
+    return rejectStagedIntentRow(
+      row,
+      'decline',
+      `report.file per-session cap (${REPORT_FILE_SESSION_CAP}) exceeded`,
+      sessionManager,
+      undefined,
+      'auto',
+    );
+  }
+
+  const payload = intent.payload as ReportFilePayload;
+  const duplicate = listStagedIntentsByProject(intent.projectId).find((row) => {
+    if (row.kind !== 'report.file' || row.id === intent.id) return false;
+    try {
+      return (
+        (JSON.parse(row.payload) as ReportFilePayload).fingerprint ===
+        payload.fingerprint
+      );
+    } catch {
+      return false;
+    }
+  });
+  if (duplicate) {
+    setStagedIntentAnnotation(
+      intent.id,
+      JSON.stringify({ duplicateOf: duplicate.id }),
+    );
+    const row = getStagedIntentRow(intent.id);
+    return row ? rowToApi(row) : intent;
+  }
+
+  return intent;
+}
+
 /** Cap on the test.request result delivered into a session's feedback inbox — the durable record in test_request_runs keeps the untruncated output. */
 const TEST_REQUEST_DELIVERY_OUTPUT_CAP = 8_000;
 
@@ -5203,7 +5667,6 @@ function resolveTestRequestExecutionInputs(intent: StagedIntent):
       commands: string[];
       timeoutSec: number;
       maxRssMb: number;
-      failFast: boolean;
     }
   | { ok: false; reason: string } {
   if (!intent.sessionId) {
@@ -5234,54 +5697,76 @@ function resolveTestRequestExecutionInputs(intent: StagedIntent):
     commands: config.test,
     timeoutSec: config.test_timeout_sec,
     maxRssMb: config.test_max_rss_mb,
-    failFast: config.test_fail_fast,
   };
 }
 
 /**
- * Runs (or joins, via runProjectTestRequest's coalescing) the test.request
- * lane execution for an already-approved intent, then finalizes it: commits
- * the staged intent (test.request has no separate apply step — mirrors
+ * Runs (or joins, via admitTestRequest's coalescing) the test.request lane
+ * execution for an already-approved intent, then finalizes it: commits the
+ * staged intent (test.request has no separate apply step — mirrors
  * review.dispute/completeness.disposition) and delivers the (truncated)
  * result to the requesting session's feedback inbox so it wakes with the
  * outcome instead of polling for it.
+ *
+ * `precomputedAdmission` lets the auto-grant path (maybeAutoApproveTestRequest)
+ * pass through the exact admission it already made — and already reported to
+ * the session synchronously — so this never admits a second, independent
+ * lane request for the same intent. The operator manual-approve path has no
+ * such precomputed admission (it never calls maybeAutoApproveTestRequest) and
+ * falls back to computing its own, exactly as this function always did before
+ * admission reporting existed.
  */
-async function triggerTestRequestExecution(
+export async function triggerTestRequestExecution(
   intent: StagedIntent,
   sessionManager: SessionManager | undefined,
+  precomputedAdmission?: TestRequestAdmission,
 ): Promise<void> {
   const inputs = resolveTestRequestExecutionInputs(intent);
   let result: TestCommandResult;
+  let joined: boolean | null = null;
+  let unchangedReplay = false;
+  let runId: string | null = null;
   if (!inputs.ok) {
     result = {
       passed: false,
       output: `[test.request] ${inputs.reason}`,
     };
   } else {
-    let contentHash: string | null = null;
-    try {
-      contentHash = await computeWholeTreeContentHash(inputs.worktreePath);
-    } catch (err) {
-      logger.error(
-        `[stagedIntents] worktree hash failed for test.request ${intent.id}: ${err}`,
-      );
-    }
-    if (!contentHash) {
-      result = {
-        passed: false,
-        output: '[test.request] worktree content hash unavailable',
-      };
-    } else {
+    let admission = precomputedAdmission ?? null;
+    if (!admission) {
+      let contentHash: string | null = null;
       try {
-        result = await runProjectTestRequest({
+        contentHash = await computeWholeTreeContentHash(inputs.worktreePath);
+      } catch (err) {
+        logger.error(
+          `[stagedIntents] worktree hash failed for test.request ${intent.id}: ${err}`,
+        );
+      }
+      if (contentHash) {
+        admission = admitTestRequest({
           projectId: intent.projectId,
           contentHash,
           worktreePath: inputs.worktreePath,
           commands: inputs.commands,
           timeoutSec: inputs.timeoutSec,
           maxRssMb: inputs.maxRssMb,
-          failFast: inputs.failFast,
+          sessionId: intent.sessionId ?? null,
+          runOrigin: null,
         });
+      }
+    }
+    if (!admission) {
+      result = {
+        passed: false,
+        output: '[test.request] worktree content hash unavailable',
+      };
+    } else {
+      try {
+        const runResult = await admission.result;
+        result = runResult;
+        joined = runResult.joined;
+        unchangedReplay = runResult.unchangedReplay;
+        runId = runResult.runId;
       } catch (err) {
         result = {
           passed: false,
@@ -5289,6 +5774,58 @@ async function triggerTestRequestExecution(
         };
       }
     }
+  }
+
+  // An execution failure (spawn ENOENT/EAGAIN/fork failure — the runner
+  // never started) is an infrastructure outcome, not a test verdict: no
+  // command ran, so base-attributable filtering (which reasons about
+  // whether *the tests that ran* are the base's fault) does not apply, and
+  // this must never be charged against the session's retry budget — mirrors
+  // the precedent below for the inconclusive/unknown base-attribution
+  // outcomes.
+  const executionFailed = !!result.spawnFailed;
+
+  // Filter a raw failure against the project's current base-branch health
+  // before anything downstream (commit annotation, audit event, session
+  // feedback) sees `result.passed` — a confirmed base-attributable failure
+  // must never charge the session or read to it as its own fault. See
+  // orchestration/baseAttributableFilter.ts.
+  let filterResult: Awaited<
+    ReturnType<typeof filterBaseAttributableFailures>
+  > | null = null;
+  if (runId && !result.passed && !executionFailed) {
+    const project = getProjectById(intent.projectId);
+    const run = getTestRequestRunById(runId);
+    if (project && run) {
+      try {
+        filterResult = await filterBaseAttributableFailures(
+          project,
+          run,
+          (intent.payload as TestRequestPayload).taskId ?? null,
+        );
+      } catch (err) {
+        logger.error(
+          `[stagedIntents] base-attributable filter failed for test.request ${intent.id}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+  }
+  if (filterResult && filterResult.outcome !== 'unfiltered') {
+    result = { ...result, passed: filterResult.passed };
+  }
+  if (
+    (executionFailed ||
+      filterResult?.outcome === 'inconclusive' ||
+      filterResult?.outcome === 'unknown') &&
+    intent.sessionId
+  ) {
+    decrementSessionTestRequestCycleCount(intent.sessionId);
+  }
+  // A fully-excused failure must also flip the stored run's state — the
+  // test_request_gate PR check reads test_request_runs.state directly, and
+  // it was written 'failed' from the raw result before this filter ran.
+  if (filterResult?.outcome === 'filtered_pass' && runId) {
+    updateTestRequestRunState(runId, 'passed');
   }
 
   const row = getStagedIntentRow(intent.id);
@@ -5309,20 +5846,40 @@ async function triggerTestRequestExecution(
       intentId: intent.id,
       disposition: 'test_request_completed',
       passed: result.passed,
+      joined,
+      unchangedReplay,
       provenance: 'auto',
+      ...(filterResult && filterResult.outcome !== 'unfiltered'
+        ? { baseAttributableFilterOutcome: filterResult.outcome }
+        : {}),
     },
   });
 
   if (!intent.sessionId || !sessionManager) return;
-  const output = truncateForDelivery(
-    result.output,
-    TEST_REQUEST_DELIVERY_OUTPUT_CAP,
-  );
+  const structuredResult = runId
+    ? getTestRequestRunById(runId)?.structured_result
+    : null;
+  const output = executionFailed
+    ? `[test.request] The test run could not be executed — the test runner process failed to start, so no test result exists. This is an infrastructure failure, not a test failure; it does not indicate your changes are broken. Retry the request.\n\n${truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP)}`
+    : (filterResult &&
+        filterResult.outcome !== 'unfiltered' &&
+        renderBaseAttributableFilterDigest(filterResult)) ||
+      (structuredResult && buildTestResultDigest(structuredResult)) ||
+      truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
   try {
     await sessionManager.enqueueFeedback(
       intent.sessionId,
       'test_request',
-      JSON.stringify({ intentId: intent.id, passed: result.passed, output }),
+      JSON.stringify({
+        intentId: intent.id,
+        passed: result.passed,
+        output,
+        ...(unchangedReplay ? { unchangedReplay: true } : {}),
+        ...(filterResult?.outcome === 'inconclusive'
+          ? { inconclusive: true }
+          : {}),
+        ...(executionFailed ? { executionFailed: true } : {}),
+      }),
     );
   } catch (err) {
     logger.error(
@@ -5337,12 +5894,14 @@ async function triggerTestRequestExecution(
  * it recomputes a project-scoped whole-tree content hash directly off the
  * requesting session's live worktree (see computeWholeTreeContentHash) and
  * auto-approves whenever the project has `test:` commands configured and a
- * hash could be computed. Bounded by a per-session cycle counter
+ * hash could be computed. Tracked by a per-session cycle counter
  * (session_test_request_cycles, mirroring flake_recovery_max_retries): once
- * a session's staged test.request count exceeds
- * runtimeSettings.test_request_cycle_limit, the session is paused
- * (test_request_cycle_exceeded) instead of auto-running further requests,
- * so an iterate-on-red loop cannot run unbounded.
+ * a session's staged test.request count reaches
+ * runtimeSettings.test_request_cycle_limit, the crossing is recorded via a
+ * durable `test_request_cycle_limit_crossed` audit event (queryable signal,
+ * not a decision-surface prompt) and the request still auto-approves —
+ * declining never helped here, since it only withheld the pass/fail signal
+ * a session needs to know whether its own change is correct.
  */
 /**
  * Declines a test.request's auto-grant for a structural reason (no
@@ -5386,13 +5945,6 @@ async function maybeAutoApproveTestRequest(
     );
   }
 
-  const priorCount = getSessionTestRequestCycleCount(intent.sessionId);
-  incrementSessionTestRequestCycleCount(intent.sessionId);
-  if (priorCount >= typedGetSetting('test_request_cycle_limit')) {
-    setSessionPauseReason(intent.sessionId, 'test_request_cycle_exceeded');
-    return intent;
-  }
-
   const inputs = resolveTestRequestExecutionInputs(intent);
   if (!inputs.ok) {
     return declineTestRequestAutoGrant(intent, inputs.reason, sessionManager);
@@ -5416,18 +5968,115 @@ async function maybeAutoApproveTestRequest(
     );
   }
 
+  // Admitted synchronously, before this intent is even approved — reports
+  // this session's live lane standing (running, or queued at a position/
+  // depth) right in the response, instead of a bare "queued" the caller has
+  // to take on faith. When this session already has one pending request
+  // against this exact tree, `reused` is true and no new lane admission
+  // happened — see admitTestRequest's doc comment.
+  const admission = admitTestRequest({
+    projectId: intent.projectId,
+    contentHash,
+    worktreePath: inputs.worktreePath,
+    commands: inputs.commands,
+    timeoutSec: inputs.timeoutSec,
+    maxRssMb: inputs.maxRssMb,
+    sessionId: intent.sessionId,
+    runOrigin: null,
+  });
+
+  const priorCount = getSessionTestRequestCycleCount(intent.sessionId);
+  if (!admission.reused && !admission.unchangedReplay) {
+    // Skip the charge when the run that prompted this cycle failed for a
+    // confirmed base-attributable reason (see baseAttribution.ts) — the
+    // session's own change isn't what's failing, so an iterate-on-red loop
+    // forced entirely by a broken base branch must not burn this budget.
+    // Unlike stalled_pr_retry_count/flake_recovery_attempts, no reset
+    // primitive exists for this counter — an already-exhausted session always
+    // requires a fresh dispatch, per the locked design. A reused (already
+    // pending) request, or one answered from a settled prior run for an
+    // unchanged tree (unchangedReplay), never reaches here — neither
+    // advances this budget a second time for the same underlying cycle.
+    const project = getProjectById(intent.projectId);
+    const priorRun = project
+      ? getLatestTestRequestRunForSession(project.id, intent.sessionId)
+      : undefined;
+    const priorFailureBaseAttributable =
+      project && priorRun?.state === 'failed'
+        ? await isRunFailureBaseAttributable(project, priorRun)
+        : false;
+    if (!priorFailureBaseAttributable) {
+      incrementSessionTestRequestCycleCount(intent.sessionId);
+    }
+    const currentCycleCount = getSessionTestRequestCycleCount(intent.sessionId);
+    const cycleLimit = typedGetSetting('test_request_cycle_limit');
+    if (priorCount >= cycleLimit) {
+      // Past the limit the request still auto-approves — see the module
+      // comment above maybeAutoApproveTestRequest. The crossing is recorded
+      // durably as a signal rather than blocking the session, since the
+      // pause this used to trigger interrupted legitimate iteration far more
+      // often than it caught a runaway loop.
+      recordEvent({
+        event_type: 'test_request_cycle_limit_crossed',
+        actor_type: 'system',
+        actor_id: intent.sessionId,
+        project_id: intent.projectId,
+        payload: {
+          session_id: intent.sessionId,
+          cycle_count: currentCycleCount,
+          cycle_limit: cycleLimit,
+        },
+      });
+    }
+  }
+
   const row = getStagedIntentRow(intent.id);
   if (!row) return intent;
+
+  const queueAnnotation = JSON.stringify({
+    testRequestQueue: {
+      runId: admission.runId,
+      status: admission.status,
+      position: admission.position,
+      queueDepth: admission.queueDepth,
+      reused: admission.reused,
+      unchangedReplay: admission.unchangedReplay,
+    },
+  });
+
+  if (admission.reused) {
+    // This session already has one pending request against this exact
+    // tree — admitTestRequest folded this call into it rather than
+    // admitting a new lane run, and per the locked design this intent must
+    // not stage as a second live one either: withdraw it immediately
+    // (never approved, never executed a second time) with its annotation
+    // pointing at the request it was folded into, so the caller's
+    // synchronous response still carries that request's identity/position.
+    // The original intent's own triggerTestRequestExecution call — already
+    // in flight — is what delivers the eventual result to this session's
+    // feedback inbox; this row has nothing further to do.
+    setStagedIntentAnnotation(intent.id, queueAnnotation);
+    return withdrawIntent(
+      intent.id,
+      `duplicate of pending test.request ${admission.runId}`,
+      intent.sessionId,
+    );
+  }
+
   autoApproveAccretionRow(row);
+  setStagedIntentAnnotation(intent.id, queueAnnotation);
 
   const approved = getStagedIntentRow(intent.id);
   const approvedIntent = approved ? rowToApi(approved) : intent;
 
-  void triggerTestRequestExecution(approvedIntent, sessionManager).catch(
-    (err) =>
-      logger.error(
-        `[stagedIntents] test.request execution failed for ${intent.id}: ${err}`,
-      ),
+  void triggerTestRequestExecution(
+    approvedIntent,
+    sessionManager,
+    admission,
+  ).catch((err) =>
+    logger.error(
+      `[stagedIntents] test.request execution failed for ${intent.id}: ${err}`,
+    ),
   );
 
   return approvedIntent;
@@ -5903,6 +6552,57 @@ function describeUnappliedCrossGroupBodyPatches(
 }
 
 /**
+ * Resolves the Type a Ready-flip gate should validate against: a
+ * task.setType staged into the same group, if one is present, else the
+ * committed board cache — mirroring how computeProposedBody already resolves
+ * the effective body from the group's pending patches rather than only the
+ * stored one. Without this, a groom session cannot retype a mis-typed task
+ * and promote it to Ready in the same pass, since the gate would validate
+ * the old, about-to-be-superseded type. Falls back to `fallbackType` (the
+ * caller's payload.groomingGate?.type) only when neither a pending setType
+ * nor a cached type is available.
+ */
+function resolveEffectiveType(
+  groupId: string | null | undefined,
+  taskId: string,
+  fallbackType: string | undefined,
+): string | undefined {
+  // Exact string equality — safe because validateAndNormalizeTaskReferences
+  // normalizes task.setType's payload.taskId the same way it normalizes
+  // task.setStatus's, the same convergence rule gate.accrete's sourceTask.id
+  // already relies on to correlate with a sibling task.setStatus by string
+  // equality (see that block's comment).
+  //
+  // Deliberately checks 'committed' alongside ACTIVE_STATES (staged/
+  // approved): commitGroupIntents applies a group's non-arming members
+  // (setDependsOn, setType, updateBody, ...) before its arming
+  // task.setStatus->Ready, transitioning each to 'committed' as it lands —
+  // so by the time the Ready flip itself applies (this function's 4th call
+  // site, TaskWriteCommands.setStatus's authoritativeType), a same-group
+  // task.setType has often already committed moments earlier in the very
+  // same pass. Excluding 'committed' would make the Ready flip see its own
+  // sibling's just-applied retype as if it had never happened. It also
+  // covers the halted-then-retried case: a prior partial commit of this
+  // same group that already landed the retype before failing elsewhere.
+  const relevantSetTypeStates: readonly StagedIntentState[] = [
+    ...ACTIVE_STATES,
+    'committed',
+  ];
+  const setTypeRow = groupId
+    ? listStagedIntentsByGroup(groupId).find(
+        (row) =>
+          row.kind === 'task.setType' &&
+          relevantSetTypeStates.includes(row.state) &&
+          (JSON.parse(row.payload) as SetTypePayload).taskId === taskId,
+      )
+    : undefined;
+  if (setTypeRow) {
+    return (JSON.parse(setTypeRow.payload) as SetTypePayload).type;
+  }
+  return getCachedType(taskId) ?? fallbackType;
+}
+
+/**
  * Stage-time eager validation for a task.setStatus -> Ready intent: runs the
  * same grooming-promotion-gate and readiness-gate checks the commit-time path
  * (applyIntent's task.setStatus case) enforces, but only to annotate the
@@ -5923,8 +6623,11 @@ export async function runStageTimeReadyChecks(
   const payload = intent.payload as SetStatusPayload;
   if (payload.status !== 'Ready') return intent;
 
-  const resolvedType =
-    getCachedType(payload.taskId) ?? payload.groomingGate?.type;
+  const resolvedType = resolveEffectiveType(
+    intent.groupId,
+    payload.taskId,
+    payload.groomingGate?.type,
+  );
 
   // A missing/unresolvable project surfaces as its own dedicated block
   // reason inside checkGroomingPromotionGate (via resolveFilesPathsEntriesServerSide)
@@ -6073,10 +6776,156 @@ export function formatStageTimeBlockFeedback(
  * looping forever, mirroring PlanningOrchestrator.verifyAndRoutePendingGroups
  * only feeding back non-escalated outcomes.
  */
+/**
+ * The distinct terminal_completion_reason a standard/ops session's
+ * auto-resolved planning.noOp leaves on its session row — deliberately not
+ * 'idle' (the silent-stop shape this task exists to close off) and
+ * deliberately not shared with any PR-driven completing reason, so a later
+ * query can tell "closed because its own no-op resolved the task" apart from
+ * every other terminal path.
+ */
+const NO_OP_RESOLVED_REASON = 'no_op_resolved';
+
+/**
+ * Auto-resolves a standalone planning.noOp staged by a standard or ops
+ * session declaring the dispatched task's work is already satisfied
+ * elsewhere — the dispatched-session analog of NoOpInvestigator's
+ * `resolved` verdict, reached directly rather than through a secondary
+ * investigator session, since the staging session already did that
+ * investigation itself and named the evidence in `reason` (see the
+ * scaffold text in orchestrator-claudemd.ts).
+ *
+ * Deliberately narrower than the general planning.noOp path: a groom/
+ * design/split/docs no-op declares "nothing to change this turn", not "this
+ * task is already done" — those still commit only via the operator's
+ * Acknowledge (see StagedIntentPanel.tsx's isNoOp branch and the
+ * /staged-intents/:id/acknowledge route), unchanged. Gated on the staging
+ * session's session_type rather than on the intent's kind-eligibility list,
+ * since groom/design/ops all list `planning.noOp` as an allowed kind but
+ * only standard/ops sessions get this auto-close semantics. A grouped
+ * planning.noOp (part of a design closing-synthesis pass) is untouched —
+ * it commits only through the group-commit path (see applyIntent's
+ * 'planning.noOp' case).
+ */
+async function maybeAutoResolveCodeNoOp(
+  intent: StagedIntent,
+): Promise<StagedIntent> {
+  if (
+    intent.kind !== 'planning.noOp' ||
+    intent.groupId ||
+    !intent.sessionId ||
+    intent.state !== 'staged'
+  ) {
+    return intent;
+  }
+  const session = getSession(intent.sessionId);
+  if (
+    !session ||
+    (session.session_type !== 'standard' && session.session_type !== 'ops') ||
+    isInvestigateSession(session.task_id)
+  ) {
+    return intent;
+  }
+  const payload = intent.payload as { taskId?: string; reason?: string };
+  if (!payload?.taskId || !payload.reason) return intent;
+
+  const committed = transitionStagedIntent(intent.id, 'committed');
+  const committedIntent = rowToApi(committed);
+  broadcastIntentChange(committedIntent);
+
+  recordEvent({
+    event_type: 'staged_intent_disposition',
+    actor_type: 'system',
+    actor_id: null,
+    project_id: committedIntent.projectId,
+    task_id: payload.taskId,
+    payload: { intentId: committedIntent.id, disposition: 'auto_committed' },
+  });
+
+  await applyResolvedNoOp(
+    getTaskBackend(intent.projectId),
+    payload.taskId,
+    `Auto-resolved via planning.noOp — this task's work was already satisfied: ${payload.reason}`,
+  );
+
+  markSessionDone(intent.sessionId, Date.now(), null, NO_OP_RESOLVED_REASON);
+  setSessionTerminalCompletionReason(intent.sessionId, NO_OP_RESOLVED_REASON);
+
+  return committedIntent;
+}
+
+/**
+ * Auto-resolves a standalone planning.noOp staged by an investigate-batch
+ * session (task_id `report-batch:<batchId>`, see isInvestigateSession)
+ * declaring one of its own dispatched reports has no actionable finding —
+ * the investigate analog of maybeAutoResolveCodeNoOp above, but resolving
+ * through updateReportState against the named report rather than
+ * applyResolvedNoOp against a real task, since an investigate session's
+ * task_id is the synthetic batch id, not a task the TaskBackend knows
+ * about. assertSessionTaskBinding (see its planning.noOp/isInvestigateSession
+ * branch) already guarantees payload.taskId names a report in this
+ * session's own dispatched batch by the time an intent reaches here.
+ */
+async function maybeAutoResolveInvestigateNoOp(
+  intent: StagedIntent,
+): Promise<StagedIntent> {
+  if (
+    intent.kind !== 'planning.noOp' ||
+    intent.groupId ||
+    !intent.sessionId ||
+    intent.state !== 'staged'
+  ) {
+    return intent;
+  }
+  const session = getSession(intent.sessionId);
+  if (!session || !isInvestigateSession(session.task_id)) {
+    return intent;
+  }
+  const payload = intent.payload as { taskId?: string; reason?: string };
+  if (!payload?.taskId || !payload.reason) return intent;
+
+  // Resolve the report — the step most likely to throw (missing report row,
+  // DB error) — before transitioning the intent to 'committed' or recording
+  // its disposition, so a throw here leaves the intent untouched in
+  // 'staged' rather than permanently 'committed' with the report never
+  // resolved and the session never terminated.
+  updateReportState(
+    payload.taskId,
+    'resolved',
+    new Date().toISOString(),
+    payload.reason,
+  );
+
+  const committed = transitionStagedIntent(intent.id, 'committed');
+  const committedIntent = rowToApi(committed);
+  broadcastIntentChange(committedIntent);
+
+  recordEvent({
+    event_type: 'staged_intent_disposition',
+    actor_type: 'system',
+    actor_id: null,
+    project_id: committedIntent.projectId,
+    task_id: payload.taskId,
+    payload: { intentId: committedIntent.id, disposition: 'auto_committed' },
+  });
+
+  markSessionDone(intent.sessionId, Date.now(), null, NO_OP_RESOLVED_REASON);
+  setSessionTerminalCompletionReason(intent.sessionId, NO_OP_RESOLVED_REASON);
+
+  return committedIntent;
+}
+
 export async function routeStageTimeBlock(
   intent: StagedIntent,
   sessionManager: SessionManager | undefined,
 ): Promise<StagedIntent> {
+  if (intent.kind === 'planning.noOp') {
+    const resolved = await maybeAutoResolveCodeNoOp(intent);
+    if (resolved.state === 'committed') return resolved;
+    const investigateResolved = await maybeAutoResolveInvestigateNoOp(resolved);
+    if (investigateResolved.state === 'committed') return investigateResolved;
+    intent = investigateResolved;
+  }
   if (intent.kind === 'session.requestCapability') {
     return maybeAutoApproveCapabilityRequest(intent, sessionManager);
   }
@@ -6088,6 +6937,9 @@ export async function routeStageTimeBlock(
   }
   if (intent.kind === 'test.request') {
     intent = await maybeAutoApproveTestRequest(intent, sessionManager);
+  }
+  if (intent.kind === 'report.file') {
+    intent = await routeReportFileStageTimeChecks(intent, sessionManager);
   }
 
   const checked = await runStageTimeReadyChecks(intent);
@@ -6345,6 +7197,7 @@ async function checkGroupArmingIntentCompleteness(
   groupId: string,
   row: StagedIntentRow,
   payload: SetStatusPayload,
+  trackedFileSetCache?: TrackedFileSetCache,
 ): Promise<GroupArmingCompletenessResult> {
   const matchedAccretionRowIds: string[] = [];
   const fail = (
@@ -6446,7 +7299,7 @@ async function checkGroupArmingIntentCompleteness(
   const gateResult = await checkGroomingPromotionGate(
     payload.groomingGate ?? {},
     payload.taskId,
-    getCachedType(payload.taskId) ?? payload.groomingGate?.type,
+    resolveEffectiveType(groupId, payload.taskId, payload.groomingGate?.type),
     {
       skipGateContributionCheck: hasGroupAccretionIntent(
         groupId,
@@ -6461,6 +7314,7 @@ async function checkGroupArmingIntentCompleteness(
     },
     row.project_id,
     groomingGateBody,
+    trackedFileSetCache,
   );
   if (!gateResult.allowed) {
     return fail({
@@ -6576,6 +7430,7 @@ async function precheckGroupCommit(
   ordered: StagedIntentRow[],
   opts: GroupCommitOptions,
   sessionManager?: SessionManager,
+  trackedFileSetCache?: TrackedFileSetCache,
 ): Promise<GroupCommitResult | null> {
   const opsTerminalFailure = checkOpsTerminalGroupCompleteness(groupId);
   if (opsTerminalFailure) {
@@ -6590,7 +7445,12 @@ async function precheckGroupCommit(
     const payload = JSON.parse(row.payload) as SetStatusPayload;
 
     const { failure, matchedAccretionRowIds } =
-      await checkGroupArmingIntentCompleteness(groupId, row, payload);
+      await checkGroupArmingIntentCompleteness(
+        groupId,
+        row,
+        payload,
+        trackedFileSetCache,
+      );
     if (failure) {
       if (
         failure.kind === 'dependsOn' ||
@@ -6643,7 +7503,14 @@ async function precheckGroupCommit(
         groupId,
         payload.taskId,
       );
-      const violations = checkReadiness(body, getCachedType(payload.taskId));
+      const violations = checkReadiness(
+        body,
+        resolveEffectiveType(
+          groupId,
+          payload.taskId,
+          payload.groomingGate?.type,
+        ),
+      );
       if (violations.length > 0) {
         setStagedIntentAnnotation(
           row.id,
@@ -6814,11 +7681,22 @@ export async function commitGroupIntents(
     ...live.filter((r) => isArmingReadyIntent(r)),
   ];
 
+  // Shared across precheckGroupCommit's per-arming-row completeness check
+  // and every member's task.setStatus->Ready apply below so the grooming-
+  // gate's `git ls-files`-backed tracked-file-set resolution
+  // (checkGroomingPromotionGate -> resolveFilesPathsEntriesServerSide ->
+  // resolveTrackedFileSet) runs at most once for this whole commit instead
+  // of once per 💻 Code member per call site — precheckGroupCommit already
+  // runs checkGroomingPromotionGate once per arming row ahead of the apply
+  // loop below, which runs it again per member as each applies.
+  const trackedFileSetCache: TrackedFileSetCache = new Map();
+
   const precheckFailure = await precheckGroupCommit(
     groupId,
     ordered,
     opts,
     sessionManager,
+    trackedFileSetCache,
   );
   if (precheckFailure) {
     return {
@@ -6845,8 +7723,15 @@ export async function commitGroupIntents(
   // before any task.setDependsOn naming that sibling — see
   // stageSplitIntents), so the id is always present here.
   const createdTaskIds = new Map<string, string>();
+  // Shared across every member of this commit so rowToApi's
+  // computeGroupBlockedSignals (and its listStagedIntentsByGroup re-read +
+  // per-session completeness resolution) runs once per group per commit
+  // instead of once per member — see 39423079, which fixed the same
+  // quadratic pattern on the GET listing routes but never touched this
+  // write-path loop.
+  const cache = createRowToApiCache();
   for (const row of ordered) {
-    const intent = rowToApi(row);
+    const intent = rowToApi(row, cache);
     try {
       if (intent.kind === 'task.setDependsOn') {
         const payload = intent.payload as SetDependsOnPayload;
@@ -6874,6 +7759,8 @@ export async function commitGroupIntents(
         opts.actorType,
         opts.triageMilestoneLabel,
         sessionManager,
+        undefined,
+        trackedFileSetCache,
       );
       if (intent.kind === 'task.create') {
         createdTaskIds.set(intent.id, (result as { id: string }).id);
@@ -6881,7 +7768,7 @@ export async function commitGroupIntents(
       const committedRow = transitionStagedIntent(intent.id, 'committed', {
         annotation: readinessAdvisoryAnnotation(intent, result),
       });
-      broadcastIntentChange(rowToApi(committedRow));
+      broadcastIntentChange(rowToApi(committedRow, cache));
       mirrorJournalDecisionIfStagedProposal(
         intent,
         (result as { previousState?: OpsState } | undefined)?.previousState,
@@ -7073,6 +7960,121 @@ export function createStagedIntentsRouter(
   // rankDecisions — joined against that milestone's convergence read-surface
   // where resolvable, unranked-by-blocking (kind/direction + needs-attention
   // only) for the unattributed bucket or an unresolvable milestone.
+  // ── GET /api/test-request-runs ────────────────────────────────────────────
+  // On-load snapshot counterpart to testRequestLane.ts's
+  // test_request_run_status WS broadcast — REST stays the fetch/apply source
+  // of truth (mirrors task_updated / staged_intent_changed), the WS message
+  // only tells a connected client a run transitioned. Deliberately not
+  // gated by isVisibleOnDecisionSurface: a lane run's progress is not a
+  // decision-surface concept, unlike the test.request staged intent itself.
+  // Accepts either ?contentHash= (the original F2/reconnect lens, which a
+  // server-internal caller can compute) or ?sessionId= (the
+  // useTestLaneRunStatus lens — a frontend client knows its own session id
+  // but has no visibility into the server-computed whole-tree content hash).
+  router.get('/test-request-runs', (req: Request, res: Response) => {
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    const contentHash =
+      typeof req.query.contentHash === 'string' ? req.query.contentHash : null;
+    const sessionId =
+      typeof req.query.sessionId === 'string' ? req.query.sessionId : null;
+    if (!projectId || (!contentHash && !sessionId)) {
+      res.status(400).json({
+        error: 'projectId and (contentHash or sessionId) are required',
+      });
+      return;
+    }
+    let row: TestRequestRunRow | undefined;
+    if (contentHash) {
+      const running = listRunningTestRequestRuns().find(
+        (r) => r.project_id === projectId && r.content_hash === contentHash,
+      );
+      row = running ?? getLatestTestRequestRun(projectId, contentHash);
+    } else if (sessionId) {
+      row = getLatestTestRequestRunForSession(projectId, sessionId);
+    }
+    res.json({ run: row ? testRequestRunRowToApi(row) : null });
+  });
+
+  // ── GET /api/test-request-runs/history ────────────────────────────────────
+  // Run-history feed for the task detail panel's Tests tab: every
+  // test_request_runs row for one (projectId, sessionId), classified with
+  // the Tests-tab 6-value outcome taxonomy (classifyTestRunOutcome) and
+  // annotated per-test with the flip-rate flag (computeTestFlipRateFlag,
+  // scoped to test ids seen in this session's own runs) plus the session's
+  // test.request cycle count/limit — all data that already exists server-side.
+  // testResults per run is bounded by TEST_RUN_RESULTS_PER_RUN_CAP and
+  // flip-rate lookups are bounded by FLIP_RATE_FLAG_TEST_ID_CAP, regardless
+  // of how many rows/unique test ids exist across the runs in scope — see
+  // listTestRunResultsForRun and getTaskTestFlipRateFlags in db/queries.ts.
+  // testResultsTruncated/totalTestResultCount on each run tell the caller
+  // when the per-run cap actually clipped results.
+  router.get('/test-request-runs/history', (req: Request, res: Response) => {
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    const sessionId =
+      typeof req.query.sessionId === 'string' ? req.query.sessionId : null;
+    const limit =
+      typeof req.query.limit === 'string' ? Number(req.query.limit) : 50;
+    if (!projectId || !sessionId) {
+      res.status(400).json({ error: 'projectId and sessionId are required' });
+      return;
+    }
+
+    const runs = listTestRequestRunsForSession(
+      projectId,
+      sessionId,
+      Number.isFinite(limit) && limit > 0 ? limit : 50,
+    );
+
+    const windowN = typedGetSetting('flip_rate_window_n');
+    const thresholdK = typedGetSetting('flip_rate_threshold_k');
+    const seenTestIds = new Set<string>();
+    const runsWithResults = runs.map((run) => {
+      const testResults = listTestRunResultsForRun(run.id);
+      const totalTestResultCount = countTestRunResultsForRun(run.id);
+      testResults.forEach((t) => seenTestIds.add(t.test_id));
+      return { run, testResults, totalTestResultCount };
+    });
+    const flipRateFlags = getTaskTestFlipRateFlags(
+      [...seenTestIds],
+      windowN,
+      thresholdK,
+    );
+    const flipRateByTestId = new Map(flipRateFlags.map((f) => [f.testId, f]));
+
+    res.json({
+      cycleCount: getSessionTestRequestCycleCount(sessionId),
+      cycleLimit: typedGetSetting('test_request_cycle_limit'),
+      runs: runsWithResults.map(
+        ({ run, testResults, totalTestResultCount }) => {
+          const classification = classifyTestRunOutcome(run);
+          return {
+            id: run.id,
+            sessionId: run.session_id,
+            contentHash: run.content_hash,
+            startedAt: run.started_at,
+            finishedAt: run.finished_at,
+            durationMs:
+              run.finished_at != null ? run.finished_at - run.started_at : null,
+            concurrentRunCount: run.concurrent_run_count,
+            outcome: classification.outcome,
+            nextAction: classification.nextAction,
+            testResults: testResults.map((t) => ({
+              testId: t.test_id,
+              name: t.name,
+              outcome: t.outcome,
+              durationMs: t.duration_ms,
+              flipRate: flipRateByTestId.get(t.test_id) ?? null,
+            })),
+            testResultsTruncated: totalTestResultCount > testResults.length,
+            totalTestResultCount,
+          };
+        },
+      ),
+    });
+  });
+
   router.get('/staged-intents', (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;
@@ -7119,7 +8121,8 @@ export function createStagedIntentsRouter(
         }
       }
       const ranked = rankDecisions(rows, convergence);
-      res.json({ intents: ranked.map(rowToApi) });
+      const cache = createRowToApiCache();
+      res.json({ intents: ranked.map((r) => rowToApi(r, cache)) });
       return;
     }
 
@@ -7132,7 +8135,8 @@ export function createStagedIntentsRouter(
           ? listStagedIntentsByProject(projectId)
           : listAllActiveStagedIntents()
     ).filter((r) => isVisibleOnDecisionSurface(r, sessionManager));
-    res.json({ intents: rows.map(rowToApi) });
+    const cache = createRowToApiCache();
+    res.json({ intents: rows.map((r) => rowToApi(r, cache)) });
   });
 
   // ── POST /api/staged-intents ─────────────────────────────────────────────
@@ -7258,27 +8262,10 @@ export function createStagedIntentsRouter(
         });
         return;
       }
-      if (row.kind === 'completeness.disposition') {
+      if (TERMINAL_ON_APPROVE_INTENT_KINDS.has(row.kind)) {
+        const article = /^[aeiou]/i.test(row.kind) ? 'an' : 'a';
         res.status(409).json({
-          error: `staged intent "${row.id}" is a completeness.disposition run — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
-        });
-        return;
-      }
-      if (row.kind === 'review.dispute') {
-        res.status(409).json({
-          error: `staged intent "${row.id}" is a review.dispute — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
-        });
-        return;
-      }
-      if (row.kind === 'test.request') {
-        res.status(409).json({
-          error: `staged intent "${row.id}" is a test.request — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
-        });
-        return;
-      }
-      if (row.kind === 'ops.prIntent') {
-        res.status(409).json({
-          error: `staged intent "${row.id}" is an ops.prIntent — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
+          error: `staged intent "${row.id}" is ${article} ${row.kind} — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
         });
         return;
       }
@@ -7616,15 +8603,17 @@ export function createStagedIntentsRouter(
   );
 
   // ── POST /api/staged-intents/:id/acknowledge ──────────────────────────────
-  // planning.noOp's sole disposition: the intent proposes nothing, so there
-  // is nothing to route through applyIntent (which has, and must keep, no
-  // case for this kind — see the default: unknown-kind throw). Acknowledging
-  // transitions the row straight to `committed`, records the same
-  // staged_intent_disposition audit event every other disposition uses, and
-  // does not call planningOrchestrator.handleDisposition: a noOp's session
-  // already reached terminal by staging it (checkTerminal's `countable`
-  // filter excludes it), so there is no session left to resume and no
-  // decision for it to act on.
+  // The disposition for a *standalone* planning.noOp (no groupId) — the kind
+  // that arises outside a design closing-synthesis group, e.g. a session
+  // deciding on its own, unprompted, that no artifact is warranted. A grouped
+  // noOp instead commits through applyIntent's group-commit path (see the
+  // 'planning.noOp' case there), since the group cannot partially commit.
+  // Acknowledging transitions the row straight to `committed`, records the
+  // same staged_intent_disposition audit event every other disposition uses,
+  // and does not call planningOrchestrator.handleDisposition: a noOp's
+  // session already reached terminal by staging it (checkTerminal's
+  // `countable` filter excludes it), so there is no session left to resume
+  // and no decision for it to act on.
   router.post(
     '/staged-intents/:id/acknowledge',
     (req: Request, res: Response) => {
@@ -7679,7 +8668,12 @@ export function createStagedIntentsRouter(
           (r) =>
             r.state === 'needs_revision' || r.state === 'pending_verification',
         );
-      res.json({ groupId, intents: members.map(rowToApi), wedged });
+      const cache = createRowToApiCache();
+      res.json({
+        groupId,
+        intents: members.map((r) => rowToApi(r, cache)),
+        wedged,
+      });
     },
   );
 
@@ -7902,9 +8896,14 @@ export function createStagedIntentsRouter(
 
       const rejected: string[] = [];
       const forGroupDisposition: StagedIntentRow[] = [];
+      // Shared across every member of this group reject so rowToApi's
+      // computeGroupBlockedSignals runs once per group instead of once per
+      // member — mirrors the same fix applied to commitGroupIntents' apply
+      // loop above (see 39423079 for the original read-path fix).
+      const cache = createRowToApiCache();
       for (const row of target) {
         const { intent: rejectedIntent, row: rejectedRow } =
-          transitionRejectedIntent(row, outcome, reason);
+          transitionRejectedIntent(row, outcome, reason, 'operator', cache);
         rejected.push(rejectedIntent.id);
 
         if (rejectedIntent.kind === 'session.requestCapability') {

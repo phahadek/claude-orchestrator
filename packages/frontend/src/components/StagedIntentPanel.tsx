@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { renderTaskBodyMarkdown } from '@claude-orchestrator/backend/src/tasks/bodyRender';
+import { TERMINAL_ON_APPROVE_INTENT_KINDS } from '@claude-orchestrator/backend/src/db/types';
 import type {
   StagedIntent,
   StagedIntentRejectOutcome,
@@ -1251,7 +1252,11 @@ export function StagedIntentPanel({
   const [showOverride, setShowOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
   const [consentRejectReason, setConsentRejectReason] = useState('');
-  const [parkEvidence, setParkEvidence] = useState('');
+  const [gateEvidence, setGateEvidence] = useState('');
+  const [reclassifyInFlight, setReclassifyInFlight] = useState(false);
+  const [mirrorClassification, setMirrorClassification] = useState<
+    string | null
+  >(null);
   const rejectReasonRef = useRef<HTMLTextAreaElement>(null);
 
   const blocked = Boolean(
@@ -1262,12 +1267,11 @@ export function StagedIntentPanel({
   // The grant-approval kind: never applied — dispositioned only through
   // approve / reject / pushback, the existing consent vocabulary.
   const isCapabilityRequest = intent.kind === 'session.requestCapability';
-  // Approval is terminal for a completeness-disposition run too — approving
-  // it directly advances the underlying completeness_disposition row(s) off
-  // `proposed` and unblocks the design task's gated arch.*/closing-synthesis
-  // writes; there is no separate apply/commit step.
-  const isCompletenessDisposition = intent.kind === 'completeness.disposition';
-  const skipsApply = isCapabilityRequest || isCompletenessDisposition;
+  // Derived from the shared backend/frontend set rather than restated here —
+  // ops.prIntent and review.dispute are terminal-on-approve too (the backend
+  // rejects apply for every kind in this set); see
+  // TERMINAL_ON_APPROVE_INTENT_KINDS in db/types.ts.
+  const skipsApply = TERMINAL_ON_APPROVE_INTENT_KINDS.has(intent.kind);
   // planning.noOp is purely informational/auditable — no operator
   // disposition (commit/approve/reject) is ever offered for it.
   const isNoOp = intent.kind === 'planning.noOp';
@@ -1290,6 +1294,46 @@ export function StagedIntentPanel({
   const consentGateItemId = isGateVerifyConsent
     ? (intent.payload as GateVerifyPayload).gateItemId
     : null;
+  const mirrorGateItemId = isGateVerifyMirror
+    ? (intent.payload as GateVerifyPayload).gateItemId
+    : null;
+
+  useEffect(() => {
+    if (!mirrorGateItemId) return;
+    let cancelled = false;
+    gateApi
+      .getGateItemDetail(mirrorGateItemId)
+      .then((detail) => {
+        if (!cancelled) setMirrorClassification(detail.item.classification);
+      })
+      .catch(() => {
+        // Non-fatal — the reclassify button just falls back to always
+        // showing (matching the pre-fetch default) rather than blocking on
+        // this read.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mirrorGateItemId]);
+
+  const handleReclassifyReadOnly = async () => {
+    if (!mirrorGateItemId) return;
+    setReclassifyInFlight(true);
+    setError(null);
+    try {
+      const updated = await gateApi.reclassifyItem(mirrorGateItemId, {
+        classification: 'Read-Only',
+        reason: gateEvidence,
+      });
+      onApplied?.(intent, updated);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to reclassify item',
+      );
+    } finally {
+      setReclassifyInFlight(false);
+    }
+  };
 
   const handleApply = async (
     override?: { reason: string },
@@ -1349,7 +1393,7 @@ export function StagedIntentPanel({
   // Mirrors the visible primary action button's own enable condition — 'a'
   // is a no-op whenever that button would be hidden or disabled, never
   // bypassing its gate. For a grouped/capability-request/completeness-
-  // disposition card the primary action is Approve (see the
+  // disposition/test-request card the primary action is Approve (see the
   // "Approve"/"Grant" button below); for an ordinary standalone card it's
   // Commit (see the "✓ Commit" button below) — matching each card's own
   // rendered primary control rather than assuming Approve applies to both.
@@ -1600,53 +1644,55 @@ export function StagedIntentPanel({
             </div>
           )}
 
-          <div className={styles.rejectForm}>
-            <div
-              className={styles.outcomeToggle}
-              role="radiogroup"
-              aria-label="Reject outcome"
-            >
-              {!isBlockedState && (
+          {!isGateVerifyMirror && (
+            <div className={styles.rejectForm}>
+              <div
+                className={styles.outcomeToggle}
+                role="radiogroup"
+                aria-label="Reject outcome"
+              >
+                {!isBlockedState && (
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={rejectOutcome === 'pushback'}
+                    className={
+                      rejectOutcome === 'pushback'
+                        ? styles.outcomeOptionActive
+                        : styles.outcomeOption
+                    }
+                    onClick={() => setRejectOutcome('pushback')}
+                  >
+                    Pushback
+                  </button>
+                )}
                 <button
                   type="button"
                   role="radio"
-                  aria-checked={rejectOutcome === 'pushback'}
+                  aria-checked={rejectOutcome === 'decline'}
                   className={
-                    rejectOutcome === 'pushback'
+                    rejectOutcome === 'decline'
                       ? styles.outcomeOptionActive
                       : styles.outcomeOption
                   }
-                  onClick={() => setRejectOutcome('pushback')}
+                  onClick={() => setRejectOutcome('decline')}
                 >
-                  Pushback
+                  Decline
                 </button>
-              )}
-              <button
-                type="button"
-                role="radio"
-                aria-checked={rejectOutcome === 'decline'}
-                className={
-                  rejectOutcome === 'decline'
-                    ? styles.outcomeOptionActive
-                    : styles.outcomeOption
+              </div>
+              <textarea
+                ref={rejectReasonRef}
+                className={styles.feedbackInput}
+                placeholder={
+                  rejectOutcome === 'pushback'
+                    ? 'What should the session revise?'
+                    : 'Why is this being declined?'
                 }
-                onClick={() => setRejectOutcome('decline')}
-              >
-                Decline
-              </button>
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+              />
             </div>
-            <textarea
-              ref={rejectReasonRef}
-              className={styles.feedbackInput}
-              placeholder={
-                rejectOutcome === 'pushback'
-                  ? 'What should the session revise?'
-                  : 'Why is this being declined?'
-              }
-              value={rejectReason}
-              onChange={(e) => setRejectReason(e.target.value)}
-            />
-          </div>
+          )}
 
           <div className={styles.permissionButtons}>
             {!isGrouped && !blocked && !skipsApply && isGateVerifyMirror && (
@@ -1656,7 +1702,9 @@ export function StagedIntentPanel({
                   className={styles.approveButton}
                   disabled={inFlight !== null || disabled}
                   data-testid="staged-intent-gate-verify-mirror-pass"
-                  onClick={() => void handleApply(undefined, 'pass')}
+                  onClick={() =>
+                    void handleApply(undefined, 'pass', gateEvidence)
+                  }
                 >
                   {inFlight === 'apply' ? 'Applying…' : 'Pass'}
                 </button>
@@ -1665,7 +1713,9 @@ export function StagedIntentPanel({
                   className={styles.approveButton}
                   disabled={inFlight !== null || disabled}
                   data-testid="staged-intent-gate-verify-mirror-fail"
-                  onClick={() => void handleApply(undefined, 'fail')}
+                  onClick={() =>
+                    void handleApply(undefined, 'fail', gateEvidence)
+                  }
                 >
                   {inFlight === 'apply' ? 'Applying…' : 'Fail'}
                 </button>
@@ -1675,22 +1725,24 @@ export function StagedIntentPanel({
                   disabled={inFlight !== null || disabled}
                   data-testid="staged-intent-gate-verify-mirror-defer"
                   title="Resolves this item permanently — it will not be re-attempted. Use Park to postpone instead."
-                  onClick={() => void handleApply(undefined, 'deferred')}
+                  onClick={() =>
+                    void handleApply(undefined, 'deferred', gateEvidence)
+                  }
                 >
                   {inFlight === 'apply' ? 'Applying…' : 'Defer (resolves)'}
                 </button>
                 <textarea
                   className={styles.feedbackInput}
-                  placeholder="Why can't this be verified right now? (required to park)"
-                  value={parkEvidence}
-                  onChange={(e) => setParkEvidence(e.target.value)}
-                  data-testid="staged-intent-gate-verify-mirror-park-evidence"
+                  placeholder="Evidence for this disposition"
+                  value={gateEvidence}
+                  onChange={(e) => setGateEvidence(e.target.value)}
+                  data-testid="staged-intent-gate-verify-mirror-evidence"
                 />
                 <button
                   type="button"
                   className={styles.approveButton}
                   disabled={
-                    inFlight !== null || disabled || !parkEvidence.trim()
+                    inFlight !== null || disabled || !gateEvidence.trim()
                   }
                   data-testid="staged-intent-gate-verify-mirror-park"
                   title="Postpones this item — it stays open and is automatically re-attempted later."
@@ -1698,12 +1750,26 @@ export function StagedIntentPanel({
                     void handleApply(
                       undefined,
                       'not-yet-triggerable',
-                      parkEvidence,
+                      gateEvidence,
                     )
                   }
                 >
                   {inFlight === 'apply' ? 'Applying…' : 'Park'}
                 </button>
+                {mirrorClassification !== 'Read-Only' && (
+                  <button
+                    type="button"
+                    className={styles.reclassifyButton}
+                    disabled={reclassifyInFlight || disabled}
+                    data-testid="staged-intent-gate-verify-mirror-reclassify-readonly"
+                    title="Reclassifies this item as Read-Only, making it auto-runnable by a verifier."
+                    onClick={() => void handleReclassifyReadOnly()}
+                  >
+                    {reclassifyInFlight
+                      ? 'Reclassifying…'
+                      : 'Reclassify: Read-Only'}
+                  </button>
+                )}
               </>
             )}
             {!isGrouped && !blocked && !skipsApply && !isGateVerifyMirror && (

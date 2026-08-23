@@ -16,6 +16,8 @@ import {
   clearTerminalPRFlags,
   getMilestoneById,
   hasAwaitingDispositionIntentForTask,
+  getTaskPauseReason,
+  TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { typedGetSetting } from '../config/settings';
@@ -26,7 +28,10 @@ import type { NotionTask } from '../notion/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
-import { parsePauseReason, deriveRecoveryDescriptor } from '../db/pauseReason';
+import {
+  parsePauseReason,
+  deriveTaskRecoveryDescriptor,
+} from '../db/pauseReason';
 import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
 import { groomBlockingDepTitles } from '../orchestration/planningCandidates';
 import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
@@ -350,9 +355,20 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     };
   }
 
+  let depthReview: TaskView['depthReview'] = null;
+  if (row.depth_review_session_id) {
+    depthReview = {
+      sessionId: row.depth_review_session_id,
+      status: row.depth_review_session_status ?? '',
+      verdict: row.depth_review_verdict ?? null,
+    };
+  }
+
   const pauseStruct = parsePauseReason(
     row.pr_pause_reason ?? row.session_pr_creation_failed_pause_reason ?? null,
   );
+  const taskPauseStruct = getTaskPauseReason(row.task_id);
+  const effectivePauseStruct = taskPauseStruct ?? pauseStruct;
 
   const displayStatus = deriveDisplayStatus({
     notionStatus,
@@ -381,8 +397,8 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     taskName: notionTask?.title ?? row.task_id,
     notionStatus,
     displayStatus,
-    pauseReason: pauseStruct?.reason ?? null,
-    pauseDetail: pauseStruct?.detail ?? null,
+    pauseReason: effectivePauseStruct?.reason ?? null,
+    pauseDetail: effectivePauseStruct?.detail ?? null,
     priority,
     notionUrl: notionTask?.notionUrl ?? '',
     taskType: notionTask?.type ?? '',
@@ -393,12 +409,20 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     planningSession,
     pr,
     review,
+    depthReview,
     totalTokens,
     assignedRepo: getTaskRepoAssignment(row.task_id)?.repo ?? null,
     hasAwaitingDispositionIntent: hasAwaitingDispositionIntentForTask(
       row.task_id,
     ),
-    recoveryDescriptor: deriveRecoveryDescriptor(pauseStruct?.reason ?? null),
+    recoveryDescriptor: deriveTaskRecoveryDescriptor({
+      taskReason: taskPauseStruct?.reason ?? null,
+      prReason: pauseStruct?.reason ?? null,
+      hasPR: row.pr_number != null,
+      sessionTerminal: TERMINAL_SESSION_STATUSES.has(
+        row.code_session_status ?? '',
+      ),
+    }),
   };
 }
 
@@ -1020,13 +1044,21 @@ export function createTasksRouter(
               null,
           )
         : null;
+      const taskPauseStruct = getTaskPauseReason(taskId);
 
-      const descriptor = deriveRecoveryDescriptor(pauseStruct?.reason ?? null);
+      const descriptor = deriveTaskRecoveryDescriptor({
+        taskReason: taskPauseStruct?.reason ?? null,
+        prReason: pauseStruct?.reason ?? null,
+        hasPR: row?.pr_number != null,
+        sessionTerminal: TERMINAL_SESSION_STATUSES.has(
+          row?.code_session_status ?? '',
+        ),
+      });
 
       if (!descriptor.available || !descriptor.action) {
         res.status(422).json({
           error: 'No recovery action available for this task',
-          pauseReason: pauseStruct?.reason ?? null,
+          pauseReason: taskPauseStruct?.reason ?? pauseStruct?.reason ?? null,
         });
         return;
       }

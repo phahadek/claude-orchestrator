@@ -34,6 +34,7 @@ import type {
 } from '../db/types';
 import { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
 import type { SessionManager } from '../session/SessionManager';
+import { normalizeTaskId } from '../tasks/taskId';
 
 function makeSessionManager() {
   const emitter = new EventEmitter();
@@ -87,7 +88,9 @@ function seedJournal(state: OpsJournalState, taskId = TASK_ID): void {
 }
 
 function seedTaskType(type: string, taskId = TASK_ID): void {
-  upsertTaskCache(taskId, JSON.stringify({ type }));
+  // getCachedType normalizes its lookup key (see tasks/taskId.ts) — seed
+  // under the same normalized key so the lookup actually hits.
+  upsertTaskCache(normalizeTaskId(taskId), JSON.stringify({ type }));
 }
 
 let counter = 0;
@@ -306,5 +309,150 @@ describe('PlanningOrchestrator.checkTerminal — ops-journal-incomplete backstop
     expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
     expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
     expect(getTaskPauseReason(TASK_ID)).toBeNull();
+  });
+});
+
+/**
+ * Coverage for handleApproveDisposition (invoked via handleDisposition with
+ * disposition: 'approve') consulting the same incompleteOpsJournalStateFor
+ * predicate rather than terminating an ops session by default the moment its
+ * group settles. This is the fix for the observed instance in the task
+ * write-up: approving a candidate journal.setState terminated the session
+ * before it could file its follow-ons and closing intent.
+ */
+describe('PlanningOrchestrator.handleDisposition — approve consults incompleteOpsJournalStateFor', () => {
+  it("approving an Investigation session's journal.setState to candidate resumes the session and does not mark it terminal", async () => {
+    seedSession();
+    seedTaskType('🔎 Investigation');
+    seedJournal('candidate');
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+
+    const intent = stageJournalSetStateIntent(TASK_ID, SESSION_ID, {
+      payload: JSON.stringify({ taskId: TASK_ID, state: 'candidate' }),
+    });
+
+    await orchestrator.handleDisposition({ intent, disposition: 'approve' });
+
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+    const [sessionId, , message] = sessionManager.enqueueFeedback.mock
+      .calls[0] as [string, string, string];
+    expect(sessionId).toBe(SESSION_ID);
+    // Names the task Type's own remaining terminal target(s), not a fixed
+    // string — an Investigation's set is resolved/blocked, never
+    // applied-pending-confirm.
+    expect(message).toContain('resolved');
+    expect(message).toContain('blocked');
+    expect(message).not.toContain('applied-pending-confirm');
+  });
+
+  it("approving an Investigation session's journal.setState to resolved does mark it terminal", async () => {
+    seedSession();
+    seedTaskType('🔎 Investigation');
+    seedJournal('resolved');
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+
+    const intent = stageJournalSetStateIntent(TASK_ID, SESSION_ID, {
+      payload: JSON.stringify({ taskId: TASK_ID, state: 'resolved' }),
+    });
+
+    await orchestrator.handleDisposition({ intent, disposition: 'approve' });
+
+    expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
+    expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it("approving an Operational session's journal.setState to applied-pending-confirm marks it terminal, while candidate does not — per-Type terminal sets are respected", async () => {
+    // applied-pending-confirm: terminal for Operational.
+    seedSession('session-op-1', 'ops', 'task-op-1');
+    seedTaskType('🔧 Operational', 'task-op-1');
+    seedJournal('applied-pending-confirm', 'task-op-1');
+    const smTerminal = makeSessionManager();
+    const orchTerminal = new PlanningOrchestrator(smTerminal);
+    const terminalIntent = stageJournalSetStateIntent(
+      'task-op-1',
+      'session-op-1',
+      {
+        payload: JSON.stringify({
+          taskId: 'task-op-1',
+          state: 'applied-pending-confirm',
+        }),
+      },
+    );
+
+    await orchTerminal.handleDisposition({
+      intent: terminalIntent,
+      disposition: 'approve',
+    });
+
+    expect(smTerminal.enqueueFeedback).not.toHaveBeenCalled();
+    expect(smTerminal.endSession).toHaveBeenCalledWith('session-op-1');
+
+    // candidate: not terminal for Operational — same predicate, different
+    // task Type, different outcome.
+    seedSession('session-op-2', 'ops', 'task-op-2');
+    seedTaskType('🔧 Operational', 'task-op-2');
+    seedJournal('candidate', 'task-op-2');
+    const smResume = makeSessionManager();
+    const orchResume = new PlanningOrchestrator(smResume);
+    const resumeIntent = stageJournalSetStateIntent(
+      'task-op-2',
+      'session-op-2',
+      {
+        payload: JSON.stringify({ taskId: 'task-op-2', state: 'candidate' }),
+      },
+    );
+
+    await orchResume.handleDisposition({
+      intent: resumeIntent,
+      disposition: 'approve',
+    });
+
+    expect(smResume.endSession).not.toHaveBeenCalled();
+    expect(smResume.enqueueFeedback).toHaveBeenCalledTimes(1);
+    const [, , message] = smResume.enqueueFeedback.mock.calls[0] as [
+      string,
+      string,
+      string,
+    ];
+    // An Operational run's own remaining set includes applied-pending-confirm.
+    expect(message).toContain('applied-pending-confirm');
+  });
+
+  it('a gate-verify session is unaffected by the ops-journal-incomplete condition', async () => {
+    seedSession(SESSION_ID, 'ops', 'gate-item:123');
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+
+    counter += 1;
+    const intent = {
+      id: `intent-${counter}`,
+      kind: 'task.setStatus',
+      payload: JSON.stringify({ taskId: 'gate-item:123', status: 'Ready' }),
+      payload_hash: `hash-${counter}`,
+      task_id: 'gate-item:123',
+      project_id: 'proj-1',
+      session_id: SESSION_ID,
+      group_id: null,
+      milestone: null,
+      state: 'committed' as const,
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    };
+    insertStagedIntent(intent);
+
+    await orchestrator.handleDisposition({ intent, disposition: 'approve' });
+
+    expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
+    expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
   });
 });

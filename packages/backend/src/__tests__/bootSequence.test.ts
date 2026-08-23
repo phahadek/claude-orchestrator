@@ -16,9 +16,18 @@ vi.mock('../config/corporateMode.js', () => ({
     .mockReturnValue({ enabled: false, envLocked: false, gates: {} }),
 }));
 
-import { runBootSequence } from '../bootSequence.js';
+import {
+  runBootSequence,
+  getReadinessState,
+  setReadinessState,
+  EXTRACTION_SWEEP_BOOT_CAP,
+} from '../bootSequence.js';
 import type { BootDeps } from '../bootSequence.js';
 import type { ServerMessage } from '../ws/types.js';
+import { db } from '../db/db.js';
+import { insertTestRequestRun, completeTestRequestRun } from '../db/queries.js';
+import fs from 'fs';
+import path from 'path';
 
 function makeDeps(): {
   deps: BootDeps;
@@ -87,9 +96,41 @@ async function runAndDrain(deps: BootDeps): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 50));
 }
 
+/**
+ * Like runAndDrain, but polls for scheduler.start() instead of a fixed
+ * sleep — needed for tests that seed enough real DB work (the extraction
+ * sweep's setImmediate-per-unit yields) that a fixed 50ms window isn't
+ * reliably enough to observe full completion, and to avoid leaking a
+ * still-running background chain into the next test's shared in-memory db.
+ */
+async function runAndDrainFully(
+  deps: BootDeps,
+  schedulerStart: ReturnType<typeof vi.fn>,
+): Promise<void> {
+  await runBootSequence(deps);
+  const deadline = Date.now() + 5000;
+  while (schedulerStart.mock.calls.length === 0 && Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  setReadinessState('migrating');
+  db.prepare('DELETE FROM test_run_summaries').run();
+  db.prepare('DELETE FROM test_run_results').run();
+  db.prepare('DELETE FROM test_request_runs').run();
 });
+
+function seedPendingExtractionRun(id: string, requestedAt: number): void {
+  const structured = JSON.stringify({
+    suites: [
+      { tests: [{ id: 't1', name: 'n', outcome: 'failed', durationMs: 5 }] },
+    ],
+  });
+  insertTestRequestRun(id, 'proj-1', `hash-${id}`, null, requestedAt);
+  completeTestRequestRun(id, 'passed', 'ok', null, structured);
+}
 
 // ── Boot-safety gate ──────────────────────────────────────────────────────────
 
@@ -199,5 +240,225 @@ describe('boot chain — gate_verify_reattachment step', () => {
 
     await expect(runAndDrain(deps)).resolves.toBeUndefined();
     expect(deps.scheduler.start).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── token_backfill and session_events_pruner_at_boot are fully awaited ────────
+
+describe('boot chain — token_backfill and session_events_pruner_at_boot are awaited', () => {
+  it('announces both steps in the boot step list', async () => {
+    const { deps, broadcast } = makeDeps();
+
+    await runAndDrain(deps);
+
+    const startedCall = vi
+      .mocked(broadcast)
+      .mock.calls.find(([msg]) => msg.type === 'boot_reconciliation_started');
+    const steps = (
+      startedCall![0] as Extract<
+        ServerMessage,
+        { type: 'boot_reconciliation_started' }
+      >
+    ).steps;
+    expect(steps).toContain('token_backfill');
+    expect(steps).toContain('session_events_pruner_at_boot');
+  });
+
+  it('runs jsonlReader.backfillTokens as a timed, tracked step', async () => {
+    const { deps, broadcast } = makeDeps();
+
+    await runAndDrain(deps);
+
+    expect(deps.jsonlReader.backfillTokens).toHaveBeenCalledTimes(1);
+    const stepCalls = vi
+      .mocked(broadcast)
+      .mock.calls.filter(([msg]) => msg.type === 'boot_reconciliation_step');
+    const stepNames = stepCalls.map(
+      ([msg]) =>
+        (msg as Extract<ServerMessage, { type: 'boot_reconciliation_step' }>)
+          .step,
+    );
+    expect(stepNames).toContain('token_backfill');
+  });
+
+  it('boot_reconciliation_completed does not fire until a slow session_events_pruner_at_boot settles', async () => {
+    const { deps, eventLog } = makeDeps();
+    let resolvePruner: () => void = () => {};
+    vi.mocked(deps.sessionEventsPruner.runAtBoot).mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolvePruner = resolve;
+      }),
+    );
+
+    const runPromise = runBootSequence(deps);
+    await runPromise;
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    expect(eventLog).not.toContain('boot_reconciliation_completed');
+    expect(deps.scheduler.start).not.toHaveBeenCalled();
+
+    resolvePruner();
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    expect(eventLog).toContain('boot_reconciliation_completed');
+    expect(deps.scheduler.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('a rejection from session_events_pruner_at_boot does not block boot completion (non-fatal)', async () => {
+    const { deps } = makeDeps();
+    vi.mocked(deps.sessionEventsPruner.runAtBoot).mockRejectedValue(
+      new Error('pruner boom'),
+    );
+
+    await expect(runAndDrain(deps)).resolves.toBeUndefined();
+    expect(deps.scheduler.start).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── readiness surface ───────────────────────────────────────────────────────
+
+describe('readiness state', () => {
+  it('starts as migrating (the module-load default, before runBootSequence is ever called)', () => {
+    expect(getReadinessState()).toBe('migrating');
+  });
+
+  it('flips to boot_steps_running synchronously as soon as runBootSequence starts, before the listener resolves', () => {
+    const { deps } = makeDeps();
+
+    const pending = runBootSequence(deps);
+
+    expect(getReadinessState()).toBe('boot_steps_running');
+    return pending;
+  });
+
+  it('only reaches serving once the full reconciliation chain has completed', async () => {
+    const { deps } = makeDeps();
+
+    await runAndDrain(deps);
+
+    expect(getReadinessState()).toBe('serving');
+  });
+
+  it('is still boot_steps_running mid-chain, not serving early', async () => {
+    const { deps } = makeDeps();
+    let resolvePruner: () => void = () => {};
+    vi.mocked(deps.sessionEventsPruner.runAtBoot).mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolvePruner = resolve;
+      }),
+    );
+
+    await runBootSequence(deps);
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    expect(getReadinessState()).toBe('boot_steps_running');
+
+    resolvePruner();
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    expect(getReadinessState()).toBe('serving');
+  });
+});
+
+// ── extraction sweep — bounded per boot, progress reported, residual left for the drain ──
+
+describe('boot chain — test_run_results_extraction_sweep is bounded and reported', () => {
+  it('emits a boot_reconciliation_progress record naming the step and the remaining count as it works', async () => {
+    seedPendingExtractionRun('run-a', Date.now());
+    seedPendingExtractionRun('run-b', Date.now() + 1);
+    const { deps, broadcast, scheduler } = makeDeps();
+
+    await runAndDrainFully(deps, scheduler.start);
+
+    const progressCalls = vi
+      .mocked(broadcast)
+      .mock.calls.map(([msg]) => msg)
+      .filter(
+        (
+          msg,
+        ): msg is Extract<
+          ServerMessage,
+          { type: 'boot_reconciliation_progress' }
+        > => msg.type === 'boot_reconciliation_progress',
+      )
+      .filter((msg) => msg.step === 'test_run_results_extraction_sweep');
+
+    expect(progressCalls.length).toBe(2);
+    expect(progressCalls.map((msg) => msg.remaining)).toEqual([1, 0]);
+  });
+
+  it('processes at most EXTRACTION_SWEEP_BOOT_CAP runs and still completes the boot sequence when more are pending', async () => {
+    const total = EXTRACTION_SWEEP_BOOT_CAP + 5;
+    for (let i = 0; i < total; i++) {
+      seedPendingExtractionRun(`run-cap-${i}`, Date.now() + i);
+    }
+    const { deps, eventLog, scheduler } = makeDeps();
+
+    await runAndDrainFully(deps, scheduler.start);
+
+    // Boot completed despite a backlog bigger than the cap.
+    expect(eventLog).toContain('boot_reconciliation_completed');
+    expect(eventLog).toContain('scheduler_start');
+
+    // The residual work list is non-empty and still discoverable afterwards.
+    const remaining = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM test_request_runs
+         WHERE structured_result IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM test_run_summaries
+             WHERE test_run_summaries.test_request_run_id = test_request_runs.id
+           )`,
+      )
+      .get() as { n: number };
+    expect(remaining.n).toBe(5);
+  });
+});
+
+// ── boot ordering ────────────────────────────────────────────────────────────
+
+describe('boot ordering', () => {
+  it('server.ts runs migrations before starting the boot sequence that binds the listener', () => {
+    const serverSrc = fs.readFileSync(
+      path.join(__dirname, '..', 'server.ts'),
+      'utf8',
+    );
+    const migrationsIdx = serverSrc.indexOf('runMigrations(db)');
+    const bootSequenceIdx = serverSrc.indexOf('void runBootSequence(');
+
+    expect(migrationsIdx).toBeGreaterThanOrEqual(0);
+    expect(bootSequenceIdx).toBeGreaterThan(migrationsIdx);
+  });
+
+  it('runs the post-listen steps in their declared order', async () => {
+    const { deps, broadcast, scheduler } = makeDeps();
+
+    await runAndDrainFully(deps, scheduler.start);
+
+    const startedCall = vi
+      .mocked(broadcast)
+      .mock.calls.find(([msg]) => msg.type === 'boot_reconciliation_started');
+    const declaredSteps = (
+      startedCall![0] as Extract<
+        ServerMessage,
+        { type: 'boot_reconciliation_started' }
+      >
+    ).steps;
+
+    const startedStepNames = vi
+      .mocked(broadcast)
+      .mock.calls.map(([msg]) => msg)
+      .filter(
+        (
+          msg,
+        ): msg is Extract<
+          ServerMessage,
+          { type: 'boot_reconciliation_step' }
+        > =>
+          msg.type === 'boot_reconciliation_step' && msg.status === 'started',
+      )
+      .map((msg) => msg.step);
+
+    expect(startedStepNames).toEqual(declaredSteps);
   });
 });

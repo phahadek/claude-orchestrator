@@ -26,6 +26,8 @@
       "entry": [
         "src/server.ts",
         "src/bootSequence.ts",
+        "src/db/walTruncateCheckpointWorker.ts",
+        "src/db/flakyTestRollupWorker.ts",
         "test/helpers/**/*.ts",
         "**/*.test.ts",
         "scripts/*.mjs"

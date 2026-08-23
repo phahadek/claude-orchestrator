@@ -70,6 +70,7 @@ import {
   isCodeSession,
   isPlanningSession,
   isGateVerifySession,
+  isInvestigateSession,
   opensPr,
 } from './sessionPredicates';
 import { stageIntent, type StagedIntent } from '../routes/stagedIntents';
@@ -220,6 +221,26 @@ export function isPreReviewBlocked(pr: {
     }
   }
   return false;
+}
+
+/**
+ * True when a session past the MCP-connection grace window has still not
+ * established any orchestrator MCP connection since its most recent
+ * spawn/respawn — the CLI-side stall SessionManager.reconcileMcpUnreachableSessions
+ * recovers via a bounded in-place respawn (see that method's doc comment).
+ * Pure predicate, kept alongside AgentSession's other exported
+ * classification helpers for unit testing; `lastSpawnMs` is the session's
+ * original started_at, or its latest respawn attempt's timestamp once one
+ * has happened, so the grace window restarts on each fresh spawn.
+ */
+export function isMcpUnreachable(params: {
+  hasConnectedSinceSpawn: boolean;
+  nowMs: number;
+  lastSpawnMs: number;
+  graceMs: number;
+}): boolean {
+  if (params.hasConnectedSinceSpawn) return false;
+  return params.nowMs - params.lastSpawnMs >= params.graceMs;
 }
 
 export interface GitHubPRShape {
@@ -691,43 +712,49 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       (isGateVerifySession(this.taskId)
         ? runtimeSettings.gate_verify_session_model ||
           runtimeSettings.ops_session_model
-        : this.sessionType === 'ops'
-          ? runtimeSettings.ops_session_model
-          : this.sessionType === 'groom'
-            ? runtimeSettings.groom_session_model ||
-              runtimeSettings.planning_session_model
-            : this.sessionType === 'design'
-              ? runtimeSettings.design_session_model ||
+        : isInvestigateSession(this.taskId)
+          ? runtimeSettings.investigate_session_model ||
+            runtimeSettings.ops_session_model
+          : this.sessionType === 'ops'
+            ? runtimeSettings.ops_session_model
+            : this.sessionType === 'groom'
+              ? runtimeSettings.groom_session_model ||
                 runtimeSettings.planning_session_model
-              : this.sessionType === 'docs'
-                ? runtimeSettings.docs_session_model ||
+              : this.sessionType === 'design'
+                ? runtimeSettings.design_session_model ||
                   runtimeSettings.planning_session_model
-                : this.sessionType === 'split'
-                  ? runtimeSettings.planning_session_model
-                  : isCodeSession(this.sessionType)
-                    ? runtimeSettings.code_session_model
-                    : runtimeSettings.review_session_model);
+                : this.sessionType === 'docs'
+                  ? runtimeSettings.docs_session_model ||
+                    runtimeSettings.planning_session_model
+                  : this.sessionType === 'split'
+                    ? runtimeSettings.planning_session_model
+                    : isCodeSession(this.sessionType)
+                      ? runtimeSettings.code_session_model
+                      : runtimeSettings.review_session_model);
     const effortSetting =
       this.launchEffort ||
       (isGateVerifySession(this.taskId)
         ? runtimeSettings.gate_verify_session_effort ||
           runtimeSettings.ops_session_effort
-        : this.sessionType === 'ops'
-          ? runtimeSettings.ops_session_effort
-          : this.sessionType === 'groom'
-            ? runtimeSettings.groom_session_effort ||
-              runtimeSettings.planning_session_effort
-            : this.sessionType === 'design'
-              ? runtimeSettings.design_session_effort ||
+        : isInvestigateSession(this.taskId)
+          ? runtimeSettings.investigate_session_effort ||
+            runtimeSettings.ops_session_effort
+          : this.sessionType === 'ops'
+            ? runtimeSettings.ops_session_effort
+            : this.sessionType === 'groom'
+              ? runtimeSettings.groom_session_effort ||
                 runtimeSettings.planning_session_effort
-              : this.sessionType === 'docs'
-                ? runtimeSettings.docs_session_effort ||
+              : this.sessionType === 'design'
+                ? runtimeSettings.design_session_effort ||
                   runtimeSettings.planning_session_effort
-                : this.sessionType === 'split'
-                  ? runtimeSettings.planning_session_effort
-                  : isCodeSession(this.sessionType)
-                    ? runtimeSettings.code_session_effort
-                    : runtimeSettings.review_session_effort);
+                : this.sessionType === 'docs'
+                  ? runtimeSettings.docs_session_effort ||
+                    runtimeSettings.planning_session_effort
+                  : this.sessionType === 'split'
+                    ? runtimeSettings.planning_session_effort
+                    : isCodeSession(this.sessionType)
+                      ? runtimeSettings.code_session_effort
+                      : runtimeSettings.review_session_effort);
     if (effortSetting) {
       setSessionEffort(this.sessionId, effortSetting);
     }
@@ -742,50 +769,58 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         ? runtimeSettings.gate_verify_session_model
           ? 'gate_verify_session_model'
           : 'ops_session_model'
-        : this.sessionType === 'ops'
-          ? 'ops_session_model'
-          : this.sessionType === 'groom'
-            ? runtimeSettings.groom_session_model
-              ? 'groom_session_model'
-              : 'planning_session_model'
-            : this.sessionType === 'design'
-              ? runtimeSettings.design_session_model
-                ? 'design_session_model'
+        : isInvestigateSession(this.taskId)
+          ? runtimeSettings.investigate_session_model
+            ? 'investigate_session_model'
+            : 'ops_session_model'
+          : this.sessionType === 'ops'
+            ? 'ops_session_model'
+            : this.sessionType === 'groom'
+              ? runtimeSettings.groom_session_model
+                ? 'groom_session_model'
                 : 'planning_session_model'
-              : this.sessionType === 'docs'
-                ? runtimeSettings.docs_session_model
-                  ? 'docs_session_model'
+              : this.sessionType === 'design'
+                ? runtimeSettings.design_session_model
+                  ? 'design_session_model'
                   : 'planning_session_model'
-                : this.sessionType === 'split'
-                  ? 'planning_session_model'
-                  : isCodeSession(this.sessionType)
-                    ? 'code_session_model'
-                    : 'review_session_model';
+                : this.sessionType === 'docs'
+                  ? runtimeSettings.docs_session_model
+                    ? 'docs_session_model'
+                    : 'planning_session_model'
+                  : this.sessionType === 'split'
+                    ? 'planning_session_model'
+                    : isCodeSession(this.sessionType)
+                      ? 'code_session_model'
+                      : 'review_session_model';
     const effortSettingKey = this.launchEffort
       ? null
       : isGateVerifySession(this.taskId)
         ? runtimeSettings.gate_verify_session_effort
           ? 'gate_verify_session_effort'
           : 'ops_session_effort'
-        : this.sessionType === 'ops'
-          ? 'ops_session_effort'
-          : this.sessionType === 'groom'
-            ? runtimeSettings.groom_session_effort
-              ? 'groom_session_effort'
-              : 'planning_session_effort'
-            : this.sessionType === 'design'
-              ? runtimeSettings.design_session_effort
-                ? 'design_session_effort'
+        : isInvestigateSession(this.taskId)
+          ? runtimeSettings.investigate_session_effort
+            ? 'investigate_session_effort'
+            : 'ops_session_effort'
+          : this.sessionType === 'ops'
+            ? 'ops_session_effort'
+            : this.sessionType === 'groom'
+              ? runtimeSettings.groom_session_effort
+                ? 'groom_session_effort'
                 : 'planning_session_effort'
-              : this.sessionType === 'docs'
-                ? runtimeSettings.docs_session_effort
-                  ? 'docs_session_effort'
+              : this.sessionType === 'design'
+                ? runtimeSettings.design_session_effort
+                  ? 'design_session_effort'
                   : 'planning_session_effort'
-                : this.sessionType === 'split'
-                  ? 'planning_session_effort'
-                  : isCodeSession(this.sessionType)
-                    ? 'code_session_effort'
-                    : 'review_session_effort';
+                : this.sessionType === 'docs'
+                  ? runtimeSettings.docs_session_effort
+                    ? 'docs_session_effort'
+                    : 'planning_session_effort'
+                  : this.sessionType === 'split'
+                    ? 'planning_session_effort'
+                    : isCodeSession(this.sessionType)
+                      ? 'code_session_effort'
+                      : 'review_session_effort';
     if (modelSettingKey) {
       setSessionModelSettingKey(this.sessionId, modelSettingKey);
     }
@@ -882,6 +917,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             { allowed_tools: this.extraAllowedTools },
             getGrantedCapabilities(this.sessionId),
             resolveProjectTaskSource(this.projectId),
+            undefined,
+            this.taskId,
           ),
           sessionType: this.sessionType,
           granted: getGrantedCapabilities(this.sessionId),
@@ -2404,6 +2441,28 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         .attachPR(this.taskId, prUrl)
         .catch((e) => logger.error(`[AgentSession] attachPR failed: ${e}`));
 
+      if (!prShape.title && this.githubClient) {
+        try {
+          const backfilled = await this.githubClient.fetchPR(repo, prNumber);
+          prShape = {
+            ...prShape,
+            title: backfilled.title,
+            body: prShape.body ?? backfilled.body,
+            head: {
+              ...prShape.head,
+              ref: backfilled.headBranch,
+              sha: prShape.head?.sha ?? backfilled.headSha ?? undefined,
+            },
+            base: { ...prShape.base, ref: backfilled.baseBranch },
+          };
+        } catch (e) {
+          logger.warn(
+            `[AgentSession] handlePRDetected: failed to backfill PR #${prNumber} metadata from GitHub — proceeding with URL-only upsert:`,
+            e,
+          );
+        }
+      }
+
       const upsertResult = upsertPullRequest({
         pr_number: prNumber,
         pr_url: prUrl,
@@ -2790,12 +2849,22 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const combined = items
       .map((item) => `[${item.source}]\n${item.payload}`)
       .join('\n\n');
+    let delivered: string | null;
     try {
-      await this.sessionManager?.sendOrResume?.(this.sessionId, combined);
+      delivered =
+        (await this.sessionManager?.sendOrResume?.(this.sessionId, combined)) ??
+        null;
     } catch (err) {
       sessionLog(
         this.sessionId,
         `deliverInboxItems: sendOrResume failed: ${err}`,
+      );
+      return;
+    }
+    if (!delivered) {
+      sessionLog(
+        this.sessionId,
+        'deliverInboxItems: sendOrResume did not deliver (resolved null) — leaving items undelivered for retry',
       );
       return;
     }
@@ -3148,10 +3217,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * in-flight `verify()` dispatch (a distinct concern — settling the
    * dispatch, not the verdict) is unaffected. Fires unconditionally (no PR
    * gating) — a read-only gate-verify session has no PR of its own.
-   * Staging itself is content-idempotent (see stageIntent), so no separate
-   * dedup is needed here — unlike recordReviewDisposition/
-   * recordVerifiedFlakyDisposition above, a repeat call with the same
-   * disposition after a rejection must be allowed to re-stage.
+   * Staging itself dedups on the gate item (see stageIntent/extractTaskId's
+   * `gate-item:<id>` key), so no separate dedup is needed here — unlike
+   * recordReviewDisposition/recordVerifiedFlakyDisposition above, a repeat
+   * call with a changed disposition after a rejection must be allowed to
+   * re-stage (superseding the prior staged/approved row), and an identical
+   * repeat call is a no-op that returns the existing row.
    *
    * gateItemId must exact-match an existing gate_item row — getGateItem does
    * a plain `WHERE id = ?` lookup, so a truncated/short-form id (not
@@ -3342,14 +3413,17 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
   /**
    * Pause the session for graceful server shutdown.
-   * SIGTERMs the CLI subprocess and awaits exit without touching DB status or
-   * Notion — leaving status='running' so resumeOrphanSessions picks it up on
-   * next boot.
+   * Stops the underlying process and awaits exit without touching DB status
+   * or Notion — leaving status='running' so resumeOrphanSessions picks it up
+   * on next boot. Uses runner.pause() rather than runner.kill() so that
+   * Docker-mode sessions keep their container/network alive to reattach to
+   * (kill() unconditionally destroys them, which is correct only for a real
+   * termination).
    */
   async gracefulPause(): Promise<void> {
     if (this.isPausingForShutdown || this.isKilling) return;
     this.isPausingForShutdown = true;
-    await this.runner.kill();
+    await this.runner.pause();
   }
 
   /** Persist to SQLite first, then emit. Caller (SessionManager) listens and broadcasts. */

@@ -204,9 +204,12 @@ function resolveArchUnit(
  * no reference resolves to a store unit, in which case selection degrades to
  * the store's unconditional active-invariant set.
  */
-function resolveDesignTopic(pagesAffected: PageRef[]): string | undefined {
+function resolveDesignTopic(
+  pagesAffected: PageRef[],
+  projectId: string,
+): string | undefined {
   if (!pagesAffected.length) return undefined;
-  const units = queryUnits({ status: 'active' });
+  const units = queryUnits({ status: 'active', project: projectId });
   for (const p of pagesAffected) {
     const want = normalizeTitle(p.title);
     for (const unit of units) {
@@ -335,8 +338,11 @@ export async function loadDesignContext(
 
   if (archStoreAdopted) {
     archSource = 'store';
-    const topic = resolveDesignTopic(pagesAffected);
-    for (const unit of selectUnitsFromStore({ topic })) {
+    const topic = resolveDesignTopic(pagesAffected, milestone.project_id);
+    for (const unit of selectUnitsFromStore({
+      projectId: milestone.project_id,
+      topic,
+    })) {
       archUnits.push({ id: unit.id, title: unit.title });
     }
   } else {

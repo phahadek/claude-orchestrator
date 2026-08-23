@@ -3,9 +3,30 @@ import { describe, it, expect, vi } from 'vitest';
 import { MilestoneView } from '../MilestoneView';
 import { apiRequest } from '../../api/projects';
 import type { TaskView } from '../../types/taskView';
+import type { TaskView as BackendTaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type { StagedIntent } from '../../api/stagedIntents';
+
+// MilestoneView fires apiRequest calls from more than one caller on mount
+// (the /api/prs depth-dispositions fetch, and LaneHealthPanel's
+// /api/milestones/.../lane-health fetch) — a single un-keyed
+// mockResolvedValueOnce queue would be consumed by whichever caller's
+// effect happens to run first. Route queued "once" responses by URL prefix
+// instead, so pushOnce('/api/prs', ...) always answers the prs fetch
+// regardless of mount-order races with other apiRequest callers.
+const prsResponses: unknown[] = [];
+function pushPrsResponseOnce(value: unknown): void {
+  prsResponses.push(value);
+}
 
 vi.mock('../../api/projects', () => ({
-  apiRequest: vi.fn().mockResolvedValue([]),
+  apiRequest: vi.fn((url: string) => {
+    if (typeof url === 'string' && url.startsWith('/api/prs')) {
+      return Promise.resolve(
+        prsResponses.length > 0 ? prsResponses.shift() : [],
+      );
+    }
+    return Promise.resolve(null);
+  }),
 }));
 
 vi.mock('../../hooks/useMilestoneConvergence', () => ({
@@ -46,7 +67,13 @@ vi.mock('../MilestoneBurndown', () => ({
 }));
 
 vi.mock('../FlowArmToggle', () => ({
-  FlowArmToggle: () => null,
+  FlowArmToggle: () => <div data-testid="flow-arm-toggle" />,
+}));
+
+vi.mock('../DeploySection', () => ({
+  DeploySection: ({ activeProjectId }: { activeProjectId: string | null }) => (
+    <div data-testid="deploy-launch-section">deploy for {activeProjectId}</div>
+  ),
 }));
 
 vi.mock('../MilestoneDecisionStack', () => ({
@@ -91,26 +118,25 @@ vi.mock('../MilestoneDecisionStack', () => ({
 vi.mock('../MilestoneDrilldown', () => ({
   MilestoneDrilldown: ({
     mode,
-    depthDispositions,
+    depthReviewStatusBySessionId,
   }: {
     mode: string;
-    depthDispositions?: Array<{
-      prNumber: number;
-      taskName: string | null;
-      failingDimensions: Array<{ name: string; notes: string }>;
-      escalated: boolean;
-    }>;
+    depthReviewStatusBySessionId?: Record<
+      string,
+      { escalated: boolean; routeCount: number }
+    >;
   }) => (
     <div data-testid="milestone-drilldown">
       mode: {mode}
       <div data-testid="milestone-drilldown-depth">
-        {(depthDispositions ?? []).map((d) => (
-          <div key={d.prNumber} data-testid={`depth-disposition-${d.prNumber}`}>
-            PR #{d.prNumber} — {d.taskName} —{' '}
-            {d.failingDimensions.map((dim) => dim.name).join(', ')} —{' '}
-            {d.escalated ? 'escalated' : 'routed'}
-          </div>
-        ))}
+        {Object.entries(depthReviewStatusBySessionId ?? {}).map(
+          ([sessionId, status]) => (
+            <div key={sessionId} data-testid={`depth-status-${sessionId}`}>
+              {sessionId} — {status.escalated ? 'escalated' : 'routed'} — ×
+              {status.routeCount}
+            </div>
+          ),
+        )}
       </div>
     </div>
   ),
@@ -180,23 +206,20 @@ describe('MilestoneView', () => {
       mergeState: null,
     },
     review: null,
+    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
   };
 
-  it('renders a failing depth verdict for the milestone in the panel, naming the dimension and PR', async () => {
-    vi.mocked(apiRequest).mockResolvedValueOnce([
+  it('builds a depth-review status map keyed by session id, for a failing verdict on the milestone', async () => {
+    pushPrsResponseOnce([
       {
         prNumber: 915,
-        prUrl: 'https://github.com/org/repo/pull/915',
-        repo: 'org/repo',
         depthVerdict: {
           verdict: 'fail',
-          dimensions: [
-            { name: 'reliability', passed: false, notes: 'Retries unbounded' },
-          ],
-          summary: 'Found a defect',
           escalated: true,
+          sessionId: 'sess-depth-a',
+          routeCount: 0,
         },
       },
     ]);
@@ -204,25 +227,22 @@ describe('MilestoneView', () => {
     render(<MilestoneView {...baseProps} tasks={[depthTask]} />);
 
     await waitFor(() =>
-      expect(screen.getByTestId('depth-disposition-915')).toBeTruthy(),
+      expect(screen.getByTestId('depth-status-sess-depth-a')).toBeTruthy(),
     );
-    const entry = screen.getByTestId('depth-disposition-915');
-    expect(entry.textContent).toContain('reliability');
-    expect(entry.textContent).toContain('915');
-    expect(entry.textContent).toContain('escalated');
+    expect(
+      screen.getByTestId('depth-status-sess-depth-a').textContent,
+    ).toContain('escalated');
   });
 
   it('distinguishes an escalated finding from a routed finding', async () => {
-    vi.mocked(apiRequest).mockResolvedValueOnce([
+    pushPrsResponseOnce([
       {
         prNumber: 915,
-        prUrl: 'https://github.com/org/repo/pull/915',
-        repo: 'org/repo',
         depthVerdict: {
           verdict: 'fail',
-          dimensions: [{ name: 'reliability', passed: false, notes: 'bad' }],
-          summary: 'Escalated',
           escalated: true,
+          sessionId: 'sess-depth-a',
+          routeCount: 0,
         },
       },
     ]);
@@ -230,45 +250,39 @@ describe('MilestoneView', () => {
       <MilestoneView {...baseProps} tasks={[depthTask]} />,
     );
     await waitFor(() =>
-      expect(screen.getByTestId('depth-disposition-915').textContent).toContain(
-        'escalated',
-      ),
+      expect(
+        screen.getByTestId('depth-status-sess-depth-a').textContent,
+      ).toContain('escalated'),
     );
 
-    vi.mocked(apiRequest).mockResolvedValueOnce([
+    pushPrsResponseOnce([
       {
         prNumber: 915,
-        prUrl: 'https://github.com/org/repo/pull/915',
-        repo: 'org/repo',
         depthVerdict: {
           verdict: 'fail',
-          dimensions: [
-            { name: 'size-proportionality', passed: false, notes: 'big' },
-          ],
-          summary: 'Routed',
           escalated: false,
+          sessionId: 'sess-depth-a',
+          routeCount: 1,
         },
       },
     ]);
     rerender(<MilestoneView {...baseProps} tasks={[{ ...depthTask }]} />);
     await waitFor(() =>
-      expect(screen.getByTestId('depth-disposition-915').textContent).toContain(
-        'routed',
-      ),
+      expect(
+        screen.getByTestId('depth-status-sess-depth-a').textContent,
+      ).toContain('routed'),
     );
   });
 
   it('does not surface a passing depth verdict as an action item', async () => {
-    vi.mocked(apiRequest).mockResolvedValueOnce([
+    pushPrsResponseOnce([
       {
         prNumber: 915,
-        prUrl: 'https://github.com/org/repo/pull/915',
-        repo: 'org/repo',
         depthVerdict: {
           verdict: 'pass',
-          dimensions: [{ name: 'reliability', passed: true, notes: 'ok' }],
-          summary: 'All good',
           escalated: false,
+          sessionId: 'sess-depth-a',
+          routeCount: 0,
         },
       },
     ]);
@@ -276,15 +290,13 @@ describe('MilestoneView', () => {
     render(<MilestoneView {...baseProps} tasks={[depthTask]} />);
 
     await waitFor(() => expect(vi.mocked(apiRequest)).toHaveBeenCalled());
-    expect(screen.queryByTestId('depth-disposition-915')).toBeNull();
+    expect(screen.queryByTestId('depth-status-sess-depth-a')).toBeNull();
   });
 
   it('renders unchanged for a milestone with no depth verdicts', async () => {
-    vi.mocked(apiRequest).mockResolvedValueOnce([
+    pushPrsResponseOnce([
       {
         prNumber: 915,
-        prUrl: 'https://github.com/org/repo/pull/915',
-        repo: 'org/repo',
         depthVerdict: null,
       },
     ]);
@@ -297,17 +309,15 @@ describe('MilestoneView', () => {
     ).toBe(0);
   });
 
-  it('does not thread depth dispositions into the decision stack — the staged-intent query stays untouched', async () => {
-    vi.mocked(apiRequest).mockResolvedValueOnce([
+  it('does not thread depth-review status into the decision stack — the staged-intent query stays untouched', async () => {
+    pushPrsResponseOnce([
       {
         prNumber: 915,
-        prUrl: 'https://github.com/org/repo/pull/915',
-        repo: 'org/repo',
         depthVerdict: {
           verdict: 'fail',
-          dimensions: [{ name: 'reliability', passed: false, notes: 'bad' }],
-          summary: 'Escalated',
           escalated: true,
+          sessionId: 'sess-depth-a',
+          routeCount: 0,
         },
       },
     ]);
@@ -315,11 +325,69 @@ describe('MilestoneView', () => {
     render(<MilestoneView {...baseProps} tasks={[depthTask]} />);
 
     await waitFor(() =>
-      expect(screen.getByTestId('depth-disposition-915')).toBeTruthy(),
+      expect(screen.getByTestId('depth-status-sess-depth-a')).toBeTruthy(),
     );
     expect(
       screen.getByTestId('milestone-decision-stack').textContent,
-    ).not.toContain('reliability');
+    ).not.toContain('sess-depth-a');
+  });
+
+  it('fetches PR depth dispositions from the DB-only endpoint, never the project-wide live-GitHub /api/prs list', async () => {
+    pushPrsResponseOnce([]);
+
+    render(<MilestoneView {...baseProps} tasks={[depthTask]} />);
+
+    await waitFor(() => expect(vi.mocked(apiRequest)).toHaveBeenCalled());
+    const urls = vi
+      .mocked(apiRequest)
+      .mock.calls.map((call) => call[0])
+      .filter((u): u is string => typeof u === 'string');
+    expect(urls.some((u) => u.startsWith('/api/prs/depth-dispositions'))).toBe(
+      true,
+    );
+    expect(urls.some((u) => /^\/api\/prs\?/.test(u))).toBe(false);
+  });
+
+  it('does not re-fetch depth dispositions when a task/staged-intent change belongs to a different milestone', async () => {
+    pushPrsResponseOnce([]);
+    // Same array reference across renders — mirrors the real component tree,
+    // where `tasks` is already scoped to the active milestone upstream and
+    // is unaffected by a change belonging to a different milestone's board.
+    const sameTasks = [depthTask];
+
+    const { rerender } = render(
+      <MilestoneView {...baseProps} tasks={sameTasks} />,
+    );
+    await waitFor(() => expect(vi.mocked(apiRequest)).toHaveBeenCalled());
+    const countBefore = vi
+      .mocked(apiRequest)
+      .mock.calls.filter(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].startsWith('/api/prs/depth-dispositions'),
+      ).length;
+
+    rerender(
+      <MilestoneView
+        {...baseProps}
+        tasks={sameTasks}
+        lastTaskUpdate={
+          { taskId: 'other-milestone-task' } as unknown as BackendTaskView
+        }
+        lastStagedIntentChange={
+          { id: 'other-milestone-intent' } as unknown as StagedIntent
+        }
+      />,
+    );
+
+    const countAfter = vi
+      .mocked(apiRequest)
+      .mock.calls.filter(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].startsWith('/api/prs/depth-dispositions'),
+      ).length;
+    expect(countAfter).toBe(countBefore);
   });
 
   it('renders the decision stack, filtered by phase, when a task phase is selected', () => {
@@ -379,6 +447,90 @@ describe('MilestoneView', () => {
     expect(screen.getByTestId('milestone-drilldown').textContent).toBe(
       'mode: task',
     );
+  });
+
+  it('renders Deploy in the left column between MilestoneBurndown and FlowArmToggle for every phaseFilter, not only the gate phase', () => {
+    render(<MilestoneView {...baseProps} />);
+
+    function assertDeployBetweenBurndownAndFlowArm() {
+      const leftColumn = screen.getByTestId('milestone-burndown-mount');
+      const html = leftColumn.innerHTML;
+      const burndownIdx = html.indexOf('data-testid="milestone-burndown"');
+      const deployIdx = html.indexOf('data-testid="deploy-launch-section"');
+      const flowArmIdx = html.indexOf('data-testid="flow-arm-toggle"');
+      expect(burndownIdx).toBeGreaterThan(-1);
+      expect(deployIdx).toBeGreaterThan(burndownIdx);
+      expect(flowArmIdx).toBeGreaterThan(deployIdx);
+    }
+
+    // Default (no phase selected).
+    assertDeployBetweenBurndownAndFlowArm();
+    expect(screen.getByTestId('deploy-launch-section').textContent).toContain(
+      'proj-1',
+    );
+
+    // Non-gate phase.
+    fireEvent.click(screen.getByTestId('phase-segment-code'));
+    assertDeployBetweenBurndownAndFlowArm();
+
+    // Gate phase — Deploy still lives in the left column, not in the gate panel.
+    fireEvent.click(screen.getByTestId('phase-segment-gate'));
+    assertDeployBetweenBurndownAndFlowArm();
+  });
+
+  describe('resize handle', () => {
+    // Mirrors the real desktop layout: container 1000px wide starting at
+    // x=0, with .leftColumn's fixed 300px rendered before .middlePanel — so
+    // the handle's true on-screen x is leftColumnWidth + middlePanel's
+    // current pixel width, not the container's own x=0 origin.
+    const CONTAINER_WIDTH = 1000;
+    const LEFT_COLUMN_WIDTH = 300;
+
+    function mockLayout() {
+      const shell = screen.getByTestId('milestone-view-shell');
+      const leftColumn = screen.getByTestId('milestone-burndown-mount');
+      vi.spyOn(shell, 'getBoundingClientRect').mockReturnValue({
+        left: 0,
+        width: CONTAINER_WIDTH,
+      } as DOMRect);
+      vi.spyOn(leftColumn, 'getBoundingClientRect').mockReturnValue({
+        left: 0,
+        width: LEFT_COLUMN_WIDTH,
+      } as DOMRect);
+    }
+
+    function middleWidthPct(): number {
+      const middlePanel = screen.getByTestId('milestone-decision-stack-mount');
+      return parseFloat(middlePanel.style.width);
+    }
+
+    it('does not jump toward the max width on the first drag pixel from the handle actual on-screen position', () => {
+      render(<MilestoneView {...baseProps} />);
+      mockLayout();
+
+      const preDragPct = middleWidthPct(); // DEFAULT_MIDDLE_WIDTH_PCT (55)
+      const handleX = LEFT_COLUMN_WIDTH + (preDragPct / 100) * CONTAINER_WIDTH;
+
+      fireEvent.mouseDown(screen.getByTestId('milestone-resize-handle'));
+      fireEvent.mouseMove(window, { clientX: handleX });
+
+      expect(middleWidthPct()).toBeCloseTo(preDragPct, 0);
+    });
+
+    it('tracks the cursor 1:1 — a known clientX delta moves middleWidthPct by the proportional amount', () => {
+      render(<MilestoneView {...baseProps} />);
+      mockLayout();
+
+      const preDragPct = middleWidthPct();
+      const handleX = LEFT_COLUMN_WIDTH + (preDragPct / 100) * CONTAINER_WIDTH;
+      const deltaPx = 50;
+      const expectedDeltaPct = (deltaPx / CONTAINER_WIDTH) * 100;
+
+      fireEvent.mouseDown(screen.getByTestId('milestone-resize-handle'));
+      fireEvent.mouseMove(window, { clientX: handleX + deltaPx });
+
+      expect(middleWidthPct() - preDragPct).toBeCloseTo(expectedDeltaPct, 5);
+    });
   });
 
   it('switches the active mobile region to the drill-down when view-session is requested on a mobile viewport', () => {

@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../../session/orchestrator-config', () => ({
+  resolvePreGrantCapabilities: vi.fn(() => []),
   loadOrchestratorConfig: vi
     .fn()
     .mockReturnValue({ ci_check_name: [], mcp_servers: undefined }),

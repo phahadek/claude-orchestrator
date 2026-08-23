@@ -152,6 +152,115 @@ describe('decision.pickOne staging validation', () => {
   });
 });
 
+describe('decision.pickOne paragraph-break enforcement', () => {
+  const LONG_NO_BREAKS = 'x'.repeat(600);
+  const LONG_WITH_BREAKS = 'x'.repeat(280) + '\n\n' + 'y'.repeat(280);
+  const SHORT_SINGLE_PARAGRAPH = 'A short single-paragraph decision proposal.';
+
+  it('rejects a decisionProposal over the threshold with zero paragraph breaks', () => {
+    expect(() =>
+      stageIntent(
+        'decision.pickOne',
+        { prompt: 'Which approach?', options: OPTIONS, allowFreeForm: true },
+        'proj-1',
+        null,
+        'sess-1',
+        LONG_NO_BREAKS,
+      ),
+    ).toThrow(/paragraph breaks/);
+  });
+
+  it('accepts a decisionProposal of the same length split into paragraphs', () => {
+    const intent = stageIntent(
+      'decision.pickOne',
+      { prompt: 'Which approach?', options: OPTIONS, allowFreeForm: true },
+      'proj-1',
+      null,
+      'sess-1',
+      LONG_WITH_BREAKS,
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('staged');
+  });
+
+  it('rejects an option description over the threshold with zero paragraph breaks', () => {
+    expect(() =>
+      stageIntent(
+        'decision.pickOne',
+        {
+          prompt: 'Which approach?',
+          options: [{ label: 'Option A', description: LONG_NO_BREAKS }],
+          allowFreeForm: true,
+        },
+        'proj-1',
+        null,
+        'sess-1',
+        SHORT_SINGLE_PARAGRAPH,
+      ),
+    ).toThrow(/paragraph breaks/);
+  });
+
+  it('accepts an option description split into paragraphs', () => {
+    const intent = stageIntent(
+      'decision.pickOne',
+      {
+        prompt: 'Which approach?',
+        options: [{ label: 'Option A', description: LONG_WITH_BREAKS }],
+        allowFreeForm: true,
+      },
+      'proj-1',
+      null,
+      'sess-1',
+      SHORT_SINGLE_PARAGRAPH,
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('staged');
+  });
+
+  it('rejects investigation over the threshold with zero paragraph breaks', () => {
+    expect(() =>
+      stageIntent(
+        'decision.pickOne',
+        { prompt: 'Which approach?', options: OPTIONS, allowFreeForm: true },
+        'proj-1',
+        null,
+        'sess-1',
+        SHORT_SINGLE_PARAGRAPH,
+        null,
+        null,
+        null,
+        LONG_NO_BREAKS,
+      ),
+    ).toThrow(/paragraph breaks/);
+  });
+
+  it('accepts investigation split into paragraphs', () => {
+    const intent = stageIntent(
+      'decision.pickOne',
+      { prompt: 'Which approach?', options: OPTIONS, allowFreeForm: true },
+      'proj-1',
+      null,
+      'sess-1',
+      SHORT_SINGLE_PARAGRAPH,
+      null,
+      null,
+      null,
+      LONG_WITH_BREAKS,
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('staged');
+  });
+
+  it('continues accepting a short single-paragraph decisionProposal and option description unchanged', () => {
+    const intent = stageIntent(
+      'decision.pickOne',
+      { prompt: 'Which approach?', options: OPTIONS, allowFreeForm: true },
+      'proj-1',
+      null,
+      'sess-1',
+      SHORT_SINGLE_PARAGRAPH,
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('staged');
+  });
+});
+
 describe('decision.pickOne investigation field', () => {
   it('persists investigation separately from decisionProposal and surfaces it via the API', () => {
     const intent = stageIntent(

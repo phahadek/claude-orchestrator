@@ -37,4 +37,42 @@ describe('useCollapsibleText', () => {
     expect(result.current.shouldCollapse).toBe(false);
     expect(result.current.displayText).toBe('');
   });
+
+  it('collapses a single-line string over the character threshold', () => {
+    const text = 'word '.repeat(180).trim(); // 900 chars, no newlines
+    const { result } = renderHook(() => useCollapsibleText(text));
+    expect(result.current.shouldCollapse).toBe(true);
+    expect(result.current.collapseReason).toBe('chars');
+  });
+
+  it('does not collapse a single-line string under the character threshold', () => {
+    const text = 'word '.repeat(40).trim(); // 200 chars, no newlines
+    const { result } = renderHook(() => useCollapsibleText(text));
+    expect(result.current.shouldCollapse).toBe(false);
+    expect(result.current.displayText).toBe(text);
+  });
+
+  it('still collapses a 20-line string of short lines via the line-count trigger', () => {
+    const text = Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n');
+    const { result } = renderHook(() => useCollapsibleText(text));
+    expect(result.current.shouldCollapse).toBe(true);
+    expect(result.current.collapseReason).toBe('lines');
+  });
+
+  it('truncates a character-triggered collapse at a word boundary', () => {
+    const text = 'word '.repeat(180).trim(); // 900 chars, no newlines
+    const { result } = renderHook(() => useCollapsibleText(text));
+    expect(result.current.displayText.length).toBeLessThanOrEqual(600);
+    expect(result.current.displayText.endsWith(' ')).toBe(false);
+    expect(text.startsWith(result.current.displayText)).toBe(true);
+    // truncation lands on a full word, not mid-word
+    expect(result.current.displayText).toMatch(/^(word ?)*word$/);
+  });
+
+  it('does not claim a line count in the collapse reason when triggered by length', () => {
+    const text = 'word '.repeat(180).trim();
+    const { result } = renderHook(() => useCollapsibleText(text));
+    expect(result.current.collapseReason).toBe('chars');
+    expect(result.current.collapseReason).not.toBe('lines');
+  });
 });

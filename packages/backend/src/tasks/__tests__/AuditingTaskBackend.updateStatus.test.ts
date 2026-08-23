@@ -3,9 +3,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockRecordEvent = vi.fn();
 const mockUpdateTaskStatusInBoardCaches = vi.fn();
 const mockGetTaskStatusFromCache = vi.fn();
+const mockRecordTaskStatusWrite = vi.fn();
+const mockCloseFlakyRemediationTaskIfLinked = vi.fn();
 
 vi.mock('../../audit/AuditLog', () => ({
   recordEvent: (...args: unknown[]) => mockRecordEvent(...args),
+}));
+
+vi.mock('../../audit/flakyRemediationFiling', () => ({
+  closeFlakyRemediationTaskIfLinked: (...args: unknown[]) =>
+    mockCloseFlakyRemediationTaskIfLinked(...args),
 }));
 
 vi.mock('../../db/queries', () => ({
@@ -14,6 +21,8 @@ vi.mock('../../db/queries', () => ({
     mockUpdateTaskStatusInBoardCaches(...args),
   getTaskStatusFromCache: (...args: unknown[]) =>
     mockGetTaskStatusFromCache(...args),
+  recordTaskStatusWrite: (...args: unknown[]) =>
+    mockRecordTaskStatusWrite(...args),
 }));
 
 import { AuditingTaskBackend } from '../TaskBackend';
@@ -39,6 +48,8 @@ beforeEach(() => {
   mockRecordEvent.mockReset();
   mockUpdateTaskStatusInBoardCaches.mockReset();
   mockGetTaskStatusFromCache.mockReset();
+  mockRecordTaskStatusWrite.mockReset();
+  mockCloseFlakyRemediationTaskIfLinked.mockReset();
 });
 
 describe('AuditingTaskBackend.updateStatus', () => {
@@ -174,5 +185,32 @@ describe('AuditingTaskBackend.updateStatus', () => {
         }),
       }),
     );
+  });
+
+  it('closes any linked flaky-remediation tracking on a transition to a terminal status', async () => {
+    const inner = makeInnerBackend();
+    const backend = new AuditingTaskBackend(inner, 'proj-1');
+
+    await backend.updateStatus('notion:abc', '✅ Done', {
+      source: 'orchestrator',
+      sessionId: 'sess-1',
+    });
+
+    expect(mockCloseFlakyRemediationTaskIfLinked).toHaveBeenCalledWith(
+      'notion:abc',
+      expect.any(String),
+    );
+  });
+
+  it('does not attempt to close flaky-remediation tracking on a non-terminal transition', async () => {
+    const inner = makeInnerBackend();
+    const backend = new AuditingTaskBackend(inner, 'proj-1');
+
+    await backend.updateStatus('notion:abc', '🔄 In Progress', {
+      source: 'orchestrator',
+      sessionId: 'sess-1',
+    });
+
+    expect(mockCloseFlakyRemediationTaskIfLinked).not.toHaveBeenCalled();
   });
 });

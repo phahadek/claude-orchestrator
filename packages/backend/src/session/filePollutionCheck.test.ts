@@ -27,7 +27,9 @@ function makeGitHub(
 ): GitHubClient {
   return {
     fetchPR: vi.fn().mockResolvedValue({ headSha: 'head-sha-1' }),
-    getPRFiles: vi.fn().mockResolvedValue(['src/index.ts']),
+    getPRFiles: vi
+      .fn()
+      .mockResolvedValue([{ filename: 'src/index.ts', status: 'added' }]),
     createIssueComment: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } as unknown as GitHubClient;
@@ -76,6 +78,39 @@ describe('runFilePollutionCheck — no violations', () => {
     expect(
       vi.mocked(github.createIssueComment as ReturnType<typeof vi.fn>),
     ).not.toHaveBeenCalled();
+  });
+});
+
+// ── Deletion exemption ────────────────────────────────────────────────────────
+
+describe('runFilePollutionCheck — deletion exemption', () => {
+  it('does not revert a removed gitignored file and reports banned_files_found: 0', async () => {
+    const actual = await vi.importActual<
+      typeof import('../github/PRFileValidator')
+    >('../github/PRFileValidator');
+    vi.mocked(validatePRFiles).mockImplementation(actual.validatePRFiles);
+
+    const github = makeGitHub({
+      getPRFiles: vi
+        .fn()
+        .mockResolvedValue([
+          { filename: 'generated/output.json', status: 'removed' },
+        ]),
+    });
+
+    const result = await runFilePollutionCheck({ github, ...BASE_OPTS });
+
+    expect(result.revertCommitSha).toBeNull();
+    expect(vi.mocked(revertBannedFiles)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(github.createIssueComment as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'file_pollution_checked',
+        payload: expect.objectContaining({ banned_files_found: 0 }),
+      }),
+    );
   });
 });
 

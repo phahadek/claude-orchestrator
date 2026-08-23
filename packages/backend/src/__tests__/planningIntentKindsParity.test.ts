@@ -27,6 +27,16 @@ const HEALTH_TOOL = orchestratorMcpToolName('health');
 // kind, so it isn't in PLANNING_INTENT_KINDS.ops (see config.ts's
 // OPS_MCP_TOOLS comment).
 const GATESEED_GETSTATE_TOOL = orchestratorMcpToolName('gateSeed.getState');
+// testHealth.getFlakyHistory is the read-only flagged_flaky_tests_rollup /
+// base_health_remediation_test_tracking lookup registered unconditionally
+// for any project-resolved session (see mcp/tools/testHealthReadTools.ts) —
+// also a direct read, not a staged-intent kind, so it isn't in
+// PLANNING_INTENT_KINDS. Unlike gateSeed.getState it IS CLI-allowed for
+// every workflow (see config.ts's PROJECT_READ_MCP_TOOLS comment), so it
+// lands in extraNonStagedTools rather than alwaysRegisteredNotAllowed below.
+const TESTHEALTH_GETFLAKYHISTORY_TOOL = orchestratorMcpToolName(
+  'testHealth.getFlakyHistory',
+);
 // deploy.verdict is the deploy-agentic-step spawner's verdict-reporting
 // tool — a direct call straight to DeployOrchestrator.reportAgenticVerdict(),
 // never a staged intent, so it isn't in PLANNING_INTENT_KINDS.ops (see
@@ -69,7 +79,10 @@ const ARCHITECTURE_READ_TOOLS = [
 // task.getById is a read-only task-summary lookup, not a staged-intent kind —
 // it isn't in PLANNING_INTENT_KINDS, so every workflow's guard below excludes
 // it too (see config.ts's TASK_READ_MCP_TOOLS comment).
-const TASK_READ_TOOLS = [orchestratorMcpToolName('task.getById')];
+const TASK_READ_TOOLS = [
+  orchestratorMcpToolName('task.getById'),
+  orchestratorMcpToolName('task.queryTasks'),
+];
 // session.getRecord / auditLog.query are the Tier-B capability-gated read
 // tools (mcp/tools/sessionRecordReadTool.ts, mcp/tools/auditLogReadTools.ts),
 // registered unconditionally like the tools above — not staged-intent kinds,
@@ -102,6 +115,7 @@ const WORKFLOWS: {
     extraNonStagedTools: [
       GROOM_PRECHECK_TOOL,
       GATESEED_GETSTATE_TOOL,
+      TESTHEALTH_GETFLAKYHISTORY_TOOL,
       PULLREQUEST_GETBYTASKID_TOOL,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
@@ -115,6 +129,7 @@ const WORKFLOWS: {
     extraNonStagedTools: [
       ...COMPLETENESS_TOOLS,
       GATESEED_GETSTATE_TOOL,
+      TESTHEALTH_GETFLAKYHISTORY_TOOL,
       PULLREQUEST_GETBYTASKID_TOOL,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
@@ -127,6 +142,7 @@ const WORKFLOWS: {
     allowedTools: OPS_ALLOWED_TOOLS,
     extraNonStagedTools: [
       GATESEED_GETSTATE_TOOL,
+      TESTHEALTH_GETFLAKYHISTORY_TOOL,
       DEPLOY_VERDICT_TOOL,
       GATE_RECLASSIFY_TOOL,
       STRANDED_INTENT_TOOL,

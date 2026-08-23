@@ -95,6 +95,7 @@ async function stage(
     payload,
     ctx.projectId,
     envelopeArgs.groupId ?? null,
+    ctx.milestone ?? null,
   );
   const intent: StagedIntent = stageIntent(
     kind,
@@ -348,12 +349,18 @@ export function registerStageProposalTools(
         'journal straight to "resolved" with no operator involvement, a failure stages an ' +
         'interrupting intent naming the mismatch. Perform the actual check yourself (re-read the ' +
         'config row, count the backfill) before staging — reconciliation.passed is your own ' +
-        'verdict, not re-derived by the orchestrator.',
+        'verdict, not re-derived by the orchestrator. A transition to "blocked" staged by an ops ' +
+        'session that has never staged a session.requestCapability intent requires a non-empty ' +
+        '`standDownReason` — a substantive attestation naming why no capability request could ' +
+        'unblock the task (a design decision, a change ops must not make itself, an external ' +
+        'dependency with no sanctioned request path); it is unread when the session did request ' +
+        'a capability.',
       inputSchema: envelope({
         taskId: z.string(),
         state: opsStateSchema,
         fields: z.record(z.string(), z.unknown()).optional(),
         reconciliation: opsReconciliationAssertionSchema.optional(),
+        standDownReason: z.string().optional(),
       }),
     },
     async (args) => stage('journal.setState', args.payload, ctx, args),
@@ -394,7 +401,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a Notion source-page edit',
       description:
-        "Stages a notion.pageEdit intent — the Notion source-of-truth-page twin of task.updateBody/task.patchBodySection, for a Docs task whose Target surface is a Notion page rather than a repo file. Each content_updates entry is a find/replace pair (old_str/new_str) applied against the page's current full body at apply time; old_str must match the live page body exactly at apply time or the intent is rejected as stale.",
+        "Stages a notion.pageEdit intent — the Notion source-of-truth-page twin of task.updateBody/task.patchBodySection, for a Docs task whose Target surface is a Notion page rather than a repo file. `page_id` accepts either a bare Notion page uuid or a `notion:<uuid>`-prefixed task id — either form applies unchanged. Each content_updates entry is a find/replace pair (old_str/new_str) applied against the page's current full body at apply time; old_str must match the live page body exactly at apply time or the intent is rejected as stale.",
       inputSchema: envelope({
         page_id: z.string(),
         content_updates: z.array(
@@ -433,6 +440,23 @@ export function registerStageProposalTools(
       }),
     },
     async (args) => stage('test.request', args.payload, ctx, args),
+  );
+
+  registerTool(
+    'report.file',
+    {
+      title:
+        'File an investigation report about a defect you must not fix yourself',
+      description:
+        "Stages a report.file intent — files an inert investigation report about a defect this session found but must not fix in-band (out of this task's scope, or a symptom this session cannot safely reproduce/resolve here). Carries only the report's own content: title, symptom_text (what was observed), an optional evidence_text (file:line, logs, repro steps), and a fingerprint (a normalized signature of the symptom, used to tag duplicates against other report.file intents already staged in this project — never to suppress this one). Origin session/task, project, milestone, and the commit-time HEAD sha are all backend-derived, never supplied here. Once operator-approved, becomes a committed investigation_report row for later triage/dispatch. Bounded by a per-session cap. File only when all three hold: (a) the defect was directly observed or reproduced during this session's own work, never a speculative suspicion; (b) it is outside the current task's own PR scope — this session cannot fix it without scope creep; and (c) no narrower existing route already covers it — a flaky test goes through flaky.confirm, a wrong review verdict through review.dispute, neither goes through report.file. Stay silent on cosmetic/style nits and on anything fixable within the current task's own PR — fix it there instead of reporting it.",
+      inputSchema: envelope({
+        title: z.string(),
+        symptom_text: z.string(),
+        evidence_text: z.string().optional(),
+        fingerprint: z.string(),
+      }),
+    },
+    async (args) => stage('report.file', args.payload, ctx, args),
   );
 
   registerTool(

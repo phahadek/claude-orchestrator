@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3';
+import path from 'path';
+import { Worker } from 'worker_threads';
 import { createHash, randomUUID } from 'crypto';
 import { db } from './db';
 import { logger } from '../logger';
@@ -12,6 +14,7 @@ import {
   isCodeSession,
   isPlanningSession,
   PLANNING_SESSION_TYPES,
+  type SessionType,
 } from '../session/sessionPredicates';
 import {
   pauseReasonFromCanonical,
@@ -46,9 +49,22 @@ import type {
   FeedbackInboxRow,
   TestRequestRunRow,
   TestRequestRunState,
+  TestRequestFailureReason,
+  RunOrigin,
+  DependencyCacheEntryRow,
+  DependencyCacheEntryStatus,
+  TestRunResultRow,
+  NewTestRunResultRow,
+  TestRunSummaryRow,
+  TestOutcomeCounts,
+  TestPerfBaselineRow,
+  NewTestPerfBaselineRow,
   OpsJournalRow,
   CapabilityDisqualificationRow,
   NewCapabilityDisqualificationRow,
+  FlakyRemediationTrackingRow,
+  BaseHealthRemediationTestTrackingRow,
+  BaseHealthRemediationReasonTrackingRow,
   GateItemRow,
   GateItemSourceRow,
   NewGateItemSourceRow,
@@ -78,12 +94,15 @@ import type {
   StagedIntentRow,
   StagedIntentState,
   StagedIntentGroupRow,
+  CompletingSignalLedgerRow,
+  NewCompletingSignalLedgerRow,
   FlowArmRow,
   ConvergenceSnapshotRow,
   NewConvergenceSnapshotRow,
   OpsJournalState,
 } from './types';
 import { FLOW_IDS, DEFAULT_ARM, type FlowId } from '../orchestration/flowArm';
+import { deriveBranchSlug } from '../session/branchSlug';
 
 // ─── asOf reconstruction ────────────────────────────────────────────────────
 // Point-in-time reads for the gate-verify read path (see gate/gateItemVerifier.ts
@@ -152,32 +171,100 @@ export function insertSession(s: NewSession): void {
   });
 }
 
+/**
+ * Mirrors a legacy sessions.status/archived write into completing_signal_ledger
+ * as a 'legacy_status_write' signal — the dual-write bridge landed by the
+ * shared-primitives migration task, ahead of any read-side cutover onto
+ * session/sessionStatusDeriver.ts. Purely additive: never gates, alters, or
+ * is awaited by the legacy write it mirrors, so it can never change that
+ * write's observable behavior.
+ */
+function recordLegacyStatusSignal(
+  sessionId: string,
+  taskId: string | null,
+  sessionType: SessionType,
+  signalValue: string,
+  recordedAt: number,
+): void {
+  insertCompletingSignal({
+    session_id: sessionId,
+    task_id: taskId,
+    session_type: sessionType,
+    signal_class: 'legacy_status_write',
+    signal_value: signalValue,
+    recorded_at: recordedAt,
+  });
+}
+
+/** Session types whose terminal status is decided by a PR merge/close outcome — see completingSignalRegistry.ts. */
+const PR_ANCHORED_SESSION_TYPES: ReadonlySet<SessionType> = new Set([
+  'standard',
+  'review',
+]);
+
+/**
+ * Dual-write bridge for the PR-anchored session types (standard/code and
+ * review — see completingSignalRegistry.ts's registry comment; depth_review
+ * has no PR of its own to anchor to and is excluded here). Mirrors a PR
+ * merge/close outcome into completing_signal_ledger as an 'external_pr_event'
+ * signal, alongside the legacy markSessionDone/updateSessionStatus write it
+ * accompanies at the call site (PRMergeWatcher/AutoMerger/
+ * bootIdleReconciliation). Purely additive — never gates, alters, or is
+ * awaited by the legacy write it accompanies, so it can never change that
+ * write's observable behavior. No-ops for any other session type (docs/ops
+ * PR outcomes are the planning-family sibling migration task's scope).
+ */
+export function recordPrAnchoredCompletingSignal(
+  sessionId: string,
+  reason: 'pr_merged' | 'pr_closed_without_merge',
+  recordedAt: number,
+): void {
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
+    | { task_id: string | null; session_type: SessionType }
+    | undefined;
+  if (!current || !PR_ANCHORED_SESSION_TYPES.has(current.session_type)) {
+    return;
+  }
+  insertCompletingSignal({
+    session_id: sessionId,
+    task_id: current.task_id ?? null,
+    session_type: current.session_type,
+    signal_class: 'external_pr_event',
+    signal_value: reason,
+    recorded_at: recordedAt,
+  });
+}
+
 export function updateSessionStatus(
   sessionId: string,
   status: string,
   endedAt?: number,
 ): void {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
-    | { status: string; task_id: string | null }
+    | { status: string; task_id: string | null; session_type: SessionType }
     | undefined;
   _stmtUpdateSessionStatus ??= db.prepare<{
     session_id: string;
     status: string;
     ended_at: number | null;
     terminalized_at: number | null;
+    is_terminal: number;
   }>(`
     UPDATE sessions
     SET status = @status, ended_at = @ended_at,
-        terminalized_at = COALESCE(terminalized_at, @terminalized_at)
+        terminalized_at = COALESCE(terminalized_at, @terminalized_at),
+        pause_reason = CASE
+          WHEN @is_terminal = 1 AND pause_reason = 'test_request_cycle_exceeded'
+          THEN NULL ELSE pause_reason END
     WHERE session_id = @session_id
   `);
+  const isTerminal = TERMINAL_SESSION_STATUSES.has(status);
   _stmtUpdateSessionStatus.run({
     session_id: sessionId,
     status,
     ended_at: endedAt ?? null,
-    terminalized_at: TERMINAL_SESSION_STATUSES.has(status)
-      ? (endedAt ?? Date.now())
-      : null,
+    terminalized_at: isTerminal ? (endedAt ?? Date.now()) : null,
+    is_terminal: isTerminal ? 1 : 0,
   });
   if (current && current.status !== status) {
     recordEvent({
@@ -187,6 +274,13 @@ export function updateSessionStatus(
       task_id: current.task_id ?? null,
       payload: { from: current.status, to: status },
     });
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      status,
+      endedAt ?? Date.now(),
+    );
   }
 }
 
@@ -235,7 +329,9 @@ function getStmtMarkSessionDone(): Database.Statement {
   }>(`
     UPDATE sessions
     SET status = 'done', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url),
-        terminalized_at = COALESCE(terminalized_at, @terminalized_at)
+        terminalized_at = COALESCE(terminalized_at, @terminalized_at),
+        pause_reason = CASE
+          WHEN pause_reason = 'test_request_cycle_exceeded' THEN NULL ELSE pause_reason END
     WHERE session_id = @session_id
   `);
   return _stmtMarkSessionDone;
@@ -353,7 +449,7 @@ export function markSessionSuperseded(
   endedAt: number,
 ): void {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
-    | { status: string; task_id: string | null }
+    | { status: string; task_id: string | null; session_type: SessionType }
     | undefined;
   _stmtMarkSessionSuperseded ??= db.prepare<{
     session_id: string;
@@ -372,6 +468,13 @@ export function markSessionSuperseded(
       task_id: current.task_id ?? null,
       payload: { from: current.status, to: 'superseded' },
     });
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      'superseded',
+      endedAt,
+    );
   }
 }
 
@@ -441,7 +544,7 @@ export function markSessionDone(
   opts?: { skipInFlightGuard?: boolean },
 ): void {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
-    | { status: string; task_id: string | null }
+    | { status: string; task_id: string | null; session_type: SessionType }
     | undefined;
   if (current?.status === 'running' && !opts?.skipInFlightGuard) {
     logger.warn(
@@ -475,6 +578,13 @@ export function markSessionDone(
         call_site: callSite ?? 'unknown',
       },
     });
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      'done',
+      endedAt,
+    );
   }
 }
 
@@ -499,6 +609,7 @@ export function applyPendingDone(sessionId: string): boolean {
     | {
         status: string;
         task_id: string | null;
+        session_type: SessionType;
         pending_done_ended_at: number | null;
         pending_done_pr_url: string | null;
         pending_done_call_site: string | null;
@@ -509,13 +620,14 @@ export function applyPendingDone(sessionId: string): boolean {
     clearPendingDone(sessionId);
     return false;
   }
+  const terminalizedAt = Date.now();
   getStmtMarkSessionDone().run({
     session_id: sessionId,
     ended_at: current.pending_done_ended_at,
     pr_url: current.pending_done_pr_url,
     // The genuine terminal instant is now (the drain), not the original
     // deferral time preserved in ended_at for backwards compatibility.
-    terminalized_at: Date.now(),
+    terminalized_at: terminalizedAt,
   });
   clearPendingDone(sessionId);
   recordEvent({
@@ -536,6 +648,13 @@ export function applyPendingDone(sessionId: string): boolean {
       call_site: current.pending_done_call_site ?? 'unknown',
     },
   });
+  recordLegacyStatusSignal(
+    sessionId,
+    current.task_id ?? null,
+    current.session_type,
+    'done',
+    terminalizedAt,
+  );
   return true;
 }
 
@@ -574,7 +693,7 @@ export const TERMINAL_SESSION_STATUSES = new Set(['done', 'error', 'killed']);
  * superseded session as concluded. Derived, never re-enumerated, so 'idle' can
  * never silently reappear in one of these collections.
  */
-const TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED = new Set([
+export const TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED = new Set([
   ...TERMINAL_SESSION_STATUSES,
   'superseded',
 ]);
@@ -616,17 +735,34 @@ let _stmtBackfillPrUrlIfNull: Database.Statement | null = null;
  * find it.
  *
  * Returns the row's effective status after the call — 'idle' when the write
- * landed, or the pre-existing terminal status when it was skipped — so
- * callers can broadcast what's actually in the database instead of assuming
- * the write always lands.
+ * landed, 'done' when a deferred pending_done was drained instead (see
+ * below), or the pre-existing terminal status when the terminal guard fired
+ * — so callers can broadcast what's actually in the database instead of
+ * assuming the write always lands.
+ *
+ * Pending-done drain: reaching a non-running status is exactly the boundary
+ * markSessionDone's docstring promises the deferred transition drains on
+ * (see applyPendingDone) — a session that parks alive between turns never
+ * exits and never settles a run() promise again, so without this drain
+ * point a pending_done written after a session's last turn boundary is
+ * never applied. Skipped when the session holds an undispositioned staged
+ * intent (staged/approved) — see hasUndispositionedStagedIntentsForSession
+ * — so a planning session parked awaiting operator disposition stays idle,
+ * not done, per boot orphan recovery's same invariant.
  */
 export function markSessionIdle(
   sessionId: string,
   endedAt: number,
   prUrl?: string | null,
+  callSite?: string,
 ): SessionStatus {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
-    | { status: SessionStatus; task_id: string | null }
+    | {
+        status: SessionStatus;
+        task_id: string | null;
+        session_type: SessionType;
+        pending_done_ended_at: number | null;
+      }
     | undefined;
   if (current && TERMINAL_SESSION_STATUSES.has(current.status)) {
     recordEvent({
@@ -649,6 +785,13 @@ export function markSessionIdle(
     }
     return current.status;
   }
+  if (
+    current?.pending_done_ended_at != null &&
+    !hasUndispositionedStagedIntentsForSession(sessionId)
+  ) {
+    applyPendingDone(sessionId);
+    return 'done';
+  }
   _stmtMarkSessionIdle ??= db.prepare<{
     session_id: string;
     ended_at: number;
@@ -669,10 +812,46 @@ export function markSessionIdle(
       actor_type: 'system',
       actor_id: sessionId,
       task_id: current.task_id ?? null,
-      payload: { from: current.status, to: 'idle' },
+      payload: {
+        from: current.status,
+        to: 'idle',
+        call_site: callSite ?? 'unknown',
+      },
     });
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      'idle',
+      endedAt,
+    );
   }
   return 'idle';
+}
+
+/**
+ * Records the skip audit event for a would-be error/killed write onto an
+ * already-terminal session row — the markSessionErrored counterpart to
+ * markSessionIdle's session_idle_write_skipped_terminal event above.
+ * SessionManager.markSessionErrored is the one deciding to skip (it reads
+ * the persisted status via getSession, never the in-memory hasEnded flag —
+ * that flag is exactly what's stale when sessionLivenessReconciler reaps an
+ * orphaned process's OS-level SIGTERM outside the AgentSession object); this
+ * only emits the audit trail for that decision.
+ */
+export function recordSessionErroredWriteSkipped(
+  sessionId: string,
+  taskId: string | null,
+  statusBefore: string,
+  attemptedStatus: string,
+): void {
+  recordEvent({
+    event_type: 'session_errored_write_skipped_terminal',
+    actor_type: 'system',
+    actor_id: sessionId,
+    task_id: taskId,
+    payload: { status_before: statusBefore, attempted_status: attemptedStatus },
+  });
 }
 
 export interface StuckResultSessionRow {
@@ -732,6 +911,52 @@ export function getStuckResultSessionRows(
   `,
     )
     .all() as StuckResultSessionRow[];
+}
+
+export interface StuckAliveSubprocessParkRow {
+  session_id: string;
+  task_id: string | null;
+  project_id: string | null;
+  pr_url: string | null;
+  worktree_path: string | null;
+  session_type: string;
+  /** audit_log.ts of the session_status_changed row that parked this session via stuck_session_alive_subprocess. */
+  parked_at: number;
+  /** sessions.ended_at as of that park — the last event timestamp known at park time. */
+  last_known_event_ts: number;
+  /** MAX(session_events.timestamp) for this session right now; null if it somehow has no events. */
+  latest_event_ts: number | null;
+}
+
+/**
+ * Sessions currently idle whose *most recent* session_status_changed transition
+ * was a stuck_session_alive_subprocess park (StuckSessionMonitor.scanForStuckSessions).
+ * getStuckResultSessionRows only matches status='running', so once a session is
+ * parked this way it drops out of that query forever — this is the query that
+ * re-finds it so the park can be bounded. Filtering on the *latest* transition's
+ * call_site (rather than merely "status is idle") is what excludes the
+ * legitimately long-lived stuck_session_open_pr park, per the cascade check in
+ * the task: a session idle for a PR-review reason must never be escalated here.
+ */
+export function getStuckAliveSubprocessParkRows(): StuckAliveSubprocessParkRow[] {
+  return db
+    .prepare(
+      `
+    SELECT s.session_id, s.task_id, s.project_id, s.pr_url, s.worktree_path,
+           s.session_type, al.ts AS parked_at, s.ended_at AS last_known_event_ts,
+           (SELECT MAX(timestamp) FROM session_events se WHERE se.session_id = s.session_id) AS latest_event_ts
+    FROM sessions s
+    JOIN audit_log al ON al.actor_id = s.session_id
+    WHERE s.status = 'idle'
+      AND al.event_type = 'session_status_changed'
+      AND json_extract(al.payload, '$.call_site') = 'stuck_session_alive_subprocess'
+      AND al.id = (
+        SELECT MAX(id) FROM audit_log
+        WHERE actor_id = s.session_id AND event_type = 'session_status_changed'
+      )
+  `,
+    )
+    .all() as StuckAliveSubprocessParkRow[];
 }
 
 /**
@@ -879,7 +1104,9 @@ export function deleteGhostSessions(): number {
     .prepare(
       `
     DELETE FROM sessions
-    WHERE session_id NOT IN (SELECT DISTINCT session_id FROM session_events)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM session_events WHERE session_events.session_id = sessions.session_id
+    )
   `,
     )
     .run();
@@ -1219,39 +1446,53 @@ export function hasActivePlanningSessionForTask(
  * the abort route (routes/taskAbort.ts) to resolve the specific session id
  * to kill, rather than just a boolean. Same non-terminal (running OR parked
  * idle), flow-scoped, archived=0 filter.
+ *
+ * Matches against sessions.task_id_norm — the same STORED generated column
+ * hasActiveSessionForTask (above) matches against — instead of a JS
+ * `.find()` over an unfiltered-by-task `SELECT *`. That previously forced a
+ * full scan of the sessions table on every groom/ops/design/docs candidate
+ * evaluated by DispatchTriggerEvaluator; the indexed column turns it into a
+ * single index seek.
  */
 export function getActivePlanningSessionForTask(
   taskId: string,
   flow: DedupedPlanningFlow,
 ): Session | undefined {
-  const norm = normalizeBoardId(taskId);
-  const rows = db
-    .prepare<{ flow: string }, Session>(
+  const norm = taskId.replace(/-/g, '');
+  return db
+    .prepare<{ task_id_norm: string; flow: string }, Session>(
       `
     SELECT * FROM sessions
-    WHERE status NOT IN (${TERMINAL_STATUS_SQL_LIST})
+    WHERE task_id_norm = @task_id_norm
+      AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND session_type = @flow
       AND archived = 0
+    LIMIT 1
   `,
     )
-    .all({ flow }) as Session[];
-  return rows.find((row) => normalizeBoardId(row.task_id ?? '') === norm);
+    .get({ task_id_norm: norm, flow }) as Session | undefined;
 }
 
 export function hasActiveSessionForTask(taskId: string): boolean {
   const norm = taskId.replace(/-/g, '');
+  // Matches sessions.task_id_norm — a VIRTUAL generated column mirroring this
+  // same REPLACE(...,'-','') expression (see schema.ts) — instead of
+  // applying REPLACE() to every row inside WHERE. That defeated
+  // idx_sessions_notion_task_id_session_type (indexed on raw task_id) and
+  // forced a full scan of the sessions table on every call; comparing
+  // against the indexed generated column turns it into a single index seek.
   const row = db
-    .prepare<{ task_id: string }>(
+    .prepare<{ task_id_norm: string }>(
       `
     SELECT 1 FROM sessions
-    WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
+    WHERE task_id_norm = @task_id_norm
       AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND (session_type = 'standard' OR session_type IS NULL)
       AND archived = 0
     LIMIT 1
   `,
     )
-    .get({ task_id: norm });
+    .get({ task_id_norm: norm });
   return !!row;
 }
 
@@ -1278,25 +1519,93 @@ export function getActiveSessions(): Session[] {
     .all() as Session[];
 }
 
-export function getArchivedSessions(): Session[] {
-  return db
+/**
+ * Default/maximum page size for getArchivedSessionsPage — bounds the
+ * /api/sessions/archived response so it no longer returns every archived
+ * row's full record on every dashboard load (measured at 8.7 MB / 6,571 rows
+ * live). Also trims the column set to what the history list actually
+ * renders, dropping heavy fields (metadata, note, tags) a list view never
+ * needs.
+ */
+export const ARCHIVED_SESSIONS_MAX_PAGE_SIZE = 200;
+
+export interface ArchivedSessionsPage {
+  sessions: Session[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Bounded, projected page of archived sessions for the /archived list route. */
+export function getArchivedSessionsPage(
+  limit: number,
+  offset: number,
+): ArchivedSessionsPage {
+  const boundedLimit = Math.min(
+    Math.max(1, Math.trunc(limit)),
+    ARCHIVED_SESSIONS_MAX_PAGE_SIZE,
+  );
+  const boundedOffset = Math.max(0, Math.trunc(offset));
+
+  const sessions = db
     .prepare(
-      'SELECT * FROM sessions WHERE archived = 1 ORDER BY started_at DESC',
+      `
+    SELECT
+      session_id, task_id, task_url, project_context_url,
+      project_id, status, started_at, ended_at, worktree_path,
+      archived, favorited, session_type, note, tags,
+      total_input_tokens, total_output_tokens, model, effort, task_name,
+      pr_url
+    FROM sessions
+    WHERE archived = 1
+    ORDER BY started_at DESC
+    LIMIT @limit OFFSET @offset
+  `,
     )
-    .all() as Session[];
+    .all({ limit: boundedLimit, offset: boundedOffset }) as Session[];
+
+  const { count } = db
+    .prepare('SELECT COUNT(*) AS count FROM sessions WHERE archived = 1')
+    .get() as { count: number };
+
+  return { sessions, total: count, limit: boundedLimit, offset: boundedOffset };
 }
 
 export function archiveSession(sessionId: string): boolean {
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
+    | { task_id: string | null; session_type: SessionType; archived: number }
+    | undefined;
   const result = db
     .prepare('UPDATE sessions SET archived = 1 WHERE session_id = ?')
     .run(sessionId);
+  if (result.changes > 0 && current && current.archived !== 1) {
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      'archived',
+      Date.now(),
+    );
+  }
   return result.changes > 0;
 }
 
 export function unarchiveSession(sessionId: string): boolean {
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
+    | { task_id: string | null; session_type: SessionType; archived: number }
+    | undefined;
   const result = db
     .prepare('UPDATE sessions SET archived = 0 WHERE session_id = ?')
     .run(sessionId);
+  if (result.changes > 0 && current && current.archived !== 0) {
+    recordLegacyStatusSignal(
+      sessionId,
+      current.task_id ?? null,
+      current.session_type,
+      'unarchived',
+      Date.now(),
+    );
+  }
   return result.changes > 0;
 }
 
@@ -1320,11 +1629,34 @@ export function unfavoriteSession(sessionId: string): boolean {
  * must never be swept up by this basis alone.
  */
 export function archiveFinishedSessions(): number {
+  const rows = db
+    .prepare(
+      `SELECT session_id, task_id, session_type FROM sessions
+       WHERE status IN (${BASE_TERMINAL_STATUS_SQL_LIST}) AND archived = 0`,
+    )
+    .all() as {
+    session_id: string;
+    task_id: string | null;
+    session_type: SessionType;
+  }[];
+
   const result = db
     .prepare(
       `UPDATE sessions SET archived = 1 WHERE status IN (${BASE_TERMINAL_STATUS_SQL_LIST})`,
     )
     .run();
+
+  const recordedAt = Date.now();
+  for (const row of rows) {
+    recordLegacyStatusSignal(
+      row.session_id,
+      row.task_id ?? null,
+      row.session_type,
+      'archived',
+      recordedAt,
+    );
+  }
+
   return result.changes;
 }
 
@@ -1337,13 +1669,17 @@ export function archiveFinishedSessions(): number {
 export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
   const rows = db
     .prepare(
-      `SELECT session_id FROM sessions
+      `SELECT session_id, task_id, session_type FROM sessions
        WHERE status IN (${BASE_TERMINAL_STATUS_SQL_LIST})
          AND archived = 0
          AND ended_at IS NOT NULL
          AND ended_at < @cutoff`,
     )
-    .all({ cutoff: cutoffMs }) as { session_id: string }[];
+    .all({ cutoff: cutoffMs }) as {
+    session_id: string;
+    task_id: string | null;
+    session_type: SessionType;
+  }[];
 
   if (rows.length === 0) return [];
 
@@ -1352,6 +1688,17 @@ export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
   db.prepare(
     `UPDATE sessions SET archived = 1 WHERE session_id IN (${placeholders})`,
   ).run(...ids);
+
+  const recordedAt = Date.now();
+  for (const row of rows) {
+    recordLegacyStatusSignal(
+      row.session_id,
+      row.task_id ?? null,
+      row.session_type,
+      'archived',
+      recordedAt,
+    );
+  }
 
   return ids;
 }
@@ -1476,6 +1823,29 @@ export function removeGrantedCapability(
   return next;
 }
 
+/**
+ * Seed the session's durable granted-capabilities set at spawn time — the
+ * write path for the per-project/per-session-kind capability pre-grants (see
+ * orchestrator-config.ts#resolvePreGrantCapabilities). Called once, from
+ * SessionManager.start(), immediately after insertSession and before the
+ * session's first turn. A union merge with whatever's already present
+ * (empty for a brand-new session) rather than an overwrite, so it composes
+ * safely with any other pre-first-turn grant write. A no-op for an empty
+ * list.
+ */
+export function seedGrantedCapabilities(
+  sessionId: string,
+  capabilities: string[],
+): string[] {
+  if (capabilities.length === 0) return getGrantedCapabilities(sessionId);
+  const existing = getGrantedCapabilities(sessionId);
+  const next = [...new Set([...existing, ...capabilities])];
+  db.prepare(
+    'UPDATE sessions SET granted_capabilities = ? WHERE session_id = ?',
+  ).run(JSON.stringify(next), sessionId);
+  return next;
+}
+
 export function setDerivedTitle(sessionId: string, title: string): void {
   setSessionMetadata(sessionId, { derivedTitle: title });
 }
@@ -1583,6 +1953,59 @@ function getStmtInsertEvent(): Database.Statement {
   return _stmtInsertEvent;
 }
 
+let _stmtBumpSessionLastEventAt: Database.Statement | null = null;
+
+/**
+ * Lazily-prepared bump of sessions.last_event_at/first_event_at/event_count,
+ * run alongside every session_events insert so the archived-sessions route
+ * and querySessionEventsByProjectAggregate's unfiltered path can read them
+ * directly instead of aggregating session_events per request. The CASEs
+ * guard against moving last_event_at backwards or first_event_at forwards
+ * for an out-of-order (late-arriving) event.
+ */
+function getStmtBumpSessionLastEventAt(): Database.Statement {
+  _stmtBumpSessionLastEventAt ??= db.prepare<{
+    session_id: string;
+    timestamp: number;
+  }>(`
+    UPDATE sessions
+    SET last_event_at = CASE
+      WHEN last_event_at IS NULL OR last_event_at < @timestamp THEN @timestamp
+      ELSE last_event_at
+    END,
+    first_event_at = CASE
+      WHEN first_event_at IS NULL OR first_event_at > @timestamp THEN @timestamp
+      ELSE first_event_at
+    END,
+    event_count = event_count + 1
+    WHERE session_id = @session_id
+  `);
+  return _stmtBumpSessionLastEventAt;
+}
+
+type InsertEventTxn = Database.Transaction<
+  (
+    params: NewSessionEvent & { message_id: string | null },
+  ) => Database.RunResult
+>;
+
+let _txnInsertEventAndBumpLastEventAt: InsertEventTxn | null = null;
+
+/** Shared transaction for insertEvent/upsertSessionEvent's insert path — inserts the event row and bumps the owning session's last_event_at atomically. */
+function getTxnInsertEventAndBumpLastEventAt(): InsertEventTxn {
+  _txnInsertEventAndBumpLastEventAt ??= db.transaction(
+    (params: NewSessionEvent & { message_id: string | null }) => {
+      const result = getStmtInsertEvent().run(params);
+      getStmtBumpSessionLastEventAt().run({
+        session_id: params.session_id,
+        timestamp: params.timestamp,
+      });
+      return result;
+    },
+  );
+  return _txnInsertEventAndBumpLastEventAt;
+}
+
 /**
  * Epoch ms of the most recent session_events row for the session, or null
  * when it has none (pruned or never emitted — callers must treat null as
@@ -1598,22 +2021,88 @@ export function getSessionLastActivityMs(sessionId: string): number | null {
   return row?.ts ?? null;
 }
 
+let _stmtGetLastActivityMsForArchivedSessions: Database.Statement | null = null;
+
+/**
+ * Bulk counterpart to getSessionLastActivityMs for the archived-sessions
+ * route: reads the denormalised sessions.last_event_at column directly
+ * (maintained at the event-insert sites) instead of aggregating
+ * session_events per request — that aggregate used to touch essentially the
+ * entire event history (archived sessions' events are retained, never
+ * pruned) and scaled worse the longer the deployment ran.
+ */
+export function getLastActivityMsForArchivedSessions(): Map<string, number> {
+  _stmtGetLastActivityMsForArchivedSessions ??= db.prepare(`
+    SELECT session_id, last_event_at AS ts FROM sessions WHERE archived = 1
+  `);
+  const rows = _stmtGetLastActivityMsForArchivedSessions.all() as {
+    session_id: string;
+    ts: number | null;
+  }[];
+  const result = new Map<string, number>();
+  for (const row of rows) {
+    if (row.ts !== null) {
+      result.set(row.session_id, row.ts);
+    }
+  }
+  return result;
+}
+
+/**
+ * Count of tool_use session_events with no matching tool_result yet,
+ * derived from event ordering rather than an in-memory counter — every
+ * tool_use row whose id is past the most recent tool_result row's id is
+ * still "in flight". Used by callers (e.g. StalledPRReconciler) that only
+ * see a session through periodic DB polls rather than the live message
+ * stream StuckSessionMonitor's own pendingToolUseCount tracks.
+ */
+export function getPendingToolUseCount(sessionId: string): number {
+  const row = db
+    .prepare<[string, string], { count: number }>(
+      `SELECT COUNT(*) AS count FROM session_events
+       WHERE session_id = ? AND event_type = 'tool_use'
+         AND id > COALESCE(
+           (SELECT MAX(id) FROM session_events WHERE session_id = ? AND event_type = 'tool_result'),
+           0
+         )`,
+    )
+    .get(sessionId, sessionId);
+  return row?.count ?? 0;
+}
+
 export function insertEvent(e: NewSessionEvent): void {
-  getStmtInsertEvent().run({
+  getTxnInsertEventAndBumpLastEventAt()({
     message_id: null,
     ...e,
     payload: capEventPayload(e.payload),
   });
 }
 
+let _txnInsertEventOrIgnoreAndBumpLastEventAt: InsertEventTxn | null = null;
+
+/** Transaction for insertEventOrIgnore's dedicated statement (distinct from getStmtInsertEvent) — inserts the event row and bumps the owning session's last_event_at atomically. */
+function getTxnInsertEventOrIgnoreAndBumpLastEventAt(): InsertEventTxn {
+  _txnInsertEventOrIgnoreAndBumpLastEventAt ??= db.transaction(
+    (params: NewSessionEvent & { message_id: string | null }) => {
+      _stmtInsertEventOrIgnore ??= db.prepare<
+        NewSessionEvent & { message_id: string | null }
+      >(`
+        INSERT OR IGNORE INTO session_events (session_id, event_type, payload, timestamp, message_id)
+        VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
+      `);
+      const result = _stmtInsertEventOrIgnore.run(params);
+      getStmtBumpSessionLastEventAt().run({
+        session_id: params.session_id,
+        timestamp: params.timestamp,
+      });
+      return result;
+    },
+  );
+  return _txnInsertEventOrIgnoreAndBumpLastEventAt;
+}
+
 export function insertEventOrIgnore(e: NewSessionEvent): void {
-  _stmtInsertEventOrIgnore ??= db.prepare<
-    NewSessionEvent & { message_id: string | null }
-  >(`
-    INSERT OR IGNORE INTO session_events (session_id, event_type, payload, timestamp, message_id)
-    VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
-  `);
-  _stmtInsertEventOrIgnore.run({
+  getTxnInsertEventOrIgnoreAndBumpLastEventAt()({
     message_id: null,
     ...e,
     payload: capEventPayload(e.payload),
@@ -1656,7 +2145,7 @@ export function upsertSessionEvent(
     );
     return -1;
   }
-  const result = getStmtInsertEvent().run({
+  const result = getTxnInsertEventAndBumpLastEventAt()({
     message_id: null,
     ...e,
     payload: cappedPayload,
@@ -1704,9 +2193,36 @@ export interface SessionEventsAggregateRow {
 /** Hard cap on rows returned when a caller opts into payload bodies — see querySessionEventsByProjectRows. */
 export const SESSION_EVENTS_ROW_CAP = 200;
 
+/**
+ * Error thrown when `pattern` is supplied without a `since`/`until` bound.
+ * `payload LIKE '%...%'` can never be served from an index (leading
+ * wildcard), so an unbounded pattern filter forces evaluating every
+ * session_events row for the project — exactly the full unindexed scan
+ * this module exists to prevent. Bounding by since/until instead lets the
+ * (session_id, timestamp) composite index restrict the LIKE evaluation to
+ * a caller-controlled window instead of the whole table's history.
+ */
+export class UnboundedPatternQueryError extends Error {
+  constructor() {
+    super(
+      'sessionEvents.query: `pattern` requires a `since` or `until` bound — ' +
+        'an unbounded substring scan over every session_events row for the ' +
+        'project is not supported',
+    );
+    this.name = 'UnboundedPatternQueryError';
+  }
+}
+
 function buildSessionEventsFilterClauses(
   filters: SessionEventsProjectQueryFilters,
 ): { clauses: string[]; params: (string | number)[] } {
+  if (
+    filters.pattern !== undefined &&
+    filters.since === undefined &&
+    filters.until === undefined
+  ) {
+    throw new UnboundedPatternQueryError();
+  }
   const clauses: string[] = [];
   const params: (string | number)[] = [];
   if (filters.pattern !== undefined) {
@@ -1733,13 +2249,43 @@ function buildSessionEventsFilterClauses(
  * happen, across any session in this project" without ever risking the
  * tool-result size limit a naive `SELECT *` over every session's raw
  * assistant-turn JSON would blow.
+ *
+ * Unfiltered calls (the overwhelming majority — the whole point of this
+ * tool's default shape) are served from sessions.event_count/first_event_at/
+ * last_event_at, denormalised at the session_events insert sites, instead of
+ * aggregating across the full session_events table. A filter (pattern/
+ * since/until) restricts the aggregate to a subset of events that the
+ * per-session totals can't answer, so any filtered call falls back to the
+ * original session_events aggregation.
  */
 export function querySessionEventsByProjectAggregate(
   projectId: string,
   filters: SessionEventsProjectQueryFilters = {},
 ): SessionEventsAggregateRow[] {
   const { clauses, params } = buildSessionEventsFilterClauses(filters);
+  if (clauses.length === 0) {
+    return db
+      .prepare<[string], SessionEventsAggregateRow>(
+        `
+        SELECT session_id AS session_id,
+               event_count AS count,
+               first_event_at AS first_timestamp,
+               last_event_at AS last_timestamp
+        FROM sessions
+        WHERE project_id = ? AND event_count > 0
+        ORDER BY last_event_at DESC
+      `,
+      )
+      .all(projectId);
+  }
   const whereExtra = clauses.map((c) => `AND ${c}`).join(' ');
+  // CROSS JOIN (not JOIN) pins SQLite's join order to the FROM clause's
+  // left-to-right order instead of letting the query planner reorder it:
+  // drive from sessions.project_id (backed by idx_sessions_project_id)
+  // first, then seek into session_events per session via the
+  // (session_id, timestamp) composite index — never a full session_events
+  // table scan. See buildSessionEventsFilterClauses' unbounded-pattern
+  // guard above for why LIKE alone can't be bounded this way.
   return db
     .prepare<(string | number)[], SessionEventsAggregateRow>(
       `
@@ -1747,8 +2293,8 @@ export function querySessionEventsByProjectAggregate(
              COUNT(*) AS count,
              MIN(session_events.timestamp) AS first_timestamp,
              MAX(session_events.timestamp) AS last_timestamp
-      FROM session_events
-      JOIN sessions ON sessions.session_id = session_events.session_id
+      FROM sessions
+      CROSS JOIN session_events ON session_events.session_id = sessions.session_id
       WHERE sessions.project_id = ? ${whereExtra}
       GROUP BY session_events.session_id
       ORDER BY last_timestamp DESC
@@ -1773,12 +2319,14 @@ export function querySessionEventsByProjectRows(
   const cappedLimit = Math.min(limit, SESSION_EVENTS_ROW_CAP);
   const { clauses, params } = buildSessionEventsFilterClauses(filters);
   const whereExtra = clauses.map((c) => `AND ${c}`).join(' ');
+  // See querySessionEventsByProjectAggregate above for why this is a
+  // CROSS JOIN driven from sessions rather than a plain JOIN.
   return db
     .prepare<(string | number)[], SessionEvent>(
       `
       SELECT session_events.*
-      FROM session_events
-      JOIN sessions ON sessions.session_id = session_events.session_id
+      FROM sessions
+      CROSS JOIN session_events ON session_events.session_id = sessions.session_id
       WHERE sessions.project_id = ? ${whereExtra}
       ORDER BY session_events.timestamp DESC
       LIMIT ?
@@ -1974,6 +2522,67 @@ export function updateTaskStatusInBoardCaches(
       // Non-fatal: leave the row as-is rather than failing the status write.
     }
   }
+}
+
+let _stmtRecordTaskStatusWrite: Database.Statement | null = null;
+let _stmtGetTaskStatusWrite: Database.Statement | null = null;
+
+/**
+ * Window a recorded status write stays authoritative over a bulk board
+ * fetch. Bounded to comfortably exceed NotionClient's 60s board-cache TTL
+ * (see CACHE_TTL_MS in notion/NotionClient.ts) — the race this guards
+ * against is a bulk fetch started before the write and resolved after it, or
+ * a cache-hit still inside that TTL window. Past this window, trust fetched
+ * data fully rather than pinning a write indefinitely (e.g. a later
+ * out-of-band Notion edit should eventually take effect).
+ */
+const STATUS_WRITE_RECONCILE_WINDOW_MS = 120_000;
+
+/**
+ * Record that a status write for `taskId` landed. Called from the write path
+ * (AuditingTaskBackend.updateStatus) alongside updateTaskStatusInBoardCaches
+ * so bulk board-fetch reconciliation has a ground-truth timestamp to compare
+ * against.
+ */
+export function recordTaskStatusWrite(taskId: string, status: string): void {
+  const normalized = normalizeTaskId(taskId);
+  _stmtRecordTaskStatusWrite ??= db.prepare<{
+    task_id: string;
+    status: string;
+    written_at: number;
+  }>(`
+    INSERT INTO task_status_writes (task_id, status, written_at)
+    VALUES (@task_id, @status, @written_at)
+    ON CONFLICT(task_id) DO UPDATE SET
+      status     = excluded.status,
+      written_at = excluded.written_at
+  `);
+  _stmtRecordTaskStatusWrite.run({
+    task_id: normalized,
+    status,
+    written_at: Date.now(),
+  });
+}
+
+/**
+ * Returns the most recently written status for `taskId` if it was recorded
+ * within STATUS_WRITE_RECONCILE_WINDOW_MS, else null. Used to reconcile a
+ * bulk board fetch that may have raced a status write — see
+ * recordTaskStatusWrite.
+ */
+export function getRecentTaskStatusWrite(taskId: string): string | null {
+  const normalized = normalizeTaskId(taskId);
+  _stmtGetTaskStatusWrite ??= db.prepare<{ task_id: string }>(`
+    SELECT status, written_at FROM task_status_writes WHERE task_id = @task_id
+  `);
+  const row = _stmtGetTaskStatusWrite.get({ task_id: normalized }) as
+    | { status: string; written_at: number }
+    | undefined;
+  if (!row) return null;
+  if (Date.now() - row.written_at > STATUS_WRITE_RECONCILE_WINDOW_MS) {
+    return null;
+  }
+  return row.status;
 }
 
 /** Minimal shape read out of cached board blobs — just enough for reverse-dependency lookup. */
@@ -2177,9 +2786,11 @@ export function upsertPullRequest(
     | 'ci_remediation_attempted_sha'
     | 'pre_review_stage'
     | 'stalled_pr_retry_count'
+    | 'stalled_retry_base_exhausted'
     | 'session_initiated_close_at'
     | 'reviewer_requested_at'
     | 'flake_recovery_attempts'
+    | 'flake_recovery_base_exhausted'
     | 'human_merge_only'
     | 'pr_intent_id'
   > & {
@@ -2339,6 +2950,41 @@ export function incrementStalledPRRetryCount(
     `UPDATE pull_requests SET stalled_pr_retry_count = stalled_pr_retry_count + 1 WHERE pr_number = @pr_number AND repo = @repo`,
   ).run({ pr_number: prNumber, repo });
   return getPRByNumber(prNumber, repo)?.stalled_pr_retry_count ?? 0;
+}
+
+/**
+ * Marks (or clears) whether the current stalled_pr_retry_count's most recent
+ * escalation (of a kind that may plausibly trace back to a broken base
+ * branch — see BASE_ATTRIBUTABLE_ESCALATION_KINDS in StalledPRReconciler)
+ * is a base-recovery-escape candidate — the sole scoping signal the
+ * base-recovery reset in StalledPRReconciler consults (alongside its own
+ * recovery-time base-health history check) before restoring this PR's
+ * budget, so recovery never resets an unrelated PR's counter.
+ */
+export function setStalledRetryBaseExhausted(
+  prNumber: number,
+  repo: string,
+  value: boolean,
+): void {
+  db.prepare<{ pr_number: number; repo: string; value: number }>(
+    `UPDATE pull_requests SET stalled_retry_base_exhausted = @value WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo, value: value ? 1 : 0 });
+}
+
+/**
+ * Resets stalled_pr_retry_count to 0 once the project's base branch
+ * recovers, for a PR whose most recent exhaustion was itself confirmed
+ * base-attributable (see baseAttribution.ts) — the head_sha-change reset
+ * (setHeadSha) is this counter's other, pre-existing reset trigger. Always
+ * clears stalled_retry_base_exhausted alongside the count.
+ */
+export function resetStalledPRRetryCountForBaseRecovery(
+  prNumber: number,
+  repo: string,
+): void {
+  db.prepare<{ pr_number: number; repo: string }>(
+    `UPDATE pull_requests SET stalled_pr_retry_count = 0, stalled_retry_base_exhausted = 0 WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo });
 }
 
 export function clearReviewSessionId(prNumber: number, repo: string): void {
@@ -2763,20 +3409,47 @@ export interface SessionBranchMatch {
 }
 
 /**
- * Attempt to derive a session from a PR's head_branch by matching against
- * sessions.worktree_path. Returns the match when exactly one session path
- * contains the branch name. Logs a warning and returns null for zero or
+ * Attempt to derive a session from a PR's head_branch by re-deriving the
+ * branch name each candidate session would have produced (via
+ * deriveBranchSlug, the same function SessionManager.start/respawnSession use
+ * to actually create the branch) and matching it against headBranch.
+ *
+ * sessions.worktree_path cannot be used for this — it is always
+ * `<projectDir>/.claude/worktrees/<sessionId>`, keyed purely by the session's
+ * UUID with no branch-name component, so a LIKE match against it can never
+ * succeed for a real branch name. task_name (the task title captured at
+ * session start) plus task_id is the only durable record of what branch a
+ * session's worktree was created on — so recompute it rather than storing it
+ * redundantly.
+ *
+ * Both the current (task-id-suffixed) and legacy (title-only) derivations are
+ * checked per candidate, matching resolveResumeBranchSlug's fallback for
+ * branches created before the task-id suffix landed. Returns the match when
+ * exactly one session matches. Logs a warning and returns null for zero or
  * multiple matches.
  */
 export function lookupSessionByBranch(
   headBranch: string,
 ): SessionBranchMatch | null {
-  const rows = db
-    .prepare<{ pattern: string }>(
-      `SELECT session_id, task_id FROM sessions
-       WHERE worktree_path LIKE @pattern`,
+  const candidates = db
+    .prepare(
+      `SELECT session_id, task_id, task_name FROM sessions
+       WHERE task_name IS NOT NULL`,
     )
-    .all({ pattern: `%${headBranch}%` }) as SessionBranchMatch[];
+    .all() as Array<{
+    session_id: string;
+    task_id: string | null;
+    task_name: string;
+  }>;
+
+  const rows: SessionBranchMatch[] = [];
+  for (const c of candidates) {
+    const current = deriveBranchSlug(c.task_name, c.task_id);
+    const legacy = deriveBranchSlug(c.task_name, null);
+    if (headBranch === current || headBranch === legacy) {
+      rows.push({ session_id: c.session_id, task_id: c.task_id });
+    }
+  }
 
   if (rows.length === 1) {
     return rows[0];
@@ -2960,13 +3633,38 @@ export function incrementFlakeRecoveryAttempts(
   ).run(prNumber, repo);
 }
 
+/**
+ * Resets flake_recovery_attempts to 0 — called both on a passing verified-
+ * flaky re-run (the original trigger) and, per the base-attributable-
+ * failures exemption, once the project's base branch recovers for a PR
+ * whose most recent exhaustion was itself base-attributable. Always clears
+ * flake_recovery_base_exhausted alongside the count — a reset counter can
+ * never legitimately be marked "exhausted for a base reason" a moment later.
+ */
 export function resetFlakeRecoveryAttempts(
   prNumber: number,
   repo: string,
 ): void {
   db.prepare(
-    `UPDATE pull_requests SET flake_recovery_attempts = 0 WHERE pr_number = ? AND repo = ?`,
+    `UPDATE pull_requests SET flake_recovery_attempts = 0, flake_recovery_base_exhausted = 0 WHERE pr_number = ? AND repo = ?`,
   ).run(prNumber, repo);
+}
+
+/**
+ * Marks (or clears) whether the current flake_recovery_attempts count's most
+ * recent charge-worthy failure was confirmed base-attributable — the sole
+ * scoping signal the base-recovery reset in PRMergeWatcher consults before
+ * restoring this PR's budget, so recovery never resets an unrelated PR's
+ * counter.
+ */
+export function setFlakeRecoveryBaseExhausted(
+  prNumber: number,
+  repo: string,
+  value: boolean,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET flake_recovery_base_exhausted = ? WHERE pr_number = ? AND repo = ?`,
+  ).run(value ? 1 : 0, prNumber, repo);
 }
 
 export function setConflictNudgeSha(
@@ -3046,18 +3744,22 @@ export type ClearTerminalPRFlagsTrigger =
   | 'head_sha_advance'
   | 'human_unpark'
   | 'review_verdict'
-  | 'session_reconciled';
+  | 'session_reconciled'
+  | 'base_recovery';
 
 /**
  * Triggers that are allowed to clear a 'stalled_reconcile_cap' escalation:
  * a genuine terminal transition (merged/closed), a head_sha advance (a fix
  * was actually pushed — the load-bearing signal), an explicit human
- * unpark/recovery action, or a session-initiated-close reconcile (the PR was
- * never really abandoned — the close was the session's own churn). A bare
- * automated 'review_verdict' is deliberately excluded: an approved verdict
- * does not guarantee the PR is mergeable, and clearing the cap on verdict
- * alone re-creates the open+no-pause+no-session limbo the cap escalation
- * exists to prevent.
+ * unpark/recovery action, a session-initiated-close reconcile (the PR was
+ * never really abandoned — the close was the session's own churn), or a
+ * confirmed base-branch recovery (StalledPRReconciler's own trusted signal —
+ * see hasBaseTotalFailSince/resetStalledPRRetryCountForBaseRecovery — first-
+ * class here rather than an inline setPauseReason(null) special case in the
+ * reconciler). A bare automated 'review_verdict' is deliberately excluded:
+ * an approved verdict does not guarantee the PR is mergeable, and clearing
+ * the cap on verdict alone re-creates the open+no-pause+no-session limbo the
+ * cap escalation exists to prevent.
  */
 const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
   new Set([
@@ -3066,6 +3768,7 @@ const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
     'head_sha_advance',
     'human_unpark',
     'session_reconciled',
+    'base_recovery',
   ]);
 
 /**
@@ -3517,6 +4220,11 @@ export interface TaskAggregateRow {
   pr_pre_review_stage: string | null;
   pr_flake_recovery_attempts: number | null;
   session_pr_creation_failed_pause_reason: string | null;
+  // depth-review session, resolved via this task's PR (pr_number + repo) —
+  // see getDepthReviewVerdict; depth_review has no task_id of its own.
+  depth_review_session_id: string | null;
+  depth_review_session_status: string | null;
+  depth_review_verdict: string | null;
 }
 
 export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
@@ -3539,7 +4247,8 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
             ORDER BY started_at DESC
           ) AS rn
         FROM sessions
-        WHERE session_type = 'standard' OR session_type IS NULL
+        WHERE (session_type = 'standard' OR session_type IS NULL)
+          AND task_id IN (${placeholders})
       ),
       ranked_planning AS (
         SELECT *,
@@ -3549,6 +4258,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
           ) AS rn
         FROM sessions
         WHERE session_type IN (${PLANNING_SESSION_TYPE_SQL_LIST})
+          AND task_id IN (${placeholders})
       ),
       ranked_review AS (
         SELECT *,
@@ -3558,6 +4268,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
           ) AS rn
         FROM sessions
         WHERE session_type = 'review'
+          AND task_id IN (${placeholders})
       ),
       ranked_pr AS (
         SELECT *,
@@ -3566,6 +4277,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
             ORDER BY pr_number DESC
           ) AS rn
         FROM pull_requests
+        WHERE task_id IN (${placeholders})
       )
     SELECT
       tc.task_id,
@@ -3616,17 +4328,29 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
           AND cs.pause_reason IN ('pr_creation_failed', 'stalled_idle')
         THEN cs.pause_reason
         ELSE NULL
-      END                    AS session_pr_creation_failed_pause_reason
+      END                    AS session_pr_creation_failed_pause_reason,
+      drv.depth_session_id   AS depth_review_session_id,
+      dvs.status              AS depth_review_session_status,
+      drv.verdict             AS depth_review_verdict
     FROM task_cache tc
     LEFT JOIN ranked_code cs ON cs.task_id = tc.task_id AND cs.rn = 1
     LEFT JOIN ranked_planning ps ON ps.task_id = tc.task_id AND ps.rn = 1
     LEFT JOIN ranked_review rs ON rs.task_id = tc.task_id AND rs.rn = 1
     LEFT JOIN ranked_pr pr ON pr.task_id = tc.task_id AND pr.rn = 1
+    LEFT JOIN depth_review_verdicts drv
+      ON drv.pr_number = pr.pr_number AND drv.repo = pr.repo
+    LEFT JOIN sessions dvs ON dvs.session_id = drv.depth_session_id
     WHERE tc.task_id IN (${placeholders})
     ORDER BY tc.fetched_at DESC
   `,
     )
-    .all(...taskIds) as TaskAggregateRow[];
+    .all(
+      ...taskIds,
+      ...taskIds,
+      ...taskIds,
+      ...taskIds,
+      ...taskIds,
+    ) as TaskAggregateRow[];
 }
 
 /** Returns the most recent standard (non-review) session for a given task ID. */
@@ -3653,19 +4377,30 @@ export function getLatestCodeSessionByNotionTaskId(
  * applied-pending-confirm -> resolved transition typically happens well
  * after that session has gone terminal.
  */
+/**
+ * Matched via normalizeBoardId rather than an exact task_id column match:
+ * ops_journal entries key on the bare board id (see ops/opsLoad.ts), while
+ * sessions.task_id is stored normalizeTaskId'd (source-prefixed) at dispatch
+ * time (see OpsSessionLauncher.ts) — an exact match would silently never
+ * find the session that closeDeferredOpsTask needs. SQL only pre-filters on
+ * session_type (backed by idx_sessions_session_type_started_at, see
+ * schema.ts) since the id match itself can't be expressed in SQL — bounded
+ * to ops-typed rows rather than the whole sessions table.
+ */
 export function getLatestOpsSessionByTaskId(
   taskId: string,
 ): Session | undefined {
-  return db
-    .prepare<{ task_id: string }>(
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare(
       `
     SELECT * FROM sessions
-    WHERE task_id = @task_id AND session_type = 'ops'
+    WHERE session_type = 'ops'
     ORDER BY started_at DESC
-    LIMIT 1
   `,
     )
-    .get({ task_id: taskId }) as Session | undefined;
+    .all() as Session[];
+  return rows.find((row) => normalizeBoardId(row.task_id ?? '') === norm);
 }
 
 /** Returns the most recent docs session for a given task ID — the docs-flow counterpart to getLatestOpsSessionByTaskId. */
@@ -3750,6 +4485,7 @@ export interface ProjectPatch {
   data_residency_confirmed?: number;
   base_branch?: string;
   arch_store_adopted?: number;
+  test_request_max_concurrent?: number | null;
 }
 
 export function updateProject(
@@ -3776,6 +4512,7 @@ export function updateProject(
     data_residency_confirmed: number;
     base_branch: string;
     arch_store_adopted: number;
+    test_request_max_concurrent: number | null;
     updated_at: number;
   }>(
     `
@@ -3795,6 +4532,7 @@ export function updateProject(
         data_residency_confirmed = @data_residency_confirmed,
         base_branch = @base_branch,
         arch_store_adopted = @arch_store_adopted,
+        test_request_max_concurrent = @test_request_max_concurrent,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -3845,6 +4583,10 @@ export function updateProject(
       patch.arch_store_adopted !== undefined
         ? patch.arch_store_adopted
         : (existing.arch_store_adopted ?? 0),
+    test_request_max_concurrent:
+      'test_request_max_concurrent' in patch
+        ? (patch.test_request_max_concurrent ?? null)
+        : (existing.test_request_max_concurrent ?? null),
     updated_at: now,
   });
   return getProjectRowById(id);
@@ -4501,6 +5243,7 @@ export function listMergedSince(
 ): BehindItem[] {
   const items: BehindItem[] = [];
   const repos = resolveProjectRepos(projectId);
+  const prSessionIds = new Set<string>();
 
   if (repos.length > 0) {
     const placeholders = repos.map(() => '?').join(', ');
@@ -4508,7 +5251,7 @@ export function listMergedSince(
       sinceIso
         ? db
             .prepare(
-              `SELECT pr_number, pr_url, task_id, title, updated_at
+              `SELECT pr_number, pr_url, task_id, title, updated_at, session_id
                FROM pull_requests
                WHERE repo IN (${placeholders}) AND state = 'merged' AND updated_at > ?
                ORDER BY updated_at ASC`,
@@ -4516,7 +5259,7 @@ export function listMergedSince(
             .all(...repos, sinceIso)
         : db
             .prepare(
-              `SELECT pr_number, pr_url, task_id, title, updated_at
+              `SELECT pr_number, pr_url, task_id, title, updated_at, session_id
                FROM pull_requests
                WHERE repo IN (${placeholders}) AND state = 'merged'
                ORDER BY updated_at ASC`,
@@ -4528,8 +5271,12 @@ export function listMergedSince(
       task_id: string | null;
       title: string | null;
       updated_at: string | null;
+      session_id: string | null;
     }>;
     for (const row of prRows) {
+      if (row.session_id) {
+        prSessionIds.add(row.session_id);
+      }
       items.push({
         kind: 'pr',
         taskId: row.task_id,
@@ -4545,7 +5292,7 @@ export function listMergedSince(
     sinceIso
       ? db
           .prepare(
-            `SELECT lb.branch_name, lb.updated_at, s.task_id, s.task_name
+            `SELECT lb.branch_name, lb.updated_at, lb.session_id, s.task_id, s.task_name
              FROM local_branches lb
              LEFT JOIN sessions s ON s.session_id = lb.session_id
              WHERE lb.project_id = ? AND lb.status = 'merged' AND lb.updated_at > ?
@@ -4554,7 +5301,7 @@ export function listMergedSince(
           .all(projectId, sinceIso)
       : db
           .prepare(
-            `SELECT lb.branch_name, lb.updated_at, s.task_id, s.task_name
+            `SELECT lb.branch_name, lb.updated_at, lb.session_id, s.task_id, s.task_name
              FROM local_branches lb
              LEFT JOIN sessions s ON s.session_id = lb.session_id
              WHERE lb.project_id = ? AND lb.status = 'merged'
@@ -4564,10 +5311,14 @@ export function listMergedSince(
   ) as Array<{
     branch_name: string;
     updated_at: string;
+    session_id: string | null;
     task_id: string | null;
     task_name: string | null;
   }>;
   for (const row of branchRows) {
+    if (row.session_id && prSessionIds.has(row.session_id)) {
+      continue;
+    }
     items.push({
       kind: 'local-branch',
       taskId: row.task_id,
@@ -4853,6 +5604,40 @@ export function incrementTaskCrashCount(taskId: string): number {
 
 export function resetTaskCrashCount(taskId: string): void {
   db.prepare(`DELETE FROM task_crash_counts WHERE task_id = ?`).run(taskId);
+}
+
+// ─── session_poke_retry_counts ─────────────────────────────────────────────
+
+function getSessionPokeRetryCount(sessionId: string): number {
+  const row = db
+    .prepare<{
+      session_id: string;
+    }>(
+      `SELECT consecutive_failures FROM session_poke_retry_counts WHERE session_id = @session_id`,
+    )
+    .get({ session_id: sessionId }) as
+    | { consecutive_failures: number }
+    | undefined;
+  return row?.consecutive_failures ?? 0;
+}
+
+/** Increment consecutive_failures for a session's poke/resume retry budget and return the new count. */
+export function incrementSessionPokeRetryCount(sessionId: string): number {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO session_poke_retry_counts (session_id, consecutive_failures, last_failure_at)
+     VALUES (?, 1, ?)
+     ON CONFLICT(session_id) DO UPDATE SET
+       consecutive_failures = consecutive_failures + 1,
+       last_failure_at = excluded.last_failure_at`,
+  ).run(sessionId, now);
+  return getSessionPokeRetryCount(sessionId);
+}
+
+export function resetSessionPokeRetryCount(sessionId: string): void {
+  db.prepare(`DELETE FROM session_poke_retry_counts WHERE session_id = ?`).run(
+    sessionId,
+  );
 }
 
 // ─── session_pause_intervals ────────────────────────────────────────────────
@@ -5283,26 +6068,37 @@ export function markSessionEventsPruned(
 
 export interface NewSchedulerAuditRow {
   job: string;
-  status: 'ok' | 'failed' | 'skipped';
+  status: 'ok' | 'failed' | 'skipped' | 'degraded';
   started_at: string;
   completed_at: string;
   duration_ms: number;
+  // event-loop-busy time attributable to the job's own synchronous work,
+  // sampled as an eventLoopUtilization() delta across the job — distinct
+  // from duration_ms, which is wall-clock across the job's await. Null for
+  // skipped runs, which never actually execute the job.
+  event_loop_blocked_ms?: number | null;
   items_processed?: number | null;
   error?: string | null;
 }
 
 export function insertSchedulerAudit(row: NewSchedulerAuditRow): void {
   db.prepare<NewSchedulerAuditRow>(
-    `INSERT INTO scheduler_audit (job, status, started_at, completed_at, duration_ms, items_processed, error)
-     VALUES (@job, @status, @started_at, @completed_at, @duration_ms, @items_processed, @error)`,
+    `INSERT INTO scheduler_audit (job, status, started_at, completed_at, duration_ms, event_loop_blocked_ms, items_processed, error)
+     VALUES (@job, @status, @started_at, @completed_at, @duration_ms, @event_loop_blocked_ms, @items_processed, @error)`,
   ).run({
+    event_loop_blocked_ms: null,
     items_processed: null,
     error: null,
     ...row,
   });
 }
 
-export function pruneSchedulerAudit(keepPerJob = 1000): void {
+/** Rows retained per job by pruneSchedulerAudit's daily sweep — see server.ts's scheduler_audit_pruner registration. */
+export const SCHEDULER_AUDIT_KEEP_PER_JOB = 1000;
+
+export function pruneSchedulerAudit(
+  keepPerJob = SCHEDULER_AUDIT_KEEP_PER_JOB,
+): void {
   const jobs = db.prepare(`SELECT DISTINCT job FROM scheduler_audit`).all() as {
     job: string;
   }[];
@@ -5314,6 +6110,64 @@ export function pruneSchedulerAudit(keepPerJob = 1000): void {
        )`,
     ).run({ job, keep: keepPerJob });
   }
+}
+
+/**
+ * Whether `job`'s last successful (status = 'ok') scheduler_audit run is
+ * older than `intervalMs`, or it has never run — used at registration time
+ * so a daily sweep's firing is derived from the durable audit record rather
+ * than from in-process timer state that a restart discards (a box that
+ * restarts more often than the interval would otherwise never reach a
+ * runOnBoot: false job's first fire).
+ */
+export function isJobOverdue(
+  job: string,
+  intervalMs: number,
+  now: number = Date.now(),
+): boolean {
+  return getJobBootSchedule(job, intervalMs, now).runOnBoot;
+}
+
+export interface JobBootSchedule {
+  /** Whether the job is already overdue and should fire immediately. */
+  runOnBoot: boolean;
+  /**
+   * Delay, in ms, before the job's first fire — seeded from the durable
+   * last-run time (last_ok_started_at + intervalMs, clamped at zero) rather
+   * than from process-registration time, so a restart landing mid-interval
+   * resumes the original schedule instead of pushing the next fire out by
+   * a fresh intervalMs. Meaningless (and ignored) when runOnBoot is true.
+   */
+  initialDelayMs: number;
+}
+
+/**
+ * Resolves the schedule a job should be registered with at boot, derived
+ * from `job`'s last successful (status = 'ok') scheduler_audit run rather
+ * than from in-process timer state a restart discards. A job that has
+ * never run, or whose last run is already `intervalMs` or older, fires
+ * immediately (runOnBoot: true). Otherwise its first fire is seeded at
+ * last_ok_started_at + intervalMs, so repeated restarts inside one
+ * interval never postpone the fire beyond that point.
+ */
+export function getJobBootSchedule(
+  job: string,
+  intervalMs: number,
+  now: number = Date.now(),
+): JobBootSchedule {
+  const row = db
+    .prepare<{ job: string }>(
+      `SELECT started_at FROM scheduler_audit
+       WHERE job = @job AND status = 'ok'
+       ORDER BY started_at DESC LIMIT 1`,
+    )
+    .get({ job }) as { started_at: string } | undefined;
+  if (!row) return { runOnBoot: true, initialDelayMs: 0 };
+  const initialDelayMs = Math.max(
+    0,
+    Date.parse(row.started_at) + intervalMs - now,
+  );
+  return { runOnBoot: initialDelayMs === 0, initialDelayMs };
 }
 
 // ─── audit_finding_dedup ────────────────────────────────────────────────────
@@ -5484,40 +6338,71 @@ export interface SchedulerAuditStats {
   lastDurationMs: number | null;
   runCount24h: number;
   errorCount24h: number;
+  // Worst/mean event-loop-blocked time over the same 24h window, over runs
+  // that recorded a value (skipped runs and pre-migration rows are NULL and
+  // excluded). Null when no run in the window recorded one.
+  maxEventLoopBlockedMs24h: number | null;
+  meanEventLoopBlockedMs24h: number | null;
 }
 
 let _stmtSchedulerAuditStats: Database.Statement | null = null;
 
-export function getSchedulerAuditStats(): SchedulerAuditStats[] {
+/**
+ * Per-job stats resolved via correlated lookups against idx_scheduler_audit_job
+ * (job, started_at DESC) — one indexed probe per distinct job for the latest
+ * row, plus an indexed range scan per job for the 24h aggregates — rather than
+ * ranking every row in the table with a window function. started_at is
+ * ISO-8601 TEXT (unlike session_events.timestamp, which is epoch-ms), so the
+ * 24h cutoff is passed in as an ISO string; a numeric/epoch bound would
+ * silently match nothing.
+ */
+export function getSchedulerAuditStats(
+  now: number = Date.now(),
+): SchedulerAuditStats[] {
   _stmtSchedulerAuditStats ??= db.prepare(`
-    WITH ranked AS (
-      SELECT
-        job,
-        status,
-        duration_ms,
-        started_at,
-        ROW_NUMBER() OVER (PARTITION BY job ORDER BY started_at DESC) AS rn
-      FROM scheduler_audit
-    )
     SELECT
-      job,
-      MAX(CASE WHEN rn = 1 THEN duration_ms END) AS last_duration_ms,
-      SUM(CASE WHEN status IN ('ok', 'failed') AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS run_count_24h,
-      SUM(CASE WHEN status = 'failed' AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS error_count_24h
-    FROM ranked
-    GROUP BY job
+      j.job AS job,
+      (
+        SELECT duration_ms FROM scheduler_audit sa
+        WHERE sa.job = j.job ORDER BY sa.started_at DESC LIMIT 1
+      ) AS last_duration_ms,
+      (
+        SELECT COUNT(*) FROM scheduler_audit sa
+        WHERE sa.job = j.job AND sa.status IN ('ok', 'failed') AND sa.started_at >= @cutoff
+      ) AS run_count_24h,
+      (
+        SELECT COUNT(*) FROM scheduler_audit sa
+        WHERE sa.job = j.job AND sa.status = 'failed' AND sa.started_at >= @cutoff
+      ) AS error_count_24h,
+      (
+        SELECT MAX(event_loop_blocked_ms) FROM scheduler_audit sa
+        WHERE sa.job = j.job AND sa.started_at >= @cutoff
+      ) AS max_event_loop_blocked_ms_24h,
+      (
+        SELECT AVG(event_loop_blocked_ms) FROM scheduler_audit sa
+        WHERE sa.job = j.job AND sa.started_at >= @cutoff
+      ) AS mean_event_loop_blocked_ms_24h
+    FROM (SELECT DISTINCT job FROM scheduler_audit) j
   `);
-  const rows = _stmtSchedulerAuditStats.all() as Array<{
+  const cutoff = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+  const rows = _stmtSchedulerAuditStats.all({ cutoff }) as Array<{
     job: string;
     last_duration_ms: number | null;
     run_count_24h: number;
     error_count_24h: number;
+    max_event_loop_blocked_ms_24h: number | null;
+    mean_event_loop_blocked_ms_24h: number | null;
   }>;
   return rows.map((r) => ({
     job: r.job,
     lastDurationMs: r.last_duration_ms,
     runCount24h: r.run_count_24h,
     errorCount24h: r.error_count_24h,
+    maxEventLoopBlockedMs24h: r.max_event_loop_blocked_ms_24h,
+    meanEventLoopBlockedMs24h:
+      r.mean_event_loop_blocked_ms_24h !== null
+        ? Math.round(r.mean_event_loop_blocked_ms_24h)
+        : null,
   }));
 }
 
@@ -5821,6 +6706,485 @@ export function upsertCapabilityDisqualification(
     lifted_at: row.lifted_at ?? null,
     updated_at: row.updated_at,
   });
+}
+
+// ─── flaky_remediation_tracking ────────────────────────────────────────────
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle.
+
+let _stmtGetFlakyRemediationTracking: Database.Statement | null = null;
+let _stmtSetFlakyRemediationLinkedTask: Database.Statement | null = null;
+
+/** The current tracking row for one test_id, or undefined if it was never tracked. */
+export function getFlakyRemediationTracking(
+  testId: string,
+): FlakyRemediationTrackingRow | undefined {
+  _stmtGetFlakyRemediationTracking ??= db.prepare<{ test_id: string }>(
+    `SELECT * FROM flaky_remediation_tracking WHERE test_id = @test_id`,
+  );
+  return _stmtGetFlakyRemediationTracking.get({ test_id: testId }) as
+    | FlakyRemediationTrackingRow
+    | undefined;
+}
+
+/**
+ * Links (or unlinks) `testId`'s tracking row to a remediation task, and
+ * records whether that task is currently open (non-terminal) or closed
+ * (terminal). Called once at filing time (open = true) and again once the
+ * linked task reaches a terminal status (open = false) — the sole signal
+ * that clears the way for a fresh filing on this test_id.
+ */
+export function setFlakyRemediationLinkedTask(
+  testId: string,
+  remediationTaskId: string | null,
+  open: boolean,
+  nowIso: string,
+): void {
+  _stmtSetFlakyRemediationLinkedTask ??= db.prepare<{
+    test_id: string;
+    remediation_task_id: string | null;
+    remediation_task_open: number;
+    updated_at: string;
+  }>(`
+    INSERT INTO flaky_remediation_tracking
+      (test_id, remediation_task_id, remediation_task_open, auto_disposition_count, created_at, updated_at)
+    VALUES
+      (@test_id, @remediation_task_id, @remediation_task_open, 0, @updated_at, @updated_at)
+    ON CONFLICT(test_id) DO UPDATE SET
+      remediation_task_id = @remediation_task_id,
+      remediation_task_open = @remediation_task_open,
+      updated_at = @updated_at
+  `);
+  _stmtSetFlakyRemediationLinkedTask.run({
+    test_id: testId,
+    remediation_task_id: remediationTaskId,
+    remediation_task_open: open ? 1 : 0,
+    updated_at: nowIso,
+  });
+}
+
+let _stmtEnsureFlakyRemediationTrackingRow: Database.Statement | null = null;
+let _stmtClaimFlakyRemediationFilingRow: Database.Statement | null = null;
+type ClaimFlakyRemediationFilingBatchTxn = Database.Transaction<
+  (ids: string[], updatedAt: string) => void
+>;
+let _txnClaimFlakyRemediationFilingBatch: ClaimFlakyRemediationFilingBatchTxn | null =
+  null;
+
+/**
+ * Atomically claims the right to file one grouped Investigation task
+ * covering every test_id in `testIds`: for each, ensures a tracking row
+ * exists (a test_id may never have been tracked before — the operator-driven
+ * route has no prior auto-disposition step that would have created one),
+ * then flips remediation_task_open 0 -> 1 guarded by `WHERE
+ * remediation_task_open = 0`. All-or-nothing — wrapped in a single
+ * better-sqlite3 transaction, so if any test_id in the set is already
+ * claimed (another in-flight filing, or a still-open previously filed task)
+ * the whole batch rolls back and no test_id is claimed. The caller must
+ * release every claimed test_id (setFlakyRemediationLinkedTask with
+ * open=false) if it fails to actually finish filing — see
+ * flakyRemediationFiling.ts. Returns false if the batch could not be claimed
+ * in full.
+ */
+export function tryClaimFlakyRemediationFilingBatch(
+  testIds: string[],
+  nowIso: string,
+): boolean {
+  _stmtEnsureFlakyRemediationTrackingRow ??= db.prepare<{
+    test_id: string;
+    now: string;
+  }>(`
+    INSERT INTO flaky_remediation_tracking
+      (test_id, remediation_task_id, remediation_task_open, auto_disposition_count, created_at, updated_at)
+    VALUES
+      (@test_id, NULL, 0, 0, @now, @now)
+    ON CONFLICT(test_id) DO NOTHING
+  `);
+  _stmtClaimFlakyRemediationFilingRow ??= db.prepare<{
+    test_id: string;
+    updated_at: string;
+  }>(`
+    UPDATE flaky_remediation_tracking
+    SET remediation_task_open = 1, remediation_task_id = NULL, updated_at = @updated_at
+    WHERE test_id = @test_id AND remediation_task_open = 0
+  `);
+  _txnClaimFlakyRemediationFilingBatch ??= db.transaction(
+    (ids: string[], updatedAt: string) => {
+      for (const testId of ids) {
+        _stmtEnsureFlakyRemediationTrackingRow!.run({
+          test_id: testId,
+          now: updatedAt,
+        });
+        const info = _stmtClaimFlakyRemediationFilingRow!.run({
+          test_id: testId,
+          updated_at: updatedAt,
+        });
+        if (info.changes === 0) {
+          throw new Error(`flaky remediation claim conflict on ${testId}`);
+        }
+      }
+    },
+  );
+  try {
+    _txnClaimFlakyRemediationFilingBatch(testIds, nowIso);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Every tracking row currently linked to `taskId` as its open remediation task — a task can cover N tests. */
+export function getFlakyRemediationTrackingRowsByOpenTaskId(
+  taskId: string,
+): FlakyRemediationTrackingRow[] {
+  return db
+    .prepare<{
+      remediation_task_id: string;
+    }>(
+      `SELECT * FROM flaky_remediation_tracking WHERE remediation_task_id = @remediation_task_id AND remediation_task_open = 1`,
+    )
+    .all({ remediation_task_id: taskId }) as FlakyRemediationTrackingRow[];
+}
+
+// ─── base_health_remediation_test_tracking / _reason_tracking / _reason_counts ──
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle. Mirrors
+// flaky_remediation_tracking's atomic-claim/reopen-on-close shape, keyed by
+// (project_id, test_id) for a partial_fail breakdown and (project_id,
+// failure_reason) for a total_fail crash — see
+// audit/baseHealthRemediationFiling.ts.
+
+let _stmtGetBaseHealthRemediationTestTracking: Database.Statement | null = null;
+let _stmtGetBaseHealthRemediationTestTrackingByOpenTaskId: Database.Statement | null =
+  null;
+let _stmtEnsureBaseHealthRemediationTestTrackingRow: Database.Statement | null =
+  null;
+let _stmtClaimBaseHealthRemediationTestFiling: Database.Statement | null = null;
+let _stmtSetBaseHealthRemediationTestLinkedTask: Database.Statement | null =
+  null;
+
+/** The current tracking row for one (project_id, test_id), or undefined if it was never confirmed base-failing. */
+export function getBaseHealthRemediationTestTracking(
+  projectId: string,
+  testId: string,
+): BaseHealthRemediationTestTrackingRow | undefined {
+  _stmtGetBaseHealthRemediationTestTracking ??= db.prepare<{
+    project_id: string;
+    test_id: string;
+  }>(
+    `SELECT * FROM base_health_remediation_test_tracking WHERE project_id = @project_id AND test_id = @test_id`,
+  );
+  return _stmtGetBaseHealthRemediationTestTracking.get({
+    project_id: projectId,
+    test_id: testId,
+  }) as BaseHealthRemediationTestTrackingRow | undefined;
+}
+
+/** Every open tracking row currently linked to `taskId` as its remediation task. */
+export function getBaseHealthRemediationTestTrackingByOpenTaskId(
+  taskId: string,
+): BaseHealthRemediationTestTrackingRow[] {
+  _stmtGetBaseHealthRemediationTestTrackingByOpenTaskId ??= db.prepare<{
+    remediation_task_id: string;
+  }>(
+    `SELECT * FROM base_health_remediation_test_tracking WHERE remediation_task_id = @remediation_task_id AND remediation_task_open = 1`,
+  );
+  return _stmtGetBaseHealthRemediationTestTrackingByOpenTaskId.all({
+    remediation_task_id: taskId,
+  }) as BaseHealthRemediationTestTrackingRow[];
+}
+
+/**
+ * Atomically claims the right to file (or extend) a remediation task for
+ * every id in `testIds` that isn't already covered by a currently-open
+ * tracking row: ensures a row exists for each id (INSERT OR IGNORE, starting
+ * closed), then flips remediation_task_open 0 -> 1 in a single UPDATE per id
+ * guarded by `WHERE remediation_task_open = 0`, all inside one transaction —
+ * mirrors tryClaimFlakyRemediationFiling's race-closing shape, extended to a
+ * multi-row claim so two concurrent confirmations sharing some (but not all)
+ * failing test ids can't double-claim the overlap. The caller must release
+ * the claim for every id it successfully claimed
+ * (setBaseHealthRemediationTestLinkedTask with open=false) if it fails to
+ * actually finish filing. Returns the subset of `testIds` this call actually
+ * claimed — empty if every id was already covered by an open row.
+ */
+export function tryClaimBaseHealthRemediationTestFiling(
+  projectId: string,
+  testIds: string[],
+  nowIso: string,
+): string[] {
+  _stmtEnsureBaseHealthRemediationTestTrackingRow ??= db.prepare<{
+    project_id: string;
+    test_id: string;
+    created_at: string;
+    updated_at: string;
+  }>(`
+    INSERT OR IGNORE INTO base_health_remediation_test_tracking
+      (project_id, test_id, remediation_task_id, remediation_task_open, created_at, updated_at)
+    VALUES
+      (@project_id, @test_id, NULL, 0, @created_at, @updated_at)
+  `);
+  _stmtClaimBaseHealthRemediationTestFiling ??= db.prepare<{
+    project_id: string;
+    test_id: string;
+    updated_at: string;
+  }>(`
+    UPDATE base_health_remediation_test_tracking
+    SET remediation_task_open = 1, updated_at = @updated_at
+    WHERE project_id = @project_id AND test_id = @test_id AND remediation_task_open = 0
+  `);
+
+  const tx = db.transaction((ids: string[]) => {
+    const claimed: string[] = [];
+    for (const testId of ids) {
+      _stmtEnsureBaseHealthRemediationTestTrackingRow!.run({
+        project_id: projectId,
+        test_id: testId,
+        created_at: nowIso,
+        updated_at: nowIso,
+      });
+      const info = _stmtClaimBaseHealthRemediationTestFiling!.run({
+        project_id: projectId,
+        test_id: testId,
+        updated_at: nowIso,
+      });
+      if (info.changes > 0) claimed.push(testId);
+    }
+    return claimed;
+  });
+  return tx(testIds);
+}
+
+/**
+ * Links (or unlinks) every one of `testIds`' tracking rows to a remediation
+ * task, in a single transaction, and records whether that task is currently
+ * open. Called once at filing time (open = true) for the ids just claimed,
+ * once the linked task reaches a terminal status (open = false), or to
+ * release a batch of failed claims (open = false, remediation_task_id null)
+ * — see recordAndMaybeFileBaseHealthRemediation.
+ */
+export function setBaseHealthRemediationTestLinkedTask(
+  projectId: string,
+  testIds: string[],
+  remediationTaskId: string | null,
+  open: boolean,
+  nowIso: string,
+): void {
+  _stmtSetBaseHealthRemediationTestLinkedTask ??= db.prepare<{
+    project_id: string;
+    test_id: string;
+    remediation_task_id: string | null;
+    remediation_task_open: number;
+    updated_at: string;
+  }>(`
+    INSERT INTO base_health_remediation_test_tracking
+      (project_id, test_id, remediation_task_id, remediation_task_open, created_at, updated_at)
+    VALUES
+      (@project_id, @test_id, @remediation_task_id, @remediation_task_open, @updated_at, @updated_at)
+    ON CONFLICT(project_id, test_id) DO UPDATE SET
+      remediation_task_id = @remediation_task_id,
+      remediation_task_open = @remediation_task_open,
+      updated_at = @updated_at
+  `);
+
+  const tx = db.transaction((ids: string[]) => {
+    for (const testId of ids) {
+      _stmtSetBaseHealthRemediationTestLinkedTask!.run({
+        project_id: projectId,
+        test_id: testId,
+        remediation_task_id: remediationTaskId,
+        remediation_task_open: open ? 1 : 0,
+        updated_at: nowIso,
+      });
+    }
+  });
+  tx(testIds);
+}
+
+let _stmtGetBaseHealthRemediationReasonTracking: Database.Statement | null =
+  null;
+let _stmtGetBaseHealthRemediationReasonTrackingByOpenTaskId: Database.Statement | null =
+  null;
+let _stmtEnsureBaseHealthRemediationReasonTrackingRow: Database.Statement | null =
+  null;
+let _stmtClaimBaseHealthRemediationReasonFiling: Database.Statement | null =
+  null;
+let _stmtSetBaseHealthRemediationReasonLinkedTask: Database.Statement | null =
+  null;
+let _stmtInsertBaseHealthRemediationReasonCount: Database.Statement | null =
+  null;
+
+/** The current tracking row for one (project_id, failure_reason), or undefined if it was never confirmed as a total_fail crash. */
+export function getBaseHealthRemediationReasonTracking(
+  projectId: string,
+  failureReason: string,
+): BaseHealthRemediationReasonTrackingRow | undefined {
+  _stmtGetBaseHealthRemediationReasonTracking ??= db.prepare<{
+    project_id: string;
+    failure_reason: string;
+  }>(
+    `SELECT * FROM base_health_remediation_reason_tracking WHERE project_id = @project_id AND failure_reason = @failure_reason`,
+  );
+  return _stmtGetBaseHealthRemediationReasonTracking.get({
+    project_id: projectId,
+    failure_reason: failureReason,
+  }) as BaseHealthRemediationReasonTrackingRow | undefined;
+}
+
+/** The open tracking row currently linked to `taskId` as its remediation task, or undefined. */
+export function getBaseHealthRemediationReasonTrackingByOpenTaskId(
+  taskId: string,
+): BaseHealthRemediationReasonTrackingRow | undefined {
+  _stmtGetBaseHealthRemediationReasonTrackingByOpenTaskId ??= db.prepare<{
+    remediation_task_id: string;
+  }>(
+    `SELECT * FROM base_health_remediation_reason_tracking WHERE remediation_task_id = @remediation_task_id AND remediation_task_open = 1`,
+  );
+  return _stmtGetBaseHealthRemediationReasonTrackingByOpenTaskId.get({
+    remediation_task_id: taskId,
+  }) as BaseHealthRemediationReasonTrackingRow | undefined;
+}
+
+let _stmtHasOpenBaseHealthRemediation: Database.Statement | null = null;
+
+/**
+ * True when `projectId` has at least one total_fail remediation tracking row
+ * currently linked to an open remediation task — the on-demand signal that a
+ * task somewhere in this project already confirmed the base branch broken
+ * (via filterBaseAttributableFailures/recordAndMaybeFileBaseHealthRemediation).
+ * AutoLauncher gates its (cached, cheap) checkBaseBranchHealth call on this so
+ * it only ever runs on-demand, never proactively on a project no task has
+ * failed a test-request against yet.
+ */
+export function hasOpenBaseHealthRemediation(projectId: string): boolean {
+  _stmtHasOpenBaseHealthRemediation ??= db.prepare<{ project_id: string }>(
+    `SELECT 1 FROM base_health_remediation_reason_tracking WHERE project_id = @project_id AND remediation_task_open = 1 LIMIT 1`,
+  );
+  return (
+    _stmtHasOpenBaseHealthRemediation.get({ project_id: projectId }) !==
+    undefined
+  );
+}
+
+/**
+ * Atomically claims the right to file a remediation task for `(projectId,
+ * failureReason)` — same single-row guarded-UPDATE shape as
+ * tryClaimFlakyRemediationFiling. The caller must release the claim
+ * (setBaseHealthRemediationReasonLinkedTask with open=false) if it fails to
+ * actually finish filing. Returns false if another caller (or a still-open
+ * previously filed task) already holds the claim.
+ */
+export function tryClaimBaseHealthRemediationReasonFiling(
+  projectId: string,
+  failureReason: string,
+  nowIso: string,
+): boolean {
+  _stmtEnsureBaseHealthRemediationReasonTrackingRow ??= db.prepare<{
+    project_id: string;
+    failure_reason: string;
+    created_at: string;
+    updated_at: string;
+  }>(`
+    INSERT OR IGNORE INTO base_health_remediation_reason_tracking
+      (project_id, failure_reason, remediation_task_id, remediation_task_open, created_at, updated_at)
+    VALUES
+      (@project_id, @failure_reason, NULL, 0, @created_at, @updated_at)
+  `);
+  _stmtEnsureBaseHealthRemediationReasonTrackingRow.run({
+    project_id: projectId,
+    failure_reason: failureReason,
+    created_at: nowIso,
+    updated_at: nowIso,
+  });
+
+  _stmtClaimBaseHealthRemediationReasonFiling ??= db.prepare<{
+    project_id: string;
+    failure_reason: string;
+    updated_at: string;
+  }>(`
+    UPDATE base_health_remediation_reason_tracking
+    SET remediation_task_open = 1, updated_at = @updated_at
+    WHERE project_id = @project_id AND failure_reason = @failure_reason AND remediation_task_open = 0
+  `);
+  const info = _stmtClaimBaseHealthRemediationReasonFiling.run({
+    project_id: projectId,
+    failure_reason: failureReason,
+    updated_at: nowIso,
+  });
+  return info.changes > 0;
+}
+
+/**
+ * Links (or unlinks) `(projectId, failureReason)`'s tracking row to a
+ * remediation task, and records whether that task is currently open. Called
+ * once at filing time (open = true), once the linked task reaches a
+ * terminal status (open = false), or to release a failed claim (open =
+ * false, remediation_task_id null) — see recordAndMaybeFileBaseHealthRemediation.
+ */
+export function setBaseHealthRemediationReasonLinkedTask(
+  projectId: string,
+  failureReason: string,
+  remediationTaskId: string | null,
+  open: boolean,
+  nowIso: string,
+): void {
+  _stmtSetBaseHealthRemediationReasonLinkedTask ??= db.prepare<{
+    project_id: string;
+    failure_reason: string;
+    remediation_task_id: string | null;
+    remediation_task_open: number;
+    updated_at: string;
+  }>(`
+    INSERT INTO base_health_remediation_reason_tracking
+      (project_id, failure_reason, remediation_task_id, remediation_task_open, created_at, updated_at)
+    VALUES
+      (@project_id, @failure_reason, @remediation_task_id, @remediation_task_open, @updated_at, @updated_at)
+    ON CONFLICT(project_id, failure_reason) DO UPDATE SET
+      remediation_task_id = @remediation_task_id,
+      remediation_task_open = @remediation_task_open,
+      updated_at = @updated_at
+  `);
+  _stmtSetBaseHealthRemediationReasonLinkedTask.run({
+    project_id: projectId,
+    failure_reason: failureReason,
+    remediation_task_id: remediationTaskId,
+    remediation_task_open: open ? 1 : 0,
+    updated_at: nowIso,
+  });
+}
+
+/**
+ * Records `triggeringTaskId`'s one-and-only attempt at a total_fail
+ * remediation claim — mirrors flaky_remediation_pr_counts' per-triggering-
+ * actor dedup gate (INSERT OR IGNORE), except keyed solely on the
+ * triggering task id rather than (test_id, pr_number, repo): a task gets one
+ * shot regardless of which (or how many different) failure_reason values
+ * its own retries land on. Returns whether this call is the task's first.
+ *
+ * `triggeringTaskId` is run through normalizeTaskId (packages/backend/src/tasks/taskId.ts)
+ * before it ever reaches the primary key: the caller has been observed
+ * passing bare hyphenated, bare hyphenless, and `notion:`-prefixed spellings
+ * of the same task id, and INSERT OR IGNORE only dedupes on an exact key
+ * match — an unnormalized key let the same triggering task claim this guard
+ * more than once. normalizeTaskId's canonical `source:externalId` form
+ * (hyphenated, lowercased) is the sole form ever stored here.
+ */
+export function recordBaseHealthTotalFailCount(
+  triggeringTaskId: string,
+  nowIso: string,
+): { countedThisTask: boolean } {
+  _stmtInsertBaseHealthRemediationReasonCount ??= db.prepare<{
+    triggering_task_id: string;
+    counted_at: string;
+  }>(`
+    INSERT OR IGNORE INTO base_health_remediation_reason_counts (triggering_task_id, counted_at)
+    VALUES (@triggering_task_id, @counted_at)
+  `);
+  const info = _stmtInsertBaseHealthRemediationReasonCount.run({
+    triggering_task_id: normalizeTaskId(triggeringTaskId),
+    counted_at: nowIso,
+  });
+  return { countedThisTask: info.changes > 0 };
 }
 
 // ─── gate_item ────────────────────────────────────────────────────────────
@@ -6837,31 +8201,123 @@ export function insertTestRequestRun(
   id: string,
   projectId: string,
   contentHash: string,
+  sessionId: string | null,
+  requestedAt: number,
+  concurrentRunCount?: number | null,
+  runOrigin?: RunOrigin,
 ): void {
   db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, state, output, started_at, finished_at)
-     VALUES (?, ?, ?, 'running', '', ?, NULL)`,
-  ).run(id, projectId, contentHash, Date.now());
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin)
+     VALUES (?, ?, ?, ?, 'running', '', ?, ?, NULL, NULL, ?, ?)`,
+  ).run(
+    id,
+    projectId,
+    contentHash,
+    sessionId,
+    requestedAt,
+    Date.now(),
+    concurrentRunCount ?? null,
+    runOrigin ?? null,
+  );
 }
 
 export function completeTestRequestRun(
   id: string,
   state: TestRequestRunState,
   output: string,
+  failureReason: TestRequestFailureReason | null = null,
+  structuredResult?: string | null,
+  oomKilled?: boolean,
+  acquisitionAttempted?: boolean,
 ): void {
   db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ? WHERE id = ?`,
-  ).run(state, output, Date.now(), id);
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ? WHERE id = ?`,
+  ).run(
+    state,
+    output,
+    Date.now(),
+    failureReason,
+    structuredResult ?? null,
+    oomKilled ? 1 : 0,
+    acquisitionAttempted === undefined ? null : acquisitionAttempted ? 1 : 0,
+    id,
+  );
 }
+
+/**
+ * Overwrites just `state` on an already-completed run — used when the
+ * base/flaky-attribution filter (baseAttributableFilter.ts) fully excuses a
+ * raw failure (`filtered_pass`) after completeTestRequestRun already stored
+ * the raw 'failed' state. Leaves output/failure_reason/structured_result
+ * alone since those still describe what actually happened; only the state
+ * the test_request_gate PR check reads needs to reflect the filtered
+ * verdict.
+ */
+export function updateTestRequestRunState(
+  id: string,
+  state: TestRequestRunState,
+): void {
+  db.prepare(`UPDATE test_request_runs SET state = ? WHERE id = ?`).run(
+    state,
+    id,
+  );
+}
+
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin`;
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {
   return db
     .prepare(
-      `SELECT id, project_id, content_hash, state, output, started_at, finished_at
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs WHERE state = 'running'`,
     )
     .all() as TestRequestRunRow[];
+}
+
+/**
+ * Every non-running run with a structured_result but no extracted
+ * test_run_results rows yet — the boot-time re-derivation sweep's work list
+ * (see ingestTestRunResults in testRequestLane.ts). Catches both a crash
+ * mid-ingestion and structured_result having been populated by a process
+ * that predates this extraction step.
+ */
+export function listTestRequestRunsNeedingExtraction(
+  limit: number,
+): TestRequestRunRow[] {
+  return db
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE structured_result IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM test_run_summaries
+           WHERE test_run_summaries.test_request_run_id = test_request_runs.id
+         )
+       ORDER BY requested_at ASC
+       LIMIT ?`,
+    )
+    .all(limit) as TestRequestRunRow[];
+}
+
+/**
+ * Cheap count companion to listTestRequestRunsNeedingExtraction — used to
+ * report the extraction sweep's residual work list size (progress
+ * reporting, readiness surface) without hydrating every pending row.
+ */
+export function countTestRequestRunsNeedingExtraction(): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n
+       FROM test_request_runs
+       WHERE structured_result IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM test_run_summaries
+           WHERE test_run_summaries.test_request_run_id = test_request_runs.id
+         )`,
+    )
+    .get() as { n: number };
+  return row.n;
 }
 
 /**
@@ -6878,7 +8334,7 @@ export function getLatestTestRequestRun(
 ): TestRequestRunRow | undefined {
   return db
     .prepare<{ project_id: string; content_hash: string }>(
-      `SELECT id, project_id, content_hash, state, output, started_at, finished_at
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
        WHERE project_id = @project_id AND content_hash = @content_hash AND state != 'running'
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
@@ -6886,6 +8342,296 @@ export function getLatestTestRequestRun(
     .get({ project_id: projectId, content_hash: contentHash }) as
     | TestRequestRunRow
     | undefined;
+}
+
+/**
+ * baseHealthCheck.ts's own cache read — narrower than getLatestTestRequestRun:
+ * only a run baseHealthCheck.ts itself produced (run_origin =
+ * 'base_health_probe', the identity it always passes to
+ * runProjectTestRequest) counts as a cached base-branch-health confirmation.
+ * session_id IS NULL is not sufficient — PreReviewPipeline.ts and
+ * ReviewOrchestrator.ts also pass session_id: null while executing a
+ * PR-branch worktree (they state run_origin: 'pr_pipeline' instead), so
+ * filtering on session_id alone would let a PR-branch run's row get misread
+ * as a base-health verdict — including a flaky retry's arbitrary
+ * failing-test sample, which re-files a "Base branch is broken" remediation
+ * task on every such retry (see baseHealthRemediationFiling.ts's
+ * per-test-id dedup, which cannot catch this because each retry's
+ * failing-test set is novel).
+ */
+export function getLatestBaseHealthTestRequestRun(
+  projectId: string,
+  contentHash: string,
+): TestRequestRunRow | undefined {
+  return db
+    .prepare<{ project_id: string; content_hash: string }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id AND content_hash = @content_hash
+         AND state != 'running' AND run_origin = 'base_health_probe'
+       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get({ project_id: projectId, content_hash: contentHash }) as
+    | TestRequestRunRow
+    | undefined;
+}
+
+/**
+ * Every base-health-probe run (run_origin = 'base_health_probe') for a
+ * project finished at or after `sinceTs` — the history a base-recovery
+ * escape check compares a PR's escalation timestamp against, rather than
+ * sampling only the live cached verdict (checkBaseBranchHealth's
+ * content-hash cache reflects whatever tree was probed most recently, which
+ * may have never coincided with the PR's own escalation window). See
+ * baseAttribution.ts's hasBaseTotalFailSince.
+ */
+export function getBaseHealthProbeRunsSince(
+  projectId: string,
+  sinceTs: number,
+): TestRequestRunRow[] {
+  return db
+    .prepare<{ project_id: string; since: number }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id AND run_origin = 'base_health_probe'
+         AND state != 'running' AND finished_at >= @since
+       ORDER BY finished_at DESC`,
+    )
+    .all({ project_id: projectId, since: sinceTs }) as TestRequestRunRow[];
+}
+
+/**
+ * Single run by id — used to fetch a just-completed run's structured_result
+ * for delivery digest rendering (see testResultDigest.ts) once
+ * runProjectTestRequest resolves with only the run's id in hand.
+ */
+export function getTestRequestRunById(
+  id: string,
+): TestRequestRunRow | undefined {
+  return db
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS} FROM test_request_runs WHERE id = ?`,
+    )
+    .get(id) as TestRequestRunRow | undefined;
+}
+
+/**
+ * The most recent run (project_id, session_id) originated — session-keyed
+ * counterpart to getLatestTestRequestRun's content-hash keying, for a
+ * frontend consumer (useTestLaneRunStatus) that knows its own session id but
+ * has no client-side visibility into the server-computed whole-tree content
+ * hash. Prefers a currently-`running` row over the latest finished one, same
+ * precedence as the GET /test-request-runs route applies for the
+ * content-hash lens.
+ */
+let _stmtLatestRunningTestRequestRunIdForSession: Database.Statement | null =
+  null;
+let _stmtLatestFinishedTestRequestRunIdForSession: Database.Statement | null =
+  null;
+
+export function getLatestTestRequestRunForSession(
+  projectId: string,
+  sessionId: string,
+): TestRequestRunRow | undefined {
+  _stmtLatestRunningTestRequestRunIdForSession ??= db.prepare<{
+    project_id: string;
+    session_id: string;
+  }>(
+    `SELECT id
+     FROM test_request_runs
+     WHERE project_id = @project_id AND session_id = @session_id AND state = 'running'
+     ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+  );
+  const running = _stmtLatestRunningTestRequestRunIdForSession.get({
+    project_id: projectId,
+    session_id: sessionId,
+  }) as { id: string } | undefined;
+  if (running) return getTestRequestRunById(running.id);
+
+  _stmtLatestFinishedTestRequestRunIdForSession ??= db.prepare<{
+    project_id: string;
+    session_id: string;
+  }>(
+    `SELECT id
+     FROM test_request_runs
+     WHERE project_id = @project_id AND session_id = @session_id AND state != 'running'
+     ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+  );
+  const finished = _stmtLatestFinishedTestRequestRunIdForSession.get({
+    project_id: projectId,
+    session_id: sessionId,
+  }) as { id: string } | undefined;
+  if (!finished) return undefined;
+  return getTestRequestRunById(finished.id);
+}
+
+/**
+ * Full run history for one (project_id, session_id) — the Tests tab's
+ * run-history table. Newest first; `limit` bounds the page size since a
+ * long-lived session can accumulate many test.request cycles.
+ */
+export function listTestRequestRunsForSession(
+  projectId: string,
+  sessionId: string,
+  limit = 50,
+): TestRequestRunRow[] {
+  return db
+    .prepare<{ project_id: string; session_id: string; limit: number }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id AND session_id = @session_id
+       ORDER BY started_at DESC, rowid DESC LIMIT @limit`,
+    )
+    .all({
+      project_id: projectId,
+      session_id: sessionId,
+      limit,
+    }) as TestRequestRunRow[];
+}
+
+/**
+ * computeTestFlipRateFlag scoped to a caller-supplied set of test ids — the
+ * Tests tab's per-test flip-rate annotation, restricted to test ids seen in
+ * a task's own runs rather than every test in the project (listFlaggedFlakyTests'
+ * scope). Reuses the same live-recompute engine and the same default
+ * window/threshold settings as the lane's own auto-disposition check; no new
+ * comparison logic.
+ */
+/**
+ * Bounds how many unique test ids getTaskTestFlipRateFlags will run
+ * computeTestFlipRateFlag against for a single call — a task's own runs can
+ * still surface thousands of unique test ids even after
+ * TEST_RUN_RESULTS_PER_RUN_CAP bounds each individual run's row count (up to
+ * 50 runs × the per-run cap), and each lookup is a synchronous prepared-
+ * statement execution. The cap trades completeness of the flip-rate
+ * annotation for a bounded amount of synchronous DB work per request.
+ */
+export const FLIP_RATE_FLAG_TEST_ID_CAP = 200;
+
+/**
+ * computeTestFlipRateFlag over a caller-supplied set of test ids — the
+ * set-based path shared by getTaskTestFlipRateFlags (capped, task-scoped)
+ * and the flaky-rollup incremental recompute (uncapped, restricted upstream
+ * to test ids with new test_run_results rows since the rollup's watermark).
+ * Still one prepared-statement round trip per test id — the flip-rate window
+ * is inherently per-test (an ordered outcome sequence for that id) — but
+ * callers bound the id set themselves rather than looping over every test in
+ * a project.
+ */
+function computeTestFlipRateFlagsForTestIds(
+  testIds: string[],
+  windowN: number,
+  thresholdK: number,
+): TestFlipRateFlag[] {
+  return testIds.map((testId) =>
+    computeTestFlipRateFlag(testId, windowN, thresholdK),
+  );
+}
+
+export function getTaskTestFlipRateFlags(
+  testIds: string[],
+  windowN: number,
+  thresholdK: number,
+): TestFlipRateFlag[] {
+  const uniqueIds = [...new Set(testIds)].slice(0, FLIP_RATE_FLAG_TEST_ID_CAP);
+  return computeTestFlipRateFlagsForTestIds(uniqueIds, windowN, thresholdK);
+}
+
+/**
+ * Clears structured_result on every other non-running row sharing this run's
+ * (project_id, content_hash) key, but ONLY once that row's test_run_results
+ * extraction has already happened. Call right after a run transitions out of
+ * `running` — that transition makes it the latest completed run for the key
+ * (see getLatestTestRequestRun's ordering), so every other row's
+ * structured_result becomes permanently unreachable by any production
+ * reader. test_run_results already retains the per-test outcome/duration
+ * data those blobs duplicate — but extraction can be deferred to the
+ * boot-time sweep (listTestRequestRunsNeedingExtraction) after a crash
+ * mid-run, so a row whose extraction hasn't run yet still needs its
+ * structured_result as the sweep's only source; clearing it here would race
+ * the sweep and permanently lose that row's per-test data. Every other
+ * column, and test_run_results itself, is always untouched.
+ *
+ * Never clears `keepRunId`'s own row — for a (project_id, content_hash) key
+ * with no other run, that leaves its blob untouched forever. See
+ * clearExtractedStructuredResultsBatch below for the extraction-scoped clear
+ * that also covers that own-row case, from a boot/scheduler pass rather than
+ * this synchronous call site.
+ */
+export function clearSupersededStructuredResults(
+  projectId: string,
+  contentHash: string,
+  keepRunId: string,
+): void {
+  db.prepare<{
+    project_id: string;
+    content_hash: string;
+    keep_run_id: string;
+  }>(
+    `UPDATE test_request_runs
+     SET structured_result = NULL
+     WHERE project_id = @project_id AND content_hash = @content_hash
+       AND id != @keep_run_id AND structured_result IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM test_run_summaries
+         WHERE test_run_summaries.test_request_run_id = test_request_runs.id
+       )`,
+  ).run({
+    project_id: projectId,
+    content_hash: contentHash,
+    keep_run_id: keepRunId,
+  });
+}
+
+/**
+ * Bounded per-statement cap for clearExtractedStructuredResultsBatch below —
+ * keeps a single UPDATE from touching an unbounded number of rows.
+ */
+export const STRUCTURED_RESULT_CLEAR_BATCH_CAP = 500;
+
+/**
+ * The widened, extraction-scoped clearing predicate: nulls structured_result
+ * on up to `limit` rows whose extraction has already produced a
+ * test_run_summaries row, regardless of whether a newer run has superseded
+ * them. clearSupersededStructuredResults above only ever clears an *other*
+ * row sharing a (project_id, content_hash)
+ * key — a key with exactly one run (659 of 810 distinct keys, see the "Clear
+ * structured_result once extraction has happened" task) never has an "other"
+ * row to clear, so its blob was retained forever. This function clears a
+ * run's own row too, once extraction has made the blob redundant — the same
+ * test_run_summaries EXISTS guard as above still protects a row whose
+ * extraction was deferred to the boot sweep after a crash.
+ *
+ * Must only ever be called from a boot/scheduler pass (sweepTestRunResultsExtraction
+ * in testRequestLane.ts, or the one-time backfill in schema.ts), never
+ * inline in the synchronous test-request completion path — clearing a run's
+ * own blob the moment its extraction finishes would race stagedIntents.ts's
+ * session-feedback digest read of that same row, which happens moments after
+ * ingestTestRunResults returns in that path.
+ *
+ * Returns the number of rows cleared, so a caller can loop until a call
+ * returns fewer than `limit` (exhausted) without needing a separate count
+ * query per iteration.
+ */
+export function clearExtractedStructuredResultsBatch(
+  limit: number = STRUCTURED_RESULT_CLEAR_BATCH_CAP,
+): number {
+  const result = db
+    .prepare(
+      `UPDATE test_request_runs
+       SET structured_result = NULL
+       WHERE id IN (
+         SELECT id FROM test_request_runs
+         WHERE structured_result IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM test_run_summaries
+             WHERE test_run_summaries.test_request_run_id = test_request_runs.id
+           )
+         LIMIT ?
+       )`,
+    )
+    .run(limit);
+  return result.changes;
 }
 
 /**
@@ -6901,6 +8647,1250 @@ export function deleteTestRequestRunsForContentHash(
   db.prepare<{ project_id: string; content_hash: string }>(
     `DELETE FROM test_request_runs WHERE project_id = @project_id AND content_hash = @content_hash`,
   ).run({ project_id: projectId, content_hash: contentHash });
+}
+
+// ─── dependency_cache_entries ───────────────────────────────────────────────
+
+/** Upserts a (project_id, lock_hash) row into `building` — the leader's durable claim before it runs the project's bootstrap_script. */
+export function insertBuildingDependencyCacheEntry(
+  projectId: string,
+  lockHash: string,
+): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO dependency_cache_entries (project_id, lock_hash, status, created_at, last_used_at)
+     VALUES (?, ?, 'building', ?, ?)
+     ON CONFLICT(project_id, lock_hash) DO UPDATE SET status = 'building', last_used_at = excluded.last_used_at`,
+  ).run(projectId, lockHash, now, now);
+}
+
+export function markDependencyCacheEntryStatus(
+  projectId: string,
+  lockHash: string,
+  status: DependencyCacheEntryStatus,
+): void {
+  db.prepare(
+    `UPDATE dependency_cache_entries SET status = ? WHERE project_id = ? AND lock_hash = ?`,
+  ).run(status, projectId, lockHash);
+}
+
+/** Only a `ready` row is a valid cache hit — see DependencyCacheEntryRow doc comment. */
+export function getReadyDependencyCacheEntry(
+  projectId: string,
+  lockHash: string,
+): DependencyCacheEntryRow | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM dependency_cache_entries WHERE project_id = ? AND lock_hash = ? AND status = 'ready'`,
+    )
+    .get(projectId, lockHash) as DependencyCacheEntryRow | undefined;
+}
+
+export function touchDependencyCacheEntryLastUsed(
+  projectId: string,
+  lockHash: string,
+): void {
+  db.prepare(
+    `UPDATE dependency_cache_entries SET last_used_at = ? WHERE project_id = ? AND lock_hash = ?`,
+  ).run(Date.now(), projectId, lockHash);
+}
+
+/** Rows still `building` — used by the boot-time crash-recovery sweep. */
+export function listBuildingDependencyCacheEntries(): DependencyCacheEntryRow[] {
+  return db
+    .prepare(`SELECT * FROM dependency_cache_entries WHERE status = 'building'`)
+    .all() as DependencyCacheEntryRow[];
+}
+
+/** `ready` rows oldest-used first — used by DependencyCacheReconciler's eviction sweep. */
+export function listReadyDependencyCacheEntries(): DependencyCacheEntryRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM dependency_cache_entries WHERE status = 'ready' ORDER BY last_used_at ASC`,
+    )
+    .all() as DependencyCacheEntryRow[];
+}
+
+/**
+ * Atomically claims a `ready` row for eviction: deletes it only if
+ * `last_used_at` still matches `expectedLastUsedAt`, i.e. nothing has
+ * touched (materialized from) it since the reconciler last read it. Returns
+ * false if the row was touched or already gone, meaning the caller must NOT
+ * delete the on-disk entry — DependencyCacheReconciler relies on this to
+ * close the race between its sweep snapshot and the actual eviction.
+ */
+export function claimDependencyCacheEntryForEviction(
+  projectId: string,
+  lockHash: string,
+  expectedLastUsedAt: number,
+): boolean {
+  const result = db
+    .prepare(
+      `DELETE FROM dependency_cache_entries
+       WHERE project_id = ? AND lock_hash = ? AND status = 'ready' AND last_used_at = ?`,
+    )
+    .run(projectId, lockHash, expectedLastUsedAt);
+  return result.changes > 0;
+}
+
+// ─── test_run_results ───────────────────────────────────────────────────────
+
+let _stmtInsertTestRunResult: Database.Statement | null = null;
+
+/**
+ * Inserts every extracted test row for a run in a single transaction, so a
+ * crash mid-ingestion never leaves a partial set for `hasTestRunResults` to
+ * mistake for "done". No-op on an empty `tests` list.
+ */
+export function insertTestRunResults(
+  testRequestRunId: string,
+  projectId: string,
+  tests: NewTestRunResultRow[],
+  concurrentRunCount: number | null,
+  oomKilled: boolean,
+): void {
+  if (tests.length === 0) return;
+  _stmtInsertTestRunResult ??= db.prepare<{
+    test_request_run_id: string;
+    project_id: string;
+    test_id: string;
+    name: string;
+    outcome: string;
+    duration_ms: number;
+    concurrent_run_count: number | null;
+    oom_killed: number;
+    failure_message: string | null;
+    failure_trace_excerpt: string | null;
+    created_at: number;
+  }>(`
+    INSERT INTO test_run_results
+      (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, failure_message, failure_trace_excerpt, created_at)
+    VALUES
+      (@test_request_run_id, @project_id, @test_id, @name, @outcome, @duration_ms, @concurrent_run_count, @oom_killed, @failure_message, @failure_trace_excerpt, @created_at)
+  `);
+  const stmt = _stmtInsertTestRunResult;
+  const insertAll = db.transaction((items: NewTestRunResultRow[]) => {
+    const now = Date.now();
+    for (const item of items) {
+      stmt.run({
+        test_request_run_id: testRequestRunId,
+        project_id: projectId,
+        test_id: item.test_id,
+        name: item.name,
+        outcome: item.outcome,
+        duration_ms: item.duration_ms,
+        concurrent_run_count: concurrentRunCount,
+        oom_killed: oomKilled ? 1 : 0,
+        failure_message: item.failureMessage ?? null,
+        failure_trace_excerpt: item.failureTraceExcerpt ?? null,
+        created_at: now,
+      });
+    }
+  });
+  insertAll(tests);
+}
+
+// ─── test_run_summaries ─────────────────────────────────────────────────────
+
+/** True once this run's ingestion (summary + failure rows + digest) has been written — the extraction idempotency check. */
+export function hasTestRunSummary(testRequestRunId: string): boolean {
+  const row = db
+    .prepare(`SELECT 1 FROM test_run_summaries WHERE test_request_run_id = ?`)
+    .get(testRequestRunId);
+  return row !== undefined;
+}
+
+export function getTestRunSummary(
+  testRequestRunId: string,
+): TestRunSummaryRow | undefined {
+  return db
+    .prepare(`SELECT * FROM test_run_summaries WHERE test_request_run_id = ?`)
+    .get(testRequestRunId) as TestRunSummaryRow | undefined;
+}
+
+let _stmtInsertTestRunSummary: Database.Statement | null = null;
+
+function insertTestRunSummary(
+  testRequestRunId: string,
+  projectId: string,
+  counts: TestOutcomeCounts,
+  totalCount: number,
+  totalDurationMs: number,
+  concurrentRunCount: number | null,
+  oomKilled: boolean,
+  incomplete: boolean,
+): void {
+  _stmtInsertTestRunSummary ??= db.prepare<{
+    test_request_run_id: string;
+    project_id: string;
+    passed_count: number;
+    failed_count: number;
+    skipped_count: number;
+    error_count: number;
+    other_count: number;
+    total_count: number;
+    total_duration_ms: number;
+    concurrent_run_count: number | null;
+    oom_killed: number;
+    incomplete: number;
+    created_at: number;
+  }>(`
+    INSERT INTO test_run_summaries
+      (test_request_run_id, project_id, passed_count, failed_count, skipped_count, error_count, other_count, total_count, total_duration_ms, concurrent_run_count, oom_killed, incomplete, created_at)
+    VALUES
+      (@test_request_run_id, @project_id, @passed_count, @failed_count, @skipped_count, @error_count, @other_count, @total_count, @total_duration_ms, @concurrent_run_count, @oom_killed, @incomplete, @created_at)
+  `);
+  _stmtInsertTestRunSummary.run({
+    test_request_run_id: testRequestRunId,
+    project_id: projectId,
+    passed_count: counts.passed,
+    failed_count: counts.failed,
+    skipped_count: counts.skipped,
+    error_count: counts.error,
+    other_count: counts.other,
+    total_count: totalCount,
+    total_duration_ms: totalDurationMs,
+    concurrent_run_count: concurrentRunCount,
+    oom_killed: oomKilled ? 1 : 0,
+    incomplete: incomplete ? 1 : 0,
+    created_at: Date.now(),
+  });
+}
+
+// ─── test_perf_baselines digest ─────────────────────────────────────────────
+// The durable, fixed-width replacement for the per-test-id windowed reads
+// that used to run against raw test_run_results rows
+// (listRecentValidTestDurations, computeTestFlipRateFlag), now that passing
+// results never get a row there. Every ingested (valid, per the existing
+// concurrent_run_count = 0 AND oom_killed = 0 predicate) sample appends to
+// two JSON arrays on the test's test_perf_baselines row: a duration ring
+// (every valid outcome) and an outcome sequence (only 'passed'/'failed',
+// matching computeTestFlipRateFlag's existing outcome filter). Both are
+// newest-last and trimmed to a fixed capacity on every write, so neither
+// grows with ingestion volume.
+
+/** >= the largest window any caller of listRecentValidTestDurations passes (computeTestPerfBaseline's BASELINE_WINDOW_SAMPLES + MIN_CONSECUTIVE_REGRESSED_SAMPLES = 23). */
+export const TEST_DURATION_DIGEST_CAPACITY = 32;
+
+/** >= flip_rate_window_n's max bound (config/settings.ts) — every production caller of computeTestFlipRateFlag passes that setting as windowN. */
+export const TEST_OUTCOME_DIGEST_CAPACITY = 200;
+
+interface DigestOutcomeSample {
+  o: 'P' | 'F';
+  t: number;
+}
+
+function parseDigestOutcomes(json: string): DigestOutcomeSample[] {
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? (parsed as DigestOutcomeSample[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseDigestDurations(json: string): number[] {
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? (parsed as number[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+let _stmtGetTestPerfDigest: Database.Statement | null = null;
+let _stmtUpsertTestPerfDigest: Database.Statement | null = null;
+
+/**
+ * Appends one sample to test_id's digest row, creating it if this is the
+ * first sample ever seen for it. `sequencedAt` is a caller-assigned
+ * strictly-increasing value (see ingestTestRunResultsTx) rather than a fresh
+ * Date.now() call here — the flip-rate rollup candidate scan pages on this
+ * column (project_id, updated_at, test_id), so it must never regress once
+ * written, which a second independent Date.now() writer (e.g.
+ * upsertTestPerfBaseline) could easily do by racing ahead or behind within
+ * the same millisecond across thousands of tests in one run.
+ *
+ * No-op (digest untouched) when the sample fails the existing validity
+ * predicate — a row with concurrent_run_count != 0 or oom_killed never
+ * occupied a window slot before, and must not start now.
+ *
+ * On a brand-new test_id, the INSERT branch below writes
+ * median_duration_ms/mad_duration_ms/sample_count/is_regressed as literal
+ * zeros — real values only land once upsertTestPerfBaseline's own recompute
+ * runs. That's never externally observable: ingestTestRunResultsTx's
+ * transaction (which calls this once per test) and testRequestLane.ts's
+ * immediately-following computeTestPerfBaseline loop both run synchronously,
+ * with no I/O yield point between them, so nothing outside this same call
+ * stack can read the zero-placeholder row. The only way to see it is a hard
+ * process crash inside that window, and even then it self-heals on this
+ * test_id's next ingestion — and every existing reader (e.g.
+ * getRegressedTestsForProject's `is_regressed = 1` filter) already treats a
+ * sample_count = 0 row as "nothing to report", not a real baseline.
+ */
+export function recordTestPerfDigestSample(
+  testId: string,
+  projectId: string,
+  name: string,
+  outcome: string,
+  durationMs: number,
+  concurrentRunCount: number | null,
+  oomKilled: boolean,
+  sequencedAt: number,
+): void {
+  if (concurrentRunCount !== 0 || oomKilled) return;
+
+  _stmtGetTestPerfDigest ??= db.prepare<{ test_id: string }>(
+    `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
+  );
+  const existing = _stmtGetTestPerfDigest.get({ test_id: testId }) as
+    | { recent_outcomes: string; recent_durations: string }
+    | undefined;
+
+  const outcomes = existing
+    ? parseDigestOutcomes(existing.recent_outcomes)
+    : [];
+  if (outcome === 'passed' || outcome === 'failed') {
+    outcomes.push({ o: outcome === 'passed' ? 'P' : 'F', t: sequencedAt });
+    if (outcomes.length > TEST_OUTCOME_DIGEST_CAPACITY) {
+      outcomes.splice(0, outcomes.length - TEST_OUTCOME_DIGEST_CAPACITY);
+    }
+  }
+
+  const durations = existing
+    ? parseDigestDurations(existing.recent_durations)
+    : [];
+  durations.push(durationMs);
+  if (durations.length > TEST_DURATION_DIGEST_CAPACITY) {
+    durations.splice(0, durations.length - TEST_DURATION_DIGEST_CAPACITY);
+  }
+
+  _stmtUpsertTestPerfDigest ??= db.prepare<{
+    test_id: string;
+    project_id: string;
+    name: string;
+    last_duration_ms: number;
+    recent_outcomes: string;
+    recent_durations: string;
+    updated_at: number;
+  }>(`
+    INSERT INTO test_perf_baselines
+      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, updated_at)
+    VALUES
+      (@test_id, @project_id, @name, 0, 0, 0, @last_duration_ms, 0, @recent_outcomes, @recent_durations, @updated_at)
+    ON CONFLICT(test_id) DO UPDATE SET
+      project_id = excluded.project_id,
+      name = excluded.name,
+      recent_outcomes = excluded.recent_outcomes,
+      recent_durations = excluded.recent_durations,
+      updated_at = excluded.updated_at
+  `);
+  _stmtUpsertTestPerfDigest.run({
+    test_id: testId,
+    project_id: projectId,
+    name,
+    last_duration_ms: durationMs,
+    recent_outcomes: JSON.stringify(outcomes),
+    recent_durations: JSON.stringify(durations),
+    updated_at: sequencedAt,
+  });
+}
+
+/**
+ * Ingests one completed run's extracted test results: writes a
+ * test_run_summaries row (outcome counts + total duration), writes a
+ * test_run_results row only for non-passing outcomes, and folds every
+ * outcome (passing included) into the test_perf_baselines digest — all in
+ * one transaction, so a crash mid-ingestion never leaves the summary marker
+ * without its digest updates or vice versa. Returns the computed counts so
+ * the caller (ingestTestRunResults in testRequestLane.ts) can log/inspect
+ * them without a second read.
+ */
+export function ingestTestRunResultsTx(
+  testRequestRunId: string,
+  projectId: string,
+  tests: NewTestRunResultRow[],
+  concurrentRunCount: number | null,
+  oomKilled: boolean,
+  incomplete: boolean,
+): TestOutcomeCounts {
+  const counts: TestOutcomeCounts = {
+    passed: 0,
+    failed: 0,
+    skipped: 0,
+    error: 0,
+    other: 0,
+  };
+  let totalDurationMs = 0;
+  for (const t of tests) {
+    totalDurationMs += t.duration_ms;
+    if (t.outcome === 'passed') counts.passed++;
+    else if (t.outcome === 'failed') counts.failed++;
+    else if (t.outcome === 'skipped') counts.skipped++;
+    else if (t.outcome === 'error') counts.error++;
+    else counts.other++;
+  }
+  const failing = tests.filter((t) => t.outcome !== 'passed');
+  const baseSequence = Date.now() * 1000;
+
+  const tx = db.transaction(() => {
+    insertTestRunResults(
+      testRequestRunId,
+      projectId,
+      failing,
+      concurrentRunCount,
+      oomKilled,
+    );
+    insertTestRunSummary(
+      testRequestRunId,
+      projectId,
+      counts,
+      tests.length,
+      totalDurationMs,
+      concurrentRunCount,
+      oomKilled,
+      incomplete,
+    );
+    tests.forEach((t, index) => {
+      recordTestPerfDigestSample(
+        t.test_id,
+        projectId,
+        t.name,
+        t.outcome,
+        t.duration_ms,
+        concurrentRunCount,
+        oomKilled,
+        baseSequence + index,
+      );
+    });
+  });
+  tx();
+  return counts;
+}
+
+/**
+ * Per-run cap for listTestRunResultsForRun. Since ingestTestRunResultsTx
+ * only writes a test_run_results row for non-passing outcomes, this now
+ * returns only a run's failing tests, not every test in it — callers that
+ * need the full per-outcome counts (including how many passed) should read
+ * the run's test_run_summaries row (getTestRunSummary) instead; that's the
+ * "per-run reads that enumerate every test" digest replacement.
+ */
+export const TEST_RUN_RESULTS_PER_RUN_CAP = 500;
+
+export function listTestRunResultsForRun(
+  testRequestRunId: string,
+  limit: number = TEST_RUN_RESULTS_PER_RUN_CAP,
+): TestRunResultRow[] {
+  return db
+    .prepare(
+      `SELECT id, test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, failure_message, failure_trace_excerpt, created_at
+       FROM test_run_results
+       WHERE test_request_run_id = ?
+       ORDER BY id ASC
+       LIMIT ?`,
+    )
+    .all(testRequestRunId, limit) as TestRunResultRow[];
+}
+
+/** Total test_run_results row count for one run — used to detect truncation against TEST_RUN_RESULTS_PER_RUN_CAP without pulling every row. */
+export function countTestRunResultsForRun(testRequestRunId: string): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as count FROM test_run_results WHERE test_request_run_id = ?`,
+    )
+    .get(testRequestRunId) as { count: number };
+  return row.count;
+}
+
+// ─── test_perf_baselines ────────────────────────────────────────────────────
+
+let _stmtGetTestPerfDigestDurations: Database.Statement | null = null;
+
+/**
+ * Most recent `limit` *valid* (concurrent_run_count = 0 AND oom_killed = 0)
+ * durations for a test_id, newest first — the sample pool
+ * computeTestPerfBaseline draws its baseline window and recent-run guard
+ * from. Reads the fixed-width digest ring on test_perf_baselines
+ * (recordTestPerfDigestSample) rather than raw test_run_results rows —
+ * `limit` must not exceed TEST_DURATION_DIGEST_CAPACITY or the result is
+ * silently truncated to whatever the ring retained.
+ */
+export function listRecentValidTestDurations(
+  testId: string,
+  limit: number,
+): number[] {
+  _stmtGetTestPerfDigestDurations ??= db.prepare<{ test_id: string }>(
+    `SELECT recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
+  );
+  const row = _stmtGetTestPerfDigestDurations.get({ test_id: testId }) as
+    | { recent_durations: string }
+    | undefined;
+  if (!row) return [];
+  const durations = parseDigestDurations(row.recent_durations);
+  return durations.slice(-limit).reverse();
+}
+
+let _stmtUpsertTestPerfBaseline: Database.Statement | null = null;
+
+/**
+ * Recomputes (not appends) the median/MAD summary columns for a test_id's
+ * already-existing digest row. Never touches recent_outcomes/
+ * recent_durations/project_id/name/updated_at — those are owned exclusively
+ * by recordTestPerfDigestSample, whose caller-assigned `updated_at` value
+ * the flip-rate rollup candidate scan depends on staying monotonic; a second
+ * Date.now() writer here could regress it.
+ */
+export function upsertTestPerfBaseline(row: NewTestPerfBaselineRow): void {
+  _stmtUpsertTestPerfBaseline ??= db.prepare<{
+    test_id: string;
+    median_duration_ms: number;
+    mad_duration_ms: number;
+    sample_count: number;
+    last_duration_ms: number;
+    is_regressed: number;
+    updated_at: number;
+  }>(`
+    INSERT INTO test_perf_baselines
+      (test_id, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, updated_at)
+    VALUES
+      (@test_id, @median_duration_ms, @mad_duration_ms, @sample_count, @last_duration_ms, @is_regressed, @updated_at)
+    ON CONFLICT(test_id) DO UPDATE SET
+      median_duration_ms = excluded.median_duration_ms,
+      mad_duration_ms = excluded.mad_duration_ms,
+      sample_count = excluded.sample_count,
+      last_duration_ms = excluded.last_duration_ms,
+      is_regressed = excluded.is_regressed
+  `);
+  _stmtUpsertTestPerfBaseline.run({
+    test_id: row.test_id,
+    median_duration_ms: row.median_duration_ms,
+    mad_duration_ms: row.mad_duration_ms,
+    sample_count: row.sample_count,
+    last_duration_ms: row.last_duration_ms,
+    is_regressed: row.is_regressed ? 1 : 0,
+    updated_at: Date.now(),
+  });
+}
+
+export function getTestPerfBaseline(
+  testId: string,
+): TestPerfBaselineRow | undefined {
+  return db
+    .prepare(`SELECT * FROM test_perf_baselines WHERE test_id = ?`)
+    .get(testId) as TestPerfBaselineRow | undefined;
+}
+
+export interface TestFlipRateFlag {
+  testId: string;
+  sampleCount: number;
+  transitionCount: number;
+  flagged: boolean;
+}
+
+let _stmtTestFlipRateDigest: Database.Statement | null = null;
+
+/**
+ * Live pass<->fail flip-rate flag for one test id, recomputed from its last
+ * `windowN` valid samples (concurrent_run_count = 0 and oom_killed = false —
+ * a row failing either check never occupies a window slot, so it can't be a
+ * pass, a fail, or a transition). Flagged once transitionCount >= thresholdK.
+ * Nothing is persisted here — every call reflects the current window, so the
+ * flag clears on its own the moment a fresh ingestion's recomputation drops
+ * the transition count back below K; there is no sticky marker to reset.
+ *
+ * Reads the fixed-width outcome-sequence digest on test_perf_baselines
+ * (recordTestPerfDigestSample) rather than raw test_run_results rows.
+ * `windowN` must not exceed TEST_OUTCOME_DIGEST_CAPACITY — see
+ * flip_rate_window_n's .max() bound in config/settings.ts.
+ */
+export function computeTestFlipRateFlag(
+  testId: string,
+  windowN: number,
+  thresholdK: number,
+  // Excludes samples at/after this timestamp — the lane-side flaky
+  // auto-disposition's "predates this PR's first run" masking guard
+  // (see PRMergeWatcher.tryF2LaneAutoDisposition). Defaults to "no cutoff"
+  // for every other caller (listFlaggedFlakyTests, the lane-health rollup).
+  beforeMs: number = Number.MAX_SAFE_INTEGER,
+): TestFlipRateFlag {
+  _stmtTestFlipRateDigest ??= db.prepare<{ test_id: string }>(
+    `SELECT recent_outcomes FROM test_perf_baselines WHERE test_id = @test_id`,
+  );
+  const row = _stmtTestFlipRateDigest.get({ test_id: testId }) as
+    | { recent_outcomes: string }
+    | undefined;
+  const all = row ? parseDigestOutcomes(row.recent_outcomes) : [];
+  const filtered =
+    beforeMs === Number.MAX_SAFE_INTEGER
+      ? all
+      : all.filter((s) => s.t < beforeMs);
+  const windowed = filtered.slice(-windowN);
+
+  let transitionCount = 0;
+  for (let i = 1; i < windowed.length; i++) {
+    if (windowed[i].o !== windowed[i - 1].o) transitionCount++;
+  }
+
+  return {
+    testId,
+    sampleCount: windowed.length,
+    transitionCount,
+    flagged: transitionCount >= thresholdK,
+  };
+}
+
+export interface TestFailureBreadthFlag {
+  testId: string;
+  distinctContentHashCount: number;
+  flagged: boolean;
+}
+
+let _stmtTestFailureBreadth: Database.Statement | null = null;
+
+/**
+ * The lane-side breadth-of-trees masking signal, supplementing
+ * computeTestFlipRateFlag: counts the distinct test_request_runs.content_hash
+ * values a test failed under within (beforeMs - windowHours, beforeMs) —
+ * i.e. the same "predates this PR's own runs" cutoff flip-rate uses, so a
+ * PR's own re-runs (all sharing that PR's content_hash) can't inflate this
+ * signal. A failure appearing across `breadthN` or more distinct trees
+ * cannot be attributable to any single diff — see evaluateF2LaneFlakyDisposition.
+ *
+ * Joins test_run_results (SEARCH via idx_test_run_results_test_id_created_at
+ * on test_id + the created_at range) to test_request_runs by its primary key
+ * (id) to read content_hash — both index-assisted, no full table scan; see
+ * scripts/check-query-plans.mjs.
+ */
+export function computeTestFailureBreadthFlag(
+  testId: string,
+  windowHours: number,
+  breadthN: number,
+  beforeMs: number,
+): TestFailureBreadthFlag {
+  _stmtTestFailureBreadth ??= db.prepare<{
+    test_id: string;
+    since_ms: number;
+    before_ms: number;
+  }>(`
+    SELECT COUNT(DISTINCT r.content_hash) AS distinct_hashes
+    FROM test_run_results t
+    JOIN test_request_runs r ON r.id = t.test_request_run_id
+    WHERE t.test_id = @test_id
+      AND t.outcome IN ('failed', 'error')
+      AND t.created_at >= @since_ms
+      AND t.created_at < @before_ms
+  `);
+  const sinceMs = beforeMs - windowHours * 60 * 60 * 1000;
+  const row = _stmtTestFailureBreadth.get({
+    test_id: testId,
+    since_ms: sinceMs,
+    before_ms: beforeMs,
+  }) as { distinct_hashes: number };
+  const distinctContentHashCount = row.distinct_hashes;
+  return {
+    testId,
+    distinctContentHashCount,
+    flagged: distinctContentHashCount >= breadthN,
+  };
+}
+
+export interface TestFlakinessCorpusVerdict {
+  testId: string;
+  eligible: boolean;
+  reason?: string;
+}
+
+/**
+ * The flaky.confirm-facing sibling of evaluateF2LaneFlakyDisposition
+ * (testRequestLane.ts): adjudicates ONE session-reported test id against the
+ * same cross-SHA corpus (flip-rate alternation + cross-tree breadth), scoped
+ * to samples predating `beforeMs`, so a session no longer has to re-run the
+ * suite itself to establish flakiness — see mcp/tools/verdictTools.ts's
+ * flaky.confirm handler, the sole caller. Touched-file masking is the
+ * caller's own responsibility (session/test-runner.ts's
+ * isTestIdTouchedByChangedFiles) — this only evaluates corpus breadth.
+ */
+export function evaluateTestFlakinessCorpus(
+  testId: string,
+  beforeMs: number,
+  flipRateWindowN: number,
+  flipRateThresholdK: number,
+  breadthN: number,
+  breadthWindowHours: number,
+): TestFlakinessCorpusVerdict {
+  const flipFlag = computeTestFlipRateFlag(
+    testId,
+    flipRateWindowN,
+    flipRateThresholdK,
+    beforeMs,
+  );
+  const breadthFlag = computeTestFailureBreadthFlag(
+    testId,
+    breadthWindowHours,
+    breadthN,
+    beforeMs,
+  );
+  if (flipFlag.flagged || breadthFlag.flagged) {
+    return { testId, eligible: true };
+  }
+  return {
+    testId,
+    eligible: false,
+    reason: `has not cleared the cross-SHA flakiness bar yet (${flipFlag.transitionCount}/${flipRateThresholdK} flip-rate transitions over ${flipFlag.sampleCount} samples, failed across ${breadthFlag.distinctContentHashCount}/${breadthN} distinct trees)`,
+  };
+}
+
+let _stmtFailingTestIdsForRun: Database.Statement | null = null;
+
+/**
+ * The failed/errored test_run_results rows for one test_request_run — the
+ * per-test failure set the lane-side f2 auto-disposition check evaluates
+ * against computeTestFlipRateFlag and the touched-file masking guard (see
+ * PRMergeWatcher.tryF2LaneAutoDisposition / testRequestLane.ts's
+ * evaluateF2LaneFlakyDisposition). Empty when the run has no per-test
+ * detail (structured_result never ingested) — the caller treats that as
+ * not-eligible, never as "no failures". Includes each test's recorded
+ * failure_message/failure_trace_excerpt (nullable — see the test_run_results
+ * migration adding those columns) so a caller comparing a PR's failure
+ * against a base probe's failure for the same test id can do so on content,
+ * not just test id.
+ */
+export interface FailingTestForRun {
+  test_id: string;
+  name: string;
+  failure_message: string | null;
+  failure_trace_excerpt: string | null;
+}
+
+export function getFailingTestIdsForRun(
+  testRequestRunId: string,
+): FailingTestForRun[] {
+  _stmtFailingTestIdsForRun ??= db.prepare<{ run_id: string }>(`
+    SELECT test_id, name, failure_message, failure_trace_excerpt FROM test_run_results
+    WHERE test_request_run_id = @run_id
+      AND outcome IN ('failed', 'error')
+  `);
+  return _stmtFailingTestIdsForRun.all({
+    run_id: testRequestRunId,
+  }) as FailingTestForRun[];
+}
+
+export interface FlaggedFlakyTest {
+  testId: string;
+  name: string;
+  sampleCount: number;
+  transitionCount: number;
+  /** Whether this test_id is currently tracked under an open remediation task — see flaky_remediation_tracking. Always false from listFlaggedFlakyTests, which only backs the rollup-table write path. */
+  remediationTaskOpen: boolean;
+  /** The linked remediation task id, set only when remediationTaskOpen is true. */
+  remediationTaskId: string | null;
+}
+
+let _stmtDistinctProjectTestIds: Database.Statement | null = null;
+
+/**
+ * Every test under `projectId` currently flagged by computeTestFlipRateFlag —
+ * computed from full test_run_results history. This is the expensive
+ * from-scratch computation (unbounded aggregate over every row ever recorded
+ * for the project) — see the module comment on flagged_flaky_tests_rollup in
+ * schema.ts. NOT called on the lane-health request path; only
+ * replaceFlaggedFlakyTestsRollup (driven by FlakyTestRollupJob's scheduler
+ * cadence) calls this. The request path reads getFlaggedFlakyTestsRollup
+ * instead. test_run_results carries no project_id column, so scoping joins
+ * through test_request_runs.
+ */
+export function listFlaggedFlakyTests(
+  projectId: string,
+  windowN: number,
+  thresholdK: number,
+): FlaggedFlakyTest[] {
+  // GROUP BY test_id (not DISTINCT test_id, name) — a test's recorded name
+  // can vary across runs, and DISTINCT on both columns would fan out into
+  // duplicate testId rows. MAX(created_at) picks the most recent run's name
+  // per test_id, mirroring getRegressedTestsForProject's same bare-column-
+  // with-MAX() convention.
+  _stmtDistinctProjectTestIds ??= db.prepare<{ project_id: string }>(`
+    SELECT trr.test_id AS test_id, trr.name AS name, MAX(trr.created_at) AS created_at
+    FROM test_run_results trr
+    JOIN test_request_runs r ON r.id = trr.test_request_run_id
+    WHERE r.project_id = @project_id
+    GROUP BY trr.test_id
+  `);
+  const rows = _stmtDistinctProjectTestIds.all({
+    project_id: projectId,
+  }) as { test_id: string; name: string }[];
+
+  const flagged: FlaggedFlakyTest[] = [];
+  for (const row of rows) {
+    const flag = computeTestFlipRateFlag(row.test_id, windowN, thresholdK);
+    if (flag.flagged) {
+      flagged.push({
+        testId: row.test_id,
+        name: row.name,
+        sampleCount: flag.sampleCount,
+        transitionCount: flag.transitionCount,
+        remediationTaskOpen: false,
+        remediationTaskId: null,
+      });
+    }
+  }
+  return flagged;
+}
+
+interface FlakyRollupWatermark {
+  updatedAt: number;
+  testId: string;
+}
+
+let _stmtGetFlakyRollupWatermark: Database.Statement | null = null;
+let _stmtSetFlakyRollupWatermark: Database.Statement | null = null;
+
+/**
+ * `projectId`'s position in test_perf_baselines' (project_id, updated_at,
+ * test_id) digest ordering, already folded into flagged_flaky_tests_rollup —
+ * the keyset-pagination watermark the candidate scan resumes from.
+ * (0, '') (never recomputed) if no row exists. Moved off
+ * test_run_results.id — see the test_perf_baselines digest comment in
+ * schema.ts — since a passing-only test never gets a test_run_results row
+ * to advance a row-id watermark, which would leave it permanently
+ * unre-examinable (e.g. stuck flagged after it stops flapping).
+ */
+function getFlakyRollupWatermark(projectId: string): FlakyRollupWatermark {
+  _stmtGetFlakyRollupWatermark ??= db.prepare<{ project_id: string }>(`
+    SELECT last_digest_updated_at, last_digest_test_id
+    FROM flagged_flaky_tests_rollup_watermark
+    WHERE project_id = @project_id
+  `);
+  const row = _stmtGetFlakyRollupWatermark.get({
+    project_id: projectId,
+  }) as
+    | { last_digest_updated_at: number; last_digest_test_id: string }
+    | undefined;
+  return {
+    updatedAt: row?.last_digest_updated_at ?? 0,
+    testId: row?.last_digest_test_id ?? '',
+  };
+}
+
+function setFlakyRollupWatermark(
+  projectId: string,
+  watermark: FlakyRollupWatermark,
+  updatedAt: number,
+): void {
+  _stmtSetFlakyRollupWatermark ??= db.prepare<{
+    project_id: string;
+    last_digest_updated_at: number;
+    last_digest_test_id: string;
+    updated_at: number;
+  }>(`
+    INSERT INTO flagged_flaky_tests_rollup_watermark
+      (project_id, last_digest_updated_at, last_digest_test_id, updated_at)
+    VALUES (@project_id, @last_digest_updated_at, @last_digest_test_id, @updated_at)
+    ON CONFLICT(project_id) DO UPDATE SET
+      last_digest_updated_at = excluded.last_digest_updated_at,
+      last_digest_test_id = excluded.last_digest_test_id,
+      updated_at = excluded.updated_at
+  `);
+  _stmtSetFlakyRollupWatermark.run({
+    project_id: projectId,
+    last_digest_updated_at: watermark.updatedAt,
+    last_digest_test_id: watermark.testId,
+    updated_at: updatedAt,
+  });
+}
+
+interface FlakyRollupCandidates {
+  testIds: string[];
+  names: Map<string, string>;
+  rowsExamined: number;
+  watermark: FlakyRollupWatermark;
+}
+
+let _stmtFlakyRollupCandidateTestIds: Database.Statement | null = null;
+
+/**
+ * The test ids in `projectId`'s digest (test_perf_baselines) touched past
+ * `since` in (updated_at, test_id) keyset order, plus each one's latest name
+ * — the bounded replacement for listFlaggedFlakyTests' unscoped project-wide
+ * GROUP BY. Every ingested test touches its digest row regardless of
+ * outcome (recordTestPerfDigestSample), so — unlike the old test_run_results
+ * row-id watermark — a test that stops flapping and only passes still
+ * advances past this watermark and gets re-evaluated (and un-flagged).
+ */
+function getFlakyRollupCandidates(
+  projectId: string,
+  since: FlakyRollupWatermark,
+): FlakyRollupCandidates {
+  _stmtFlakyRollupCandidateTestIds ??= db.prepare<{
+    project_id: string;
+    since_updated_at: number;
+    since_test_id: string;
+  }>(`
+    SELECT test_id AS test_id, name AS name, updated_at AS updated_at
+    FROM test_perf_baselines
+    WHERE project_id = @project_id
+      AND (updated_at > @since_updated_at
+           OR (updated_at = @since_updated_at AND test_id > @since_test_id))
+    ORDER BY updated_at ASC, test_id ASC
+  `);
+  const rows = _stmtFlakyRollupCandidateTestIds.all({
+    project_id: projectId,
+    since_updated_at: since.updatedAt,
+    since_test_id: since.testId,
+  }) as { test_id: string; name: string; updated_at: number }[];
+
+  if (rows.length === 0) {
+    return { testIds: [], names: new Map(), rowsExamined: 0, watermark: since };
+  }
+
+  const names = new Map<string, string>();
+  for (const row of rows) names.set(row.test_id, row.name);
+  const last = rows[rows.length - 1];
+
+  return {
+    testIds: rows.map((r) => r.test_id),
+    names,
+    rowsExamined: rows.length,
+    watermark: { updatedAt: last.updated_at, testId: last.test_id },
+  };
+}
+
+/**
+ * How long a test_perf_baselines row can go untouched before a flagged
+ * rollup row pinned to it is treated as a ghost rather than a genuinely
+ * still-flaky test that simply hasn't run recently. A renamed/deleted test's
+ * old test_id stops receiving digest updates entirely (recordTestPerfDigestSample
+ * only ever writes under the CURRENT literal test_id), so its
+ * test_perf_baselines row freezes at whatever updated_at it last had —
+ * forever behind flagged_flaky_tests_rollup_watermark, and so never
+ * revisited by getFlakyRollupCandidates' keyset scan. There is no way to
+ * distinguish "permanently dead" from "temporarily quiet" from position
+ * alone (both sit behind the watermark); only elapsed time since the last
+ * real update does. A project's suite is expected to exercise a still-live
+ * flaky test at least once in this window.
+ */
+const FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+let _stmtPruneGhostFlaggedFlakyTests: Database.Statement | null = null;
+
+/**
+ * Deletes `projectId`'s flagged_flaky_tests_rollup rows whose test_id has no
+ * test_perf_baselines row updated within FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS
+ * of `computedAt` — either the baseline row was deleted outright, or (the
+ * renamed/retired-test case) it still exists but has stopped receiving new
+ * samples. Runs on every recompute tick, independent of and in addition to
+ * the keyset-candidate pass below, since a ghost's own test_id can never
+ * cross flagged_flaky_tests_rollup_watermark again to get itself reconsidered
+ * by that scan. Returns the number of rows pruned.
+ */
+function pruneGhostFlaggedFlakyTests(
+  projectId: string,
+  computedAt: number,
+): number {
+  _stmtPruneGhostFlaggedFlakyTests ??= db.prepare<{
+    project_id: string;
+    stale_before: number;
+  }>(`
+    DELETE FROM flagged_flaky_tests_rollup
+    WHERE project_id = @project_id
+      AND test_id NOT IN (
+        SELECT test_id FROM test_perf_baselines
+        WHERE project_id = @project_id AND updated_at > @stale_before
+      )
+  `);
+  const result = _stmtPruneGhostFlaggedFlakyTests.run({
+    project_id: projectId,
+    stale_before: computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS,
+  });
+  return result.changes;
+}
+
+let _stmtDeleteFlaggedFlakyTestForId: Database.Statement | null = null;
+let _stmtInsertFlaggedFlakyTestsRollup: Database.Statement | null = null;
+let _txReplaceFlaggedFlakyTestsRollup: ((...args: unknown[]) => void) | null =
+  null;
+
+/**
+ * Recomputes `projectId`'s flagged-flaky set incrementally, on the shared
+ * main-thread `db` connection: only test ids touched (any outcome) past
+ * flagged_flaky_tests_rollup_watermark are re-run through
+ * computeTestFlipRateFlagsForTestIds, and only those test ids' rows in
+ * flagged_flaky_tests_rollup are touched — every other project test's
+ * previously-computed flag is left untouched, since nothing about its own
+ * sample window changed. The watermark then advances to the highest
+ * (updated_at, test_id) folded in by this tick. Only safe to call directly
+ * against an in-memory (test) or otherwise unknown-path database — see
+ * replaceFlaggedFlakyTestsRollupOffMainThread, which dispatches this same
+ * recompute to a worker thread for a real on-disk database instead. Called
+ * on FlakyTestRollupJob's scheduler cadence, never on the lane-health
+ * request path.
+ *
+ * Also prunes ghost rows every tick (see pruneGhostFlaggedFlakyTests) —
+ * flagged rows whose test_id's test_perf_baselines row has gone stale,
+ * meaning the underlying test was renamed or deleted and can never cross
+ * the watermark again on its own to get re-examined.
+ *
+ * `itemsProcessed` reports the number of test ids actually recomputed this
+ * tick (work performed) plus any ghost rows pruned, not the number flagged —
+ * a tick that examines new rows but flags nothing is still real work, not an
+ * idle no-op.
+ */
+function replaceFlaggedFlakyTestsRollupSync(
+  projectId: string,
+  windowN: number,
+  thresholdK: number,
+  computedAt: number,
+): { itemsProcessed: number } {
+  const since = getFlakyRollupWatermark(projectId);
+  const candidates = getFlakyRollupCandidates(projectId, since);
+  const ghostsPruned = pruneGhostFlaggedFlakyTests(projectId, computedAt);
+
+  if (candidates.testIds.length === 0) {
+    return { itemsProcessed: ghostsPruned };
+  }
+
+  const flags = computeTestFlipRateFlagsForTestIds(
+    candidates.testIds,
+    windowN,
+    thresholdK,
+  );
+
+  _stmtDeleteFlaggedFlakyTestForId ??= db.prepare<{
+    project_id: string;
+    test_id: string;
+  }>(`
+    DELETE FROM flagged_flaky_tests_rollup
+    WHERE project_id = @project_id AND test_id = @test_id
+  `);
+  _stmtInsertFlaggedFlakyTestsRollup ??= db.prepare<{
+    project_id: string;
+    test_id: string;
+    name: string;
+    sample_count: number;
+    transition_count: number;
+    computed_at: number;
+  }>(`
+    INSERT INTO flagged_flaky_tests_rollup
+      (project_id, test_id, name, sample_count, transition_count, computed_at)
+    VALUES
+      (@project_id, @test_id, @name, @sample_count, @transition_count, @computed_at)
+  `);
+  _txReplaceFlaggedFlakyTestsRollup ??= db.transaction(
+    (
+      pid: string,
+      testFlags: TestFlipRateFlag[],
+      names: Map<string, string>,
+      at: number,
+      newWatermark: FlakyRollupWatermark,
+    ) => {
+      for (const flag of testFlags) {
+        _stmtDeleteFlaggedFlakyTestForId!.run({
+          project_id: pid,
+          test_id: flag.testId,
+        });
+        if (flag.flagged) {
+          _stmtInsertFlaggedFlakyTestsRollup!.run({
+            project_id: pid,
+            test_id: flag.testId,
+            name: names.get(flag.testId) ?? flag.testId,
+            sample_count: flag.sampleCount,
+            transition_count: flag.transitionCount,
+            computed_at: at,
+          });
+        }
+      }
+      setFlakyRollupWatermark(pid, newWatermark, at);
+    },
+  ) as unknown as (...args: unknown[]) => void;
+  _txReplaceFlaggedFlakyTestsRollup(
+    projectId,
+    flags,
+    candidates.names,
+    computedAt,
+    candidates.watermark,
+  );
+
+  return { itemsProcessed: candidates.testIds.length + ghostsPruned };
+}
+
+/**
+ * Dispatches replaceFlaggedFlakyTestsRollupSync's recompute to a worker
+ * thread that opens its OWN connection against `targetPath`, instead of
+ * running it on the shared main-thread `db` connection. The recompute is
+ * incremental (scoped to test ids with rows past the watermark) on every
+ * tick after the first, but the first-ever tick for a project — and any
+ * tick after a watermark reset — still walks that project's full
+ * test_run_results history, and better-sqlite3 has no async API to yield
+ * within it, so running it inline would block every Express route,
+ * WebSocket handler, and other scheduled job for that scan's full duration
+ * (previously documented at 7.6s+ at 1.5M rows, growing daily). See
+ * flakyTestRollupWorker.ts for the worker entry point, and
+ * runWalTruncateCheckpointOffMainThread in db.ts for the identical pattern
+ * applied to the hourly WAL TRUNCATE checkpoint.
+ *
+ * Falls back to the in-process sync path for `:memory:` (no second
+ * connection can open against an in-memory database) and for any other
+ * falsy path, as a defensive default rather than handing an unusable
+ * value to `new Database()` as a real worker target.
+ */
+export function replaceFlaggedFlakyTestsRollupOffMainThread(
+  targetPath: string | undefined,
+  projectId: string,
+  windowN: number,
+  thresholdK: number,
+  computedAt: number,
+): Promise<{ itemsProcessed: number }> {
+  if (!targetPath || targetPath === ':memory:') {
+    return Promise.resolve(
+      replaceFlaggedFlakyTestsRollupSync(
+        projectId,
+        windowN,
+        thresholdK,
+        computedAt,
+      ),
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const isTsNode = __filename.endsWith('.ts');
+    const workerPath = path.join(
+      __dirname,
+      isTsNode ? 'flakyTestRollupWorker.ts' : 'flakyTestRollupWorker.js',
+    );
+    const worker = new Worker(workerPath, {
+      workerData: {
+        dbPath: targetPath,
+        projectId,
+        windowN,
+        thresholdK,
+        computedAt,
+      },
+      execArgv: isTsNode ? ['-r', 'ts-node/register/transpile-only'] : [],
+    });
+    let settled = false;
+    worker.once(
+      'message',
+      (
+        msg:
+          | { ok: true; result: { itemsProcessed: number } }
+          | { ok: false; error: string },
+      ) => {
+        settled = true;
+        if (msg.ok) {
+          resolve(msg.result);
+        } else {
+          reject(new Error(`[flaky_test_rollup] worker failed: ${msg.error}`));
+        }
+        void worker.terminate();
+      },
+    );
+    worker.once('error', (err) => {
+      settled = true;
+      reject(err);
+    });
+    worker.once('exit', (code) => {
+      if (!settled) {
+        reject(
+          new Error(
+            `[flaky_test_rollup] worker exited with code ${code} before reporting a result`,
+          ),
+        );
+      }
+    });
+  });
+}
+
+/**
+ * Public entry point used by FlakyTestRollupJob: recomputes `projectId`'s
+ * flagged-flaky set off the shared main-thread `db` connection. See
+ * replaceFlaggedFlakyTestsRollupOffMainThread for why.
+ *
+ * Dispatches against `db.name` (better-sqlite3's own record of the path it
+ * was opened with) rather than the `dbPath` sibling export from db.ts — a
+ * test file that mocks db.js to swap in its own in-memory `db` (see e.g.
+ * flakyTestRollup.queries.test.ts) has no reason to also stub `dbPath`, so
+ * reading that binding here would silently see whatever the real db.ts
+ * module resolved it to and dispatch a worker against the wrong file.
+ * `db.name` can never disagree with the connection actually in use.
+ */
+export function replaceFlaggedFlakyTestsRollup(
+  projectId: string,
+  windowN: number,
+  thresholdK: number,
+  computedAt: number,
+): Promise<{ itemsProcessed: number }> {
+  return replaceFlaggedFlakyTestsRollupOffMainThread(
+    db.name,
+    projectId,
+    windowN,
+    thresholdK,
+    computedAt,
+  );
+}
+
+let _stmtGetFlaggedFlakyTestsRollup: Database.Statement | null = null;
+
+/**
+ * The lane-health rollup's flaky-test tier, read from the precomputed
+ * flagged_flaky_tests_rollup table (project_id-indexed) rather than
+ * recomputed from full test_run_results history. See
+ * replaceFlaggedFlakyTestsRollup for the write side.
+ */
+export function getFlaggedFlakyTestsRollup(
+  projectId: string,
+): FlaggedFlakyTest[] {
+  _stmtGetFlaggedFlakyTestsRollup ??= db.prepare<{ project_id: string }>(`
+    SELECT
+      f.test_id AS test_id,
+      f.name AS name,
+      f.sample_count AS sample_count,
+      f.transition_count AS transition_count,
+      t.remediation_task_open AS remediation_task_open,
+      t.remediation_task_id AS remediation_task_id
+    FROM flagged_flaky_tests_rollup f
+    LEFT JOIN flaky_remediation_tracking t ON t.test_id = f.test_id
+    WHERE f.project_id = @project_id
+    ORDER BY f.test_id ASC
+  `);
+  const rows = _stmtGetFlaggedFlakyTestsRollup.all({
+    project_id: projectId,
+  }) as {
+    test_id: string;
+    name: string;
+    sample_count: number;
+    transition_count: number;
+    remediation_task_open: number | null;
+    remediation_task_id: string | null;
+  }[];
+  return rows.map((r) => ({
+    testId: r.test_id,
+    name: r.name,
+    sampleCount: r.sample_count,
+    transitionCount: r.transition_count,
+    remediationTaskOpen: r.remediation_task_open === 1,
+    remediationTaskId:
+      r.remediation_task_open === 1 ? r.remediation_task_id : null,
+  }));
+}
+
+let _stmtGetFlaggedFlakyTestIds: Database.Statement | null = null;
+
+/**
+ * Set-membership lookup over flagged_flaky_tests_rollup for `projectId` —
+ * for callers (baseAttributableFilter.ts) that only need to test
+ * "is this test_id currently flagged flaky", not the full UI-rollup shape
+ * returned by getFlaggedFlakyTestsRollup/listFlaggedFlakyTests.
+ */
+export function getFlaggedFlakyTestIds(projectId: string): Set<string> {
+  _stmtGetFlaggedFlakyTestIds ??= db.prepare<{ project_id: string }>(`
+    SELECT test_id
+    FROM flagged_flaky_tests_rollup
+    WHERE project_id = @project_id
+  `);
+  const rows = _stmtGetFlaggedFlakyTestIds.all({
+    project_id: projectId,
+  }) as { test_id: string }[];
+  return new Set(rows.map((r) => r.test_id));
 }
 
 // ─── session_test_request_cycles ───────────────────────────────────────────
@@ -6926,6 +9916,26 @@ export function incrementSessionTestRequestCycleCount(
        count = count + 1,
        updated_at = excluded.updated_at`,
   ).run(sessionId, now);
+  return getSessionTestRequestCycleCount(sessionId);
+}
+
+/**
+ * Undoes one prior increment — used when a test.request cycle's failure
+ * couldn't be judged against the session's own diff at all: either the base
+ * tree itself whole-process-crashed (baseAttributableFilter's
+ * `inconclusive` outcome) or no usable base-health probe existed for the
+ * current base content hash (`unknown` outcome). Neither case counts
+ * against test_request_cycle_limit. Floors at 0 rather than going negative.
+ */
+export function decrementSessionTestRequestCycleCount(
+  sessionId: string,
+): number {
+  const now = Date.now();
+  db.prepare(
+    `UPDATE session_test_request_cycles
+     SET count = MAX(0, count - 1), updated_at = ?
+     WHERE session_id = ?`,
+  ).run(now, sessionId);
   return getSessionTestRequestCycleCount(sessionId);
 }
 
@@ -7223,6 +10233,34 @@ export function hasStagedIntentForTask(taskId: string): boolean {
   return _stmtHasStagedIntentForTask.get({ task_id: taskId }) !== undefined;
 }
 
+let _stmtHasUndispositionedStagedIntentsForSession: Database.Statement | null =
+  null;
+
+/**
+ * True if this session holds any staged intent still awaiting operator
+ * disposition (state IN staged/approved — the same set
+ * sweepStagedIntentsForTerminalSessions reaps). Used by boot orphan recovery
+ * to distinguish a planning session that merely parked awaiting the operator
+ * from one that genuinely finished with nothing pending: only the latter
+ * should settle to 'done' from a stuck-result row.
+ */
+export function hasUndispositionedStagedIntentsForSession(
+  sessionId: string,
+): boolean {
+  _stmtHasUndispositionedStagedIntentsForSession ??= db.prepare<{
+    session_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE session_id = @session_id AND state IN ('staged', 'approved')
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasUndispositionedStagedIntentsForSession.get({
+      session_id: sessionId,
+    }) !== undefined
+  );
+}
+
 /**
  * True if this task has at least one decision.pickOne intent, staged by any
  * session, in a non-withdrawn/non-superseded state. decision.pickOne carries
@@ -7273,9 +10311,10 @@ let _stmtGetLatestNoOpForTask: Database.Statement | null = null;
 
 /**
  * The task's most recent planning.noOp staged intent (by creation order),
- * in whatever state it currently holds. isGroomNoOpSuppressed reads its
- * state/updated_at to decide whether the deliberate "leave it at Backlog"
- * decision it recorded still stands.
+ * in whatever state it currently holds. isNoOpSuppressed reads its
+ * state/updated_at to decide whether the deliberate decision it recorded —
+ * a groom/design "leave it at Backlog", or a standard/ops session's
+ * "already resolved elsewhere" — still stands.
  */
 function getLatestNoOpForTask(taskId: string): StagedIntentRow | undefined {
   _stmtGetLatestNoOpForTask ??= db.prepare<{ task_id: string }>(
@@ -7291,17 +10330,21 @@ function getLatestNoOpForTask(taskId: string): StagedIntentRow | undefined {
 
 /**
  * True while a task's most recent planning.noOp still suppresses
- * auto-grooming candidacy. Only a no-op that reached `committed` represents
- * an accepted operator decision — staged, rejected and superseded carry no
- * acceptance and never suppress. Suppression is derived from the committed
- * intent itself, not from the staging session's status, so it holds after
- * that session reaches a terminal state (see isGroomCandidate). It retires
- * the moment a task_body_updated or task_deps_updated audit event lands for
- * the task after the no-op's commit timestamp (its `updated_at`) — the
- * conditions the no-op was reasoned against changing reopens candidacy with
- * no operator action required.
+ * auto-grooming candidacy AND re-dispatch/orphan-revert candidacy (see
+ * orchestration/planningCandidates.ts, orchestration/AutoLauncher.ts, and
+ * orchestration/OrphanedTaskSweeper.ts — the single predicate every
+ * candidacy/revert check must consult, never a parallel one). Only a no-op
+ * that reached `committed` represents an accepted decision — staged,
+ * rejected and superseded carry no acceptance and never suppress.
+ * Suppression is derived from the committed intent itself, not from the
+ * staging session's status, so it holds after that session reaches a
+ * terminal state (see isGroomCandidate). It retires the moment a
+ * task_body_updated or task_deps_updated audit event lands for the task
+ * after the no-op's commit timestamp (its `updated_at`) — the conditions the
+ * no-op was reasoned against changing reopens candidacy with no operator
+ * action required.
  */
-export function isGroomNoOpSuppressed(taskId: string): boolean {
+export function isNoOpSuppressed(taskId: string): boolean {
   const noOp = getLatestNoOpForTask(taskId);
   if (!noOp || noOp.state !== 'committed') return false;
   return !hasTaskEditSinceTimestamp(taskId, noOp.updated_at);
@@ -7317,7 +10360,7 @@ export type KillSuppressiblePlanningFlow = 'groom' | 'design' | 'ops';
  * True while a task's most recent planning session of `flow` was ended by an
  * explicit operator kill (reason `user_kill`) and no orchestrator-authored
  * edit (task_body_updated / task_deps_updated) has landed for the task since
- * that kill — the deliberate-kill analog of isGroomNoOpSuppressed, generalized
+ * that kill — the deliberate-kill analog of isNoOpSuppressed, generalized
  * across groom/design/ops. A kill is deliberately excluded from the crash
  * budget (SessionManager's UNCOUNTED_REASONS) so it never triggers a revert or
  * needs_attention; without this gate that exclusion left the task fully
@@ -7326,21 +10369,35 @@ export type KillSuppressiblePlanningFlow = 'groom' | 'design' | 'ops';
  * (done/error/launch_failed/etc.) never suppresses candidacy. The
  * session_errored audit event this reads is written unconditionally by
  * markSessionErrored for every terminal session, including kills.
+ *
+ * The most-recent-session lookup matches against sessions.task_id_norm (the
+ * same STORED generated column hasActiveSessionForTask matches against)
+ * instead of a JS `.find()` over every session ever run for `flow`,
+ * account-wide and unbounded by status. That previously fetched and
+ * hydrated the full per-flow session history on every groom/ops/design
+ * candidate that cleared the earlier gates; scoping the query to this
+ * task's task_id_norm turns it into a single indexed lookup for at most
+ * this task's own (small) session history.
  */
 export function isPlanningKillSuppressed(
   taskId: string,
   flow: KillSuppressiblePlanningFlow,
 ): boolean {
-  const norm = normalizeBoardId(taskId);
-  const rows = db
-    .prepare<
-      { flow: string },
-      Session
-    >(`SELECT * FROM sessions WHERE session_type = @flow ORDER BY started_at DESC`)
-    .all({ flow }) as Session[];
-  const session = rows.find(
-    (row) => normalizeBoardId(row.task_id ?? '') === norm,
-  );
+  const norm = taskId.replace(/-/g, '');
+  const session = db
+    .prepare<{ task_id_norm: string; flow: string }, Session>(
+      // INDEXED BY pins this to the task-scoped composite index. Without
+      // it, SQLite's planner — lacking ANALYZE stats on a fresh/small
+      // table — can instead pick idx_sessions_session_type_started_at
+      // (which also satisfies ORDER BY started_at DESC), walking the
+      // flow's entire session history looking for a task_id_norm match
+      // rather than seeking directly to this task's own (small) history.
+      `SELECT * FROM sessions INDEXED BY idx_sessions_task_id_norm_flow_started_at
+       WHERE task_id_norm = @task_id_norm AND session_type = @flow
+       ORDER BY started_at DESC
+       LIMIT 1`,
+    )
+    .get({ task_id_norm: norm, flow }) as Session | undefined;
   if (!session || session.status !== 'killed') return false;
 
   const event = db
@@ -7356,6 +10413,75 @@ export function isPlanningKillSuppressed(
   if (payload.reason !== 'user_kill') return false;
 
   return !hasTaskEditSinceTimestamp(taskId, session.ended_at ?? 0);
+}
+
+/**
+ * True when at least one mcp_connection_established audit event exists for
+ * this session with ts > sinceMs — the detection signal
+ * SessionManager.reconcileMcpUnreachableSessions checks per spawn/respawn
+ * window (see AgentSession.isMcpUnreachable).
+ */
+export function hasMcpConnectionEstablishedSince(
+  sessionId: string,
+  sinceMs: number,
+): boolean {
+  const row = db
+    .prepare<[string, number], { cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM audit_log
+       WHERE event_type = 'mcp_connection_established' AND actor_id = ? AND ts > ?`,
+    )
+    .get(sessionId, sinceMs);
+  return (row?.cnt ?? 0) > 0;
+}
+
+/**
+ * Count of session_mcp_unreachable_respawned audit events recorded for this
+ * session — doubles as both the respawn-attempt counter (next attempt
+ * number = this + 1) and the grace-window anchor's fallback source (see
+ * getLatestMcpUnreachableRespawnTimestamp).
+ */
+export function countMcpUnreachableRespawnAttempts(sessionId: string): number {
+  const row = db
+    .prepare<[string], { cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM audit_log
+       WHERE event_type = 'session_mcp_unreachable_respawned' AND actor_id = ?`,
+    )
+    .get(sessionId);
+  return row?.cnt ?? 0;
+}
+
+/**
+ * ts of the most recent session_mcp_unreachable_respawned event for this
+ * session, or null if it has never been respawned for MCP-unreachability —
+ * the reconciler's grace-window anchor falls back to the session's own
+ * started_at in that case.
+ */
+export function getLatestMcpUnreachableRespawnTimestamp(
+  sessionId: string,
+): number | null {
+  const row = db
+    .prepare<[string], { ts: number | null }>(
+      `SELECT MAX(ts) AS ts FROM audit_log
+       WHERE event_type = 'session_mcp_unreachable_respawned' AND actor_id = ?`,
+    )
+    .get(sessionId);
+  return row?.ts ?? null;
+}
+
+/**
+ * True when a session_mcp_unreachable_respawn_exhausted event has already
+ * been recorded for this session — once true, reconcileMcpUnreachableSessions
+ * leaves the session alone permanently rather than re-surfacing it every
+ * sweep.
+ */
+export function hasMcpUnreachableExhaustedEvent(sessionId: string): boolean {
+  const row = db
+    .prepare<[string], { cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM audit_log
+       WHERE event_type = 'session_mcp_unreachable_respawn_exhausted' AND actor_id = ?`,
+    )
+    .get(sessionId);
+  return (row?.cnt ?? 0) > 0;
 }
 
 /**
@@ -7417,12 +10543,41 @@ export function listStagedIntentsByProject(
   }) as StagedIntentRow[];
 }
 
+let _stmtListStagedIntentsByState: Database.Statement | null = null;
+
+/**
+ * Runs the 'staged' and 'approved' branches as two single-value equality
+ * searches (each merge-sortable) rather than one `state IN (...)` query.
+ * idx_staged_intent_state_created_at(state, created_at) satisfies a
+ * single-value equality's ORDER BY directly from the index, but SQLite
+ * can't do the same for a multi-value IN — it probes each value separately
+ * and falls back to a temp b-tree to merge them into one sorted result. The
+ * two already-sorted branches are merged here instead.
+ */
 export function listAllActiveStagedIntents(): StagedIntentRow[] {
-  return db
-    .prepare(
-      `SELECT * FROM staged_intent WHERE state IN ('staged', 'approved') ORDER BY created_at ASC`,
-    )
-    .all() as StagedIntentRow[];
+  _stmtListStagedIntentsByState ??= db.prepare<{ state: StagedIntentState }>(
+    `SELECT * FROM staged_intent WHERE state = @state ORDER BY created_at ASC`,
+  );
+  const staged = _stmtListStagedIntentsByState.all({
+    state: 'staged',
+  }) as StagedIntentRow[];
+  const approved = _stmtListStagedIntentsByState.all({
+    state: 'approved',
+  }) as StagedIntentRow[];
+
+  const merged: StagedIntentRow[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < staged.length && j < approved.length) {
+    merged.push(
+      staged[i].created_at <= approved[j].created_at
+        ? staged[i++]
+        : approved[j++],
+    );
+  }
+  while (i < staged.length) merged.push(staged[i++]);
+  while (j < approved.length) merged.push(approved[j++]);
+  return merged;
 }
 
 /** The milestone key the ?milestone list lens uses to bucket legacy/unattributable rows — never a real milestone's canonical_short_id. */
@@ -7965,8 +11120,8 @@ export function expireStagedIntentsForSession(
   return result.changes;
 }
 
-let _stmtSweepStagedIntentsForTerminalSessions: Database.Statement | null =
-  null;
+let _stmtSelectSweepableStagedIntents: Database.Statement | null = null;
+let _stmtSupersedeStagedIntentById: Database.Statement | null = null;
 
 /**
  * Backstop sweep for expireStagedIntentsForSession: reaps `staged`/`approved`
@@ -7974,28 +11129,79 @@ let _stmtSweepStagedIntentsForTerminalSessions: Database.Statement | null =
  * (done/error/killed) but never went through the terminal-transition hook —
  * e.g. a process crash, or a write path that predates this reaper. Safe to
  * run repeatedly (idempotent: nothing left to reap after the first pass).
- * Returns the number of rows reaped.
+ * Returns the reaped rows grouped by session, so the caller can tell each
+ * swept session exactly what it lost (see SessionManager's
+ * reapStagedIntentsBackstopSweep, which reuses markSessionErrored's expiry
+ * notice with these rows).
  */
 export function sweepStagedIntentsForTerminalSessions(
   reason: string,
   now: number,
-): number {
-  _stmtSweepStagedIntentsForTerminalSessions ??= db.prepare<{
-    reason: string;
-    now: number;
-  }>(`
-    UPDATE staged_intent
-    SET state = 'superseded', disposition_reason = @reason, updated_at = @now
+): Array<{
+  sessionId: string;
+  expired: Array<Pick<StagedIntentRow, 'id' | 'kind' | 'group_id'>>;
+}> {
+  _stmtSelectSweepableStagedIntents ??= db.prepare(`
+    SELECT id, kind, group_id, session_id FROM staged_intent
     WHERE state IN ('staged', 'approved')
       AND session_id IN (
         SELECT session_id FROM sessions WHERE status IN ('done', 'error', 'killed')
       )
   `);
-  const result = _stmtSweepStagedIntentsForTerminalSessions.run({
-    reason,
-    now,
-  });
-  return result.changes;
+  const rows = _stmtSelectSweepableStagedIntents.all() as Array<{
+    id: string;
+    kind: string;
+    group_id: string | null;
+    session_id: string;
+  }>;
+  if (rows.length === 0) return [];
+
+  // Re-checks the same state/session-terminal predicate as the SELECT above
+  // at write time, so a row that changed state (or whose session left the
+  // terminal set) between the SELECT and this UPDATE — e.g. a concurrent
+  // disposition, or an overlapping sweep invocation — is left untouched
+  // rather than blindly forced to 'superseded'. This preserves the
+  // check-and-set atomicity of the single-statement UPDATE this replaced.
+  _stmtSupersedeStagedIntentById ??= db.prepare<{
+    id: string;
+    reason: string;
+    now: number;
+  }>(`
+    UPDATE staged_intent
+    SET state = 'superseded', disposition_reason = @reason, updated_at = @now
+    WHERE id = @id
+      AND state IN ('staged', 'approved')
+      AND session_id IN (
+        SELECT session_id FROM sessions WHERE status IN ('done', 'error', 'killed')
+      )
+  `);
+  const stmt = _stmtSupersedeStagedIntentById;
+  const actuallySuperseded = db.transaction((items: typeof rows) => {
+    const reaped: typeof rows = [];
+    for (const item of items) {
+      const result = stmt.run({ id: item.id, reason, now });
+      if (result.changes > 0) reaped.push(item);
+    }
+    return reaped;
+  })(rows);
+
+  const bySession = new Map<
+    string,
+    Array<Pick<StagedIntentRow, 'id' | 'kind' | 'group_id'>>
+  >();
+  for (const row of actuallySuperseded) {
+    const existing = bySession.get(row.session_id);
+    const entry = { id: row.id, kind: row.kind, group_id: row.group_id };
+    if (existing) {
+      existing.push(entry);
+    } else {
+      bySession.set(row.session_id, [entry]);
+    }
+  }
+  return Array.from(bySession.entries()).map(([sessionId, expired]) => ({
+    sessionId,
+    expired,
+  }));
 }
 
 /**
@@ -8172,12 +11378,18 @@ export function incrementRouteBackCount(
 // ─── trust-precision signals ───────────────────────────────────────────────
 
 /** The auto-dispatch flows the trust-precision rejection/abstain-rate signal covers. */
-export type TrustPrecisionFlow = 'groom' | 'design' | 'ops' | 'gate-verify';
+export type TrustPrecisionFlow =
+  | 'groom'
+  | 'design'
+  | 'ops'
+  | 'investigate'
+  | 'gate-verify';
 
 const STAGED_INTENT_FLOWS: ReadonlySet<TrustPrecisionFlow> = new Set([
   'groom',
   'design',
   'ops',
+  'investigate',
 ]);
 
 /** A staged intent an operator sent back for revision or outright declined, vs one they approved through. */
@@ -8362,6 +11574,185 @@ export function getFlakeRecoveryMisclassificationRates(
   });
 }
 
+// ─── lane-health rollup ────────────────────────────────────────────────────
+
+/** p50/p90/p99 of a duration distribution, in ms. Null fields mean no samples were available. */
+interface DurationPercentiles {
+  p50: number | null;
+  p90: number | null;
+  p99: number | null;
+  sampleCount: number;
+}
+
+interface RegressedTestSummary {
+  testId: string;
+  name: string;
+  medianDurationMs: number;
+  lastDurationMs: number;
+}
+
+export interface LaneHealthRollup {
+  project: string;
+  totalRuns: number;
+  passRate: number | null;
+  timeoutRate: number | null;
+  /** started_at - requested_at — time spent behind the admission/coalescing semaphore, not test execution. */
+  queueWaitMs: DurationPercentiles;
+  /** finished_at - started_at — actual lane execution time. */
+  executionTimeMs: DurationPercentiles;
+  /** Tests currently flagged is_regressed=1 (per-test median/MAD baseline) among this project's tests — display-only, per Open Question 5. */
+  regressedTests: RegressedTestSummary[];
+  /** Tests currently flagged by the per-test flip-rate flag — see getFlaggedFlakyTestsRollup. */
+  flakyTests: {
+    count: number;
+    tests: FlaggedFlakyTest[];
+  };
+  /**
+   * Count of `test_request_cycle_limit_crossed` audit events for this
+   * project — sessions whose test.request cycle count reached
+   * test_request_cycle_limit. Past the limit the request still
+   * auto-approves (see maybeAutoApproveTestRequest); this is the
+   * non-blocking record of the thrash, not a count of anything paused.
+   */
+  cycleLimitCrossings: number;
+}
+
+/**
+ * Tests currently flagged `is_regressed` for this project — test_perf_baselines
+ * carries its own project_id/name (see the digest extension in schema.ts),
+ * populated by recordTestPerfDigestSample on every ingested sample, so this
+ * no longer needs to join through test_run_results/test_request_runs (which
+ * a passing-only regressed test — regression is duration-based, independent
+ * of pass/fail — would no longer have a row in).
+ */
+let _stmtHasRegressedTests: Database.Statement | null = null;
+
+function getRegressedTestsForProject(
+  projectId: string,
+): RegressedTestSummary[] {
+  // Guard the query: test_perf_baselines is 0 rows until the baseline job
+  // populates it, and the lookup costs nothing to skip when there's nothing
+  // regressed anywhere in the table, project or not.
+  _stmtHasRegressedTests ??= db.prepare(
+    `SELECT 1 FROM test_perf_baselines WHERE is_regressed = 1 LIMIT 1`,
+  );
+  if (!_stmtHasRegressedTests.get()) return [];
+
+  const rows = db
+    .prepare<{ project_id: string }>(
+      `SELECT test_id AS test_id, name AS name,
+              median_duration_ms AS median_duration_ms,
+              last_duration_ms AS last_duration_ms
+       FROM test_perf_baselines
+       WHERE is_regressed = 1 AND project_id = @project_id
+       ORDER BY name ASC`,
+    )
+    .all({ project_id: projectId }) as Array<{
+    test_id: string;
+    name: string;
+    median_duration_ms: number;
+    last_duration_ms: number;
+  }>;
+
+  return rows.map((r) => ({
+    testId: r.test_id,
+    name: r.name,
+    medianDurationMs: r.median_duration_ms,
+    lastDurationMs: r.last_duration_ms,
+  }));
+}
+
+function percentilesOf(samples: number[]): DurationPercentiles {
+  if (samples.length === 0) {
+    return { p50: null, p90: null, p99: null, sampleCount: 0 };
+  }
+  const sorted = [...samples].sort((a, b) => a - b);
+  const at = (p: number): number => {
+    const idx = Math.min(
+      sorted.length - 1,
+      Math.max(0, Math.ceil((p / 100) * sorted.length) - 1),
+    );
+    return sorted[idx];
+  };
+  return {
+    p50: at(50),
+    p90: at(90),
+    p99: at(99),
+    sampleCount: sorted.length,
+  };
+}
+
+/**
+ * Project-scoped lane-health rollup over test_request_runs: pass rate,
+ * timeout rate, and — critically — queue-wait vs execution-time kept as
+ * separate distributions (see requested_at/started_at/finished_at split on
+ * TestRequestRunRow) so 'this suite is slow' (execution-time) can be told
+ * apart from 'this run was starved by a concurrent peer' (queue-wait).
+ * Scoped to finished (non-`running`) runs; `limit` bounds how many of the
+ * most recent finished runs are considered (most-recent-first).
+ */
+export function getLaneHealthRollup(
+  projectId: string,
+  limit = 500,
+): LaneHealthRollup {
+  // Served by idx_test_request_runs_project_finished(project_id,
+  // finished_at DESC) — see schema.ts for why the rowid DESC tiebreaker
+  // can't also be covered by that index.
+  const rows = db
+    .prepare<{ project_id: string; limit: number }>(
+      `SELECT state, requested_at, started_at, finished_at, failure_reason
+       FROM test_request_runs
+       WHERE project_id = @project_id AND state != 'running'
+       ORDER BY finished_at DESC, rowid DESC
+       LIMIT @limit`,
+    )
+    .all({ project_id: projectId, limit }) as Array<{
+    state: TestRequestRunState;
+    requested_at: number | null;
+    started_at: number;
+    finished_at: number | null;
+    failure_reason: TestRequestFailureReason | null;
+  }>;
+
+  const totalRuns = rows.length;
+  const passed = rows.filter((r) => r.state === 'passed').length;
+  const timedOut = rows.filter((r) => r.failure_reason === 'timeout').length;
+
+  const queueWaitSamples = rows
+    .filter((r) => r.requested_at !== null)
+    .map((r) => r.started_at - (r.requested_at as number));
+  const executionTimeSamples = rows
+    .filter((r) => r.finished_at !== null)
+    .map((r) => (r.finished_at as number) - r.started_at);
+
+  const flakyTests = getFlaggedFlakyTestsRollup(projectId);
+
+  return {
+    project: projectId,
+    totalRuns,
+    passRate: totalRuns > 0 ? passed / totalRuns : null,
+    timeoutRate: totalRuns > 0 ? timedOut / totalRuns : null,
+    queueWaitMs: percentilesOf(queueWaitSamples),
+    executionTimeMs: percentilesOf(executionTimeSamples),
+    regressedTests: getRegressedTestsForProject(projectId),
+    flakyTests: { count: flakyTests.length, tests: flakyTests },
+    cycleLimitCrossings: getCycleLimitCrossingsForProject(projectId),
+  };
+}
+
+let _stmtCycleLimitCrossings: Database.Statement | null = null;
+
+function getCycleLimitCrossingsForProject(projectId: string): number {
+  _stmtCycleLimitCrossings ??= db.prepare<{ project_id: string }>(
+    `SELECT COUNT(*) AS cnt FROM audit_log
+     WHERE event_type = 'test_request_cycle_limit_crossed' AND project_id = @project_id`,
+  );
+  const row = _stmtCycleLimitCrossings.get({ project_id: projectId }) as
+    | { cnt: number }
+    | undefined;
+  return row?.cnt ?? 0;
+}
+
 /** The auto-grant kinds the disagreement-rate signal covers. */
 export type AutoGrantKind = 'gate.accrete' | 'seed.stage';
 
@@ -8520,9 +11911,9 @@ export function getArchUnit(id: string): ArchUnitRow | undefined {
 export function insertArchUnit(row: NewArchUnitRow): void {
   _stmtInsertArchUnit ??= db.prepare<ArchUnitRow>(`
     INSERT INTO arch_unit
-      (id, title, kind, topic, regions, status, body, supersedes, superseded_by, version, created_at, updated_at)
+      (id, project, title, kind, topic, regions, status, body, supersedes, superseded_by, version, created_at, updated_at)
     VALUES
-      (@id, @title, @kind, @topic, @regions, @status, @body, @supersedes, @superseded_by, @version, @created_at, @updated_at)
+      (@id, @project, @title, @kind, @topic, @regions, @status, @body, @supersedes, @superseded_by, @version, @created_at, @updated_at)
   `);
   _stmtInsertArchUnit.run({
     ...row,
@@ -8576,6 +11967,10 @@ export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
   const clauses: string[] = [];
   const params: Record<string, string> = {};
 
+  if (query.project) {
+    clauses.push('project = @project');
+    params.project = query.project;
+  }
   if (query.topic) {
     clauses.push('topic = @topic');
     params.topic = query.topic;
@@ -8607,10 +12002,16 @@ export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
  * "topic recognized but currently empty" when a queryArchUnits call by
  * topic returns zero rows.
  */
-export function listArchUnitTopics(): string[] {
-  const rows = db
-    .prepare(`SELECT DISTINCT topic FROM arch_unit ORDER BY topic`)
-    .all() as { topic: string }[];
+export function listArchUnitTopics(project?: string): string[] {
+  const rows = project
+    ? (db
+        .prepare(
+          `SELECT DISTINCT topic FROM arch_unit WHERE project = @project ORDER BY topic`,
+        )
+        .all({ project }) as { topic: string }[])
+    : (db
+        .prepare(`SELECT DISTINCT topic FROM arch_unit ORDER BY topic`)
+        .all() as { topic: string }[]);
   return rows.map((r) => r.topic);
 }
 
@@ -8619,14 +12020,23 @@ export function listArchUnitTopics(): string[] {
  * flattened out of each row's JSON regions array — the live region
  * vocabulary a region substring filter is checked against.
  */
-export function listArchUnitRegions(): string[] {
-  const rows = db
-    .prepare(
-      `SELECT DISTINCT r.value AS region
-       FROM arch_unit, json_each(arch_unit.regions) AS r
-       ORDER BY region`,
-    )
-    .all() as { region: string }[];
+export function listArchUnitRegions(project?: string): string[] {
+  const rows = project
+    ? (db
+        .prepare(
+          `SELECT DISTINCT r.value AS region
+           FROM arch_unit, json_each(arch_unit.regions) AS r
+           WHERE arch_unit.project = @project
+           ORDER BY region`,
+        )
+        .all({ project }) as { region: string }[])
+    : (db
+        .prepare(
+          `SELECT DISTINCT r.value AS region
+           FROM arch_unit, json_each(arch_unit.regions) AS r
+           ORDER BY region`,
+        )
+        .all() as { region: string }[]);
   return rows.map((r) => r.region);
 }
 
@@ -8769,4 +12179,41 @@ export function clearUsageDeferral(window: UsageDeferralWindow): void {
     `DELETE FROM usage_deferral WHERE window = ?`,
   );
   _stmtDeleteUsageDeferral.run(window);
+}
+
+// ─── completing_signal_ledger ────────────────────────────────────────────────
+// New, additive infrastructure for session/sessionStatusDeriver.ts — no
+// existing writer inserts into this table yet. See the schema comment on
+// completing_signal_ledger in schema.ts.
+
+let _stmtInsertCompletingSignal: Database.Statement | null = null;
+let _stmtListCompletingSignalsForSession: Database.Statement | null = null;
+
+/** Append a completing-signal observation for a session. Synchronous, single-row insert — never batched. */
+export function insertCompletingSignal(
+  entry: NewCompletingSignalLedgerRow,
+): void {
+  _stmtInsertCompletingSignal ??= db.prepare<NewCompletingSignalLedgerRow>(`
+    INSERT INTO completing_signal_ledger
+      (session_id, task_id, session_type, signal_class, signal_value, recorded_at)
+    VALUES
+      (@session_id, @task_id, @session_type, @signal_class, @signal_value, @recorded_at)
+  `);
+  _stmtInsertCompletingSignal.run(entry);
+}
+
+/** All completing-signal ledger rows for a session, oldest first. */
+export function listCompletingSignalsForSession(
+  sessionId: string,
+): CompletingSignalLedgerRow[] {
+  _stmtListCompletingSignalsForSession ??= db.prepare<{
+    session_id: string;
+  }>(`
+    SELECT * FROM completing_signal_ledger
+    WHERE session_id = @session_id
+    ORDER BY recorded_at ASC, id ASC
+  `);
+  return _stmtListCompletingSignalsForSession.all({
+    session_id: sessionId,
+  }) as CompletingSignalLedgerRow[];
 }

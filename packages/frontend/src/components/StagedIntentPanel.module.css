@@ -114,6 +114,21 @@
   background: rgba(166, 227, 161, 0.25);
 }
 
+.reclassifyButton {
+  background: rgba(249, 226, 175, 0.15);
+  border: 1px solid rgba(249, 226, 175, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-yellow);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 6px 14px;
+  transition: background 0.15s;
+}
+
+.reclassifyButton:hover {
+  background: rgba(249, 226, 175, 0.25);
+}
+
 .denyButton {
   background: rgba(243, 139, 168, 0.15);
   border: 1px solid rgba(243, 139, 168, 0.4);
@@ -139,8 +154,9 @@
 .rationale {
   margin: 0;
   font-size: 0.82rem;
-  color: var(--text-muted);
-  font-style: italic;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .withdrawnBadge {

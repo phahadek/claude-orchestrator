@@ -1,6 +1,10 @@
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { createInterface } from 'readline';
-import { config, PLANNING_DISALLOWED_TOOLS } from '../config';
+import {
+  config,
+  PLANNING_DISALLOWED_TOOLS,
+  SCHEDULING_DISALLOWED_TOOLS,
+} from '../config';
 import type {
   ISessionRunner,
   RawSessionEvent,
@@ -64,6 +68,7 @@ export class DockerSessionRunner implements ISessionRunner {
   private networkName: string;
   private execProc: ChildProcess | null = null;
   private _killed = false;
+  private _paused = false;
   private _isPlanning = false;
   private _scratchDir: string | undefined;
 
@@ -235,9 +240,8 @@ export class DockerSessionRunner implements ISessionRunner {
         : []),
       '--allowed-tools',
       ...allowedTools,
-      ...(isPlanning
-        ? ['--disallowed-tools', ...PLANNING_DISALLOWED_TOOLS]
-        : []),
+      '--disallowed-tools',
+      ...(isPlanning ? PLANNING_DISALLOWED_TOOLS : SCHEDULING_DISALLOWED_TOOLS),
       ...addDirs.flatMap((dir) => ['--add-dir', dir]),
     ];
 
@@ -379,7 +383,24 @@ export class DockerSessionRunner implements ISessionRunner {
   async kill(): Promise<void> {
     if (this._killed) return;
     this._killed = true;
+    await this._killExecProc();
+    await this._teardown();
+  }
 
+  /**
+   * Pause for a graceful backend restart: stop the `docker exec` process
+   * driving the session but deliberately skip `_teardown()` — the session
+   * container, proxy container, and network must survive so
+   * `resumeOrphanSessions` can `docker exec` back into the same container
+   * on next boot instead of every restart destroying live work.
+   */
+  async pause(): Promise<void> {
+    if (this._killed || this._paused) return;
+    this._paused = true;
+    await this._killExecProc();
+  }
+
+  private async _killExecProc(): Promise<void> {
     if (this.execProc && this.execProc.exitCode === null) {
       try {
         this.execProc.kill('SIGTERM');
@@ -401,8 +422,6 @@ export class DockerSessionRunner implements ISessionRunner {
         });
       });
     }
-
-    await this._teardown();
   }
 
   private async _teardown(): Promise<void> {

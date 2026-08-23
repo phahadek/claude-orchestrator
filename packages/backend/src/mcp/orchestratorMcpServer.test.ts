@@ -56,7 +56,10 @@ import {
   getStagedIntent,
   updateSessionStatus,
   addGrantedCapability,
+  listStagedIntentsByMilestone,
+  UNATTRIBUTED_MILESTONE_BUCKET,
 } from '../db/queries';
+import { insertReport, recordDispatch } from '../investigation/reportStore';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import { createUnit } from '../architecture/ArchUnitStore';
@@ -199,8 +202,10 @@ describe('buildMcpServer — tool surface per session type', () => {
         'architecture.getUnit',
         'architecture.queryUnits',
         'task.getById',
+        'task.queryTasks',
         'pullRequest.getByTaskId',
         'gateSeed.getState',
+        'testHealth.getFlakyHistory',
         'session.getRecord',
         'auditLog.query',
         'sessionEvents.query',
@@ -229,8 +234,10 @@ describe('buildMcpServer — tool surface per session type', () => {
         'architecture.getUnit',
         'architecture.queryUnits',
         'task.getById',
+        'task.queryTasks',
         'pullRequest.getByTaskId',
         'gateSeed.getState',
+        'testHealth.getFlakyHistory',
         'session.getRecord',
         'auditLog.query',
         'sessionEvents.query',
@@ -261,8 +268,10 @@ describe('buildMcpServer — tool surface per session type', () => {
         'architecture.getUnit',
         'architecture.queryUnits',
         'task.getById',
+        'task.queryTasks',
         'pullRequest.getByTaskId',
         'gateSeed.getState',
+        'testHealth.getFlakyHistory',
         'deploy.verdict',
         'gate.reclassify',
         'intent.dispositionStranded',
@@ -277,6 +286,81 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).toContain('intent.dispositionStranded');
     expect(names).not.toContain('review.disposition');
     expect(names).not.toContain('flaky.confirm');
+  });
+
+  it('an investigate-dispatched session (ops session_type, report-batch task_id) gets INVESTIGATE_INTENT_KINDS, not PLANNING_INTENT_KINDS.ops', async () => {
+    const report = insertReport({
+      projectId: 'proj-1',
+      milestoneId: 'ms-13',
+      title: 'Something is wrong',
+      symptomText: 'Sessions crash on startup',
+      createdAt: new Date(0).toISOString(),
+    });
+    insertSession({
+      session_id: 'mcp-investigate-kinds-1',
+      task_id: 'report-batch:batch-kinds-1',
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'ops',
+    });
+    recordDispatch(
+      report.id,
+      'mcp-investigate-kinds-1',
+      new Date(0).toISOString(),
+    );
+
+    const names = await toolNamesFor('mcp-investigate-kinds-1');
+
+    expect(names).toContain('decision.pickOne');
+    expect(names).toContain('task.create');
+    expect(names).toContain('session.requestCapability');
+    expect(names).toContain('intent.withdraw');
+    // planning.noOp is part of INVESTIGATE_INTENT_KINDS (see
+    // planningIntentKinds.ts) — it lets an investigate session record why a
+    // report needed no action, distinct from the ops-flavored planning.noOp
+    // apply path this test otherwise guards against.
+    expect(names).toContain('planning.noOp');
+
+    const opsOnlyKinds = [
+      'journal.setState',
+      'task.setStatus',
+      'task.updateBody',
+      'task.patchBodySection',
+      'gate.verify',
+      'ops.prIntent',
+      // Registered directly off workflow === 'ops' rather than via
+      // PLANNING_INTENT_KINDS.ops — see verdictTools.ts,
+      // gateReclassifyTool.ts, and strandedIntentTool.ts.
+      'deploy.verdict',
+      'gate.reclassify',
+      'intent.dispositionStranded',
+    ];
+    for (const kind of opsOnlyKinds) {
+      expect(names).not.toContain(kind);
+    }
+  });
+
+  it('an ops session with a non-report-batch task_id is unaffected and still gets PLANNING_INTENT_KINDS.ops', async () => {
+    insertSession({
+      session_id: 'mcp-ops-not-investigate-1',
+      task_id: 'notion:11111111-1111-1111-1111-111111111111',
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'ops',
+    });
+
+    const names = await toolNamesFor('mcp-ops-not-investigate-1');
+
+    for (const kind of PLANNING_INTENT_KINDS.ops) {
+      expect(names).toContain(kind);
+    }
+    expect(names).not.toContain('decision.pickOne');
   });
 
   it('a standard session still exposes review.disposition and flaky.confirm, not the architecture read tools, but does get the Tier-A read tools', async () => {
@@ -296,11 +380,13 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).not.toContain('architecture.getUnit');
     expect(names).not.toContain('architecture.queryUnits');
     expect(names).not.toContain('task.getById');
+    expect(names).not.toContain('task.queryTasks');
     expect(names).not.toContain('gate.verify');
     expect(names).not.toContain('gate.reclassify');
     expect(names).not.toContain('intent.dispositionStranded');
     expect(names).toContain('pullRequest.getByTaskId');
     expect(names).toContain('gateSeed.getState');
+    expect(names).toContain('testHealth.getFlakyHistory');
   });
 });
 
@@ -317,6 +403,7 @@ describe('architecture.getUnit / architecture.queryUnits', () => {
       session_type: 'groom',
     });
     const unit = createUnit({
+      project: 'proj-1',
       title: 'Test Invariant',
       kind: 'invariant',
       topic: 'system-architecture',
@@ -498,6 +585,62 @@ describe('buildMcpServer — ctx.milestone attribution', () => {
     await client.close();
     await server.close();
   });
+
+  it("an investigate session's staged intent is attributed to its batch's milestone, not left unattributed", async () => {
+    const report = insertReport({
+      projectId: 'proj-1',
+      milestoneId: 'ms-13',
+      title: 'Something is wrong',
+      symptomText: 'Sessions crash on startup',
+      createdAt: new Date(0).toISOString(),
+    });
+    insertSession({
+      session_id: 'mcp-investigate-1',
+      task_id: 'report-batch:batch-mcp-1',
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'ops',
+    });
+    recordDispatch(report.id, 'mcp-investigate-1', new Date(0).toISOString());
+
+    const server = buildMcpServer('mcp-investigate-1', new SessionManager());
+    const [serverTransport, clientTransport] =
+      InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+
+    const result = await client.callTool({
+      name: 'session.requestCapability',
+      arguments: {
+        payload: {
+          capability: 'Bash(ls)',
+          plan: 'list files to confirm the finding is real',
+          evidence: 'the investigation requires inspecting repo contents',
+        },
+      },
+    });
+    const content = (result.content as { type: string; text: string }[])[0];
+    const staged = JSON.parse(content.text) as { id: string };
+    const row = getStagedIntent(staged.id);
+    expect(row?.milestone).toBe('M13');
+
+    const attributed = listStagedIntentsByMilestone('proj-1', 'M13');
+    expect(attributed.map((r) => r.id)).toContain(staged.id);
+    const unattributed = listStagedIntentsByMilestone(
+      'proj-1',
+      UNATTRIBUTED_MILESTONE_BUCKET,
+    );
+    expect(unattributed.map((r) => r.id)).not.toContain(staged.id);
+
+    await client.close();
+    await server.close();
+  });
 });
 
 describe('orchestratorMcpServer — MCP lifecycle instrumentation', () => {
@@ -639,7 +782,7 @@ describe('orchestratorMcpServer — MCP lifecycle instrumentation', () => {
       .set('Authorization', `Bearer ${token}`)
       .set('Accept', 'application/json, text/event-stream')
       .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(410);
 
     const { entries } = queryAuditLogByProject('proj-lifecycle-revoked', {
       eventType: 'mcp_stage_credential_rejected',

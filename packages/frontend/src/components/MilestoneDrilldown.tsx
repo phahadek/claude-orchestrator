@@ -10,6 +10,7 @@ import { useTaskPage } from '../hooks/useTaskPage';
 import { gateApi } from '../api/gate';
 import type { GateItemDetail } from '../api/gate';
 import { SessionPanel } from './SessionPanel';
+import type { DepthReviewStatus } from './ReviewDetailView';
 import {
   taskIdFromIntent,
   taskIdForIntentDisplay,
@@ -21,25 +22,6 @@ import type { MilestoneStackSelection } from './MilestoneDecisionStack';
 import styles from './MilestoneDrilldown.module.css';
 
 export type DrilldownMode = 'task' | 'session';
-
-/**
- * A persisted depth-review verdict for one of the milestone's PRs, filtered
- * to non-passing verdicts only — a passing verdict carries nothing an
- * operator needs to act on. `escalated` distinguishes a finding that
- * replaced the PR's pause reason with `depth_review_escalation` (needs an
- * operator disposition) from one that was routed back to the originating
- * session as auto-fix feedback (no operator action pending).
- */
-export interface DepthReviewDisposition {
-  prNumber: number;
-  prUrl: string;
-  repo: string;
-  taskName: string | null;
-  verdict: string;
-  summary: string;
-  failingDimensions: Array<{ name: string; notes: string }>;
-  escalated: boolean;
-}
 
 interface Props {
   selection: MilestoneStackSelection | null;
@@ -54,8 +36,8 @@ interface Props {
   /** Which of task/session occupies the panel — controlled by the parent so scroll-follow and card switches can reset it. */
   mode: DrilldownMode;
   onModeChange: (mode: DrilldownMode) => void;
-  /** Non-passing depth-review verdicts for the milestone's PRs — a record surface, independent of the current stack selection. */
-  depthDispositions?: DepthReviewDisposition[];
+  /** Escalated/routed depth-review dispositions, keyed by the depth_review session id they belong to — looked up for the currently-selected session only, so a depth_review session's own detail view can show its disposition. */
+  depthReviewStatusBySessionId?: Record<string, DepthReviewStatus>;
 }
 
 /**
@@ -214,7 +196,7 @@ export function MilestoneDrilldown({
   project = null,
   mode,
   onModeChange,
-  depthDispositions = [],
+  depthReviewStatusBySessionId = {},
 }: Props) {
   const isGateSelection =
     selection?.type === 'intent' && isGateVerifyIntent(selection.intent);
@@ -247,25 +229,31 @@ export function MilestoneDrilldown({
     ? null
     : fallbackSessionTaskId;
 
-  const taskId = isGateSelection
-    ? null
-    : selection?.type === 'task'
-      ? selection.task.taskId
-      : selection
-        ? taskIdForIntentDisplay(selection.intent, safeFallbackSessionTaskId)
-        : null;
+  const taskId =
+    isGateSelection || selection?.type === 'report'
+      ? null
+      : selection?.type === 'task'
+        ? selection.task.taskId
+        : selection
+          ? taskIdForIntentDisplay(selection.intent, safeFallbackSessionTaskId)
+          : null;
 
   const resolvedTask: TaskView | null =
     selection?.type === 'task'
       ? selection.task
       : (tasks.find((t) => t.taskId === taskId) ?? null);
 
+  // A report has no task ref at all — its session comes from the most
+  // recently dispatched investigation session (dispatchedSessions is
+  // already most-recent-first, per reportStore.ts).
   const sessionId =
     selection?.type === 'task'
       ? (selection.task.codeSession?.sessionId ?? null)
-      : (selection?.intent.sessionId ??
-        resolvedTask?.codeSession?.sessionId ??
-        null);
+      : selection?.type === 'report'
+        ? (selection.report.dispatchedSessions[0]?.sessionId ?? null)
+        : (selection?.intent.sessionId ??
+          resolvedTask?.codeSession?.sessionId ??
+          null);
 
   const {
     markdown: taskMarkdown,
@@ -279,57 +267,9 @@ export function MilestoneDrilldown({
     notFound: sessionNotFound,
   } = useResolvedSession(sessionId, sessions);
 
-  const depthSection =
-    depthDispositions.length > 0 ? (
-      <div
-        className={styles.depthSection}
-        data-testid="milestone-depth-dispositions"
-      >
-        {depthDispositions.map((d) => (
-          <div
-            key={d.prNumber}
-            className={styles.depthEntry}
-            data-testid={`depth-disposition-${d.prNumber}`}
-          >
-            <div className={styles.depthEntryHeader}>
-              <a
-                href={d.prUrl}
-                target="_blank"
-                rel="noreferrer"
-                className={styles.depthEntryPr}
-              >
-                PR #{d.prNumber}
-              </a>
-              {d.taskName && (
-                <span className={styles.depthEntryTask}>{d.taskName}</span>
-              )}
-              <span
-                className={
-                  d.escalated
-                    ? styles.depthBadgeEscalated
-                    : styles.depthBadgeRouted
-                }
-                data-testid={`depth-disposition-${d.prNumber}-badge`}
-              >
-                {d.escalated ? 'Escalated to operator' : 'Routed to session'}
-              </span>
-            </div>
-            <ul className={styles.depthDimensions}>
-              {d.failingDimensions.map((dim) => (
-                <li key={dim.name}>
-                  <strong>{dim.name}</strong>: {dim.notes}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
-      </div>
-    ) : null;
-
   if (!selection) {
     return (
       <div className={styles.drilldownEmptyWrap}>
-        {depthSection}
         <div
           className={styles.emptyState}
           data-testid="milestone-drilldown-empty"
@@ -342,7 +282,6 @@ export function MilestoneDrilldown({
 
   return (
     <div className={styles.drilldown} data-testid="milestone-drilldown">
-      {depthSection}
       <div className={styles.modeTabs} role="tablist">
         <button
           type="button"
@@ -426,6 +365,17 @@ export function MilestoneDrilldown({
               </div>
             )}
         </div>
+      ) : mode === 'task' && selection.type === 'report' ? (
+        <div
+          className={styles.taskReader}
+          data-testid="milestone-report-reader"
+        >
+          <div className={styles.headingRow}>
+            <div className={styles.heading}>{selection.report.title}</div>
+            <span className={styles.headingType}>{selection.report.state}</span>
+          </div>
+          <p className={styles.taskMarkdown}>{selection.report.symptom_text}</p>
+        </div>
       ) : mode === 'task' ? (
         <div className={styles.taskReader} data-testid="milestone-task-reader">
           <div className={styles.headingRow}>
@@ -491,6 +441,9 @@ export function MilestoneDrilldown({
               setSessionFavorited={setSessionFavorited}
               project={project}
               showDecisionPanel={false}
+              depthReviewStatus={
+                depthReviewStatusBySessionId[resolvedSession.sessionId] ?? null
+              }
             />
           )}
         </div>

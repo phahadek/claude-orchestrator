@@ -1,7 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { CrashBudget } from '../crashBudget';
 
 describe('CrashBudget', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('backs off with an escalating cooldown and escalates after N consecutive events', () => {
     const budget = new CrashBudget({
       backoffScheduleMs: [10, 20, 30],

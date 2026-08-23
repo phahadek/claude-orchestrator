@@ -56,6 +56,12 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'gate-verify flow arm/disarm control',
   },
+  'POST /api/milestones/:project/flaky-investigation': {
+    audience: 'known-gap',
+    reason: 'operator-driven grouped flaky Investigation filing control',
+    fixTask:
+      'Replace auto-filed per-test flaky remediation with operator-driven grouped Investigation filing (frontend sibling task)',
+  },
 
   // -- planningLaunch.ts -----------------------------------------------------
   'POST /api/planning/launch': {
@@ -304,6 +310,35 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'staged-intent answer action',
   },
+
+  // -- reportState.ts -------------------------------------------------------
+  'POST /api/reports': {
+    audience: 'known-gap',
+    reason: 'no frontend intake surface exists yet for investigation_report',
+    fixTask: 'investigation_report intake UI (follow-on task)',
+  },
+  'PATCH /api/reports/:id': {
+    audience: 'known-gap',
+    reason: 'no frontend intake surface exists yet for investigation_report',
+    fixTask: 'investigation_report intake UI (follow-on task)',
+  },
+  'POST /api/reports/:id/commit': {
+    audience: 'known-gap',
+    reason: 'no frontend intake surface exists yet for investigation_report',
+    fixTask: 'investigation_report intake UI (follow-on task)',
+  },
+  'POST /api/reports/:id/abandon': {
+    audience: 'known-gap',
+    reason: 'no frontend intake surface exists yet for investigation_report',
+    fixTask: 'investigation_report intake UI (follow-on task)',
+  },
+
+  // -- investigate.ts ---------------------------------------------------------
+  'POST /api/investigate/launch': {
+    audience: 'known-gap',
+    reason: 'no frontend dispatch surface exists yet for investigate batches',
+    fixTask: 'investigate dispatch UI (follow-on task)',
+  },
 };
 
 /**
@@ -329,6 +364,8 @@ export const ROUTE_FILE_MOUNT_PREFIX: Record<string, string> = {
   'gateState.ts': '/api',
   'seedState.ts': '/api',
   'stagedIntents.ts': '/api',
+  'reportState.ts': '/api',
+  'investigate.ts': '/api',
 };
 
 /**

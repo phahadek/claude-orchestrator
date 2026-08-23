@@ -213,7 +213,7 @@ export function buildOrchestratorClaudeMd(
 
 ## Lifecycle
 
-> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR) instead of stopping silently — a silent stop re-dispatches the task forever.**
 
 ${
   taskContent
@@ -260,18 +260,13 @@ The supervisor's "Pause your work" message isn't a nudge in this sense: stopping
 
 When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
 
-Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Only disposition a failure as flaky after clearing this bar, in order:
+Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite to establish flakiness — the backend already holds a cross-SHA outcome corpus and adjudicates against it. Call \`mcp__orchestrator__flaky_confirm\` once with what you observed, instead of pushing a commit:
 
-1. Call \`test_request\`; confirm it reproduces there, not just in the CI log.
-2. Call \`test_request\` again after any fix; confirm it passes clean.
-3. Confirm the failure is unrelated to your diff (e.g. infra contention, test-ordering/parallelism interference, a timing race) — not a real regression you introduced.
+- \`gate\`: \`"ci"\`, \`"f2"\`, or \`"analyze"\` — whichever gate failed.
+- \`reason\`: one line naming what you observed and why it's unrelated to your diff.
+- \`testId\` / \`testName\`: required for \`"ci"\`/\`"f2"\` — identifies the failing test so the backend can check it against the corpus and your diff.
 
-If all three hold, call the \`mcp__orchestrator__flaky_confirm\` tool instead of pushing a commit, with:
-
-- \`gate\`: \`"ci"\` for a failing GitHub check or \`"f2"\` for the orchestrator-run test gate — whichever gate actually failed.
-- \`reason\`: one line naming what you ran and what you concluded.
-
-The orchestrator re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention, so only call this when you've genuinely cleared the verification bar above, not as a way to skip investigating.
+The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
 
 ---
 

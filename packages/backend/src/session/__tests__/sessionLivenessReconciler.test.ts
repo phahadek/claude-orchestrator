@@ -25,19 +25,28 @@ vi.mock('../../logger', () => ({
 
 import { db } from '../../db/db.js';
 import { recordEvent } from '../../audit/AuditLog';
+import * as queries from '../../db/queries.js';
 import {
   insertSession,
   countLivePlanningSessions,
   insertEvent,
+  updateSessionStatus,
+  listCompletingSignalsForSession,
 } from '../../db/queries.js';
 import { runtimeSettings } from '../../config';
 import {
   reconcileSessionLiveness,
   reconcileNonPlanningSessionLiveness,
+  reconcileOrphanProcesses,
 } from '../sessionLivenessReconciler';
+import { updateSessionWorktreePath } from '../../db/queries';
+import type { ClaudeSessionProcess } from '../processLiveness';
 
 const NOW = 1_700_000_000_000;
 const OLD_START = NOW - 60 * 60_000; // 1 hour before "now" — well past the grace floor
+// Backend "up" for well over the post-boot settle window, unless a test
+// overrides bootTimeMs itself to exercise that gate directly.
+const BOOT_LONG_AGO = NOW - 60 * 60_000;
 
 beforeEach(() => {
   db.prepare('DELETE FROM sessions').run();
@@ -69,6 +78,7 @@ describe('reconcileSessionLiveness', () => {
     seedSession({ sessionId: 'ghost-running', status: 'running' });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -78,12 +88,23 @@ describe('reconcileSessionLiveness', () => {
       .prepare('SELECT status FROM sessions WHERE session_id = ?')
       .get('ghost-running') as { status: string };
     expect(row.status).toBe('killed');
+
+    // The liveness-sweep kill write goes through updateSessionStatus, which
+    // now mirrors it into completing_signal_ledger — see the shared-primitives
+    // dual-write migration.
+    const signals = listCompletingSignalsForSession('ghost-running');
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toMatchObject({
+      signal_class: 'legacy_status_write',
+      signal_value: 'killed',
+    });
   });
 
   it('reconciles an idle session with no live OS process to a terminal status', () => {
     seedSession({ sessionId: 'ghost-idle', status: 'idle' });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -105,6 +126,7 @@ describe('reconcileSessionLiveness', () => {
     });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => true,
       nowFn: () => NOW,
     });
@@ -125,6 +147,7 @@ describe('reconcileSessionLiveness', () => {
     const inMemoryMap = new Map<string, true>([['stale-map-entry', true]]);
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
       evictSessionMapEntry: (sessionId) => inMemoryMap.delete(sessionId),
@@ -139,6 +162,7 @@ describe('reconcileSessionLiveness', () => {
     expect(countLivePlanningSessions()).toBe(1);
 
     reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -151,6 +175,7 @@ describe('reconcileSessionLiveness', () => {
     seedSession({ sessionId: 'ghost-2', status: 'idle' });
 
     reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -183,6 +208,7 @@ describe('reconcileSessionLiveness', () => {
     });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -195,6 +221,7 @@ describe('reconcileSessionLiveness', () => {
     seedSession({ sessionId: 'api-mode-session', status: 'running' });
 
     const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -204,6 +231,236 @@ describe('reconcileSessionLiveness', () => {
       .prepare('SELECT status FROM sessions WHERE session_id = ?')
       .get('api-mode-session') as { status: string };
     expect(row.status).toBe('running');
+  });
+
+  it('records examined = N, alive = N, terminalized = 0 when the whole candidate set reports alive', () => {
+    seedSession({ sessionId: 'alive-1', status: 'running' });
+    seedSession({ sessionId: 'alive-2', status: 'running' });
+    seedSession({ sessionId: 'alive-3', status: 'idle' });
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(3);
+    expect(result.alive).toBe(3);
+    expect(result.reconciled.length).toBe(0);
+  });
+
+  it('records examined = 0 for an empty candidate set — distinguishable from an all-alive sweep', () => {
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(0);
+    expect(result.alive).toBe(0);
+    expect(result.reconciled.length).toBe(0);
+  });
+
+  it('counts a row whose liveness check fails open (unreadable ps) as alive, and does not terminalize it', () => {
+    seedSession({ sessionId: 'fail-open-row', status: 'running' });
+
+    // isSessionProcessAlive returns true on an unreadable ps — simulate that
+    // fail-open verdict directly via the injected isProcessAlive dep.
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.alive).toBe(1);
+    expect(result.reconciled).toEqual([]);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('fail-open-row') as { status: string };
+    expect(row.status).toBe('running');
+  });
+
+  it('items_processed (reconciled.length) still equals the terminalized count, unchanged in meaning', () => {
+    seedSession({ sessionId: 'dead-1', status: 'running' });
+    seedSession({ sessionId: 'dead-2', status: 'running' });
+    seedSession({ sessionId: 'alive-4', status: 'running' });
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: (sessionId) => sessionId === 'alive-4',
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled.length).toBe(2);
+    expect(result.examined).toBe(3);
+    expect(result.alive).toBe(1);
+  });
+
+  it('routes a dead planning session through tryMarkPlanningTerminal instead of writing a bare killed status, when the hook reports it terminalized the session itself', () => {
+    seedSession({ sessionId: 'settled-investigate', status: 'running' });
+    const tryMarkPlanningTerminal = vi.fn().mockImplementation(() => {
+      // Simulate PlanningOrchestrator.tryTerminalizeIfComplete's own write.
+      updateSessionStatus('settled-investigate', 'done', NOW);
+      return true;
+    });
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      tryMarkPlanningTerminal,
+    });
+
+    expect(tryMarkPlanningTerminal).toHaveBeenCalledWith('settled-investigate');
+    expect(result.reconciled).toEqual(['settled-investigate']);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('settled-investigate') as { status: string };
+    expect(row.status).toBe('done');
+  });
+
+  it('falls back to writing killed when tryMarkPlanningTerminal reports the session was not eligible', () => {
+    seedSession({ sessionId: 'still-pending', status: 'running' });
+    const tryMarkPlanningTerminal = vi.fn().mockReturnValue(false);
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      tryMarkPlanningTerminal,
+    });
+
+    expect(tryMarkPlanningTerminal).toHaveBeenCalledWith('still-pending');
+    expect(result.reconciled).toEqual(['still-pending']);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('still-pending') as { status: string };
+    expect(row.status).toBe('killed');
+  });
+
+  it('sets terminal_completion_reason naming the reap when a genuinely dead session is reconciled', () => {
+    seedSession({ sessionId: 'reason-ghost', status: 'running' });
+
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    const row = db
+      .prepare(
+        'SELECT terminal_completion_reason FROM sessions WHERE session_id = ?',
+      )
+      .get('reason-ghost') as { terminal_completion_reason: string | null };
+    expect(row.terminal_completion_reason).toBe(
+      'liveness_reconciler_process_not_found',
+    );
+  });
+
+  it('does not revoke credentials for any quiet session when the backend has been up for less than the settle window', () => {
+    // Quiet for 21 minutes — well past the activity grace floor — but the
+    // backend itself only booted 30 seconds ago (e.g. right after a
+    // restart, before the in-memory session/process map has rehydrated).
+    seedSession({
+      sessionId: 'quiet-across-restart',
+      status: 'running',
+      startedAt: NOW - 21 * 60_000,
+    });
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: NOW - 30_000,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual([]);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('quiet-across-restart') as { status: string };
+    expect(row.status).toBe('running');
+  });
+
+  it('resumes normal reap behavior for a genuinely dead session once the settle window has elapsed', () => {
+    seedSession({
+      sessionId: 'dead-after-settle',
+      status: 'running',
+      startedAt: NOW - 21 * 60_000,
+    });
+
+    const result = reconcileSessionLiveness({
+      // Backend booted well over the settle window ago.
+      bootTimeMs: NOW - 5 * 60_000,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual(['dead-after-settle']);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('dead-after-settle') as { status: string };
+    expect(row.status).toBe('killed');
+  });
+
+  it('does not treat a session with an undispositioned staged intent as inactive, even past the activity grace floor', () => {
+    seedSession({
+      sessionId: 'blocked-on-staged-intent',
+      status: 'running',
+      startedAt: NOW - 21 * 60_000,
+    });
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      hasUndispositionedStagedIntents: (sessionId) =>
+        sessionId === 'blocked-on-staged-intent',
+    });
+
+    expect(result.reconciled).toEqual([]);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('blocked-on-staged-intent') as { status: string };
+    expect(row.status).toBe('running');
+  });
+
+  it('reaps a quiet session with no staged intents even when the hook is wired', () => {
+    seedSession({
+      sessionId: 'quiet-no-staged-intent',
+      status: 'running',
+      startedAt: NOW - 21 * 60_000,
+    });
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      hasUndispositionedStagedIntents: () => false,
+    });
+
+    expect(result.reconciled).toEqual(['quiet-no-staged-intent']);
+  });
+
+  it('never consults tryMarkPlanningTerminal for the non-planning population', () => {
+    insertSession({
+      session_id: 'standard-ghost',
+      task_id: 'task-standard-ghost',
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: OLD_START,
+      session_type: 'standard',
+      task_name: null,
+    } as never);
+    const tryMarkPlanningTerminal = vi.fn().mockReturnValue(true);
+
+    reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      tryMarkPlanningTerminal,
+    });
+
+    expect(tryMarkPlanningTerminal).not.toHaveBeenCalled();
   });
 });
 
@@ -216,6 +473,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -239,6 +497,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -254,6 +513,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -269,6 +529,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => true,
       nowFn: () => NOW,
     });
@@ -288,6 +549,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -308,6 +570,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -324,6 +587,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -339,6 +603,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     });
 
     reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
       isProcessAlive: () => false,
       nowFn: () => NOW,
     });
@@ -353,5 +618,463 @@ describe('reconcileNonPlanningSessionLiveness', () => {
         }),
       }),
     );
+  });
+
+  it('records examined = N, alive = N, terminalized = 0 when the whole candidate set reports alive', () => {
+    seedSession({
+      sessionId: 'np-alive-1',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    seedSession({
+      sessionId: 'np-alive-2',
+      status: 'running',
+      sessionType: 'review',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(2);
+    expect(result.alive).toBe(2);
+    expect(result.reconciled.length).toBe(0);
+  });
+
+  it('records examined = 0 for an empty candidate set — distinguishable from an all-alive sweep', () => {
+    const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(0);
+    expect(result.alive).toBe(0);
+    expect(result.reconciled.length).toBe(0);
+  });
+
+  it('counts a row whose liveness check fails open (unreadable ps) as alive, and does not terminalize it', () => {
+    seedSession({
+      sessionId: 'np-fail-open-row',
+      status: 'running',
+      sessionType: 'standard',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
+
+    expect(result.alive).toBe(1);
+    expect(result.reconciled).toEqual([]);
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('np-fail-open-row') as { status: string };
+    expect(row.status).toBe('running');
+  });
+
+  it('items_processed (reconciled.length) still equals the terminalized count, unchanged in meaning', () => {
+    seedSession({
+      sessionId: 'np-dead-1',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    seedSession({
+      sessionId: 'np-alive-3',
+      status: 'running',
+      sessionType: 'review',
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: (sessionId) => sessionId === 'np-alive-3',
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled.length).toBe(1);
+    expect(result.examined).toBe(2);
+    expect(result.alive).toBe(1);
+  });
+});
+
+describe('reconcileOrphanProcesses', () => {
+  function proc(
+    overrides: Partial<ClaudeSessionProcess>,
+  ): ClaudeSessionProcess {
+    return { pid: 1234, sessionId: null, etimeSeconds: 10_000, ...overrides };
+  }
+
+  // Instant, no real delay — tests must never actually wait out
+  // KILL_ESCALATION_WAIT_MS / POST_SIGKILL_SETTLE_MS.
+  const instantWait = async () => {};
+
+  it('reaps a process whose row is terminal (done) past the grace floor', async () => {
+    seedSession({ sessionId: 'orphan-done', status: 'running' });
+    updateSessionStatus('orphan-done', 'done', NOW - 60 * 60_000);
+
+    const killed: Array<[number, NodeJS.Signals]> = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 111, sessionId: 'orphan-done' })],
+      killProcess: (pid, signal) => killed.push([pid, signal]),
+      isPidAlive: () => false, // dies right after SIGTERM
+      waitMs: instantWait,
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(1);
+    expect(result.reaped).toBe(1);
+    expect(result.skippedByGrace).toBe(0);
+    expect(result.survivedEscalation).toBe(0);
+    expect(killed).toEqual([[111, 'SIGTERM']]);
+  });
+
+  it.each(['error', 'killed', 'superseded'])(
+    'reaps a process whose row is terminal (%s) past the grace floor',
+    async (status) => {
+      seedSession({ sessionId: `orphan-${status}`, status: 'running' });
+      updateSessionStatus(`orphan-${status}`, status, NOW - 60 * 60_000);
+
+      const killed: number[] = [];
+      const result = await reconcileOrphanProcesses({
+        scanProcesses: () => [
+          proc({ pid: 222, sessionId: `orphan-${status}` }),
+        ],
+        killProcess: (pid) => killed.push(pid),
+        isPidAlive: () => false,
+        waitMs: instantWait,
+        nowFn: () => NOW,
+      });
+
+      expect(result.reaped).toBe(1);
+      expect(killed).toEqual([222]);
+    },
+  );
+
+  it('never reaps a process whose row is non-terminal', async () => {
+    seedSession({ sessionId: 'live-row', status: 'running' });
+
+    const killed: number[] = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 333, sessionId: 'live-row' })],
+      killProcess: (pid) => killed.push(pid),
+      isPidAlive: () => false,
+      waitMs: instantWait,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reaped).toBe(0);
+    expect(killed).toEqual([]);
+  });
+
+  it('never treats a process with no resolvable session uuid (claude remote-control) as a candidate', async () => {
+    const killed: number[] = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [
+        // Exact cmdline shape from processLiveness.scanClaudeSessionProcesses
+        // for `/usr/bin/claude remote-control` — no --session-id/--resume flag,
+        // so sessionId comes back null.
+        { pid: 444, sessionId: null, etimeSeconds: 1_000_000 },
+      ],
+      killProcess: (pid) => killed.push(pid),
+      isPidAlive: () => false,
+      waitMs: instantWait,
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(0);
+    expect(result.reaped).toBe(0);
+    expect(killed).toEqual([]);
+  });
+
+  it('never reaps a process whose sessionId resolves to no row — e.g. a Remote Control cloud session id', async () => {
+    const killed: number[] = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [
+        // Remote Control sessions carry a cse_-prefixed cloud session id
+        // that never has a row in this DB — it must never be reaped.
+        proc({
+          pid: 555,
+          sessionId: 'cse_01HoHJzea111waLofaBDYimz',
+          etimeSeconds: 10_000,
+        }),
+      ],
+      killProcess: (pid) => killed.push(pid),
+      isPidAlive: () => false,
+      waitMs: instantWait,
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(1);
+    expect(result.reaped).toBe(0);
+    expect(result.skippedByGrace).toBe(0);
+    expect(killed).toEqual([]);
+  });
+
+  it('skips a terminal row whose ended_at is inside the grace floor, counting it in skippedByGrace', async () => {
+    seedSession({ sessionId: 'just-terminalized', status: 'running' });
+    updateSessionStatus('just-terminalized', 'done', NOW - 5_000);
+
+    const killed: number[] = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 777, sessionId: 'just-terminalized' })],
+      killProcess: (pid) => killed.push(pid),
+      isPidAlive: () => false,
+      waitMs: instantWait,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reaped).toBe(0);
+    expect(result.skippedByGrace).toBe(1);
+    expect(killed).toEqual([]);
+  });
+
+  it('is a no-op in api session mode', async () => {
+    runtimeSettings.session_mode = 'api';
+    const killed: number[] = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 888, sessionId: 'whatever' })],
+      killProcess: (pid) => killed.push(pid),
+      isPidAlive: () => false,
+      waitMs: instantWait,
+      nowFn: () => NOW,
+    });
+
+    expect(result).toEqual({
+      examined: 0,
+      reaped: 0,
+      skippedByGrace: 0,
+      survivedEscalation: 0,
+    });
+    expect(killed).toEqual([]);
+  });
+
+  it('writes no session status — status-writer spy must not be called', async () => {
+    seedSession({ sessionId: 'no-status-write', status: 'running' });
+    updateSessionStatus('no-status-write', 'done', NOW - 60 * 60_000);
+
+    const statusWriterSpy = vi.spyOn(queries, 'updateSessionStatus');
+    statusWriterSpy.mockClear();
+
+    await reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 999, sessionId: 'no-status-write' })],
+      killProcess: () => {},
+      isPidAlive: () => false,
+      waitMs: instantWait,
+      nowFn: () => NOW,
+    });
+
+    expect(statusWriterSpy).not.toHaveBeenCalled();
+    statusWriterSpy.mockRestore();
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('no-status-write') as { status: string };
+    expect(row.status).toBe('done');
+  });
+
+  it('evicts a stale in-memory map entry for a reaped session', async () => {
+    seedSession({ sessionId: 'evict-me', status: 'running' });
+    updateSessionStatus('evict-me', 'killed', NOW - 60 * 60_000);
+    const inMemoryMap = new Map<string, true>([['evict-me', true]]);
+
+    await reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 1010, sessionId: 'evict-me' })],
+      killProcess: () => {},
+      isPidAlive: () => false,
+      waitMs: instantWait,
+      evictSessionMapEntry: (sessionId) => inMemoryMap.delete(sessionId),
+      nowFn: () => NOW,
+    });
+
+    expect(inMemoryMap.has('evict-me')).toBe(false);
+  });
+
+  it('reports examined and reaped separately, so a zero is distinguishable from a no-op sweep', async () => {
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [],
+      nowFn: () => NOW,
+    });
+
+    expect(result).toEqual({
+      examined: 0,
+      reaped: 0,
+      skippedByGrace: 0,
+      survivedEscalation: 0,
+    });
+  });
+
+  it('reaping a terminal session also kills its cgroup — reaches a test-command tree (pytest, uv run task test) that carries no --session-id/--resume of its own and so is invisible to scanProcesses', async () => {
+    seedSession({ sessionId: 'orphan-with-tree', status: 'running' });
+    updateSessionStatus('orphan-with-tree', 'done', NOW - 60 * 60_000);
+    updateSessionWorktreePath(
+      'orphan-with-tree',
+      '/srv/app/.claude/worktrees/orphan-with-tree',
+    );
+
+    const cgroupKills: string[] = [];
+    const worktreeKills: string[] = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 111, sessionId: 'orphan-with-tree' })],
+      killProcess: () => {},
+      isPidAlive: () => false,
+      waitMs: instantWait,
+      killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
+      killWorktreeProcessTree: (worktreePath) => {
+        worktreeKills.push(worktreePath);
+        return 1;
+      },
+      nowFn: () => NOW,
+    });
+
+    expect(result.reaped).toBe(1);
+    expect(cgroupKills).toEqual(['orphan-with-tree']);
+    expect(worktreeKills).toEqual([
+      '/srv/app/.claude/worktrees/orphan-with-tree',
+    ]);
+  });
+
+  it('never kills a cgroup or worktree-path tree for a process with no resolvable session uuid (claude remote-control)', async () => {
+    const cgroupKills: string[] = [];
+    const worktreeKills: string[] = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [
+        { pid: 444, sessionId: null, etimeSeconds: 1_000_000 },
+      ],
+      killProcess: () => {},
+      isPidAlive: () => false,
+      waitMs: instantWait,
+      killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
+      killWorktreeProcessTree: (worktreePath) => {
+        worktreeKills.push(worktreePath);
+        return 1;
+      },
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(0);
+    expect(cgroupKills).toEqual([]);
+    expect(worktreeKills).toEqual([]);
+  });
+
+  it('never kills a cgroup or worktree-path tree for a session uuid resolving to no row — e.g. a Remote Control cloud session id', async () => {
+    const cgroupKills: string[] = [];
+    const worktreeKills: string[] = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [
+        proc({
+          pid: 555,
+          sessionId: 'cse_01HoHJzea111waLofaBDYimz',
+          etimeSeconds: 10_000,
+        }),
+      ],
+      killProcess: () => {},
+      isPidAlive: () => false,
+      waitMs: instantWait,
+      killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
+      killWorktreeProcessTree: (worktreePath) => {
+        worktreeKills.push(worktreePath);
+        return 1;
+      },
+      nowFn: () => NOW,
+    });
+
+    expect(result.reaped).toBe(0);
+    expect(cgroupKills).toEqual([]);
+    expect(worktreeKills).toEqual([]);
+  });
+
+  it('never kills a cgroup or worktree-path tree for a process whose row is non-terminal (live session)', async () => {
+    seedSession({ sessionId: 'live-row-2', status: 'running' });
+    updateSessionWorktreePath(
+      'live-row-2',
+      '/srv/app/.claude/worktrees/live-row-2',
+    );
+
+    const cgroupKills: string[] = [];
+    const worktreeKills: string[] = [];
+    await reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 666, sessionId: 'live-row-2' })],
+      killProcess: () => {},
+      isPidAlive: () => false,
+      waitMs: instantWait,
+      killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
+      killWorktreeProcessTree: (worktreePath) => {
+        worktreeKills.push(worktreePath);
+        return 1;
+      },
+      nowFn: () => NOW,
+    });
+
+    expect(cgroupKills).toEqual([]);
+    expect(worktreeKills).toEqual([]);
+  });
+
+  it('escalates to SIGKILL when the process ignores SIGTERM, and confirms death before counting it reaped', async () => {
+    seedSession({ sessionId: 'ignores-sigterm', status: 'running' });
+    updateSessionStatus('ignores-sigterm', 'done', NOW - 60 * 60_000);
+
+    const signalsSent: NodeJS.Signals[] = [];
+    // Alive after SIGTERM (first check), dead after SIGKILL (second check).
+    let aliveCheckCount = 0;
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 2020, sessionId: 'ignores-sigterm' })],
+      killProcess: (_pid, signal) => signalsSent.push(signal),
+      isPidAlive: () => {
+        aliveCheckCount++;
+        return aliveCheckCount === 1;
+      },
+      waitMs: instantWait,
+      nowFn: () => NOW,
+    });
+
+    expect(signalsSent).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(result.reaped).toBe(1);
+    expect(result.survivedEscalation).toBe(0);
+  });
+
+  it('does not count a process as reaped when it survives both SIGTERM and SIGKILL', async () => {
+    seedSession({ sessionId: 'survives-everything', status: 'running' });
+    updateSessionStatus('survives-everything', 'done', NOW - 60 * 60_000);
+
+    const signalsSent: NodeJS.Signals[] = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [
+        proc({ pid: 3030, sessionId: 'survives-everything' }),
+      ],
+      killProcess: (_pid, signal) => signalsSent.push(signal),
+      isPidAlive: () => true, // never dies, e.g. stuck in D-state
+      waitMs: instantWait,
+      nowFn: () => NOW,
+    });
+
+    expect(signalsSent).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(result.reaped).toBe(0);
+    expect(result.survivedEscalation).toBe(1);
+  });
+
+  it('still runs the cgroup and worktree-tree backstops even when the pid-level escalation cannot confirm death', async () => {
+    seedSession({ sessionId: 'survives-with-tree', status: 'running' });
+    updateSessionStatus('survives-with-tree', 'done', NOW - 60 * 60_000);
+    updateSessionWorktreePath(
+      'survives-with-tree',
+      '/srv/app/.claude/worktrees/survives-with-tree',
+    );
+
+    const cgroupKills: string[] = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [
+        proc({ pid: 4040, sessionId: 'survives-with-tree' }),
+      ],
+      killProcess: () => {},
+      isPidAlive: () => true,
+      waitMs: instantWait,
+      killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
+      nowFn: () => NOW,
+    });
+
+    expect(result.survivedEscalation).toBe(1);
+    expect(cgroupKills).toEqual(['survives-with-tree']);
   });
 });

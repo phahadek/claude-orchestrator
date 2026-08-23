@@ -9,7 +9,13 @@
  * 'split', which is not a flow and must not be added to FlowId — 'split' is
  * routed by groomFlip.ts, not by an arm.
  */
-export type FlowId = 'groom' | 'gate-verify' | 'design' | 'ops' | 'docs';
+export type FlowId =
+  | 'groom'
+  | 'gate-verify'
+  | 'design'
+  | 'ops'
+  | 'docs'
+  | 'investigate';
 
 export const FLOW_IDS: readonly FlowId[] = [
   'groom',
@@ -17,6 +23,7 @@ export const FLOW_IDS: readonly FlowId[] = [
   'design',
   'ops',
   'docs',
+  'investigate',
 ];
 
 export function isFlowId(value: string): value is FlowId {
@@ -38,6 +45,7 @@ export const DEFAULT_ARM: Record<FlowId, boolean> = {
   design: false,
   ops: false,
   docs: false,
+  investigate: false,
 };
 
 /**
@@ -45,10 +53,17 @@ export const DEFAULT_ARM: Record<FlowId, boolean> = {
  * isPlanningSession session type; gate-verify has no session type of its
  * own — it invokes the GateItemVerifier dispatch (gate/gateReconciler.ts's
  * scheduled tick, or the operator-triggered route in routes/gateState.ts).
+ * investigate is likewise sibling to gate-verify, not a `{kind:'session',
+ * sessionType}` variant — its dispatch doesn't go through
+ * DispatchTriggerEvaluator's per-project Notion-task-board candidate scan;
+ * it scans committed investigation_report rows instead (see
+ * investigation/investigationReconciler.ts's scheduled tick, or the
+ * operator-triggered route in routes/investigate.ts).
  */
 export type FlowDispatch =
   | { kind: 'session'; sessionType: 'groom' | 'design' | 'ops' | 'docs' }
-  | { kind: 'gate-verify' };
+  | { kind: 'gate-verify' }
+  | { kind: 'investigate' };
 
 export const FLOW_DISPATCH: Record<FlowId, FlowDispatch> = {
   groom: { kind: 'session', sessionType: 'groom' },
@@ -56,4 +71,5 @@ export const FLOW_DISPATCH: Record<FlowId, FlowDispatch> = {
   ops: { kind: 'session', sessionType: 'ops' },
   docs: { kind: 'session', sessionType: 'docs' },
   'gate-verify': { kind: 'gate-verify' },
+  investigate: { kind: 'investigate' },
 };
