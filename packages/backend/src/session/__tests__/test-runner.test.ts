@@ -630,6 +630,10 @@ describe('runTestCommands — cgroup-scoped teardown verification', () => {
   const TESTS_CGROUP_PATH = '/sys/fs/cgroup/orchestrator.service/tests';
 
   beforeEach(() => {
+    // Mock call history (e.g. rmdirSync) is not cleared between tests by
+    // default — without this, an earlier test's cgroup-cleanup call would
+    // leak into a later test's "was never called" assertion.
+    vi.clearAllMocks();
     _setTestsPathForTesting(TESTS_CGROUP_PATH);
     // mainCgroupPath left null so spawnIntoTestRunCgroup takes its
     // unrelocated fallback path — these tests exercise kill/verify only.
