@@ -70,15 +70,13 @@ import {
   runTestCommands,
   collapseProgressRuns,
   truncateForDelivery,
+  TEARDOWN_VERIFY_RETRY_MS,
 } from '../test-runner';
 import {
   _setTestsPathForTesting,
   _setMainPathForTesting,
   _resetForTesting,
 } from '../sessionCgroup';
-
-/** Mirrors test-runner.ts's own TEARDOWN_VERIFY_RETRY_MS — kept local since that constant isn't exported. */
-const TEARDOWN_VERIFY_RETRY_MS = 200;
 
 /**
  * A proc whose stdout streams once (after listeners attach) but that never

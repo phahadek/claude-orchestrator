@@ -138,7 +138,7 @@ export function getChildRssMb(
 
 /** Bounded retries for verifyRunTeardown — a cgroup.kill signal needs a moment to actually reap before cgroup.procs reflects it as empty. */
 const TEARDOWN_VERIFY_MAX_ATTEMPTS = 3;
-const TEARDOWN_VERIFY_RETRY_MS = 200;
+export const TEARDOWN_VERIFY_RETRY_MS = 200;
 
 /**
  * Confirms no process survives in this run's cgroup before settle()
