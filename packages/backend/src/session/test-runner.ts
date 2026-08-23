@@ -16,6 +16,13 @@ export interface TestCommandResult {
   output: string;
   timedOut?: boolean;
   oomKilled?: boolean;
+  /**
+   * True when at least one command's child process could not be spawned at
+   * all (ENOENT, EAGAIN, fork failure) — an infrastructure failure, not a
+   * test verdict: the command never ran, so `passed: false` here must not be
+   * read as "the suite ran and failed".
+   */
+  spawnFailed?: boolean;
 }
 
 export interface TestRunOptions {
@@ -114,6 +121,7 @@ function runCommandWithTimeout(
   output: string;
   timedOut: boolean;
   oomKilled: boolean;
+  spawnFailed: boolean;
 }> {
   return new Promise((resolve) => {
     // Strip production data-plane env before the child spawns. A test
@@ -172,13 +180,14 @@ function runCommandWithTimeout(
       output: string;
       timedOut: boolean;
       oomKilled: boolean;
+      spawnFailed?: boolean;
     }) {
       if (settled) return;
       settled = true;
       if (timer !== null) clearTimeout(timer);
       if (rssPoller !== null) clearInterval(rssPoller);
       if (graceTimer !== null) clearTimeout(graceTimer);
-      resolve(result);
+      resolve({ spawnFailed: false, ...result });
     }
 
     // Escalate: SIGINT the process group so the runner can reach its normal
@@ -273,11 +282,16 @@ function runCommandWithTimeout(
     });
 
     proc.on('error', (err) => {
+      // The process could never be spawned at all (ENOENT, EAGAIN, fork
+      // failure) — an infrastructure failure distinct from any test verdict:
+      // no command ever ran, so this must not be mistaken for a test
+      // failure downstream (see TestCommandResult.spawnFailed).
       settle({
         exitCode: 1,
-        output: err.message,
+        output: `[test-runner] spawn failed: ${err.message}`,
         timedOut: false,
         oomKilled: false,
+        spawnFailed: true,
       });
     });
   });
@@ -305,14 +319,19 @@ export async function runTestCommands(
   let allPassed = true;
   let anyTimedOut = false;
   let anyOomKilled = false;
+  let anySpawnFailed = false;
 
   for (const cmd of commands) {
     log(`[test-runner] running: ${cmd}\n`);
-    const { exitCode, output, timedOut, oomKilled } =
+    const { exitCode, output, timedOut, oomKilled, spawnFailed } =
       await runCommandWithTimeout(cmd, worktreePath, timeoutMs, maxRssMb);
     outputParts.push(`$ ${cmd}\n${output}`);
 
-    if (oomKilled) {
+    if (spawnFailed) {
+      log(`[test-runner] SPAWN FAILED: ${cmd}\n`);
+      allPassed = false;
+      anySpawnFailed = true;
+    } else if (oomKilled) {
       log(
         `[test-runner] OOM_KILL after exceeding ${maxRssMb} MB RSS: ${cmd}\n`,
       );
@@ -337,6 +356,7 @@ export async function runTestCommands(
     output: outputParts.join('\n'),
     timedOut: anyTimedOut,
     oomKilled: anyOomKilled,
+    spawnFailed: anySpawnFailed,
   };
 }
 

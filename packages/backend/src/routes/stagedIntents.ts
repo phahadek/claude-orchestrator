@@ -5776,6 +5776,15 @@ export async function triggerTestRequestExecution(
     }
   }
 
+  // An execution failure (spawn ENOENT/EAGAIN/fork failure — the runner
+  // never started) is an infrastructure outcome, not a test verdict: no
+  // command ran, so base-attributable filtering (which reasons about
+  // whether *the tests that ran* are the base's fault) does not apply, and
+  // this must never be charged against the session's retry budget — mirrors
+  // the precedent below for the inconclusive/unknown base-attribution
+  // outcomes.
+  const executionFailed = !!result.spawnFailed;
+
   // Filter a raw failure against the project's current base-branch health
   // before anything downstream (commit annotation, audit event, session
   // feedback) sees `result.passed` — a confirmed base-attributable failure
@@ -5784,7 +5793,7 @@ export async function triggerTestRequestExecution(
   let filterResult: Awaited<
     ReturnType<typeof filterBaseAttributableFailures>
   > | null = null;
-  if (runId && !result.passed) {
+  if (runId && !result.passed && !executionFailed) {
     const project = getProjectById(intent.projectId);
     const run = getTestRequestRunById(runId);
     if (project && run) {
@@ -5805,7 +5814,8 @@ export async function triggerTestRequestExecution(
     result = { ...result, passed: filterResult.passed };
   }
   if (
-    (filterResult?.outcome === 'inconclusive' ||
+    (executionFailed ||
+      filterResult?.outcome === 'inconclusive' ||
       filterResult?.outcome === 'unknown') &&
     intent.sessionId
   ) {
@@ -5849,12 +5859,13 @@ export async function triggerTestRequestExecution(
   const structuredResult = runId
     ? getTestRequestRunById(runId)?.structured_result
     : null;
-  const output =
-    (filterResult &&
-      filterResult.outcome !== 'unfiltered' &&
-      renderBaseAttributableFilterDigest(filterResult)) ||
-    (structuredResult && buildTestResultDigest(structuredResult)) ||
-    truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
+  const output = executionFailed
+    ? `[test.request] The test run could not be executed — the test runner process failed to start, so no test result exists. This is an infrastructure failure, not a test failure; it does not indicate your changes are broken. Retry the request.\n\n${truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP)}`
+    : (filterResult &&
+        filterResult.outcome !== 'unfiltered' &&
+        renderBaseAttributableFilterDigest(filterResult)) ||
+      (structuredResult && buildTestResultDigest(structuredResult)) ||
+      truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
   try {
     await sessionManager.enqueueFeedback(
       intent.sessionId,
@@ -5867,6 +5878,7 @@ export async function triggerTestRequestExecution(
         ...(filterResult?.outcome === 'inconclusive'
           ? { inconclusive: true }
           : {}),
+        ...(executionFailed ? { executionFailed: true } : {}),
       }),
     );
   } catch (err) {
