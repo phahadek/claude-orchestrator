@@ -6,6 +6,7 @@ import type { Scheduler } from './Scheduler';
 import {
   getPRBySessionId,
   setPauseReason,
+  setTaskPauseReason,
   insertPauseInterval,
   closePauseInterval,
   upsertStuckSessionTimer,
@@ -103,10 +104,16 @@ function isSessionTerminal(status: string | null | undefined): boolean {
  * activity. Three escalating responses:
  *
  *   1. Notify threshold — emit a toast (orchestration continues).
- *   2. Pause threshold — inject a pause message, set pause_reason on the PR,
- *      arm a hard-stop window.
- *   3. Hard-stop — if any tool_use arrives within the hard-stop window after
- *      pause, force-kill the session process.
+ *   2. Pause threshold — inject a pause message, set pause_reason on the PR
+ *      (and a durable task_pause_reasons entry regardless of whether a PR
+ *      exists yet), arm a hard-stop window.
+ *   3. Hard-stop — if a tool_use arrives within the hard-stop window after
+ *      pause, force-kill the session process immediately (checkHardStop).
+ *      If the window instead elapses with no further activity at all (a
+ *      session gone completely silent, not just between tool calls),
+ *      handleHardStopWindowExpiry force-kills it too — unless there's a
+ *      still-live, in-flight tool_use, which the intra-tool heartbeat sweep
+ *      (see runHeartbeatSweep) is already protecting.
  *
  * Both thresholds measure time since the session's most recent activity, not
  * time since launch: every session_event (of any kind — tool_use, text,
@@ -551,13 +558,10 @@ export class StuckSessionMonitor {
           this.persistTimerState(row.session_id);
         } else {
           state.hardStopDeadline = deadline;
-          state.hardStopTimer = setTimeout(() => {
-            const s = this.timers.get(row.session_id);
-            if (s) {
-              s.hardStopArmed = false;
-              s.hardStopTimer = null;
-            }
-          }, remaining);
+          state.hardStopTimer = setTimeout(
+            () => this.handleHardStopWindowExpiry(row.session_id),
+            remaining,
+          );
           state.hardStopTimer.unref?.();
         }
       }
@@ -860,13 +864,10 @@ export class StuckSessionMonitor {
     if (state.hardStopRemainingMs !== null) {
       const remaining = state.hardStopRemainingMs;
       state.hardStopDeadline = now + remaining;
-      state.hardStopTimer = setTimeout(() => {
-        const s = this.timers.get(sessionId);
-        if (s) {
-          s.hardStopArmed = false;
-          s.hardStopTimer = null;
-        }
-      }, remaining);
+      state.hardStopTimer = setTimeout(
+        () => this.handleHardStopWindowExpiry(sessionId),
+        remaining,
+      );
       state.hardStopTimer.unref?.();
       state.hardStopRemainingMs = null;
     }
@@ -948,6 +949,15 @@ export class StuckSessionMonitor {
     if (pr) {
       setPauseReason(pr.pr_number, pr.repo, 'stuck_timeout');
     }
+    // Durable, PR-independent pause signal: written unconditionally (not
+    // just when getPRBySessionId comes up empty) so a session that later
+    // opens a PR still has a task_pause_reasons row until something clears
+    // it — same durability the PR-keyed write above gets. This is what lets
+    // needs_attention (TaskStatusEngine / attentionSignals) see a stuck
+    // pre-PR session, which pull_requests.pause_reason alone can't reach.
+    if (session.task_id) {
+      setTaskPauseReason(session.task_id, 'stuck_timeout', 'stuck_timeout');
+    }
     insertPauseInterval(sessionId, 'stuck_timeout');
 
     try {
@@ -975,13 +985,10 @@ export class StuckSessionMonitor {
     state.hardStopArmed = true;
     state.hardStopDeadline = Date.now() + windowMs;
     if (state.hardStopTimer) clearTimeout(state.hardStopTimer);
-    state.hardStopTimer = setTimeout(() => {
-      const s = this.timers.get(sessionId);
-      if (s) {
-        s.hardStopArmed = false;
-        s.hardStopTimer = null;
-      }
-    }, windowMs);
+    state.hardStopTimer = setTimeout(
+      () => this.handleHardStopWindowExpiry(sessionId),
+      windowMs,
+    );
     state.hardStopTimer.unref?.();
     this.persistTimerState(sessionId);
 
@@ -991,6 +998,55 @@ export class StuckSessionMonitor {
       taskName: state.taskName,
       ...(pr ? { prNumber: pr.pr_number, repo: pr.repo } : {}),
     });
+  }
+
+  /**
+   * Fires when the hard-stop window armed by firePause elapses without
+   * checkHardStop having already fired (which clears hardStopTimer/disarms
+   * on its own). Previously this only disarmed — a session that goes fully
+   * silent after the pause nudge (no tool_use, no session_event of any
+   * kind) was never force-killed by anything, so it ran forever holding a
+   * subprocess and its sessions row stuck non-terminal.
+   *
+   * Must not kill a session that's mid-tool-call at expiry time: that's the
+   * intra-tool heartbeat case (pendingToolUseCount > 0 with a live OS
+   * process), which runHeartbeatSweep already protects by continuously
+   * resetting notify/pause — this window's disarm was only ever a guard
+   * against a stray tool_use race right after pause, not a liveness
+   * verdict, so silence on that case is correct and must be preserved.
+   */
+  private handleHardStopWindowExpiry(sessionId: string): void {
+    const state = this.timers.get(sessionId);
+    if (!state) return;
+    state.hardStopArmed = false;
+    state.hardStopTimer = null;
+    this.persistTimerState(sessionId);
+
+    if (state.pendingToolUseCount > 0 && isSessionProcessAlive(sessionId)) {
+      return;
+    }
+
+    const session = getSession(sessionId);
+    if (isSessionTerminal(session?.status)) {
+      this.clear(sessionId);
+      return;
+    }
+
+    logger.warn(
+      `[StuckSessionMonitor] force-killing session ${sessionId.slice(0, 8)} — hard-stop window expired with no further activity after pause`,
+    );
+    this.broadcast({
+      type: 'stuck_session_killed',
+      sessionId,
+      taskName: state.taskName,
+    });
+    this.sessionManager
+      .kill(sessionId)
+      .catch((err: unknown) =>
+        logger.warn(
+          `[StuckSessionMonitor] kill failed for ${sessionId}: ${(err as Error).message}`,
+        ),
+      );
   }
 
   private checkHardStop(sessionId: string): void {

@@ -314,14 +314,17 @@ describe('StuckSessionMonitor', () => {
     );
   });
 
-  it('does not hard-stop if no tool_use arrives within the window', () => {
+  it('does not immediately hard-stop from a tool_use that arrives after the window already expired', () => {
     const sm = makeMockSessionManager();
     const broadcast = vi.fn();
     new StuckSessionMonitor(sm, broadcast);
 
     fireMessage(sm, sessionStarted());
     vi.advanceTimersByTime(120_000); // pause fires
-    vi.advanceTimersByTime(31_000); // past window
+    vi.advanceTimersByTime(31_000); // past window — the window's own expiry
+    // already force-killed the session (see the force-kill test below), so
+    // sm.kill was called exactly once by the time it expired.
+    sm.kill.mockClear();
 
     fireMessage(sm, {
       type: 'session_event',
@@ -329,7 +332,28 @@ describe('StuckSessionMonitor', () => {
       eventType: 'tool_use',
       content: '',
     });
+    // checkHardStop's own kill trigger no longer applies — hardStopArmed was
+    // already cleared when the window expired — so this specific tool_use
+    // event doesn't trigger a second, redundant kill call.
     expect(sm.kill).not.toHaveBeenCalled();
+  });
+
+  it('force-kills a session that goes completely silent through the hard-stop window — no tool_use, no events at all', () => {
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    new StuckSessionMonitor(sm, broadcast);
+
+    fireMessage(sm, sessionStarted());
+    vi.advanceTimersByTime(120_000); // pause fires, arms the hard-stop window
+    vi.advanceTimersByTime(31_000); // window expires with zero further activity
+
+    expect(sm.kill).toHaveBeenCalledWith(SESSION_ID);
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'stuck_session_killed',
+        sessionId: SESSION_ID,
+      }),
+    );
   });
 
   it('clears state on session_ended', () => {
