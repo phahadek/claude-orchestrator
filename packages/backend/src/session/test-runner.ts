@@ -10,6 +10,7 @@ import path from 'path';
 import { platform } from 'process';
 import { minimatch } from 'minimatch';
 import type { StructuredTestResult } from '../db/types';
+import { spawnIntoTestsCgroup } from './sessionCgroup';
 
 export interface TestCommandResult {
   passed: boolean;
@@ -136,7 +137,12 @@ function runCommandWithTimeout(
         ? { shell: true, cwd, env }
         : { shell: true, cwd, env, detached: true };
 
-    const proc = spawn(cmd, spawnOpts);
+    // Relocated into the delegated tests/ cgroup for the duration of the
+    // spawn call so this subprocess (and any grandchild it forks
+    // synchronously, e.g. a temp postgres cluster) is born under that
+    // bounded leaf rather than main/ — see spawnIntoTestsCgroup's doc
+    // comment for why post-spawn placement can't close this race.
+    const proc = spawnIntoTestsCgroup(() => spawn(cmd, spawnOpts));
     let chunks: Buffer[] = [];
     let headDroppedChars = 0;
     let settled = false;

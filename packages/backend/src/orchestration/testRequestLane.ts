@@ -587,12 +587,17 @@ async function executeTestRequestRun(
 }
 
 /**
- * Boot-time crash recovery: a `running` row left over from a prior process
- * (the backend was killed/crashed mid-run) can never resolve its own
- * coalescing promise again — that in-memory state died with the process — so
- * it is marked `failed` rather than left stuck. The request that started it
- * already spent its cycle-counter increment at stage time, so this does not
- * grant a free retry against the escalation budget.
+ * Crash recovery: a `running` row left over from a prior process (the
+ * backend was killed/crashed mid-run, or its subprocess was killed/reaped
+ * out from under it) can never resolve its own coalescing promise again —
+ * that in-memory state died with the process — so it is marked `failed`
+ * (failure_reason 'execution_failed') rather than left stuck. The request
+ * that started it already spent its cycle-counter increment at stage time,
+ * so this does not grant a free retry against the escalation budget.
+ * Called at boot (bootSequence.ts) and again by
+ * SessionManager.reapMainCgroupOrphans whenever the periodic main/ orphan
+ * sweep actually reaps something — a boot-only call would leave a run
+ * stuck 'running' for the rest of a long uptime.
  */
 export function recoverInterruptedTestRequestRuns(): void {
   const running = listRunningTestRequestRuns();
@@ -602,7 +607,7 @@ export function recoverInterruptedTestRequestRuns(): void {
     );
     const output =
       '[testRequestLane] backend restarted mid-run — treated as failed';
-    completeTestRequestRun(run.id, 'failed', output);
+    completeTestRequestRun(run.id, 'failed', output, 'execution_failed');
     clearSupersededStructuredResults(run.project_id, run.content_hash, run.id);
     broadcastRunStatus({
       runId: run.id,

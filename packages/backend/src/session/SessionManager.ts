@@ -40,6 +40,7 @@ import {
   killSessionCgroup,
   reapOrphanedMainCgroupProcesses,
 } from './sessionCgroup';
+import { recoverInterruptedTestRequestRuns } from '../orchestration/testRequestLane';
 import {
   revokeStageCredential,
   mintStageCredential,
@@ -3280,6 +3281,30 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Kills any process sitting in main/ (the backend's own resting cgroup)
+   * with ppid=1 (see reapOrphanedMainCgroupProcesses) and, when it reaped
+   * anything, recovers every test_request_runs row still 'running' as
+   * failed — the same crash-recovery recoverInterruptedTestRequestRuns
+   * already performs at boot (see bootSequence.ts), invoked here too since
+   * a reaped orphan is exactly the signal that some earlier run's
+   * subprocess tree outlived the bookkeeping that was supposed to settle
+   * its row. Called both from resumeOrphanSessions (boot) and periodically
+   * by server.ts's main_cgroup_orphan_sweep Scheduler job — a boot-only
+   * sweep cannot bound a process that leaks mid-uptime, which is exactly
+   * what produced the incident this method exists to close.
+   */
+  reapMainCgroupOrphans(): number {
+    const reaped = reapOrphanedMainCgroupProcesses();
+    if (reaped > 0) {
+      logger.info(
+        `[SessionManager] reaped ${reaped} orphaned process(es) from main/ cgroup`,
+      );
+      recoverInterruptedTestRequestRuns();
+    }
+    return reaped;
+  }
+
+  /**
    * Detect sessions still marked 'running' in the DB after a server restart
    * and resume them via --resume so they come back to life instead of lingering
    * as unkillable ghosts. Called from server.ts after migrations and imports.
@@ -3291,12 +3316,8 @@ export class SessionManager extends EventEmitter {
     // structurally unreachable by killSessionCgroup, since that only ever
     // touches sessions/<sessionId>/. See sessionCgroup.ts's
     // reapOrphanedMainCgroupProcesses for why ppid=1 is the safe signal.
-    const reapedOrphans = reapOrphanedMainCgroupProcesses();
-    if (reapedOrphans > 0) {
-      logger.info(
-        `[SessionManager] reaped ${reapedOrphans} orphaned process(es) from main/ cgroup at boot`,
-      );
-    }
+    // Same sweep also runs periodically post-boot — see reapMainCgroupOrphans.
+    this.reapMainCgroupOrphans();
 
     // Close the loop on deferred done-transitions that were never applied —
     // e.g. the backend restarted between markSessionDone's pending write and

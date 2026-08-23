@@ -708,6 +708,24 @@ scheduler.register({
     return { items_processed: result.processed };
   },
 });
+// Periodic counterpart to resumeOrphanSessions' boot-only reap of the
+// backend's own main/ cgroup: a process that gets reparented to ppid=1 (a
+// daemonizing grandchild that escaped a session/test-lane placement) mid
+// uptime was previously invisible to any sweep until the next restart —
+// exactly the gap that let a leaked test.request subprocess swap the host
+// unbounded for the incident this job exists to close. Also recovers any
+// test_request_runs row still 'running' whenever it reaps something — see
+// SessionManager.reapMainCgroupOrphans.
+scheduler.register({
+  name: 'main_cgroup_orphan_sweep',
+  intervalMs: 10 * 60_000,
+  runOnBoot: false,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const reaped = sessionManager.reapMainCgroupOrphans();
+    return { items_processed: reaped };
+  },
+});
 // Session-map reconciler: defense-in-depth sweep dropping stale in-memory
 // this.sessions entries whose DB row is terminal or missing, so a slot leak
 // from any (known or future) code path self-heals without operator

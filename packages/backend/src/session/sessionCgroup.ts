@@ -7,6 +7,7 @@ import { logger } from '../logger';
 const CGROUP_ROOT = '/sys/fs/cgroup';
 const MAIN_LEAF = 'main';
 const SESSIONS_LEAF = 'sessions';
+const TESTS_LEAF = 'tests';
 
 /** Absolute path of the delegated sessions/ cgroup once set up; null when unavailable. */
 let sessionsCgroupPath: string | null = null;
@@ -14,6 +15,17 @@ let sessionsCgroupPath: string | null = null;
 /** Absolute path of the delegated main/ cgroup (the backend's own resting
  * place) once set up; null when unavailable. */
 let mainCgroupPath: string | null = null;
+
+/**
+ * Absolute path of the delegated tests/ cgroup — a sessions/-sibling leaf
+ * bounding every test-request-lane subprocess (session-owned or not, see
+ * spawnIntoTestsCgroup) once set up; null when unavailable. Kept distinct
+ * from sessions/ per the locked decision: a test run's bound must not
+ * depend on whether it happens to have an owning session, and commingling
+ * test workers into a session's own sub-cgroup would give killSessionCgroup
+ * a kill scope wider than "this session's own agent process tree".
+ */
+let testsCgroupPath: string | null = null;
 
 /** Derived cgroup memory limits, in bytes. */
 export interface SessionCgroupLimits {
@@ -64,20 +76,19 @@ function readOwnCgroupPath(): string | null {
   return path.join(CGROUP_ROOT, relPath);
 }
 
-function writeLimits(limits: SessionCgroupLimits): void {
-  if (!sessionsCgroupPath) return;
+function writeLimitsTo(dir: string, limits: SessionCgroupLimits): void {
+  fs.writeFileSync(path.join(dir, 'memory.max'), String(limits.maxBytes));
+  fs.writeFileSync(path.join(dir, 'memory.high'), String(limits.highBytes));
   fs.writeFileSync(
-    path.join(sessionsCgroupPath, 'memory.max'),
-    String(limits.maxBytes),
-  );
-  fs.writeFileSync(
-    path.join(sessionsCgroupPath, 'memory.high'),
-    String(limits.highBytes),
-  );
-  fs.writeFileSync(
-    path.join(sessionsCgroupPath, 'memory.swap.max'),
+    path.join(dir, 'memory.swap.max'),
     limits.denySwap ? '0' : 'max',
   );
+}
+
+/** Applies the current derived limits to every delegated leaf that's set up. */
+function writeLimits(limits: SessionCgroupLimits): void {
+  if (sessionsCgroupPath) writeLimitsTo(sessionsCgroupPath, limits);
+  if (testsCgroupPath) writeLimitsTo(testsCgroupPath, limits);
 }
 
 /**
@@ -115,8 +126,10 @@ export function setupSessionCgroup(): void {
 
     const mainPath = path.join(ownPath, MAIN_LEAF);
     const sessionsPath = path.join(ownPath, SESSIONS_LEAF);
+    const testsPath = path.join(ownPath, TESTS_LEAF);
     fs.mkdirSync(mainPath, { recursive: true });
     fs.mkdirSync(sessionsPath, { recursive: true });
+    fs.mkdirSync(testsPath, { recursive: true });
 
     // Move the backend's own process into main/ first — cgroup-v2's
     // no-internal-processes rule forbids enabling subtree_control while
@@ -129,20 +142,22 @@ export function setupSessionCgroup(): void {
 
     mainCgroupPath = mainPath;
     sessionsCgroupPath = sessionsPath;
+    testsCgroupPath = testsPath;
     writeLimits(currentLimits());
     logger.info(
-      `[sessionCgroup] delegated cgroup ready at ${ownPath} — sessions bounded via ${sessionsPath}`,
+      `[sessionCgroup] delegated cgroup ready at ${ownPath} — sessions bounded via ${sessionsPath}, test-lane runs bounded via ${testsPath}`,
     );
   } catch (err) {
     sessionsCgroupPath = null;
     mainCgroupPath = null;
+    testsCgroupPath = null;
     warnNoop((err as Error).message);
   }
 }
 
 /** Re-applies memory limits from current runtimeSettings; no-op when not set up. */
 export function reapplySessionCgroupLimits(): void {
-  if (!sessionsCgroupPath) return;
+  if (!sessionsCgroupPath && !testsCgroupPath) return;
   try {
     writeLimits(currentLimits());
   } catch (err) {
@@ -224,15 +239,58 @@ export function spawnIntoSessionCgroup<T>(
   spawnFn: () => T,
 ): T {
   if (!sessionsCgroupPath || !mainCgroupPath) return spawnFn();
-  const dir = sessionCgroupDir(sessionId);
+  return relocateForSpawn(
+    sessionCgroupDir(sessionId),
+    `session ${sessionId.slice(0, 8)}`,
+    { mkdir: true },
+    spawnFn,
+  );
+}
+
+/**
+ * Test-lane counterpart to spawnIntoSessionCgroup: relocates the backend
+ * into the delegated tests/ leaf before calling `spawnFn`, so a test.request
+ * command's subprocess (and anything it forks synchronously — e.g. a temp
+ * postgres cluster's postmaster) is born under the bounded tests/ cgroup
+ * rather than main/, closing the same fork-time race for the test-request
+ * lane that spawnIntoSessionCgroup closes for session spawns.
+ *
+ * Applied unconditionally to every test-lane run — session-owned or not
+ * (base_health_probe / pr_pipeline origins carry no sessionId) — per the
+ * locked decision to give the lane one dedicated bounded leaf rather than
+ * placing session-owned runs into that session's own sub-cgroup.
+ *
+ * Falls back to calling `spawnFn` directly, unrelocated, when the
+ * delegated subtree was never set up.
+ */
+export function spawnIntoTestsCgroup<T>(spawnFn: () => T): T {
+  if (!testsCgroupPath || !mainCgroupPath) return spawnFn();
+  return relocateForSpawn(testsCgroupPath, 'test-lane', {}, spawnFn);
+}
+
+/**
+ * Shared relocate-spawn-restore body for spawnIntoSessionCgroup and
+ * spawnIntoTestsCgroup: moves the backend's own pid into `dir`, runs
+ * `spawnFn` synchronously (so any child born during the call inherits
+ * `dir`), then restores the backend to main/ before returning. Node is
+ * single-threaded and every step here is a synchronous fs call, so no
+ * other code can observe the backend mid-relocation. `mainCgroupPath` is
+ * guaranteed non-null by both callers' guards.
+ */
+function relocateForSpawn<T>(
+  dir: string,
+  label: string,
+  opts: { mkdir?: boolean },
+  spawnFn: () => T,
+): T {
   let relocated = false;
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    if (opts.mkdir) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'cgroup.procs'), String(process.pid));
     relocated = true;
   } catch (err) {
     logger.warn(
-      `[sessionCgroup] failed to relocate backend into session ${sessionId.slice(0, 8)} cgroup for spawn: ${(err as Error).message}`,
+      `[sessionCgroup] failed to relocate backend into ${label} cgroup for spawn: ${(err as Error).message}`,
     );
   }
   try {
@@ -241,7 +299,7 @@ export function spawnIntoSessionCgroup<T>(
     if (relocated) {
       try {
         fs.writeFileSync(
-          path.join(mainCgroupPath, 'cgroup.procs'),
+          path.join(mainCgroupPath!, 'cgroup.procs'),
           String(process.pid),
         );
       } catch (err) {
@@ -374,10 +432,15 @@ export function reapOrphanedMainCgroupProcesses(
 export function _resetForTesting(): void {
   sessionsCgroupPath = null;
   mainCgroupPath = null;
+  testsCgroupPath = null;
 }
 
 export function _setSessionsPathForTesting(p: string | null): void {
   sessionsCgroupPath = p;
+}
+
+export function _setTestsPathForTesting(p: string | null): void {
+  testsCgroupPath = p;
 }
 
 export function _setMainPathForTesting(p: string | null): void {
