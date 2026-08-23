@@ -956,8 +956,9 @@ async function isBenignRefLockLoss(
     const [{ stdout: refOut }, { stdout: fetchHeadOut }] = await Promise.all([
       exec(`git rev-parse refs/remotes/origin/${baseBranch}`, {
         cwd: projectDir,
+        timeout: 10_000,
       }),
-      exec('git rev-parse FETCH_HEAD', { cwd: projectDir }),
+      exec('git rev-parse FETCH_HEAD', { cwd: projectDir, timeout: 10_000 }),
     ]);
     const ref = refOut.trim();
     const fetchHead = fetchHeadOut.trim();
