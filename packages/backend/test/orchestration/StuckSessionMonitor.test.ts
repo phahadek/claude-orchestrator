@@ -175,7 +175,7 @@ describe('StuckSessionMonitor', () => {
     });
   });
 
-  it('writes an explicit did-not-flag audit row when activity arrives before the notify threshold', () => {
+  it('writes no audit row for steady-state activity that arrives before the notify threshold (edge-triggered)', () => {
     const sm = makeMockSessionManager();
     const broadcast = vi.fn();
     new StuckSessionMonitor(sm, broadcast);
@@ -189,45 +189,45 @@ describe('StuckSessionMonitor', () => {
       content: 'still working',
     } as ServerMessage);
 
+    // flagged was already false and stays false — this is a non-event and
+    // must not be persisted (the level-triggered behaviour this task removes).
     const rows = db
       .prepare(
-        `SELECT ts, event_type, payload FROM audit_log WHERE event_type = 'stuck_session_notify_checked' AND actor_id = ?`,
+        `SELECT payload FROM audit_log WHERE event_type = 'stuck_session_notify_checked' AND actor_id = ?`,
       )
-      .all(SESSION_ID) as Array<{
-      ts: number;
-      event_type: string;
-      payload: string;
-    }>;
-    expect(rows).toHaveLength(1);
-    expect(Number.isInteger(rows[0].ts)).toBe(true);
-    const payload = JSON.parse(rows[0].payload);
-    expect(payload).toEqual({
-      session_id: SESSION_ID,
-      observed_gap_ms: 30_000,
-      threshold_ms: 60_000,
-      flagged: false,
-    });
-
-    // The did-not-flag case must be distinguishable from silence: it is a
-    // real row, not the absence of one — and it must never fire alongside
-    // (or in place of) the flagged broadcast for a session that is still
-    // emitting events.
+      .all(SESSION_ID) as Array<{ payload: string }>;
+    expect(rows).toHaveLength(0);
     expect(broadcast).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: 'stuck_session_notified' }),
     );
 
-    // Advancing past the (reset) notify threshold from here still fires the
-    // flagged path distinctly, proving the two rows are independently
-    // observable rather than one masking the other.
+    // Advancing past the (reset) notify threshold from here fires the
+    // flagged transition and writes exactly one row for it.
     vi.advanceTimersByTime(60_000);
+    const flaggedRows = db
+      .prepare(
+        `SELECT payload FROM audit_log WHERE event_type = 'stuck_session_notify_checked' AND actor_id = ? ORDER BY id ASC`,
+      )
+      .all(SESSION_ID) as Array<{ payload: string }>;
+    expect(flaggedRows).toHaveLength(1);
+    expect(JSON.parse(flaggedRows[0].payload).flagged).toBe(true);
+
+    // Activity after the flagged notification records the true->false
+    // recovery transition, and only that one additional row.
+    fireMessage(sm, {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'text',
+      content: 'back to work',
+    } as ServerMessage);
     const allRows = db
       .prepare(
         `SELECT payload FROM audit_log WHERE event_type = 'stuck_session_notify_checked' AND actor_id = ? ORDER BY id ASC`,
       )
       .all(SESSION_ID) as Array<{ payload: string }>;
     expect(allRows).toHaveLength(2);
-    expect(JSON.parse(allRows[0].payload).flagged).toBe(false);
-    expect(JSON.parse(allRows[1].payload).flagged).toBe(true);
+    expect(JSON.parse(allRows[0].payload).flagged).toBe(true);
+    expect(JSON.parse(allRows[1].payload).flagged).toBe(false);
   });
 
   it('resets the notify timer when a review verdict arrives', () => {
