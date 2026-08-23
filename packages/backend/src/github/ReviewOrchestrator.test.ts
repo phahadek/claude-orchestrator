@@ -535,7 +535,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     );
   });
 
-  it('skips routing and records no verdict_routing_failed when session_id is null', async () => {
+  it('skips routing and records verdict_routing_failed when session_id is null', async () => {
     vi.mocked(getPRByNumber).mockReturnValue({
       ...basePRRow,
       session_id: null,
@@ -559,8 +559,13 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
-    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'verdict_routing_failed' }),
+    );
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'verdict_routing_failed',
     );
   });
 });

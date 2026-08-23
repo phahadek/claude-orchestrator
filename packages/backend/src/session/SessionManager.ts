@@ -4718,6 +4718,18 @@ export class SessionManager extends EventEmitter {
       logger.warn(
         `[SessionManager] ${logContext}: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
       );
+      recordEvent({
+        event_type: 'verdict_routing_failed',
+        actor_type: 'system',
+        actor_id: sessionId,
+        project_id: row.project_id ?? null,
+        task_id: row.task_id ?? null,
+        payload: {
+          session_id: sessionId,
+          log_context: logContext,
+          error: String(err),
+        },
+      });
       this.emitFeedbackPending(sessionId, false);
       return;
     }
@@ -4725,6 +4737,18 @@ export class SessionManager extends EventEmitter {
       logger.warn(
         `[SessionManager] ${logContext}: sendOrResume could not deliver to ${sessionId.slice(0, 8)} — leaving item(s) undelivered`,
       );
+      recordEvent({
+        event_type: 'verdict_routing_failed',
+        actor_type: 'system',
+        actor_id: sessionId,
+        project_id: row.project_id ?? null,
+        task_id: row.task_id ?? null,
+        payload: {
+          session_id: sessionId,
+          log_context: logContext,
+          reason: 'sendOrResume_returned_null',
+        },
+      });
       this.emitFeedbackPending(sessionId, false);
       return;
     }

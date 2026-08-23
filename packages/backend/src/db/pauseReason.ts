@@ -60,6 +60,7 @@ export type CanonicalPauseReason =
   | 'test_report_acquisition_failed'
   | 'ci_not_completing'
   | 'mcp_unreachable_exhausted'
+  | 'verdict_routing_failed';
   | 'base_attributable_test_excluded';
 
 export interface PauseReasonStruct {
@@ -393,6 +394,15 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
+  // A needs_changes/incomplete verdict had no session_id to route feedback
+  // to (e.g. a boot-swept PR that never matched a session by branch — see
+  // PRBootSweep.insertIfMissing). No automated recovery path exists for a
+  // PR with no session to nudge, so — like needs_repo/workflow_scope_denied
+  // — this is a permanent operator-action-required pause.
+  verdict_routing_failed: {
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
   // Advisory-only pill: the F2 gate's baseAttributableFilter excused this
   // PR's failing test(s) as confirmed base-attributable (and, for any
   // excluded test, cleared both masking guards — see

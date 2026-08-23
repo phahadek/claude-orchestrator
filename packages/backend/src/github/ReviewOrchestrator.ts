@@ -1010,6 +1010,37 @@ export class ReviewOrchestrator {
     }
   }
 
+  /**
+   * A needs_changes/incomplete verdict has nowhere to route to — the PR row
+   * has no session_id (e.g. a boot-swept PR that never matched a session by
+   * branch, see PRBootSweep.insertIfMissing). Record the drop and surface a
+   * pause reason so the PR appears on the needs-attention queue immediately
+   * instead of sitting stuck with a stale verdict and no signal.
+   */
+  private recordVerdictRoutingFailure(
+    job: ReviewJob,
+    projectId: string,
+    taskId: string | null | undefined,
+    payload: Record<string, unknown>,
+  ): void {
+    logger.warn(
+      `[ReviewOrchestrator] verdict routing failed for PR #${job.prNumber} (${job.repo}): no session_id to route feedback to`,
+    );
+    recordEvent({
+      event_type: 'verdict_routing_failed',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: projectId,
+      task_id: taskId ?? job.taskId ?? null,
+      payload: {
+        pr_number: job.prNumber,
+        repo: job.repo,
+        ...payload,
+      },
+    });
+    setPauseReason(job.prNumber, job.repo, 'verdict_routing_failed');
+  }
+
   private async executeReview(job: ReviewJob): Promise<void> {
     logger.info(
       `[ReviewOrchestrator] executeReview: entered for PR #${job.prNumber} (${job.repo}) taskId=${job.taskId ?? 'none'}`,
@@ -1183,6 +1214,11 @@ export class ReviewOrchestrator {
             baseBranch: prRow?.base_branch ?? undefined,
           }),
         );
+      } else {
+        this.recordVerdictRoutingFailure(job, project.id, prRow?.task_id, {
+          verdict: result.verdict,
+          reason: 'session_id_null',
+        });
       }
     } else if (result.verdict === 'incomplete') {
       const message = `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
@@ -1202,6 +1238,11 @@ export class ReviewOrchestrator {
             baseBranch: prRow?.base_branch ?? undefined,
           }),
         );
+      } else {
+        this.recordVerdictRoutingFailure(job, project.id, prRow?.task_id, {
+          verdict: result.verdict,
+          reason: 'session_id_null',
+        });
       }
     } else if (result.verdict === 'approved') {
       // Depth review runs only after conformance is approved. Auto-merge is
