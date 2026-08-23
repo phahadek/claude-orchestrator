@@ -166,6 +166,10 @@ export interface TestRequestAdmission {
 
 function failureReasonFor(result: TestCommandResult): TestRequestFailureReason {
   if (result.spawnFailed) return 'execution_failed';
+  // Checked ahead of timedOut/oomKilled: a surviving process means teardown
+  // itself failed, which is the more actionable/alarming fact regardless of
+  // what triggered the teardown attempt in the first place.
+  if (result.teardownVerificationFailed) return 'teardown_failed';
   if (result.timedOut) return 'timeout';
   if (result.oomKilled) return 'oom_killed';
   return 'generic';
@@ -503,7 +507,11 @@ async function executeTestRequestRun(
       spec.commands,
       spec.timeoutSec,
       (msg) => logger.info(`[testRequestLane] ${msg}`),
-      { maxRssMb: spec.maxRssMb, failFast: false },
+      // runId keys the per-run cgroup leaf teardown is verified against
+      // (see sessionCgroup.ts's spawnIntoTestRunCgroup) — reusing this
+      // run's own durable id means a surviving process is traceable back
+      // to this exact test_request_runs row.
+      { maxRssMb: spec.maxRssMb, failFast: false, runId },
     );
     const oomKilled = result.oomKilled ?? false;
     let structuredResult: StructuredTestResult | null = null;

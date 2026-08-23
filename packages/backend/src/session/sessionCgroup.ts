@@ -18,12 +18,15 @@ let mainCgroupPath: string | null = null;
 
 /**
  * Absolute path of the delegated tests/ cgroup — a sessions/-sibling leaf
- * bounding every test-request-lane subprocess (session-owned or not, see
- * spawnIntoTestsCgroup) once set up; null when unavailable. Kept distinct
- * from sessions/ per the locked decision: a test run's bound must not
- * depend on whether it happens to have an owning session, and commingling
- * test workers into a session's own sub-cgroup would give killSessionCgroup
- * a kill scope wider than "this session's own agent process tree".
+ * whose per-run sub-cgroups (tests/<runId>/, see spawnIntoTestRunCgroup)
+ * bound every test-request-lane subprocess, session-owned or not, once set
+ * up; null when unavailable. Kept distinct from sessions/ per the locked
+ * decision: a test run's bound must not depend on whether it happens to
+ * have an owning session, and commingling test workers into a session's own
+ * sub-cgroup would give killSessionCgroup a kill scope wider than "this
+ * session's own agent process tree". Runs are further isolated from each
+ * other by their own per-run leaf so one run's teardown can never reach a
+ * sibling run's tree either.
  */
 let testsCgroupPath: string | null = null;
 
@@ -247,30 +250,119 @@ export function spawnIntoSessionCgroup<T>(
   );
 }
 
+function sanitizeTestRunId(runId: string): string {
+  return runId.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+/**
+ * Absolute path of the per-run sub-cgroup for `runId`, nested under the
+ * delegated tests/ leaf. Pure path derivation — callers must still check
+ * testsCgroupPath is non-null before using this.
+ */
+function testRunCgroupDir(runId: string): string {
+  return path.join(testsCgroupPath!, sanitizeTestRunId(runId));
+}
+
 /**
  * Test-lane counterpart to spawnIntoSessionCgroup: relocates the backend
- * into the delegated tests/ leaf before calling `spawnFn`, so a test.request
- * command's subprocess (and anything it forks synchronously — e.g. a temp
- * postgres cluster's postmaster) is born under the bounded tests/ cgroup
- * rather than main/, closing the same fork-time race for the test-request
- * lane that spawnIntoSessionCgroup closes for session spawns.
+ * into a per-run sub-cgroup (tests/<runId>/) before calling `spawnFn`, so a
+ * test.request command's subprocess (and anything it forks synchronously —
+ * e.g. a temp postgres cluster's postmaster) is born under that bounded,
+ * run-scoped leaf rather than main/ or a leaf shared with other concurrent
+ * runs, closing the same fork-time race for the test-request lane that
+ * spawnIntoSessionCgroup closes for session spawns.
  *
- * Applied unconditionally to every test-lane run — session-owned or not
- * (base_health_probe / pr_pipeline origins carry no sessionId) — per the
- * locked decision to give the lane one dedicated bounded leaf rather than
- * placing session-owned runs into that session's own sub-cgroup.
+ * Keyed on `runId` (a test_request_runs.id) rather than session — every run
+ * gets its own leaf regardless of whether it has an owning session
+ * (base_health_probe / pr_pipeline origins carry none), and killTestRunCgroup
+ * can never reach a sibling run's tree, a session's tree, or the Remote
+ * Control slice as a result.
  *
  * Falls back to calling `spawnFn` directly, unrelocated, when the
  * delegated subtree was never set up.
  */
-export function spawnIntoTestsCgroup<T>(spawnFn: () => T): T {
+export function spawnIntoTestRunCgroup<T>(runId: string, spawnFn: () => T): T {
   if (!testsCgroupPath || !mainCgroupPath) return spawnFn();
-  return relocateForSpawn(testsCgroupPath, 'test-lane', {}, spawnFn);
+  return relocateForSpawn(
+    testRunCgroupDir(runId),
+    `test run ${runId.slice(0, 8)}`,
+    { mkdir: true },
+    spawnFn,
+  );
+}
+
+/**
+ * Kills every process in a test run's sub-cgroup (tests/<runId>/) — the
+ * inescapable backstop for the same class of escape killSessionCgroup
+ * closes for sessions: a grandchild that called setsid(), or that was
+ * re-parented to init after its own parent exited, stays a member of this
+ * cgroup regardless, because cgroup-v2 membership is orthogonal to process
+ * group and parent pid. Writing cgroup.kill (not scanning for pids by name)
+ * is what keeps this scoped to exactly this run's own tree.
+ *
+ * No-ops (returns true — nothing to kill) when the delegated subtree was
+ * never set up, or when this run's sub-cgroup doesn't exist (already torn
+ * down, or the run's subprocess never got placed into one). Returns false
+ * only when the cgroup exists but the kill write itself failed, so a caller
+ * can distinguish "nothing to do" from "tried and failed".
+ */
+export function killTestRunCgroup(runId: string): boolean {
+  if (!testsCgroupPath) return true;
+  const dir = testRunCgroupDir(runId);
+  if (!fs.existsSync(dir)) return true;
+  try {
+    fs.writeFileSync(path.join(dir, 'cgroup.kill'), '1');
+    return true;
+  } catch (err) {
+    logger.warn(
+      `[sessionCgroup] failed to kill cgroup for test run ${runId.slice(0, 8)}: ${(err as Error).message}`,
+    );
+    return false;
+  }
+}
+
+/**
+ * Whether a test run's sub-cgroup currently holds no live processes — the
+ * verify half of "verify before settle": a timed-out (or normally-exited)
+ * run must not be recorded as finished while a member of its cgroup is
+ * still alive. Returns true (nothing to verify) when cgroups were never set
+ * up or the run's leaf doesn't exist, so this degrades to a no-op on
+ * platforms/configs without delegated cgroup-v2 rather than falsely
+ * reporting survivors.
+ */
+export function isTestRunCgroupEmpty(runId: string): boolean {
+  if (!testsCgroupPath) return true;
+  const dir = testRunCgroupDir(runId);
+  try {
+    if (!fs.existsSync(dir)) return true;
+    const procs = fs
+      .readFileSync(path.join(dir, 'cgroup.procs'), 'utf8')
+      .trim();
+    return procs === '';
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Removes a now-empty test run sub-cgroup directory. Best-effort: called
+ * only once verification has confirmed the cgroup holds no processes, but
+ * still swallows errors since a zombie awaiting reap by its (now-dead)
+ * original parent can briefly keep the dir non-empty, and a leftover empty
+ * directory is otherwise harmless.
+ */
+export function removeTestRunCgroup(runId: string): void {
+  if (!testsCgroupPath) return;
+  try {
+    fs.rmdirSync(testRunCgroupDir(runId));
+  } catch {
+    // best-effort — see doc comment
+  }
 }
 
 /**
  * Shared relocate-spawn-restore body for spawnIntoSessionCgroup and
- * spawnIntoTestsCgroup: moves the backend's own pid into `dir`, runs
+ * spawnIntoTestRunCgroup: moves the backend's own pid into `dir`, runs
  * `spawnFn` synchronously (so any child born during the call inherits
  * `dir`), then restores the backend to main/ before returning. Node is
  * single-threaded and every step here is a synchronous fs call, so no
