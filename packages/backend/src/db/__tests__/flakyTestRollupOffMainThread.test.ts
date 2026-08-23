@@ -148,7 +148,12 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
     } finally {
       db.close();
     }
-  }, 30000);
+    // Real worker_thread + ts-node/register/transpile-only startup cost;
+    // under full-suite concurrency (many files spawning their own worker
+    // threads simultaneously) this has been observed exceeding 30s even
+    // though the test does trivial work once the worker is up. See the
+    // matching comment on db.performance.test.ts's watermark test.
+  }, 60000);
 
   it('prunes a flagged rollup row via the worker path once its test_perf_baselines row goes stale, without crossing the watermark again', async () => {
     const { db, file } = openFileBackedDb();
@@ -199,7 +204,7 @@ describe('replaceFlaggedFlakyTestsRollupOffMainThread', () => {
     } finally {
       db.close();
     }
-  }, 30000);
+  }, 60000);
 
   it('runs in-process for an in-memory database, since no second connection can open against it', async () => {
     const result = await replaceFlaggedFlakyTestsRollupOffMainThread(

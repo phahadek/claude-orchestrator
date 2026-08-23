@@ -107,7 +107,12 @@ describe('runMigrations() — sessions.task_id_norm', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
-  });
+    // Real on-disk sqlite file open + migration — cheap in isolation, but
+    // under full-suite concurrency (many other files doing their own
+    // synchronous better-sqlite3 disk I/O and worker-thread spawns at the
+    // same time) this has been observed exceeding the 5000ms default
+    // timeout purely from contention, not a correctness failure.
+  }, 60000);
 
   it('matches hasActiveSessionForTask normalization, including a NULL task_id', () => {
     const mem = new Database(':memory:');
