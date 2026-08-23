@@ -52,6 +52,7 @@ export interface ClaudeSessionProcess {
 const SESSION_ID_ARG_RE = /--session-id\s+(\S+)/;
 const RESUME_ARG_RE = /--resume\s+(\S+)/;
 const PS_LINE_RE = /^\s*(\d+)\s+(\d+)\s+(.*)$/;
+const PS_ARGS_LINE_RE = /^\s*(\d+)\s+(.*)$/;
 
 /**
  * Enumerates every OS process carrying a `--session-id <uuid>` or `--resume
@@ -91,4 +92,69 @@ export function scanClaudeSessionProcesses(): ClaudeSessionProcess[] {
     );
     return [];
   }
+}
+
+/**
+ * Enumerates every OS process whose command line contains `worktreePath` —
+ * the attribution key for a session's test-command process tree (`pytest`,
+ * `uv run task test`, ...) spawned as a Bash-tool child of the session's own
+ * CLI process. Such a tree carries neither `--session-id` nor `--resume` of
+ * its own, so it is structurally invisible to scanClaudeSessionProcesses
+ * (whose own doc warns a null sessionId there must never be treated as a
+ * reap candidate — there is nothing to resolve it against). The worktree
+ * path is what ties the tree back to a session unambiguously instead: every
+ * process in it runs with that path as its cwd and/or references it via argv
+ * (a venv interpreter under `<worktree>/.venv/bin/python`, a report path,
+ * etc).
+ *
+ * Never matches a Remote Control process: RC sessions have no worktree_path
+ * row in this DB and never run inside a per-task worktree, so their cmdline
+ * has no occasion to contain one.
+ *
+ * Fails safe: an unreadable process table returns an empty list, so a
+ * transient `ps` failure can never authorize killing anything.
+ */
+export function scanWorktreeProcesses(worktreePath: string): number[] {
+  try {
+    const out = execSync('ps -eo pid=,args=', {
+      encoding: 'utf-8',
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    const pids: number[] = [];
+    for (const line of out.split('\n')) {
+      const match = line.match(PS_ARGS_LINE_RE);
+      if (!match) continue;
+      const [, pidStr, args] = match;
+      if (args.includes(worktreePath)) pids.push(Number(pidStr));
+    }
+    return pids;
+  } catch (err) {
+    logger.error(
+      `[processLiveness] worktree process scan failed, returning no candidates (fail-safe): ${(err as Error).message}`,
+    );
+    return [];
+  }
+}
+
+/**
+ * Kills every OS process rooted in `worktreePath` (per scanWorktreeProcesses)
+ * with SIGKILL. The backstop for hosts where the per-session cgroup
+ * (sessionCgroup.ts's killSessionCgroup) is unavailable — no cgroup-v2
+ * delegation, or non-Linux — so a worktree can still be safely removed even
+ * when the cgroup-scoped kill was a no-op. Individual-pid SIGKILL (not a
+ * process-group kill) is sufficient here because every member of the tree
+ * independently matches the worktree-path scan, not just its root. Returns
+ * the number of kill signals actually sent.
+ */
+export function killWorktreeProcessTree(worktreePath: string): number {
+  let killed = 0;
+  for (const pid of scanWorktreeProcesses(worktreePath)) {
+    try {
+      process.kill(pid, 'SIGKILL');
+      killed++;
+    } catch {
+      // Already exited between the scan and this kill — not an error.
+    }
+  }
+  return killed;
 }

@@ -84,6 +84,14 @@ vi.mock('../sessionRecovery', () => ({
   recoverSession: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
+vi.mock('../sessionCgroup', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../sessionCgroup')>();
+  return { ...actual, killSessionCgroup: vi.fn() };
+});
+vi.mock('../processLiveness', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../processLiveness')>();
+  return { ...actual, killWorktreeProcessTree: vi.fn().mockReturnValue(0) };
+});
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({
     updateStatus: vi.fn().mockResolvedValue(undefined),
@@ -286,6 +294,8 @@ import * as fsModule from 'fs';
 import { loadOrchestratorConfig } from '../orchestrator-config';
 import { getTaskBackend } from '../../tasks/TaskBackend';
 import { hasMemoryHeadroom } from '../../orchestration/memoryAdmission';
+import { killSessionCgroup } from '../sessionCgroup';
+import { killWorktreeProcessTree } from '../processLiveness';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -1846,6 +1856,81 @@ describe('cleanupWorktree chokepoint guard', () => {
         ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
       );
     expect(removeCalls).toHaveLength(1);
+  });
+});
+
+// ── cleanupWorktree — kills the session's test-command process tree before
+//    the worktree it's rooted in is ever removed ────────────────────────────
+
+describe('cleanupWorktree — process-tree termination', () => {
+  let sm: SessionManager;
+  const WORKTREE_PATH = `${PROJECT_DIR}/.claude/worktrees/${SESSION_ID}`;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+  });
+
+  it('a session reaching a terminal status has killSessionCgroup invoked for it — reaches a test-command tree that carries no --session-id of its own', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'done',
+    });
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      WORKTREE_PATH,
+      'https://github.com/org/repo/pull/1',
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(killSessionCgroup)).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('worktree teardown kills the worktree-path-attributed process tree before attempting git worktree remove', () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'done',
+    });
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      WORKTREE_PATH,
+      'https://github.com/org/repo/pull/1',
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(killWorktreeProcessTree)).toHaveBeenCalledWith(
+      WORKTREE_PATH,
+    );
+
+    const killCallOrder = vi.mocked(killWorktreeProcessTree).mock
+      .invocationCallOrder[0];
+    const removeCall = vi
+      .mocked(execSync)
+      .mock.calls.findIndex(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
+    const removeCallOrder = vi.mocked(execSync).mock.invocationCallOrder[
+      removeCall
+    ];
+    expect(killCallOrder).toBeLessThan(removeCallOrder);
+  });
+
+  it('a live, non-terminal (idle) session is never a termination candidate — the chokepoint guard fires before any kill', () => {
+    vi.mocked(getSession).mockReturnValue(makeDeadRow()); // status='idle'
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      WORKTREE_PATH,
+      'https://github.com/org/repo/pull/1',
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(killSessionCgroup)).not.toHaveBeenCalled();
+    expect(vi.mocked(killWorktreeProcessTree)).not.toHaveBeenCalled();
   });
 });
 

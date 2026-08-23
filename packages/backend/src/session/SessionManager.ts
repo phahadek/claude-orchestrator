@@ -129,7 +129,7 @@ import {
   listLiveSessionRows,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
-import { isSessionProcessAlive } from './processLiveness';
+import { isSessionProcessAlive, killWorktreeProcessTree } from './processLiveness';
 import {
   reconcileSessionLiveness,
   reconcileNonPlanningSessionLiveness,
@@ -3567,6 +3567,17 @@ export class SessionManager extends EventEmitter {
       return;
     }
 
+    // Kill any surviving process tree rooted in this now-terminal session
+    // before doing anything else — a session's CLI process can exit cleanly
+    // (session.run() resolving on its own, the natural-completion path into
+    // this function) while a Bash-tool-spawned test-command tree it forked
+    // (pytest, `uv run task test`) outlives it, since neither endSession()
+    // nor kill() — the only other callers of killSessionCgroup — run on
+    // that path. cgroup-scoped kill reaches the whole tree regardless of
+    // whether any of its processes carry --session-id/--resume, since
+    // cgroup-v2 membership is inherited at fork.
+    killSessionCgroup(sessionId);
+
     this.sessions.delete(sessionId);
     revokeStageCredential(sessionId, 'session_teardown');
     revokeRouteCredential(sessionId, 'session_teardown');
@@ -3657,6 +3668,15 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] failed to remove system-prompt file for ${sessionId.slice(0, 8)}: ${err}`,
       );
     }
+
+    // Backstop for hosts without cgroup-v2 delegation (killSessionCgroup
+    // above was a no-op there): kill any process whose command line still
+    // names this worktree, keyed on the worktree path rather than
+    // --session-id since a test-command tree carries neither flag. Must run
+    // before `git worktree remove` — a process still holding the directory
+    // open is exactly what turns that command into a retried
+    // worktree_remove_failed event.
+    killWorktreeProcessTree(worktreePath);
 
     try {
       execSync(`git worktree remove --force "${worktreePath}"`, {
