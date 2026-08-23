@@ -420,9 +420,18 @@ export async function reconcileOrphanProcesses(
   const now = deps.nowFn ? deps.nowFn() : Date.now();
 
   let examined = 0;
-  let reaped = 0;
   let skippedByGrace = 0;
-  let survivedEscalation = 0;
+
+  // Candidates confirmed reapable by row/grace checks, escalated below —
+  // concurrently, not one after another. Each escalation is dominated by a
+  // fixed per-pid wait (KILL_ESCALATION_WAIT_MS, +POST_SIGKILL_SETTLE_MS on
+  // the SIGKILL path); running the loop's `await` sequentially would make a
+  // sweep's wall-clock scale with orphan count (16 orphans -> minutes) where
+  // it used to be near-instant, and since this job is skip-if-running, that
+  // also suppresses the next scheduled sweep. Promise.all keeps sweep
+  // duration ~= one escalation, independent of how many orphans it covers.
+  const candidates: Array<{ pid: number; sessionId: string; status: string }> =
+    [];
 
   for (const proc of scanProcesses()) {
     // Hard safety constraint: a process with no resolvable session uuid
@@ -461,23 +470,34 @@ export async function reconcileOrphanProcesses(
     killCgroup(proc.sessionId);
     if (row.worktree_path) killWorktreeTree(row.worktree_path);
 
-    const confirmedDead = await killProcessWithEscalation(
-      proc.pid,
-      killProcess,
-      isPidAlive,
-      waitMs,
-    );
-    evictSessionMapEntry(proc.sessionId);
+    candidates.push({ pid: proc.pid, sessionId: proc.sessionId, status: row.status });
+  }
 
+  const escalations = await Promise.all(
+    candidates.map(async (candidate) => {
+      const confirmedDead = await killProcessWithEscalation(
+        candidate.pid,
+        killProcess,
+        isPidAlive,
+        waitMs,
+      );
+      evictSessionMapEntry(candidate.sessionId);
+      return { ...candidate, confirmedDead };
+    }),
+  );
+
+  let reaped = 0;
+  let survivedEscalation = 0;
+  for (const { pid, sessionId, status, confirmedDead } of escalations) {
     if (confirmedDead) {
       reaped++;
       logger.warn(
-        `[sessionLivenessReconciler] reaped orphaned process pid=${proc.pid} for session ${proc.sessionId.slice(0, 8)} (status=${row.status})`,
+        `[sessionLivenessReconciler] reaped orphaned process pid=${pid} for session ${sessionId.slice(0, 8)} (status=${status})`,
       );
     } else {
       survivedEscalation++;
       logger.error(
-        `[sessionLivenessReconciler] pid=${proc.pid} for session ${proc.sessionId.slice(0, 8)} (status=${row.status}) survived SIGTERM and SIGKILL — will retry next sweep`,
+        `[sessionLivenessReconciler] pid=${pid} for session ${sessionId.slice(0, 8)} (status=${status}) survived SIGTERM and SIGKILL — will retry next sweep`,
       );
     }
   }
