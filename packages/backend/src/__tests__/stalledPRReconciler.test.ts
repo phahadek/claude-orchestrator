@@ -30,6 +30,8 @@ vi.mock('../db/queries.js', () => ({
   linkPRTaskAndSession: vi.fn(),
   setPendingPush: vi.fn(),
   getSessionLastActivityMs: vi.fn(() => null),
+  setStalledRetryBaseExhausted: vi.fn(),
+  resetStalledPRRetryCountForBaseRecovery: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -64,6 +66,8 @@ import {
   linkPRTaskAndSession,
   setPendingPush,
   getSessionLastActivityMs,
+  setStalledRetryBaseExhausted,
+  resetStalledPRRetryCountForBaseRecovery,
 } from '../db/queries.js';
 import {
   recordEvent,
@@ -384,6 +388,13 @@ describe('StalledPRReconciler', () => {
       kind: 'gate_failed',
     });
     expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+    // gate_failed IS in BASE_ATTRIBUTABLE_STALL_KINDS — armed purely on kind
+    // eligibility at escalation time, no live base-health check.
+    expect(setStalledRetryBaseExhausted).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      true,
+    );
   });
 
   it('does not relaunch a gate-failed PR when sessionManager is not set', async () => {
@@ -496,6 +507,8 @@ describe('StalledPRReconciler', () => {
       kind: 'incomplete_verdict',
     });
     expect(ro.enqueueReview).not.toHaveBeenCalled();
+    // incomplete_verdict is not in BASE_ATTRIBUTABLE_STALL_KINDS.
+    expect(setStalledRetryBaseExhausted).not.toHaveBeenCalled();
   });
 
   it('skips PRs already at stalled_reconcile_cap', async () => {
@@ -842,6 +855,9 @@ describe('StalledPRReconciler', () => {
       kind: 'analyze_failing',
     });
     expect(ro.enqueueReview).not.toHaveBeenCalled();
+    // analyze_failing is not in BASE_ATTRIBUTABLE_STALL_KINDS — a base-branch
+    // recovery must never be read as an excuse to un-park it.
+    expect(setStalledRetryBaseExhausted).not.toHaveBeenCalled();
   });
 
   it('clears review_session_id and enqueues review for pre_review_interrupted PR', async () => {
@@ -905,6 +921,14 @@ describe('StalledPRReconciler', () => {
       kind: 'pre_review_interrupted',
     });
     expect(ro.enqueueReview).not.toHaveBeenCalled();
+    // pre_review_interrupted IS in BASE_ATTRIBUTABLE_STALL_KINDS — armed
+    // purely on kind eligibility, with no live base-health check at
+    // escalation time (see StalledPRReconciler.baseAttribution.test.ts).
+    expect(setStalledRetryBaseExhausted).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      true,
+    );
   });
 
   it('skips analyze_failing PR with pending_push (push flow handles it)', async () => {
@@ -1017,6 +1041,8 @@ describe('StalledPRReconciler', () => {
       kind: 'conflict_dead_session',
     });
     expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+    // conflict_dead_session is not in BASE_ATTRIBUTABLE_STALL_KINDS.
+    expect(setStalledRetryBaseExhausted).not.toHaveBeenCalled();
   });
 
   it('redelivers undelivered review feedback to an idle implementing session', async () => {

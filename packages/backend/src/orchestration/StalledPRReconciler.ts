@@ -30,10 +30,18 @@ import {
 } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
-import { classifyStalledPR, parseVerdict } from '../github/pollUtils';
+import {
+  classifyStalledPR,
+  parseVerdict,
+  BASE_ATTRIBUTABLE_STALL_KINDS,
+} from '../github/pollUtils';
 import type { StalledPRKind } from '../github/pollUtils';
 import { sessionBusyInFlightToolCall } from '../session/sessionLifecycle';
-import { isBaseTotalFail, isProjectBaseHealthy } from './baseAttribution';
+import {
+  isBaseTotalFail,
+  isProjectBaseHealthy,
+  wasBaseTotalFailSince,
+} from './baseAttribution';
 import {
   formatCIFailureFeedback,
   formatMergeConflictFeedback,
@@ -126,34 +134,48 @@ export class StalledPRReconciler {
 
       // Skip PRs already escalated to the human-attention queue — unless
       // this PR's own most recent exhaustion was confirmed base-attributable
-      // (stalled_retry_base_exhausted) and the base branch has since
-      // recovered, in which case restore the budget via the same reset
-      // primitive setHeadSha's head_sha-change trigger already uses, then
-      // fall through to reconcile this PR fresh this cycle. Scoped to this
-      // PR alone — never a blanket reset of every escalated PR's counter.
+      // (stalled_retry_base_exhausted, armed only for a stall kind in
+      // BASE_ATTRIBUTABLE_STALL_KINDS) AND a base-health-history query over
+      // [pause_reason_set_at, now] finds a total_fail probe AND the base
+      // branch is healthy right now, in which case restore the budget via
+      // the same reset primitive setHeadSha's head_sha-change trigger
+      // already uses, clear the escalation through clearTerminalPRFlags
+      // under the trusted 'base_recovery' trigger, then fall through to
+      // reconcile this PR fresh this cycle. The history check (rather than
+      // only "is the base unhealthy right now") is required because the
+      // flag is armed purely on stall-kind eligibility at escalation time,
+      // with no live health check of its own — see the escalation block
+      // below. Scoped to this PR alone — never a blanket reset of every
+      // escalated PR's counter.
       const existing = parsePauseReason(pr.pause_reason);
       if (existing?.reason === 'stalled_reconcile_cap') {
-        if (pr.stalled_retry_base_exhausted) {
+        if (pr.stalled_retry_base_exhausted && pr.pause_reason_set_at) {
           const project = getProjectByGithubRepo(pr.repo);
-          if (project && (await isProjectBaseHealthy(project))) {
-            resetStalledPRRetryCountForBaseRecovery(pr.pr_number, pr.repo);
-            setPauseReason(pr.pr_number, pr.repo, null);
-            recordEvent({
-              event_type: 'stalled_pr_base_recovery_reset',
-              actor_type: 'system',
-              actor_id: null,
-              project_id: project.id,
-              task_id: pr.task_id ?? null,
-              payload: { pr_number: pr.pr_number, repo: pr.repo },
-            });
-            this.broadcast({
-              type: 'pr_pause_cleared',
-              prNumber: pr.pr_number,
-              repo: pr.repo,
-            });
-            logger.info(
-              `[StalledPRReconciler] PR #${pr.pr_number} (${pr.repo}): base recovered — restoring stalled_pr_retry_count budget`,
+          if (project) {
+            const wasAttributable = await wasBaseTotalFailSince(
+              project,
+              pr.pause_reason_set_at,
             );
+            if (wasAttributable && (await isProjectBaseHealthy(project))) {
+              resetStalledPRRetryCountForBaseRecovery(pr.pr_number, pr.repo);
+              clearTerminalPRFlags(pr.pr_number, pr.repo, 'base_recovery');
+              recordEvent({
+                event_type: 'stalled_pr_base_recovery_reset',
+                actor_type: 'system',
+                actor_id: null,
+                project_id: project.id,
+                task_id: pr.task_id ?? null,
+                payload: { pr_number: pr.pr_number, repo: pr.repo },
+              });
+              this.broadcast({
+                type: 'pr_pause_cleared',
+                prNumber: pr.pr_number,
+                repo: pr.repo,
+              });
+              logger.info(
+                `[StalledPRReconciler] PR #${pr.pr_number} (${pr.repo}): base recovered — restoring stalled_pr_retry_count budget`,
+              );
+            }
           }
         }
         continue;
@@ -226,19 +248,19 @@ export class StalledPRReconciler {
 
       const count = effectivePr.stalled_pr_retry_count ?? 0;
       if (count >= retryCap) {
-        // Only a gate_failed stall is a test/build failure a base-branch
-        // health check can speak to — record whether this escalation was
-        // base-attributable so a later base-recovery pass knows this PR (and
-        // only this PR) is eligible to have its budget restored.
-        if (stalled.kind === 'gate_failed') {
-          const project = getProjectByGithubRepo(effectivePr.repo);
-          if (project && (await isBaseTotalFail(project))) {
-            setStalledRetryBaseExhausted(
-              effectivePr.pr_number,
-              effectivePr.repo,
-              true,
-            );
-          }
+        // Arm the base-recovery escape purely on stall-kind eligibility
+        // (BASE_ATTRIBUTABLE_STALL_KINDS) — never on a live base-health
+        // check here. A point-in-time check at this exact moment can miss a
+        // total_fail that happened earlier in the stall window or hasn't
+        // happened yet; the history-ranged check at recovery time (top of
+        // this loop) is what actually confirms base-attributability before
+        // the escape is taken.
+        if (BASE_ATTRIBUTABLE_STALL_KINDS.has(stalled.kind)) {
+          setStalledRetryBaseExhausted(
+            effectivePr.pr_number,
+            effectivePr.repo,
+            true,
+          );
         }
         this.escalate(
           effectivePr.pr_number,

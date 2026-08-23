@@ -78,6 +78,7 @@ import {
 import {
   isBaseTotalFail,
   isProjectBaseHealthy,
+  wasBaseTotalFailSince,
 } from '../orchestration/baseAttribution';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
@@ -1096,11 +1097,21 @@ export class PRMergeWatcher extends EventEmitter {
     const maxRetries = typedGetSetting('flake_recovery_max_retries');
     if (pr.flake_recovery_attempts >= maxRetries) {
       // Restore, once — scoped to this PR alone — if its most recent
-      // exhaustion was itself confirmed base-attributable and the base
-      // branch has since recovered. Never a blanket reset of every open
-      // PR's counter.
-      if (pr.flake_recovery_base_exhausted && project) {
-        const healthy = await isProjectBaseHealthy(project);
+      // exhaustion was itself confirmed base-attributable (a
+      // base-health-history query over [pause_reason_set_at, now] finds a
+      // total_fail probe — not only whether the base happens to be
+      // unhealthy at this exact instant) and the base branch is healthy
+      // right now. Never a blanket reset of every open PR's counter.
+      if (
+        pr.flake_recovery_base_exhausted &&
+        project &&
+        pr.pause_reason_set_at
+      ) {
+        const wasAttributable = await wasBaseTotalFailSince(
+          project,
+          pr.pause_reason_set_at,
+        );
+        const healthy = wasAttributable && (await isProjectBaseHealthy(project));
         if (healthy) {
           resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
           recordEvent({
@@ -1436,10 +1447,14 @@ export class PRMergeWatcher extends EventEmitter {
     const maxRetries = typedGetSetting('flake_recovery_max_retries');
     if (pr.flake_recovery_attempts >= maxRetries) {
       // Restore, scoped to this PR alone, if its most recent exhaustion was
-      // itself confirmed base-attributable and the base branch has since
-      // recovered — mirrors handleVerifiedFlakyDisposition's own restore.
+      // itself confirmed base-attributable (base-health-history query over
+      // [pause_reason_set_at, now], not just the instant base health) and
+      // the base branch is healthy right now — mirrors
+      // handleVerifiedFlakyDisposition's own restore.
       if (
         pr.flake_recovery_base_exhausted &&
+        pr.pause_reason_set_at &&
+        (await wasBaseTotalFailSince(project, pr.pause_reason_set_at)) &&
         (await isProjectBaseHealthy(project))
       ) {
         resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);

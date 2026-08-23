@@ -13,6 +13,21 @@ export type StalledPRKind =
   | 'session_inert';
 
 /**
+ * Stall kinds a broken base branch could plausibly cause (or be coincident
+ * with) — gate_failed is a direct test/build failure, session_inert and
+ * pre_review_interrupted are both consistent with a session/pipeline
+ * wedging on a base that itself won't build/test cleanly. The other six
+ * kinds (incomplete_verdict, errored_review_session, analyze_failing,
+ * conflict_dead_session, undelivered_review_feedback,
+ * orphaned_no_task_link) are process/review-management signals, never base
+ * health, so a base-branch recovery must never be read as an excuse to
+ * un-park them. Consulted by StalledPRReconciler when deciding whether a
+ * stalled_reconcile_cap escalation is eligible for the base-recovery escape.
+ */
+export const BASE_ATTRIBUTABLE_STALL_KINDS: ReadonlySet<StalledPRKind> =
+  new Set(['gate_failed', 'session_inert', 'pre_review_interrupted']);
+
+/**
  * True when a PR is in a terminal-stale state where PRMergeWatcher polling
  * would be pointless. Covers three parked anchors:
  *

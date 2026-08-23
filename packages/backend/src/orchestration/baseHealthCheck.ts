@@ -178,7 +178,7 @@ function classifyFailedRun(
  * total_fail is downgraded to `partial_fail` here (normal failure, does not
  * escalate to the base-branch dispatch hold) rather than read as a crash.
  */
-function classifyRun(run: TestRequestRunRow): BaseHealthOutcome {
+export function classifyRun(run: TestRequestRunRow): BaseHealthOutcome {
   if (run.state === 'passed') return 'clean_pass';
   const failed = classifyFailedRun(run);
   if (failed === 'total_fail' && !run.test_report_acquisition_attempted) {

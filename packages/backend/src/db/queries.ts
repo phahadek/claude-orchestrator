@@ -3696,18 +3696,22 @@ export type ClearTerminalPRFlagsTrigger =
   | 'head_sha_advance'
   | 'human_unpark'
   | 'review_verdict'
-  | 'session_reconciled';
+  | 'session_reconciled'
+  | 'base_recovery';
 
 /**
  * Triggers that are allowed to clear a 'stalled_reconcile_cap' escalation:
  * a genuine terminal transition (merged/closed), a head_sha advance (a fix
  * was actually pushed — the load-bearing signal), an explicit human
- * unpark/recovery action, or a session-initiated-close reconcile (the PR was
- * never really abandoned — the close was the session's own churn). A bare
- * automated 'review_verdict' is deliberately excluded: an approved verdict
- * does not guarantee the PR is mergeable, and clearing the cap on verdict
- * alone re-creates the open+no-pause+no-session limbo the cap escalation
- * exists to prevent.
+ * unpark/recovery action, a session-initiated-close reconcile (the PR was
+ * never really abandoned — the close was the session's own churn), or a
+ * confirmed base-recovery reset (the escalating stall was itself
+ * base-attributable and the project's base branch has since recovered — see
+ * StalledPRReconciler.reconcileOnce / PRMergeWatcher's flake-recovery
+ * restore). A bare automated 'review_verdict' is deliberately excluded: an
+ * approved verdict does not guarantee the PR is mergeable, and clearing the
+ * cap on verdict alone re-creates the open+no-pause+no-session limbo the cap
+ * escalation exists to prevent.
  */
 const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
   new Set([
@@ -3716,6 +3720,7 @@ const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
     'head_sha_advance',
     'human_unpark',
     'session_reconciled',
+    'base_recovery',
   ]);
 
 /**
@@ -8321,6 +8326,32 @@ export function getLatestBaseHealthTestRequestRun(
     .get({ project_id: projectId, content_hash: contentHash }) as
     | TestRequestRunRow
     | undefined;
+}
+
+/**
+ * Time-ranged counterpart to getLatestBaseHealthTestRequestRun: every
+ * finished base-health probe (run_origin='base_health_probe') recorded for a
+ * project since `sinceTs`, not just the latest one for a single exact
+ * content hash. Backs the base-recovery escape's history check (see
+ * orchestration/baseAttribution.ts's wasBaseTotalFailSince) — "was there
+ * ever a total_fail probe while this PR sat escalated" instead of only "is
+ * the base unhealthy right now," since there is no proactive base-health
+ * poller and a live check at any single instant can miss a transient
+ * total_fail that happened in between checks.
+ */
+export function getBaseHealthProbesSince(
+  projectId: string,
+  sinceTs: number,
+): TestRequestRunRow[] {
+  return db
+    .prepare<{ project_id: string; since_ts: number }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id AND run_origin = 'base_health_probe'
+         AND state != 'running' AND finished_at >= @since_ts
+       ORDER BY finished_at ASC, rowid ASC`,
+    )
+    .all({ project_id: projectId, since_ts: sinceTs }) as TestRequestRunRow[];
 }
 
 /**

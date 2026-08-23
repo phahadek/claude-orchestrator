@@ -30,7 +30,7 @@
  */
 
 import type { ProjectConfig } from '../config';
-import { getFailingTestIdsForRun } from '../db/queries';
+import { getFailingTestIdsForRun, getBaseHealthProbesSince } from '../db/queries';
 import type { TestRequestRunRow } from '../db/types';
 
 async function checkBaseBranchHealth(project: ProjectConfig) {
@@ -80,4 +80,27 @@ export async function isProjectBaseHealthy(
 ): Promise<boolean> {
   const health = await checkBaseBranchHealth(project);
   return health.outcome === 'clean_pass';
+}
+
+/**
+ * History-ranged counterpart to isBaseTotalFail: true when any base-health
+ * probe recorded for this project since `sinceTs` (typically a PR's
+ * pause_reason_set_at) classifies as total_fail — not only whether the base
+ * is unhealthy at the instant this is called. A live-only check can sample a
+ * moment when the base happens to be transiently clean_pass even though the
+ * failure that triggered the escalation was itself caused by an
+ * intervening total_fail probe (or the base tree hadn't recovered yet when
+ * the escalation actually happened but has since). There is no proactive
+ * base-health poller, so probe coverage is sparse — absence of a bad row
+ * means "no evidence found," not "definitely never happened" — but this is
+ * still a strict improvement over a single point-in-time sample, never a
+ * regression: it can only find MORE attributable failures, not fewer.
+ */
+export async function wasBaseTotalFailSince(
+  project: Pick<ProjectConfig, 'id'>,
+  sinceTs: number,
+): Promise<boolean> {
+  const { classifyRun } = await import('./baseHealthCheck');
+  const probes = getBaseHealthProbesSince(project.id, sinceTs);
+  return probes.some((run) => classifyRun(run) === 'total_fail');
 }
