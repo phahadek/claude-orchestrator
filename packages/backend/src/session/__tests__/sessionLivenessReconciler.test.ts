@@ -707,35 +707,44 @@ describe('reconcileOrphanProcesses', () => {
     return { pid: 1234, sessionId: null, etimeSeconds: 10_000, ...overrides };
   }
 
-  it('reaps a process whose row is terminal (done) past the grace floor', () => {
+  // Instant, no real delay — tests must never actually wait out
+  // KILL_ESCALATION_WAIT_MS / POST_SIGKILL_SETTLE_MS.
+  const instantWait = async () => {};
+
+  it('reaps a process whose row is terminal (done) past the grace floor', async () => {
     seedSession({ sessionId: 'orphan-done', status: 'running' });
     updateSessionStatus('orphan-done', 'done', NOW - 60 * 60_000);
 
-    const killed: number[] = [];
-    const result = reconcileOrphanProcesses({
+    const killed: Array<[number, NodeJS.Signals]> = [];
+    const result = await reconcileOrphanProcesses({
       scanProcesses: () => [proc({ pid: 111, sessionId: 'orphan-done' })],
-      killProcess: (pid) => killed.push(pid),
+      killProcess: (pid, signal) => killed.push([pid, signal]),
+      isPidAlive: () => false, // dies right after SIGTERM
+      waitMs: instantWait,
       nowFn: () => NOW,
     });
 
     expect(result.examined).toBe(1);
     expect(result.reaped).toBe(1);
     expect(result.skippedByGrace).toBe(0);
-    expect(killed).toEqual([111]);
+    expect(result.survivedEscalation).toBe(0);
+    expect(killed).toEqual([[111, 'SIGTERM']]);
   });
 
   it.each(['error', 'killed', 'superseded'])(
     'reaps a process whose row is terminal (%s) past the grace floor',
-    (status) => {
+    async (status) => {
       seedSession({ sessionId: `orphan-${status}`, status: 'running' });
       updateSessionStatus(`orphan-${status}`, status, NOW - 60 * 60_000);
 
       const killed: number[] = [];
-      const result = reconcileOrphanProcesses({
+      const result = await reconcileOrphanProcesses({
         scanProcesses: () => [
           proc({ pid: 222, sessionId: `orphan-${status}` }),
         ],
         killProcess: (pid) => killed.push(pid),
+        isPidAlive: () => false,
+        waitMs: instantWait,
         nowFn: () => NOW,
       });
 
@@ -744,13 +753,15 @@ describe('reconcileOrphanProcesses', () => {
     },
   );
 
-  it('never reaps a process whose row is non-terminal', () => {
+  it('never reaps a process whose row is non-terminal', async () => {
     seedSession({ sessionId: 'live-row', status: 'running' });
 
     const killed: number[] = [];
-    const result = reconcileOrphanProcesses({
+    const result = await reconcileOrphanProcesses({
       scanProcesses: () => [proc({ pid: 333, sessionId: 'live-row' })],
       killProcess: (pid) => killed.push(pid),
+      isPidAlive: () => false,
+      waitMs: instantWait,
       nowFn: () => NOW,
     });
 
@@ -758,9 +769,9 @@ describe('reconcileOrphanProcesses', () => {
     expect(killed).toEqual([]);
   });
 
-  it('never treats a process with no resolvable session uuid (claude remote-control) as a candidate', () => {
+  it('never treats a process with no resolvable session uuid (claude remote-control) as a candidate', async () => {
     const killed: number[] = [];
-    const result = reconcileOrphanProcesses({
+    const result = await reconcileOrphanProcesses({
       scanProcesses: () => [
         // Exact cmdline shape from processLiveness.scanClaudeSessionProcesses
         // for `/usr/bin/claude remote-control` — no --session-id/--resume flag,
@@ -768,6 +779,8 @@ describe('reconcileOrphanProcesses', () => {
         { pid: 444, sessionId: null, etimeSeconds: 1_000_000 },
       ],
       killProcess: (pid) => killed.push(pid),
+      isPidAlive: () => false,
+      waitMs: instantWait,
       nowFn: () => NOW,
     });
 
@@ -776,9 +789,9 @@ describe('reconcileOrphanProcesses', () => {
     expect(killed).toEqual([]);
   });
 
-  it('never reaps a process whose sessionId resolves to no row — e.g. a Remote Control cloud session id', () => {
+  it('never reaps a process whose sessionId resolves to no row — e.g. a Remote Control cloud session id', async () => {
     const killed: number[] = [];
-    const result = reconcileOrphanProcesses({
+    const result = await reconcileOrphanProcesses({
       scanProcesses: () => [
         // Remote Control sessions carry a cse_-prefixed cloud session id
         // that never has a row in this DB — it must never be reaped.
@@ -789,6 +802,8 @@ describe('reconcileOrphanProcesses', () => {
         }),
       ],
       killProcess: (pid) => killed.push(pid),
+      isPidAlive: () => false,
+      waitMs: instantWait,
       nowFn: () => NOW,
     });
 
@@ -798,14 +813,16 @@ describe('reconcileOrphanProcesses', () => {
     expect(killed).toEqual([]);
   });
 
-  it('skips a terminal row whose ended_at is inside the grace floor, counting it in skippedByGrace', () => {
+  it('skips a terminal row whose ended_at is inside the grace floor, counting it in skippedByGrace', async () => {
     seedSession({ sessionId: 'just-terminalized', status: 'running' });
     updateSessionStatus('just-terminalized', 'done', NOW - 5_000);
 
     const killed: number[] = [];
-    const result = reconcileOrphanProcesses({
+    const result = await reconcileOrphanProcesses({
       scanProcesses: () => [proc({ pid: 777, sessionId: 'just-terminalized' })],
       killProcess: (pid) => killed.push(pid),
+      isPidAlive: () => false,
+      waitMs: instantWait,
       nowFn: () => NOW,
     });
 
@@ -814,29 +831,38 @@ describe('reconcileOrphanProcesses', () => {
     expect(killed).toEqual([]);
   });
 
-  it('is a no-op in api session mode', () => {
+  it('is a no-op in api session mode', async () => {
     runtimeSettings.session_mode = 'api';
     const killed: number[] = [];
-    const result = reconcileOrphanProcesses({
+    const result = await reconcileOrphanProcesses({
       scanProcesses: () => [proc({ pid: 888, sessionId: 'whatever' })],
       killProcess: (pid) => killed.push(pid),
+      isPidAlive: () => false,
+      waitMs: instantWait,
       nowFn: () => NOW,
     });
 
-    expect(result).toEqual({ examined: 0, reaped: 0, skippedByGrace: 0 });
+    expect(result).toEqual({
+      examined: 0,
+      reaped: 0,
+      skippedByGrace: 0,
+      survivedEscalation: 0,
+    });
     expect(killed).toEqual([]);
   });
 
-  it('writes no session status — status-writer spy must not be called', () => {
+  it('writes no session status — status-writer spy must not be called', async () => {
     seedSession({ sessionId: 'no-status-write', status: 'running' });
     updateSessionStatus('no-status-write', 'done', NOW - 60 * 60_000);
 
     const statusWriterSpy = vi.spyOn(queries, 'updateSessionStatus');
     statusWriterSpy.mockClear();
 
-    reconcileOrphanProcesses({
+    await reconcileOrphanProcesses({
       scanProcesses: () => [proc({ pid: 999, sessionId: 'no-status-write' })],
       killProcess: () => {},
+      isPidAlive: () => false,
+      waitMs: instantWait,
       nowFn: () => NOW,
     });
 
@@ -848,14 +874,16 @@ describe('reconcileOrphanProcesses', () => {
     expect(row.status).toBe('done');
   });
 
-  it('evicts a stale in-memory map entry for a reaped session', () => {
+  it('evicts a stale in-memory map entry for a reaped session', async () => {
     seedSession({ sessionId: 'evict-me', status: 'running' });
     updateSessionStatus('evict-me', 'killed', NOW - 60 * 60_000);
     const inMemoryMap = new Map<string, true>([['evict-me', true]]);
 
-    reconcileOrphanProcesses({
+    await reconcileOrphanProcesses({
       scanProcesses: () => [proc({ pid: 1010, sessionId: 'evict-me' })],
       killProcess: () => {},
+      isPidAlive: () => false,
+      waitMs: instantWait,
       evictSessionMapEntry: (sessionId) => inMemoryMap.delete(sessionId),
       nowFn: () => NOW,
     });
@@ -863,16 +891,21 @@ describe('reconcileOrphanProcesses', () => {
     expect(inMemoryMap.has('evict-me')).toBe(false);
   });
 
-  it('reports examined and reaped separately, so a zero is distinguishable from a no-op sweep', () => {
-    const result = reconcileOrphanProcesses({
+  it('reports examined and reaped separately, so a zero is distinguishable from a no-op sweep', async () => {
+    const result = await reconcileOrphanProcesses({
       scanProcesses: () => [],
       nowFn: () => NOW,
     });
 
-    expect(result).toEqual({ examined: 0, reaped: 0, skippedByGrace: 0 });
+    expect(result).toEqual({
+      examined: 0,
+      reaped: 0,
+      skippedByGrace: 0,
+      survivedEscalation: 0,
+    });
   });
 
-  it('reaping a terminal session also kills its cgroup — reaches a test-command tree (pytest, uv run task test) that carries no --session-id/--resume of its own and so is invisible to scanProcesses', () => {
+  it('reaping a terminal session also kills its cgroup — reaches a test-command tree (pytest, uv run task test) that carries no --session-id/--resume of its own and so is invisible to scanProcesses', async () => {
     seedSession({ sessionId: 'orphan-with-tree', status: 'running' });
     updateSessionStatus('orphan-with-tree', 'done', NOW - 60 * 60_000);
     updateSessionWorktreePath(
@@ -882,9 +915,11 @@ describe('reconcileOrphanProcesses', () => {
 
     const cgroupKills: string[] = [];
     const worktreeKills: string[] = [];
-    const result = reconcileOrphanProcesses({
+    const result = await reconcileOrphanProcesses({
       scanProcesses: () => [proc({ pid: 111, sessionId: 'orphan-with-tree' })],
       killProcess: () => {},
+      isPidAlive: () => false,
+      waitMs: instantWait,
       killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
       killWorktreeProcessTree: (worktreePath) => {
         worktreeKills.push(worktreePath);
@@ -900,14 +935,16 @@ describe('reconcileOrphanProcesses', () => {
     ]);
   });
 
-  it('never kills a cgroup or worktree-path tree for a process with no resolvable session uuid (claude remote-control)', () => {
+  it('never kills a cgroup or worktree-path tree for a process with no resolvable session uuid (claude remote-control)', async () => {
     const cgroupKills: string[] = [];
     const worktreeKills: string[] = [];
-    const result = reconcileOrphanProcesses({
+    const result = await reconcileOrphanProcesses({
       scanProcesses: () => [
         { pid: 444, sessionId: null, etimeSeconds: 1_000_000 },
       ],
       killProcess: () => {},
+      isPidAlive: () => false,
+      waitMs: instantWait,
       killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
       killWorktreeProcessTree: (worktreePath) => {
         worktreeKills.push(worktreePath);
@@ -921,10 +958,10 @@ describe('reconcileOrphanProcesses', () => {
     expect(worktreeKills).toEqual([]);
   });
 
-  it('never kills a cgroup or worktree-path tree for a session uuid resolving to no row — e.g. a Remote Control cloud session id', () => {
+  it('never kills a cgroup or worktree-path tree for a session uuid resolving to no row — e.g. a Remote Control cloud session id', async () => {
     const cgroupKills: string[] = [];
     const worktreeKills: string[] = [];
-    const result = reconcileOrphanProcesses({
+    const result = await reconcileOrphanProcesses({
       scanProcesses: () => [
         proc({
           pid: 555,
@@ -933,6 +970,8 @@ describe('reconcileOrphanProcesses', () => {
         }),
       ],
       killProcess: () => {},
+      isPidAlive: () => false,
+      waitMs: instantWait,
       killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
       killWorktreeProcessTree: (worktreePath) => {
         worktreeKills.push(worktreePath);
@@ -946,7 +985,7 @@ describe('reconcileOrphanProcesses', () => {
     expect(worktreeKills).toEqual([]);
   });
 
-  it('never kills a cgroup or worktree-path tree for a process whose row is non-terminal (live session)', () => {
+  it('never kills a cgroup or worktree-path tree for a process whose row is non-terminal (live session)', async () => {
     seedSession({ sessionId: 'live-row-2', status: 'running' });
     updateSessionWorktreePath(
       'live-row-2',
@@ -955,9 +994,11 @@ describe('reconcileOrphanProcesses', () => {
 
     const cgroupKills: string[] = [];
     const worktreeKills: string[] = [];
-    reconcileOrphanProcesses({
+    await reconcileOrphanProcesses({
       scanProcesses: () => [proc({ pid: 666, sessionId: 'live-row-2' })],
       killProcess: () => {},
+      isPidAlive: () => false,
+      waitMs: instantWait,
       killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
       killWorktreeProcessTree: (worktreePath) => {
         worktreeKills.push(worktreePath);
@@ -968,5 +1009,74 @@ describe('reconcileOrphanProcesses', () => {
 
     expect(cgroupKills).toEqual([]);
     expect(worktreeKills).toEqual([]);
+  });
+
+  it('escalates to SIGKILL when the process ignores SIGTERM, and confirms death before counting it reaped', async () => {
+    seedSession({ sessionId: 'ignores-sigterm', status: 'running' });
+    updateSessionStatus('ignores-sigterm', 'done', NOW - 60 * 60_000);
+
+    const signalsSent: NodeJS.Signals[] = [];
+    // Alive after SIGTERM (first check), dead after SIGKILL (second check).
+    let aliveCheckCount = 0;
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [
+        proc({ pid: 2020, sessionId: 'ignores-sigterm' }),
+      ],
+      killProcess: (_pid, signal) => signalsSent.push(signal),
+      isPidAlive: () => {
+        aliveCheckCount++;
+        return aliveCheckCount === 1;
+      },
+      waitMs: instantWait,
+      nowFn: () => NOW,
+    });
+
+    expect(signalsSent).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(result.reaped).toBe(1);
+    expect(result.survivedEscalation).toBe(0);
+  });
+
+  it('does not count a process as reaped when it survives both SIGTERM and SIGKILL', async () => {
+    seedSession({ sessionId: 'survives-everything', status: 'running' });
+    updateSessionStatus('survives-everything', 'done', NOW - 60 * 60_000);
+
+    const signalsSent: NodeJS.Signals[] = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [
+        proc({ pid: 3030, sessionId: 'survives-everything' }),
+      ],
+      killProcess: (_pid, signal) => signalsSent.push(signal),
+      isPidAlive: () => true, // never dies, e.g. stuck in D-state
+      waitMs: instantWait,
+      nowFn: () => NOW,
+    });
+
+    expect(signalsSent).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(result.reaped).toBe(0);
+    expect(result.survivedEscalation).toBe(1);
+  });
+
+  it('still runs the cgroup and worktree-tree backstops even when the pid-level escalation cannot confirm death', async () => {
+    seedSession({ sessionId: 'survives-with-tree', status: 'running' });
+    updateSessionStatus('survives-with-tree', 'done', NOW - 60 * 60_000);
+    updateSessionWorktreePath(
+      'survives-with-tree',
+      '/srv/app/.claude/worktrees/survives-with-tree',
+    );
+
+    const cgroupKills: string[] = [];
+    const result = await reconcileOrphanProcesses({
+      scanProcesses: () => [
+        proc({ pid: 4040, sessionId: 'survives-with-tree' }),
+      ],
+      killProcess: () => {},
+      isPidAlive: () => true,
+      waitMs: instantWait,
+      killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
+      nowFn: () => NOW,
+    });
+
+    expect(result.survivedEscalation).toBe(1);
+    expect(cgroupKills).toEqual(['survives-with-tree']);
   });
 });

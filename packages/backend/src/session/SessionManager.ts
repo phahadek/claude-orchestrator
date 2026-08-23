@@ -5600,7 +5600,7 @@ export class SessionManager extends EventEmitter {
    * coverage matrix none of the three sweeps above can reach. See
    * sessionLivenessReconciler.reconcileOrphanProcesses.
    */
-  reconcileOrphanProcesses(): OrphanProcessReconcileResult {
+  reconcileOrphanProcesses(): Promise<OrphanProcessReconcileResult> {
     return reconcileOrphanProcesses({
       evictSessionMapEntry: (sessionId) =>
         this.evictDeadSessionEntry(sessionId),
