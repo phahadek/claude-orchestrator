@@ -44,6 +44,7 @@ const SETTING_KEYS = [
   'session_pause_threshold_seconds',
   'session_inert_threshold_seconds',
   'session_hard_stop_window_seconds',
+  'session_alive_park_escalation_seconds',
   'ci_poll_interval_seconds',
   'ci_poll_max_minutes',
   'max_review_iterations',
@@ -156,6 +157,9 @@ function applyToRuntime(
       break;
     case 'session_hard_stop_window_seconds':
       runtimeSettings.session_hard_stop_window_seconds = value as number;
+      break;
+    case 'session_alive_park_escalation_seconds':
+      runtimeSettings.session_alive_park_escalation_seconds = value as number;
       break;
     case 'ci_poll_interval_seconds':
       runtimeSettings.ci_poll_interval_seconds = value as number;
@@ -302,6 +306,9 @@ function runtimeSettingsAsRecord(): {
     ),
     session_hard_stop_window_seconds: String(
       runtimeSettings.session_hard_stop_window_seconds,
+    ),
+    session_alive_park_escalation_seconds: String(
+      runtimeSettings.session_alive_park_escalation_seconds,
     ),
     ci_poll_interval_seconds: String(runtimeSettings.ci_poll_interval_seconds),
     ci_poll_max_minutes: String(runtimeSettings.ci_poll_max_minutes),

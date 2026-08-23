@@ -41,6 +41,7 @@ const SettingsSchema = z.object({
   session_pause_threshold_seconds: z.coerce.number().int().min(0),
   session_inert_threshold_seconds: z.coerce.number().int().min(0),
   session_hard_stop_window_seconds: z.coerce.number().int().min(0),
+  session_alive_park_escalation_seconds: z.coerce.number().int().min(0),
   ci_poll_interval_seconds: z.coerce.number().int().min(1),
   ci_poll_max_minutes: z.coerce.number().int().min(1),
   max_review_iterations: z.coerce.number().int().min(1),
@@ -162,6 +163,12 @@ export const SETTING_DEFAULTS: Settings = {
   session_pause_threshold_seconds: 7200,
   session_inert_threshold_seconds: 600,
   session_hard_stop_window_seconds: 60,
+  // A stuck_session_alive_subprocess park (StuckSessionMonitor.scanForStuckSessions)
+  // is normally transient — the CLI's clean-exit reap runs within seconds. This
+  // bounds how long one may sit with no new session_events before StuckSessionMonitor
+  // escalates to teardown. Deliberately well above a normal cleanup so a
+  // genuinely-transient park is unaffected; 0 disables escalation entirely.
+  session_alive_park_escalation_seconds: 900,
   ci_poll_interval_seconds: 30,
   ci_poll_max_minutes: 30,
   max_review_iterations: 3,

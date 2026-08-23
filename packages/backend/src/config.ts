@@ -789,6 +789,12 @@ export interface RuntimeSettings {
   session_inert_threshold_seconds: number;
   /** After pause, seconds during which a tool_use triggers a hard-stop. */
   session_hard_stop_window_seconds: number;
+  /**
+   * Bound on a stuck_session_alive_subprocess park (StuckSessionMonitor):
+   * seconds a session may sit idle with its subprocess still alive and no new
+   * session_events before StuckSessionMonitor escalates to teardown. 0 disables.
+   */
+  session_alive_park_escalation_seconds: number;
   /** Auto-merger: seconds between CI status polls while waiting for green. */
   ci_poll_interval_seconds: number;
   /** Auto-merger: minutes before the merge attempt gives up and pauses. */
@@ -985,6 +991,9 @@ export const runtimeSettings: RuntimeSettings = {
   ),
   session_hard_stop_window_seconds: Number(
     process.env.SESSION_HARD_STOP_WINDOW_SECONDS ?? 60,
+  ),
+  session_alive_park_escalation_seconds: Number(
+    process.env.SESSION_ALIVE_PARK_ESCALATION_SECONDS ?? 900,
   ),
   milestone_attention_aging_threshold_seconds: Number(
     process.env.MILESTONE_ATTENTION_AGING_THRESHOLD_SECONDS ?? 24 * 60 * 60,
