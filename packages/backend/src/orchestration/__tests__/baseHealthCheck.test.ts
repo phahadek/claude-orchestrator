@@ -300,7 +300,7 @@ describe('checkBaseBranchHealth', () => {
     expect(result.outcome).toBe('partial_fail');
   });
 
-  it('classifies a failed run with no per-test breakdown (e.g. OOM-kill) as total_fail', async () => {
+  it('classifies an OOM-killed run (no per-test breakdown) as unknown, not total_fail — an OOM-kill is the orchestrator resource limit, not a base-tree signal', async () => {
     const project = makeProject();
     mockComputeWholeTreeContentHash.mockResolvedValue('hash-total');
     mockRunProjectTestRequest.mockImplementation(async (spec) => {
@@ -331,7 +331,42 @@ describe('checkBaseBranchHealth', () => {
     });
 
     const result = await checkBaseBranchHealth(project);
-    expect(result.outcome).toBe('total_fail');
+    expect(result.outcome).toBe('unknown');
+  });
+
+  it('classifies a run killed at the configured test-timeout budget (failure_reason=timeout, no summary row, no structured_result) as unknown, not total_fail', async () => {
+    const project = makeProject();
+    mockComputeWholeTreeContentHash.mockResolvedValue('hash-timeout');
+    mockRunProjectTestRequest.mockImplementation(async (spec) => {
+      insertTestRequestRun(
+        'run-timeout',
+        spec.projectId,
+        spec.contentHash,
+        null,
+        Date.now(),
+        undefined,
+        spec.runOrigin,
+      );
+      completeTestRequestRun(
+        'run-timeout',
+        'failed',
+        'timed out',
+        'timeout',
+        null,
+        false,
+        true,
+      );
+      return {
+        runId: 'run-timeout',
+        joined: false,
+        passed: false,
+        output: 'timed out',
+      };
+    });
+
+    const result = await checkBaseBranchHealth(project);
+    expect(result.outcome).toBe('unknown');
+    expect(classifyTestRunOutcome(result.run!).outcome).toBe('timed-out');
   });
 
   it('classifies a failed run with structured_result nulled but extraction output (test_run_summaries) present as partial_fail, not total_fail', async () => {
@@ -400,7 +435,7 @@ describe('checkBaseBranchHealth', () => {
     expect(result.outcome).toBe('partial_fail');
   });
 
-  it('classifies a failed run with no structured_result and no extraction output as total_fail when acquisition was attempted (genuine crash/OOM case)', async () => {
+  it('classifies a failed run with no structured_result and no extraction output as total_fail when acquisition was attempted (genuine crash case — failure_reason neither timeout nor OOM)', async () => {
     const project = makeProject();
     mockComputeWholeTreeContentHash.mockResolvedValue('hash-crash');
     mockRunProjectTestRequest.mockImplementation(async (spec) => {
@@ -417,9 +452,9 @@ describe('checkBaseBranchHealth', () => {
         'run-crash',
         'failed',
         'killed',
-        'oom_killed',
+        'generic',
         null,
-        true,
+        false,
         true,
       );
       return {
