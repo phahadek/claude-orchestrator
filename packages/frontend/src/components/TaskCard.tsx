@@ -140,6 +140,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     "Session's orchestrator MCP server never connected and automatic in-place respawn attempts were exhausted — review and resume manually.",
   verdict_routing_failed:
     'A review verdict had no session to route feedback to (e.g. an orphaned PR with no linked session) — assign a session or redispatch manually.',
+  base_attributable_test_excluded:
+    'A failing F2 test was excluded as a confirmed base-branch break (clearing both masking guards) — does not block merge. No action needed.',
 };
 
 function verdictLabel(verdict: string): string {

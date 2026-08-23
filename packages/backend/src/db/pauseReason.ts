@@ -61,6 +61,7 @@ export type CanonicalPauseReason =
   | 'ci_not_completing'
   | 'mcp_unreachable_exhausted'
   | 'verdict_routing_failed';
+  | 'base_attributable_test_excluded';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -402,6 +403,20 @@ export const PAUSE_REASON_REGISTRY: Record<
     source: 'review',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
+  // Advisory-only pill: the F2 gate's baseAttributableFilter excused this
+  // PR's failing test(s) as confirmed base-attributable (and, for any
+  // excluded test, cleared both masking guards — see
+  // orchestration/baseAttributableFilter.ts). Never blocks merge — the
+  // point is to keep the exclusion visible to an operator rather than let
+  // it pass silently, mirroring ci_not_completing/
+  // test_report_acquisition_failed. No RECOVERY_ACTION_MAP entry — nothing
+  // for an operator to click, the pill clears itself once a subsequent run
+  // is clean or newly attributable.
+  base_attributable_test_excluded: {
+    source: 'tests',
+    severity: 'needs_attention',
+    retry_strategy: 'automatic',
+    blocks_merge: false,
   },
 };
 

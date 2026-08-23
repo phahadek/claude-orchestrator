@@ -102,6 +102,7 @@ import type {
   OpsJournalState,
 } from './types';
 import { FLOW_IDS, DEFAULT_ARM, type FlowId } from '../orchestration/flowArm';
+import { deriveBranchSlug } from '../session/branchSlug';
 
 // ─── asOf reconstruction ────────────────────────────────────────────────────
 // Point-in-time reads for the gate-verify read path (see gate/gateItemVerifier.ts
@@ -3360,20 +3361,47 @@ export interface SessionBranchMatch {
 }
 
 /**
- * Attempt to derive a session from a PR's head_branch by matching against
- * sessions.worktree_path. Returns the match when exactly one session path
- * contains the branch name. Logs a warning and returns null for zero or
+ * Attempt to derive a session from a PR's head_branch by re-deriving the
+ * branch name each candidate session would have produced (via
+ * deriveBranchSlug, the same function SessionManager.start/respawnSession use
+ * to actually create the branch) and matching it against headBranch.
+ *
+ * sessions.worktree_path cannot be used for this — it is always
+ * `<projectDir>/.claude/worktrees/<sessionId>`, keyed purely by the session's
+ * UUID with no branch-name component, so a LIKE match against it can never
+ * succeed for a real branch name. task_name (the task title captured at
+ * session start) plus task_id is the only durable record of what branch a
+ * session's worktree was created on — so recompute it rather than storing it
+ * redundantly.
+ *
+ * Both the current (task-id-suffixed) and legacy (title-only) derivations are
+ * checked per candidate, matching resolveResumeBranchSlug's fallback for
+ * branches created before the task-id suffix landed. Returns the match when
+ * exactly one session matches. Logs a warning and returns null for zero or
  * multiple matches.
  */
 export function lookupSessionByBranch(
   headBranch: string,
 ): SessionBranchMatch | null {
-  const rows = db
-    .prepare<{ pattern: string }>(
-      `SELECT session_id, task_id FROM sessions
-       WHERE worktree_path LIKE @pattern`,
+  const candidates = db
+    .prepare(
+      `SELECT session_id, task_id, task_name FROM sessions
+       WHERE task_name IS NOT NULL`,
     )
-    .all({ pattern: `%${headBranch}%` }) as SessionBranchMatch[];
+    .all() as Array<{
+    session_id: string;
+    task_id: string | null;
+    task_name: string;
+  }>;
+
+  const rows: SessionBranchMatch[] = [];
+  for (const c of candidates) {
+    const current = deriveBranchSlug(c.task_name, c.task_id);
+    const legacy = deriveBranchSlug(c.task_name, null);
+    if (headBranch === current || headBranch === legacy) {
+      rows.push({ session_id: c.session_id, task_id: c.task_id });
+    }
+  }
 
   if (rows.length === 1) {
     return rows[0];
@@ -8654,12 +8682,14 @@ export function insertTestRunResults(
     duration_ms: number;
     concurrent_run_count: number | null;
     oom_killed: number;
+    failure_message: string | null;
+    failure_trace_excerpt: string | null;
     created_at: number;
   }>(`
     INSERT INTO test_run_results
-      (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+      (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, failure_message, failure_trace_excerpt, created_at)
     VALUES
-      (@test_request_run_id, @project_id, @test_id, @name, @outcome, @duration_ms, @concurrent_run_count, @oom_killed, @created_at)
+      (@test_request_run_id, @project_id, @test_id, @name, @outcome, @duration_ms, @concurrent_run_count, @oom_killed, @failure_message, @failure_trace_excerpt, @created_at)
   `);
   const stmt = _stmtInsertTestRunResult;
   const insertAll = db.transaction((items: NewTestRunResultRow[]) => {
@@ -8674,6 +8704,8 @@ export function insertTestRunResults(
         duration_ms: item.duration_ms,
         concurrent_run_count: concurrentRunCount,
         oom_killed: oomKilled ? 1 : 0,
+        failure_message: item.failureMessage ?? null,
+        failure_trace_excerpt: item.failureTraceExcerpt ?? null,
         created_at: now,
       });
     }
@@ -8975,7 +9007,7 @@ export function listTestRunResultsForRun(
 ): TestRunResultRow[] {
   return db
     .prepare(
-      `SELECT id, test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at
+      `SELECT id, test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, failure_message, failure_trace_excerpt, created_at
        FROM test_run_results
        WHERE test_request_run_id = ?
        ORDER BY id ASC
@@ -9241,19 +9273,30 @@ let _stmtFailingTestIdsForRun: Database.Statement | null = null;
  * PRMergeWatcher.tryF2LaneAutoDisposition / testRequestLane.ts's
  * evaluateF2LaneFlakyDisposition). Empty when the run has no per-test
  * detail (structured_result never ingested) — the caller treats that as
- * not-eligible, never as "no failures".
+ * not-eligible, never as "no failures". Includes each test's recorded
+ * failure_message/failure_trace_excerpt (nullable — see the test_run_results
+ * migration adding those columns) so a caller comparing a PR's failure
+ * against a base probe's failure for the same test id can do so on content,
+ * not just test id.
  */
+export interface FailingTestForRun {
+  test_id: string;
+  name: string;
+  failure_message: string | null;
+  failure_trace_excerpt: string | null;
+}
+
 export function getFailingTestIdsForRun(
   testRequestRunId: string,
-): { test_id: string; name: string }[] {
+): FailingTestForRun[] {
   _stmtFailingTestIdsForRun ??= db.prepare<{ run_id: string }>(`
-    SELECT test_id, name FROM test_run_results
+    SELECT test_id, name, failure_message, failure_trace_excerpt FROM test_run_results
     WHERE test_request_run_id = @run_id
       AND outcome IN ('failed', 'error')
   `);
   return _stmtFailingTestIdsForRun.all({
     run_id: testRequestRunId,
-  }) as { test_id: string; name: string }[];
+  }) as FailingTestForRun[];
 }
 
 export interface FlaggedFlakyTest {

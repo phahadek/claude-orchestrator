@@ -23,6 +23,13 @@ import {
 } from '../session/autofix-runner';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
 import { evaluateF2LaneFlakyDisposition } from '../orchestration/testRequestLane';
+import {
+  filterBaseAttributableFailures,
+  applyF2GateMaskingGuards,
+  renderBaseAttributableFilterDigest,
+  type BaseAttributableFilterResult,
+  type FailingTest,
+} from '../orchestration/baseAttributableFilter';
 import { recordEvent } from '../audit/AuditLog';
 import { closeFlakyRemediationTaskIfLinked } from '../audit/flakyRemediationFiling';
 import { closeBaseHealthRemediationTaskIfLinked } from '../audit/baseHealthRemediationFiling';
@@ -655,50 +662,101 @@ export class PRMergeWatcher extends EventEmitter {
         ? getLatestTestRequestRun(project.id, contentHash)
         : undefined;
       if (testResult && testResult.state === 'failed') {
-        if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
-          const recovered = worktreePath
-            ? await this.tryF2LaneAutoDisposition(
-                pr,
-                project,
-                testResult,
-                worktreePath,
-              )
-            : false;
-          if (!recovered) {
-            setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
-            setPauseReason(
-              pr.pr_number,
-              pr.repo,
-              'ci_failing',
-              testResult.output ? testResult.output.slice(0, 1000) : undefined,
-            );
-            const digest = testResult.structured_result
-              ? buildTestResultDigest(testResult.structured_result)
-              : null;
-            const verifyMsg = formatCIFailureFeedback({
-              source: 'verify',
-              failedCommand: config.test.join(' && '),
-              truncatedOutput:
-                digest ??
-                (testResult.output
-                  ? truncateLog(testResult.output, CI_LOG_EXCERPT_CAP)
-                  : undefined),
-              conflicted: pr.merge_state === 'dirty',
-              baseBranch: pr.base_branch ?? undefined,
-            });
-            this.sessions
-              .sendOrResume(pr.session_id!, verifyMsg)
-              .catch((err: unknown) =>
-                logger.warn(
-                  `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
-                  (err as Error).message,
-                ),
+        // ── Base-health-aware f2-gate pre-empt ─────────────────────────────
+        // Filter the raw failure against the project's confirmed
+        // base-branch health, gated by the two masking guards, before this
+        // PR is ever paused/nudged — a confirmed base-attributable failure
+        // that clears both guards must never block merge or charge the
+        // session. See orchestration/baseAttributableFilter.ts.
+        const gate = await this.computeBaseAttributableF2GateFilter(
+          pr,
+          project,
+          testResult,
+        );
+        if (
+          gate &&
+          gate.result.outcome !== 'unfiltered' &&
+          gate.result.passed
+        ) {
+          setPauseReason(
+            pr.pr_number,
+            pr.repo,
+            'base_attributable_test_excluded',
+            renderBaseAttributableFilterDigest(
+              gate.result,
+              gate.guardBlocked,
+            ).slice(0, 1000),
+          );
+          this.autoMerger?.attempt(pr.pr_number, pr.repo);
+          // Fall through — this run's failure is fully excused, so the F2
+          // gate does not block; GitHub mergeability evaluation below still
+          // runs normally.
+        } else {
+          const baseExcusedTestIds = new Set(
+            (gate && gate.result.outcome !== 'unfiltered'
+              ? gate.result.excludedTests
+              : []
+            ).map((t) => t.test_id),
+          );
+          if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
+            const recovered = worktreePath
+              ? await this.tryF2LaneAutoDisposition(
+                  pr,
+                  project,
+                  testResult,
+                  worktreePath,
+                  baseExcusedTestIds,
+                )
+              : false;
+            if (!recovered) {
+              setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
+              const gateDigest =
+                gate && gate.result.outcome !== 'unfiltered'
+                  ? renderBaseAttributableFilterDigest(
+                      gate.result,
+                      gate.guardBlocked,
+                    )
+                  : null;
+              setPauseReason(
+                pr.pr_number,
+                pr.repo,
+                'ci_failing',
+                gateDigest
+                  ? gateDigest.slice(0, 1000)
+                  : testResult.output
+                    ? testResult.output.slice(0, 1000)
+                    : undefined,
               );
+              const digest = testResult.structured_result
+                ? buildTestResultDigest(testResult.structured_result)
+                : null;
+              const verifyMsg = formatCIFailureFeedback({
+                source: 'verify',
+                failedCommand: config.test.join(' && '),
+                truncatedOutput:
+                  gateDigest ??
+                  digest ??
+                  (testResult.output
+                    ? truncateLog(testResult.output, CI_LOG_EXCERPT_CAP)
+                    : undefined),
+                conflicted: pr.merge_state === 'dirty',
+                baseBranch: pr.base_branch ?? undefined,
+              });
+              this.sessions
+                .sendOrResume(pr.session_id!, verifyMsg)
+                .catch((err: unknown) =>
+                  logger.warn(
+                    `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
+                    (err as Error).message,
+                  ),
+                );
+            }
           }
+          return; // Gated on failing tests — skip GitHub mergeability evaluation
         }
-        return; // Gated on failing tests — skip GitHub mergeability evaluation
       }
-      // No result yet (test hasn't run) or test passed → fall through
+      // No result yet (test hasn't run), test passed, or the failure was
+      // fully excused by the base-attributable gate filter → fall through
 
       // ── Test-report acquisition failure (non-blocking) ────────────────────
       // Independent of the ci_failing branch above: a run whose producer
@@ -1291,6 +1349,69 @@ export class PRMergeWatcher extends EventEmitter {
   }
 
   /**
+   * Gate-level base-health pre-empt for a failing F2 run: reuses the same
+   * filterBaseAttributableFailures the test.request lane already calls (see
+   * stagedIntents.ts), then applies the two f2-gate-specific masking guards
+   * (applyF2GateMaskingGuards) before trusting any of its exclusions —
+   * f2/merge-time evaluation has no live session worktree to source a diff
+   * from, so `changedFiles` comes from GitHubClient.fetchDiff instead of
+   * getChangedFiles. Never throws: a fetchDiff failure fails closed (every
+   * candidate exclusion is blocked, surfaced via guardBlocked) rather than
+   * risk excusing a test without confirming the diff doesn't touch it.
+   */
+  private async computeBaseAttributableF2GateFilter(
+    pr: PullRequestRow,
+    project: ProjectConfig,
+    testResult: TestRequestRunRow,
+  ): Promise<{
+    result: BaseAttributableFilterResult;
+    guardBlocked: FailingTest[];
+  } | null> {
+    let filterResult: BaseAttributableFilterResult;
+    try {
+      filterResult = await filterBaseAttributableFailures(
+        project,
+        testResult,
+        pr.task_id ?? null,
+      );
+    } catch (err) {
+      logger.warn(
+        `[PRMergeWatcher] PR #${pr.pr_number}: base-attributable filter failed: ${(err as Error).message}`,
+      );
+      return null;
+    }
+    if (filterResult.excludedTests.length === 0) {
+      return { result: filterResult, guardBlocked: [] };
+    }
+
+    let changedFiles: string[];
+    try {
+      const diff = await this.github.fetchDiff(pr.pr_number, pr.repo);
+      changedFiles = diff.filesChanged;
+    } catch (err) {
+      logger.warn(
+        `[PRMergeWatcher] PR #${pr.pr_number}: fetchDiff failed for f2 gate masking guard — failing closed: ${(err as Error).message}`,
+      );
+      return {
+        result: {
+          outcome: 'unfiltered',
+          passed: false,
+          excludedTests: [],
+          flakyExcludedTests: filterResult.flakyExcludedTests,
+          remainingTests: [
+            ...filterResult.remainingTests,
+            ...filterResult.excludedTests,
+          ],
+          baseRun: filterResult.baseRun,
+        },
+        guardBlocked: filterResult.excludedTests,
+      };
+    }
+
+    return applyF2GateMaskingGuards(filterResult, testResult, changedFiles);
+  }
+
+  /**
    * Lane-side, f2-only auto-disposition: intercepts an F2 (orchestrator-run
    * test gate) failure right before it would otherwise pause the PR and nudge
    * the session (poll()'s "Orchestrator-run test gate (F2)" block above).
@@ -1310,6 +1431,7 @@ export class PRMergeWatcher extends EventEmitter {
     project: ProjectConfig,
     testResult: TestRequestRunRow,
     worktreePath: string,
+    baseExcusedTestIds: ReadonlySet<string> = new Set(),
   ): Promise<boolean> {
     const maxRetries = typedGetSetting('flake_recovery_max_retries');
     if (pr.flake_recovery_attempts >= maxRetries) {
@@ -1363,6 +1485,7 @@ export class PRMergeWatcher extends EventEmitter {
       typedGetSetting('flip_rate_threshold_k'),
       typedGetSetting('flip_rate_breadth_n'),
       typedGetSetting('flip_rate_breadth_window_hours'),
+      baseExcusedTestIds,
     );
     if (!eligible) return false;
 
