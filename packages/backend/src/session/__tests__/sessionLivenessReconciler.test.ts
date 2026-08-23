@@ -904,7 +904,9 @@ describe('reconcileOrphanProcesses', () => {
     const cgroupKills: string[] = [];
     const worktreeKills: string[] = [];
     const result = reconcileOrphanProcesses({
-      scanProcesses: () => [{ pid: 444, sessionId: null, etimeSeconds: 1_000_000 }],
+      scanProcesses: () => [
+        { pid: 444, sessionId: null, etimeSeconds: 1_000_000 },
+      ],
       killProcess: () => {},
       killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
       killWorktreeProcessTree: (worktreePath) => {

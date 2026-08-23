@@ -1913,9 +1913,8 @@ describe('cleanupWorktree — process-tree termination', () => {
       .mock.calls.findIndex(
         ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
       );
-    const removeCallOrder = vi.mocked(execSync).mock.invocationCallOrder[
-      removeCall
-    ];
+    const removeCallOrder =
+      vi.mocked(execSync).mock.invocationCallOrder[removeCall];
     expect(killCallOrder).toBeLessThan(removeCallOrder);
   });
 

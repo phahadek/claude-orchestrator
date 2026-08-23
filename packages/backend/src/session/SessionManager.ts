@@ -129,7 +129,10 @@ import {
   listLiveSessionRows,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
-import { isSessionProcessAlive, killWorktreeProcessTree } from './processLiveness';
+import {
+  isSessionProcessAlive,
+  killWorktreeProcessTree,
+} from './processLiveness';
 import {
   reconcileSessionLiveness,
   reconcileNonPlanningSessionLiveness,
