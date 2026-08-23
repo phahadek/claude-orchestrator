@@ -42,7 +42,17 @@ test:
   - npm run test -w packages/backend
 
 # Per-command timeout in seconds for test commands. Default 300 (5 min).
-test_timeout_sec: 300
+# Raised 300 -> 900 on 2026-08-23: the backend suite's own measured test time
+# (test_run_summaries.total_duration_ms) grew 188s -> 359s between 08-19 and
+# 08-23 (+91%) while its test count grew only +3.6%, and wall-clock execution
+# p50 reached 4.9 min against the 5 min budget (p90 8.5 min). Runs began
+# timing out on 08-23 (10 timeouts, 0 passes in 34 runs; 0 timeouts on 08-22),
+# and every timeout leaves orphaned vitest workers behind (see the test-lane
+# teardown task), so crossing this threshold is self-reinforcing rather than
+# self-limiting. 900 restores roughly the 3x headroom-over-p50 this value had
+# when it was set. This is a stopgap: the suite's cost trend is the real
+# problem and needs its own fix.
+test_timeout_sec: 900
 
 # Commands the orchestrator runs on each PR before spawning review — catches lint errors, license contamination, and secret leaks.
 # Phase 1 baseline: eslint errors + GPL/AGPL dependency check. Warnings tolerated (11-warning baseline on dev).
