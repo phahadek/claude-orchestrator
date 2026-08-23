@@ -471,17 +471,31 @@ export function resumeActiveDeployRuns(projects: ProjectRow[]): void {
  * self-hosted carve-out. Fires the gate-verification reconciler on report,
  * event-driven rather than polled.
  */
-export function createDeployRouter(): Router {
+/**
+ * GET /api/deploy/build-sha — reports the SHA embedded into this running
+ * process's own build. This is the identity check verify's playbook step
+ * curls (`curl -sf .../deploy/build-sha`) and compares byte-for-byte
+ * against the run's own target_sha, so it responds with the bare SHA as
+ * plain text, not a JSON envelope.
+ *
+ * Registered as its own router, mounted in server.ts ahead of
+ * requireDeviceOrSessionRouteAuth (mirroring GET /api/readiness) rather
+ * than living inside createDeployRouter(): a restarted process must be
+ * able to report its own identity without a device token, since the
+ * restart step's identity_capture runs as an unauthenticated loopback curl.
+ * The build SHA is a build identity, not a secret. Every other deploy
+ * route stays behind auth via createDeployRouter() below.
+ */
+export function createDeployBuildShaRouter(): Router {
   const router = Router();
-
-  // GET /api/deploy/build-sha
-  // Reports the SHA embedded into this running process's own build — the
-  // identity check verify's playbook step curls (`curl -sf .../deploy/build-sha`)
-  // and compares byte-for-byte against the run's own target_sha, so this
-  // responds with the bare SHA as plain text, not a JSON envelope.
   router.get('/deploy/build-sha', (_req: Request, res: Response) => {
     res.status(200).type('text/plain').send(BUILD_SHA);
   });
+  return router;
+}
+
+export function createDeployRouter(): Router {
+  const router = Router();
 
   // POST /api/deploy/report-in  { projectId, sha }
   router.post('/deploy/report-in', (req: Request, res: Response) => {

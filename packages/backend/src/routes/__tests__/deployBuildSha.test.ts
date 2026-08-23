@@ -6,6 +6,11 @@
  * actually serving. The module reads it once, from the path named by
  * DEPLOY_BUILD_SHA_PATH (npm run build writes the real one to dist/), so the
  * env var must be set before the route module is first imported.
+ *
+ * It is served unauthenticated (createDeployBuildShaRouter, mounted ahead of
+ * requireDeviceOrSessionRouteAuth) since the restart step's identity_capture
+ * is an unauthenticated loopback curl — while every other deploy route
+ * (createDeployRouter) stays behind that auth gate.
  */
 
 import fs from 'fs';
@@ -40,6 +45,10 @@ vi.mock('../../db/queries.js', () => ({
   insertCompletingSignal: vi.fn(),
   TERMINAL_SESSION_STATUSES: new Set(),
   getLatestOpsSessionByTaskId: vi.fn(),
+  getActiveDeviceCount: vi.fn(() => 1),
+  getDeviceByToken: vi.fn(() => null),
+  updateDeviceLastSeen: vi.fn(),
+  getGrantedCapabilities: vi.fn(() => []),
 }));
 
 vi.mock('../../deploy/loadPlaybook.js', () => ({
@@ -62,10 +71,10 @@ afterAll(() => {
 });
 
 describe('GET /api/deploy/build-sha', () => {
-  it('returns the SHA embedded into this build at npm run build time', async () => {
-    const { createDeployRouter } = await import('../deploy.js');
+  it('returns the SHA embedded into this build at npm run build time, with no Authorization header', async () => {
+    const { createDeployBuildShaRouter } = await import('../deploy.js');
     const app = express();
-    app.use('/api', createDeployRouter());
+    app.use('/api', createDeployBuildShaRouter());
 
     const res = await request(app).get('/api/deploy/build-sha');
 
@@ -73,5 +82,27 @@ describe('GET /api/deploy/build-sha', () => {
     // Plain text, not a JSON envelope — verify's identity_capture curls this
     // endpoint and compares the raw body byte-for-byte against target_sha.
     expect(res.text).toBe('abc123def456789');
+    // A single line — no trailing newline — so normalizeIdentityCapture
+    // returns it verbatim rather than the <identity-capture-invalid> marker.
+    expect(res.text).not.toMatch(/\r|\n/);
+  });
+
+  it('mirrors server.ts: mounting the build-sha router ahead of requireDeviceOrSessionRouteAuth does not make a sibling deploy route reachable unauthenticated', async () => {
+    const { createDeployBuildShaRouter, createDeployRouter } =
+      await import('../deploy.js');
+    const { requireDeviceOrSessionRouteAuth } =
+      await import('../../auth/SessionRouteAuth.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createDeployBuildShaRouter());
+    app.use('/api', requireDeviceOrSessionRouteAuth);
+    app.use('/api', createDeployRouter());
+
+    const buildSha = await request(app).get('/api/deploy/build-sha');
+    expect(buildSha.status).toBe(200);
+    expect(buildSha.text).toBe('abc123def456789');
+
+    const status = await request(app).get('/api/deploy/status?project=proj');
+    expect(status.status).toBe(401);
   });
 });

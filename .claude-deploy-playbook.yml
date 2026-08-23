@@ -67,7 +67,7 @@ steps:
   - id: restart
     kind: shell
     command_or_prompt: 'sudo systemctl restart orchestrator.service'
-    identity_capture: 'curl -sf http://localhost:3000/deploy/build-sha'
+    identity_capture: 'curl -sf http://localhost:3000/api/deploy/build-sha'
     is_prod_mutating: true
 
   - id: verify

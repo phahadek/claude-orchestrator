@@ -107,6 +107,7 @@ import {
 } from './routes/diagnostics';
 import {
   createDeployRouter,
+  createDeployBuildShaRouter,
   setDeployScheduler,
   setDeploySessionManager,
   resumeActiveDeployRuns,
@@ -276,6 +277,12 @@ app.use('/api', createOpsJournalRouter());
 // Device-authed-only abort route for a mis-filed Backlog task — flips it to
 // Deferred and kills its bound groom session, if any (see routes/taskAbort.ts).
 app.use('/api', createTaskAbortRouter(sessionManager));
+// Build-identity read — public, no token required. The restart step's
+// identity_capture is an unauthenticated loopback curl that must resolve
+// to the running process's build SHA to prove verify against the right
+// build; the SHA is a build identity, not a secret. Every other deploy
+// route stays behind requireDeviceOrSessionRouteAuth via createDeployRouter().
+app.use('/api', createDeployBuildShaRouter());
 // Setup endpoints are public — wizard UI uses them before credentials exist
 app.use('/api', setupRouter);
 // Gate all other /api routes when setup has not been completed
