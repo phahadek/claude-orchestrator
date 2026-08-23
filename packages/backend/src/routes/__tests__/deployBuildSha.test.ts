@@ -88,12 +88,10 @@ describe('GET /api/deploy/build-sha', () => {
   });
 
   it('mirrors server.ts: mounting the build-sha router ahead of requireDeviceOrSessionRouteAuth does not make a sibling deploy route reachable unauthenticated', async () => {
-    const { createDeployBuildShaRouter, createDeployRouter } = await import(
-      '../deploy.js'
-    );
-    const { requireDeviceOrSessionRouteAuth } = await import(
-      '../../auth/SessionRouteAuth.js'
-    );
+    const { createDeployBuildShaRouter, createDeployRouter } =
+      await import('../deploy.js');
+    const { requireDeviceOrSessionRouteAuth } =
+      await import('../../auth/SessionRouteAuth.js');
     const app = express();
     app.use(express.json());
     app.use('/api', createDeployBuildShaRouter());

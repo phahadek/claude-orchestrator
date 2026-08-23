@@ -698,9 +698,7 @@ describe('DeployOrchestrator: resume after a restart', () => {
 
 describe('normalizeIdentityCapture', () => {
   it('returns the SHA unchanged for the exact body GET /api/deploy/build-sha responds with — a single line, no trailing newline', () => {
-    expect(normalizeIdentityCapture('abc123def456789')).toBe(
-      'abc123def456789',
-    );
+    expect(normalizeIdentityCapture('abc123def456789')).toBe('abc123def456789');
   });
 
   it('still trims surrounding whitespace, e.g. a trailing newline from -o /dev/stdout-style capture', () => {
