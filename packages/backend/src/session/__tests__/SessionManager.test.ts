@@ -2980,7 +2980,9 @@ describe('sendOrResume — missing worktree falls through to recreation', () => 
           return callback(err);
         }
         // The ref already holds the value the fetch wanted to write.
-        callback(null, { stdout: 'fc7b2df8870355a1bb8b3cbb0eda4fac44f31456\n' });
+        callback(null, {
+          stdout: 'fc7b2df8870355a1bb8b3cbb0eda4fac44f31456\n',
+        });
       },
     );
 
@@ -3352,7 +3354,9 @@ describe('fetchBaseBranchCoalesced — direct unit tests', () => {
           return callback(err);
         }
         // Both the local ref and FETCH_HEAD now hold the winner's value.
-        callback(null, { stdout: 'fc7b2df8870355a1bb8b3cbb0eda4fac44f31456\n' });
+        callback(null, {
+          stdout: 'fc7b2df8870355a1bb8b3cbb0eda4fac44f31456\n',
+        });
       },
     );
 
@@ -3376,10 +3380,14 @@ describe('fetchBaseBranchCoalesced — direct unit tests', () => {
           return callback(err);
         }
         if (String(cmd).includes('refs/remotes/origin/dev')) {
-          return callback(null, { stdout: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' });
+          return callback(null, {
+            stdout: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n',
+          });
         }
         // FETCH_HEAD
-        callback(null, { stdout: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' });
+        callback(null, {
+          stdout: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n',
+        });
       },
     );
 
@@ -3401,7 +3409,9 @@ describe('fetchBaseBranchCoalesced — direct unit tests', () => {
           });
           return callback(err);
         }
-        callback(null, { stdout: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n' });
+        callback(null, {
+          stdout: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n',
+        });
       },
     );
 
@@ -4115,7 +4125,9 @@ describe('start() — pre-launch fetch serialization/coalescing (integration)', 
           return callback(err);
         }
         // The ref already holds the value the fetch wanted to write.
-        callback(null, { stdout: 'fc7b2df8870355a1bb8b3cbb0eda4fac44f31456\n' });
+        callback(null, {
+          stdout: 'fc7b2df8870355a1bb8b3cbb0eda4fac44f31456\n',
+        });
       },
     );
 
