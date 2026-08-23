@@ -910,10 +910,62 @@ async function withRepoWorktreeLock<T>(
  * Outcome of a pre-launch base-branch fetch: `ok: false` means the fetch
  * failed (or lost the ref lock to a concurrent fetch outside this process)
  * and the caller is proceeding against whatever the local ref already holds.
+ * `benignRefLock: true` narrows that further: the failure was a lost
+ * `refs/remotes/origin/<base>` ref-lock race (another fetch against the same
+ * object store — a worktree, an audit/base-health check, a deploy — won the
+ * lock first) *and* the ref now holds the exact value this fetch wanted to
+ * write. The remote state the caller wanted is present; this was a no-op
+ * failure, not a stale base.
  */
 export interface BaseFetchOutcome {
   ok: boolean;
   error?: unknown;
+  benignRefLock?: boolean;
+}
+
+/** Matches git's ref-lock contention error text across git versions loosely enough to detect the failure mode without depending on exact wording. */
+const GIT_REF_LOCK_RE = /cannot lock ref|unable to update local ref/i;
+
+function extractErrorText(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const message = (error as Error).message;
+    const stderr = (error as { stderr?: unknown }).stderr;
+    return [message, stderr].filter(Boolean).join('\n');
+  }
+  return String(error);
+}
+
+/**
+ * After a failed fetch whose error text indicates a lost ref-lock race,
+ * re-read `refs/remotes/origin/<baseBranch>` and compare it against
+ * `FETCH_HEAD` (which git updates to the fetched tip regardless of whether
+ * the local ref update itself succeeded). Equal, non-empty values mean the
+ * winner of the race wrote the same value this fetch wanted — the outcome is
+ * benign. Never retries the fetch itself; this only classifies the failure
+ * already reported.
+ */
+async function isBenignRefLockLoss(
+  error: unknown,
+  projectDir: string,
+  baseBranch: string,
+): Promise<boolean> {
+  if (!GIT_REF_LOCK_RE.test(extractErrorText(error))) {
+    return false;
+  }
+  try {
+    const [{ stdout: refOut }, { stdout: fetchHeadOut }] = await Promise.all([
+      exec(`git rev-parse refs/remotes/origin/${baseBranch}`, {
+        cwd: projectDir,
+        timeout: 10_000,
+      }),
+      exec('git rev-parse FETCH_HEAD', { cwd: projectDir, timeout: 10_000 }),
+    ]);
+    const ref = refOut.trim();
+    const fetchHead = fetchHeadOut.trim();
+    return ref.length > 0 && ref === fetchHead;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -978,7 +1030,12 @@ export async function fetchBaseBranchCoalesced(
       });
       return { ok: true };
     } catch (error) {
-      return { ok: false, error };
+      const benignRefLock = await isBenignRefLockLoss(
+        error,
+        projectDir,
+        baseBranch,
+      );
+      return { ok: false, error, benignRefLock };
     }
   })();
 
@@ -1916,7 +1973,22 @@ export class SessionManager extends EventEmitter {
             projectDir,
             project.baseBranch,
           );
-          if (!fetchOutcome.ok) {
+          if (!fetchOutcome.ok && fetchOutcome.benignRefLock) {
+            logger.info(
+              `[SessionManager] git fetch origin ${project.baseBranch} lost a ref-lock race but the ref already holds the fetched value (continuing): ${fetchOutcome.error}`,
+            );
+            recordEvent({
+              event_type: 'base_fetch_ref_lock_benign',
+              actor_type: 'system',
+              actor_id: sessionId,
+              project_id: projectId || null,
+              task_id: sessionTaskId || null,
+              payload: {
+                baseBranch: project.baseBranch,
+                error: String(fetchOutcome.error),
+              },
+            });
+          } else if (!fetchOutcome.ok) {
             logger.warn(
               `[SessionManager] git fetch origin ${project.baseBranch} failed (continuing with local ref): ${fetchOutcome.error}`,
             );
@@ -5105,7 +5177,22 @@ export class SessionManager extends EventEmitter {
           projectDir,
           project.baseBranch,
         );
-        if (!fetchOutcome.ok) {
+        if (!fetchOutcome.ok && fetchOutcome.benignRefLock) {
+          logger.info(
+            `[SessionManager] sendOrResume: git fetch origin ${project.baseBranch} lost a ref-lock race but the ref already holds the fetched value (continuing): ${fetchOutcome.error}`,
+          );
+          recordEvent({
+            event_type: 'base_fetch_ref_lock_benign',
+            actor_type: 'system',
+            actor_id: sessionId,
+            project_id: row.project_id || null,
+            task_id: row.task_id || null,
+            payload: {
+              baseBranch: project.baseBranch,
+              error: String(fetchOutcome.error),
+            },
+          });
+        } else if (!fetchOutcome.ok) {
           logger.warn(
             `[SessionManager] sendOrResume: git fetch origin ${project.baseBranch} failed (continuing with local ref): ${fetchOutcome.error}`,
           );

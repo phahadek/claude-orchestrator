@@ -2964,6 +2964,51 @@ describe('sendOrResume — missing worktree falls through to recreation', () => 
     // The resume still proceeded despite the fetch failure.
     expect(capturedSessions.length).toBeGreaterThan(0);
   });
+
+  it('a benign lost ref-lock race on resume does not set a stale-base error or record base_fetch_failed', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      projectDir: '/project-resume-fetch-benign',
+    });
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at fc7b2df8 but expected 863d2513",
+          });
+          return callback(err);
+        }
+        // The ref already holds the value the fetch wanted to write.
+        callback(null, {
+          stdout: 'fc7b2df8870355a1bb8b3cbb0eda4fac44f31456\n',
+        });
+      },
+    );
+
+    const p = sm.sendOrResume(SESSION_ID, 'hello');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event' as const,
+      sessionId: SESSION_ID,
+      eventType: 'system' as const,
+      content: 'boot',
+    });
+    await p;
+
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'base_fetch_failed' }),
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'base_fetch_ref_lock_benign' }),
+    );
+    expect(vi.mocked(setSessionLastErrorDetail)).not.toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('stale'),
+    );
+    // The resume still proceeded despite the ref-lock race.
+    expect(capturedSessions.length).toBeGreaterThan(0);
+  });
 });
 
 // ── gitWorktreeAddWithRetry — unit tests ──────────────────────────────────────
@@ -3270,11 +3315,16 @@ describe('fetchBaseBranchCoalesced — direct unit tests', () => {
   it('returns ok:false on failure without throwing, retrying, or forcing past the lock', async () => {
     vi.mocked(execCb).mockImplementation(
       (cmd: string, _opts: unknown, callback: any) => {
-        const err = Object.assign(new Error('cmd failed'), {
-          stderr:
-            "error: cannot lock ref 'refs/remotes/origin/dev': is at ae9f9803 but expected 066b562e",
-        });
-        callback(err);
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at ae9f9803 but expected 066b562e",
+          });
+          return callback(err);
+        }
+        // rev-parse ref-lock classification calls: leave unresolvable so the
+        // outcome is classified as a non-benign (genuine) failure.
+        callback(new Error('unknown revision'));
       },
     );
 
@@ -3285,10 +3335,98 @@ describe('fetchBaseBranchCoalesced — direct unit tests', () => {
 
     expect(outcome.ok).toBe(false);
     expect(outcome.error).toBeDefined();
-    // Exactly one attempt — no retry loop chasing the lock mismatch.
-    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
-    const [cmd] = vi.mocked(execCb).mock.calls[0];
-    expect(String(cmd)).not.toContain('--force');
+    // Exactly one fetch attempt — no retry loop chasing the lock mismatch.
+    const fetchCalls = vi
+      .mocked(execCb)
+      .mock.calls.filter(([cmd]) => String(cmd).startsWith('git fetch'));
+    expect(fetchCalls).toHaveLength(1);
+    expect(String(fetchCalls[0][0])).not.toContain('--force');
+  });
+
+  it('classifies a lost ref-lock race as benign when the ref already holds the value the fetch wanted', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at fc7b2df8 but expected 863d2513",
+          });
+          return callback(err);
+        }
+        // Both the local ref and FETCH_HEAD now hold the winner's value.
+        callback(null, {
+          stdout: 'fc7b2df8870355a1bb8b3cbb0eda4fac44f31456\n',
+        });
+      },
+    );
+
+    const outcome = await fetchBaseBranchCoalesced(
+      '/fetch-test-benign-ref-lock',
+      'dev',
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.benignRefLock).toBe(true);
+  });
+
+  it('does not classify a ref-lock loss as benign when the ref differs from FETCH_HEAD', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at ae9f9803 but expected 066b562e",
+          });
+          return callback(err);
+        }
+        if (String(cmd).includes('refs/remotes/origin/dev')) {
+          return callback(null, {
+            stdout: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n',
+          });
+        }
+        // FETCH_HEAD
+        callback(null, {
+          stdout: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n',
+        });
+      },
+    );
+
+    const outcome = await fetchBaseBranchCoalesced(
+      '/fetch-test-genuine-stale',
+      'dev',
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.benignRefLock).toBe(false);
+  });
+
+  it('does not classify a non-ref-lock failure (network/timeout) as benign', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr: 'fatal: unable to access origin: Could not resolve host',
+          });
+          return callback(err);
+        }
+        callback(null, {
+          stdout: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n',
+        });
+      },
+    );
+
+    const outcome = await fetchBaseBranchCoalesced(
+      '/fetch-test-network-failure',
+      'dev',
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.benignRefLock).toBe(false);
+    // Never re-reads refs for a non-ref-lock failure.
+    const revParseCalls = vi
+      .mocked(execCb)
+      .mock.calls.filter(([cmd]) => String(cmd).startsWith('git rev-parse'));
+    expect(revParseCalls).toHaveLength(0);
   });
 });
 
@@ -3966,6 +4104,48 @@ describe('start() — pre-launch fetch serialization/coalescing (integration)', 
       expect.objectContaining({ event_type: 'base_fetch_failed' }),
     );
     expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('stale'),
+    );
+  });
+
+  it('a benign lost ref-lock race on launch does not set a stale-base error or record base_fetch_failed', async () => {
+    const projectDir = '/project-integ-benign-ref-lock';
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      projectDir,
+    });
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at fc7b2df8 but expected 863d2513",
+          });
+          return callback(err);
+        }
+        // The ref already holds the value the fetch wanted to write.
+        callback(null, {
+          stdout: 'fc7b2df8870355a1bb8b3cbb0eda4fac44f31456\n',
+        });
+      },
+    );
+
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'non_milestone',
+      taskName: 'task-benign',
+    });
+
+    await vi.waitFor(() => expect(capturedSessions).toHaveLength(1));
+
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'base_fetch_failed' }),
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'base_fetch_ref_lock_benign' }),
+    );
+    expect(vi.mocked(setSessionLastErrorDetail)).not.toHaveBeenCalledWith(
       expect.any(String),
       expect.stringContaining('stale'),
     );
