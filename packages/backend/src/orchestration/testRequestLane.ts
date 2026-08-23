@@ -587,17 +587,21 @@ async function executeTestRequestRun(
 }
 
 /**
- * Crash recovery: a `running` row left over from a prior process (the
- * backend was killed/crashed mid-run, or its subprocess was killed/reaped
- * out from under it) can never resolve its own coalescing promise again —
- * that in-memory state died with the process — so it is marked `failed`
- * (failure_reason 'execution_failed') rather than left stuck. The request
- * that started it already spent its cycle-counter increment at stage time,
- * so this does not grant a free retry against the escalation budget.
- * Called at boot (bootSequence.ts) and again by
- * SessionManager.reapMainCgroupOrphans whenever the periodic main/ orphan
- * sweep actually reaps something — a boot-only call would leave a run
- * stuck 'running' for the rest of a long uptime.
+ * Boot-time crash recovery: a `running` row left over from a prior process
+ * (the backend was killed/crashed mid-run) can never resolve its own
+ * coalescing promise again — that in-memory state died with the process —
+ * so it is marked `failed` (failure_reason 'execution_failed') rather than
+ * left stuck. The request that started it already spent its cycle-counter
+ * increment at stage time, so this does not grant a free retry against the
+ * escalation budget.
+ *
+ * Deliberately boot-only: "every row still 'running' is stale" is only
+ * true immediately after the process starts, when nothing could have
+ * legitimately begun executing yet. Do not call this from a periodic,
+ * mid-uptime sweep — a genuinely in-flight run's row would get force-failed
+ * out from under its still-executing subprocess. See
+ * SessionManager.reapMainCgroupOrphans's doc comment for why the periodic
+ * main/ orphan sweep does not call this.
  */
 export function recoverInterruptedTestRequestRuns(): void {
   const running = listRunningTestRequestRuns();

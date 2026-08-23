@@ -40,7 +40,6 @@ import {
   killSessionCgroup,
   reapOrphanedMainCgroupProcesses,
 } from './sessionCgroup';
-import { recoverInterruptedTestRequestRuns } from '../orchestration/testRequestLane';
 import {
   revokeStageCredential,
   mintStageCredential,
@@ -3282,16 +3281,22 @@ export class SessionManager extends EventEmitter {
 
   /**
    * Kills any process sitting in main/ (the backend's own resting cgroup)
-   * with ppid=1 (see reapOrphanedMainCgroupProcesses) and, when it reaped
-   * anything, recovers every test_request_runs row still 'running' as
-   * failed — the same crash-recovery recoverInterruptedTestRequestRuns
-   * already performs at boot (see bootSequence.ts), invoked here too since
-   * a reaped orphan is exactly the signal that some earlier run's
-   * subprocess tree outlived the bookkeeping that was supposed to settle
-   * its row. Called both from resumeOrphanSessions (boot) and periodically
-   * by server.ts's main_cgroup_orphan_sweep Scheduler job — a boot-only
-   * sweep cannot bound a process that leaks mid-uptime, which is exactly
-   * what produced the incident this method exists to close.
+   * with ppid=1 (see reapOrphanedMainCgroupProcesses). Called both from
+   * resumeOrphanSessions (boot) and periodically by server.ts's
+   * main_cgroup_orphan_sweep Scheduler job — a boot-only sweep cannot
+   * bound a process that leaks mid-uptime, which is exactly what produced
+   * the incident this method exists to close.
+   *
+   * Deliberately does NOT call recoverInterruptedTestRequestRuns() here:
+   * that function's "every row still 'running' is stale" assumption only
+   * holds at boot, when no test run can legitimately be in-flight yet.
+   * Mid-uptime, a genuinely in-flight test-lane run's subprocess is (as of
+   * this same change) correctly placed under the bounded tests/ cgroup and
+   * has its own live proc.on('close') listener in test-runner.ts, which
+   * already marks its row failed if that specific subprocess is killed —
+   * reaping some unrelated main/ orphan says nothing about that run's own
+   * state, so force-failing every running row here would false-fail work
+   * that's still genuinely executing and about to produce a real result.
    */
   reapMainCgroupOrphans(): number {
     const reaped = reapOrphanedMainCgroupProcesses();
@@ -3299,7 +3304,6 @@ export class SessionManager extends EventEmitter {
       logger.info(
         `[SessionManager] reaped ${reaped} orphaned process(es) from main/ cgroup`,
       );
-      recoverInterruptedTestRequestRuns();
     }
     return reaped;
   }

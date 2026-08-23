@@ -713,9 +713,7 @@ scheduler.register({
 // daemonizing grandchild that escaped a session/test-lane placement) mid
 // uptime was previously invisible to any sweep until the next restart —
 // exactly the gap that let a leaked test.request subprocess swap the host
-// unbounded for the incident this job exists to close. Also recovers any
-// test_request_runs row still 'running' whenever it reaps something — see
-// SessionManager.reapMainCgroupOrphans.
+// unbounded for the incident this job exists to close.
 scheduler.register({
   name: 'main_cgroup_orphan_sweep',
   intervalMs: 10 * 60_000,
