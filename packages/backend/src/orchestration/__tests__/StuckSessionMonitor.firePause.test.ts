@@ -11,6 +11,7 @@ vi.mock('../../config.js', () => ({
 vi.mock('../../db/queries.js', () => ({
   getPRBySessionId: vi.fn().mockReturnValue(null),
   setPauseReason: vi.fn(),
+  setTaskPauseReason: vi.fn(),
   insertPauseInterval: vi.fn(),
   closePauseInterval: vi.fn(),
   upsertStuckSessionTimer: vi.fn(),
@@ -31,6 +32,7 @@ import {
   getPRBySessionId,
   insertPauseInterval,
   getSession,
+  setTaskPauseReason,
 } from '../../db/queries.js';
 import { recordEvent } from '../../audit/AuditLog';
 import { StuckSessionMonitor } from '../StuckSessionMonitor.js';
@@ -129,6 +131,45 @@ describe('StuckSessionMonitor.firePause', () => {
       expect.objectContaining({
         event_type: 'stuck_session_pause_delivery_failed',
       }),
+    );
+  });
+
+  it('records a durable, PR-independent task_pause_reasons entry even when no PR exists yet', () => {
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'sess-no-pr',
+      task_id: 'task-123',
+    } as never);
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    const { monitor } = makeMonitor();
+    seedTimerState(monitor, 'sess-no-pr');
+
+    callFirePause(monitor, 'sess-no-pr');
+
+    expect(setTaskPauseReason).toHaveBeenCalledWith(
+      'task-123',
+      'stuck_timeout',
+      expect.any(String),
+    );
+  });
+
+  it('also records the task-level pause reason when a PR already exists', () => {
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'sess-with-pr',
+      task_id: 'task-456',
+    } as never);
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 1,
+      repo: 'org/repo',
+    } as never);
+    const { monitor } = makeMonitor();
+    seedTimerState(monitor, 'sess-with-pr');
+
+    callFirePause(monitor, 'sess-with-pr');
+
+    expect(setTaskPauseReason).toHaveBeenCalledWith(
+      'task-456',
+      'stuck_timeout',
+      expect.any(String),
     );
   });
 
