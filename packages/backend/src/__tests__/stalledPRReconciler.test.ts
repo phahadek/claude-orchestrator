@@ -30,6 +30,8 @@ vi.mock('../db/queries.js', () => ({
   linkPRTaskAndSession: vi.fn(),
   setPendingPush: vi.fn(),
   getSessionLastActivityMs: vi.fn(() => null),
+  setStalledRetryBaseExhausted: vi.fn(),
+  resetStalledPRRetryCountForBaseRecovery: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -64,6 +66,7 @@ import {
   linkPRTaskAndSession,
   setPendingPush,
   getSessionLastActivityMs,
+  setStalledRetryBaseExhausted,
 } from '../db/queries.js';
 import {
   recordEvent,
@@ -905,6 +908,16 @@ describe('StalledPRReconciler', () => {
       kind: 'pre_review_interrupted',
     });
     expect(ro.enqueueReview).not.toHaveBeenCalled();
+
+    // pre_review_interrupted is one of BASE_ATTRIBUTABLE_ESCALATION_KINDS —
+    // a kind that could never arm the base-recovery escape before this
+    // change. Arming is unconditional at escalation time (no live
+    // base-health check consulted here).
+    expect(setStalledRetryBaseExhausted).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      true,
+    );
   });
 
   it('skips analyze_failing PR with pending_push (push flow handles it)', async () => {

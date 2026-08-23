@@ -27,6 +27,7 @@ vi.mock('../../db/queries', () => ({
   clearSessionInitiatedPRClose: vi.fn(),
   incrementFlakeRecoveryAttempts: vi.fn(),
   resetFlakeRecoveryAttempts: vi.fn(),
+  setFlakeRecoveryBaseExhausted: vi.fn(),
 }));
 
 vi.mock('../../config', () => ({
@@ -69,6 +70,7 @@ vi.mock('../pollUtils', () => ({
 vi.mock('../../orchestration/baseAttribution', () => ({
   isBaseTotalFail: vi.fn().mockResolvedValue(false),
   isProjectBaseHealthy: vi.fn().mockResolvedValue(false),
+  hasBaseTotalFailSince: vi.fn().mockResolvedValue(false),
 }));
 
 // db/pauseReason is left un-mocked — real parse/serialize logic exercises the
