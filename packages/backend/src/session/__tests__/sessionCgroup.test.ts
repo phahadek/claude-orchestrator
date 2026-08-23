@@ -432,7 +432,9 @@ describe('spawnIntoTestsCgroup', () => {
 
     const testsLeafWrites = writeSpy.mock.calls
       .map((c) => String(c[0]))
-      .filter((p) => p === '/sys/fs/cgroup/orchestrator.service/tests/cgroup.procs');
+      .filter(
+        (p) => p === '/sys/fs/cgroup/orchestrator.service/tests/cgroup.procs',
+      );
     expect(testsLeafWrites).toHaveLength(2);
   });
 });
@@ -540,7 +542,9 @@ describe('reapOrphanedMainCgroupProcesses', () => {
   });
 
   it('never targets a process outside …/orchestrator.service/main — e.g. a Remote Control-slice process, even one reparented to init, is never reaped', () => {
-    _setMainPathForTesting('/sys/fs/cgroup/system.slice/orchestrator.service/main');
+    _setMainPathForTesting(
+      '/sys/fs/cgroup/system.slice/orchestrator.service/main',
+    );
     const killed: number[] = [];
     // A Remote Control session process lives under a wholly separate
     // systemd slice (/system.slice/orchestrator-remote-control.service),
