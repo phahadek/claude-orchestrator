@@ -808,7 +808,13 @@ export class StuckSessionMonitor {
       return;
     }
     this.persistTimerState(sessionId);
-    this.recordNotifyChecked(sessionId, state, true, observedGapMs, thresholdMs);
+    this.recordNotifyChecked(
+      sessionId,
+      state,
+      true,
+      observedGapMs,
+      thresholdMs,
+    );
     const message = `⚠️ ${state.taskName} exceeding expected duration — possible grooming gap`;
     this.broadcast({
       type: 'stuck_session_notified',

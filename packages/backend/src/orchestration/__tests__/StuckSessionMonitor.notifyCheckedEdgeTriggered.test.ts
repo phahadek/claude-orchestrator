@@ -21,7 +21,9 @@ vi.mock('../../db/queries.js', () => ({
   getStuckResultSessionRows: vi.fn().mockReturnValue([]),
   markSessionDone: vi.fn(),
   markSessionIdle: vi.fn(),
-  getSession: vi.fn().mockReturnValue({ session_id: 'sess-1', status: 'running' }),
+  getSession: vi
+    .fn()
+    .mockReturnValue({ session_id: 'sess-1', status: 'running' }),
   getSessionLastActivityMs: vi.fn().mockReturnValue(null),
 }));
 
