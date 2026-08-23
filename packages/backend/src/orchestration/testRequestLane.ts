@@ -589,10 +589,19 @@ async function executeTestRequestRun(
 /**
  * Boot-time crash recovery: a `running` row left over from a prior process
  * (the backend was killed/crashed mid-run) can never resolve its own
- * coalescing promise again — that in-memory state died with the process — so
- * it is marked `failed` rather than left stuck. The request that started it
- * already spent its cycle-counter increment at stage time, so this does not
- * grant a free retry against the escalation budget.
+ * coalescing promise again — that in-memory state died with the process —
+ * so it is marked `failed` (failure_reason 'execution_failed') rather than
+ * left stuck. The request that started it already spent its cycle-counter
+ * increment at stage time, so this does not grant a free retry against the
+ * escalation budget.
+ *
+ * Deliberately boot-only: "every row still 'running' is stale" is only
+ * true immediately after the process starts, when nothing could have
+ * legitimately begun executing yet. Do not call this from a periodic,
+ * mid-uptime sweep — a genuinely in-flight run's row would get force-failed
+ * out from under its still-executing subprocess. See
+ * SessionManager.reapMainCgroupOrphans's doc comment for why the periodic
+ * main/ orphan sweep does not call this.
  */
 export function recoverInterruptedTestRequestRuns(): void {
   const running = listRunningTestRequestRuns();
@@ -602,7 +611,7 @@ export function recoverInterruptedTestRequestRuns(): void {
     );
     const output =
       '[testRequestLane] backend restarted mid-run — treated as failed';
-    completeTestRequestRun(run.id, 'failed', output);
+    completeTestRequestRun(run.id, 'failed', output, 'execution_failed');
     clearSupersededStructuredResults(run.project_id, run.content_hash, run.id);
     broadcastRunStatus({
       runId: run.id,
