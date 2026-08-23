@@ -16,8 +16,10 @@ import { runtimeSettings } from '../config';
 import {
   isSessionProcessAlive,
   scanClaudeSessionProcesses,
+  killWorktreeProcessTree,
   type ClaudeSessionProcess,
 } from './processLiveness';
+import { killSessionCgroup } from './sessionCgroup';
 import { logger } from '../logger';
 import type { Session } from '../db/types';
 
@@ -256,6 +258,20 @@ export interface OrphanProcessReconcilerDeps {
   getSessionRow?: (sessionId: string) => Session | undefined;
   /** Overridable for tests; defaults to a real `process.kill(pid, 'SIGTERM')`. */
   killProcess?: (pid: number) => void;
+  /**
+   * Overridable for tests; defaults to the real cgroup-scoped kill
+   * (sessionCgroup.ts's killSessionCgroup). Reaches a test-command tree
+   * (pytest, `uv run task test`) the reaped `proc` itself carries no
+   * --session-id/--resume for — cgroup-v2 membership is inherited at fork
+   * regardless of that flag.
+   */
+  killSessionCgroup?: (sessionId: string) => void;
+  /**
+   * Overridable for tests; defaults to the real worktree-path-keyed kill
+   * (processLiveness.ts's killWorktreeProcessTree) — the backstop for hosts
+   * without cgroup-v2 delegation.
+   */
+  killWorktreeProcessTree?: (worktreePath: string) => number;
   /** Drops the session's stale in-memory entry, if any — SessionManager wires this to evictDeadSessionEntry. */
   evictSessionMapEntry?: (sessionId: string) => void;
   nowFn?: () => number;
@@ -319,6 +335,9 @@ export function reconcileOrphanProcesses(
   const scanProcesses = deps.scanProcesses ?? scanClaudeSessionProcesses;
   const getSessionRow = deps.getSessionRow ?? getSession;
   const killProcess = deps.killProcess ?? defaultKillProcess;
+  const killCgroup = deps.killSessionCgroup ?? killSessionCgroup;
+  const killWorktreeTree =
+    deps.killWorktreeProcessTree ?? killWorktreeProcessTree;
   const evictSessionMapEntry = deps.evictSessionMapEntry ?? (() => {});
   const now = deps.nowFn ? deps.nowFn() : Date.now();
 
@@ -354,6 +373,12 @@ export function reconcileOrphanProcesses(
     }
 
     killProcess(proc.pid);
+    // Reach the session's whole test-command process tree, not just the
+    // scanned pid — a pytest/`uv run task test` tree forked by this
+    // session's own process carries no --session-id/--resume of its own,
+    // so it would otherwise survive this sweep entirely.
+    killCgroup(proc.sessionId);
+    if (row.worktree_path) killWorktreeTree(row.worktree_path);
     evictSessionMapEntry(proc.sessionId);
     reaped++;
     logger.warn(

@@ -39,6 +39,7 @@ import {
   reconcileNonPlanningSessionLiveness,
   reconcileOrphanProcesses,
 } from '../sessionLivenessReconciler';
+import { updateSessionWorktreePath } from '../../db/queries';
 import type { ClaudeSessionProcess } from '../processLiveness';
 
 const NOW = 1_700_000_000_000;
@@ -869,5 +870,103 @@ describe('reconcileOrphanProcesses', () => {
     });
 
     expect(result).toEqual({ examined: 0, reaped: 0, skippedByGrace: 0 });
+  });
+
+  it('reaping a terminal session also kills its cgroup — reaches a test-command tree (pytest, uv run task test) that carries no --session-id/--resume of its own and so is invisible to scanProcesses', () => {
+    seedSession({ sessionId: 'orphan-with-tree', status: 'running' });
+    updateSessionStatus('orphan-with-tree', 'done', NOW - 60 * 60_000);
+    updateSessionWorktreePath(
+      'orphan-with-tree',
+      '/srv/app/.claude/worktrees/orphan-with-tree',
+    );
+
+    const cgroupKills: string[] = [];
+    const worktreeKills: string[] = [];
+    const result = reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 111, sessionId: 'orphan-with-tree' })],
+      killProcess: () => {},
+      killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
+      killWorktreeProcessTree: (worktreePath) => {
+        worktreeKills.push(worktreePath);
+        return 1;
+      },
+      nowFn: () => NOW,
+    });
+
+    expect(result.reaped).toBe(1);
+    expect(cgroupKills).toEqual(['orphan-with-tree']);
+    expect(worktreeKills).toEqual([
+      '/srv/app/.claude/worktrees/orphan-with-tree',
+    ]);
+  });
+
+  it('never kills a cgroup or worktree-path tree for a process with no resolvable session uuid (claude remote-control)', () => {
+    const cgroupKills: string[] = [];
+    const worktreeKills: string[] = [];
+    const result = reconcileOrphanProcesses({
+      scanProcesses: () => [
+        { pid: 444, sessionId: null, etimeSeconds: 1_000_000 },
+      ],
+      killProcess: () => {},
+      killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
+      killWorktreeProcessTree: (worktreePath) => {
+        worktreeKills.push(worktreePath);
+        return 1;
+      },
+      nowFn: () => NOW,
+    });
+
+    expect(result.examined).toBe(0);
+    expect(cgroupKills).toEqual([]);
+    expect(worktreeKills).toEqual([]);
+  });
+
+  it('never kills a cgroup or worktree-path tree for a session uuid resolving to no row — e.g. a Remote Control cloud session id', () => {
+    const cgroupKills: string[] = [];
+    const worktreeKills: string[] = [];
+    const result = reconcileOrphanProcesses({
+      scanProcesses: () => [
+        proc({
+          pid: 555,
+          sessionId: 'cse_01HoHJzea111waLofaBDYimz',
+          etimeSeconds: 10_000,
+        }),
+      ],
+      killProcess: () => {},
+      killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
+      killWorktreeProcessTree: (worktreePath) => {
+        worktreeKills.push(worktreePath);
+        return 1;
+      },
+      nowFn: () => NOW,
+    });
+
+    expect(result.reaped).toBe(0);
+    expect(cgroupKills).toEqual([]);
+    expect(worktreeKills).toEqual([]);
+  });
+
+  it('never kills a cgroup or worktree-path tree for a process whose row is non-terminal (live session)', () => {
+    seedSession({ sessionId: 'live-row-2', status: 'running' });
+    updateSessionWorktreePath(
+      'live-row-2',
+      '/srv/app/.claude/worktrees/live-row-2',
+    );
+
+    const cgroupKills: string[] = [];
+    const worktreeKills: string[] = [];
+    reconcileOrphanProcesses({
+      scanProcesses: () => [proc({ pid: 666, sessionId: 'live-row-2' })],
+      killProcess: () => {},
+      killSessionCgroup: (sessionId) => cgroupKills.push(sessionId),
+      killWorktreeProcessTree: (worktreePath) => {
+        worktreeKills.push(worktreePath);
+        return 1;
+      },
+      nowFn: () => NOW,
+    });
+
+    expect(cgroupKills).toEqual([]);
+    expect(worktreeKills).toEqual([]);
   });
 });
