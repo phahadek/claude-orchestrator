@@ -507,10 +507,16 @@ describe('runTestCommands — RSS kill via cgroup tree measurement', () => {
     });
     _spawnHook = () => makeProc(0, 'running', '', 9999_000);
 
-    const promise = runTestCommands('/worktree', ['sh -c pytest'], 300, () => {}, {
-      maxRssMb: 4096,
-      runId: RUN_ID,
-    });
+    const promise = runTestCommands(
+      '/worktree',
+      ['sh -c pytest'],
+      300,
+      () => {},
+      {
+        maxRssMb: 4096,
+        runId: RUN_ID,
+      },
+    );
     await vi.advanceTimersByTimeAsync(8_000);
     const result = await promise;
 
@@ -527,10 +533,16 @@ describe('runTestCommands — RSS kill via cgroup tree measurement', () => {
     });
     _spawnHook = () => makeProc(0, 'ok');
 
-    const promise = runTestCommands('/worktree', ['sh -c pytest'], 300, () => {}, {
-      maxRssMb: 4096,
-      runId: RUN_ID,
-    });
+    const promise = runTestCommands(
+      '/worktree',
+      ['sh -c pytest'],
+      300,
+      () => {},
+      {
+        maxRssMb: 4096,
+        runId: RUN_ID,
+      },
+    );
     await vi.runAllTimersAsync();
     const result = await promise;
 
