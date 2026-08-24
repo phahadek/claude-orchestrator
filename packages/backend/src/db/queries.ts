@@ -8720,6 +8720,10 @@ export function getLatestTestRequestRun(
  * task on every such retry (see baseHealthRemediationFiling.ts's
  * per-test-id dedup, which cannot catch this because each retry's
  * failing-test set is novel).
+ *
+ * run_kind = 'full' is defense-in-depth, not a behavior change: a base-health
+ * probe has no session diff to scope against, so runProjectTestRequest always
+ * stamps these rows 'full' already — see baseHealthCheck.ts's module doc.
  */
 export function getLatestBaseHealthTestRequestRun(
   projectId: string,
@@ -8731,6 +8735,7 @@ export function getLatestBaseHealthTestRequestRun(
        FROM test_request_runs
        WHERE project_id = @project_id AND content_hash = @content_hash
          AND state NOT IN ('running', 'queued') AND run_origin = 'base_health_probe'
+         AND run_kind = 'full'
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )
     .get({ project_id: projectId, content_hash: contentHash }) as

@@ -1,6 +1,6 @@
 /**
- * Unit tests for classifyTestRunOutcome's 6-value Tests-tab outcome
- * taxonomy — a pure function over TestRequestRunRow, no DB required.
+ * Unit tests for classifyTestRunOutcome's Tests-tab outcome taxonomy — a
+ * pure function over TestRequestRunRow, no DB required.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -45,6 +45,14 @@ describe('classifyTestRunOutcome', () => {
   it('classifies a passed run', () => {
     const result = classifyTestRunOutcome(makeRun({ state: 'passed' }));
     expect(result.outcome).toBe('passed');
+  });
+
+  it('classifies a passed scoped run as passed-scoped, never passed', () => {
+    const result = classifyTestRunOutcome(
+      makeRun({ state: 'passed', run_kind: 'scoped' }),
+    );
+    expect(result.outcome).toBe('passed-scoped');
+    expect(result.outcome).not.toBe('passed');
   });
 
   it('classifies a failed run with a per-test breakdown as failed-with-named-tests', () => {
@@ -92,6 +100,8 @@ describe('classifyTestRunOutcome', () => {
     const outcomes = [
       classifyTestRunOutcome(makeRun({ state: 'running' })).outcome,
       classifyTestRunOutcome(makeRun({ state: 'passed' })).outcome,
+      classifyTestRunOutcome(makeRun({ state: 'passed', run_kind: 'scoped' }))
+        .outcome,
       classifyTestRunOutcome(
         makeRun({ state: 'failed', structured_result: structuredWithTests }),
       ).outcome,
@@ -109,6 +119,6 @@ describe('classifyTestRunOutcome', () => {
         makeRun({ state: 'failed', failure_reason: 'timeout' }),
       ).outcome,
     ];
-    expect(new Set(outcomes).size).toBe(6);
+    expect(new Set(outcomes).size).toBe(7);
   });
 });

@@ -211,14 +211,21 @@ export function classifyRun(run: TestRequestRunRow): BaseHealthOutcome {
 }
 
 /**
- * The Tests tab's 6-value run outcome taxonomy — reuses classifyFailedRun's
+ * The Tests tab's run outcome taxonomy — reuses classifyFailedRun's
  * clean/partial/total split, splitting `total_fail` further via
  * failure_reason and oom_killed (both already recorded per run) into its
  * three distinct causes. Each outcome carries its own next-action string
  * for the tab to render alongside the run.
+ *
+ * `passed-scoped` is its own outcome, not `passed` — a scoped run (run_kind
+ * = 'scoped', see TestRunKind) only ever exercised the tests its base-diff
+ * scoping selected, so a clean result from it is not the same confirmation
+ * a full-suite `passed` is. Collapsing the two would let a scoped pass read
+ * as "the whole suite is green" when it never ran the whole suite.
  */
 type TestRunOutcome =
   | 'passed'
+  | 'passed-scoped'
   | 'failed-with-named-tests'
   | 'failed-with-no-report-acquired'
   | 'crashed-oom'
@@ -234,6 +241,8 @@ export interface TestRunOutcomeInfo {
 
 const TEST_RUN_NEXT_ACTIONS: Record<TestRunOutcome, string> = {
   passed: 'No action needed — all tests passed.',
+  'passed-scoped':
+    'The tests scoped to this diff passed — this is not a full-suite confirmation.',
   'failed-with-named-tests':
     'Review the named failing tests below and fix them.',
   'failed-with-no-report-acquired':
@@ -257,7 +266,7 @@ export function classifyTestRunOutcome(
   } else if (run.state === 'running') {
     outcome = 'running';
   } else if (run.state === 'passed') {
-    outcome = 'passed';
+    outcome = run.run_kind === 'scoped' ? 'passed-scoped' : 'passed';
   } else if (run.failure_reason === 'execution_failed') {
     outcome = 'execution-failed';
   } else if (run.oom_killed || run.failure_reason === 'oom_killed') {
