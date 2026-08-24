@@ -5329,7 +5329,7 @@ export function isGateVerifyAutoCommitDispositionClass(
  * decision 3's exclusion), attributed to a milestone, whose disposition
  * matches an armed policy for that milestone.
  */
-export function isGateVerifyAutoCommitEligible(row: StagedIntentRow): boolean {
+function isGateVerifyAutoCommitEligible(row: StagedIntentRow): boolean {
   if (row.kind !== 'gate.verify') return false;
   if (row.state !== 'staged' && row.state !== 'approved') return false;
   if (!row.milestone) return false;
@@ -5447,7 +5447,7 @@ async function commitGateVerifyAutoCommit(
  * planning-concurrency bookkeeping for no benefit (this is an infrequent,
  * operator-triggered action, not a hot path).
  */
-export async function sweepGateVerifyAutoCommitBacklog(
+async function sweepGateVerifyAutoCommitBacklog(
   milestoneId: string,
   dispositionClass: GateVerifyAutoCommitDispositionClass,
   sessionManager: SessionManager | undefined,
