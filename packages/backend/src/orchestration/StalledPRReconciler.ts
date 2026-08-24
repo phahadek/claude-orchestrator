@@ -557,9 +557,25 @@ export class StalledPRReconciler {
       return false;
     }
 
-    const newCount = incrementStalledPRRetryCount(prNumber, repo);
     const project = getProjectByGithubRepo(repo);
     const session = pr.session_id ? getSession(pr.session_id) : null;
+
+    const queued = this.reviewOrchestrator.enqueueReview({
+      prNumber,
+      repo,
+      taskId: pr.task_id,
+      taskUrl: session?.task_url ?? '',
+      contextUrl: project?.contextUrl ?? '',
+    });
+
+    if (!queued) {
+      logger.warn(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): enqueueReview declined to queue forced re-review — not counting as an attempt`,
+      );
+      return false;
+    }
+
+    const newCount = incrementStalledPRRetryCount(prNumber, repo);
 
     logger.info(
       `[StalledPRReconciler] PR #${prNumber} (${repo}): forcing re-review at unchanged head — needs_changes remedy applied via PR-body update without a new push (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
@@ -577,14 +593,6 @@ export class StalledPRReconciler {
         kind: 'session_inert_body_only_remedy',
         attempt: newCount,
       },
-    });
-
-    this.reviewOrchestrator.enqueueReview({
-      prNumber,
-      repo,
-      taskId: pr.task_id,
-      taskUrl: session?.task_url ?? '',
-      contextUrl: project?.contextUrl ?? '',
     });
 
     return true;
@@ -607,6 +615,46 @@ export class StalledPRReconciler {
     if (!this.sessionManager) {
       logger.warn(
         `[StalledPRReconciler] sessionManager not set — cannot relaunch fixer for PR #${prNumber}`,
+      );
+      return false;
+    }
+
+    // No session to relaunch onto at all — this PR can never be recovered
+    // via a fixer relaunch, so escalate immediately with a real-cause reason
+    // rather than silently retrying (and burning budget on) the same no-op
+    // forever.
+    if (!pr.session_id) {
+      this.escalateNoRelaunchTarget(pr, kind);
+      return true;
+    }
+
+    const prompt =
+      kind === 'conflict_dead_session'
+        ? formatMergeConflictFeedback({
+            branchName: pr.head_branch,
+            baseBranch: pr.base_branch ?? 'dev',
+          })
+        : kind === 'session_inert'
+          ? `This session has shown no activity for a while, but PR #${prNumber} (${repo}) is still open and unmerged. Please check the current state of the branch and PR and continue toward getting it mergeable, or report back if it's already complete.`
+          : formatCIFailureFeedback({
+              source: 'verify',
+              failedCommand: parseGateFailureSummary(pr.review_result),
+              truncatedOutput: undefined,
+              conflicted: pr.merge_state === 'dirty',
+              baseBranch: pr.base_branch ?? 'dev',
+            });
+
+    // Attempt the relaunch first — a refusal before it starts (memory/usage
+    // admission deferral, a deleted session row, no worktree on an idle
+    // session) returns null and must not be charged against the retry
+    // budget, since no fixer attempt actually happened.
+    const relaunched = await this.sessionManager.relaunchFixerForPR(
+      pr,
+      prompt,
+    );
+    if (!relaunched) {
+      logger.info(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): fixer relaunch (kind=${kind}) was refused before it started — not counting as an attempt`,
       );
       return false;
     }
@@ -636,25 +684,53 @@ export class StalledPRReconciler {
       payload: { pr_number: prNumber, repo, kind, attempt: newCount },
     });
 
-    const prompt =
-      kind === 'conflict_dead_session'
-        ? formatMergeConflictFeedback({
-            branchName: pr.head_branch,
-            baseBranch: pr.base_branch ?? 'dev',
-          })
-        : kind === 'session_inert'
-          ? `This session has shown no activity for a while, but PR #${prNumber} (${repo}) is still open and unmerged. Please check the current state of the branch and PR and continue toward getting it mergeable, or report back if it's already complete.`
-          : formatCIFailureFeedback({
-              source: 'verify',
-              failedCommand: parseGateFailureSummary(pr.review_result),
-              truncatedOutput: undefined,
-              conflicted: pr.merge_state === 'dirty',
-              baseBranch: pr.base_branch ?? 'dev',
-            });
-
-    await this.sessionManager.relaunchFixerForPR(pr, prompt);
-
     return true;
+  }
+
+  /**
+   * Escalates a PR whose gate_failed/conflict_dead_session/session_inert
+   * fixer-relaunch has no session to relaunch onto (session_id is null) —
+   * a permanent condition, not a transient admission refusal, so retrying
+   * forever would never make progress. Reported immediately (never after
+   * burning retry attempts on relaunches that would always no-op), as a
+   * real-cause pause_reason distinct from the reconcile_exhausted flag's
+   * generic retry-exhaustion story.
+   */
+  private escalateNoRelaunchTarget(pr: PullRequestRow, kind: StalledPRKind): void {
+    const { pr_number: prNumber, repo } = pr;
+    const project = getProjectByGithubRepo(repo);
+
+    logger.warn(
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): escalating — no session to relaunch onto (kind=${kind})`,
+    );
+
+    setPauseReason(
+      prNumber,
+      repo,
+      'stalled_no_relaunch_target',
+      `${kind} — no session to relaunch onto (session_id is null)`,
+    );
+
+    recordEvent({
+      event_type: 'stalled_pr_escalated',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: project?.id ?? null,
+      task_id: pr.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        kind: 'no_relaunch_target',
+        retryCount: pr.stalled_pr_retry_count ?? 0,
+      },
+    });
+
+    this.broadcast({
+      type: 'pr_stalled_escalated',
+      prNumber,
+      repo,
+      kind: 'no_relaunch_target',
+    });
   }
 
   /**
@@ -685,6 +761,16 @@ export class StalledPRReconciler {
       return false;
     }
 
+    const redelivered = await this.sessionManager.redeliverUndeliveredFeedback(
+      pr.session_id,
+    );
+    if (!redelivered) {
+      logger.info(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): redeliverUndeliveredFeedback found nothing to deliver — not counting as an attempt`,
+      );
+      return false;
+    }
+
     const newCount = incrementStalledPRRetryCount(prNumber, repo);
     const project = getProjectByGithubRepo(repo);
 
@@ -706,7 +792,7 @@ export class StalledPRReconciler {
       },
     });
 
-    return this.sessionManager.redeliverUndeliveredFeedback(pr.session_id);
+    return true;
   }
 
   /**
@@ -732,6 +818,25 @@ export class StalledPRReconciler {
     }
 
     const project = getProjectByGithubRepo(repo);
+    const session = pr.session_id ? getSession(pr.session_id) : null;
+
+    const queued = this.reviewOrchestrator.enqueueReview({
+      prNumber,
+      repo,
+      taskId: pr.task_id ?? '',
+      taskUrl: session?.task_url ?? '',
+      contextUrl: project?.contextUrl ?? '',
+    });
+
+    if (!queued) {
+      logger.warn(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): enqueueReview declined to queue pending_push consume — not counting as an attempt`,
+      );
+      return false;
+    }
+
+    setPendingPush(prNumber, repo, 0);
+
     const baseAttributable = project ? await isBaseTotalFail(project) : false;
     if (baseAttributable) {
       setStalledRetryBaseExhausted(prNumber, repo, true);
@@ -756,17 +861,6 @@ export class StalledPRReconciler {
         kind: 'gate_failed_pending_push',
         attempt: newCount,
       },
-    });
-
-    setPendingPush(prNumber, repo, 0);
-
-    const session = pr.session_id ? getSession(pr.session_id) : null;
-    this.reviewOrchestrator.enqueueReview({
-      prNumber,
-      repo,
-      taskId: pr.task_id ?? '',
-      taskUrl: session?.task_url ?? '',
-      contextUrl: project?.contextUrl ?? '',
     });
 
     return true;

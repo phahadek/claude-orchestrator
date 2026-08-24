@@ -37,6 +37,7 @@ export type CanonicalPauseReason =
   | 'diverged_branch_unresolved'
   | 'analyze_failing'
   | 'rate_limit'
+  | 'stalled_no_relaunch_target'
   | 'needs_repo'
   | 'autofix_git_infra_failure'
   | 'autofix_tool_infra_failure'
@@ -218,6 +219,16 @@ export const PAUSE_REASON_REGISTRY: Record<
     source: 'session',
     severity: 'recoverable',
     retry_strategy: 'automatic',
+  },
+  // Distinct from the reconcile_exhausted flag: this PR was never charged
+  // against the retry budget at all — there was no session to relaunch a
+  // fixer onto (session_id is null), so retrying the same no-op forever
+  // would just loop silently. Surfaced immediately rather than after
+  // burning attempts.
+  stalled_no_relaunch_target: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
   },
   needs_repo: {
     source: 'launch',
@@ -451,6 +462,9 @@ const RECOVERY_ACTION_MAP: Record<
   planning_first_turn_empty: 'redispatch',
   planning_terminal_no_decision: 'redispatch',
   ops_journal_terminal_incomplete: 'redispatch',
+  // no session exists to relaunch onto — a fresh dispatch is the only
+  // recovery, mirroring stalled_idle above.
+  stalled_no_relaunch_target: 'redispatch',
   // rerun: clear pause + re-run the pre-review pipeline
   autofix_git_infra_failure: 'rerun',
   autofix_tool_infra_failure: 'rerun',
