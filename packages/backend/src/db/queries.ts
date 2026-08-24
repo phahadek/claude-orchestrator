@@ -3870,26 +3870,49 @@ const PAUSE_REASON_HAS_AUTO_MERGE_FAILED_SQL = `
 `;
 
 /**
- * PRs with pause_reason='auto_merge_failed' whose pause_reason_set_at is older
- * than thresholdMs milliseconds ago. These are stale transient failures eligible
+ * PRs with a live 'auto_merge_failed' entry whose own set_at is older than
+ * thresholdMs milliseconds ago. These are stale transient failures eligible
  * for automatic retry.
+ *
+ * Filters in JS rather than purely in SQL: pause_reason_set_at is a single
+ * column shared across the whole concurrent set, so it gets refreshed by
+ * *any* source's write to the PR — including one from a source other than
+ * 'merge'. Comparing that shared column against the threshold would let an
+ * unrelated source's activity mask a genuinely stale auto_merge_failed entry
+ * indefinitely. The per-entry set_at stamped by setPauseReason is the
+ * authoritative signal; the column is only a fallback for legacy rows
+ * written before per-entry timestamps existed.
  */
 export function getStaleAutoMergeFailedPRs(thresholdMs: number): Array<{
   pr_number: number;
   repo: string;
 }> {
   const cutoff = Date.now() - thresholdMs;
-  return db
+  const candidates = db
     .prepare(
       `
-    SELECT pr_number, repo FROM pull_requests
+    SELECT pr_number, repo, pause_reason, pause_reason_set_at FROM pull_requests
     WHERE state = 'open'
       AND (${PAUSE_REASON_HAS_AUTO_MERGE_FAILED_SQL})
       AND pause_reason_set_at IS NOT NULL
-      AND pause_reason_set_at < @cutoff
   `,
     )
-    .all({ cutoff }) as Array<{ pr_number: number; repo: string }>;
+    .all() as Array<{
+    pr_number: number;
+    repo: string;
+    pause_reason: string | null;
+    pause_reason_set_at: number | null;
+  }>;
+
+  return candidates
+    .filter((row) => {
+      const entry = parsePauseReasonSet(row.pause_reason).find(
+        (e) => e.reason === 'auto_merge_failed',
+      );
+      const setAt = entry?.set_at ?? row.pause_reason_set_at;
+      return setAt != null && setAt < cutoff;
+    })
+    .map(({ pr_number, repo }) => ({ pr_number, repo }));
 }
 
 /**

@@ -625,6 +625,25 @@ function unknownPauseReasonFallback(raw: string): PauseReasonStruct {
 }
 
 /**
+ * Coerces one element of a concurrent-set JSON array, degrading a malformed
+ * element to the same safe fallback as an unknown bare-string reason rather
+ * than dropping it — a corrupt array element must never silently vanish from
+ * the set, since that would make isMergeBlockingPause under-report a pause
+ * that fails to parse (see UNKNOWN_FALLBACK's fail-closed blocks_merge:true).
+ */
+function coerceArrayElementOrFallback(item: unknown, index: number): PauseReasonStruct {
+  if (item !== null && typeof item === 'object') {
+    const coerced = coercePauseReasonObject(item as Record<string, unknown>);
+    if (coerced) return coerced;
+    const record = item as Record<string, unknown>;
+    if (typeof record.reason === 'string') {
+      return unknownPauseReasonFallback(record.reason);
+    }
+  }
+  return unknownPauseReasonFallback(`malformed_entry_${index}`);
+}
+
+/**
  * Parses pull_requests.pause_reason into the full concurrent set of live
  * entries (at most one per PauseSource). Handles every storage shape the
  * column has ever held:
@@ -641,13 +660,9 @@ export function parsePauseReasonSet(raw: string | null): PauseReasonStruct[] {
   if (raw.startsWith('[')) {
     try {
       const parsedArray = JSON.parse(raw) as unknown[];
-      return parsedArray
-        .map((item) =>
-          item !== null && typeof item === 'object'
-            ? coercePauseReasonObject(item as Record<string, unknown>)
-            : null,
-        )
-        .filter((entry): entry is PauseReasonStruct => entry !== null);
+      return parsedArray.map((item, index) =>
+        coerceArrayElementOrFallback(item, index),
+      );
     } catch {
       // fall through to legacy handling
     }
