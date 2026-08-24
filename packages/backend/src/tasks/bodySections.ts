@@ -5,7 +5,7 @@ import type { PatchBodySectionOperation } from './TaskBackend';
  * heading line's index and the exclusive index of the next heading (or the
  * end of the body).
  */
-export interface MarkdownSectionRange {
+interface MarkdownSectionRange {
   start: number;
   end: number;
 }
@@ -18,7 +18,7 @@ export interface MarkdownSectionRange {
  * (e.g. readinessGate.ts's live '## Open Questions' scan) — so a single
  * splitter stays the source of truth for "where does this section live".
  */
-export function findMarkdownSectionRange(
+function findMarkdownSectionRange(
   lines: string[],
   section: string,
 ): MarkdownSectionRange | null {
