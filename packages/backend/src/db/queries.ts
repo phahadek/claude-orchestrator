@@ -9274,6 +9274,31 @@ function parseDigestDurations(json: string): number[] {
   }
 }
 
+/**
+ * test_perf_baselines' t/updated_at columns hold whichever unit their writer
+ * used: the live path (recordTestPerfDigestSample, via
+ * ingestTestRunResultsTx's `baseSequence = Date.now() * 1000`) stamps
+ * microseconds deliberately, to give every test in a run a unique, monotonic
+ * sequence — but a historical backfill stamped milliseconds and was never
+ * migrated, so both units coexist on rows written before the cutover. Any
+ * epoch-millisecond cutoff callers pass in (a PR's created_at, a
+ * computedAt-derived staleness bound) needs to be compared against whichever
+ * unit a given stored value actually used.
+ *
+ * `THRESHOLD` sits between the millisecond and microsecond forms of any
+ * plausible date: a millisecond timestamp for any date since 2001 is still
+ * under 1e15, while a microsecond timestamp for any date since 1970 is
+ * already over 1.7e18. Values under the threshold are treated as
+ * milliseconds and scaled up; values at/above it are already microseconds.
+ * This also makes it safe to run on the incoming cutoff itself (always a
+ * legitimate epoch-millisecond value, so always converted).
+ */
+const MS_VS_US_THRESHOLD = 1e15;
+
+function toDigestMicros(value: number): number {
+  return value < MS_VS_US_THRESHOLD ? value * 1000 : value;
+}
+
 let _stmtGetTestPerfDigest: Database.Statement | null = null;
 let _stmtUpsertTestPerfDigest: Database.Statement | null = null;
 
@@ -9605,7 +9630,7 @@ export function computeTestFlipRateFlag(
   const filtered =
     beforeMs === Number.MAX_SAFE_INTEGER
       ? all
-      : all.filter((s) => s.t < beforeMs);
+      : all.filter((s) => toDigestMicros(s.t) < toDigestMicros(beforeMs));
   const windowed = filtered.slice(-windowN);
 
   let transitionCount = 0;
@@ -9972,19 +9997,24 @@ function hasGhostFlaggedFlakyTests(
   _stmtHasGhostFlaggedFlakyTests ??= db.prepare<{
     project_id: string;
     stale_before: number;
+    unit_threshold: number;
   }>(`
     SELECT EXISTS(
       SELECT 1 FROM flagged_flaky_tests_rollup
       WHERE project_id = @project_id
         AND test_id NOT IN (
           SELECT test_id FROM test_perf_baselines
-          WHERE project_id = @project_id AND updated_at > @stale_before
+          WHERE project_id = @project_id
+            AND (CASE WHEN updated_at < @unit_threshold THEN updated_at * 1000 ELSE updated_at END) > @stale_before
         )
     ) AS has_ghost
   `);
   const row = _stmtHasGhostFlaggedFlakyTests.get({
     project_id: projectId,
-    stale_before: computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS,
+    stale_before: toDigestMicros(
+      computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS,
+    ),
+    unit_threshold: MS_VS_US_THRESHOLD,
   }) as { has_ghost: number };
   return row.has_ghost === 1;
 }
@@ -10010,17 +10040,22 @@ function pruneGhostFlaggedFlakyTests(
   _stmtPruneGhostFlaggedFlakyTests ??= db.prepare<{
     project_id: string;
     stale_before: number;
+    unit_threshold: number;
   }>(`
     DELETE FROM flagged_flaky_tests_rollup
     WHERE project_id = @project_id
       AND test_id NOT IN (
         SELECT test_id FROM test_perf_baselines
-        WHERE project_id = @project_id AND updated_at > @stale_before
+        WHERE project_id = @project_id
+          AND (CASE WHEN updated_at < @unit_threshold THEN updated_at * 1000 ELSE updated_at END) > @stale_before
       )
   `);
   const result = _stmtPruneGhostFlaggedFlakyTests.run({
     project_id: projectId,
-    stale_before: computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS,
+    stale_before: toDigestMicros(
+      computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS,
+    ),
+    unit_threshold: MS_VS_US_THRESHOLD,
   });
   return result.changes;
 }

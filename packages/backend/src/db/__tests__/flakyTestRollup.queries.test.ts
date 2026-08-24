@@ -19,6 +19,7 @@ import {
   getFlaggedFlakyTestsRollup,
   getLaneHealthRollup,
   recordTestPerfDigestSample,
+  computeTestFlipRateFlag,
 } from '../queries.js';
 
 /**
@@ -261,6 +262,124 @@ describe('ghost pruning for renamed/retired tests', () => {
 
     expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
       'test-still-flaky',
+    ]);
+  });
+});
+
+describe('computeTestFlipRateFlag microsecond/millisecond unit normalization', () => {
+  it('keeps both a live microsecond-stamped sample and a legacy millisecond-stamped sample inside a realistic epoch-ms cutoff window', () => {
+    const nowMs = Date.now();
+    // The live ingest path (ingestTestRunResultsTx's baseSequence = Date.now() * 1000)
+    // stamps microseconds.
+    recordTestPerfDigestSample(
+      'test-mixed-units',
+      'proj-1',
+      'suite > mixed units',
+      'passed',
+      1,
+      0,
+      false,
+      nowMs * 1000,
+    );
+    // The pre-cutover backfill stamped milliseconds.
+    recordTestPerfDigestSample(
+      'test-mixed-units',
+      'proj-1',
+      'suite > mixed units',
+      'failed',
+      1,
+      0,
+      false,
+      nowMs - 60_000,
+    );
+
+    // A real caller-supplied cutoff — a PR's created_at — in epoch-milliseconds.
+    const beforeMs = nowMs + 60_000;
+    const flag = computeTestFlipRateFlag('test-mixed-units', 20, 2, beforeMs);
+
+    expect(flag.sampleCount).toBe(2);
+    expect(flag.transitionCount).toBe(1);
+  });
+
+  it('returns the same sampleCount/transitionCount with the default (no-filter) Number.MAX_SAFE_INTEGER cutoff as before normalization', () => {
+    const nowMs = Date.now();
+    (['passed', 'failed', 'passed'] as const).forEach((outcome, i) =>
+      recordTestPerfDigestSample(
+        'test-no-cutoff',
+        'proj-1',
+        'suite > no cutoff',
+        outcome,
+        1,
+        0,
+        false,
+        nowMs * 1000 + i,
+      ),
+    );
+
+    const flag = computeTestFlipRateFlag('test-no-cutoff', 20, 2);
+
+    expect(flag.sampleCount).toBe(3);
+    expect(flag.transitionCount).toBe(2);
+  });
+});
+
+describe('pruneGhostFlaggedFlakyTests microsecond/millisecond unit normalization', () => {
+  it('deletes a flagged rollup row whose test_perf_baselines updated_at (stored in production microsecond form) is older than the 7-day staleness window', () => {
+    const nowMs = Date.now();
+    const EIGHT_DAYS_MS = 8 * 24 * 60 * 60 * 1000;
+    const staleMicros = (nowMs - EIGHT_DAYS_MS) * 1000;
+
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      recordTestPerfDigestSample(
+        'test-stale-micros',
+        'proj-1',
+        'suite > stale (microseconds)',
+        outcome as 'passed' | 'failed',
+        1,
+        0,
+        false,
+        staleMicros + i,
+      ),
+    );
+    // Flag it once, using a computedAt in the same era as the samples so the
+    // flip-rate window itself isn't the thing filtering them out.
+    replaceFlaggedFlakyTestsRollup(
+      'proj-1',
+      20,
+      2,
+      nowMs - EIGHT_DAYS_MS + 1000,
+    );
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
+      'test-stale-micros',
+    ]);
+
+    // A present-day tick: the row's updated_at is well outside the 7-day
+    // window measured from `nowMs`.
+    replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, nowMs);
+
+    expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual([]);
+  });
+
+  it('leaves a flagged rollup row alone whose test_perf_baselines updated_at (production microsecond form) is inside the 7-day window', () => {
+    const nowMs = Date.now();
+    const freshMicros = (nowMs - 1000) * 1000;
+
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      recordTestPerfDigestSample(
+        'test-fresh-micros',
+        'proj-1',
+        'suite > fresh (microseconds)',
+        outcome as 'passed' | 'failed',
+        1,
+        0,
+        false,
+        freshMicros + i,
+      ),
+    );
+    replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, nowMs);
+
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
+      'test-fresh-micros',
     ]);
   });
 });
