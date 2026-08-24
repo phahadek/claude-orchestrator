@@ -295,9 +295,7 @@ describe('reopenSeedItem', () => {
     const item = makeItem();
     appendSeedItemEvent(item.id, { outcome: 'applied', operator: 'pedro' });
     appendSeedItemEvent(item.id, { outcome: 'confirmed', operator: 'pedro' });
-    expect(getSeedReadiness('polimarket-analyser', 'M12').status).toBe(
-      'green',
-    );
+    expect(getSeedReadiness('polimarket-analyser', 'M12').status).toBe('green');
 
     reopenSeedItem(item.id, 'pedro');
 

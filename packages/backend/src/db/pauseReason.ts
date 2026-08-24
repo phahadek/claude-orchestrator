@@ -631,7 +631,10 @@ function unknownPauseReasonFallback(raw: string): PauseReasonStruct {
  * the set, since that would make isMergeBlockingPause under-report a pause
  * that fails to parse (see UNKNOWN_FALLBACK's fail-closed blocks_merge:true).
  */
-function coerceArrayElementOrFallback(item: unknown, index: number): PauseReasonStruct {
+function coerceArrayElementOrFallback(
+  item: unknown,
+  index: number,
+): PauseReasonStruct {
   if (item !== null && typeof item === 'object') {
     const coerced = coercePauseReasonObject(item as Record<string, unknown>);
     if (coerced) return coerced;
