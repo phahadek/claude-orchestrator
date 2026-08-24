@@ -93,6 +93,39 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
     expect(events.map((e) => e.eventType)).toEqual(['created', 'updated']);
   });
 
+  it('retains the genuine pre-edit body in the updated event payload, distinct from the post-edit body', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Gate item shape',
+      kind: 'invariant',
+      topic: 'gate',
+      regions: ['packages/backend/src/gate'],
+      body: 'original body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    updateUnit(
+      unit.id,
+      { body: 'revised body' },
+      '2026-01-02T00:00:00Z',
+    );
+
+    const events = getUnitEvents(unit.id);
+    const updatedEvent = events.find((e) => e.eventType === 'updated');
+    const payload = updatedEvent?.payload as {
+      before: { body: string; version: number };
+      after: { body: string; version: number };
+    };
+
+    expect(payload.before.body).toBe('original body');
+    expect(payload.after.body).toBe('revised body');
+    expect(payload.before.body).not.toBe(payload.after.body);
+    expect(payload.before).not.toBe(payload.after);
+    // before must reflect the version the intent staged against (baseVersion), not the post-edit version.
+    expect(payload.before.version).toBe(unit.version);
+    expect(payload.after.version).toBe(unit.version + 1);
+  });
+
   it('supersedes a unit: old retained as superseded, new unit created linking back', () => {
     const original = createUnit({
       project: 'proj-1',
@@ -130,6 +163,48 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
     ]);
     const newEvents = getUnitEvents(next.id);
     expect(newEvents.map((e) => e.eventType)).toEqual(['created']);
+  });
+
+  it('retains the genuine pre-supersede state in the superseded event payload', () => {
+    const original = createUnit({
+      project: 'proj-1',
+      title: 'Old decision',
+      kind: 'decision',
+      topic: 'architecture-store',
+      regions: ['packages/backend/src/architecture'],
+      body: 'old decision body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const { previous, next } = supersedeUnit(
+      original.id,
+      {
+        project: 'proj-1',
+        title: 'New decision',
+        kind: 'decision',
+        topic: 'architecture-store',
+        regions: ['packages/backend/src/architecture'],
+        body: 'new decision body',
+        at: '2026-01-03T00:00:00Z',
+      },
+      '2026-01-03T00:00:00Z',
+    );
+
+    const oldEvents = getUnitEvents(original.id);
+    const supersededEvent = oldEvents.find((e) => e.eventType === 'superseded');
+    const payload = supersededEvent?.payload as {
+      before: { body: string; status: string; version: number };
+      after: { body: string; status: string; version: number };
+    };
+
+    expect(payload.before.body).toBe('old decision body');
+    expect(payload.after.body).toBe('old decision body');
+    expect(payload.before.status).toBe('active');
+    expect(payload.after.status).toBe('superseded');
+    expect(payload.before).not.toBe(payload.after);
+    expect(payload.before.version).toBe(original.version);
+    expect(payload.after.version).toBe(previous.version);
+    expect(next.supersedes).toBe(original.id);
   });
 });
 

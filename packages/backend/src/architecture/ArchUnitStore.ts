@@ -179,6 +179,7 @@ export function updateUnit(
   if (!row) {
     throw new Error(`arch_unit: no unit ${id} to update`);
   }
+  const before = toArchUnit(row);
   const next = {
     ...row,
     title: fields.title ?? row.title,
@@ -195,7 +196,7 @@ export function updateUnit(
     insertArchUnitEvent({
       arch_unit_id: id,
       event_type: 'updated',
-      payload: stringifyJson({ before: fields, after: toArchUnit(next) }),
+      payload: stringifyJson({ before, after: toArchUnit(next) }),
       at,
     });
     recordEvent({
@@ -247,17 +248,23 @@ export function supersedeUnit(
       payload: stringifyJson({ supersedes: id }),
       at,
     });
-    updateArchUnit({
+    const beforeSuperseded = toArchUnit(row);
+    const afterSuperseded = {
       ...row,
-      status: 'superseded',
+      status: 'superseded' as const,
       superseded_by: newId,
       version: row.version + 1,
       updated_at: at,
-    });
+    };
+    updateArchUnit(afterSuperseded);
     insertArchUnitEvent({
       arch_unit_id: id,
       event_type: 'superseded',
-      payload: stringifyJson({ supersededBy: newId }),
+      payload: stringifyJson({
+        supersededBy: newId,
+        before: beforeSuperseded,
+        after: toArchUnit(afterSuperseded),
+      }),
       at,
     });
     recordEvent({
