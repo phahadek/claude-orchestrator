@@ -54,6 +54,17 @@ test:
 # problem and needs its own fix.
 test_timeout_sec: 900
 
+# Diff-scoped alternative to `test:` above, run instead of it when a
+# test.request's diff touches none of `test_full_run_paths` below. May
+# contain {{changed_files}}, expanded the same way autofix commands are.
+# Empty (default, unset here) = feature off — `test:` always runs in full.
+test_scoped: []
+
+# Glob list forcing the full `test:` command instead of `test_scoped` when
+# the diff touches any of them (shared config/infra a scoped run can't
+# safely skip). Ignored while `test_scoped` is empty.
+test_full_run_paths: []
+
 # Commands the orchestrator runs on each PR before spawning review — catches lint errors, license contamination, and secret leaks.
 # Phase 1 baseline: eslint errors + GPL/AGPL dependency check. Warnings tolerated (11-warning baseline on dev).
 # Phase 4: gitleaks secret scanning — git-aware mode auto-respects .gitignore; allowlist in .gitleaks.toml.

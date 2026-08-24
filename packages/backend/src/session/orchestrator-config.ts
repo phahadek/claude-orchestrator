@@ -131,6 +131,23 @@ export interface OrchestratorConfig {
   test_report_format?: 'junit-xml';
   /** Glob matched once after every `test:` command finishes, collecting every matching report file into one normalized result. Applies globally across the whole test: list, not per-command. */
   test_report_glob: string;
+  /**
+   * Diff-scoped alternative to `test:`, run instead of it when the requesting
+   * session's diff touches none of `test_full_run_paths`. May contain
+   * `{{changed_files}}` (same templating as `autofix` — see
+   * expandAutofixCommand in autofix-runner.ts), expanded against the
+   * session's changed files. Empty = feature off (always run `test:`,
+   * today's behavior unchanged).
+   */
+  test_scoped: string[];
+  /**
+   * Glob list (minimatch, matched against `git diff --name-only
+   * <baseBranch>...HEAD` paths via matchesPathDiff) that forces the full
+   * `test:` command instead of `test_scoped` when the session's diff
+   * touches any of them — e.g. shared config/infra files a scoped run
+   * can't safely skip. Ignored when `test_scoped` is empty.
+   */
+  test_full_run_paths: string[];
   /** Commands the orchestrator runs as static analysis gate, between verify and test. Empty = gate skipped. */
   analyze: AnalyzeCommand[];
   /** Per-command timeout in seconds for analyze commands. Default 300. */
@@ -204,6 +221,8 @@ const DEFAULTS: OrchestratorConfig = {
   test_fail_fast: true,
   test_report_format: undefined,
   test_report_glob: '',
+  test_scoped: [],
+  test_full_run_paths: [],
   analyze: [],
   analyze_timeout_sec: 300,
   analyze_max_rss_mb: 0,
@@ -336,6 +355,12 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.test_report_glob === 'string'
           ? parsed.test_report_glob
           : DEFAULTS.test_report_glob,
+      test_scoped: Array.isArray(parsed.test_scoped)
+        ? parsed.test_scoped
+        : DEFAULTS.test_scoped,
+      test_full_run_paths: Array.isArray(parsed.test_full_run_paths)
+        ? parsed.test_full_run_paths
+        : DEFAULTS.test_full_run_paths,
       analyze: Array.isArray(parsed.analyze)
         ? (parsed.analyze as unknown[]).filter(isValidAnalyzeEntry)
         : DEFAULTS.analyze,

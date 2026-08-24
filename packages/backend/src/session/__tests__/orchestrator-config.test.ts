@@ -219,6 +219,35 @@ describe('loadOrchestratorConfig', () => {
     expect(config.test_report_glob).toBe('');
   });
 
+  it('parses test_scoped and test_full_run_paths when set in config', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'test_scoped:',
+        '  - "npm run test:scoped -- {{changed_files}}"',
+        'test_full_run_paths:',
+        '  - "package-lock.json"',
+        '  - "**/schema/**"',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.test_scoped).toEqual([
+      'npm run test:scoped -- {{changed_files}}',
+    ]);
+    expect(config.test_full_run_paths).toEqual([
+      'package-lock.json',
+      '**/schema/**',
+    ]);
+  });
+
+  it('defaults test_scoped and test_full_run_paths to [] when absent', () => {
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.test_scoped).toEqual([]);
+    expect(config.test_full_run_paths).toEqual([]);
+  });
+
   it('defaults capability_pre_grants to {} when .claude-orchestrator.yml is absent', () => {
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.capability_pre_grants).toEqual({});

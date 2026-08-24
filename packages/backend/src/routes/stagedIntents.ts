@@ -169,8 +169,13 @@ import {
 } from '../session/orchestrator-config';
 import { runtimeSettings, getProjectById } from '../config';
 import { typedGetSetting } from '../config/settings';
-import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  type OrchestratorConfig,
+} from '../session/orchestrator-config';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
+import { getChangedFiles, expandAutofixCommand } from '../session/autofix-runner';
+import { matchesPathDiff } from '../deploy/pathDiffPredicate';
 import type { TestCommandResult } from '../session/test-runner';
 import { truncateForDelivery } from '../session/test-runner';
 import {
@@ -5695,7 +5700,7 @@ const TEST_REQUEST_DELIVERY_OUTPUT_CAP = 8_000;
  * that must strand the intent structurally (see maybeAutoApproveTestRequest)
  * can report exactly why instead of returning silently.
  */
-function resolveTestRequestExecutionInputs(intent: StagedIntent):
+async function resolveTestRequestExecutionInputs(intent: StagedIntent): Promise<
   | {
       ok: true;
       worktreePath: string;
@@ -5703,7 +5708,8 @@ function resolveTestRequestExecutionInputs(intent: StagedIntent):
       timeoutSec: number;
       maxRssMb: number;
     }
-  | { ok: false; reason: string } {
+  | { ok: false; reason: string }
+> {
   if (!intent.sessionId) {
     return { ok: false, reason: 'no originating session' };
   }
@@ -5726,13 +5732,43 @@ function resolveTestRequestExecutionInputs(intent: StagedIntent):
       reason: 'originating session has no resolvable worktree',
     };
   }
+  const commands = await resolveTestCommandsForDiff(
+    config,
+    worktreePath,
+    project.baseBranch,
+  );
   return {
     ok: true,
     worktreePath,
-    commands: config.test,
+    commands,
     timeoutSec: config.test_timeout_sec,
     maxRssMb: config.test_max_rss_mb,
   };
+}
+
+/**
+ * Picks between `test:` and `test_scoped` for one test.request execution:
+ * `test_scoped` unconfigured means the full `test:` command always runs
+ * (today's behavior, unchanged). Otherwise the session's diff against the
+ * project's base branch is checked against `test_full_run_paths` — a match
+ * forces the full `test:` command since a scoped run can't safely skip
+ * changes to shared config/infra files; no match expands `{{changed_files}}`
+ * (same templating autofix commands use) in each `test_scoped` command
+ * against that diff.
+ */
+async function resolveTestCommandsForDiff(
+  config: OrchestratorConfig,
+  worktreePath: string,
+  baseBranch: string,
+): Promise<string[]> {
+  if (!config.test_scoped?.length) return config.test;
+  const diffPaths = await getChangedFiles(worktreePath, baseBranch);
+  if (matchesPathDiff(config.test_full_run_paths, diffPaths)) {
+    return config.test;
+  }
+  return config.test_scoped
+    .map((cmd) => expandAutofixCommand(cmd, diffPaths))
+    .filter((cmd): cmd is string => cmd !== null);
 }
 
 /**
@@ -5756,7 +5792,7 @@ export async function triggerTestRequestExecution(
   sessionManager: SessionManager | undefined,
   precomputedAdmission?: TestRequestAdmission,
 ): Promise<void> {
-  const inputs = resolveTestRequestExecutionInputs(intent);
+  const inputs = await resolveTestRequestExecutionInputs(intent);
   let result: TestCommandResult;
   let joined: boolean | null = null;
   let unchangedReplay = false;
@@ -5981,7 +6017,7 @@ async function maybeAutoApproveTestRequest(
     );
   }
 
-  const inputs = resolveTestRequestExecutionInputs(intent);
+  const inputs = await resolveTestRequestExecutionInputs(intent);
   if (!inputs.ok) {
     return declineTestRequestAutoGrant(intent, inputs.reason, sessionManager);
   }
