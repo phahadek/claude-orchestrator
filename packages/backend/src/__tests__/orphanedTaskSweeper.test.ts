@@ -33,6 +33,11 @@ vi.mock('../db/queries.js', () => ({
   hasNonTerminalPlanningSessionForTask: vi.fn(() => false),
   isSessionAwaitingCapabilityDisposition: vi.fn(() => false),
   getPRByNotionTaskId: vi.fn(() => null),
+  // sessionLifecycle.ts's sessionDidWork (called by the sweeper's
+  // ops/docs fallback path) is keyed on session id, not task id — kept
+  // separate from getPRByNotionTaskId above, which is the sweeper's own
+  // task-id-based PR resolution.
+  getPRBySessionId: vi.fn(() => null),
   getTaskRepoAssignment: vi.fn(() => undefined),
   getLocalBranchBySession: vi.fn(() => undefined),
   setSessionPauseReason: vi.fn(),

@@ -97,7 +97,7 @@ describe('deleteSession() — open-PR anchor durability', () => {
     const result = deleteSession('sess-open-pr');
 
     expect(result).toBe(false);
-    expect(getSession('sess-open-pr')).not.toBeNull();
+    expect(getSession('sess-open-pr')).not.toBeUndefined();
   });
 
   it('deletes a session with no referencing open PR', () => {
@@ -106,7 +106,7 @@ describe('deleteSession() — open-PR anchor durability', () => {
     const result = deleteSession('sess-no-pr');
 
     expect(result).toBe(true);
-    expect(getSession('sess-no-pr')).toBeNull();
+    expect(getSession('sess-no-pr')).toBeUndefined();
   });
 
   it('deletes a session whose only referencing PR is merged/closed', () => {
@@ -122,7 +122,7 @@ describe('deleteSession() — open-PR anchor durability', () => {
     const result = deleteSession('sess-closed-pr');
 
     expect(result).toBe(true);
-    expect(getSession('sess-closed-pr')).toBeNull();
+    expect(getSession('sess-closed-pr')).toBeUndefined();
   });
 });
 
@@ -139,7 +139,7 @@ describe('deleteGhostSessions() — open-PR anchor durability', () => {
 
     const deletedCount = deleteGhostSessions();
 
-    expect(getSession('ghost-protected')).not.toBeNull();
+    expect(getSession('ghost-protected')).not.toBeUndefined();
     expect(logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('ghost-protected'),
     );
@@ -152,7 +152,7 @@ describe('deleteGhostSessions() — open-PR anchor durability', () => {
 
     const deletedCount = deleteGhostSessions();
 
-    expect(getSession('ghost-unprotected')).toBeNull();
+    expect(getSession('ghost-unprotected')).toBeUndefined();
     expect(deletedCount).toBe(1);
   });
 
@@ -169,8 +169,8 @@ describe('deleteGhostSessions() — open-PR anchor durability', () => {
 
     const deletedCount = deleteGhostSessions();
 
-    expect(getSession('ghost-protected-2')).not.toBeNull();
-    expect(getSession('ghost-unprotected-2')).toBeNull();
+    expect(getSession('ghost-protected-2')).not.toBeUndefined();
+    expect(getSession('ghost-unprotected-2')).toBeUndefined();
     expect(deletedCount).toBe(1);
   });
 });
@@ -198,7 +198,7 @@ describe('DELETE /api/sessions/:id — open-PR anchor durability', () => {
     );
 
     expect(res.status).toBe(409);
-    expect(getSession('route-open-pr')).not.toBeNull();
+    expect(getSession('route-open-pr')).not.toBeUndefined();
   });
 
   it('deletes (200) a session with no referencing open PR', async () => {
@@ -207,6 +207,6 @@ describe('DELETE /api/sessions/:id — open-PR anchor durability', () => {
     const res = await supertest(buildApp()).delete('/api/sessions/route-no-pr');
 
     expect(res.status).toBe(200);
-    expect(getSession('route-no-pr')).toBeNull();
+    expect(getSession('route-no-pr')).toBeUndefined();
   });
 });

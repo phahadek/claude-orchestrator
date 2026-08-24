@@ -291,11 +291,12 @@ export class OrphanedTaskSweeper {
 
     // If the task's PR is already merged or closed, mark Done rather than
     // reverting to Ready — re-dispatching a merged task would re-assign finished work.
-    // taskPR reaching here is either null or already merged/closed (the open
-    // case returned above), so no fresh getPRBySessionId lookup is needed.
+    // taskPR reaching here is either absent or already merged/closed (the
+    // open case returned above), so no fresh getPRBySessionId lookup is
+    // needed. Loose falsy check — a real (unmocked) db lookup miss surfaces
+    // as `undefined`, not the `null` the return type declares.
     const prMergedOrClosed =
-      (taskPR !== null &&
-        (taskPR.state === 'merged' || taskPR.state === 'closed')) ||
+      (!!taskPR && (taskPR.state === 'merged' || taskPR.state === 'closed')) ||
       (latestSession !== undefined &&
         getLocalBranchBySession(latestSession.session_id)?.status ===
           'merged');
