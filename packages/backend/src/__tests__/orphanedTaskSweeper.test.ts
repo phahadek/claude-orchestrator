@@ -424,9 +424,15 @@ describe('OrphanedTaskSweeper', () => {
       'notion:abc',
       '🗂️ Ready',
     );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'task_orphan_reverted',
+        payload: expect.objectContaining({ reason: 'merged' }),
+      }),
+    );
   });
 
-  it('marks Done (not Ready) when the latest session has a closed GitHub PR', async () => {
+  it('reverts to Ready (not Done) when the latest session has a closed, unmerged GitHub PR', async () => {
     const backend = makeBackend([makeTask('notion:abc')]);
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
       makeSession('done', 10 * 60 * 1000) as ReturnType<
@@ -450,7 +456,91 @@ describe('OrphanedTaskSweeper', () => {
 
     await sweeper.sweepOnce();
 
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(backend.updateStatus).not.toHaveBeenCalledWith(
+      'notion:abc',
+      '✅ Done',
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'task_orphan_reverted',
+        payload: expect.objectContaining({ reason: 'closed_unmerged' }),
+      }),
+    );
+  });
+
+  it('marks Done — not Ready — when the PR reports closed but its local_branches row records a merge (squash-merge case)', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('done', 10 * 60 * 1000) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(getPRByNotionTaskId).mockReturnValue({
+      id: 2,
+      pr_number: 505,
+      pr_url: 'https://github.com/o/r/pull/505',
+      session_id: 'sess-1',
+      state: 'closed',
+    } as ReturnType<typeof getPRByNotionTaskId>);
+    vi.mocked(getLocalBranchBySession).mockReturnValue({
+      id: 1,
+      session_id: 'sess-1',
+      project_id: 'proj-1',
+      branch_name: 'feature/x',
+      base_branch: 'dev',
+      status: 'merged',
+      review_result: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as ReturnType<typeof getLocalBranchBySession>);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
     expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '✅ Done');
+    expect(backend.updateStatus).not.toHaveBeenCalledWith(
+      'notion:abc',
+      '🗂️ Ready',
+    );
+  });
+
+  it('reverts to Ready when the local_branches row is abandoned (no GitHub PR)', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('done', 10 * 60 * 1000) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(getPRByNotionTaskId).mockReturnValue(null);
+    vi.mocked(getLocalBranchBySession).mockReturnValue({
+      id: 1,
+      session_id: 'sess-1',
+      project_id: 'proj-1',
+      branch_name: 'feature/x',
+      base_branch: 'dev',
+      status: 'abandoned',
+      review_result: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as ReturnType<typeof getLocalBranchBySession>);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
   });
 
   it('marks Done (not Ready) when the latest session has a merged local branch (local-only case)', async () => {

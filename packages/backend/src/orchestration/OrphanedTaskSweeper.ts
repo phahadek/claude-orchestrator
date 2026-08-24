@@ -289,18 +289,24 @@ export class OrphanedTaskSweeper {
       return;
     }
 
-    // If the task's PR is already merged or closed, mark Done rather than
-    // reverting to Ready — re-dispatching a merged task would re-assign finished work.
     // taskPR reaching here is either absent or already merged/closed (the
     // open case returned above), so no fresh getPRBySessionId lookup is
     // needed. Loose falsy check — a real (unmocked) db lookup miss surfaces
     // as `undefined`, not the `null` the return type declares.
-    const prMergedOrClosed =
-      (!!taskPR && (taskPR.state === 'merged' || taskPR.state === 'closed')) ||
-      (latestSession !== undefined &&
-        getLocalBranchBySession(latestSession.session_id)?.status === 'merged');
+    const localBranch =
+      latestSession !== undefined
+        ? getLocalBranchBySession(latestSession.session_id)
+        : undefined;
 
-    if (prMergedOrClosed) {
+    // Merged is the only signal that means "finished work" — mark Done so the
+    // task doesn't get re-dispatched over top of it. A squash-merged PR can
+    // report state='closed' on GitHub while local_branches still records the
+    // merge commit, so the merged check must win over the closed check below
+    // even when both signals are present on the same session.
+    const isMerged =
+      taskPR?.state === 'merged' || localBranch?.status === 'merged';
+
+    if (isMerged) {
       await this.revertTask(
         taskId,
         projectId,
@@ -308,6 +314,27 @@ export class OrphanedTaskSweeper {
         lastSeenAt,
         backend,
         DONE_STATUS,
+        'merged',
+      );
+      return;
+    }
+
+    // Closed-without-merging means the attempt was abandoned, not completed —
+    // e.g. the operator's close-and-relaunch remedy for a wedged PR. Revert to
+    // Ready (not Done) so the task returns to the backlog for re-grooming
+    // instead of silently reading as finished work.
+    const isClosedUnmerged =
+      taskPR?.state === 'closed' || localBranch?.status === 'abandoned';
+
+    if (isClosedUnmerged) {
+      await this.revertTask(
+        taskId,
+        projectId,
+        effectiveProjectId,
+        lastSeenAt,
+        backend,
+        READY_STATUS,
+        'closed_unmerged',
       );
       return;
     }
@@ -363,6 +390,7 @@ export class OrphanedTaskSweeper {
       lastSeenAt,
       backend,
       READY_STATUS,
+      'orphan',
     );
   }
 
@@ -546,7 +574,12 @@ export class OrphanedTaskSweeper {
     );
   }
 
-  /** Revert a task to the given Notion status. Used only for merged/closed PRs and genuine orphans. */
+  /**
+   * Revert a task to the given Notion status. Used for merged PRs (→ Done),
+   * closed-unmerged PRs and genuine orphans (→ Ready). `reason` distinguishes
+   * the merged case from the closed-unmerged one in the audit trail, so a
+   * closed-unmerged revert cannot read as normal completion.
+   */
   private async revertTask(
     taskId: string,
     projectId: string,
@@ -554,6 +587,7 @@ export class OrphanedTaskSweeper {
     lastSeenAt: number | null,
     backend: TaskBackend,
     newStatus: string,
+    reason: 'merged' | 'closed_unmerged' | 'orphan',
   ): Promise<void> {
     await backend.updateStatus(taskId, newStatus);
 
@@ -562,7 +596,7 @@ export class OrphanedTaskSweeper {
       actor_type: 'system',
       project_id: effectiveProjectId,
       task_id: taskId,
-      payload: { taskId, projectId: effectiveProjectId, lastSeenAt },
+      payload: { taskId, projectId: effectiveProjectId, lastSeenAt, reason },
     });
 
     this.broadcast({

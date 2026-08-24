@@ -5783,7 +5783,9 @@ export function getLastRecordedDisplayStatus(taskId: string): string | null {
   const row = db
     .prepare<{
       task_id: string;
-    }>(`SELECT display_status FROM task_display_status_log WHERE task_id = @task_id`)
+    }>(
+      `SELECT display_status FROM task_display_status_log WHERE task_id = @task_id`,
+    )
     .get({ task_id: taskId }) as { display_status: string } | undefined;
   return row?.display_status ?? null;
 }

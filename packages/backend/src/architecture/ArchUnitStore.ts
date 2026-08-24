@@ -209,10 +209,6 @@ export function updateUnit(
     }
     return value !== priorValues[key];
   });
-  const before: Record<string, unknown> = {};
-  for (const key of changedFields) {
-    before[key] = priorValues[key];
-  }
   db.transaction(() => {
     updateArchUnit(next);
     insertArchUnitEvent({
