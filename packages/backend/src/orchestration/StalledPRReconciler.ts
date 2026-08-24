@@ -646,9 +646,25 @@ export class StalledPRReconciler {
 
     // Attempt the relaunch first — a refusal before it starts (memory/usage
     // admission deferral, a deleted session row, no worktree on an idle
-    // session) returns null and must not be charged against the retry
-    // budget, since no fixer attempt actually happened.
+    // session) returns null (or, for a deleted session row, the typed
+    // session_row_missing outcome) and must not be charged against the
+    // retry budget, since no fixer attempt actually happened.
     const relaunched = await this.sessionManager.relaunchFixerForPR(pr, prompt);
+    if (
+      relaunched !== null &&
+      typeof relaunched === 'object' &&
+      relaunched.outcome === 'session_row_missing'
+    ) {
+      // Distinguished from the generic pre-start refusal below: the anchor
+      // this recovery path depends on (pr.session_id's sessions row) no
+      // longer exists, not a transient admission/idle-worktree refusal —
+      // gets its own diagnostic per the durable-anchor fix's composition
+      // note, rather than being silently conflated with either bucket.
+      logger.error(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): relaunch failed — implementing session ${pr.session_id ?? '(none)'} has no row in sessions (deleted anchor)`,
+      );
+      return false;
+    }
     if (!relaunched) {
       logger.info(
         `[StalledPRReconciler] PR #${prNumber} (${repo}): fixer relaunch (kind=${kind}) was refused before it started — not counting as an attempt`,

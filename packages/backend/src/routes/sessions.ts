@@ -8,6 +8,7 @@ import {
   getSessionsByStatus,
   getSessionsByProject,
   deleteSession,
+  getOpenPRBySessionId,
   archiveSession,
   unarchiveSession,
   archiveFinishedSessions,
@@ -163,6 +164,13 @@ sessionsRouter.delete('/:id', (req: Request, res: Response) => {
   const existing = getSession(sessionId);
   if (!existing) {
     res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  const blockingPR = getOpenPRBySessionId(sessionId);
+  if (blockingPR) {
+    res.status(409).json({
+      error: `Session is referenced by open PR #${blockingPR.pr_number} (${blockingPR.repo}) and cannot be deleted while it is open`,
+    });
     return;
   }
   // Evict the in-memory entry first so a lingering live session can never

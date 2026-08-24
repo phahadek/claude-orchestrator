@@ -1088,7 +1088,35 @@ export function insertSessionOrIgnore(s: NewSession): void {
   });
 }
 
+/**
+ * The open (non-terminal) pull_requests row referencing this session id, if
+ * any. A session anchoring an open PR is the durable-anchor invariant this
+ * guards: pull_requests.session_id carries no foreign key, so nothing else
+ * stops a session row from being deleted out from under a live PR — see
+ * deleteSession/deleteGhostSessions, the sole two deleters.
+ */
+export function getOpenPRBySessionId(sessionId: string): PullRequestRow | null {
+  return db
+    .prepare<{
+      session_id: string;
+    }>(`SELECT * FROM pull_requests WHERE session_id = @session_id AND state = 'open' LIMIT 1`)
+    .get({ session_id: sessionId }) as PullRequestRow | null;
+}
+
+/**
+ * Deletes a session row. Refuses (returns false, deletes nothing) when an
+ * open PR still references this session id — that PR's recovery paths
+ * (fixer relaunch, OrphanedTaskSweeper's open-PR protection) are anchored on
+ * this row, and a bare session-id deletion has no task id to re-anchor to.
+ */
 export function deleteSession(sessionId: string): boolean {
+  const blockingPR = getOpenPRBySessionId(sessionId);
+  if (blockingPR) {
+    logger.warn(
+      `[deleteSession] refusing to delete ${sessionId} — referenced by open PR #${blockingPR.pr_number} (${blockingPR.repo})`,
+    );
+    return false;
+  }
   _stmtDeleteSession ??= db.prepare<{ session_id: string }>(`
     DELETE FROM sessions WHERE session_id = @session_id
   `);
@@ -1099,15 +1127,41 @@ export function deleteSession(sessionId: string): boolean {
 /**
  * Delete sessions that have no events — these are "ghost sessions" created by
  * either empty JSONL imports or session starts that never ran the subprocess.
- * Returns the number of sessions deleted.
+ * Skips (and logs) any zero-event session still referenced by an open PR,
+ * for the same anchor-durability reason deleteSession refuses. Returns the
+ * number of sessions actually deleted.
  */
 export function deleteGhostSessions(): number {
+  const protectedRows = db
+    .prepare(
+      `
+    SELECT sessions.session_id AS session_id FROM sessions
+    WHERE NOT EXISTS (
+      SELECT 1 FROM session_events WHERE session_events.session_id = sessions.session_id
+    )
+    AND EXISTS (
+      SELECT 1 FROM pull_requests
+      WHERE pull_requests.session_id = sessions.session_id AND pull_requests.state = 'open'
+    )
+  `,
+    )
+    .all() as { session_id: string }[];
+  for (const { session_id } of protectedRows) {
+    logger.debug(
+      `[deleteGhostSessions] skipping ghost session ${session_id} — referenced by an open PR`,
+    );
+  }
+
   const result = db
     .prepare(
       `
     DELETE FROM sessions
     WHERE NOT EXISTS (
       SELECT 1 FROM session_events WHERE session_events.session_id = sessions.session_id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM pull_requests
+      WHERE pull_requests.session_id = sessions.session_id AND pull_requests.state = 'open'
     )
   `,
     )

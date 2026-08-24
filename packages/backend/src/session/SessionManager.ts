@@ -923,6 +923,16 @@ export interface BaseFetchOutcome {
   benignRefLock?: boolean;
 }
 
+/**
+ * relaunchFixerForPR's typed failure for a PR whose session_id no longer
+ * resolves to a sessions row — distinguishable from the plain-null
+ * idle-with-no-worktree/no-session-id outcomes. See relaunchFixerForPR's
+ * doc comment.
+ */
+export interface FixerRelaunchFailure {
+  outcome: 'session_row_missing';
+}
+
 /** Matches git's ref-lock contention error text across git versions loosely enough to detect the failure mode without depending on exact wording. */
 const GIT_REF_LOCK_RE = /cannot lock ref|unable to update local ref/i;
 
@@ -5624,13 +5634,19 @@ export class SessionManager extends EventEmitter {
    *  - terminal, worktree missing (confirmed dead): recreate a worktree
    *    attached to the PR's existing branch and spawn fresh with --resume.
    *
-   * Returns the session id on success, or null if no relaunch was attempted
-   * (missing session_id/DB row, or the idle+no-worktree operator-surface case).
+   * Returns the session id on success, null if no relaunch was attempted
+   * (missing session_id, or the idle+no-worktree operator-surface case), or
+   * `{ outcome: 'session_row_missing' }` when pr.session_id is set but its
+   * sessions row is gone (e.g. deleted by deleteGhostSessions/DELETE
+   * /api/sessions/:id before this durable-anchor guard existed, or by any
+   * future deleter) — distinguishable from the idle-with-no-worktree null
+   * so a caller can tell "nothing to resume, by design" apart from
+   * "the anchor this recovery path depends on no longer exists".
    */
   async relaunchFixerForPR(
     pr: { pr_number: number; repo: string; session_id: string | null },
     prompt: string,
-  ): Promise<string | null> {
+  ): Promise<string | FixerRelaunchFailure | null> {
     const sessionId = pr.session_id;
     if (!sessionId) {
       logger.warn(
@@ -5648,7 +5664,7 @@ export class SessionManager extends EventEmitter {
       logger.error(
         `[SessionManager] relaunchFixerForPR: session ${sessionId} not found in DB`,
       );
-      return null;
+      return { outcome: 'session_row_missing' };
     }
 
     const isTerminal =
