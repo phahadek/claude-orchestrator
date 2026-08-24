@@ -80,6 +80,15 @@ const SettingsSchema = z.object({
   flip_rate_breadth_window_hours: z.coerce.number().int().min(1),
   flaky_remediation_file_threshold: z.coerce.number().int().min(1),
   decision_pick_one_paragraph_threshold: z.coerce.number().int().min(100),
+  // Tier-3 classifier chronic-error-rate signal — rolling window plus
+  // independent per-kind thresholds, same config shape as
+  // milestone_attention_aging_threshold_seconds above. errored/usage_limited
+  // are reported as two separate rates (db/queries.ts's
+  // getTier3ClassifierErrorRates), so each gets its own threshold rather
+  // than sharing one.
+  tier3_error_rate_window_seconds: z.coerce.number().int().min(1),
+  tier3_error_rate_errored_threshold: z.coerce.number().min(0).max(1),
+  tier3_error_rate_usage_limited_threshold: z.coerce.number().min(0).max(1),
 
   // Boolean settings (stored as 'true'/'false' strings; also accepts native booleans)
   auto_review: zodBoolCoerce,
@@ -192,6 +201,9 @@ export const SETTING_DEFAULTS: Settings = {
   flip_rate_breadth_window_hours: 24,
   flaky_remediation_file_threshold: 2,
   decision_pick_one_paragraph_threshold: 560,
+  tier3_error_rate_window_seconds: 7 * 24 * 60 * 60,
+  tier3_error_rate_errored_threshold: 0.5,
+  tier3_error_rate_usage_limited_threshold: 0.5,
   auto_review: true,
   auto_archive_enabled: true,
   session_cgroup_deny_swap: true,

@@ -73,6 +73,9 @@ const SETTING_KEYS = [
   'milestone_attention_aging_threshold_seconds',
   'milestone_attention_flat_convergence_window_seconds',
   'decision_pick_one_paragraph_threshold',
+  'tier3_error_rate_window_seconds',
+  'tier3_error_rate_errored_threshold',
+  'tier3_error_rate_usage_limited_threshold',
 ] as const satisfies readonly SettingKey[];
 
 type RouteSettingKey = (typeof SETTING_KEYS)[number];
@@ -247,6 +250,16 @@ function applyToRuntime(
     case 'decision_pick_one_paragraph_threshold':
       runtimeSettings.decision_pick_one_paragraph_threshold = value as number;
       break;
+    case 'tier3_error_rate_window_seconds':
+      runtimeSettings.tier3_error_rate_window_seconds = value as number;
+      break;
+    case 'tier3_error_rate_errored_threshold':
+      runtimeSettings.tier3_error_rate_errored_threshold = value as number;
+      break;
+    case 'tier3_error_rate_usage_limited_threshold':
+      runtimeSettings.tier3_error_rate_usage_limited_threshold =
+        value as number;
+      break;
   }
 }
 
@@ -350,6 +363,15 @@ function runtimeSettingsAsRecord(): {
     ),
     decision_pick_one_paragraph_threshold: String(
       runtimeSettings.decision_pick_one_paragraph_threshold,
+    ),
+    tier3_error_rate_window_seconds: String(
+      runtimeSettings.tier3_error_rate_window_seconds,
+    ),
+    tier3_error_rate_errored_threshold: String(
+      runtimeSettings.tier3_error_rate_errored_threshold,
+    ),
+    tier3_error_rate_usage_limited_threshold: String(
+      runtimeSettings.tier3_error_rate_usage_limited_threshold,
     ),
   };
 }
