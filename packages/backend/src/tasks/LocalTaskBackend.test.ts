@@ -282,9 +282,9 @@ describe('LocalTaskBackend.createTask', () => {
       title: 'Foo Bar',
     });
 
-    expect(id).toBe('yaml:foo-bar');
+    expect(id).toBe('yaml:proj-1-foo-bar');
     const file = readTasksYaml(tmpDir);
-    expect(file.milestones[0].tasks[0].id).toBe('foo-bar');
+    expect(file.milestones[0].tasks[0].id).toBe('proj-1-foo-bar');
   });
 
   it('de-duplicates on id collision within the same milestone', async () => {
@@ -300,8 +300,34 @@ describe('LocalTaskBackend.createTask', () => {
       title: 'Foo Bar',
     });
 
-    expect(first).toBe('yaml:foo-bar');
-    expect(second).toBe('yaml:foo-bar-2');
+    expect(first).toBe('yaml:proj-1-foo-bar');
+    expect(second).toBe('yaml:proj-1-foo-bar-2');
+  });
+
+  it('prefixes minted ids with projectId so two projects with the same title never collide in task_cache', async () => {
+    const dirA = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'local-backend-test-a-'),
+    );
+    const dirB = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'local-backend-test-b-'),
+    );
+    writeTempTasksYaml(dirA, []);
+    writeTempTasksYaml(dirB, []);
+    const backendA = new LocalTaskBackend(dirA, 'proj-a');
+    const backendB = new LocalTaskBackend(dirB, 'proj-b');
+
+    const idA = await backendA.createTask!({
+      databaseId: 'ms-1',
+      title: 'Fix Login Bug',
+    });
+    const idB = await backendB.createTask!({
+      databaseId: 'ms-1',
+      title: 'Fix Login Bug',
+    });
+
+    expect(idA).toBe('yaml:proj-a-fix-login-bug');
+    expect(idB).toBe('yaml:proj-b-fix-login-bug');
+    expect(idA).not.toBe(idB);
   });
 
   it('always creates at Backlog status regardless of input', async () => {
