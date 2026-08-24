@@ -1,4 +1,4 @@
-type PauseSource =
+export type PauseSource =
   | 'autofix'
   | 'verify'
   | 'analyze'
@@ -614,6 +614,27 @@ export function serializePauseReason(struct: PauseReasonStruct): string {
 /** Serializes a concurrent pause-reason set for storage in pull_requests.pause_reason. */
 export function serializePauseReasonSet(entries: PauseReasonStruct[]): string {
   return JSON.stringify(entries);
+}
+
+/**
+ * Capability predicate generalizing isAutomaticRecoveryPending below: finds
+ * the live concurrent-set entry (if any) whose source matches `source` and
+ * whose retry_strategy is 'automatic' — i.e. a pause that a same-commit
+ * automatic re-run can discharge. Callers that used to compare
+ * pauseStruct.reason against a single expected literal (e.g. 'ci_failing')
+ * should match on this instead: it generalizes past source alone, which
+ * would incorrectly treat a manual_action pause sharing the same source
+ * (e.g. ci_billing_blocked, source: 'ci') as automatically dischargeable.
+ */
+export function findAutomaticGateRecoveryEntry(
+  entries: PauseReasonStruct[],
+  source: PauseSource,
+): PauseReasonStruct | null {
+  return (
+    entries.find(
+      (entry) => entry.source === source && entry.retry_strategy === 'automatic',
+    ) ?? null
+  );
 }
 
 /**
