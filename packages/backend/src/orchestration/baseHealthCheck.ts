@@ -224,7 +224,8 @@ type TestRunOutcome =
   | 'crashed-oom'
   | 'timed-out'
   | 'execution-failed'
-  | 'running';
+  | 'running'
+  | 'queued';
 
 export interface TestRunOutcomeInfo {
   outcome: TestRunOutcome;
@@ -244,13 +245,16 @@ const TEST_RUN_NEXT_ACTIONS: Record<TestRunOutcome, string> = {
   'execution-failed':
     'The test runner could not be started (e.g. spawn failure) — no test ever ran. This is an infrastructure failure, not a test result; retry.',
   running: 'Run is still in progress — wait for it to finish.',
+  queued: 'Run is queued — waiting for a lane concurrency slot to open.',
 };
 
 export function classifyTestRunOutcome(
   run: TestRequestRunRow,
 ): TestRunOutcomeInfo {
   let outcome: TestRunOutcome;
-  if (run.state === 'running') {
+  if (run.state === 'queued') {
+    outcome = 'queued';
+  } else if (run.state === 'running') {
     outcome = 'running';
   } else if (run.state === 'passed') {
     outcome = 'passed';
@@ -377,6 +381,7 @@ async function checkBaseBranchHealthLocked(
       maxRssMb: config.test_max_rss_mb,
       sessionId: null,
       runOrigin: 'base_health_probe',
+      producer: 'base_health',
     });
     runId = result.runId;
   } catch (err) {

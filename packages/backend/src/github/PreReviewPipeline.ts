@@ -537,6 +537,7 @@ export class PreReviewPipeline {
               maxRssMb: config.test_max_rss_mb,
               sessionId: null,
               runOrigin: 'pr_pipeline',
+              producer: 'pr_gate',
             })
           : await runTestCommands(
               ctx.worktreePath,
@@ -682,6 +683,7 @@ export class PreReviewPipeline {
           maxRssMb: config.test_max_rss_mb,
           sessionId: null,
           runOrigin: 'pr_pipeline',
+          producer: 'pr_gate',
         })
       : await runTestCommands(
           worktreePath,

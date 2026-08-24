@@ -37,7 +37,7 @@ function planFor(sql: string, params: Record<string, unknown>): string {
 const ROLLUP_SQL = `
   SELECT state, requested_at, started_at, finished_at, failure_reason
   FROM test_request_runs
-  WHERE project_id = @project_id AND state != 'running'
+  WHERE project_id = @project_id AND state NOT IN ('running', 'queued')
   ORDER BY finished_at DESC, rowid DESC
   LIMIT @limit
 `;
@@ -98,6 +98,17 @@ describe('getLaneHealthRollup', () => {
       `INSERT INTO test_request_runs
          (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason)
        VALUES ('running-1', 'proj-1', 'h', NULL, 'running', '', 1000, 1000, NULL, NULL)`,
+    ).run();
+
+    const result = getLaneHealthRollup('proj-1');
+    expect(result.totalRuns).toBe(0);
+  });
+
+  it('excludes still-queued runs from every aggregate', () => {
+    db.prepare(
+      `INSERT INTO test_request_runs
+         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason)
+       VALUES ('queued-1', 'proj-1', 'h', NULL, 'queued', '', 1000, 1000, NULL, NULL)`,
     ).run();
 
     const result = getLaneHealthRollup('proj-1');

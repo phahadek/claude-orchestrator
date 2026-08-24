@@ -3082,6 +3082,25 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // producer: which lane call site produced this run (see TestRunProducer in
+  // db/types.ts) — set at insert time by every call site, independent of
+  // run_origin. NULL for rows predating this column.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN producer TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // idx_test_request_runs_project_started: the project-scope run-history
+  // route (GET /test-request-runs/project) reads every run for a project —
+  // running, queued, and finished alike — newest-first by started_at, which
+  // finished_at (idx_test_request_runs_project_finished) cannot serve since a
+  // queued/running row's finished_at is NULL.
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_project_started
+      ON test_request_runs(project_id, started_at DESC);
+  `);
+
   // idx_sessions_task_id_norm_flow_started_at: composite index for
   // isPlanningKillSuppressed's "most recent session of this task+flow"
   // lookup (`WHERE task_id_norm = ? AND session_type = ? ORDER BY

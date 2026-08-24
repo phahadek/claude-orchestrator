@@ -1565,6 +1565,7 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
       maxRssMb: 0,
       sessionId: null,
       runOrigin: 'pr_pipeline',
+      producer: 'pr_gate',
     });
   });
 

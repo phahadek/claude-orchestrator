@@ -1070,7 +1070,7 @@ export interface FeedbackInboxRow {
  * recover (see recoverInterruptedTestRequestRuns in
  * orchestration/testRequestLane.ts) rather than leaving it silently stuck.
  */
-export type TestRequestRunState = 'running' | 'passed' | 'failed';
+export type TestRequestRunState = 'queued' | 'running' | 'passed' | 'failed';
 
 /**
  * Failure sub-reason for a `failed` run — distinguishes a hard timeout, an
@@ -1109,6 +1109,16 @@ export type TestRequestFailureReason =
  */
 export type RunOrigin = 'base_health_probe' | 'pr_pipeline' | null;
 
+/**
+ * Which lane call site produced a run, set at insert time — independent of
+ * RunOrigin (which distinguishes a base-health probe from a PR-branch worktree
+ * run, both session_id: null): 'session_request' is a test.request staged
+ * intent (routes/stagedIntents.ts), 'pr_gate' is the PR pre-review/review test
+ * pass (PreReviewPipeline.ts/ReviewOrchestrator.ts), 'base_health' is
+ * baseHealthCheck.ts's own probe. Null only for rows predating this column.
+ */
+export type TestRunProducer = 'session_request' | 'pr_gate' | 'base_health';
+
 export interface TestRequestRunRow {
   id: string;
   project_id: string;
@@ -1139,6 +1149,8 @@ export interface TestRequestRunRow {
   test_report_acquisition_attempted: number | null;
   /** Explicit run identity stated by the originating caller — see RunOrigin. Null for pre-existing rows and ordinary session-attributed runs. */
   run_origin: RunOrigin;
+  /** Which lane call site produced this run — see TestRunProducer. Null for rows predating this column. */
+  producer: TestRunProducer | null;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────

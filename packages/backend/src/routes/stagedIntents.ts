@@ -189,6 +189,7 @@ import {
   getTestRequestRunById,
   updateTestRequestRunState,
   listTestRequestRunsForSession,
+  listTestRequestRunsForProject,
   listTestRunResultsForRun,
   countTestRunResultsForRun,
   getTaskTestFlipRateFlags,
@@ -5786,6 +5787,7 @@ export async function triggerTestRequestExecution(
           maxRssMb: inputs.maxRssMb,
           sessionId: intent.sessionId ?? null,
           runOrigin: null,
+          producer: 'session_request',
         });
       }
     }
@@ -6017,6 +6019,7 @@ async function maybeAutoApproveTestRequest(
     maxRssMb: inputs.maxRssMb,
     sessionId: intent.sessionId,
     runOrigin: null,
+    producer: 'session_request',
   });
 
   const priorCount = getSessionTestRequestCycleCount(intent.sessionId);
@@ -8277,6 +8280,54 @@ export function createStagedIntentsRouter(
           };
         },
       ),
+    });
+  });
+
+  // ── GET /api/test-request-runs/project ────────────────────────────────────
+  // Project-scope run-history feed for the 'tests' TopView destination
+  // (frontend follow-on task): every test_request_runs row for a project —
+  // running, queued, and finished alike — newest-first, each annotated with
+  // its producer (which lane call site originated it) and outcome
+  // classification/next-action, plus its per-outcome test-count breakdown
+  // when extraction has already produced one. Unlike
+  // /test-request-runs/history (session-scoped, Tests-tab detail), this is
+  // project-wide — it is not gated to one session's own runs.
+  router.get('/test-request-runs/project', (req: Request, res: Response) => {
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    const limit =
+      typeof req.query.limit === 'string' ? Number(req.query.limit) : 100;
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
+      return;
+    }
+
+    const rows = listTestRequestRunsForProject(
+      projectId,
+      Number.isFinite(limit) && limit > 0 ? limit : 100,
+    );
+
+    res.json({
+      runs: rows.map(({ run, outcomeCounts }) => {
+        const classification = classifyTestRunOutcome(run);
+        return {
+          id: run.id,
+          projectId: run.project_id,
+          sessionId: run.session_id,
+          contentHash: run.content_hash,
+          state: run.state,
+          producer: run.producer,
+          runOrigin: run.run_origin,
+          requestedAt: run.requested_at,
+          startedAt: run.started_at,
+          finishedAt: run.finished_at,
+          durationMs:
+            run.finished_at != null ? run.finished_at - run.started_at : null,
+          outcome: classification.outcome,
+          nextAction: classification.nextAction,
+          outcomeCounts,
+        };
+      }),
     });
   });
 

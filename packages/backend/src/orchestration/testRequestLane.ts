@@ -43,11 +43,13 @@ import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { typedGetSetting } from '../config/settings';
 import {
   insertTestRequestRun,
+  markTestRequestRunRunning,
   completeTestRequestRun,
   clearSupersededStructuredResults,
   clearExtractedStructuredResultsBatch,
   STRUCTURED_RESULT_CLEAR_BATCH_CAP,
   listRunningTestRequestRuns,
+  listQueuedTestRequestRuns,
   listTestRequestRunsNeedingExtraction,
   countTestRequestRunsNeedingExtraction,
   hasTestRunSummary,
@@ -66,6 +68,7 @@ import type {
   StructuredTestResult,
   NewTestRunResultRow,
   RunOrigin,
+  TestRunProducer,
 } from '../db/types';
 import { logger } from '../logger';
 import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
@@ -106,6 +109,8 @@ export interface TestRequestRunSpec {
    * db/queries.ts).
    */
   runOrigin: RunOrigin;
+  /** Which lane call site is originating this run — set at insert time onto every row; see TestRunProducer in db/types.ts. */
+  producer: TestRunProducer;
 }
 
 /**
@@ -377,6 +382,22 @@ export function admitTestRequest(
 
   const requestedAt = Date.now();
   const runId = randomUUID();
+  // Durably recorded as 'queued' before the semaphore permit is even
+  // requested — a caller can query this row (and a boot-time crash mid-queue
+  // is recoverable) from the moment of admission, not just from the moment
+  // execution actually starts. See markTestRequestRunRunning below for the
+  // transition once the permit is acquired.
+  insertTestRequestRun(
+    runId,
+    spec.projectId,
+    spec.contentHash,
+    spec.sessionId,
+    requestedAt,
+    null,
+    spec.runOrigin,
+    spec.producer,
+    'queued',
+  );
   const semaphore = getProjectSemaphore(spec.projectId);
   const permitPromise = semaphore.acquire(runId);
   const admission = () => {
@@ -461,15 +482,7 @@ async function executeTestRequestRun(
   // computeTestFlipRateFlag).
   const concurrentRunCount = semaphore.inUse() - 1;
   try {
-    insertTestRequestRun(
-      runId,
-      spec.projectId,
-      spec.contentHash,
-      spec.sessionId,
-      requestedAt,
-      concurrentRunCount,
-      spec.runOrigin,
-    );
+    markTestRequestRunRunning(runId, startedAt, concurrentRunCount);
     broadcastRunStatus({
       runId,
       projectId: spec.projectId,
@@ -570,6 +583,7 @@ async function executeTestRequestRun(
       oom_killed: oomKilled ? 1 : 0,
       test_report_acquisition_attempted: acquisitionAttempted ? 1 : 0,
       run_origin: spec.runOrigin,
+      producer: spec.producer,
     });
     return { ...result, runId };
   } catch (err) {
@@ -612,8 +626,15 @@ async function executeTestRequestRun(
  * main/ orphan sweep does not call this.
  */
 export function recoverInterruptedTestRequestRuns(): void {
-  const running = listRunningTestRequestRuns();
-  for (const run of running) {
+  // A 'queued' row is exactly as stranded as a 'running' one: its waiter
+  // lived only in the crashed process's in-memory Semaphore, so it can never
+  // acquire a permit on its own — mark it failed rather than leaving it
+  // silently queued forever.
+  const stranded = [
+    ...listRunningTestRequestRuns(),
+    ...listQueuedTestRequestRuns(),
+  ];
+  for (const run of stranded) {
     logger.warn(
       `[testRequestLane] recovering interrupted run ${run.id} (project ${run.project_id}) as failed`,
     );

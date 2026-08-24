@@ -161,6 +161,8 @@ function baseSpec(
     timeoutSec: 60,
     maxRssMb: 0,
     sessionId: null,
+    runOrigin: null,
+    producer: 'session_request',
     ...overrides,
   };
 }
@@ -449,6 +451,67 @@ describe('recoverInterruptedTestRequestRuns', () => {
       .prepare(`SELECT state FROM test_request_runs WHERE id = ?`)
       .get('run-1') as { state: string };
     expect(row.state).toBe('failed');
+  });
+
+  it('marks a leftover queued row as failed, matching the running-row behavior', () => {
+    insertTestRequestRun(
+      'run-queued-1',
+      'proj-1',
+      'hash-queued-1',
+      null,
+      Date.now(),
+      null,
+      null,
+      'session_request',
+      'queued',
+    );
+    const before = db
+      .prepare(`SELECT state FROM test_request_runs WHERE id = ?`)
+      .get('run-queued-1') as { state: string };
+    expect(before.state).toBe('queued');
+
+    recoverInterruptedTestRequestRuns();
+
+    const after = db
+      .prepare(`SELECT state FROM test_request_runs WHERE id = ?`)
+      .get('run-queued-1') as { state: string };
+    expect(after.state).toBe('failed');
+  });
+});
+
+describe('admitTestRequest — durable queued state', () => {
+  it('records the row as queued, queryable, before its semaphore permit is acquired', () => {
+    insertProject({
+      id: 'proj-queued-durable',
+      name: 'Queued Durable',
+      project_dir: '/tmp/proj-queued-durable',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      test_request_max_concurrent: 1,
+    });
+    // Never resolves — the first request holds the only permit for the
+    // whole test, so the second request's row stays queued throughout.
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+
+    admitTestRequest(
+      baseSpec({
+        projectId: 'proj-queued-durable',
+        contentHash: 'queued-durable-a',
+      }),
+    );
+    const second = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-queued-durable',
+        contentHash: 'queued-durable-b',
+      }),
+    );
+
+    const row = db
+      .prepare(`SELECT state, producer FROM test_request_runs WHERE id = ?`)
+      .get(second.runId) as { state: string; producer: string | null };
+    expect(row.state).toBe('queued');
+    expect(row.producer).toBe('session_request');
   });
 });
 
