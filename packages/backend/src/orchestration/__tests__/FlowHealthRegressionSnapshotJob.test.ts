@@ -118,6 +118,12 @@ describe('FlowHealthRegressionSnapshotJob artifact exclusion', () => {
 
 describe('FlowHealthRegressionSnapshotJob dedup', () => {
   it('writes exactly one row for two identical consecutive evaluations', () => {
+    // runOnce() captures a fresh Date.now() for window_end on every call, so
+    // two "identical" evaluations must be pinned to the same instant here —
+    // otherwise a real clock tick between the two calls flakily produces
+    // different window_end values and a spurious second insert.
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+
     (getStandardSessionWallClockSample as any).mockReturnValue({
       durationsMs: [10 * MS, 20 * MS, 30 * MS],
       excludedArtifactCount: 0,
@@ -138,6 +144,8 @@ describe('FlowHealthRegressionSnapshotJob dedup', () => {
     job.runOnce();
 
     expect(insertFlowHealthRegressionSnapshot).toHaveBeenCalledTimes(1);
+
+    nowSpy.mockRestore();
   });
 
   it('writes a new row when the sample changes', () => {

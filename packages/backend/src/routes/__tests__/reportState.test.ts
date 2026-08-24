@@ -163,6 +163,55 @@ describe('POST /api/reports/:id/abandon', () => {
   });
 });
 
+describe('PATCH /api/reports/:id', () => {
+  it('forwards a base64 image field to replace the report image', async () => {
+    const updated = { id: 'r-1', state: 'draft', image_path: '/data/r-1.png' };
+    reportServiceMock.updateDraftReport.mockReturnValue(updated);
+
+    const res = await request(makeApp())
+      .patch('/api/reports/r-1')
+      .send({ image: 'data:image/png;base64,AAAA' });
+
+    expect(reportServiceMock.updateDraftReport).toHaveBeenCalledWith(
+      'r-1',
+      expect.objectContaining({ image: 'data:image/png;base64,AAAA' }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(updated);
+  });
+
+  it('forwards a null image field to clear the report image', async () => {
+    const updated = { id: 'r-1', state: 'draft', image_path: null };
+    reportServiceMock.updateDraftReport.mockReturnValue(updated);
+
+    const res = await request(makeApp())
+      .patch('/api/reports/r-1')
+      .send({ image: null });
+
+    expect(reportServiceMock.updateDraftReport).toHaveBeenCalledWith(
+      'r-1',
+      expect.objectContaining({ image: null }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(updated);
+  });
+
+  it('400s when the service rejects an oversized image', async () => {
+    reportServiceMock.updateDraftReport.mockImplementation(() => {
+      throw new Error(
+        'image exceeds the 8 MB size cap (decoded image is 9000000 bytes)',
+      );
+    });
+
+    const res = await request(makeApp())
+      .patch('/api/reports/r-1')
+      .send({ image: 'data:image/png;base64,AAAA' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/8 MB/);
+  });
+});
+
 describe('GET /api/reports', () => {
   it('forwards project/milestone/state filters and returns derived fields', async () => {
     const result = {

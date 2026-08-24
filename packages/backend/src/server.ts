@@ -135,7 +135,10 @@ import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
 import { createOpsJournalRouter } from './routes/opsJournal';
 import { createTaskAbortRouter } from './routes/taskAbort';
 import { createGateStateRouter } from './routes/gateState';
-import { createReportStateRouter } from './routes/reportState';
+import {
+  createReportStateRouter,
+  reportImageBodyParser,
+} from './routes/reportState';
 import { createSeedStateRouter } from './routes/seedState';
 import { createConvergenceRouter } from './routes/convergence';
 import { createArchitectureRouter } from './routes/architecture';
@@ -253,6 +256,11 @@ const PORT = getOrchestratorConfig().server.port;
 logConfigProvenanceSummary();
 
 const app = express();
+// Scoped ahead of the global parser below so /api/reports (which accepts a
+// base64 screenshot on POST/PATCH) gets a raised body-size limit without
+// raising it for every other route — body-parser skips re-parsing a body
+// it's already consumed, so the global parser becomes a no-op here.
+app.use('/api/reports', reportImageBodyParser);
 app.use(express.json());
 // Readiness surface — public, no token required. Distinguishes a slow boot
 // (migrating / boot_steps_running) from a crashed process; only reachable at
