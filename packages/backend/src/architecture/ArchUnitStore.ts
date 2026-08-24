@@ -179,6 +179,7 @@ export function updateUnit(
   if (!row) {
     throw new Error(`arch_unit: no unit ${id} to update`);
   }
+  const before = toArchUnit(row);
   const next = {
     ...row,
     title: fields.title ?? row.title,
@@ -208,10 +209,6 @@ export function updateUnit(
     }
     return value !== priorValues[key];
   });
-  const before: Record<string, unknown> = {};
-  for (const key of changedFields) {
-    before[key] = priorValues[key];
-  }
   db.transaction(() => {
     updateArchUnit(next);
     insertArchUnitEvent({
