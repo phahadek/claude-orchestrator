@@ -55,10 +55,12 @@ const {
   mockListStagedIntentsByGroup,
   mockGetTaskCache,
   mockSetStagedIntentAdvisory,
+  mockIncrementRouteBackCount,
 } = vi.hoisted(() => ({
   mockListStagedIntentsByGroup: vi.fn(),
   mockGetTaskCache: vi.fn(),
   mockSetStagedIntentAdvisory: vi.fn(),
+  mockIncrementRouteBackCount: vi.fn(),
 }));
 
 vi.mock('../../db/queries', () =>
@@ -66,10 +68,19 @@ vi.mock('../../db/queries', () =>
     listStagedIntentsByGroup: mockListStagedIntentsByGroup,
     getTaskCache: mockGetTaskCache,
     setStagedIntentAdvisory: mockSetStagedIntentAdvisory,
+    incrementRouteBackCount: mockIncrementRouteBackCount,
     getMergeCommitForTask: vi.fn(),
     deleteTaskCacheRow: vi.fn(),
   }),
 );
+
+const { mockPushBackGroupToOriginatingSession } = vi.hoisted(() => ({
+  mockPushBackGroupToOriginatingSession: vi.fn(),
+}));
+
+vi.mock('../../routes/stagedIntents', () => ({
+  pushBackGroupToOriginatingSession: mockPushBackGroupToOriginatingSession,
+}));
 
 vi.mock('../../gate/gateStore', () => ({
   insertItem: vi.fn(),
@@ -180,6 +191,8 @@ beforeEach(() => {
   mockListStagedIntentsByGroup.mockReset();
   mockGetTaskCache.mockReset();
   mockSetStagedIntentAdvisory.mockReset();
+  mockIncrementRouteBackCount.mockReset();
+  mockPushBackGroupToOriginatingSession.mockReset();
   mockLoggerDebug.mockReset();
   mockLoggerWarn.mockReset();
   mockLoggerInfo.mockReset();
@@ -188,6 +201,13 @@ beforeEach(() => {
   mockGetTaskBackend.mockReturnValue({
     fetchTaskPage: vi.fn().mockResolvedValue('A clean, ready task body.'),
   });
+  mockIncrementRouteBackCount.mockReturnValue({
+    group_id: 'group-1',
+    route_back_count: 1,
+    escalated: 0,
+    updated_at: 1,
+  });
+  mockPushBackGroupToOriginatingSession.mockResolvedValue(undefined);
 });
 
 describe('classifyReadyProposal — type scope', () => {
@@ -453,6 +473,166 @@ describe('classifyReadyProposal — advisory/annotation independence', () => {
     const advisory = JSON.parse(advisoryJson);
     expect(advisory.status).toBe('flagged');
     expect(advisory.tier).toBe('semantic');
+  });
+});
+
+describe('classifyReadyProposal — Tier-3 route-back', () => {
+  it("calls incrementRouteBackCount with the group's id on a flagged verdict", async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({
+      stdout: cliJsonWrap({
+        status: 'flagged',
+        confidence: 0.9,
+        findings: [{ quote: 'q', detail: 'd' }],
+      }),
+    });
+
+    await classifyReadyProposal('group-1');
+
+    expect(mockIncrementRouteBackCount).toHaveBeenCalledTimes(1);
+    expect(mockIncrementRouteBackCount).toHaveBeenCalledWith('group-1');
+  });
+
+  it('pushes a group under the route-back cap back to its originating session, pre-commit', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({
+      stdout: cliJsonWrap({
+        status: 'flagged',
+        confidence: 0.9,
+        findings: [{ quote: 'q', detail: 'd' }],
+      }),
+    });
+    mockIncrementRouteBackCount.mockReturnValue({
+      group_id: 'group-1',
+      route_back_count: 1,
+      escalated: 0,
+      updated_at: 1,
+    });
+    const planningOrchestrator = { fake: 'orchestrator' } as never;
+    const sessionManager = { fake: 'sessionManager' } as never;
+
+    await classifyReadyProposal('group-1', {
+      preCommit: true,
+      planningOrchestrator,
+      sessionManager,
+    });
+
+    expect(mockPushBackGroupToOriginatingSession).toHaveBeenCalledTimes(1);
+    const [groupId, , orchestratorArg, sessionManagerArg] =
+      mockPushBackGroupToOriginatingSession.mock.calls[0];
+    expect(groupId).toBe('group-1');
+    expect(orchestratorArg).toBe(planningOrchestrator);
+    expect(sessionManagerArg).toBe(sessionManager);
+  });
+
+  it('does not push back a group at/over the cap — leaves it for operator disposition', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({
+      stdout: cliJsonWrap({
+        status: 'flagged',
+        confidence: 0.9,
+        findings: [{ quote: 'q', detail: 'd' }],
+      }),
+    });
+    mockIncrementRouteBackCount.mockReturnValue({
+      group_id: 'group-1',
+      route_back_count: 3,
+      escalated: 1,
+      updated_at: 1,
+    });
+
+    await classifyReadyProposal('group-1', { preCommit: true });
+
+    expect(mockIncrementRouteBackCount).toHaveBeenCalledTimes(1);
+    expect(mockPushBackGroupToOriginatingSession).not.toHaveBeenCalled();
+  });
+
+  it('does not push back post-commit even when under the cap', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({
+      stdout: cliJsonWrap({
+        status: 'flagged',
+        confidence: 0.9,
+        findings: [{ quote: 'q', detail: 'd' }],
+      }),
+    });
+    mockIncrementRouteBackCount.mockReturnValue({
+      group_id: 'group-1',
+      route_back_count: 1,
+      escalated: 0,
+      updated_at: 1,
+    });
+
+    await classifyReadyProposal('group-1', { preCommit: false });
+
+    expect(mockIncrementRouteBackCount).toHaveBeenCalledTimes(1);
+    expect(mockPushBackGroupToOriginatingSession).not.toHaveBeenCalled();
+  });
+
+  it('never calls incrementRouteBackCount for a clean verdict', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({
+      stdout: cliJsonWrap({ status: 'clean', confidence: 0, findings: [] }),
+    });
+
+    await classifyReadyProposal('group-1', { preCommit: true });
+
+    expect(mockIncrementRouteBackCount).not.toHaveBeenCalled();
+    expect(mockPushBackGroupToOriginatingSession).not.toHaveBeenCalled();
+  });
+
+  it('never calls incrementRouteBackCount for a usage_limited verdict', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({
+      stdout: JSON.stringify({
+        result: "You've hit your session limit · resets 6:10pm (UTC)",
+        is_error: true,
+        api_error_status: 429,
+      }),
+    });
+
+    vi.useFakeTimers();
+    try {
+      const promise = classifyReadyProposal('group-1', { preCommit: true });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await promise;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(mockIncrementRouteBackCount).not.toHaveBeenCalled();
+    expect(mockPushBackGroupToOriginatingSession).not.toHaveBeenCalled();
+  });
+
+  it('never calls incrementRouteBackCount for an errored verdict (unparseable output)', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({ stdout: 'not json at all' });
+
+    await classifyReadyProposal('group-1', { preCommit: true });
+
+    expect(mockIncrementRouteBackCount).not.toHaveBeenCalled();
+    expect(mockPushBackGroupToOriginatingSession).not.toHaveBeenCalled();
   });
 });
 

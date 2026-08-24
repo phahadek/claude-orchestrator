@@ -336,7 +336,11 @@ export class PlanningOrchestrator {
   private async verifyAndRoutePendingGroups(
     sessionId: string,
   ): Promise<boolean> {
-    const outcomes = await verifyDispatchedGroupsForSession(sessionId);
+    const outcomes = await verifyDispatchedGroupsForSession(
+      sessionId,
+      this,
+      this.sessionManager,
+    );
     const blocked = outcomes.filter((o) => !o.passed && !o.escalated);
 
     for (const outcome of blocked) {

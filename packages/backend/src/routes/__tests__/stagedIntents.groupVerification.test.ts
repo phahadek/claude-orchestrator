@@ -204,7 +204,10 @@ describe('verifyDispatchedGroupsForSession — group-level verify gate', () => {
 
     await verifyDispatchedGroupsForSession('session-4');
 
-    expect(mockClassifyReadyProposal).toHaveBeenCalledWith('group-tier3');
+    expect(mockClassifyReadyProposal).toHaveBeenCalledWith(
+      'group-tier3',
+      expect.objectContaining({ preCommit: true }),
+    );
   });
 
   it('does not invoke classifyReadyProposal for a group that fails verification', async () => {
