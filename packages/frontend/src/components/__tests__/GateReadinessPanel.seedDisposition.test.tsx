@@ -23,7 +23,10 @@ const seedApiMock = vi.hoisted(() => ({
   listSeedItems: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1 }),
   recordSeedItemEvent: vi.fn(),
 }));
-vi.mock('../../api/seed', () => ({ seedApi: seedApiMock }));
+vi.mock('../../api/seed', () => ({
+  seedApi: seedApiMock,
+  SEED_EVENT_OUTCOMES: ['applied', 'confirmed', 'blocked', 'discarded'],
+}));
 
 const deployApiMock = vi.hoisted(() => ({
   launch: vi.fn(),
