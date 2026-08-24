@@ -285,35 +285,54 @@ describe('deriveRecoveryDescriptor', () => {
     ['pr_body_invalid', 'resume', 'Resume'],
     ['attribution_missing', 'resume', 'Resume'],
     ['audit_findings', 'resume', 'Resume'],
-    ['baseline_escalation_floor', 'resume', 'Resume'],
+    ['diverged_branch_unresolved', 'resume', 'Resume'],
+    ['api_overloaded_exhausted', 'resume', 'Resume'],
   ] as const)('%s → resume', (reason, action, label) => {
     const d = deriveRecoveryDescriptor(reason);
     expect(d).toEqual({ available: true, action, label });
   });
 
-  it('awaiting_human_approval → available:false (no action)', () => {
-    expect(deriveRecoveryDescriptor('awaiting_human_approval')).toEqual({
-      available: false,
-    });
+  it.each([
+    ['pr_creation_failed', 'redispatch', 'Redispatch'],
+    ['planning_crashed', 'redispatch', 'Redispatch'],
+    ['planning_first_turn_empty', 'redispatch', 'Redispatch'],
+    ['planning_terminal_no_decision', 'redispatch', 'Redispatch'],
+    ['ops_journal_terminal_incomplete', 'redispatch', 'Redispatch'],
+  ] as const)('%s → redispatch (previously omitted)', (reason, action, label) => {
+    const d = deriveRecoveryDescriptor(reason);
+    expect(d).toEqual({ available: true, action, label });
   });
 
-  it('max_reviews → available:false (no action)', () => {
-    expect(deriveRecoveryDescriptor('max_reviews')).toEqual({
-      available: false,
-    });
-  });
-
-  it('manual_verification_pending → available:false (no action)', () => {
-    expect(deriveRecoveryDescriptor('manual_verification_pending')).toEqual({
-      available: false,
-    });
-  });
-
-  it('recoverable reason (stuck_timeout) → available:false', () => {
-    expect(deriveRecoveryDescriptor('stuck_timeout')).toEqual({
-      available: false,
-    });
-  });
+  it.each([
+    'max_reviews',
+    'stuck_timeout',
+    'pr_closed',
+    'api_overloaded',
+    'awaiting_human_approval',
+    'notion_done_update_stuck',
+    'base_branch_broken',
+    'rate_limit',
+    'workflow_scope_denied',
+    'review_rules_escalation',
+    'baseline_escalation_floor',
+    'depth_review_escalation',
+    'depth_review_pending',
+    'planning_terminal_blocked_members',
+    'ops_terminal_group_incomplete',
+    'usage_limit_deferred',
+    'manual_verification_pending',
+    'test_request_cycle_exceeded',
+    'test_report_acquisition_failed',
+    'ci_not_completing',
+    'mcp_unreachable_exhausted',
+    'verdict_routing_failed',
+    'base_attributable_test_excluded',
+  ] as const)(
+    '%s → available:false (deliberate none, previously omitted)',
+    (reason) => {
+      expect(deriveRecoveryDescriptor(reason)).toEqual({ available: false });
+    },
+  );
 });
 
 // ── deriveTaskRecoveryDescriptor ────────────────────────────────────────────
@@ -411,24 +430,24 @@ describe('deriveTaskRecoveryDescriptor', () => {
     expect(d).toEqual({ available: false });
   });
 
-  it('baseline_escalation_floor (PR-side) resolves to an available resume action, giving the discharge path an affordance', () => {
+  it('baseline_escalation_floor (PR-side) resolves to available:false — a deliberate none, not an affordance', () => {
     const d = deriveTaskRecoveryDescriptor({
       taskReason: null,
       prReason: 'baseline_escalation_floor',
       hasPR: true,
       sessionTerminal: false,
     });
-    expect(d).toEqual({ available: true, action: 'resume', label: 'Resume' });
+    expect(d).toEqual({ available: false });
   });
 
-  it('baseline_escalation_floor (task-side) resolves to an available resume action', () => {
+  it('baseline_escalation_floor (task-side) resolves to available:false — a deliberate none', () => {
     const d = deriveTaskRecoveryDescriptor({
       taskReason: 'baseline_escalation_floor',
       prReason: null,
       hasPR: true,
       sessionTerminal: false,
     });
-    expect(d).toEqual({ available: true, action: 'resume', label: 'Resume' });
+    expect(d).toEqual({ available: false });
   });
 });
 

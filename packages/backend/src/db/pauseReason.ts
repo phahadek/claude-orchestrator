@@ -439,14 +439,21 @@ export interface RecoveryDescriptor {
   label?: string;
 }
 
-const RECOVERY_ACTION_MAP: Partial<
-  Record<CanonicalPauseReason, RecoveryAction>
-> = {
+// Exhaustive by construction (mirrors PAUSE_REASON_REGISTRY): every
+// CanonicalPauseReason needs an explicit, reviewed entry here — either a real
+// RecoveryAction or a deliberate 'none' — so adding a new reason without
+// deciding its discharge path is a typecheck failure, not a silent omission.
+const RECOVERY_ACTION_MAP: Record<CanonicalPauseReason, RecoveryAction | 'none'> = {
   // redispatch: clear pause + reset crash count + set Ready
   launch_failed: 'redispatch',
   needs_repo: 'redispatch',
   stalled_idle: 'redispatch',
   resume_failed: 'redispatch',
+  pr_creation_failed: 'redispatch',
+  planning_crashed: 'redispatch',
+  planning_first_turn_empty: 'redispatch',
+  planning_terminal_no_decision: 'redispatch',
+  ops_journal_terminal_incomplete: 'redispatch',
   // rerun: clear pause + re-run the pre-review pipeline
   autofix_git_infra_failure: 'rerun',
   autofix_tool_infra_failure: 'rerun',
@@ -463,12 +470,42 @@ const RECOVERY_ACTION_MAP: Partial<
   pr_body_invalid: 'resume',
   attribution_missing: 'resume',
   audit_findings: 'resume',
-  // The floor itself never re-derives (it's diff-driven, not verdict-driven),
-  // so discharging it must not re-run review — that would just re-escalate
-  // against the same diff. 'resume' only clears the pause and nudges the
-  // session to continue, unlike 'rerun' which re-enters the review pipeline.
-  baseline_escalation_floor: 'resume',
-  // awaiting_human_approval, max_reviews → available: false (omitted from map)
+  // Escalated form of diverged_branch once MAX_REBASE_NUDGES is exhausted —
+  // once a human rebases by hand out of band, the session still needs the
+  // same continue-nudge diverged_branch already uses.
+  diverged_branch_unresolved: 'resume',
+  // Escalated form of api_overloaded once the in-session respawn/backoff
+  // budget is exhausted — flagged for manual attention, then resumed.
+  api_overloaded_exhausted: 'resume',
+  // none: no click in this map fixes it — either the system already
+  // auto-clears it, or the fix is structurally outside redispatch/rerun/resume.
+  max_reviews: 'none', // reviewed and closed by the reviewer/operator directly
+  stuck_timeout: 'none', // recoverable+automatic: auto continue-nudge, then orphan-reconciliation force-kill
+  pr_closed: 'none', // terminal; PRMergeWatcher auto-reconciles within a grace window, otherwise outside this map's actions
+  api_overloaded: 'none', // recoverable+automatic: auto-retries via in-place kill+respawn before ever reaching *_exhausted
+  awaiting_human_approval: 'none', // cleared by approving the PR on GitHub, not by this map
+  notion_done_update_stuck: 'none', // PR is already merged; a redispatch would incorrectly reset an already-completed task
+  base_branch_broken: 'none', // clears itself the moment a subsequent base-health check comes back clean/partial
+  rate_limit: 'none', // recoverable+automatic: auto-clears the moment the rate_limit_event status flips to 'resumed'
+  workflow_scope_denied: 'none', // fix is retyping the task as Tooling for an interactive session — a routing change outside this session
+  review_rules_escalation: 'none', // resolve manually; no dedicated auto-discharge route
+  // Deliberate, reviewed 'none': set identically to review_rules_escalation
+  // with no dedicated clear route beyond the standard human-operated recover
+  // flow. Mirrors the other non-automatable, human-adjudicated escalation
+  // reasons rather than inventing new discharge machinery.
+  baseline_escalation_floor: 'none',
+  depth_review_escalation: 'none', // same shape as baseline_escalation_floor; can be raised with no linked session to route to
+  depth_review_pending: 'none', // recoverable+automatic: clears itself within dispatchDepthReview's timeout ceiling
+  planning_terminal_blocked_members: 'none', // fix is dispositioning stuck staged intents, not a task-level redispatch
+  ops_terminal_group_incomplete: 'none', // fix is staging the missing transition manually, not a session action
+  usage_limit_deferred: 'none', // recoverable+automatic: resumes at the recorded resets_at
+  manual_verification_pending: 'none', // cleared only via the dedicated verify-manual-items route
+  test_request_cycle_exceeded: 'none', // needs a human look, not a one-click redispatch/resume that would just resume the same loop
+  test_report_acquisition_failed: 'none', // nothing auto-recovers it, but it also never blocks merge
+  ci_not_completing: 'none', // advisory-only: self-clears via the scheduled poll job or is superseded by a genuine ci_failing pause
+  mcp_unreachable_exhausted: 'none', // an operator has to decide whether to keep retrying by hand or abandon the session
+  verdict_routing_failed: 'none', // no session to nudge; permanent operator-action-required pause
+  base_attributable_test_excluded: 'none', // advisory-only: the pill clears itself once a subsequent run is clean or newly attributable
 };
 
 const RECOVERY_LABELS: Record<RecoveryAction, string> = {
@@ -482,7 +519,7 @@ export function deriveRecoveryDescriptor(
 ): RecoveryDescriptor {
   if (reason == null) return { available: false };
   const action = RECOVERY_ACTION_MAP[reason];
-  if (action == null) return { available: false };
+  if (action == null || action === 'none') return { available: false };
   return { available: true, action, label: RECOVERY_LABELS[action] };
 }
 
