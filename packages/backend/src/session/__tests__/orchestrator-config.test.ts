@@ -813,6 +813,19 @@ describe('getSessionAddDirs', () => {
     );
     expect(dirs).toEqual([grantedPath]);
   });
+
+  it("unions a configured investigate read:path: pre-grant into a dispatched batch session's add-dir list", () => {
+    const imagesDir = '/srv/orchestrator/data/investigation-report-images';
+    const granted = resolvePreGrantCapabilities(
+      { capability_pre_grants: { investigate: [pathReadCapability(imagesDir)] } },
+      'ops',
+      'report-batch:batch-1',
+    );
+
+    const dirs = getSessionAddDirs('ops', granted, projectDir);
+
+    expect(dirs).toContain(imagesDir);
+  });
 });
 
 /**

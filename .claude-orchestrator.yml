@@ -104,6 +104,11 @@ bootstrap_script: ''
 # - gate-verify / investigate: read:audit-log + read:session-events, plus
 #   the read-only adhoc-query script (isGrantable — matches no denylist
 #   pattern; read-only enforced independently by the script itself).
+# - investigate also gets a static read:path: grant onto the backend-owned
+#   investigation-report-images storage root (reportStore.ts#getReportImagesDir)
+#   so a dispatched batch session can Read the `- image:` path
+#   buildInvestigateProcedure lists per report, with no per-dispatch scratch
+#   copy and no session.requestCapability round trip.
 # - groom: read:audit-log + read:session-events — the carve-out that
 #   auto-approves these reads for other kinds excludes groom
 #   (isSanctionedAutoApproveCapability's nonGroomCarveOut), so groom's
@@ -119,6 +124,7 @@ capability_pre_grants:
     - read:audit-log:claude-dashboard
     - read:session-events:claude-dashboard
     - 'Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)'
+    - 'read:path:/home/paulie/.local/share/claude-orchestrator/investigation-report-images'
   ops:
     - read:audit-log:claude-dashboard
   groom:

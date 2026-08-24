@@ -61,6 +61,7 @@ export function buildInvestigateProcedure(
       `  - title: ${r.title}`,
       `  - symptom: ${r.symptom_text}`,
       ...(r.evidence_text ? [`  - evidence: ${r.evidence_text}`] : []),
+      ...(r.image_path ? [`  - image: ${r.image_path}`] : []),
     ]),
     '',
     ...renderOpsCapabilities(),
