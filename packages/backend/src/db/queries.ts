@@ -1576,7 +1576,7 @@ export function getActivePlanningSessionForTask(
   return db
     .prepare<{ task_id_norm: string; flow: string }, Session>(
       `
-    SELECT * FROM sessions
+    SELECT * FROM sessions INDEXED BY idx_sessions_task_id_norm
     WHERE task_id_norm = @task_id_norm
       AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND session_type = @flow
@@ -1598,7 +1598,7 @@ export function hasActiveSessionForTask(taskId: string): boolean {
   const row = db
     .prepare<{ task_id_norm: string }>(
       `
-    SELECT 1 FROM sessions
+    SELECT 1 FROM sessions INDEXED BY idx_sessions_task_id_norm
     WHERE task_id_norm = @task_id_norm
       AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND (session_type = 'standard' OR session_type IS NULL)
