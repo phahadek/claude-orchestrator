@@ -875,6 +875,29 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // Awaiting-operator-decision state: a session that correctly refuses to
+  // self-authorize and asks the operator a question it cannot answer itself
+  // (extends the session.requestCapability precedent — see
+  // isSessionAwaitingCapabilityDisposition — to any operator-only decision,
+  // not just a capability grant). Non-null awaiting_operator_question is the
+  // marker; awaiting_operator_asked_at bounds how long it may sit unanswered
+  // before OrphanedTaskSweeper surfaces it instead of parking it forever.
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN awaiting_operator_question TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN awaiting_operator_asked_at INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+
   // Task-level pause reasons for tasks that have never had a PR (e.g. launch_failed).
   target.exec(`
     CREATE TABLE IF NOT EXISTS task_pause_reasons (

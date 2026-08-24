@@ -27,6 +27,7 @@ import {
   listStagedIntentsBySession,
   getOpsJournalEntry,
   getPendingToolUseCount,
+  isSessionAwaitingOperatorDecision,
 } from '../db/queries';
 import { isGateVerifySession } from './sessionPredicates';
 import type { SessionType } from './sessionPredicates';
@@ -69,6 +70,18 @@ export function sessionBusyInFlightToolCall(sessionId: string): boolean {
   return (
     getPendingToolUseCount(sessionId) > 0 && isSessionProcessAlive(sessionId)
   );
+}
+
+/**
+ * DB-derived variant of isSessionAwaitingOperatorDecision for pollers (e.g.
+ * StalledPRReconciler) that only have a session_id in hand, not an
+ * already-loaded Session row — same shape as sessionBusyInFlightToolCall
+ * above. True iff the session is idle and parked awaiting an answer only the
+ * operator can give (a generic question, not just a capability grant).
+ */
+export function sessionAwaitingOperatorDecision(sessionId: string): boolean {
+  const session = getSession(sessionId);
+  return session !== undefined && isSessionAwaitingOperatorDecision(session);
 }
 
 /** True iff a merged/closed pull_requests row or a merged local branch exists for this session. */

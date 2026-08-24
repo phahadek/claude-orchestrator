@@ -10759,6 +10759,105 @@ export function isSessionAwaitingCapabilityDisposition(
   );
 }
 
+// ── awaiting-operator-decision ───────────────────────────────────────────────
+//
+// Extends the isSessionAwaitingCapabilityDisposition precedent above from one
+// specific question (a capability grant) to any question only the operator
+// can answer — e.g. a session that correctly refuses to self-authorize an
+// ambiguous instruction and asks rather than guessing. Stored directly on the
+// session row (awaiting_operator_question / awaiting_operator_asked_at)
+// rather than a side table: unlike a capability request, there is no
+// separate approve/reject workflow to model, just "is someone waiting on an
+// answer, and since when."
+
+let _stmtSetSessionAwaitingOperatorDecision: Database.Statement | null = null;
+let _stmtClearSessionAwaitingOperatorDecision: Database.Statement | null =
+  null;
+
+/** Parks a session awaiting an operator decision, carrying the question it asked. */
+export function setSessionAwaitingOperatorDecision(
+  sessionId: string,
+  question: string,
+  askedAt: number,
+): void {
+  _stmtSetSessionAwaitingOperatorDecision ??= db.prepare<{
+    session_id: string;
+    question: string;
+    asked_at: number;
+  }>(
+    `UPDATE sessions
+     SET awaiting_operator_question = @question,
+         awaiting_operator_asked_at = @asked_at
+     WHERE session_id = @session_id`,
+  );
+  _stmtSetSessionAwaitingOperatorDecision.run({
+    session_id: sessionId,
+    question,
+    asked_at: askedAt,
+  });
+}
+
+/** Discharges the awaiting-operator-decision state — call once the operator has answered. */
+export function clearSessionAwaitingOperatorDecision(sessionId: string): void {
+  _stmtClearSessionAwaitingOperatorDecision ??= db.prepare<{
+    session_id: string;
+  }>(
+    `UPDATE sessions
+     SET awaiting_operator_question = NULL,
+         awaiting_operator_asked_at = NULL
+     WHERE session_id = @session_id`,
+  );
+  _stmtClearSessionAwaitingOperatorDecision.run({ session_id: sessionId });
+}
+
+/** The pending question and when it was asked, or null if the session isn't awaiting one. */
+export function getSessionOperatorQuestion(
+  sessionId: string,
+): { question: string; askedAt: number } | null {
+  const row = getStmtGetSession().get({ session_id: sessionId }) as
+    | Pick<Session, 'awaiting_operator_question' | 'awaiting_operator_asked_at'>
+    | undefined;
+  if (!row || row.awaiting_operator_question === null) return null;
+  return {
+    question: row.awaiting_operator_question,
+    askedAt: row.awaiting_operator_asked_at ?? 0,
+  };
+}
+
+/**
+ * True when an `idle` session is idling specifically because it asked the
+ * operator a question only they can answer and is waiting for the reply —
+ * the generalized sibling of isSessionAwaitingCapabilityDisposition above.
+ * Always a legitimate park, never a candidate for staleness handling (orphan
+ * sweep, nudge, revert-to-Ready, session_inert classification) — until
+ * isOperatorDecisionPastWindow says otherwise (see below).
+ */
+export function isSessionAwaitingOperatorDecision(
+  session: Pick<Session, 'status' | 'awaiting_operator_question'>,
+): boolean {
+  return (
+    session.status === 'idle' && session.awaiting_operator_question !== null
+  );
+}
+
+/**
+ * True once a session has sat in the awaiting-operator-decision state longer
+ * than `windowMs` — the bound that keeps a waiting session from becoming
+ * permanently unreapable. A session past this window should be surfaced to
+ * the operator like any other stalled session, rather than protected
+ * forever by isSessionAwaitingOperatorDecision.
+ */
+export function isOperatorDecisionPastWindow(
+  session: Pick<Session, 'awaiting_operator_asked_at'>,
+  windowMs: number,
+  now: number = Date.now(),
+): boolean {
+  return (
+    session.awaiting_operator_asked_at !== null &&
+    now - session.awaiting_operator_asked_at > windowMs
+  );
+}
+
 /** Active (non-terminal-tombstone) intents for a project — superseded rows are always hidden. */
 export function listStagedIntentsByProject(
   projectId: string,

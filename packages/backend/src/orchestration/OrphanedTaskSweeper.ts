@@ -14,6 +14,8 @@ import {
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
   isSessionAwaitingCapabilityDisposition,
+  isSessionAwaitingOperatorDecision,
+  isOperatorDecisionPastWindow,
   isNoOpSuppressed,
   getPRByNotionTaskId,
   getLocalBranchBySession,
@@ -53,6 +55,11 @@ const NUDGE_LIMIT = 2;
 const RECENCY_GATE_MS = 10 * 60 * 1000;
 /** Skip nudge if the previous nudge was less than this many ms ago. */
 const MIN_NUDGE_SPACING_MS = 15 * 60 * 1000;
+/**
+ * Bounded window a session may sit awaiting an operator decision before it
+ * is surfaced instead of parked forever — see isOperatorDecisionPastWindow.
+ */
+const AWAITING_OPERATOR_DECISION_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Nudge message sent to a stalled idle session that hasn't opened a PR. */
 const NO_PR_NUDGE_MESSAGE =
   'You appear to have finished your work but no PR was opened. Please open a draft PR now so your changes can be reviewed. If you are done with your task, follow the PR format in CLAUDE.md and emit the <pr-body>…</pr-body> marker.';
@@ -236,6 +243,41 @@ export class OrphanedTaskSweeper {
       latestSession?.status === 'idle' &&
       isSessionAwaitingCapabilityDisposition(latestSession)
     ) {
+      return;
+    }
+
+    // Same shape, generalized: an idle session parked awaiting an operator
+    // decision (a question only they can answer, not a capability grant) is
+    // equally legitimate — it is the system working, not a stall. Unlike the
+    // capability case, this park is not indefinite: a session left waiting
+    // past AWAITING_OPERATOR_DECISION_WINDOW_MS falls through to the normal
+    // surface-to-operator path below instead of being protected forever.
+    if (
+      latestSession?.status === 'idle' &&
+      isSessionAwaitingOperatorDecision(latestSession)
+    ) {
+      if (
+        !isOperatorDecisionPastWindow(
+          latestSession,
+          AWAITING_OPERATOR_DECISION_WINDOW_MS,
+        )
+      ) {
+        return;
+      }
+      // Surface-once: already escalated on a prior sweep tick — the question
+      // itself is left in place (still answerable, still retrievable) but
+      // this branch must not re-fire task_orphan_surfaced every cycle.
+      if (latestSession.pause_reason === 'stalled_idle') {
+        return;
+      }
+      this.surfaceToOperator(
+        latestSession.session_id,
+        taskId,
+        latestSession.project_id ??
+          getTaskRepoAssignment(taskId)?.project_id ??
+          projectId,
+        'awaiting_operator_decision_timeout',
+      );
       return;
     }
 

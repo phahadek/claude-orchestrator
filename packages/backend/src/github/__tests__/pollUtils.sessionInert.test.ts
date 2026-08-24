@@ -168,6 +168,44 @@ describe('classifyStalledPR — session_inert', () => {
     ).toBeNull();
   });
 
+  it('does not classify session_inert when the session is awaiting an operator decision, even past the threshold', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+
+    expect(
+      classifyStalledPR(
+        pr,
+        'done',
+        'running',
+        false,
+        TEN_MIN_MS + 1,
+        TEN_MIN_MS,
+        false,
+        true,
+      ),
+    ).toBeNull();
+  });
+
+  it('still classifies session_inert past the threshold when isAwaitingOperatorDecision is false', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+
+    expect(
+      classifyStalledPR(
+        pr,
+        'done',
+        'running',
+        false,
+        TEN_MIN_MS + 1,
+        TEN_MIN_MS,
+        false,
+        false,
+      ),
+    ).toEqual({ kind: 'session_inert' });
+  });
+
   it('still classifies session_inert past the threshold when sessionBusyInFlightToolCall is false', () => {
     const pr = makePR({
       review_result: JSON.stringify({ verdict: 'approved' }),
