@@ -378,10 +378,7 @@ export class LocalTaskBackend implements TaskBackend {
     return sections.join('\n\n');
   }
 
-  async updateBody(
-    taskId: string,
-    sections: TaskBodySections,
-  ): Promise<void> {
+  async updateBody(taskId: string, sections: TaskBodySections): Promise<void> {
     const externalId = toExternalId(taskId);
     const file = this.readFile();
     const found = this.findTaskById(file, externalId);
