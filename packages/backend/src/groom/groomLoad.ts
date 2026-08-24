@@ -619,8 +619,14 @@ export function parseFilesPathsRawItems(
  * migration-path recognition (`isMigrationPath`) so the two conventions
  * never drift.
  */
+// Anchored on the `migrations?/` segment itself rather than capturing an
+// arbitrary-depth directory prefix with a quantified group (the previous
+// `(?:[\w.-]+\/)*` shape nested one unbounded quantifier inside another,
+// flagged by security/detect-unsafe-regex as ReDoS-prone) — the prefix is
+// sliced off the token by index instead, in `parsePendingMigrationPathEntry`
+// below.
 const MIGRATION_PLACEHOLDER_RE =
-  /^((?:[\w.-]+\/)*(?:db\/)?migrations?\/)(N{2,})_([\w.-]+)$/i;
+  /(^|\/)((?:db\/)?migrations?\/)(N{2,})_([\w.-]+)$/i;
 
 export interface PendingMigrationPathEntry {
   /** The exact placeholder path token as found in the entry's raw text. */
@@ -643,9 +649,10 @@ export function parsePendingMigrationPathEntry(
 ): PendingMigrationPathEntry | null {
   const token = extractPathToken(raw);
   if (!token) return null;
-  const m = token.match(MIGRATION_PLACEHOLDER_RE);
+  const m = MIGRATION_PLACEHOLDER_RE.exec(token);
   if (!m) return null;
-  return { token, dir: m[1], suffix: m[3] };
+  const dir = token.slice(0, m.index) + m[1] + m[2];
+  return { token, dir, suffix: m[4] };
 }
 
 /**
