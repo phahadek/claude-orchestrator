@@ -76,6 +76,7 @@ import {
   clearExtractedStructuredResultsBatch,
   getLatestBaseHealthTestRequestRun,
   getLatestTestRequestRun,
+  getTestRequestRunById,
   updateTestRequestRunState,
 } from '../../db/queries';
 import { typedSetSetting } from '../../config/settings';
@@ -105,29 +106,6 @@ function insertSummaryRow(
   );
 }
 
-function makeFailedRun(overrides: Partial<TestRequestRunRow> = {}): TestRequestRunRow {
-  return {
-    id: 'run-classify',
-    project_id: 'proj-1',
-    content_hash: 'hash-1',
-    session_id: null,
-    state: 'failed',
-    output: '',
-    requested_at: null,
-    started_at: Date.now(),
-    finished_at: Date.now(),
-    structured_result: null,
-    failure_reason: 'generic',
-    concurrent_run_count: null,
-    oom_killed: 0,
-    test_report_acquisition_attempted: 1,
-    run_origin: 'base_health_probe',
-    producer: 'base_health',
-    run_kind: 'full',
-    base_sha: null,
-    ...overrides,
-  };
-}
 
 function makeProject(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
   return {
@@ -1150,11 +1128,37 @@ describe('classifyRun suite-size floor', () => {
     });
   }
 
+  /** Persists the row under test itself (the FK from test_run_summaries requires it) and returns it. */
+  function seedFailedRun(
+    runId: string,
+    overrides: Partial<TestRequestRunRow> = {},
+  ): TestRequestRunRow {
+    insertTestRequestRun(
+      runId,
+      projectId,
+      `hash-${runId}`,
+      null,
+      Date.now(),
+      undefined,
+      'base_health_probe',
+    );
+    completeTestRequestRun(
+      runId,
+      'failed',
+      '',
+      overrides.failure_reason ?? 'generic',
+      null,
+      Boolean(overrides.oom_killed),
+      overrides.test_report_acquisition_attempted !== 0,
+    );
+    return getTestRequestRunById(runId) as TestRequestRunRow;
+  }
+
   it('classifies unknown when total_count falls below the configured fraction of the established baseline (be735798 shape: 6446 vs 11030)', () => {
     typedSetSetting('base_health_suite_size_floor_fraction', 0.8);
     seedBaseline([11007, 11030, 11032, 11046]);
 
-    const run = makeFailedRun({ id: 'run-truncated' });
+    const run = seedFailedRun('run-truncated');
     insertSummaryRow(run.id, projectId, 6446, 368);
 
     expect(classifyRun(run)).toBe('unknown');
@@ -1164,7 +1168,7 @@ describe('classifyRun suite-size floor', () => {
     typedSetSetting('base_health_suite_size_floor_fraction', 0.8);
     seedBaseline([11007, 11030, 11032, 11046]);
 
-    const run = makeFailedRun({ id: 'run-full' });
+    const run = seedFailedRun('run-full');
     insertSummaryRow(run.id, projectId, 11046, 4);
 
     expect(classifyRun(run)).toBe('partial_fail');
@@ -1174,7 +1178,7 @@ describe('classifyRun suite-size floor', () => {
     typedSetSetting('base_health_suite_size_floor_fraction', 0.8);
     // No prior base_health_probe runs seeded — baseline is unknown.
 
-    const run = makeFailedRun({ id: 'run-no-baseline' });
+    const run = seedFailedRun('run-no-baseline');
     insertSummaryRow(run.id, projectId, 50, 3);
 
     expect(classifyRun(run)).toBe('partial_fail');
@@ -1184,15 +1188,12 @@ describe('classifyRun suite-size floor', () => {
     typedSetSetting('base_health_suite_size_floor_fraction', 0.8);
     seedBaseline([11007, 11030, 11032, 11046]);
 
-    const truncated = makeFailedRun({ id: 'run-truncated-2' });
+    const truncated = seedFailedRun('run-truncated-2');
     insertSummaryRow(truncated.id, projectId, 6446, 368);
     expect(classifyRun(truncated)).toBe('unknown');
 
-    const crashed = makeFailedRun({
-      id: 'run-crashed',
-      test_report_acquisition_attempted: 1,
-    });
     // No summary row and no structured_result at all — a genuine crash.
+    const crashed = seedFailedRun('run-crashed');
     expect(classifyRun(crashed)).toBe('total_fail');
     expect(classifyRun(truncated)).not.toBe(classifyRun(crashed));
   });
