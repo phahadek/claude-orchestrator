@@ -159,9 +159,9 @@ describe('operator attribution — POST /api/gate/items/:id/approve', () => {
     expect(latestEventOperator(item.id)).toBe('pedros-macbook');
     const audit = latestAuditRow('gate_item_event_appended');
     expect(audit.actor_id).not.toBeNull();
-    expect(
-      audit.actor_type === 'system' && audit.actor_id === null,
-    ).toBe(false);
+    expect(audit.actor_type === 'system' && audit.actor_id === null).toBe(
+      false,
+    );
   });
 
   it('session route credential with no body operator: approves with a session-label operator and a non-system audit_log row', async () => {
@@ -176,9 +176,9 @@ describe('operator attribution — POST /api/gate/items/:id/approve', () => {
     expect(operator).toContain('sess-xyz');
     const audit = latestAuditRow('gate_item_event_appended');
     expect(audit.actor_id).not.toBeNull();
-    expect(
-      audit.actor_type === 'system' && audit.actor_id === null,
-    ).toBe(false);
+    expect(audit.actor_type === 'system' && audit.actor_id === null).toBe(
+      false,
+    );
   });
 
   it('an explicit body operator wins over either auth identity', async () => {

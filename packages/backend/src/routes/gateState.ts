@@ -47,7 +47,10 @@ import { asyncHandler } from './asyncHandler';
  * via a per-session route credential (requireDeviceOrSessionRouteAuth sets
  * exactly one of req.device / req.routeSession, never both).
  */
-function resolveOperator(req: Request, bodyOperator: unknown): string | undefined {
+function resolveOperator(
+  req: Request,
+  bodyOperator: unknown,
+): string | undefined {
   if (typeof bodyOperator === 'string' && bodyOperator) {
     return bodyOperator;
   }
@@ -55,8 +58,9 @@ function resolveOperator(req: Request, bodyOperator: unknown): string | undefine
   if (device) {
     return device.name;
   }
-  const routeSession = (req as Request & { routeSession?: { sessionId: string } })
-    .routeSession;
+  const routeSession = (
+    req as Request & { routeSession?: { sessionId: string } }
+  ).routeSession;
   if (routeSession) {
     return `session:${routeSession.sessionId}`;
   }
