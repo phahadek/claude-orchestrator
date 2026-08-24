@@ -13,6 +13,8 @@ import {
   listSeedItemSources,
   insertSeedItemSource,
   updateSeedItemSourceMergeCommit,
+  listSeedItemIdsBySourceTask,
+  listUnfilledSeedItemSourceTaskIds,
   rehomeSeedItemsBySourceTask,
   rehomeSeedItemById,
   listSeedItemEvents,
@@ -313,6 +315,42 @@ export function setSourceMergeCommit(
     normalizedSourceTaskId,
     mergeCommit,
   );
+}
+
+/**
+ * Every seed_item id sourced from a task, across every project — the
+ * merge-completion consumer's fan-out from a merged `notion_task_id` to the
+ * seed_item rows that need their source filled and commit recomputed.
+ */
+export function itemIdsBySourceTask(sourceTaskId: string): string[] {
+  return listSeedItemIdsBySourceTask(sourceTaskId);
+}
+
+/**
+ * Every distinct source task id with at least one still-unfilled
+ * seed_item_source.merge_commit — the reconciler catch-up net's candidate
+ * set (see `catchUpSeedMergeCommits` in seedMergeConsumer.ts).
+ */
+export function unfilledSourceTaskIds(): string[] {
+  return listUnfilledSeedItemSourceTaskIds();
+}
+
+/**
+ * Recomputes min_deployed_commit as the latest merge commit across an item's
+ * sources — the seed twin of gateStore.recomputeMinDeployedCommit. "Latest"
+ * means the most recently filled one, taken as the last (by insertion order,
+ * `listSeedItemSources`' id-ASC order) source that carries a merge_commit.
+ * No-op (returns undefined) when no source has merged yet.
+ */
+export function recomputeMinDeployedCommit(
+  seedItemId: string,
+  updatedAt: string,
+): string | undefined {
+  const merged = listSeedItemSources(seedItemId).filter((s) => s.merge_commit);
+  if (merged.length === 0) return undefined;
+  const latest = merged[merged.length - 1].merge_commit as string;
+  updateSeedItemMinDeployedCommit(seedItemId, latest, updatedAt);
+  return latest;
 }
 
 /**

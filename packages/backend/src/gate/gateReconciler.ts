@@ -23,6 +23,7 @@ import {
   type TaskBodySections,
 } from '../tasks/bodyRender';
 import { catchUpMergeCommits } from './gateMergeConsumer';
+import { catchUpSeedMergeCommits } from '../seed/seedMergeConsumer';
 import {
   resolveMilestoneDatabaseId,
   resolveMilestoneRowForProject,
@@ -992,6 +993,12 @@ export async function runGateReconcilerTick(
   // Durability net: catch up any gate_item_source.merge_commit a missed
   // merge_completed event left unfilled before reconciling runnability.
   await catchUpMergeCommits();
+
+  // Seed twin of the above: catch up any seed_item_source.merge_commit left
+  // unfilled — this is also the seed store's only backfill path, since
+  // seedMergeConsumer's live merge_completed listener never fires for a row
+  // that accreted before the consumer was registered.
+  await catchUpSeedMergeCommits();
 
   // Shallow: this tick only reads project/milestone/classification/state off
   // allItems (below, and via reconcileHumanObservationMirrors) — never
