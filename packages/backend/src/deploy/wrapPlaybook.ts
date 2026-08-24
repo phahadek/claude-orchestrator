@@ -294,7 +294,13 @@ function shellOk(payload: unknown): ShellResult {
 
 function shellFail(err: unknown): ShellResult {
   const message = err instanceof Error ? err.message : String(err);
-  return { ok: false, output: message, exitCode: 1, stdout: '', stderr: message };
+  return {
+    ok: false,
+    output: message,
+    exitCode: 1,
+    stdout: '',
+    stderr: message,
+  };
 }
 
 /**
@@ -306,7 +312,11 @@ function shellFail(err: unknown): ShellResult {
  */
 export function createWrapShellRunner(
   fallback: ShellRunner = (command, opts) =>
-    spawnShell(command, { cwd: opts.cwd, runAs: opts.runAs, bindings: opts.bindings }),
+    spawnShell(command, {
+      cwd: opts.cwd,
+      runAs: opts.runAs,
+      bindings: opts.bindings,
+    }),
 ): ShellRunner {
   return async (command, opts) => {
     const directive = decodeDirective(command);

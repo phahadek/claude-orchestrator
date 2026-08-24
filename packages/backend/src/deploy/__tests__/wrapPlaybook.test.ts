@@ -19,7 +19,11 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { insertProject, insertMilestone, insertGateItem } from '../../db/queries.js';
+import {
+  insertProject,
+  insertMilestone,
+  insertGateItem,
+} from '../../db/queries.js';
 import {
   buildWrapPlaybook,
   markMilestoneWrapped,
@@ -123,9 +127,7 @@ describe('buildWrapPlaybook: shape', () => {
     // The two hard-to-reverse actions (repoint auto-launch, cut the
     // release) are prod-mutating; both confirm-gates precede them and are
     // themselves non-mutating (they only gate).
-    const byId = Object.fromEntries(
-      playbook.steps.map((s) => [s.id, s]),
-    );
+    const byId = Object.fromEntries(playbook.steps.map((s) => [s.id, s]));
     expect(byId[WRAP_STEP_CONFIRM_REPOINT].is_prod_mutating).toBe(false);
     expect(byId[WRAP_STEP_REPOINT].is_prod_mutating).toBe(true);
     expect(byId[WRAP_STEP_CONFIRM_RELEASE].is_prod_mutating).toBe(false);
@@ -141,10 +143,14 @@ describe('buildWrapPlaybook: shape', () => {
       releaseVersion: '2.0.0',
       repoUrl: 'https://github.com/acme/wrap-test-project.git',
     });
-    const cutRelease = playbook.steps.find((s) => s.id === WRAP_STEP_CUT_RELEASE);
+    const cutRelease = playbook.steps.find(
+      (s) => s.id === WRAP_STEP_CUT_RELEASE,
+    );
     expect(cutRelease?.command_or_prompt).toContain('v2.0.0');
     expect(cutRelease?.command_or_prompt).toContain('gh release create');
-    const advanceMain = playbook.steps.find((s) => s.id === WRAP_STEP_ADVANCE_MAIN);
+    const advanceMain = playbook.steps.find(
+      (s) => s.id === WRAP_STEP_ADVANCE_MAIN,
+    );
     expect(advanceMain?.command_or_prompt).toContain('git merge --no-ff');
     expect(advanceMain?.command_or_prompt).toContain('origin/dev');
   });
@@ -228,7 +234,9 @@ describe('Step 2 — bulkCarryPendingGateItems (the carry-gate-items step)', () 
     expect(result.carriedCount).toBe(2);
 
     const nextItems = db
-      .prepare(`SELECT text FROM gate_item WHERE project = ? AND milestone = 'M2'`)
+      .prepare(
+        `SELECT text FROM gate_item WHERE project = ? AND milestone = 'M2'`,
+      )
       .all(PROJECT) as { text: string }[];
     expect(nextItems.map((i) => i.text).sort()).toEqual([
       'pending item one',
@@ -237,7 +245,9 @@ describe('Step 2 — bulkCarryPendingGateItems (the carry-gate-items step)', () 
 
     // The originals stay under the closing milestone, state untouched.
     const originalStates = db
-      .prepare(`SELECT id, state FROM gate_item WHERE milestone = 'M1' ORDER BY id`)
+      .prepare(
+        `SELECT id, state FROM gate_item WHERE milestone = 'M1' ORDER BY id`,
+      )
       .all() as { id: string; state: string }[];
     expect(originalStates).toEqual([
       { id: 'item-deferred', state: 'deferred' },
@@ -274,7 +284,9 @@ describe('Step 2 — bulkCarryPendingGateItems (the carry-gate-items step)', () 
     bulkCarryPendingGateItems(PROJECT, CLOSING_MILESTONE, NEXT_MILESTONE);
 
     const nextItems = db
-      .prepare(`SELECT text FROM gate_item WHERE project = ? AND milestone = 'M2'`)
+      .prepare(
+        `SELECT text FROM gate_item WHERE project = ? AND milestone = 'M2'`,
+      )
       .all(PROJECT) as { text: string }[];
     expect(nextItems).toHaveLength(1);
   });
@@ -438,10 +450,9 @@ describe('createWrapShellRunner: directive dispatch', () => {
       cwd: '/tmp',
     });
 
-    expect(fallback).toHaveBeenCalledWith(
-      advanceMainStep.command_or_prompt,
-      { cwd: '/tmp' },
-    );
+    expect(fallback).toHaveBeenCalledWith(advanceMainStep.command_or_prompt, {
+      cwd: '/tmp',
+    });
     expect(result.ok).toBe(true);
   });
 });

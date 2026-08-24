@@ -188,7 +188,7 @@ describe('deploy_run: run-state store', () => {
   });
 });
 
-describe('deploy_run: (project, kind) exclusivity — a wrap run is independent of a project\'s deploy lock', () => {
+describe("deploy_run: (project, kind) exclusivity — a wrap run is independent of a project's deploy lock", () => {
   it('defaults kind to "deploy" when unset', () => {
     const run = startDeployRun({
       project: 'claude-orchestrator',
@@ -214,9 +214,7 @@ describe('deploy_run: (project, kind) exclusivity — a wrap run is independent 
     expect(getActiveDeployRun('claude-orchestrator', 'deploy')).toEqual(
       deployRun,
     );
-    expect(getActiveDeployRun('claude-orchestrator', 'wrap')).toEqual(
-      wrapRun,
-    );
+    expect(getActiveDeployRun('claude-orchestrator', 'wrap')).toEqual(wrapRun);
   });
 
   it('rejects a second concurrent deploy run for the same project', () => {
@@ -253,7 +251,7 @@ describe('deploy_run: (project, kind) exclusivity — a wrap run is independent 
     ).toThrow(DeployRunConflictError);
   });
 
-  it('a rejected concurrent run does not disturb the other kind\'s active run', () => {
+  it("a rejected concurrent run does not disturb the other kind's active run", () => {
     const deployRun = startDeployRun({
       project: 'claude-orchestrator',
       kind: 'deploy',
@@ -277,9 +275,7 @@ describe('deploy_run: (project, kind) exclusivity — a wrap run is independent 
     expect(getActiveDeployRun('claude-orchestrator', 'deploy')).toEqual(
       deployRun,
     );
-    expect(getActiveDeployRun('claude-orchestrator', 'wrap')).toEqual(
-      wrapRun,
-    );
+    expect(getActiveDeployRun('claude-orchestrator', 'wrap')).toEqual(wrapRun);
   });
 
   it('getLatestDeployRun scopes to the given kind independently', () => {
@@ -289,7 +285,11 @@ describe('deploy_run: (project, kind) exclusivity — a wrap run is independent 
       targetSha: 'sha1',
       startedAt: '2026-07-20T00:00:00.000Z',
     });
-    completeDeployRun(deployRun.run_id, 'succeeded', '2026-07-20T00:05:00.000Z');
+    completeDeployRun(
+      deployRun.run_id,
+      'succeeded',
+      '2026-07-20T00:05:00.000Z',
+    );
     const wrapRun = startDeployRun({
       project: 'claude-orchestrator',
       kind: 'wrap',
@@ -317,7 +317,11 @@ describe('deploy_run: (project, kind) exclusivity — a wrap run is independent 
       targetSha: 'closing-milestone-id',
       startedAt: '2026-07-20T00:01:00.000Z',
     });
-    completeDeployRun(firstWrap.run_id, 'succeeded', '2026-07-20T00:05:00.000Z');
+    completeDeployRun(
+      firstWrap.run_id,
+      'succeeded',
+      '2026-07-20T00:05:00.000Z',
+    );
     const secondWrap = startDeployRun({
       project: 'claude-orchestrator',
       kind: 'wrap',

@@ -1462,7 +1462,9 @@ describe('DeployOrchestrator: run kind (deploy vs wrap)', () => {
   });
 
   it('starts a run tagged with the given kind, and getActiveDeployRun scopes lookups to it', async () => {
-    const playbook = playbookWith([step({ id: 'mark-wrapped', kind: 'shell' })]);
+    const playbook = playbookWith([
+      step({ id: 'mark-wrapped', kind: 'shell' }),
+    ]);
     const deps = makeDeps(playbook);
     const orchestrator = new DeployOrchestrator(
       'proj',
@@ -1500,14 +1502,14 @@ describe('DeployOrchestrator: run kind (deploy vs wrap)', () => {
     const deployRun = await deployOrchestrator.startDeploy('sha-target');
     const wrapRun = await wrapOrchestrator.startDeploy('closing-milestone-id');
 
-    expect(getActiveDeployRun('proj', 'deploy')?.run_id).toBe(
-      deployRun.run_id,
-    );
+    expect(getActiveDeployRun('proj', 'deploy')?.run_id).toBe(deployRun.run_id);
     expect(getActiveDeployRun('proj', 'wrap')?.run_id).toBe(wrapRun.run_id);
   });
 
   it('does not overwrite the project deployed-sha record on a successful wrap run', async () => {
-    const playbook = playbookWith([step({ id: 'mark-wrapped', kind: 'shell' })]);
+    const playbook = playbookWith([
+      step({ id: 'mark-wrapped', kind: 'shell' }),
+    ]);
     const deps = makeDeps(playbook);
     const orchestrator = new DeployOrchestrator(
       'proj',
@@ -1521,7 +1523,9 @@ describe('DeployOrchestrator: run kind (deploy vs wrap)', () => {
   });
 
   it("resume() looks up the active run scoped to this orchestrator's kind, leaving a same-project deploy run untouched", async () => {
-    const playbook = playbookWith([step({ id: 'mark-wrapped', kind: 'shell' })]);
+    const playbook = playbookWith([
+      step({ id: 'mark-wrapped', kind: 'shell' }),
+    ]);
     const { startDeployRun } = await import('../deployService');
     const deployRun = startDeployRun({
       project: 'proj',
@@ -1548,8 +1552,6 @@ describe('DeployOrchestrator: run kind (deploy vs wrap)', () => {
 
     expect(deps.runShell).toHaveBeenCalled();
     expect(getActiveDeployRun('proj', 'wrap')).toBeUndefined();
-    expect(getActiveDeployRun('proj', 'deploy')?.run_id).toBe(
-      deployRun.run_id,
-    );
+    expect(getActiveDeployRun('proj', 'deploy')?.run_id).toBe(deployRun.run_id);
   });
 });
