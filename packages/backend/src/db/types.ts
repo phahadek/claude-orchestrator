@@ -1400,9 +1400,9 @@ export type NewMigrationReservationRow = Omit<
   updated_at: string;
 };
 
-export type MigrationReservationEventType = 'reserved';
+type MigrationReservationEventType = 'reserved';
 
-export interface MigrationReservationEventRow {
+interface MigrationReservationEventRow {
   id: number;
   migration_reservation_id: string;
   event_type: MigrationReservationEventType;
