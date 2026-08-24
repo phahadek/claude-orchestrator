@@ -9803,6 +9803,40 @@ function getFlakyRollupCandidates(
 const FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
 let _stmtPruneGhostFlaggedFlakyTests: Database.Statement | null = null;
+let _stmtHasGhostFlaggedFlakyTests: Database.Statement | null = null;
+
+/**
+ * Read-only existence check for pruneGhostFlaggedFlakyTests' DELETE
+ * predicate — same WHERE clause, wrapped in a SELECT EXISTS instead. Under
+ * WAL mode a read never blocks on, or is blocked by, a concurrent writer
+ * holding the single shared write lock, so this can run on every tick for
+ * free, while the DELETE itself (a write) only runs when it would actually
+ * change something. Must stay predicate-identical to the DELETE below —
+ * this only gates *when* the write fires, never *which* rows it would hit.
+ */
+function hasGhostFlaggedFlakyTests(
+  projectId: string,
+  computedAt: number,
+): boolean {
+  _stmtHasGhostFlaggedFlakyTests ??= db.prepare<{
+    project_id: string;
+    stale_before: number;
+  }>(`
+    SELECT EXISTS(
+      SELECT 1 FROM flagged_flaky_tests_rollup
+      WHERE project_id = @project_id
+        AND test_id NOT IN (
+          SELECT test_id FROM test_perf_baselines
+          WHERE project_id = @project_id AND updated_at > @stale_before
+        )
+    ) AS has_ghost
+  `);
+  const row = _stmtHasGhostFlaggedFlakyTests.get({
+    project_id: projectId,
+    stale_before: computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS,
+  }) as { has_ghost: number };
+  return row.has_ghost === 1;
+}
 
 /**
  * Deletes `projectId`'s flagged_flaky_tests_rollup rows whose test_id has no
@@ -9813,6 +9847,10 @@ let _stmtPruneGhostFlaggedFlakyTests: Database.Statement | null = null;
  * the keyset-candidate pass below, since a ghost's own test_id can never
  * cross flagged_flaky_tests_rollup_watermark again to get itself reconsidered
  * by that scan. Returns the number of rows pruned.
+ *
+ * Callers should gate this behind hasGhostFlaggedFlakyTests — see
+ * replaceFlaggedFlakyTestsRollupSync — so a genuinely zero-work tick issues
+ * no write and never contends for the shared single-writer SQLite lock.
  */
 function pruneGhostFlaggedFlakyTests(
   projectId: string,
@@ -9856,10 +9894,13 @@ let _txReplaceFlaggedFlakyTestsRollup: ((...args: unknown[]) => void) | null =
  * on FlakyTestRollupJob's scheduler cadence, never on the lane-health
  * request path.
  *
- * Also prunes ghost rows every tick (see pruneGhostFlaggedFlakyTests) —
- * flagged rows whose test_id's test_perf_baselines row has gone stale,
- * meaning the underlying test was renamed or deleted and can never cross
- * the watermark again on its own to get re-examined.
+ * Also prunes ghost rows (see pruneGhostFlaggedFlakyTests) — flagged rows
+ * whose test_id's test_perf_baselines row has gone stale, meaning the
+ * underlying test was renamed or deleted and can never cross the watermark
+ * again on its own to get re-examined. The prune DELETE only actually runs
+ * when hasGhostFlaggedFlakyTests' read-only check finds something to prune,
+ * so a genuinely zero-work tick (no new candidates, no ghosts) issues no
+ * writes at all.
  *
  * `itemsProcessed` reports the number of test ids actually recomputed this
  * tick (work performed) plus any ghost rows pruned, not the number flagged —
@@ -9874,7 +9915,9 @@ function replaceFlaggedFlakyTestsRollupSync(
 ): { itemsProcessed: number } {
   const since = getFlakyRollupWatermark(projectId);
   const candidates = getFlakyRollupCandidates(projectId, since);
-  const ghostsPruned = pruneGhostFlaggedFlakyTests(projectId, computedAt);
+  const ghostsPruned = hasGhostFlaggedFlakyTests(projectId, computedAt)
+    ? pruneGhostFlaggedFlakyTests(projectId, computedAt)
+    : 0;
 
   if (candidates.testIds.length === 0) {
     return { itemsProcessed: ghostsPruned };

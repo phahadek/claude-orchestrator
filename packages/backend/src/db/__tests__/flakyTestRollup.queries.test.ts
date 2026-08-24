@@ -21,6 +21,33 @@ import {
   recordTestPerfDigestSample,
 } from '../queries.js';
 
+/**
+ * pruneGhostFlaggedFlakyTests' DELETE statement is prepared once and cached
+ * as module state in queries.ts (`_stmtPruneGhostFlaggedFlakyTests`), so
+ * `db.prepare` is only ever called with its SQL text on the very first tick
+ * anywhere in this file that actually has something to prune. Wrapping
+ * `db.prepare` here — before any test runs — lets us intercept that one
+ * creation and patch a counter onto the returned statement's `run`, which
+ * then stays in place (the module keeps reusing that same statement object)
+ * for every later call in the file, regardless of which test triggers it
+ * first.
+ */
+const deleteCalls = { count: 0 };
+const originalDbPrepare = db.prepare.bind(db);
+vi.spyOn(db, 'prepare').mockImplementation((sql: string, ...rest: unknown[]) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stmt = (originalDbPrepare as any)(sql, ...rest);
+  if (typeof sql === 'string' && sql.includes('DELETE FROM flagged_flaky_tests_rollup')) {
+    const originalRun = stmt.run.bind(stmt);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    stmt.run = (...runArgs: unknown[]) => {
+      deleteCalls.count += 1;
+      return originalRun(...runArgs);
+    };
+  }
+  return stmt;
+});
+
 let seq = 0;
 
 /**
@@ -86,6 +113,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM flagged_flaky_tests_rollup_watermark').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
   seq = 0;
+  deleteCalls.count = 0;
 });
 
 describe('flagged_flaky_tests_rollup equivalence', () => {
@@ -230,6 +258,129 @@ describe('ghost pruning for renamed/retired tests', () => {
     expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
       'test-still-flaky',
     ]);
+  });
+});
+
+describe('conditional ghost-prune write (zero-work tick cost)', () => {
+  it('issues no write against flagged_flaky_tests_rollup and still reports items_processed = 0 on a tick with no new candidates and nothing to prune', async () => {
+    // Establish a stable baseline and let the watermark advance past it, so
+    // the follow-up tick below has nothing new to examine.
+    ['passed', 'passed', 'passed', 'passed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-stable',
+        name: 'suite > stable test',
+        outcome: outcome as 'passed',
+        createdAt: i,
+      }),
+    );
+    await replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 1000);
+    deleteCalls.count = 0;
+
+    const result = await replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 2000);
+
+    expect(deleteCalls.count).toBe(0);
+    expect(result).toEqual({ itemsProcessed: 0 });
+  });
+
+  it('still prunes a stale/ghost row even when there are zero new candidates that tick', async () => {
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-renamed-old',
+        name: 'suite > old name (before rename)',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: i,
+      }),
+    );
+    await replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 1000);
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
+      'test-renamed-old',
+    ]);
+    deleteCalls.count = 0;
+
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const laterComputedAt = 1000 + SEVEN_DAYS_MS + 1;
+    const result = await replaceFlaggedFlakyTestsRollup(
+      'proj-1',
+      20,
+      2,
+      laterComputedAt,
+    );
+
+    expect(deleteCalls.count).toBeGreaterThan(0);
+    expect(result.itemsProcessed).toBeGreaterThan(0);
+    expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual([]);
+  });
+
+  it('handles the first-ever tick for a project with no watermark row without early-exiting or mistreating existing rows as ghosts', async () => {
+    const outcomes: Array<'passed' | 'failed'> = [
+      'passed',
+      'failed',
+      'passed',
+      'failed',
+    ];
+    outcomes.forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-first-tick',
+        testId: 'test-flaky',
+        name: 'suite > flaky test',
+        outcome,
+        createdAt: i,
+      }),
+    );
+
+    const preOptimization = listFlaggedFlakyTests('proj-first-tick', 20, 2);
+    const result = await replaceFlaggedFlakyTestsRollup(
+      'proj-first-tick',
+      20,
+      2,
+      1000,
+    );
+
+    expect(result.itemsProcessed).toBeGreaterThan(0);
+    expect(getFlaggedFlakyTestsRollup('proj-first-tick')).toEqual(
+      preOptimization,
+    );
+  });
+
+  it('recomputes and matches a from-scratch listFlaggedFlakyTests recomputation once the watermark has advanced', async () => {
+    const outcomes: Array<'passed' | 'failed'> = [
+      'passed',
+      'failed',
+      'passed',
+      'failed',
+    ];
+    outcomes.forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-flaky',
+        name: 'suite > flaky test',
+        outcome,
+        createdAt: i,
+      }),
+    );
+    await replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 1000);
+
+    // A second batch of results advances the watermark on a later tick.
+    ['failed', 'passed', 'failed', 'passed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-flaky',
+        name: 'suite > flaky test',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: 10 + i,
+      }),
+    );
+    const preOptimization = listFlaggedFlakyTests('proj-1', 20, 2);
+    await replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 2000);
+
+    const precomputed = getFlaggedFlakyTestsRollup('proj-1');
+    expect(precomputed).toEqual(preOptimization);
+    expect(precomputed[0]?.sampleCount).toBe(preOptimization[0]?.sampleCount);
+    expect(precomputed[0]?.transitionCount).toBe(
+      preOptimization[0]?.transitionCount,
+    );
   });
 });
 
