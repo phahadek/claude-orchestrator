@@ -1276,7 +1276,7 @@ export async function backfillGateTask(
 /** scheduler_audit job name for the gate-verify reconciler tick — see gateReconciler.register() and getGateVerifyFleetState. */
 export const GATE_VERIFICATION_RECONCILER_JOB = 'gate_verification_reconciler';
 
-export interface GateVerifyFleetSession {
+interface GateVerifyFleetSession {
   sessionId: string;
   itemId: string;
   project: string;
