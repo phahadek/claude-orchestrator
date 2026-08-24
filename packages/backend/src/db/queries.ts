@@ -53,6 +53,7 @@ import type {
   TestRequestRunState,
   TestRequestFailureReason,
   RunOrigin,
+  TestRunKind,
   TestRunProducer,
   DependencyCacheEntryRow,
   DependencyCacheEntryStatus,
@@ -8428,10 +8429,12 @@ export function insertTestRequestRun(
   runOrigin?: RunOrigin,
   producer?: TestRunProducer | null,
   state: TestRequestRunState = 'running',
+  runKind: TestRunKind = 'full',
+  baseSha?: string | null,
 ): void {
   db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer)
-     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?)`,
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha)
+     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     projectId,
@@ -8446,6 +8449,8 @@ export function insertTestRequestRun(
     concurrentRunCount ?? null,
     runOrigin ?? null,
     producer ?? null,
+    runKind,
+    baseSha ?? null,
   );
 }
 
@@ -8507,7 +8512,7 @@ export function updateTestRequestRunState(
   );
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha`;
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {
@@ -8593,17 +8598,47 @@ export function countTestRequestRunsNeedingExtraction(): number {
 export function getLatestTestRequestRun(
   projectId: string,
   contentHash: string,
+  /**
+   * When given, restricts the lookup to rows of this exact run_kind — a
+   * scoped run's settled result must never be handed back for a full-run
+   * lookup or vice versa (see testRequestLane.ts's settled-run guard).
+   * Omitted by every read-only caller that predates run_kind (PRMergeWatcher,
+   * ReviewOrchestrator, PreReviewPipeline, AgentSession, stagedIntents' PR
+   * marker read), which only ever match against a 'full' row today and so
+   * keep their unfiltered pre-existing behavior.
+   */
+  runKind?: TestRunKind,
+  /**
+   * When given (including explicit null), restricts the lookup to rows
+   * whose base_sha exactly matches — so a base-relative scoped run computed
+   * against a since-superseded base is never handed back for the current
+   * base. Omitted (the default) skips this filter entirely.
+   */
+  baseSha?: string | null,
 ): TestRequestRunRow | undefined {
+  const baseShaProvided = baseSha !== undefined;
   return db
-    .prepare<{ project_id: string; content_hash: string }>(
+    .prepare<{
+      project_id: string;
+      content_hash: string;
+      run_kind: string | null;
+      base_sha_provided: number;
+      base_sha: string | null;
+    }>(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
        WHERE project_id = @project_id AND content_hash = @content_hash AND state NOT IN ('running', 'queued')
+         AND (@run_kind IS NULL OR run_kind = @run_kind)
+         AND (@base_sha_provided = 0 OR base_sha IS @base_sha)
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )
-    .get({ project_id: projectId, content_hash: contentHash }) as
-    | TestRequestRunRow
-    | undefined;
+    .get({
+      project_id: projectId,
+      content_hash: contentHash,
+      run_kind: runKind ?? null,
+      base_sha_provided: baseShaProvided ? 1 : 0,
+      base_sha: baseSha ?? null,
+    }) as TestRequestRunRow | undefined;
 }
 
 /**
@@ -8778,6 +8813,7 @@ export function listTestRequestRunsForProject(
               r.requested_at, r.started_at, r.finished_at, r.failure_reason,
               r.structured_result, r.concurrent_run_count, r.oom_killed,
               r.test_report_acquisition_attempted, r.run_origin, r.producer,
+              r.run_kind, r.base_sha,
               s.passed_count, s.failed_count, s.skipped_count, s.error_count,
               s.other_count, s.total_count
        FROM test_request_runs r

@@ -1073,6 +1073,16 @@ export interface FeedbackInboxRow {
 export type TestRequestRunState = 'queued' | 'running' | 'passed' | 'failed';
 
 /**
+ * 'full' runs the project's unscoped test command(s); 'scoped' runs a
+ * narrower test_scoped command against the same tree — a different verdict
+ * is possible for the identical content_hash, so the two are never coalesced
+ * or replayed as if interchangeable (see testRequestLane.ts's coalesceKey
+ * and settled-run guard). Defaults to 'full' for every row and caller that
+ * never states otherwise.
+ */
+export type TestRunKind = 'full' | 'scoped';
+
+/**
  * Failure sub-reason for a `failed` run — distinguishes a hard timeout, an
  * OOM-kill, and a generic non-zero exit (including a lane execution error),
  * which TestCommandResult's bare `passed: false` otherwise collapses. Null
@@ -1151,6 +1161,15 @@ export interface TestRequestRunRow {
   run_origin: RunOrigin;
   /** Which lane call site produced this run — see TestRunProducer. Null for rows predating this column. */
   producer: TestRunProducer | null;
+  /** 'full' or 'scoped' — see TestRunKind. 'full' for every row predating this column. */
+  run_kind: TestRunKind;
+  /**
+   * Base commit sha a scoped run computed against, when its command is a
+   * base-relative scoping mechanism (e.g. `vitest --changed <base_sha>`).
+   * Null for a 'full' run, for a marker-exclusion scoped run with no base
+   * dependency, and for rows predating this column.
+   */
+  base_sha: string | null;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────

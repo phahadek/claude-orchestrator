@@ -3091,6 +3091,30 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // run_kind + base_sha: distinguish a full test-command run from a scoped
+  // one against the identical content_hash (a project declaring a
+  // test_scoped command can produce a different outcome than test on the
+  // same tree, which content_hash alone cannot disambiguate — see
+  // testRequestLane.ts's coalesceKey). run_kind defaults to 'full' so every
+  // pre-existing row (and every caller that never states a kind) reads as
+  // the unscoped run it always was. base_sha is populated only for a
+  // base-relative scoped run (e.g. `vitest --changed <base_sha>`) so a
+  // scoped result computed against a since-superseded base can eventually be
+  // told apart from one still valid against the current base; a
+  // marker-exclusion scoped run (no base dependency) always stores it NULL.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'full'`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN base_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+
   // idx_test_request_runs_project_started: the project-scope run-history
   // route (GET /test-request-runs/project) reads every run for a project —
   // running, queued, and finished alike — newest-first by started_at, which
