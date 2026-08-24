@@ -323,11 +323,7 @@ describe('isMergeBlockingPause() — ORs across concurrent entries', () => {
   it('returns false when every live entry is advisory (blocks_merge:false)', () => {
     insertPR({ pr_number: 61, task_id: 'notion:task-block-2' });
     setPauseReason(61, 'owner/repo', 'ci_not_completing'); // source: ci, advisory
-    setPauseReason(
-      61,
-      'owner/repo',
-      'test_report_acquisition_failed',
-    ); // source: tests, advisory
+    setPauseReason(61, 'owner/repo', 'test_report_acquisition_failed'); // source: tests, advisory
 
     const raw = rawPauseReason(61);
     expect(parsePauseReasonSet(raw)).toHaveLength(2);
