@@ -23,7 +23,11 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { insertProject, updateProject } from '../../db/queries.js';
+import {
+  insertProject,
+  insertMilestone,
+  updateProject,
+} from '../../db/queries.js';
 import { createGroomContextRouter } from '../groomContext';
 
 function git(args: string[], cwd: string) {
@@ -176,5 +180,23 @@ describe('GET /api/groom-context', () => {
       expect(typeof page.markdown).toBe('string');
       expect(page.markdown.length).toBeGreaterThan(0);
     }
+  });
+
+  it('loads a milestone that has a milestones-table row but no manifest.milestones entry', async () => {
+    insertMilestone({
+      id: 'mil-route-db-only',
+      project_id: PROJECT_ID,
+      name: 'DB-only Route Milestone',
+      source_id: 'fake-db-board',
+      canonical_short_id: 'M-db-route-test',
+      display_order: 1,
+    });
+
+    const res = await supertest(buildApp()).get(
+      `/api/groom-context?milestone=M-db-route-test&project=${PROJECT_ID}`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.board).toEqual([]);
   });
 });

@@ -25,7 +25,7 @@ import {
 } from '../groomLoad';
 import { toExternalId } from '../../tasks/taskId';
 import { bindingConstraintIdsForRegions } from '../constraintCatalog';
-import { insertProject, updateProject } from '../../db/queries';
+import { insertProject, insertMilestone, updateProject } from '../../db/queries';
 import { createUnit } from '../../architecture/ArchUnitStore';
 import { SIZE_TYPE_CHECK } from '../../planning/procedureCore';
 
@@ -477,6 +477,288 @@ describe('loadGroomContext', () => {
         notionClient: fakeNotion(),
       }),
     ).rejects.toThrow(/not registered/);
+  });
+
+  describe('DB-resolved board & neighbours (milestones table)', () => {
+    function notionWithBoards(
+      boards: Record<string, NotionTaskLike[]>,
+    ): NotionReadClient {
+      return {
+        async fetchReadyTasks(boardId: string) {
+          return (boards[boardId] ?? []).map((task) => ({ task }));
+        },
+        async fetchTaskPage(taskId: string) {
+          const externalId = toExternalId(taskId);
+          const page = TASK_PAGES[externalId];
+          if (!page) throw new Error(`no fixture page for ${externalId}`);
+          return page;
+        },
+      };
+    }
+
+    beforeEach(() => {
+      db.prepare('DELETE FROM milestones').run();
+      db.prepare('DELETE FROM projects').run();
+    });
+
+    it('resolves the board from the milestones row when there is no manifest entry', async () => {
+      ({ repoDir } = setupRepo());
+      const PROJECT_ID = 'proj-db-only';
+      insertProject({
+        id: PROJECT_ID,
+        name: 'DB Only Project',
+        project_dir: repoDir,
+        context_url: null,
+        github_repo: null,
+        task_source: 'notion',
+      });
+      insertMilestone({
+        id: 'mil-db-only',
+        project_id: PROJECT_ID,
+        name: 'DB Only Milestone',
+        source_id: 'fake-board',
+        canonical_short_id: 'M-db-only',
+        display_order: 1,
+      });
+
+      const result = await loadGroomContext('M-db-only', {
+        repoRoot: repoDir,
+        manifest: { ...MANIFEST, milestones: {} },
+        projectId: PROJECT_ID,
+        notionClient: notionWithBoards({
+          'fake-board': [CODE_ROW, TOOL_ROW, DONE_ROW],
+        }),
+      });
+
+      expect(result.board.map((r) => r.id).sort()).toEqual(
+        [CODE_ROW.id, TOOL_ROW.id, DONE_ROW.id].sort(),
+      );
+    });
+
+    it('falls back to the manifest board when the milestone has no resolvable row', async () => {
+      ({ repoDir } = setupRepo());
+      const PROJECT_ID = 'proj-manifest-fallback';
+      insertProject({
+        id: PROJECT_ID,
+        name: 'Manifest Fallback Project',
+        project_dir: repoDir,
+        context_url: null,
+        github_repo: null,
+        task_source: 'notion',
+      });
+      // No milestones row for 'M-test' — only the manifest entry resolves it.
+
+      const result = await loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST,
+        projectId: PROJECT_ID,
+        notionClient: fakeNotion(),
+      });
+
+      expect(result.board.map((r) => r.id).sort()).toEqual(
+        [CODE_ROW.id, TOOL_ROW.id, DONE_ROW.id].sort(),
+      );
+    });
+
+    it('prefers the row board over a conflicting manifest board', async () => {
+      ({ repoDir } = setupRepo());
+      const PROJECT_ID = 'proj-row-wins';
+      insertProject({
+        id: PROJECT_ID,
+        name: 'Row Wins Project',
+        project_dir: repoDir,
+        context_url: null,
+        github_repo: null,
+        task_source: 'notion',
+      });
+      insertMilestone({
+        id: 'mil-row-wins',
+        project_id: PROJECT_ID,
+        name: 'Row Wins Milestone',
+        source_id: 'row-board',
+        canonical_short_id: 'M-conflict',
+        display_order: 1,
+      });
+      const manifest: GroomManifest = {
+        ...MANIFEST,
+        milestones: {
+          'M-conflict': { board: 'manifest-board' },
+        },
+      };
+
+      const result = await loadGroomContext('M-conflict', {
+        repoRoot: repoDir,
+        manifest,
+        projectId: PROJECT_ID,
+        notionClient: notionWithBoards({
+          'row-board': [CODE_ROW],
+          'manifest-board': [TOOL_ROW],
+        }),
+      });
+
+      expect(result.board.map((r) => r.id)).toEqual([CODE_ROW.id]);
+    });
+
+    it('names both the row and the manifest when neither resolves', async () => {
+      ({ repoDir } = setupRepo());
+      const PROJECT_ID = 'proj-neither-resolves';
+      insertProject({
+        id: PROJECT_ID,
+        name: 'Neither Resolves Project',
+        project_dir: repoDir,
+        context_url: null,
+        github_repo: null,
+        task_source: 'notion',
+      });
+
+      await expect(
+        loadGroomContext('M-nowhere', {
+          repoRoot: repoDir,
+          manifest: { ...MANIFEST, milestones: {} },
+          projectId: PROJECT_ID,
+          notionClient: notionWithBoards({}),
+        }),
+      ).rejects.toThrow(/milestones-table row/);
+      await expect(
+        loadGroomContext('M-nowhere', {
+          repoRoot: repoDir,
+          manifest: { ...MANIFEST, milestones: {} },
+          projectId: PROJECT_ID,
+          notionClient: notionWithBoards({}),
+        }),
+      ).rejects.toThrow(/grooming manifest/);
+    });
+
+    it('derives neighbours project-scoped, ignoring another project with the same milestone short id', async () => {
+      ({ repoDir } = setupRepo());
+      const PROJECT_A = 'proj-scope-a';
+      const PROJECT_B = 'proj-scope-b';
+      insertProject({
+        id: PROJECT_A,
+        name: 'Scope Project A',
+        project_dir: repoDir,
+        context_url: null,
+        github_repo: null,
+        task_source: 'notion',
+      });
+      insertProject({
+        id: PROJECT_B,
+        name: 'Scope Project B',
+        project_dir: repoDir,
+        context_url: null,
+        github_repo: null,
+        task_source: 'notion',
+      });
+      insertMilestone({
+        id: 'mil-a-prior',
+        project_id: PROJECT_A,
+        name: 'A Prior',
+        source_id: 'board-a-prev',
+        canonical_short_id: 'M-prior-a',
+        display_order: 1,
+      });
+      insertMilestone({
+        id: 'mil-a-shared',
+        project_id: PROJECT_A,
+        name: 'A Shared',
+        source_id: 'board-a-target',
+        canonical_short_id: 'M-shared',
+        display_order: 2,
+      });
+      insertMilestone({
+        id: 'mil-b-prior',
+        project_id: PROJECT_B,
+        name: 'B Prior',
+        source_id: 'board-b-prev',
+        canonical_short_id: 'M-prior-b',
+        display_order: 1,
+      });
+      insertMilestone({
+        id: 'mil-b-shared',
+        project_id: PROJECT_B,
+        name: 'B Shared',
+        source_id: 'board-b-target',
+        canonical_short_id: 'M-shared',
+        display_order: 2,
+      });
+
+      const result = await loadGroomContext('M-shared', {
+        repoRoot: repoDir,
+        manifest: { ...MANIFEST, milestones: {} },
+        projectId: PROJECT_A,
+        notionClient: notionWithBoards({
+          'board-a-target': [CODE_ROW],
+          'board-a-prev': [NEIGHBOUR_ROW],
+          'board-b-target': [TOOL_ROW],
+          'board-b-prev': [DONE_ROW],
+        }),
+      });
+
+      expect(result.neighbourBoards.map((r) => r.id)).toEqual([
+        NEIGHBOUR_ROW.id,
+      ]);
+    });
+
+    it('pins the neighbour count to 1 even with several preceding milestones', async () => {
+      ({ repoDir } = setupRepo());
+      const PROJECT_ID = 'proj-neighbour-limit';
+      insertProject({
+        id: PROJECT_ID,
+        name: 'Neighbour Limit Project',
+        project_dir: repoDir,
+        context_url: null,
+        github_repo: null,
+        task_source: 'notion',
+      });
+      insertMilestone({
+        id: 'mil-limit-1',
+        project_id: PROJECT_ID,
+        name: 'Limit M1',
+        source_id: 'board-1',
+        canonical_short_id: 'M-limit-1',
+        display_order: 1,
+      });
+      insertMilestone({
+        id: 'mil-limit-2',
+        project_id: PROJECT_ID,
+        name: 'Limit M2',
+        source_id: 'board-2',
+        canonical_short_id: 'M-limit-2',
+        display_order: 2,
+      });
+      insertMilestone({
+        id: 'mil-limit-3',
+        project_id: PROJECT_ID,
+        name: 'Limit M3',
+        source_id: 'board-3',
+        canonical_short_id: 'M-limit-3',
+        display_order: 3,
+      });
+      insertMilestone({
+        id: 'mil-limit-target',
+        project_id: PROJECT_ID,
+        name: 'Limit Target',
+        source_id: 'board-4',
+        canonical_short_id: 'M-limit-target',
+        display_order: 4,
+      });
+
+      const result = await loadGroomContext('M-limit-target', {
+        repoRoot: repoDir,
+        manifest: { ...MANIFEST, milestones: {} },
+        projectId: PROJECT_ID,
+        notionClient: notionWithBoards({
+          'board-4': [CODE_ROW],
+          'board-3': [NEIGHBOUR_ROW],
+          'board-2': [TOOL_ROW],
+          'board-1': [DONE_ROW],
+        }),
+      });
+
+      expect(result.neighbourBoards.map((r) => r.id)).toEqual([
+        NEIGHBOUR_ROW.id,
+      ]);
+    });
   });
 
   describe('non-Notion task source', () => {
