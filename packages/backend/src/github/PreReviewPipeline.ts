@@ -20,6 +20,7 @@ import {
 } from '../db/queries';
 import {
   filterBaseAttributableFailuresForF2Gate,
+  filterVerifyFailureByBaseHealth,
   renderBaseAttributableFilterDigest,
 } from '../orchestration/baseAttributableFilter';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
@@ -293,8 +294,42 @@ export class PreReviewPipeline {
       skipIf: (ctx) => !ctx.worktreePath,
       run: async (ctx) => {
         const config = loadOrchestratorConfig(ctx.project.projectDir);
-        const result = await runVerifyAsGate(ctx.worktreePath, config.verify);
+        const result = await runVerifyAsGate(
+          ctx.worktreePath,
+          config.verify,
+          config.test_report_glob,
+        );
         if (!result.passed) {
+          let filtered: Awaited<
+            ReturnType<typeof filterVerifyFailureByBaseHealth>
+          > = null;
+          try {
+            filtered = await filterVerifyFailureByBaseHealth(
+              ctx.project,
+              result.structuredResult,
+            );
+          } catch (err) {
+            logger.warn(
+              `[PreReviewPipeline] PR #${ctx.prNumber}: verify base-attributable filter failed: ${err instanceof Error ? err.message : err}`,
+            );
+          }
+          if (filtered && filtered.outcome !== 'unfiltered') {
+            const digest = renderBaseAttributableFilterDigest(filtered);
+            setPauseReason(
+              ctx.prNumber,
+              ctx.repo,
+              'base_attributable_test_excluded',
+              digest.slice(0, 1000),
+            );
+            if (filtered.passed) {
+              return null;
+            }
+            return {
+              failedCommand: result.failedCommand,
+              truncatedOutput: digest,
+              summary: `verify failed: ${filtered.remainingTests.length} non-base-attributable failure(s)`,
+            };
+          }
           return {
             failedCommand: result.failedCommand,
             truncatedOutput: result.truncatedOutput,

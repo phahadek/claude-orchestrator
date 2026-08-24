@@ -57,7 +57,14 @@ import type { DiffSource } from './DiffSource';
 import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
 import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import type { DispositionsParsedPayload } from './types';
-import { runVerifyAsGate } from '../orchestration/verifyRunner';
+import {
+  runVerifyAsGate,
+  type VerifyResult,
+} from '../orchestration/verifyRunner';
+import {
+  filterVerifyFailureByBaseHealth,
+  renderBaseAttributableFilterDigest,
+} from '../orchestration/baseAttributableFilter';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runTestCommands } from '../session/test-runner';
@@ -775,13 +782,68 @@ export class ReviewOrchestrator {
     }
   }
 
+  /**
+   * Filters a failed verify run against the current base-branch health when
+   * verify's own failing command produced a structured report (see
+   * baseAttributableFilter.ts's filterVerifyFailureByBaseHealth) — a base
+   * branch break the test.request lane has already confirmed must not also
+   * fail the pre-review verify gate. Records a visible (non-blocking)
+   * base_attributable_test_excluded pause reason whenever filtering
+   * applies, then returns a VerifyResult a caller can treat exactly like
+   * runVerifyAsGate's own return: `passed: true` once every failing test is
+   * base-attributable, or `passed: false` with `truncatedOutput` narrowed
+   * to only the non-base-attributable remainder otherwise. Returns `result`
+   * unchanged — including on filter-lookup errors — when no structured
+   * report was parseable or the base probe couldn't attribute anything.
+   */
+  private async applyVerifyBaseAttributionFilter(
+    project: ProjectConfig,
+    localBranchId: number,
+    result: VerifyResult,
+  ): Promise<VerifyResult> {
+    if (result.passed) return result;
+    let filtered: Awaited<ReturnType<typeof filterVerifyFailureByBaseHealth>>;
+    try {
+      filtered = await filterVerifyFailureByBaseHealth(
+        project,
+        result.structuredResult,
+      );
+    } catch (err) {
+      logger.warn(
+        `[ReviewOrchestrator] verify base-attributable filter failed for local branch ${localBranchId}: ${err instanceof Error ? err.message : err}`,
+      );
+      return result;
+    }
+    if (!filtered || filtered.outcome === 'unfiltered') return result;
+
+    const digest = renderBaseAttributableFilterDigest(filtered);
+    setLocalBranchPauseReason(
+      localBranchId,
+      'base_attributable_test_excluded',
+      digest.slice(0, 1000),
+    );
+    if (filtered.passed) {
+      return { passed: true };
+    }
+    return {
+      passed: false,
+      failedCommand: result.failedCommand,
+      truncatedOutput: digest,
+    };
+  }
+
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
     const project = getProjectById(job.projectId);
     if (project) {
       const config = loadOrchestratorConfig(project.projectDir);
-      const verifyResult = await runVerifyAsGate(
-        job.worktreePath,
-        config.verify,
+      const verifyResult = await this.applyVerifyBaseAttributionFilter(
+        project,
+        job.localBranchId,
+        await runVerifyAsGate(
+          job.worktreePath,
+          config.verify,
+          config.test_report_glob,
+        ),
       );
       if (!verifyResult.passed) {
         const autofixCommands = loadAutofixCommands(project.projectDir);
@@ -813,9 +875,14 @@ export class ReviewOrchestrator {
                 },
               });
               // Re-run verify to see if autofix resolved it
-              const retryResult = await runVerifyAsGate(
-                job.worktreePath,
-                config.verify,
+              const retryResult = await this.applyVerifyBaseAttributionFilter(
+                project,
+                job.localBranchId,
+                await runVerifyAsGate(
+                  job.worktreePath,
+                  config.verify,
+                  config.test_report_glob,
+                ),
               );
               if (retryResult.passed) {
                 // Autofix fixed the gate — fall through to AI review
