@@ -1414,6 +1414,7 @@ export class SessionManager extends EventEmitter {
 
     // 1. Update DB status and ended_at
     updateSessionStatus(sessionId, status, endedAt);
+    setSessionTerminalCompletionReason(sessionId, reason);
 
     // Reap any uncommitted staged intents this session left behind — a dead
     // session can never resolve them, and a parked proposal (e.g. a
@@ -4474,6 +4475,7 @@ export class SessionManager extends EventEmitter {
 
     // Pre-mark as killed immediately — prevents orphan-resume on server restart.
     updateSessionStatus(sessionId, 'killed', endedAt);
+    setSessionTerminalCompletionReason(sessionId, 'operator_abort');
 
     // Reap this session's uncommitted staged intents — abortSession bypasses
     // markSessionErrored, so it needs its own call (see that method for why).
@@ -5168,7 +5170,7 @@ export class SessionManager extends EventEmitter {
           logger.info(
             `[SessionManager] sendOrResume: superseding stale session ${s.session_id.slice(0, 8)} for task ${row.task_id}`,
           );
-          markSessionSuperseded(s.session_id, Date.now());
+          markSessionSuperseded(s.session_id, Date.now(), 'resume_superseded');
         }
       }
       const session = this.respawnSession(
@@ -5453,7 +5455,7 @@ export class SessionManager extends EventEmitter {
         logger.info(
           `[SessionManager] sendOrResume: superseding stale session ${s.session_id.slice(0, 8)} for task ${row.task_id}`,
         );
-        markSessionSuperseded(s.session_id, Date.now());
+        markSessionSuperseded(s.session_id, Date.now(), 'resume_superseded');
       }
     }
 
