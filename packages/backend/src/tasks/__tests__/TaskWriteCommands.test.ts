@@ -76,6 +76,7 @@ import {
 } from '../TaskWriteCommands';
 import { ReadinessGateError } from '../readinessGate';
 import { GroomingGateError } from '../../groom/groomGate';
+import { UnsupportedTaskBackendMethodError } from '../TaskBackend';
 import type { TaskBackend } from '../TaskBackend';
 import { NotionTaskBackend } from '../NotionTaskBackend';
 import type { NotionClient } from '../../notion/NotionClient';
@@ -1117,7 +1118,7 @@ describe('TaskWriteCommands.createTask', () => {
 
     await expect(
       commands.createTask({ databaseId: 'db-1', title: 'x' }),
-    ).rejects.toThrow(/not supported/i);
+    ).rejects.toThrow(UnsupportedTaskBackendMethodError);
   });
 
   it('resolves the board databaseId server-side from the target milestone when the payload carries no raw databaseId', async () => {
@@ -1220,7 +1221,7 @@ describe('TaskWriteCommands.setDependsOn', () => {
 
     await expect(
       commands.setDependsOn('notion:abc', ['notion:dep1']),
-    ).rejects.toThrow(/not supported/i);
+    ).rejects.toThrow(UnsupportedTaskBackendMethodError);
   });
 });
 
@@ -1304,7 +1305,7 @@ describe('TaskWriteCommands.setType', () => {
     const commands = new BackendTaskWriteCommands(backend);
 
     await expect(commands.setType('notion:abc', '📐 Design')).rejects.toThrow(
-      /not supported/i,
+      UnsupportedTaskBackendMethodError,
     );
   });
 });
@@ -1344,7 +1345,7 @@ describe('TaskWriteCommands.setProperties', () => {
 
     await expect(
       commands.setProperties('notion:abc', { priority: '🔴 High' }),
-    ).rejects.toThrow(/not supported/i);
+    ).rejects.toThrow(UnsupportedTaskBackendMethodError);
   });
 });
 
@@ -1365,7 +1366,7 @@ describe('TaskWriteCommands.archive', () => {
     const commands = new BackendTaskWriteCommands(backend);
 
     await expect(commands.archive('notion:abc')).rejects.toThrow(
-      /not supported/i,
+      UnsupportedTaskBackendMethodError,
     );
   });
 });

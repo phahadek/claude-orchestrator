@@ -1,9 +1,10 @@
-import type {
-  TaskBackend,
-  NewTaskFields,
-  TaskWriteOptions,
-  TaskPropertiesPatch,
-  PatchBodySectionOperation,
+import {
+  UnsupportedTaskBackendMethodError,
+  type TaskBackend,
+  type NewTaskFields,
+  type TaskWriteOptions,
+  type TaskPropertiesPatch,
+  type PatchBodySectionOperation,
 } from './TaskBackend';
 import type { TaskBodySections } from './bodyRender';
 import {
@@ -497,8 +498,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<string> {
     if (!this.backend.createTask) {
-      throw new Error(
-        `[TaskWriteCommands] createTask is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'createTask',
+        this.backend.type,
       );
     }
     const { milestone, ...rest } = fields;
@@ -616,8 +619,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.backend.setDependsOn) {
-      throw new Error(
-        `[TaskWriteCommands] setDependsOn is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'setDependsOn',
+        this.backend.type,
       );
     }
     await this.backend.setDependsOn(taskId, dependsOn, options);
@@ -629,8 +634,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.backend.updateBody) {
-      throw new Error(
-        `[TaskWriteCommands] updateBody is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'updateBody',
+        this.backend.type,
       );
     }
     await this.backend.updateBody(taskId, sections, options);
@@ -643,8 +650,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.backend.patchBodySection) {
-      throw new Error(
-        `[TaskWriteCommands] patchBodySection is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'patchBodySection',
+        this.backend.type,
       );
     }
     await this.backend.patchBodySection(taskId, section, operation, options);
@@ -656,8 +665,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.backend.setType) {
-      throw new Error(
-        `[TaskWriteCommands] setType is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'setType',
+        this.backend.type,
       );
     }
     if (!isValidTaskType(type)) {
@@ -685,8 +696,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
     if (!this.backend.setProperties) {
-      throw new Error(
-        `[TaskWriteCommands] setProperties is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'setProperties',
+        this.backend.type,
       );
     }
     await this.backend.setProperties(taskId, patch, options);
@@ -694,8 +707,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
 
   async archive(taskId: string, options?: TaskWriteOptions): Promise<void> {
     if (!this.backend.archive) {
-      throw new Error(
-        `[TaskWriteCommands] archive is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'archive',
+        this.backend.type,
       );
     }
     await this.backend.archive(taskId, options);
@@ -924,8 +939,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       !this.backend.setDependsOn ||
       !this.backend.archive
     ) {
-      throw new Error(
-        `[TaskWriteCommands] moveTask is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'moveTask',
+        this.backend.type,
       );
     }
     const { taskId, content, sourceMilestone, targetMilestone } = params;
