@@ -2411,6 +2411,25 @@ const GATE_ITEM_UUID_RE =
  * rather than silently prefix-matched, which would just reintroduce the same
  * ambiguity under a different id space.
  */
+/**
+ * Thrown at apply time when a staged notion.pageEdit intent targets a
+ * project whose task_source isn't Notion — e.g. a Docs task's body declared
+ * a Notion-page Target surface for a yaml-backed project (a human-authoring
+ * mistake docsLoad.ts doesn't itself validate). Refuses before instantiating
+ * NotionClient, rather than attempting a live write against a backend that
+ * doesn't hold this project's tasks/pages.
+ */
+class NotionPageEditWrongBackendError extends Error {
+  constructor(projectId: string, taskSource: string | undefined) {
+    super(
+      `[stagedIntents] notion.pageEdit apply rejected: project "${projectId}" ` +
+        `is not Notion-backed (task_source=${taskSource ?? 'unknown'}). ` +
+        'A Notion-page Target surface cannot be applied against a non-Notion project.',
+    );
+    this.name = 'NotionPageEditWrongBackendError';
+  }
+}
+
 class GateVerifyPayloadValidationError extends Error {
   constructor(gateItemId: unknown) {
     super(
@@ -4975,6 +4994,13 @@ async function applyIntent(
       );
     }
     case 'notion.pageEdit': {
+      const project = getProjectById(intent.projectId);
+      if (project?.taskSource !== 'notion') {
+        throw new NotionPageEditWrongBackendError(
+          intent.projectId,
+          project?.taskSource,
+        );
+      }
       const payload = intent.payload as NotionPageEditPayload;
       const notionCommands = new NotionWriteCommands(new NotionClient());
       await notionCommands.applyPageEdit(payload);
