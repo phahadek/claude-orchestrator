@@ -63,7 +63,10 @@ function toReservation(row: MigrationReservationRow): MigrationReservation {
 function classifyUniqueConstraintError(
   err: unknown,
 ): 'project_number' | 'task_placeholder' | 'other' {
-  if (!(err instanceof Error) || !/UNIQUE constraint failed/i.test(err.message)) {
+  if (
+    !(err instanceof Error) ||
+    !/UNIQUE constraint failed/i.test(err.message)
+  ) {
     return 'other';
   }
   if (/migration_reservation\.task_id/i.test(err.message)) {

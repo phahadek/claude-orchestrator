@@ -237,7 +237,9 @@ describe('reserveMigrationNumber', () => {
     expect(second.id).toBe(first.id);
     expect(second.number).toBe(first.number);
     const rows = db
-      .prepare('SELECT COUNT(*) AS n FROM migration_reservation WHERE task_id = ?')
+      .prepare(
+        'SELECT COUNT(*) AS n FROM migration_reservation WHERE task_id = ?',
+      )
       .get('notion:task-race-same') as { n: number };
     expect(rows.n).toBe(1);
     spy.mockRestore();
