@@ -292,6 +292,20 @@ export function spawnIntoTestRunCgroup<T>(runId: string, spawnFn: () => T): T {
 }
 
 /**
+ * Absolute path to a test run's cgroup-v2 memory.current file, or null when
+ * the delegated tests/ subtree was never set up. Pure path derivation — does
+ * not check whether the run's own leaf actually exists (the leaf is created
+ * lazily by spawnIntoTestRunCgroup at spawn time); callers should treat a
+ * read failure (e.g. ENOENT before the leaf exists, or after teardown
+ * removes it) as "no leaf" and fall back accordingly, the same convention
+ * getChildRssMb already uses for a vanished /proc/<pid>.
+ */
+export function testRunCgroupMemoryCurrentPath(runId: string): string | null {
+  if (!testsCgroupPath) return null;
+  return path.join(testRunCgroupDir(runId), 'memory.current');
+}
+
+/**
  * Kills every process in a test run's sub-cgroup (tests/<runId>/) — the
  * inescapable backstop for the same class of escape killSessionCgroup
  * closes for sessions: a grandchild that called setsid(), or that was
