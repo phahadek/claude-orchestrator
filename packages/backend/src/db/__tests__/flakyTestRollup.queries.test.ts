@@ -36,14 +36,13 @@ const deleteCalls = { count: 0 };
 const originalDbPrepare = db.prepare.bind(db);
 vi.spyOn(db, 'prepare').mockImplementation(
   (sql: string, ...rest: unknown[]) => {
-     
     const stmt = (originalDbPrepare as any)(sql, ...rest);
     if (
       typeof sql === 'string' &&
       sql.includes('DELETE FROM flagged_flaky_tests_rollup')
     ) {
       const originalRun = stmt.run.bind(stmt);
-       
+
       stmt.run = (...runArgs: unknown[]) => {
         deleteCalls.count += 1;
         return originalRun(...runArgs);
