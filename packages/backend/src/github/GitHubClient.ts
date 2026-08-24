@@ -1353,6 +1353,21 @@ export class GitHubClient {
     return { fullName: data.full_name, private: data.private };
   }
 
+  /**
+   * Full recursive file listing (blobs only) of `repo` at `ref` — used by the
+   * migration-renumber pre-check (PRReviewService) to detect whether a diff's
+   * renumbered migration collides with a number already committed on the
+   * base branch. One tree API call per ref rather than a directory-scoped
+   * contents call, since the migrations directory's exact location isn't
+   * known to this client.
+   */
+  async listFilePathsAtRef(repo: string, ref: string): Promise<string[]> {
+    const data = await this.request<{
+      tree: Array<{ path: string; type: string }>;
+    }>(`/repos/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`);
+    return data.tree.filter((e) => e.type === 'blob').map((e) => e.path);
+  }
+
   // ---- Milestones -------------------------------------------------------------
 
   async listMilestones(
