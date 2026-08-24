@@ -8,6 +8,7 @@ import {
   listSeedItems,
   listSeedMilestoneReadiness,
   appendSeedItemEvent,
+  reopenSeedItem,
   backfillSeedTask,
 } from '../seed/seedService';
 import type { SeedItemEventOutcome } from '../db/types';
@@ -208,6 +209,24 @@ export function createSeedStateRouter(): Router {
     } catch (err) {
       res.status(400).json({
         error: err instanceof Error ? err.message : 'seed item event failed',
+      });
+    }
+  });
+
+  // POST /api/seed/items/:id/reopen  { operator, reason }
+  router.post('/seed/items/:id/reopen', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const body = req.body as { operator?: unknown; reason?: unknown };
+    try {
+      const updated = reopenSeedItem(
+        id,
+        typeof body.operator === 'string' ? body.operator : undefined,
+        typeof body.reason === 'string' ? body.reason : undefined,
+      );
+      res.json(updated);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'seed item reopen failed',
       });
     }
   });

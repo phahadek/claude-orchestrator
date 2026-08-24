@@ -26,6 +26,7 @@ import {
   listSeedItems,
   listSeedMilestoneReadiness,
   appendSeedItemEvent,
+  reopenSeedItem,
 } from '../seedService.js';
 import type { DeployAncestrySource } from '../../gate/gateService.js';
 
@@ -245,6 +246,76 @@ describe('appendSeedItemEvent', () => {
       operator: 'pedro',
       evidence: { observed: 'config write succeeded' },
     });
+  });
+});
+
+describe('reopenSeedItem', () => {
+  it('reopens a terminal (confirmed) item to pending, recorded in its event history', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, { outcome: 'applied', operator: 'pedro' });
+    appendSeedItemEvent(item.id, { outcome: 'confirmed', operator: 'pedro' });
+    expect(getSeedItem(item.id)?.state).toBe('confirmed');
+
+    const updated = reopenSeedItem(item.id, 'pedro', 'regression found');
+    expect(updated.state).toBe('pending');
+    expect(updated.events.map((e) => e.outcome)).toEqual([
+      'applied',
+      'confirmed',
+      'reopened',
+    ]);
+    expect(updated.events[2]).toMatchObject({
+      outcome: 'reopened',
+      operator: 'pedro',
+      evidence: { reason: 'regression found' },
+    });
+  });
+
+  it('reopens a terminal (blocked) item to pending', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, {
+      outcome: 'blocked',
+      operator: 'pedro',
+      filedFollowon: 'notion:followon-1',
+    });
+    expect(getSeedItem(item.id)?.state).toBe('blocked');
+
+    const updated = reopenSeedItem(item.id, 'pedro');
+    expect(updated.state).toBe('pending');
+  });
+
+  it('rejects reopening a non-terminal (pending or applied) item', () => {
+    const item = makeItem();
+    expect(() => reopenSeedItem(item.id, 'pedro')).toThrow();
+
+    appendSeedItemEvent(item.id, { outcome: 'applied', operator: 'pedro' });
+    expect(() => reopenSeedItem(item.id, 'pedro')).toThrow();
+  });
+
+  it('counts a reopened item as blocking again in getSeedReadiness and listSeedMilestoneReadiness', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, { outcome: 'applied', operator: 'pedro' });
+    appendSeedItemEvent(item.id, { outcome: 'confirmed', operator: 'pedro' });
+    expect(getSeedReadiness('polimarket-analyser', 'M12').status).toBe(
+      'green',
+    );
+
+    reopenSeedItem(item.id, 'pedro');
+
+    const readiness = getSeedReadiness('polimarket-analyser', 'M12');
+    expect(readiness.status).toBe('blocked');
+    expect(readiness.blocking.map((b) => b.id)).toEqual([item.id]);
+
+    const milestoneReadiness = listSeedMilestoneReadiness({
+      project: 'polimarket-analyser',
+    });
+    expect(milestoneReadiness).toEqual([
+      {
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+        status: 'blocked',
+        blockingCount: 1,
+      },
+    ]);
   });
 });
 

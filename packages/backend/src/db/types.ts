@@ -689,7 +689,11 @@ export interface SeedItemSourceRow {
 
 export type NewSeedItemSourceRow = Omit<SeedItemSourceRow, 'id'>;
 
-export type SeedItemEventOutcome = 'applied' | 'confirmed' | 'blocked';
+export type SeedItemEventOutcome =
+  | 'applied'
+  | 'confirmed'
+  | 'blocked'
+  | 'reopened';
 
 export interface SeedItemEventRow {
   id: number;
